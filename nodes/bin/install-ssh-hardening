@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly target='/etc/ssh/sshd_config.d/90-dgx-admin.conf'
+readonly target_dir='/etc/ssh/sshd_config.d'
+readonly admin_user='carst'
+readonly admin_key_fingerprint='SHA256:66yS2tf5iK+wvPkO44m++PWfI1q1BHS63BRMJqsPaqM'
+
+if (( EUID != 0 )); then
+  printf 'ERROR: run this installer through sudo\n' >&2
+  exit 1
+fi
+
+admin_home="$(getent passwd "$admin_user" | awk -F: 'NR == 1 { print $6 }')"
+if [[ -z "$admin_home" ]]; then
+  printf 'ERROR: admin user %s does not exist\n' "$admin_user" >&2
+  exit 1
+fi
+
+authorized_keys="$admin_home/.ssh/authorized_keys"
+if [[ ! -f "$authorized_keys" ]] ||
+  ! ssh-keygen -lf "$authorized_keys" 2>/dev/null |
+    awk '{ print $2 }' | grep -Fx "$admin_key_fingerprint" >/dev/null; then
+  printf 'ERROR: expected DGX Spark Admin public key is not authorized for %s\n' \
+    "$admin_user" >&2
+  exit 1
+fi
+
+install -d -o root -g root -m 0755 "$target_dir"
+
+stage="$(mktemp "$target_dir/.90-dgx-admin.conf.XXXXXX")"
+installed_this_run=0
+cleanup() {
+  rm -f -- "$stage"
+}
+rollback_on_error() {
+  status=$?
+  trap - ERR
+  if (( installed_this_run )); then
+    printf 'ERROR: validation failed; removing the new managed drop-in\n' >&2
+    rm -f -- "$target"
+    if /usr/sbin/sshd -t; then
+      systemctl reload ssh || true
+    else
+      printf 'ERROR: the pre-existing SSH configuration also fails sshd -t\n' >&2
+    fi
+  fi
+  cleanup
+  exit "$status"
+}
+trap cleanup EXIT
+trap rollback_on_error ERR
+
+cat > "$stage" <<'EOF'
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin prohibit-password
+EOF
+chown root:root "$stage"
+chmod 0644 "$stage"
+
+if [[ -e "$target" ]]; then
+  if [[ ! -f "$target" ]] || [[ -L "$target" ]] || ! cmp -s "$stage" "$target"; then
+    printf 'ERROR: refusing to replace existing non-managed path %s\n' "$target" >&2
+    exit 1
+  fi
+  printf 'Managed SSH drop-in is already installed; revalidating it.\n'
+else
+  install -o root -g root -m 0644 "$stage" "$target"
+  installed_this_run=1
+fi
+
+[[ "$(stat -c '%U:%G %a' "$target")" == 'root:root 644' ]]
+/usr/sbin/sshd -t
+
+effective_config="$(/usr/sbin/sshd -T)"
+effective_value() {
+  option="$1"
+  awk -v option="$option" '$1 == option { print $2; exit }' \
+    <<< "$effective_config"
+}
+
+[[ "$(effective_value passwordauthentication)" == 'no' ]]
+[[ "$(effective_value kbdinteractiveauthentication)" == 'no' ]]
+[[ "$(effective_value pubkeyauthentication)" == 'yes' ]]
+case "$(effective_value permitrootlogin)" in
+  prohibit-password|without-password) ;;
+  *)
+    printf 'ERROR: PermitRootLogin is not effectively prohibit-password\n' >&2
+    false
+    ;;
+esac
+
+printf '%s\n' \
+  "passwordauthentication $(effective_value passwordauthentication)" \
+  "kbdinteractiveauthentication $(effective_value kbdinteractiveauthentication)" \
+  "pubkeyauthentication $(effective_value pubkeyauthentication)" \
+  "permitrootlogin $(effective_value permitrootlogin)"
+
+systemctl reload ssh
+[[ "$(systemctl is-active ssh)" == 'active' ]]
+
+installed_this_run=0
+printf 'SSH hardening installed, validated, and reloaded successfully.\n'
