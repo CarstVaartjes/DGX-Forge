@@ -270,7 +270,7 @@ inventories.
 | Dashboard checked at (UTC) | 2026-08-01; exact time not recorded | 2026-08-01; exact time not recorded |
 | Dashboard result | `No Available Updates` (user-confirmed) | `No Available Updates` (user-confirmed) |
 | Installation completed at (UTC), or `not required` | `not required` | `not required` |
-| Reboot completed at (UTC), or `not required` | 2026-08-01; identity-repair reboot, exact time not recorded | 2026-08-01; identity-repair reboot, exact time not recorded |
+| Reboot completed at (UTC), or `not required` | `2026-08-01T20:39:02Z`; identity-repair reboot | `2026-08-01T20:47:12Z`; identity-repair reboot |
 | Effective DGX OS OTA | `7.5.0` | `7.5.0` |
 | Kernel | `6.17.0-1029-nvidia` | `6.17.0-1029-nvidia` |
 | NVIDIA driver | `580.173.02` | `580.173.02` |
