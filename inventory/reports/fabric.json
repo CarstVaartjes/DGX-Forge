@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "status": "needs_context",
+  "evidence_scope": "preconfiguration_and_staged_manual_rollout_only",
   "captured_at": "2026-08-01T21:59:08Z",
   "topology": {
     "requested": "two-node direct ConnectX-7 QSFP link",
@@ -100,16 +101,17 @@
       "evidence": "Both functions report 200000 Mb/s Direct Attach Copper and sudo ethtool -m identifies matching 1 m Amphenol NJAAKK-C106 passive PAM4 DAC ends. C106 is not one of NVIDIA's currently published supported part numbers, so it is not confirmed supported."
     },
     {
-      "name": "NVIDIA Sync Cluster Assistant",
-      "status": "requires_controller_preconfiguration_gate",
-      "evidence": "Cluster Assistant is a controller-side NVIDIA Sync GUI workflow. The next permitted action is the Network Check screen before Confirm Network Configuration; any cable/link warning stops the rollout."
+      "name": "manual CLI preflight",
+      "status": "requires_user_authorized_sudo",
+      "evidence": "The reviewed worker-first CLI script must pass its read-only preflight and local validation before the head is staged. NVIDIA Sync and discover-sparks are out of scope."
     },
     {
       "name": "fabric acceptance",
       "status": "not_run",
-      "evidence": "Neither node has a fabric IPv4 address or 99-nvidia-sync-cluster.yaml, so GID-to-IP mapping and bidirectional ping/MTU checks cannot be run."
+      "evidence": "Neither node has a fabric IPv4 address or 99-dgx-spark-direct-fabric.yaml, so GID-to-IP mapping and bidirectional ping/MTU checks cannot be run."
     }
   ],
   "host_mutations_performed": false,
-  "commit_created": false
+  "commit_created": true,
+  "staging_commit": "bae20253943c954774ecd31692bf434754998481"
 }

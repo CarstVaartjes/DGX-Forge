@@ -7,9 +7,10 @@ It deliberately does not use the Mac administration key for node-to-node
 access and does not enable SSH agent forwarding. The direct fabric must never
 receive a default route.
 
-Do not populate `inventory/cluster.toml` or commit `inventory/reports/fabric.json`
-until the post-configuration probes below have been captured. The staged
-values are a manual plan, not final live evidence.
+`inventory/reports/fabric.json` is committed as explicitly-labelled
+preconfiguration/staging evidence. Do not populate `inventory/cluster.toml` or
+replace its null post-configuration values until the probes below have been
+captured.
 
 ## Evidence and safety gate
 
@@ -55,64 +56,13 @@ both functions to be `UP` at 200000 Mb/s and preserves the management default
 route. Any cable or link warning, failed preflight, Netplan error, route
 change, or failed postcheck is a hard stop. Do not apply a manual workaround.
 
-## Controller-run NVIDIA Sync operation
+## Out-of-scope helpers
 
-NVIDIA Sync is not the selected configuration path. This section remains only
-as a controlled, supported alternative if the reviewed manual procedure cannot
-be used; do not mix its generated Netplan file with the manual file below.
-
-This is an interactive, sudo-authorized change and must be performed by the
-controller/user, not through an unattended SSH command.
-
-1. On the Mac that is on the Sparks' LAN, open NVIDIA Sync and import/add
-   `dgx-spark-1` (`192.168.1.211`, Spark 1/head) and `dgx-spark-2`
-   (`192.168.1.212`, Spark 2/worker). Keep management on Wi-Fi or 10 GbE.
-2. Open **Settings > Cluster Assistant > Add New Cluster**. Select exactly the
-   two Sparks and the direct-connect topology. Do not add a switch or a second
-   cable. At **Network Check**, capture a clean topology/link result before
-   selecting **Confirm Network Configuration**; the latter can mutate Netplan.
-3. Only after the controller explicitly approves that clean gate, use the
-   controller to enter sudo credentials in
-   NVIDIA Sync. Do not copy the Mac `DGX Spark Admin` key to either Spark and
-   do not enable agent forwarding. Confirm that the assistant creates a
-   distinct inter-device key/aliases; if it exposes an `authorized_keys`
-   source restriction, restrict the worker entry to the discovered fabric
-   source address.
-4. At network confirmation, accept only the two private point-to-point fabric
-   subnets. There must be no gateway/default route on either fabric interface.
-   Save screenshots of the 200 Gb/s checks and the successful cluster summary;
-   use **Copy** in the success screen to save the network information.
-5. Do not continue if an assistant readiness, topology, link-speed, or SSH
-   check fails. Record that screen and use the official NVIDIA manual workflow
-   only after a reviewed, reversible change procedure has been approved.
-
-NVIDIA documents Cluster Assistant at
-<https://docs.nvidia.com/sync/latest/cluster-assistant.html>. It writes the
-managed cluster plan as `/etc/netplan/99-nvidia-sync-cluster.yaml`; do not
-hand-edit that file while the cluster relationship exists.
-
-### Reversal plan
-
-The normal reversible path is **Settings > Clusters > ... > Delete** in NVIDIA
-Sync. That removes the cluster relationship and its generated node-to-node SSH
-configuration. If the controller has first preserved management access and
-needs a Netplan-only emergency rollback, NVIDIA's documented command sequence
-is below. It moves the generated file rather than deleting it; `netplan try`
-provides an interactive rollback window.
-
-```bash
-ssh -o BatchMode=yes -o ForwardAgent=no dgx-spark-1 \
-  'sudo install -d -m 0700 /root/netplan-disabled && \
-   sudo mv /etc/netplan/99-nvidia-sync-cluster.yaml /root/netplan-disabled/ && \
-   sudo netplan generate && sudo netplan try'
-ssh -o BatchMode=yes -o ForwardAgent=no dgx-spark-2 \
-  'sudo install -d -m 0700 /root/netplan-disabled && \
-   sudo mv /etc/netplan/99-nvidia-sync-cluster.yaml /root/netplan-disabled/ && \
-   sudo netplan generate && sudo netplan try'
-```
-
-Do not run this rollback remotely without a working management path. Removing
-Netplan alone does not remove the generated cluster SSH relationship.
+NVIDIA Sync/Cluster Assistant is out of scope for this selected Spark-side CLI
+rollout. Do not use its generated Netplan, nor run `discover-sparks`: the
+current discovery helper copies `~/.ssh/id_ed25519_shared` private material to
+every node and appends a `Host * IdentityFile` rule. Both actions violate this
+rollout's key separation and password-SSH constraints.
 
 ## Selected manual CLI rollout
 
@@ -142,7 +92,8 @@ read-only preflight. They do not change either Spark. Do not add `-A` or enable
 agent forwarding.
 
 ```bash
-scp nodes/bin/configure-direct-fabric dgx-spark-2:/tmp/configure-direct-fabric
+scp -o ForwardAgent=no nodes/bin/configure-direct-fabric \
+  dgx-spark-2:/tmp/configure-direct-fabric
 ssh -o BatchMode=yes -o ForwardAgent=no dgx-spark-2 \
   'bash /tmp/configure-direct-fabric --node spark2 --check'
 ```
@@ -158,13 +109,21 @@ ssh -t -o BatchMode=yes -o ForwardAgent=no dgx-spark-2 \
 
 Review `netplan try` at the console and accept only if management remains
 reachable. If it is not accepted, it automatically rolls back. Do not continue
-to Spark 1 if worker application, route preservation, or link checks fail.
+to Spark 1 if worker application, route preservation, or local validation
+fails. Before staging the head, the worker must prove its own addresses, MTU,
+RoCEv2 GID-to-netdev binding, and absence of a fabric default route:
+
+```bash
+ssh -o BatchMode=yes -o ForwardAgent=no dgx-spark-2 \
+  'sudo bash /tmp/configure-direct-fabric --node spark2 --local-postcheck'
+```
 
 After the worker result is recorded, repeat the same staged preflight and
 interactive application for the head:
 
 ```bash
-scp nodes/bin/configure-direct-fabric dgx-spark-1:/tmp/configure-direct-fabric
+scp -o ForwardAgent=no nodes/bin/configure-direct-fabric \
+  dgx-spark-1:/tmp/configure-direct-fabric
 ssh -o BatchMode=yes -o ForwardAgent=no dgx-spark-1 \
   'bash /tmp/configure-direct-fabric --node spark1 --check'
 ssh -t -o BatchMode=yes -o ForwardAgent=no dgx-spark-1 \
@@ -248,7 +207,8 @@ manual operation.
 ```bash
 for host in dgx-spark-1 dgx-spark-2; do
   ssh -o BatchMode=yes -o ForwardAgent=no "$host" '
-    sudo cat /etc/netplan/99-nvidia-sync-cluster.yaml
+    set -euo pipefail
+    sudo cat /etc/netplan/99-dgx-spark-direct-fabric.yaml
     ip -br link
     ip -br addr
     ip route
