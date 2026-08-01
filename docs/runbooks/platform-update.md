@@ -363,13 +363,21 @@ It must exit zero and print a `PASS` line. Record a fresh after-state with
 exact exit codes before staging and repeating the same procedure on
 `dgx-spark-1`. Never claim an after-state from the pre-change observation.
 
-If an installed service was disabled and the decision is explicitly reversed,
-the rollback/re-enable command is:
+If an installed service was changed and the decision is explicitly reversed,
+restore its recorded prior state rather than using one generic rollback:
 
 ```bash
+# Prior state: enabled and running
 sudo systemctl unmask earlyoom && sudo systemctl enable --now earlyoom
+
+# Prior state: disabled but running
+sudo systemctl start earlyoom
+
+# Prior state: masked but running
+sudo systemctl unmask earlyoom && sudo systemctl start earlyoom && \
+  sudo systemctl mask earlyoom
 ```
 
-Do not run that command for the observed absent state; there is nothing to
+Do not run these commands for the observed absent state; there is nothing to
 roll back. After both nodes pass, remove `/tmp/disable-earlyoom` from each
 node and mark the evidence document complete.

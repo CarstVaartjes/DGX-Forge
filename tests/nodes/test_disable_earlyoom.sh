@@ -10,7 +10,30 @@ cat > "$fixture_dir/systemctl" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-case "${EARLYOOM_TEST_STATE:?}" in
+state="${EARLYOOM_TEST_STATE:?}"
+if [[ -n "${EARLYOOM_TEST_STATE_FILE:-}" ]]; then
+  state="$(cat "$EARLYOOM_TEST_STATE_FILE")"
+fi
+
+case "$1" in
+  stop)
+    printf 'stop\n' >> "${EARLYOOM_TEST_ACTION_LOG:?}"
+    case "$state" in
+      enabled|enabled_active) printf 'enabled_inactive\n' > "$EARLYOOM_TEST_STATE_FILE" ;;
+      disabled_active) printf 'disabled\n' > "$EARLYOOM_TEST_STATE_FILE" ;;
+      masked_active) printf 'masked\n' > "$EARLYOOM_TEST_STATE_FILE" ;;
+      *) printf 'unsupported stop state: %s\n' "$state" >&2; exit 98 ;;
+    esac
+    exit 0
+    ;;
+  disable)
+    printf 'disable\n' >> "${EARLYOOM_TEST_ACTION_LOG:?}"
+    printf 'disabled\n' > "${EARLYOOM_TEST_STATE_FILE:?}"
+    exit 0
+    ;;
+esac
+
+case "$state" in
   absent)
     case "$1" in
       show) printf 'not-found\n'; exit 0 ;;
@@ -39,11 +62,53 @@ case "${EARLYOOM_TEST_STATE:?}" in
       is-active) printf 'active\n'; exit 0 ;;
     esac
     ;;
+  enabled_active)
+    case "$1" in
+      show) printf 'loaded\n'; exit 0 ;;
+      is-enabled) printf 'enabled\n'; exit 0 ;;
+      is-active) printf 'active\n'; exit 0 ;;
+    esac
+    ;;
+  enabled_inactive)
+    case "$1" in
+      show) printf 'loaded\n'; exit 0 ;;
+      is-enabled) printf 'enabled\n'; exit 0 ;;
+      is-active) printf 'inactive\n'; exit 3 ;;
+    esac
+    ;;
+  disabled_active)
+    case "$1" in
+      show) printf 'loaded\n'; exit 0 ;;
+      is-enabled) printf 'disabled\n'; exit 1 ;;
+      is-active) printf 'active\n'; exit 0 ;;
+    esac
+    ;;
+  masked_active)
+    case "$1" in
+      show) printf 'masked\n'; exit 0 ;;
+      is-enabled) printf 'masked\n'; exit 1 ;;
+      is-active) printf 'active\n'; exit 0 ;;
+    esac
+    ;;
   static)
     case "$1" in
       show) printf 'loaded\n'; exit 0 ;;
       is-enabled) printf 'static\n'; exit 0 ;;
       is-active) printf 'inactive\n'; exit 3 ;;
+    esac
+    ;;
+  invalid_enabled_rc)
+    case "$1" in
+      show) printf 'loaded\n'; exit 0 ;;
+      is-enabled) printf 'disabled\n'; exit 0 ;;
+      is-active) printf 'inactive\n'; exit 3 ;;
+    esac
+    ;;
+  invalid_active_rc)
+    case "$1" in
+      show) printf 'loaded\n'; exit 0 ;;
+      is-enabled) printf 'disabled\n'; exit 1 ;;
+      is-active) printf 'inactive\n'; exit 0 ;;
     esac
     ;;
 esac
@@ -56,7 +121,11 @@ cat > "$fixture_dir/dpkg-query" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "${EARLYOOM_TEST_STATE:?}" == absent ]]; then
+state="${EARLYOOM_TEST_STATE:?}"
+if [[ -n "${EARLYOOM_TEST_STATE_FILE:-}" ]]; then
+  state="$(cat "$EARLYOOM_TEST_STATE_FILE")"
+fi
+if [[ "$state" == absent ]]; then
   printf 'dpkg-query: no packages found matching earlyoom\n' >&2
   exit 1
 fi
@@ -68,6 +137,7 @@ chmod +x "$fixture_dir/systemctl" "$fixture_dir/dpkg-query"
 run_check() {
   local state="$1"
   local expected_rc="$2"
+  local expected_classification="$3"
   local output_file="$fixture_dir/$state.out"
   local rc
 
@@ -77,29 +147,58 @@ run_check() {
   rc=$?
   set -e
   test "$rc" -eq "$expected_rc"
-  grep -Fq "classification=$state" "$output_file"
+  grep -Fq "classification=$expected_classification" "$output_file"
 }
 
-run_check absent 0
+run_check absent 0 absent
 grep -Fq 'before.enabled.exit_code=4' "$fixture_dir/absent.out"
 grep -Fq 'before.active.exit_code=4' "$fixture_dir/absent.out"
 grep -Fq 'PASS: earlyoom is absent; no change required' "$fixture_dir/absent.out"
 
-run_check disabled 0
+run_check disabled 0 disabled
 grep -Fq 'PASS: earlyoom is disabled and inactive' "$fixture_dir/disabled.out"
 
-run_check masked 0
+run_check masked 0 masked
 grep -Fq 'PASS: earlyoom is masked and inactive' "$fixture_dir/masked.out"
 
-run_check enabled 2
-grep -Fq 'CHANGE_REQUIRED: earlyoom must be stopped and disabled' \
+run_check enabled 2 change_required_enabled
+grep -Fq 'CHANGE_REQUIRED: earlyoom must be made inactive and non-enabled' \
   "$fixture_dir/enabled.out"
 
-run_check static 3
+run_check disabled_active 2 change_required_disabled_active
+run_check masked_active 2 change_required_masked_active
+
+run_check static 3 static
 grep -Fq 'ERROR: unexpected earlyoom state; refusing to change it' \
   "$fixture_dir/static.out"
+run_check invalid_enabled_rc 3 unexpected
+run_check invalid_active_rc 3 unexpected
 
-grep -Fq 'systemctl stop earlyoom' "$script"
-grep -Fq 'systemctl disable earlyoom' "$script"
+apply_script="$fixture_dir/disable-earlyoom-apply-test"
+sed 's/if (( EUID != 0 )); then/if false; then/' "$script" > "$apply_script"
+chmod +x "$apply_script"
+
+run_apply() {
+  local initial_state="$1"
+  local expected_classification="$2"
+  local expected_actions="$3"
+  local state_file="$fixture_dir/$initial_state.state"
+  local action_log="$fixture_dir/$initial_state.actions"
+  local output_file="$fixture_dir/$initial_state.apply.out"
+
+  printf '%s\n' "$initial_state" > "$state_file"
+  : > "$action_log"
+  PATH="$fixture_dir:$PATH" \
+    EARLYOOM_TEST_STATE="$initial_state" \
+    EARLYOOM_TEST_STATE_FILE="$state_file" \
+    EARLYOOM_TEST_ACTION_LOG="$action_log" \
+    bash "$apply_script" --apply > "$output_file" 2>&1
+  grep -Fq "classification=$expected_classification" "$output_file"
+  test "$(cat "$action_log")" = "$expected_actions"
+}
+
+run_apply enabled_active disabled $'stop\ndisable'
+run_apply disabled_active disabled $'stop\ndisable'
+run_apply masked_active masked 'stop'
 
 printf 'earlyoom safeguard: PASS\n'
