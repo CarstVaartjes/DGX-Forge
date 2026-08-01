@@ -4,6 +4,7 @@ Host dgx-spark-1
     IdentityAgent "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
     IdentityFile ~/.ssh/dgx_spark_admin.pub
     IdentitiesOnly yes
+    HostKeyAlgorithms ssh-ed25519
 
 Host dgx-spark-2
     HostName 192.168.1.212
@@ -11,3 +12,4 @@ Host dgx-spark-2
     IdentityAgent "~/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock"
     IdentityFile ~/.ssh/dgx_spark_admin.pub
     IdentitiesOnly yes
+    HostKeyAlgorithms ssh-ed25519
