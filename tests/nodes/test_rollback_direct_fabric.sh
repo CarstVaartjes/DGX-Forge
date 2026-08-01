@@ -36,6 +36,7 @@ elif [[ "$command" == *'--rollback'* ]]; then
   [[ "${ROLLBACK_FAIL_ROLLBACK:-}" != "$host" ]] || exit 8
 elif [[ "$command" == *'hostname'* ]]; then
   printf 'management:%s\n' "$host" >> "${ROLLBACK_ACTION_LOG:?}"
+  [[ "${ROLLBACK_FAIL_MANAGEMENT:-}" != "$host" ]] || exit 9
   printf 'reachable\n'
 else
   printf 'unexpected ssh command: %s\n' "$command" >&2; exit 99
@@ -67,6 +68,10 @@ test "$(cat "$fixture_dir/checksum-failure.log")" = $'stage:dgx-spark-2\nchecksu
 rc="$(run_case worker-failure env ROLLBACK_FAIL_ROLLBACK=dgx-spark-2)"
 test "$rc" -ne 0
 test "$(cat "$fixture_dir/worker-failure.log")" = $'stage:dgx-spark-2\nchecksum:dgx-spark-2\nrollback:dgx-spark-2'
+
+rc="$(run_case management-failure env ROLLBACK_FAIL_MANAGEMENT=dgx-spark-2)"
+test "$rc" -ne 0
+test "$(cat "$fixture_dir/management-failure.log")" = $'stage:dgx-spark-2\nchecksum:dgx-spark-2\nrollback:dgx-spark-2\nmanagement:dgx-spark-2'
 
 rc="$(run_case success env)"
 test "$rc" -eq 0
