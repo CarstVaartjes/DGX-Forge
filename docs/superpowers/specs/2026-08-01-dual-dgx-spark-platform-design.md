@@ -40,6 +40,7 @@ This specification uses measurable defaults and acceptance gates. A measured val
 - Automatic operating-system, firmware, container, model, or distributed-profile updates.
 - Running unreviewed remote installation scripts directly from a pipe to a shell.
 - Hiding low-level Docker, SSH, NCCL, or vLLM behavior behind a custom orchestration daemon.
+- Running Caddy, the profile controller, browser UI, LiteLLM, Tailscale ingress, or general-purpose monitoring containers on either Spark.
 
 ## Prerequisites and Inventory
 
@@ -88,7 +89,7 @@ Cluster jobs require separate node-to-node SSH credentials. These credentials ar
 
 Spark 1 is the head node and Spark 2 is the worker. DeepSeek runs as one logical vLLM service with tensor parallel size two, pipeline parallel size one, and the `mp` distributed executor. TP=2 is mandatory for this checkpoint: the snapshot is about 155.44 GiB, or about 77.72 GiB of weight payload per rank before runtime workspaces and metadata.
 
-Inter-node model traffic uses the direct ConnectX-7 fabric. Client traffic uses the stable reverse-proxy endpoint on the DS218+. The browser UI is also placed on the NAS when it passes its resource gate, otherwise on Spark 2 rather than on the busier TP rank 0.
+Inter-node model traffic uses the direct ConnectX-7 fabric. Client traffic uses the stable reverse-proxy endpoint on the DS218+. Caddy, the profile controller, browser UI, optional LiteLLM, Tailscale ingress, and any later general-purpose monitoring services run on the DS218+ or another non-Spark container host.
 
 NVIDIA Sync Cluster Assistant is the preferred fabric configuration path because it validates topology, software readiness, addressing, and node-to-node SSH. The official manual two-Spark playbook is the fallback if Cluster Assistant cannot complete the configuration.
 
@@ -112,15 +113,15 @@ Caddy runs on the DS218+ from day one as the stable client endpoint at `https://
 - **active:** proxy the advertised profile to its firewall-restricted LAN upstream and return HTTP 503 if that upstream becomes unhealthy;
 - **draining/maintenance:** reject new inference with HTTP 503 and `Retry-After: 30` while existing proxied requests receive their configured grace period.
 
-Clients and the browser UI always use Caddy, which makes drain and advertise operations real before LiteLLM exists. The vLLM upstream binds on Spark 1's LAN address, but its host firewall permits port 8888 only from the NAS and local host. Caddy is limited to 0.5 CPU and 256 MiB of memory and may start when the NAS boots, always using the fail-closed maintenance configuration until the controller advertises a healthy profile. If the NAS cannot run the pinned Caddy container, Spark 1 is the documented fallback gateway; this fallback must pass the same tests before model work proceeds.
+Clients and the browser UI always use Caddy, which makes drain and advertise operations real before LiteLLM exists. The vLLM upstream binds on Spark 1's LAN address, but its host firewall permits port 8888 only from the external gateway and local host. Caddy is limited to 0.5 CPU and 256 MiB of memory and may start when the control host boots, always using the fail-closed maintenance configuration until the controller advertises a healthy profile. If the DS218+ cannot run the pinned Caddy image, another non-Spark container host is required; neither Spark is a fallback gateway.
 
-The Spark 1 controller changes Caddy state through a dedicated restricted SSH key and a root-owned `gatewayctl` command on the NAS. That forced command accepts only `drain`, `activate <profile>`, and `status`; it validates a generated configuration and performs an atomic Caddy reload through the container's loopback-only admin API. The general Caddy admin API is never exposed on the LAN.
+The profile controller is a one-shot container on the same external control host as Caddy. It changes Caddy state through a private container network and uses dedicated restricted SSH keys to invoke a root-owned `spark-nodectl` forced command on each Spark. That command accepts only the explicit runtime operations required by the controller; it does not provide a general shell. Caddy's admin API is reachable only on the private container network and is never exposed on the LAN.
 
-The browser UI is added after the API passes correctness and load gates. The DS218+ is preferred if it has a supported Container Manager installation, at least 4 GiB installed memory, at least 2 GiB available memory before start, and at least 20 GiB free disk. Its UI container is limited to 1 CPU and 2 GiB. If the NAS fails those gates, the UI runs on Spark 2 with the same limits.
+The browser UI is added after the API passes correctness and load gates. The DS218+ is preferred if it has a supported Container Manager installation, at least 4 GiB installed memory, at least 2 GiB available memory before start, and at least 20 GiB free disk. Its UI container is limited to 1 CPU and 2 GiB. If the NAS fails those gates, the UI requires another non-Spark container host with the same minimum resources and limits.
 
 LiteLLM is optional and deferred until routing multiple simultaneously active endpoints provides value. If deployed, the DS218+ must have at least 6 GiB installed memory and 3 GiB available before LiteLLM plus the UI start. LiteLLM is limited to 1 CPU and 1 GiB in addition to the UI allocation.
 
-Tailscale is added after LAN acceptance from Tailscale's signed APT repository rather than its convenience `curl | sh` installer. Remote clients use a named Tailscale Service protected by grants or ACLs. No Spark API port is exposed directly to the public internet.
+Tailscale is added after LAN acceptance as a container or signed-package installation on an external gateway host rather than through its convenience `curl | sh` installer. Remote clients use a named Tailscale Service and, where needed, a restricted subnet route protected by grants or ACLs. No Tailscale daemon is required on the Sparks initially, and no Spark API port is exposed directly to the public internet.
 
 ### Port and bind map
 
@@ -128,13 +129,14 @@ Tailscale is added after LAN acceptance from Tailscale's signed APT repository r
 | --- | --- | ---: | --- | --- |
 | Administrative SSH | both | 22/TCP | LAN; approved admin clients | Ed25519 public key |
 | Cluster SSH | both | 22/TCP | fabric peer only | separate cluster key |
+| Controller SSH | both | 22/TCP | external control-host source only | forced-command controller key |
 | Caddy API/status | DS218+ | 8443/TCP | LAN, later Tailscale | private CA TLS plus bearer key |
-| Caddy admin API | DS218+ | 2019/TCP | container loopback only | restricted `gatewayctl` path |
+| Caddy admin API | DS218+ | 2019/TCP | private container network only | controller-network isolation |
 | vLLM API upstream | Spark 1 | 8888/TCP | Spark 1 LAN; firewall source NAS and local host only | vLLM API key plus proxy isolation |
 | vLLM `mp` rendezvous | both | 25000/TCP | fabric peer only | network isolation |
 | NCCL/Gloo/TP runtime traffic | both | runtime-selected | fabric peer only | direct-link firewall isolation |
 | TRELLIS.2 upstream | Spark 2 | 7860/TCP | Spark 2 LAN; firewall source NAS only | upstream token plus proxy isolation |
-| Browser UI | NAS or Spark 2 | 3000/TCP | LAN; exact host firewall source list | UI login plus Caddy API key |
+| Browser UI | external host | 3000/TCP | LAN; exact host firewall source list | UI login plus Caddy API key |
 
 No client route exists on the fabric. Because the fabric is a dedicated point-to-point network, its peer-to-peer runtime port range is allowed only between the two recorded fabric IPs rather than exposed on the LAN.
 
@@ -203,7 +205,7 @@ The prebuilt Anemll image is acceptable only after provenance and contents are i
 ### `maintenance`
 
 - Stops all GPU model containers on both nodes.
-- Leaves SSH, Caddy's maintenance response, monitoring, and DGX Dashboard available.
+- Leaves Spark SSH and DGX Dashboard available; external Caddy continues returning its maintenance response.
 - Is the required state before OS, firmware, driver, or fabric maintenance.
 
 ### Future profiles
@@ -212,11 +214,11 @@ Each future model is isolated with declared nodes, exact ports, local cache path
 
 ## Workload Controller
 
-There is no NVIDIA-standard model-profile switcher for DGX Spark. The platform therefore uses a thin, project-local shell wrapper over ordinary Docker Compose and SSH, including the NAS's restricted `gatewayctl` command. It is not a daemon and does not hide the underlying commands.
+There is no NVIDIA-standard model-profile switcher for DGX Spark. The platform therefore uses a thin, project-local controller container over ordinary Docker Compose, Caddy's private admin API, and restricted SSH commands. It is not a daemon and does not hide the underlying commands.
 
-The controller executes only on Spark 1 from `/opt/dgx-spark-platform`. Its persistent state is `/var/lib/dgx-spark-platform/state.json`; transition metadata contains the prior profile, target profile, phase, controller PID, start timestamp, last error, and boot ID. The lock file is `/run/lock/dgx-spark-platform.switch.lock`.
+The controller executes as a one-shot container only on the external control host. Its container path `/var/lib/dgx-spark-platform` is a persistent bind mount; `state.json` contains the prior profile, target profile, phase, controller PID, start timestamp, last error, and both Spark boot IDs. The shared lock file is `/var/lib/dgx-spark-platform/switch.lock`.
 
-The controller uses the kernel's `flock`, not existence of a lock file, for mutual exclusion. A crashed process automatically releases the kernel lock, so stale file contents cannot wedge future operations. If state shows an interrupted transition, `status` reports `recovery-required`; `recover --force` is permitted only after it proves no controller PID and no profile container are still active on either node.
+The controller uses the control host kernel's `flock` on the bind-mounted lock file, not file existence, for mutual exclusion across one-shot container runs. A crashed process automatically releases the kernel lock, so stale contents cannot wedge future operations. If state shows an interrupted transition, `status` reports `recovery-required`; `recover --force` is permitted only after it proves no controller process and no profile container are still active on either Spark.
 
 The controller provides:
 
@@ -231,23 +233,23 @@ The controller provides:
 A profile switch performs this sequence:
 
 1. Acquire `flock` and write transition metadata.
-2. Invoke NAS `gatewayctl drain`, verify Caddy loaded its draining route, and confirm new inference receives HTTP 503.
+2. Load Caddy's draining route over the private container network and confirm new inference receives HTTP 503.
 3. Poll the active-request metric for up to 300 seconds by default. The configured grace may be 30–1,800 seconds; expiry is logged.
-4. Stop the head before the worker with a 120-second Compose stop grace.
+4. Invoke restricted node commands to stop the head before the worker with a 120-second Compose stop grace.
 5. Confirm all target and prior-profile containers exited on both nodes within 60 seconds.
 6. Confirm the quantitative memory, swap, and disk gates for the target profile.
 7. Validate image digests, model manifests, encoder checksum, offline mode, fabric connectivity, and rendered configuration.
-8. Start target workers before the target head.
+8. Invoke restricted node commands to start target workers before the target head.
 9. Wait up to 900 seconds for container and application health checks.
 10. Run structural, deterministic output-quality, and profile-specific capacity smoke tests.
-11. Invoke NAS `gatewayctl activate <profile>`, verify its upstream health, and publish the target in controller status.
+11. Load Caddy's active route over the private container network, verify upstream health, and publish the target in controller state.
 12. Mark the transition successful and release the lock.
 
 If startup or validation fails, the controller restores Caddy's maintenance route, stops the partial target deployment, preserves logs, and leaves the system in a known stopped state. It does not automatically restart the previous heavyweight workload.
 
 Distributed and GPU-heavy profiles use `restart: "no"`. They never auto-start after a Spark reboot because Compose cannot enforce cross-host worker-before-head order. Caddy may auto-start on the NAS, but it starts fail-closed and returns maintenance or upstream-unhealthy HTTP 503. A Spark boot-ID change causes controller status to report `stopped-after-reboot`; an operator must run `doctor` and explicitly start a profile.
 
-Compose uses explicit project names, health checks, `stop_grace_period: 120s`, and Docker JSON log rotation of `max-size: 50m` and `max-file: 5` per container. The NAS Caddy container alone may use `restart: unless-stopped`. Controller logs use journald with a 500 MiB maximum for the service namespace. Production overrides contain runtime settings without duplicating base definitions.
+Compose uses explicit project names, health checks, `stop_grace_period: 120s`, and Docker JSON log rotation of `max-size: 50m` and `max-file: 5` per container. The external Caddy container alone may use `restart: unless-stopped`; controller runs use `restart: "no"`. Production overrides contain runtime settings without duplicating base definitions.
 
 ## Output-Quality Gate
 
@@ -272,6 +274,7 @@ The validation fixture pins sampling parameters and records the runtime digest, 
 - After key verification on both nodes, set `PasswordAuthentication no` and `KbdInteractiveAuthentication no` in a managed drop-in and reload SSH.
 - Verify key login again, then verify a connection with public-key authentication disabled is rejected. Retain local console/DGX Dashboard recovery access.
 - Do not copy the Mac's private key to either Spark or use SSH agent forwarding.
+- Keep the controller's dedicated private key only on the external control host; each Spark restricts its public key with a forced `spark-nodectl` command and source-address rule.
 - Keep secrets out of Git, Compose files, logs, process arguments where avoidable, and command histories.
 - Store API keys and future Tailscale or LiteLLM credentials in 1Password and render runtime-only secret files under `/run` with mode `0600`.
 - Require a bearer API key at Caddy and a separate upstream key at vLLM.
@@ -314,7 +317,7 @@ Model, runtime, image, encoder, and sampling changes use new pins and repeat the
 - last 100 log lines plus current bounded log sizes;
 - last successful structural, output-quality, capacity, and performance test with pin set.
 
-Metrics and logs remain local initially. Prometheus or centralized logging is added only if operation demonstrates a need.
+Spark runtime metrics and logs remain on the Sparks initially and are queried by the external controller. Any later Prometheus or centralized logging containers run only on external hosts.
 
 ## Failure Handling
 
@@ -352,7 +355,7 @@ The source results came from specific upstream hardware state and profile settin
 8. Validate Docker GPU access and image architecture on both nodes.
 9. Audit and pin the MiaAI-Lab source, Anemll image digest, patches, encoder, configuration, and sampling presets.
 10. Check disk gates; download the pinned snapshot online during maintenance, generate/verify manifests on both nodes, then enforce offline mode.
-11. Inventory the DS218+, install Caddy there in fail-closed maintenance state, and validate TLS, bearer rejection, upstream failure, restricted `gatewayctl`, route switching, and log limits.
+11. Inventory the DS218+, install the external Caddy and one-shot controller containers, install forced `spark-nodectl` access on both Sparks, and validate TLS, bearer rejection, upstream failure, private admin networking, restricted node control, route switching, state locking, and log limits.
 12. Run `deepseek-baseline` and pass structural plus deterministic quality gates.
 13. Add DSpark, pass quality gates, and record speculative acceptance.
 14. Add padded NVFP4, pass the greater-than-411-token regression and 8K quality gates.
@@ -379,6 +382,7 @@ The source results came from specific upstream hardware state and profile settin
 - Deterministic, script/language, repetition, XML-leakage, reasoning, streaming, and tool-call quality gates pass both directly and through Caddy.
 - All performance floors pass, and the 15-minute run has no thermal throttling or greater than 15% sustained regression.
 - NAS-hosted Caddy is the only client endpoint, enforces TLS and bearer keys, exposes no LAN admin API, and returns HTTP 503 during drains, upstream failures, and post-reboot state.
+- The Sparks run only AI/model containers; gateway, controller, UI, LiteLLM, Tailscale ingress, and general monitoring containers run on non-Spark hosts.
 - Profile switches are serialized by kernel `flock`, use the numeric timeouts, and fail to a known stopped state.
 - After reboot, no distributed/GPU-heavy profile starts automatically.
 - TRELLIS.2 produces a valid GLB from a sample image at 512-cubed resolution.
