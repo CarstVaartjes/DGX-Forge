@@ -11,7 +11,7 @@ if ! kernel_log="$(journalctl -k -b --no-pager)"; then
 fi
 
 if grep -Eai \
-    'I/O error|nvme.*(abort|reset|timeout)|EXT4-fs error|XFS.*corrupt|BTRFS.*error' \
+    'I/O error|nvme.*I/O .*timeout|nvme.*controller is down; will reset|nvme.*reset controller|nvme.*failed to reset|EXT4-fs error|XFS.*corrupt|BTRFS.*error' \
     <<<"$kernel_log"
 then
     printf 'FAIL: storage or filesystem error in current boot\n' >&2

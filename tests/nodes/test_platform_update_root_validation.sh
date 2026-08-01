@@ -38,13 +38,26 @@ cmp "$test_dir/expected-docker-args" "$DOCKER_ARGS_FILE"
 grep -Fxq 'PASS: GPU container and current-boot storage checks passed' \
   "$test_dir/safe-output"
 
-if JOURNAL_CONTENT='nvme0: I/O error' "$validator" \
-  > "$test_dir/unsafe-output" 2>&1
-then
-  printf 'validator accepted a kernel storage error\n' >&2
-  exit 1
-fi
+JOURNAL_CONTENT='nvme nvme0: Shutdown timeout set to 10 seconds' \
+  "$validator" > "$test_dir/benign-timeout-output"
+grep -Fxq 'PASS: GPU container and current-boot storage checks passed' \
+  "$test_dir/benign-timeout-output"
 
-grep -Fq 'nvme0: I/O error' "$test_dir/unsafe-output"
-grep -Fq 'FAIL: storage or filesystem error in current boot' \
-  "$test_dir/unsafe-output"
+dangerous_messages=(
+  'nvme nvme0: I/O 42 QID 7 timeout, aborting'
+  'nvme nvme0: controller is down; will reset: CSTS=0xffffffff'
+  'nvme0n1: I/O error at sector 123'
+)
+
+for message in "${dangerous_messages[@]}"; do
+  if JOURNAL_CONTENT="$message" "$validator" \
+    > "$test_dir/unsafe-output" 2>&1
+  then
+    printf 'validator accepted a kernel storage error: %s\n' "$message" >&2
+    exit 1
+  fi
+
+  grep -Fq "$message" "$test_dir/unsafe-output"
+  grep -Fq 'FAIL: storage or filesystem error in current boot' \
+    "$test_dir/unsafe-output"
+done
