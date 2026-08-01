@@ -1,0 +1,73 @@
+{
+  "captured_at": "2026-08-01T22:57:55.463738+00:00",
+  "commands": [
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": ""
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "123138\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "---------------------------------------------------------------------------------------\n                    RDMA_Write BW Test\n Dual-port       : OFF\t\tDevice         : rocep1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n TX depth        : 128\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Max inline data : 0[B]\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x0228 PSN 0x71b12a RKey 0x1c03ec VAddr 0x00e608d5c7d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:10\n remote address: LID 0000 QPN 0x0228 PSN 0x2a3c06 RKey 0x1c03ec VAddr 0x00fd5b477fd000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             109.00             108.97 \t\t   0.207852\n---------------------------------------------------------------------------------------\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "\n************************************\n* Waiting for client to connect... *\n************************************\n---------------------------------------------------------------------------------------\n                    RDMA_Write BW Test\n Dual-port       : OFF\t\tDevice         : rocep1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Max inline data : 0[B]\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x0228 PSN 0x2a3c06 RKey 0x1c03ec VAddr 0x00fd5b477fd000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11\n remote address: LID 0000 QPN 0x0228 PSN 0x71b12a RKey 0x1c03ec VAddr 0x00e608d5c7d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:10\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             109.00             108.97 \t\t   0.207852\n---------------------------------------------------------------------------------------\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "123744\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "---------------------------------------------------------------------------------------\n                    RDMA_Write BW Test\n Dual-port       : OFF\t\tDevice         : rocep1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n TX depth        : 128\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Max inline data : 0[B]\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x0229 PSN 0xae9fd6 RKey 0x1c03ec VAddr 0x00fceff427d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11\n remote address: LID 0000 QPN 0x0229 PSN 0x99f1ae RKey 0x1c03ec VAddr 0x00fe8365f0d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:10\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             109.00             108.99 \t\t   0.207879\n---------------------------------------------------------------------------------------\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 255,
+      "stderr": "sign_and_send_pubkey: signing failed for ED25519 \"/Users/cvaartjes/.ssh/dgx_spark_admin.pub\" from agent: agent refused operation\ncarst@192.168.1.211: Permission denied (publickey).\n",
+      "stdout": ""
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 255,
+      "stderr": "sign_and_send_pubkey: signing failed for ED25519 \"/Users/cvaartjes/.ssh/dgx_spark_admin.pub\" from agent: agent refused operation\ncarst@192.168.1.211: Permission denied (publickey).\n",
+      "stdout": ""
+    }
+  ],
+  "evidence_scope": "live_runtime_verification",
+  "failure": "command failed (255): ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+  "inventory": "inventory/cluster.toml",
+  "nccl": null,
+  "rdma": [],
+  "resolved_consumers": {
+    "GLOO_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1",
+    "NCCL_IB_GID_INDEX": 3,
+    "NCCL_IB_HCA": "=rocep1s0f1:1,roceP2p1s0f1:1",
+    "NCCL_SOCKET_IFNAME": "=enp1s0f1np1,enP2p1s0f1np1",
+    "TP_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1"
+  },
+  "schema_version": 1,
+  "status": "failed"
+}

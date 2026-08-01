@@ -310,3 +310,47 @@ test -z "$(ip route show default dev "$iface")"
 The verified values above are recorded in `inventory/cluster.toml` and
 `inventory/reports/fabric.json`. Do not replace them using the management LAN
 or link-local GIDs.
+
+## RDMA and NCCL acceptance
+
+Run `scripts/validate-fabric --inventory inventory/cluster.toml --output
+inventory/reports/rdma-nccl.json` from the controller only after the recorded
+postchecks pass. The wrapper is fail-closed: it validates both recorded
+HCA/GID/netdev consumers, uses `-x 3` with `ib_write_bw` and `ib_read_bw`,
+uses the Spark 1 `dgx-spark-2-fabric` alias for every worker operation, and
+stops at the first nonzero exit, no-positive-bandwidth result, or NCCL
+`NET/Socket` diagnostic. It never enables agent forwarding.
+
+The NCCL gate uses NVIDIA's official `nccl-tests` source pinned at
+`a0b82b2260cf5152b9f8c061bbf7eaf0ba096432`, compiled with MPI support for
+`all_reduce_perf_mpi`, in the DGX-Spark-validated NGC PyTorch image
+`nvcr.io/nvidia/pytorch:25.12-py3`. NVIDIA's DGX Spark guide directs users to
+the stacked-Sparks NCCL playbook; the `nccl-tests` project documents that a
+multi-node benchmark must be built with `MPI=1` and launched by `mpirun`.
+This avoids installing MPI, CUDA, or an NCCL test binary on either host.
+
+The first NCCL container action is deliberately a narrow, noninteractive
+authorization probe on Spark 1 and then through its fabric alias to Spark 2:
+
+```bash
+sudo -n /usr/bin/docker info >/dev/null
+```
+
+Do not add `carst` to the `docker` group. If that probe fails, stop; do not
+pull an image, clone sources, or stage a container. A controller with a fresh
+1Password SSH-agent session must first rerun the wrapper's read-only gate:
+
+```bash
+scripts/validate-fabric --inventory inventory/cluster.toml \
+  --output /tmp/rdma-nccl-preflight.json --preflight-only
+```
+
+Only after a controller approves narrowly scoped `sudo docker` execution on
+both Sparks may the temporary NGC container be used. Every container command
+must include `--rm --network host --ipc host --gpus all`; source and build
+directories belong under a unique `/tmp/validate-fabric-nccl-*` directory and
+must be removed after the result has been copied to
+`inventory/reports/rdma-nccl.json`. Mount only Spark 1's existing
+`dgx_spark_fabric_ed25519` key and known-hosts file read-only into the
+head-side ephemeral AI container. Never copy either private key to Spark 2 or
+the controller, and never mount an agent socket.
