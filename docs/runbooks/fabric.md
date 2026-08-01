@@ -186,17 +186,45 @@ private component to Spark 2 or the Mac.
 
 ### Manual rollback
 
-Run the same reviewed script from a working management session. It retains the
-managed Netplan file under `/root/dgx-spark-fabric-rollback/` and uses
-`netplan try`; it does not remove the head-only SSH key, which must be removed
-separately only if the cluster relationship is intentionally dismantled.
+Re-stage the reviewed source script and verify its SHA-256 before each rollback
+command. This transfers only the checked-in script over the existing Mac
+administration connection; it never transfers a private key and explicitly
+disables agent forwarding. The first rollback is a hard worker gate: do not
+stage or touch Spark 1 until Spark 2 prints its final pass result and management
+access remains available.
 
 ```bash
-ssh -t -o BatchMode=yes -o ForwardAgent=no dgx-spark-1 \
-  'sudo bash /tmp/configure-direct-fabric --node spark1 --rollback'
+script_sha256="$(shasum -a 256 nodes/bin/configure-direct-fabric | awk '{print $1}')"
+scp -o ForwardAgent=no nodes/bin/configure-direct-fabric \
+  dgx-spark-2:/tmp/configure-direct-fabric
+worker_checksum="$(ssh -o BatchMode=yes -o ForwardAgent=no dgx-spark-2 \
+  'sha256sum /tmp/configure-direct-fabric')"
+test "${worker_checksum%% *}" = "$script_sha256"
+printf '%s\n' 'rollback preflight passed on Spark 2'
 ssh -t -o BatchMode=yes -o ForwardAgent=no dgx-spark-2 \
   'sudo bash /tmp/configure-direct-fabric --node spark2 --rollback'
 ```
+
+Only after that worker rollback command exits successfully, repeat the same
+checksum gate and rollback on Spark 1:
+
+```bash
+scp -o ForwardAgent=no nodes/bin/configure-direct-fabric \
+  dgx-spark-1:/tmp/configure-direct-fabric
+head_checksum="$(ssh -o BatchMode=yes -o ForwardAgent=no dgx-spark-1 \
+  'sha256sum /tmp/configure-direct-fabric')"
+test "${head_checksum%% *}" = "$script_sha256"
+printf '%s\n' 'rollback preflight passed on Spark 1'
+ssh -t -o BatchMode=yes -o ForwardAgent=no dgx-spark-1 \
+  'sudo bash /tmp/configure-direct-fabric --node spark1 --rollback'
+```
+
+The rollback retains the managed Netplan file under
+`/root/dgx-spark-fabric-rollback/` and uses `netplan try`; it does not remove
+the head-only SSH key, which must be removed separately only if the cluster
+relationship is intentionally dismantled. After a deliberately completed
+rollback, verify both nodes over management and remove the two temporary
+`/tmp/configure-direct-fabric` copies.
 
 ## Post-success collection and acceptance
 
