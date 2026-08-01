@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Upload and invoke this script only with `ssh -o ForwardAgent=no`; it never
+# opens SSH itself and never handles private-key material.
+
+managed_netplan='/etc/netplan/99-dgx-spark-direct-fabric.yaml'
+rollback_directory='/root/dgx-spark-fabric-rollback'
+node=''
+action=''
+
+usage() {
+    cat <<'USAGE'
+Usage: configure-direct-fabric --node spark1|spark2 --emit-netplan|--check|--apply|--postcheck|--rollback
+
+--emit-netplan prints the reviewed persistent Netplan document without changing
+anything. --check is read-only. --apply and --rollback require root and use
+netplan try so a console/controller can reject an unsafe route change.
+USAGE
+}
+
+fail() {
+    printf 'FAIL: %s\n' "$*" >&2
+    exit 1
+}
+
+while (($#)); do
+    case "$1" in
+        --node)
+            (($# >= 2)) || fail '--node needs spark1 or spark2'
+            node="$2"
+            shift 2
+            ;;
+        --emit-netplan|--check|--apply|--postcheck|--rollback)
+            [[ -z "$action" ]] || fail 'choose exactly one action'
+            action="$1"
+            shift
+            ;;
+        --help|-h)
+            usage
+            exit 0
+            ;;
+        *)
+            fail "unknown argument: $1"
+            ;;
+    esac
+done
+
+[[ "$node" == spark1 || "$node" == spark2 ]] || fail 'node must be spark1 or spark2'
+[[ -n "$action" ]] || fail 'an action is required'
+
+case "$node" in
+    spark1)
+        addresses=('192.168.100.10/24' '192.168.101.10/24')
+        peers=('192.168.100.11' '192.168.101.11')
+        hcas=('rocep1s0f1' 'roceP2p1s0f1')
+        ;;
+    spark2)
+        addresses=('192.168.100.11/24' '192.168.101.11/24')
+        peers=('192.168.100.10' '192.168.101.10')
+        hcas=('rocep1s0f1' 'roceP2p1s0f1')
+        ;;
+esac
+
+interfaces=('enp1s0f1np1' 'enP2p1s0f1np1')
+mtu=1500
+
+emit_netplan() {
+    cat <<EOF
+network:
+  version: 2
+  ethernets:
+    ${interfaces[0]}:
+      addresses:
+        - ${addresses[0]}
+      dhcp4: false
+      mtu: ${mtu}
+      optional: true
+    ${interfaces[1]}:
+      addresses:
+        - ${addresses[1]}
+      dhcp4: false
+      mtu: ${mtu}
+      optional: true
+EOF
+}
+
+require_root() {
+    ((EUID == 0)) || fail "$action must be run with sudo"
+}
+
+management_default_device() {
+    ip -4 route show default | awk '/^default / { for (i = 1; i <= NF; ++i) if ($i == "dev") { print $(i + 1); exit } }'
+}
+
+assert_interfaces_present() {
+    local interface
+    for interface in "${interfaces[@]}"; do
+        [[ -d "/sys/class/net/$interface" ]] || fail "missing expected CX-7 interface: $interface"
+        [[ "$(cat "/sys/class/net/$interface/operstate")" == up ]] || \
+            fail "expected CX-7 interface is not up: $interface"
+        [[ "$(cat "/sys/class/net/$interface/speed")" == 200000 ]] || \
+            fail "expected 200000 Mb/s link on $interface"
+    done
+}
+
+assert_management_route_is_preserved() {
+    local default_device
+    default_device="$(management_default_device)"
+    [[ -n "$default_device" ]] || fail 'no IPv4 management default route exists'
+    for interface in "${interfaces[@]}"; do
+        [[ "$default_device" != "$interface" ]] || \
+            fail "management default route must not use fabric interface $interface"
+    done
+}
+
+assert_no_foreign_fabric_plan() {
+    [[ ! -e /etc/netplan/99-nvidia-sync-cluster.yaml ]] || \
+        fail 'NVIDIA Sync cluster Netplan exists; do not mix managed and manual fabric plans'
+    if [[ -e "$managed_netplan" ]] && ! cmp -s "$managed_netplan" <(emit_netplan); then
+        fail "existing managed Netplan differs: $managed_netplan"
+    fi
+}
+
+check() {
+    command -v ip >/dev/null || fail 'ip command is unavailable'
+    command -v netplan >/dev/null || fail 'netplan command is unavailable'
+    assert_interfaces_present
+    assert_management_route_is_preserved
+    assert_no_foreign_fabric_plan
+    printf 'PASS: fabric preflight passed for %s; management default=%s\n' \
+        "$node" "$(management_default_device)"
+}
+
+assert_no_fabric_default_routes() {
+    local interface
+    for interface in "${interfaces[@]}"; do
+        [[ -z "$(ip route show default dev "$interface")" ]] || \
+            fail "fabric interface has a default route: $interface"
+    done
+}
+
+apply() {
+    require_root
+    check
+
+    if [[ -e "$managed_netplan" ]]; then
+        printf 'PASS: reviewed Netplan is already installed: %s\n' "$managed_netplan"
+    else
+        local temporary_netplan
+        temporary_netplan="$(mktemp /etc/netplan/.99-dgx-spark-direct-fabric.XXXXXX)"
+        trap 'rm -f "$temporary_netplan"' RETURN
+        emit_netplan > "$temporary_netplan"
+        chmod 0600 "$temporary_netplan"
+        install -m 0600 "$temporary_netplan" "$managed_netplan"
+        rm -f "$temporary_netplan"
+        trap - RETURN
+        printf 'INSTALLED: %s\n' "$managed_netplan"
+    fi
+
+    netplan generate
+    printf '%s\n' 'ACTION REQUIRED: review netplan try and accept only if management remains reachable.'
+    netplan try
+    assert_management_route_is_preserved
+    assert_no_fabric_default_routes
+    printf 'PASS: Netplan accepted without a fabric default route\n'
+}
+
+gid_for_ipv4() {
+    local hca="$1"
+    local address="$2"
+    local gid_file gid_index gid_type gid
+    for gid_file in "/sys/class/infiniband/$hca/ports/1/gids"/[0-9]*; do
+        [[ -e "$gid_file" ]] || continue
+        gid_index="${gid_file##*/}"
+        gid_type="$(cat "/sys/class/infiniband/$hca/ports/1/gid_attrs/types/$gid_index" 2>/dev/null || true)"
+        [[ "$gid_type" == 'RoCE v2' ]] || continue
+        gid="$(cat "$gid_file")"
+        if python3 - "$address" "$gid" <<'PY'
+import ipaddress
+import sys
+
+address = ipaddress.IPv4Address(sys.argv[1])
+gid = ipaddress.IPv6Address(sys.argv[2])
+raise SystemExit(0 if gid.ipv4_mapped == address else 1)
+PY
+        then
+            printf '%s\n' "$gid_index"
+            return 0
+        fi
+    done
+    return 1
+}
+
+postcheck() {
+    local index interface address peer hca gid_index current_mtu payload
+    check
+    assert_no_fabric_default_routes
+    for index in 0 1; do
+        interface="${interfaces[$index]}"
+        address="${addresses[$index]%%/*}"
+        peer="${peers[$index]}"
+        hca="${hcas[$index]}"
+        current_mtu="$(cat "/sys/class/net/$interface/mtu")"
+        [[ "$current_mtu" == "$mtu" ]] || fail "unexpected MTU on $interface: $current_mtu"
+        ip -4 -o addr show dev "$interface" | grep -Fq "$address/24" || \
+            fail "missing $address/24 on $interface"
+        ip route get "$peer" | grep -Fq "dev $interface" || \
+            fail "peer $peer does not route through $interface"
+        gid_index="$(gid_for_ipv4 "$hca" "$address")" || \
+            fail "no RoCE v2 GID maps $hca to $address"
+        payload=$((current_mtu - 28))
+        ping -I "$interface" -c 3 "$peer"
+        ping -I "$interface" -M 'do' -s "$payload" -c 3 "$peer"
+        printf 'PASS: interface=%s fabric_ip=%s peer=%s hca=%s gid_index=%s mtu=%s link_rate=200000Mb/s\n' \
+            "$interface" "$address" "$peer" "$hca" "$gid_index" "$current_mtu"
+    done
+    printf 'PASS: fabric postcheck passed for %s\n' "$node"
+}
+
+rollback() {
+    require_root
+    [[ -e "$managed_netplan" ]] || fail "managed Netplan is absent: $managed_netplan"
+    install -d -m 0700 "$rollback_directory"
+    local saved_plan
+    saved_plan="$rollback_directory/$(basename "$managed_netplan").$(date -u +%Y%m%dT%H%M%SZ)"
+    mv "$managed_netplan" "$saved_plan"
+    netplan generate
+    printf 'ACTION REQUIRED: review netplan try; rollback file retained at %s\n' "$saved_plan"
+    netplan try
+    assert_management_route_is_preserved
+    assert_no_fabric_default_routes
+    printf 'PASS: manual fabric plan removed; retained at %s\n' "$saved_plan"
+}
+
+case "$action" in
+    --emit-netplan) emit_netplan ;;
+    --check) check ;;
+    --apply) apply ;;
+    --postcheck) postcheck ;;
+    --rollback) rollback ;;
+esac

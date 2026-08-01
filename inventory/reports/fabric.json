@@ -1,0 +1,115 @@
+{
+  "schema_version": 1,
+  "status": "needs_context",
+  "captured_at": "2026-08-01T21:59:08Z",
+  "topology": {
+    "requested": "two-node direct ConnectX-7 QSFP link",
+    "configured": false,
+    "default_route": false
+  },
+  "manual_plan": {
+    "status": "staged_not_applied",
+    "source": "NVIDIA dgx-spark-playbooks Connect Two Sparks README",
+    "source_commit": "1fb66f059ee427c5a3678b3117ef73aab042b458",
+    "netplan_file": "/etc/netplan/99-dgx-spark-direct-fabric.yaml",
+    "mtu": 1500,
+    "dhcp4": false,
+    "nodes": {
+      "spark1": [
+        {"interface": "enp1s0f1np1", "hca": "rocep1s0f1", "address": "192.168.100.10/24"},
+        {"interface": "enP2p1s0f1np1", "hca": "roceP2p1s0f1", "address": "192.168.101.10/24"}
+      ],
+      "spark2": [
+        {"interface": "enp1s0f1np1", "hca": "rocep1s0f1", "address": "192.168.100.11/24"},
+        {"interface": "enP2p1s0f1np1", "hca": "roceP2p1s0f1", "address": "192.168.101.11/24"}
+      ]
+    }
+  },
+  "observed_preconfiguration": {
+    "spark1": {
+      "ssh_alias": "dgx-spark-1",
+      "management_ip": "192.168.1.211",
+      "active_qsfp_functions": [
+        {
+          "interface": "enp1s0f1np1",
+          "hca": "rocep1s0f1",
+          "link_rate_mbps": 200000,
+          "link_mode": "Direct Attach Copper",
+          "fabric_ip": null,
+          "gid_index": null
+        },
+        {
+          "interface": "enP2p1s0f1np1",
+          "hca": "roceP2p1s0f1",
+          "link_rate_mbps": 200000,
+          "link_mode": "Direct Attach Copper",
+          "fabric_ip": null,
+          "gid_index": null
+        }
+      ]
+    },
+    "spark2": {
+      "ssh_alias": "dgx-spark-2",
+      "management_ip": "192.168.1.212",
+      "active_qsfp_functions": [
+        {
+          "interface": "enp1s0f1np1",
+          "hca": "rocep1s0f1",
+          "link_rate_mbps": 200000,
+          "link_mode": "Direct Attach Copper",
+          "fabric_ip": null,
+          "gid_index": null
+        },
+        {
+          "interface": "enP2p1s0f1np1",
+          "hca": "roceP2p1s0f1",
+          "link_rate_mbps": 200000,
+          "link_mode": "Direct Attach Copper",
+          "fabric_ip": null,
+          "gid_index": null
+        }
+      ]
+    }
+  },
+  "unresolved_required_values": [
+    "fabric_ip",
+    "mtu",
+    "RoCEv2 GID index mapped to each fabric IPv4 address",
+    "NCCL_SOCKET_IFNAME",
+    "NCCL_IB_HCA",
+    "NCCL_IB_GID_INDEX",
+    "TP_SOCKET_IFNAME",
+    "GLOO_SOCKET_IFNAME"
+  ],
+  "cable": {
+    "vendor": "Amphenol",
+    "oui": "78:a7:14",
+    "vendor_part_number": "NJAAKK-C106",
+    "revision": "B",
+    "serial": "APF261610697AC",
+    "length_meters": 1,
+    "construction": "passive copper PAM4",
+    "end_a_matches_end_b": true,
+    "support_status": "unconfirmed_oem_or_customer_identifier",
+    "support_evidence": "NVIDIA Sync currently lists Amphenol NJAAKK-N911 and Luxshare LMTQF022-SD-R, but no exact public record for NJAAKK-C106 was found."
+  },
+  "safety_gates": [
+    {
+      "name": "cable identity",
+      "status": "conditional_hypothesis_test_only",
+      "evidence": "Both functions report 200000 Mb/s Direct Attach Copper and sudo ethtool -m identifies matching 1 m Amphenol NJAAKK-C106 passive PAM4 DAC ends. C106 is not one of NVIDIA's currently published supported part numbers, so it is not confirmed supported."
+    },
+    {
+      "name": "NVIDIA Sync Cluster Assistant",
+      "status": "requires_controller_preconfiguration_gate",
+      "evidence": "Cluster Assistant is a controller-side NVIDIA Sync GUI workflow. The next permitted action is the Network Check screen before Confirm Network Configuration; any cable/link warning stops the rollout."
+    },
+    {
+      "name": "fabric acceptance",
+      "status": "not_run",
+      "evidence": "Neither node has a fabric IPv4 address or 99-nvidia-sync-cluster.yaml, so GID-to-IP mapping and bidirectional ping/MTU checks cannot be run."
+    }
+  ],
+  "host_mutations_performed": false,
+  "commit_created": false
+}

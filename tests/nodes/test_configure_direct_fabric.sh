@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+script="$repo_root/nodes/bin/configure-direct-fabric"
+fixture_dir="$(mktemp -d)"
+trap 'rm -rf -- "$fixture_dir"' EXIT
+
+cat > "$fixture_dir/spark2.expected" <<'EXPECTED'
+network:
+  version: 2
+  ethernets:
+    enp1s0f1np1:
+      addresses:
+        - 192.168.100.11/24
+      dhcp4: false
+      mtu: 1500
+      optional: true
+    enP2p1s0f1np1:
+      addresses:
+        - 192.168.101.11/24
+      dhcp4: false
+      mtu: 1500
+      optional: true
+EXPECTED
+
+"$script" --node spark2 --emit-netplan > "$fixture_dir/spark2.actual"
+cmp "$fixture_dir/spark2.expected" "$fixture_dir/spark2.actual"
+
+cat > "$fixture_dir/spark1.expected" <<'EXPECTED'
+network:
+  version: 2
+  ethernets:
+    enp1s0f1np1:
+      addresses:
+        - 192.168.100.10/24
+      dhcp4: false
+      mtu: 1500
+      optional: true
+    enP2p1s0f1np1:
+      addresses:
+        - 192.168.101.10/24
+      dhcp4: false
+      mtu: 1500
+      optional: true
+EXPECTED
+
+"$script" --node spark1 --emit-netplan > "$fixture_dir/spark1.actual"
+cmp "$fixture_dir/spark1.expected" "$fixture_dir/spark1.actual"
+
+if "$script" --node spark3 --emit-netplan > "$fixture_dir/invalid.out" 2>&1; then
+  printf 'script accepted an unsupported node\n' >&2
+  exit 1
+fi
+grep -Fq 'spark1 or spark2' "$fixture_dir/invalid.out"
+
+if grep -Eq 'id_ed25519_shared|Host \*|ssh-copy-id|scp .*id_ed25519' "$script"; then
+  printf 'script contains prohibited shared-key or broad SSH configuration behavior\n' >&2
+  exit 1
+fi
+
+grep -Fq 'netplan generate' "$script"
+grep -Fq 'netplan try' "$script"
+grep -Fq 'ip route show default dev' "$script"
+grep -Fq 'ForwardAgent=no' "$script"
+
+printf 'direct fabric configuration script: PASS\n'
