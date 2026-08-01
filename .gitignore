@@ -7,3 +7,5 @@
 *.pem
 model-cache/
 logs/
+.pytest_cache/
+__pycache__/
