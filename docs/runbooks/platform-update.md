@@ -386,9 +386,9 @@ node and mark the evidence document complete.
 
 The audited apply path ran on Spark 2 first and Spark 1 second. Both executions
 classified the service as `absent` and printed `PASS: earlyoom is absent; no
-change required`; no package, unit, or host configuration was changed. The
-exact interactive execution times were not recorded and are left null rather
-than inferred.
+change required`; both commands exited zero. No package, unit, or host
+configuration was changed. The exact interactive execution times were not
+recorded and are left null rather than inferred.
 
 Independent post-action probes at `2026-08-01T21:42:43Z` on Spark 2 and
 `2026-08-01T21:42:44Z` on Spark 1 reproduced the before state and exact exit
