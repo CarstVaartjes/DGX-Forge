@@ -1,15 +1,15 @@
 {
   "schema_version": 1,
-  "status": "needs_context",
-  "evidence_scope": "preconfiguration_and_staged_manual_rollout_only",
-  "captured_at": "2026-08-01T21:59:08Z",
+  "status": "complete",
+  "evidence_scope": "live_runtime_verification",
+  "captured_at": "2026-08-01T22:34:12Z",
   "topology": {
     "requested": "two-node direct ConnectX-7 QSFP link",
-    "configured": false,
+    "configured": true,
     "default_route": false
   },
   "manual_plan": {
-    "status": "staged_not_applied",
+    "status": "applied_and_verified",
     "source": "NVIDIA dgx-spark-playbooks Connect Two Sparks README",
     "source_commit": "1fb66f059ee427c5a3678b3117ef73aab042b458",
     "netplan_file": "/etc/netplan/99-dgx-spark-direct-fabric.yaml",
@@ -36,16 +36,16 @@
           "hca": "rocep1s0f1",
           "link_rate_mbps": 200000,
           "link_mode": "Direct Attach Copper",
-          "fabric_ip": null,
-          "gid_index": null
+          "fabric_ip": "192.168.100.10",
+          "gid_index": 3
         },
         {
           "interface": "enP2p1s0f1np1",
           "hca": "roceP2p1s0f1",
           "link_rate_mbps": 200000,
           "link_mode": "Direct Attach Copper",
-          "fabric_ip": null,
-          "gid_index": null
+          "fabric_ip": "192.168.101.10",
+          "gid_index": 3
         }
       ]
     },
@@ -58,30 +58,27 @@
           "hca": "rocep1s0f1",
           "link_rate_mbps": 200000,
           "link_mode": "Direct Attach Copper",
-          "fabric_ip": null,
-          "gid_index": null
+          "fabric_ip": "192.168.100.11",
+          "gid_index": 3
         },
         {
           "interface": "enP2p1s0f1np1",
           "hca": "roceP2p1s0f1",
           "link_rate_mbps": 200000,
           "link_mode": "Direct Attach Copper",
-          "fabric_ip": null,
-          "gid_index": null
+          "fabric_ip": "192.168.101.11",
+          "gid_index": 3
         }
       ]
     }
   },
-  "unresolved_required_values": [
-    "fabric_ip",
-    "mtu",
-    "RoCEv2 GID index mapped to each fabric IPv4 address",
-    "NCCL_SOCKET_IFNAME",
-    "NCCL_IB_HCA",
-    "NCCL_IB_GID_INDEX",
-    "TP_SOCKET_IFNAME",
-    "GLOO_SOCKET_IFNAME"
-  ],
+  "resolved_consumers": {
+    "NCCL_SOCKET_IFNAME": "=enp1s0f1np1,enP2p1s0f1np1",
+    "NCCL_IB_HCA": "=rocep1s0f1:1,roceP2p1s0f1:1",
+    "NCCL_IB_GID_INDEX": 3,
+    "TP_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1",
+    "GLOO_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1"
+  },
   "cable": {
     "vendor": "Amphenol",
     "oui": "78:a7:14",
@@ -97,21 +94,30 @@
   "safety_gates": [
     {
       "name": "cable identity",
-      "status": "conditional_hypothesis_test_only",
-      "evidence": "Both functions report 200000 Mb/s Direct Attach Copper and sudo ethtool -m identifies matching 1 m Amphenol NJAAKK-C106 passive PAM4 DAC ends. C106 is not one of NVIDIA's currently published supported part numbers, so it is not confirmed supported."
+      "status": "passed_with_undocumented_oem_identifier",
+      "evidence": "Both rails negotiated 200000 Mb/s Direct Attach Copper and passed normal plus 1472-byte non-fragmenting ping in both directions. The matching 1 m Amphenol NJAAKK-C106 passive PAM4 DAC remains an undocumented OEM identifier."
     },
     {
-      "name": "manual CLI preflight",
-      "status": "requires_user_authorized_sudo",
-      "evidence": "The reviewed worker-first CLI script must pass its read-only preflight and local validation before the head is staged. NVIDIA Sync and discover-sparks are out of scope."
+      "name": "manual CLI rollout",
+      "status": "passed",
+      "evidence": "Spark2 worker apply and local validation completed before Spark1 head apply and local validation. NVIDIA Sync and discover-sparks were not used."
     },
     {
       "name": "fabric acceptance",
-      "status": "not_run",
-      "evidence": "Neither node has a fabric IPv4 address or 99-dgx-spark-direct-fabric.yaml, so GID-to-IP mapping and bidirectional ping/MTU checks cannot be run."
+      "status": "passed",
+      "captured_at": "2026-08-01T22:34:27Z",
+      "evidence": "Both rails on both nodes have IPv4-mapped RoCE v2 GID index 3 bound to the selected netdev. Normal and 1472-byte non-fragmenting pings completed 3/3 with zero loss in both directions; no fabric interface has a default route."
     }
   ],
-  "host_mutations_performed": false,
-  "commit_created": true,
-  "staging_commit": "bae20253943c954774ecd31692bf434754998481"
+  "cluster_ssh": {
+    "private_key_location": "Spark1 ~/.ssh/dgx_spark_fabric_ed25519 only",
+    "private_key_fingerprint": "SHA256:xAsqCZnOIq34EVQR2O5+z+qaLlXFIdT7Qp9wreg4rfg",
+    "worker_authorized_key_options": "restrict,from=192.168.100.10,192.168.101.10",
+    "worker_host_ed25519_fingerprint": "SHA256:Q/0cf26vxC6Z+xH6pfB5uoGNXfIEum6KOFVhnl4nngg",
+    "head_alias": "dgx-spark-2-fabric",
+    "head_alias_result": "spark-2297"
+  },
+  "host_mutations_performed": true,
+  "staging_commit": "bae20253943c954774ecd31692bf434754998481",
+  "fix_commit": "a55d1d5bb300fc52e9228222c34314b8299320e1"
 }

@@ -200,6 +200,43 @@ ssh -t -o BatchMode=yes -o ForwardAgent=no dgx-spark-2 \
 
 ## Post-success collection and acceptance
 
+### Verified live result
+
+The following runtime state was captured read-only at `2026-08-01T22:34:12Z`.
+Spark 2 was applied and locally validated before Spark 1. Both nodes retain the
+management default route through `wlP9s9`; neither fabric interface has a
+default route.
+
+| Node | Rail | Interface | Fabric IPv4 | HCA | RoCEv2 GID | MTU | Link rate |
+| --- | --- | --- | --- | --- | ---: | ---: | ---: |
+| Spark 1/head | 100 | `enp1s0f1np1` | `192.168.100.10/24` | `rocep1s0f1` | 3 | 1500 | 200000 Mb/s |
+| Spark 1/head | 101 | `enP2p1s0f1np1` | `192.168.101.10/24` | `roceP2p1s0f1` | 3 | 1500 | 200000 Mb/s |
+| Spark 2/worker | 100 | `enp1s0f1np1` | `192.168.100.11/24` | `rocep1s0f1` | 3 | 1500 | 200000 Mb/s |
+| Spark 2/worker | 101 | `enP2p1s0f1np1` | `192.168.101.11/24` | `roceP2p1s0f1` | 3 | 1500 | 200000 Mb/s |
+
+Each recorded GID is IPv4-mapped, type `RoCE v2`, and has `gid_attrs/ndevs`
+bound to the interface in the table. At `2026-08-01T22:34:27Z`, normal and
+non-fragmenting `-M do -s 1472` pings succeeded 3/3 with zero loss in both
+directions on both rails.
+
+Use these exact values for distributed consumers on both nodes:
+
+```bash
+export NCCL_SOCKET_IFNAME='=enp1s0f1np1,enP2p1s0f1np1'
+export NCCL_IB_HCA='=rocep1s0f1:1,roceP2p1s0f1:1'
+export NCCL_IB_GID_INDEX=3
+export TP_SOCKET_IFNAME='enp1s0f1np1,enP2p1s0f1np1'
+export GLOO_SOCKET_IFNAME='enp1s0f1np1,enP2p1s0f1np1'
+```
+
+The head-only fabric key fingerprint is
+`SHA256:xAsqCZnOIq34EVQR2O5+z+qaLlXFIdT7Qp9wreg4rfg`. The worker entry uses
+`restrict,from="192.168.100.10,192.168.101.10"`; the private key is not on the
+worker or Mac. `dgx-spark-2-fabric` binds `192.168.100.10`, disables password,
+keyboard-interactive, and agent forwarding, uses strict host checking, and
+returned `spark-2297`. The verified worker host Ed25519 fingerprint is
+`SHA256:Q/0cf26vxC6Z+xH6pfB5uoGNXfIEum6KOFVhnl4nngg`.
+
 The controller must capture the following output from both nodes after the
 manual configuration completes. It is read-only except for the already-approved
 manual operation.
@@ -261,8 +298,6 @@ ping -I "$iface" -M do -s "$((mtu - 28))" -c 3 "$peer"
 test -z "$(ip route show default dev "$iface")"
 ```
 
-Only after those checks pass, record the exact values for every fabric function
-in `inventory/cluster.toml` and `inventory/reports/fabric.json`, including the
-resolved `NCCL_SOCKET_IFNAME`, `NCCL_IB_HCA`, `NCCL_IB_GID_INDEX`,
-`TP_SOCKET_IFNAME`, and `GLOO_SOCKET_IFNAME`. Do not infer these from the
-management LAN or from link-local GIDs.
+The verified values above are recorded in `inventory/cluster.toml` and
+`inventory/reports/fabric.json`. Do not replace them using the management LAN
+or link-local GIDs.
