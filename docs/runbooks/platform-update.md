@@ -1,0 +1,283 @@
+# DGX Spark platform update
+
+This runbook updates the two Founders Edition DGX Sparks through DGX
+Dashboard. It is intentionally worker-first and fail-stopped: validate Spark 2
+completely before changing Spark 1. Never run a distributed model during this
+procedure, and never use ad-hoc `apt` or `fwupdmgr` updates while the Dashboard
+path is available.
+
+The authoritative NVIDIA references checked on 2026-08-01 are:
+
+- [DGX Spark release notes](https://docs.nvidia.com/dgx/dgx-spark/release-notes.html)
+- [OS and component update guide](https://docs.nvidia.com/dgx/dgx-spark/os-and-component-update.html)
+- [DGX Dashboard access](https://docs.nvidia.com/dgx/dgx-spark/dgx-dashboard.html)
+- [NVIDIA container runtime validation](https://docs.nvidia.com/dgx/dgx-spark/nvidia-container-runtime-for-docker.html)
+- [DGX Spark system recovery](https://docs.nvidia.com/dgx/dgx-spark/system-recovery.html)
+- [May 2026 DGX Spark security bulletin](https://nvidia.custhelp.com/app/answers/detail/a_id/5835)
+
+## Target and observed preparation state
+
+NVIDIA's current-version table applies only to Founders Edition units. Both
+machines report `NVIDIA_DGX_Spark`, and both already report effective OTA
+`7.5.0`. `/etc/dgx-release` retains the factory image as
+`DGX_SWBUILD_VERSION=7.2.3`; use `DGX_OTA_VERSION`, not the factory build field,
+to determine the installed OTA level.
+
+| Component | NVIDIA current table | Spark 1 observed | Spark 2 observed | Gate |
+| --- | --- | --- | --- | --- |
+| Effective DGX OS OTA | `7.5.0` | `7.5.0` | `7.5.0` | Dashboard says no update is pending |
+| Ubuntu | not separately pinned | `24.04.4 LTS` | `24.04.4 LTS` | exact match |
+| Kernel | `6.17` family | `6.17.0-1029-nvidia` | `6.17.0-1029-nvidia` | exact match after update |
+| NVIDIA driver | `580.159.03` | `580.173.02` | `580.173.02` | do not downgrade; exact node match |
+| CUDA Toolkit | `13.0.2` | package `13.0.3-1` | package `13.0.3-1` | do not downgrade; exact node match |
+| UEFI | `1.110.13` | Dashboard confirmation pending | Dashboard confirmation pending | Dashboard success/no pending update |
+| Embedded Controller | `3.5.8` | fwupd raw `0x03000508` | fwupd raw `0x03000508` | Dashboard success/no pending update |
+| USB Power Delivery | `0.5.22` | fwupd raw `0x00000516` | fwupd raw `0x00000516` | Dashboard success/no pending update |
+| TPM | `7.516.1` | Dashboard confirmation pending | Dashboard confirmation pending | Dashboard success/no pending update |
+| SoC | `2.155.11` | fwupd raw `0x02009b0b` | fwupd raw `0x02009b0b` | Dashboard success/no pending update |
+| Docker Engine | not published in the release table | `29.2.1` | `29.2.1` | exact node match |
+| Docker Compose | not published in the release table | `5.0.2` | `5.0.2` | exact node match |
+| containerd | not published in the release table | `2.2.1` | `2.2.1` | exact node match |
+| NVIDIA Container Toolkit | not published in the release table | `1.19.1` | `1.19.1` | exact node match plus GPU-container test |
+
+The installed driver and CUDA package revisions are newer than the values in
+NVIDIA's current-version table. Treat that table as the release reference, not
+as a downgrade instruction. Accept the installed revisions only when DGX
+Dashboard reports the machine fully updated, and require both nodes to finish
+on identical revisions. If Dashboard offers a newer release, record its
+release highlights and versions before installing it and replace the target
+column in the final update record.
+
+At preparation time both hosts had no `/var/run/reboot-required` marker and
+reported the same firmware, OS, driver, and container versions. This is not a
+substitute for checking Dashboard for pending updates.
+
+## Recovery and maintenance constraints
+
+Before opening the update controls:
+
+1. Confirm both units use their supplied power adapters and stable power.
+2. Stop all applications and containers and save work. No distributed profile
+   may be active.
+3. Keep Spark 1 unchanged while validating Spark 2. If Spark 2 fails any gate,
+   stop; do not update Spark 1.
+4. Have a wired keyboard, display, a 16 GB or larger USB drive, and access to
+   NVIDIA's Founders Edition recovery image. NVIDIA's recovery procedure
+   reflashes the internal SSD and erases its data, so back up irreplaceable
+   data first.
+5. Do not interrupt power, reboot, or close the update while installation is
+   in progress. Wait for Dashboard to report completion before rebooting if it
+   asks for one.
+
+NVIDIA does not document an in-place firmware downgrade in the update guide.
+Treat firmware rollback as unavailable. The published recovery path restores
+the system with recovery media and is destructive; it is not an automatic
+rollback. On failure, preserve logs, leave the other Spark unchanged, and use
+recovery media or NVIDIA support rather than attempting a downgrade.
+
+## Dashboard access
+
+Dashboard listens on loopback port 11000 on each Spark. Bind the Mac end of
+the tunnel to loopback too; never expose Dashboard directly on the LAN. Use a
+distinct local port for each node and keep strict host-key checking enabled.
+
+Open the Spark 2 tunnel first:
+
+```bash
+ssh -N -T \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -L 127.0.0.1:11002:127.0.0.1:11000 \
+  dgx-spark-2
+```
+
+While that command remains open, visit <http://127.0.0.1:11002>. Confirm that
+the page identifies `spark-2297`. Dashboard requires the initial user's sudo
+authorization to apply updates; enter that password only in the local
+Dashboard prompt, never in chat, a script, or a repository file.
+
+Inspect the available updates and release highlights without starting an
+installation. If Dashboard reports no pending update, record that result and
+continue to validation without forcing a reinstall or reboot. If it offers an
+update, apply it only to Spark 2, monitor it to completion, and reboot only when
+Dashboard directs. Do not start the Spark 1 tunnel yet.
+
+After Spark 2 passes every gate, close the Spark 2 tunnel and use the same
+procedure for Spark 1:
+
+```bash
+ssh -N -T \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -L 127.0.0.1:11001:127.0.0.1:11000 \
+  dgx-spark-1
+```
+
+Visit <http://127.0.0.1:11001> and confirm `spark-3542` before using any update
+control.
+
+## Validate one node
+
+Set `host`, `before`, and `after` to Spark 2 first. If an update was installed,
+wait for the machine to reboot and for a fresh key-only SSH session to work.
+If Dashboard reported no pending update, use the same validation but do not
+claim that a reboot occurred.
+
+```bash
+host=dgx-spark-2
+before=inventory/raw/spark2-pre.json
+after=inventory/raw/spark2-post-update.json
+
+ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" 'hostname'
+ssh -o BatchMode=yes "$host" 'bash -s' \
+  < nodes/bin/collect-inventory > "$after"
+
+uv run --with pytest --with jsonschema \
+  pytest tests/nodes/test_collect_inventory.py -v \
+  --inventory-dir inventory/raw
+
+jq -e --slurpfile before "$before" '
+  ([.interfaces[].ifname] | sort)
+  == ([$before[0].interfaces[].ifname] | sort)
+' "$after"
+```
+
+The interface comparison must return `true`. An update may change link state
+or addresses, but it must not make a physical interface disappear. Record and
+investigate any difference before continuing.
+
+Run the host, filesystem, and interface checks:
+
+```bash
+ssh -o BatchMode=yes "$host" 'bash -s' <<'REMOTE'
+set -euo pipefail
+test ! -e /var/run/reboot-required
+nvidia-smi -L
+nvidia-smi --query-gpu=name,driver_version,temperature.gpu \
+  --format=csv,noheader
+findmnt -no TARGET,SOURCE,FSTYPE,OPTIONS /
+df -B1 /
+ip -brief link
+lspci -nn -d 15b3:
+failed="$(systemctl --failed --no-legend --plain)"
+test -z "$failed" || { printf '%s\n' "$failed" >&2; exit 1; }
+REMOTE
+```
+
+In an interactive SSH session on that Spark, run the GPU-container gate. This
+uses the exact CUDA image in NVIDIA's DGX Spark container-runtime guide and
+requires sudo because `carst` is intentionally not assumed to be in the
+Docker group:
+
+```bash
+sudo docker run --rm --gpus=all \
+  nvcr.io/nvidia/cuda:13.0.1-devel-ubuntu24.04 nvidia-smi
+```
+
+The command must exit zero and display the GPU and driver. A successful image
+pull alone is not a pass. Then check the current boot's kernel log for storage
+or filesystem errors:
+
+```bash
+if sudo journalctl -k -b --no-pager \
+  | grep -Eai 'I/O error|nvme.*(abort|reset|timeout)|EXT4-fs error|XFS.*corrupt|BTRFS.*error'
+then
+  echo 'FAIL: storage or filesystem error in current boot' >&2
+  exit 1
+else
+  echo 'PASS: no matching storage or filesystem errors in current boot'
+fi
+```
+
+Do not touch Spark 1 unless every Spark 2 command passes and Dashboard remains
+reachable. Repeat this section with:
+
+```bash
+host=dgx-spark-1
+before=inventory/raw/spark1-pre.json
+after=inventory/raw/spark1-post-update.json
+```
+
+## Capture and compare matched versions
+
+After each node passes, capture the normalized platform facts on the Mac. The
+files are temporary comparison artifacts; the final values belong in the
+update record below.
+
+```bash
+capture_platform() {
+  local host="$1"
+  local output="$2"
+
+  ssh -o BatchMode=yes "$host" 'bash -s' > "$output" <<'REMOTE'
+set -euo pipefail
+dgx_ota="$(awk -F= '$1 == "DGX_OTA_VERSION" {gsub(/"/, "", $2); print $2}' /etc/dgx-release)"
+kernel="$(uname -r)"
+driver="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1)"
+cuda_toolkit="$(dpkg-query -W -f='${Version}' cuda-toolkit-13-0)"
+docker="$(dpkg-query -W -f='${Version}' docker-ce)"
+compose="$(docker compose version --short)"
+containerd="$(dpkg-query -W -f='${Version}' containerd.io)"
+nvidia_ctk="$(dpkg-query -W -f='${Version}' nvidia-container-toolkit)"
+jq -n \
+  --arg dgx_ota "$dgx_ota" \
+  --arg kernel "$kernel" \
+  --arg driver "$driver" \
+  --arg cuda_toolkit "$cuda_toolkit" \
+  --arg docker "$docker" \
+  --arg compose "$compose" \
+  --arg containerd "$containerd" \
+  --arg nvidia_ctk "$nvidia_ctk" \
+  '{dgx_ota: $dgx_ota, kernel: $kernel, driver: $driver,
+    cuda_toolkit: $cuda_toolkit, docker: $docker, compose: $compose,
+    containerd: $containerd, nvidia_container_toolkit: $nvidia_ctk}'
+REMOTE
+}
+
+capture_platform dgx-spark-2 /tmp/dgx-spark-2-platform.json
+capture_platform dgx-spark-1 /tmp/dgx-spark-1-platform.json
+jq -S . /tmp/dgx-spark-2-platform.json
+jq -S . /tmp/dgx-spark-1-platform.json
+cmp -s /tmp/dgx-spark-2-platform.json /tmp/dgx-spark-1-platform.json
+```
+
+`cmp` must exit zero. Also compare the Dashboard firmware versions exactly;
+the inventory collector does not capture every firmware component. A mismatch
+in DGX OS, kernel, driver, CUDA, Docker, Compose, containerd, NVIDIA Container
+Toolkit, UEFI, EC, USB PD, TPM, or SoC is a hard stop.
+
+## Update record
+
+Fill this only after both nodes pass. Do not commit placeholder post-update
+inventories.
+
+| Field | Spark 2 (worker) | Spark 1 (head) |
+| --- | --- | --- |
+| Dashboard checked at (UTC) | | |
+| Dashboard result | | |
+| Installation completed at (UTC), or `not required` | | |
+| Reboot completed at (UTC), or `not required` | | |
+| Effective DGX OS OTA | | |
+| Kernel | | |
+| NVIDIA driver | | |
+| CUDA Toolkit package | | |
+| Docker Engine package | | |
+| Docker Compose | | |
+| containerd package | | |
+| NVIDIA Container Toolkit package | | |
+| UEFI | | |
+| Embedded Controller | | |
+| USB Power Delivery | | |
+| TPM | | |
+| SoC | | |
+| Collector/schema gate | | |
+| Host GPU gate | | |
+| GPU-container gate | | |
+| Filesystem/kernel-log gate | | |
+| Interface-presence gate | | |
+
+Commit `inventory/raw/spark2-post-update.json`,
+`inventory/raw/spark1-post-update.json`, and this completed record together
+only after all gates pass.
