@@ -367,10 +367,64 @@ guard deliberately rejects broader paths:
 sudo bash
 set -euo pipefail
 backup_dir='/root/dgx-identity-backup.PASTE_EXACT_SUFFIX'
-case "$backup_dir" in /root/dgx-identity-backup.*) ;; *) exit 1 ;; esac
-test -d "$backup_dir"
-find "$backup_dir" -type f -delete
-rmdir "$backup_dir"
+# BEGIN validated identity backup cleanup
+remove_identity_backup() {
+  candidate="$1"
+  trusted_parent="$2"
+  test -d "$candidate" || return 1
+  test ! -L "$candidate" || return 1
+
+  canonical="$(realpath -- "$candidate")" || return 1
+  canonical_parent="$(dirname -- "$canonical")"
+  canonical_name="$(basename -- "$canonical")"
+  test "$candidate" = "$canonical" || return 1
+  test "$canonical_parent" = "$trusted_parent" || return 1
+  [[ "$canonical_name" =~ ^dgx-identity-backup\.[A-Za-z0-9]{6}$ ]] \
+    || return 1
+
+  expected_files=(
+    machine-id
+    ssh_host_rsa_key
+    ssh_host_rsa_key.pub
+    ssh_host_ecdsa_key
+    ssh_host_ecdsa_key.pub
+    ssh_host_ed25519_key
+    ssh_host_ed25519_key.pub
+  )
+  entries=()
+  while IFS= read -r -d '' entry; do
+    entries+=("$entry")
+  done < <(find "$canonical" -mindepth 1 -maxdepth 1 -print0)
+  test "${#entries[@]}" -eq "${#expected_files[@]}" || return 1
+
+  for name in "${expected_files[@]}"; do
+    test -f "$canonical/$name" || return 1
+    test ! -L "$canonical/$name" || return 1
+  done
+  for entry in "${entries[@]}"; do
+    entry_name="$(basename -- "$entry")"
+    found=false
+    for name in "${expected_files[@]}"; do
+      if test "$entry_name" = "$name"; then
+        found=true
+        break
+      fi
+    done
+    test "$found" = true || return 1
+  done
+
+  rm -f -- \
+    "$canonical/machine-id" \
+    "$canonical/ssh_host_rsa_key" \
+    "$canonical/ssh_host_rsa_key.pub" \
+    "$canonical/ssh_host_ecdsa_key" \
+    "$canonical/ssh_host_ecdsa_key.pub" \
+    "$canonical/ssh_host_ed25519_key" \
+    "$canonical/ssh_host_ed25519_key.pub"
+  rmdir -- "$canonical"
+}
+# END validated identity backup cleanup
+remove_identity_backup "$backup_dir" /root
 test ! -e "$backup_dir"
 ```
 
