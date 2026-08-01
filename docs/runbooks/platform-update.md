@@ -166,30 +166,31 @@ test -z "$failed" || { printf '%s\n' "$failed" >&2; exit 1; }
 REMOTE
 ```
 
-In an interactive SSH session on that Spark, run the GPU-container gate. This
-uses the exact CUDA image in NVIDIA's DGX Spark container-runtime guide and
-requires sudo because `carst` is intentionally not assumed to be in the
-Docker group:
+Stage the audited privileged validator from the Mac and compare its local and
+remote SHA-256 before running it. The script uses the exact CUDA image in
+NVIDIA's DGX Spark container-runtime guide and requires sudo because `carst`
+is intentionally not assumed to be in the Docker group. It also reads the
+root-only kernel log and fails closed on read errors or storage/filesystem
+errors.
 
 ```bash
-sudo docker run --rm --gpus=all \
-  nvcr.io/nvidia/cuda:13.0.1-devel-ubuntu24.04 nvidia-smi
+scp nodes/bin/validate-platform-update-root \
+  "$host:/tmp/validate-platform-update-root"
+ssh -o BatchMode=yes "$host" \
+  'chmod 0700 /tmp/validate-platform-update-root && sha256sum /tmp/validate-platform-update-root'
+shasum -a 256 nodes/bin/validate-platform-update-root
 ```
 
-The command must exit zero and display the GPU and driver. A successful image
-pull alone is not a pass. Then check the current boot's kernel log for storage
-or filesystem errors:
+The hashes must match. In an interactive SSH session on that Spark, run one
+audited privileged command:
 
 ```bash
-if sudo journalctl -k -b --no-pager \
-  | grep -Eai 'I/O error|nvme.*(abort|reset|timeout)|EXT4-fs error|XFS.*corrupt|BTRFS.*error'
-then
-  echo 'FAIL: storage or filesystem error in current boot' >&2
-  exit 1
-else
-  echo 'PASS: no matching storage or filesystem errors in current boot'
-fi
+sudo bash /tmp/validate-platform-update-root
 ```
+
+It must exit zero, display the GPU and driver, and end with `PASS: GPU
+container and current-boot storage checks passed`. A successful image pull
+alone is not a pass. Remove the staged script after recording the result.
 
 Do not touch Spark 1 unless every Spark 2 command passes and Dashboard remains
 reachable. Repeat this section with:
@@ -255,28 +256,28 @@ inventories.
 
 | Field | Spark 2 (worker) | Spark 1 (head) |
 | --- | --- | --- |
-| Dashboard checked at (UTC) | | |
-| Dashboard result | | |
-| Installation completed at (UTC), or `not required` | | |
-| Reboot completed at (UTC), or `not required` | | |
-| Effective DGX OS OTA | | |
-| Kernel | | |
-| NVIDIA driver | | |
-| CUDA Toolkit package | | |
-| Docker Engine package | | |
-| Docker Compose | | |
-| containerd package | | |
-| NVIDIA Container Toolkit package | | |
+| Dashboard checked at (UTC) | 2026-08-01; exact time not recorded | |
+| Dashboard result | `No Available Updates` (user-confirmed) | |
+| Installation completed at (UTC), or `not required` | `not required` | |
+| Reboot completed at (UTC), or `not required` | `not required`; pre/post boot ID unchanged | |
+| Effective DGX OS OTA | `7.5.0` | |
+| Kernel | `6.17.0-1029-nvidia` | |
+| NVIDIA driver | `580.173.02` | |
+| CUDA Toolkit package | `13.0.3-1` | |
+| Docker Engine package | `5:29.2.1-1~ubuntu.24.04~noble` | |
+| Docker Compose | `5.0.2` | |
+| containerd package | `2.2.1-1~ubuntu.24.04~noble` | |
+| NVIDIA Container Toolkit package | `1.19.1-1` | |
 | UEFI | | |
 | Embedded Controller | | |
 | USB Power Delivery | | |
 | TPM | | |
 | SoC | | |
-| Collector/schema gate | | |
-| Host GPU gate | | |
-| GPU-container gate | | |
-| Filesystem/kernel-log gate | | |
-| Interface-presence gate | | |
+| Collector/schema gate | pass at `2026-08-01T20:05:07Z` | |
+| Host GPU gate | pass: NVIDIA GB10, 38 C | |
+| GPU-container gate | pending one audited sudo command | |
+| Filesystem/kernel-log gate | mount/systemd pass; privileged kernel-log check pending | |
+| Interface-presence gate | pass: exact pre/post interface-name set | |
 
 Commit `inventory/raw/spark2-post-update.json`,
 `inventory/raw/spark1-post-update.json`, and this completed record together
