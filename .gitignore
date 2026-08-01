@@ -1,0 +1,8 @@
+.superpowers/
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+model-cache/
+logs/
