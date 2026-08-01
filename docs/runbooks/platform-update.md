@@ -68,6 +68,10 @@ Before opening the update controls:
 5. Do not interrupt power, reboot, or close the update while installation is
    in progress. Wait for Dashboard to report completion before rebooting if it
    asks for one.
+6. After regenerating `/etc/machine-id`, reboot each node once before trusting
+   persistent journal checks. A runtime machine-ID change leaves the current
+   journald instance writing beneath the old machine-ID directory. Reboot
+   Spark 2 and validate it fully before rebooting Spark 1.
 
 NVIDIA does not document an in-place firmware downgrade in the update guide.
 Treat firmware rollback as unavailable. The published recovery path restores
@@ -99,9 +103,11 @@ Dashboard prompt, never in chat, a script, or a repository file.
 
 Inspect the available updates and release highlights without starting an
 installation. If Dashboard reports no pending update, record that result and
-continue to validation without forcing a reinstall or reboot. If it offers an
-update, apply it only to Spark 2, monitor it to completion, and reboot only when
-Dashboard directs. Do not start the Spark 1 tunnel yet.
+do not force a reinstall. This cluster still requires the one-time sequential
+reboot after its machine-ID repair: reboot Spark 2 first, wait for fresh
+key-only SSH and Dashboard access, then validate it. If Dashboard offers an
+update, apply it only to Spark 2, monitor it to completion, and follow its
+reboot direction. Do not reboot or start the Spark 1 update yet.
 
 After Spark 2 passes every gate, close the Spark 2 tunnel and use the same
 procedure for Spark 1:
@@ -122,8 +128,9 @@ control.
 
 Set `host`, `before`, and `after` to Spark 2 first. If an update was installed,
 wait for the machine to reboot and for a fresh key-only SSH session to work.
-If Dashboard reported no pending update, use the same validation but do not
-claim that a reboot occurred.
+If Dashboard reported no pending update, do not claim an update occurred. The
+one-time reboot after identity regeneration is nevertheless required, and its
+new boot ID must differ from the pre-change inventory.
 
 ```bash
 host=dgx-spark-2
@@ -142,6 +149,8 @@ jq -e --slurpfile before "$before" '
   ([.interfaces[].ifname] | sort)
   == ([$before[0].interfaces[].ifname] | sort)
 ' "$after"
+
+test "$(jq -r '.boot_id' "$before")" != "$(jq -r '.boot_id' "$after")"
 ```
 
 The interface comparison must return `true`. An update may change link state
@@ -154,6 +163,8 @@ Run the host, filesystem, and interface checks:
 ssh -o BatchMode=yes "$host" 'bash -s' <<'REMOTE'
 set -euo pipefail
 test ! -e /var/run/reboot-required
+machine_id="$(cat /etc/machine-id)"
+test -d "/var/log/journal/$machine_id"
 nvidia-smi -L
 nvidia-smi --query-gpu=name,driver_version,temperature.gpu \
   --format=csv,noheader
@@ -259,7 +270,7 @@ inventories.
 | Dashboard checked at (UTC) | 2026-08-01; exact time not recorded | |
 | Dashboard result | `No Available Updates` (user-confirmed) | |
 | Installation completed at (UTC), or `not required` | `not required` | |
-| Reboot completed at (UTC), or `not required` | `not required`; pre/post boot ID unchanged | |
+| Reboot completed at (UTC), or `not required` | 2026-08-01; identity-repair reboot, exact time not recorded | |
 | Effective DGX OS OTA | `7.5.0` | |
 | Kernel | `6.17.0-1029-nvidia` | |
 | NVIDIA driver | `580.173.02` | |
@@ -273,10 +284,10 @@ inventories.
 | USB Power Delivery | | |
 | TPM | | |
 | SoC | | |
-| Collector/schema gate | pass at `2026-08-01T20:05:07Z` | |
-| Host GPU gate | pass: NVIDIA GB10, 38 C | |
+| Collector/schema gate | pass after reboot; boot ID changed | |
+| Host GPU gate | pass: NVIDIA GB10, 39 C | |
 | GPU-container gate | pending one audited sudo command | |
-| Filesystem/kernel-log gate | mount/systemd pass; privileged kernel-log check pending | |
+| Filesystem/kernel-log gate | mount/systemd/new journal directory pass; privileged current-boot log check pending | |
 | Interface-presence gate | pass: exact pre/post interface-name set | |
 
 Commit `inventory/raw/spark2-post-update.json`,

@@ -1,6 +1,6 @@
 {
   "hostname": "spark-2297",
-  "boot_id": "2396064b-6544-41ab-9001-df8c7dd10087",
+  "boot_id": "f9eae13d-4f8d-451c-9ab1-136eb82d516b",
   "os": {
     "PRETTY_NAME": "Ubuntu 24.04.4 LTS",
     "NAME": "Ubuntu",
@@ -21,7 +21,7 @@
   },
   "memory": {
     "total_bytes": 130663231488,
-    "available_bytes": 126913556480
+    "available_bytes": 126901809152
   },
   "swap": {
     "total_bytes": 17179865088,
@@ -43,17 +43,6 @@
       "name": "loop1",
       "maj:min": "7:1",
       "rm": false,
-      "size": 64864256,
-      "ro": true,
-      "type": "loop",
-      "mountpoints": [
-        "/snap/core24/1644"
-      ]
-    },
-    {
-      "name": "loop2",
-      "maj:min": "7:2",
-      "rm": false,
       "size": 72310784,
       "ro": true,
       "type": "loop",
@@ -62,30 +51,8 @@
       ]
     },
     {
-      "name": "loop3",
-      "maj:min": "7:3",
-      "rm": false,
-      "size": 527577088,
-      "ro": true,
-      "type": "loop",
-      "mountpoints": [
-        "/snap/gnome-42-2204/264"
-      ]
-    },
-    {
-      "name": "loop4",
-      "maj:min": "7:4",
-      "rm": false,
-      "size": 10719232,
-      "ro": true,
-      "type": "loop",
-      "mountpoints": [
-        "/snap/firmware-updater/168"
-      ]
-    },
-    {
-      "name": "loop5",
-      "maj:min": "7:5",
+      "name": "loop2",
+      "maj:min": "7:2",
       "rm": false,
       "size": 257073152,
       "ro": true,
@@ -95,30 +62,41 @@
       ]
     },
     {
+      "name": "loop3",
+      "maj:min": "7:3",
+      "rm": false,
+      "size": 64864256,
+      "ro": true,
+      "type": "loop",
+      "mountpoints": [
+        "/snap/core24/1644"
+      ]
+    },
+    {
+      "name": "loop4",
+      "maj:min": "7:4",
+      "rm": false,
+      "size": 527577088,
+      "ro": true,
+      "type": "loop",
+      "mountpoints": [
+        "/snap/gnome-42-2204/264"
+      ]
+    },
+    {
+      "name": "loop5",
+      "maj:min": "7:5",
+      "rm": false,
+      "size": 10719232,
+      "ro": true,
+      "type": "loop",
+      "mountpoints": [
+        "/snap/firmware-updater/168"
+      ]
+    },
+    {
       "name": "loop6",
       "maj:min": "7:6",
-      "rm": false,
-      "size": 96141312,
-      "ro": true,
-      "type": "loop",
-      "mountpoints": [
-        "/snap/gtk-common-themes/1535"
-      ]
-    },
-    {
-      "name": "loop7",
-      "maj:min": "7:7",
-      "rm": false,
-      "size": 579809280,
-      "ro": true,
-      "type": "loop",
-      "mountpoints": [
-        "/snap/gnome-46-2404/154"
-      ]
-    },
-    {
-      "name": "loop8",
-      "maj:min": "7:8",
       "rm": false,
       "size": 197390336,
       "ro": true,
@@ -128,25 +106,47 @@
       ]
     },
     {
-      "name": "loop9",
-      "maj:min": "7:9",
+      "name": "loop7",
+      "maj:min": "7:7",
       "rm": false,
-      "size": 10530816,
+      "size": 96141312,
       "ro": true,
       "type": "loop",
       "mountpoints": [
-        "/snap/snap-store/1271"
+        "/snap/gtk-common-themes/1535"
       ]
     },
     {
-      "name": "loop10",
-      "maj:min": "7:10",
+      "name": "loop8",
+      "maj:min": "7:8",
+      "rm": false,
+      "size": 579809280,
+      "ro": true,
+      "type": "loop",
+      "mountpoints": [
+        "/snap/gnome-46-2404/154"
+      ]
+    },
+    {
+      "name": "loop9",
+      "maj:min": "7:9",
       "rm": false,
       "size": 45477888,
       "ro": true,
       "type": "loop",
       "mountpoints": [
         "/snap/snapd/27595"
+      ]
+    },
+    {
+      "name": "loop10",
+      "maj:min": "7:10",
+      "rm": false,
+      "size": 10530816,
+      "ro": true,
+      "type": "loop",
+      "mountpoints": [
+        "/snap/snap-store/1271"
       ]
     },
     {
@@ -211,8 +211,8 @@
     {
       "filesystem": "tmpfs",
       "size_bytes": 13066326016,
-      "used_bytes": 2387968,
-      "available_bytes": 13063938048,
+      "used_bytes": 2314240,
+      "available_bytes": 13064011776,
       "use_percent": "1%",
       "mountpoint": "/run"
     },
@@ -227,8 +227,8 @@
     {
       "filesystem": "/dev/nvme0n1p2",
       "size_bytes": 4031871553536,
-      "used_bytes": 40047124480,
-      "available_bytes": 3786983694336,
+      "used_bytes": 46687690752,
+      "available_bytes": 3780343128064,
       "use_percent": "2%",
       "mountpoint": "/"
     },
@@ -267,8 +267,8 @@
     {
       "filesystem": "tmpfs",
       "size_bytes": 13066321920,
-      "used_bytes": 106496,
-      "available_bytes": 13066215424,
+      "used_bytes": 102400,
+      "available_bytes": 13066219520,
       "use_percent": "1%",
       "mountpoint": "/run/user/1000"
     }
@@ -380,7 +380,17 @@
       "link_type": "ether",
       "address": "4c:bb:47:e8:22:99",
       "broadcast": "ff:ff:ff:ff:ff:ff",
-      "addr_info": []
+      "addr_info": [
+        {
+          "family": "inet6",
+          "local": "fe80::e64b:ce9a:be3:ac5",
+          "prefixlen": 64,
+          "scope": "link",
+          "noprefixroute": true,
+          "valid_life_time": 4294967295,
+          "preferred_life_time": 4294967295
+        }
+      ]
     },
     {
       "ifindex": 5,
@@ -418,7 +428,17 @@
       "link_type": "ether",
       "address": "4c:bb:47:e8:22:9d",
       "broadcast": "ff:ff:ff:ff:ff:ff",
-      "addr_info": []
+      "addr_info": [
+        {
+          "family": "inet6",
+          "local": "fe80::3455:bf0:dcb9:5784",
+          "prefixlen": 64,
+          "scope": "link",
+          "noprefixroute": true,
+          "valid_life_time": 4294967295,
+          "preferred_life_time": 4294967295
+        }
+      ]
     },
     {
       "ifindex": 7,
@@ -450,33 +470,33 @@
           "dynamic": true,
           "noprefixroute": true,
           "label": "wlP9s9",
-          "valid_life_time": 56714,
-          "preferred_life_time": 56714
+          "valid_life_time": 86348,
+          "preferred_life_time": 86348
         },
         {
           "family": "inet6",
-          "local": "fdf1:bc43:d25d:434d:ba41:6815:cb3e:6e4",
+          "local": "fdf1:bc43:d25d:434d:f80b:9a07:3993:c7ee",
           "prefixlen": 64,
           "scope": "global",
           "temporary": true,
           "dynamic": true,
-          "valid_life_time": 1765,
-          "preferred_life_time": 1765
+          "valid_life_time": 1780,
+          "preferred_life_time": 1780
         },
         {
           "family": "inet6",
-          "local": "fdf1:bc43:d25d:434d:6136:3b34:b55f:796d",
+          "local": "fdf1:bc43:d25d:434d:cf35:9582:46c2:a27c",
           "prefixlen": 64,
           "scope": "global",
           "dynamic": true,
           "mngtmpaddr": true,
           "noprefixroute": true,
-          "valid_life_time": 1765,
-          "preferred_life_time": 1765
+          "valid_life_time": 1780,
+          "preferred_life_time": 1780
         },
         {
           "family": "inet6",
-          "local": "fe80::c60a:2e15:6494:8ffc",
+          "local": "fe80::8a1f:18fe:ca1:530d",
           "prefixlen": 64,
           "scope": "link",
           "noprefixroute": true,
@@ -499,7 +519,7 @@
       "operstate": "DOWN",
       "group": "default",
       "link_type": "ether",
-      "address": "3e:e2:bf:75:d7:a8",
+      "address": "b2:7d:0e:d3:d6:78",
       "broadcast": "ff:ff:ff:ff:ff:ff",
       "addr_info": [
         {
@@ -519,7 +539,7 @@
   "thermal": [
     {
       "index": 0,
-      "temperature_c": 38
+      "temperature_c": 39
     }
   ]
 }
