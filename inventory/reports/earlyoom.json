@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "status": "pending_worker_validation",
+  "ordering": [
+    "spark2",
+    "spark1"
+  ],
+  "accepted_final_states": [
+    "absent",
+    "disabled_and_inactive",
+    "masked_and_inactive"
+  ],
+  "nodes": {
+    "spark2": {
+      "role": "worker",
+      "ssh_alias": "dgx-spark-2",
+      "before": {
+        "captured_at": "2026-08-01T21:01:57Z",
+        "ssh_exit_code": 0,
+        "load_state": {
+          "stdout": "not-found",
+          "exit_code": 0
+        },
+        "enabled": {
+          "stdout": "not-found",
+          "exit_code": 4
+        },
+        "active": {
+          "stdout": "inactive",
+          "exit_code": 4
+        },
+        "package": {
+          "stdout": "dpkg-query: no packages found matching earlyoom",
+          "exit_code": 1
+        },
+        "classification": "absent"
+      },
+      "after": null
+    },
+    "spark1": {
+      "role": "head",
+      "ssh_alias": "dgx-spark-1",
+      "before": {
+        "captured_at": "2026-08-01T21:01:58Z",
+        "ssh_exit_code": 0,
+        "load_state": {
+          "stdout": "not-found",
+          "exit_code": 0
+        },
+        "enabled": {
+          "stdout": "not-found",
+          "exit_code": 4
+        },
+        "active": {
+          "stdout": "inactive",
+          "exit_code": 4
+        },
+        "package": {
+          "stdout": "dpkg-query: no packages found matching earlyoom",
+          "exit_code": 1
+        },
+        "classification": "absent"
+      },
+      "after": null
+    }
+  }
+}

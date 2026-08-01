@@ -313,3 +313,63 @@ TPM firmware is listed in NVIDIA's release table but no TPM device is exposed
 to `tpm2_getcap` or fwupd on either running node. Exact local TPM interrogation
 was therefore unavailable; both Dashboards independently reported the systems
 current with no available update.
+
+## Disable the earlyoom userspace killer
+
+DeepSeek uses most of each Spark's unified memory. An independently acting
+`earlyoom` service could kill a distributed worker before the runtime can
+preserve useful diagnostics, so it must not be active or enabled. This check
+is deliberately separate from swap and memory-capacity admission controls.
+
+The live pre-change probe on 2026-08-01 found `earlyoom` absent on both nodes:
+`systemctl is-enabled` returned `not-found` with exit code 4,
+`systemctl is-active` returned `inactive` with exit code 4, `LoadState` was
+`not-found`, and `dpkg-query` returned exit code 1. The exact evidence is in
+`inventory/reports/earlyoom.json`. Absence is an accepted safe state and is
+not rewritten as `disabled`; the package must not be installed merely to
+disable it.
+
+Use the audited script to classify the full state. It treats these outcomes
+as safe:
+
+- absent: unit `not-found`, package absent, service inactive;
+- disabled: loaded package, `disabled` and `inactive` with their documented
+  non-zero `systemctl` status codes;
+- masked: `masked` or `masked-runtime` and inactive.
+
+A static unit, a package/unit disagreement, or any other combination is an
+unexpected state and fails without modification. An installed active or
+enabled service requires `--apply`, which stops before disabling and then
+re-reads every state. The script is idempotent.
+
+Stage and validate the worker first, comparing its checksum with the local
+artifact:
+
+```bash
+scp nodes/bin/disable-earlyoom dgx-spark-2:/tmp/disable-earlyoom
+ssh -o BatchMode=yes dgx-spark-2 \
+  'chmod 0700 /tmp/disable-earlyoom && sha256sum /tmp/disable-earlyoom'
+shasum -a 256 nodes/bin/disable-earlyoom
+```
+
+After the hashes match, run this one audited command in an interactive worker
+session:
+
+```bash
+sudo bash /tmp/disable-earlyoom --apply
+```
+
+It must exit zero and print a `PASS` line. Record a fresh after-state with
+exact exit codes before staging and repeating the same procedure on
+`dgx-spark-1`. Never claim an after-state from the pre-change observation.
+
+If an installed service was disabled and the decision is explicitly reversed,
+the rollback/re-enable command is:
+
+```bash
+sudo systemctl unmask earlyoom && sudo systemctl enable --now earlyoom
+```
+
+Do not run that command for the observed absent state; there is nothing to
+roll back. After both nodes pass, remove `/tmp/disable-earlyoom` from each
+node and mark the evidence document complete.
