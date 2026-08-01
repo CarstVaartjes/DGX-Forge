@@ -86,3 +86,18 @@ def test_inventory_tolerates_unparseable_nvidia_smi(tmp_path):
 
     assert result["nvidia"] is None
     assert result["thermal"] is None
+
+
+def test_captured_inventories_satisfy_schema(inventory_dir):
+    """Validates every requested read-only capture against the raw contract."""
+    if inventory_dir is None:
+        pytest.skip("--inventory-dir was not provided")
+
+    paths = sorted(inventory_dir.glob("*.json"))
+    names = {path.name for path in paths}
+    assert {"spark1-pre.json", "spark2-pre.json"} <= names
+
+    schema = json.loads(SCHEMA_PATH.read_text())
+    for path in paths:
+        with path.open() as inventory_file:
+            jsonschema.validate(json.load(inventory_file), schema)
