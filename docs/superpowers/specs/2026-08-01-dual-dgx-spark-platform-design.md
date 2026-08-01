@@ -17,7 +17,7 @@ This specification uses measurable defaults and acceptance gates. A measured val
 - One QSFP/CX-7 cable directly connects matching ports on the two systems. Its part number and 200 Gb/s compatibility must be verified before fabric configuration.
 - The administration computer is a Mac using the 1Password SSH agent.
 - A dedicated Ed25519 key named `DGX Spark Admin` exists in 1Password, but its public key has not yet been installed on either Spark.
-- A Synology DS218+ is available as the preferred always-on Caddy gateway and possible later UI and LiteLLM host. Its LAN address, installed memory, free disk, DSM, and Container Manager versions remain to be inventoried.
+- A Synology DS218+ exists but is not part of the initial deployment. A new NAS or other external container host will be added later for Caddy, the controller, UI, LiteLLM, and Tailscale ingress.
 - Installed SSD capacity, free disk space, DGX software versions, and `earlyoom` state remain to be inventoried after key access is established.
 
 ## Goals
@@ -89,7 +89,7 @@ Cluster jobs require separate node-to-node SSH credentials. These credentials ar
 
 Spark 1 is the head node and Spark 2 is the worker. DeepSeek runs as one logical vLLM service with tensor parallel size two, pipeline parallel size one, and the `mp` distributed executor. TP=2 is mandatory for this checkpoint: the snapshot is about 155.44 GiB, or about 77.72 GiB of weight payload per rank before runtime workspaces and metadata.
 
-Inter-node model traffic uses the direct ConnectX-7 fabric. Client traffic uses the stable reverse-proxy endpoint on the DS218+. Caddy, the profile controller, browser UI, optional LiteLLM, Tailscale ingress, and any later general-purpose monitoring services run on the DS218+ or another non-Spark container host.
+Inter-node model traffic uses the direct ConnectX-7 fabric. During initial AI bring-up, vLLM and TRELLIS.2 bind to loopback and the Mac reaches them through SSH tunnels. After the new external host arrives, Caddy, the profile controller, browser UI, optional LiteLLM, Tailscale ingress, and any later general-purpose monitoring services run there.
 
 NVIDIA Sync Cluster Assistant is the preferred fabric configuration path because it validates topology, software readiness, addressing, and node-to-node SSH. The official manual two-Spark playbook is the fallback if Cluster Assistant cannot complete the configuration.
 
@@ -108,16 +108,18 @@ The NAS may store configuration backups, benchmark results, and optional downloa
 
 ### Access plane
 
-Caddy runs on the DS218+ from day one as the stable client endpoint at `https://spark-gateway.home.arpa:8443`. The NAS receives a static DHCP reservation or static LAN address and the name is installed in local DNS. Caddy uses an internal/private CA certificate whose root is installed only on approved clients. It enforces bearer API keys, serves controller status, actively health-checks the advertised upstream, and has two atomic route states:
+The initial phase has no gateway: vLLM binds to `127.0.0.1:8888` on Spark 1 and TRELLIS.2 binds to loopback on Spark 2; the Mac uses SSH local forwarding for direct validation. No AI service binds to a LAN-facing address during this phase.
+
+When the new NAS or external container host is available, Caddy becomes the stable client endpoint at `https://spark-gateway.home.arpa:8443`. The host receives a static DHCP reservation or static LAN address and the name is installed in local DNS. Caddy uses an internal/private CA certificate whose root is installed only on approved clients. It enforces bearer API keys, serves controller status, actively health-checks the advertised upstream, and has two atomic route states:
 
 - **active:** proxy the advertised profile to its firewall-restricted LAN upstream and return HTTP 503 if that upstream becomes unhealthy;
 - **draining/maintenance:** reject new inference with HTTP 503 and `Retry-After: 30` while existing proxied requests receive their configured grace period.
 
-Clients and the browser UI always use Caddy, which makes drain and advertise operations real before LiteLLM exists. The vLLM upstream binds on Spark 1's LAN address, but its host firewall permits port 8888 only from the external gateway and local host. Caddy is limited to 0.5 CPU and 256 MiB of memory and may start when the control host boots, always using the fail-closed maintenance configuration until the controller advertises a healthy profile. If the DS218+ cannot run the pinned Caddy image, another non-Spark container host is required; neither Spark is a fallback gateway.
+After gateway deployment, clients and the browser UI always use Caddy. The vLLM upstream then binds on Spark 1's LAN address, but its host firewall permits port 8888 only from the external gateway and local host. Caddy is limited to 0.5 CPU and 256 MiB of memory and may start when the control host boots, always using the fail-closed maintenance configuration until the controller advertises a healthy profile. The external host is a prerequisite for this phase; neither Spark is a gateway fallback.
 
 The profile controller is a one-shot container on the same external control host as Caddy. It changes Caddy state through a private container network and uses dedicated restricted SSH keys to invoke a root-owned `spark-nodectl` forced command on each Spark. That command accepts only the explicit runtime operations required by the controller; it does not provide a general shell. Caddy's admin API is reachable only on the private container network and is never exposed on the LAN.
 
-The browser UI is added after the API passes correctness and load gates. The DS218+ is preferred if it has a supported Container Manager installation, at least 4 GiB installed memory, at least 2 GiB available memory before start, and at least 20 GiB free disk. Its UI container is limited to 1 CPU and 2 GiB. If the NAS fails those gates, the UI requires another non-Spark container host with the same minimum resources and limits.
+The browser UI is added only after the new external host exists and the direct API passes correctness and load gates. That host must have a supported container runtime, at least 4 GiB installed memory, at least 2 GiB available memory before start, and at least 20 GiB free disk. Its UI container is limited to 1 CPU and 2 GiB.
 
 LiteLLM is optional and deferred until routing multiple simultaneously active endpoints provides value. If deployed, the DS218+ must have at least 6 GiB installed memory and 3 GiB available before LiteLLM plus the UI start. LiteLLM is limited to 1 CPU and 1 GiB in addition to the UI allocation.
 
@@ -130,12 +132,14 @@ Tailscale is added after LAN acceptance as a container or signed-package install
 | Administrative SSH | both | 22/TCP | LAN; approved admin clients | Ed25519 public key |
 | Cluster SSH | both | 22/TCP | fabric peer only | separate cluster key |
 | Controller SSH | both | 22/TCP | external control-host source only | forced-command controller key |
-| Caddy API/status | DS218+ | 8443/TCP | LAN, later Tailscale | private CA TLS plus bearer key |
-| Caddy admin API | DS218+ | 2019/TCP | private container network only | controller-network isolation |
-| vLLM API upstream | Spark 1 | 8888/TCP | Spark 1 LAN; firewall source NAS and local host only | vLLM API key plus proxy isolation |
+| Caddy API/status, future | external host | 8443/TCP | LAN, later Tailscale | private CA TLS plus bearer key |
+| Caddy admin API, future | external host | 2019/TCP | private container network only | controller-network isolation |
+| vLLM API, initial | Spark 1 | 8888/TCP | loopback only through SSH tunnel | vLLM API key plus SSH |
+| vLLM API upstream, future | Spark 1 | 8888/TCP | Spark 1 LAN; firewall source gateway and local host only | vLLM API key plus proxy isolation |
 | vLLM `mp` rendezvous | both | 25000/TCP | fabric peer only | network isolation |
 | NCCL/Gloo/TP runtime traffic | both | runtime-selected | fabric peer only | direct-link firewall isolation |
-| TRELLIS.2 upstream | Spark 2 | 7860/TCP | Spark 2 LAN; firewall source NAS only | upstream token plus proxy isolation |
+| TRELLIS.2, initial | Spark 2 | 7860/TCP | loopback only through SSH tunnel | SSH plus application token where supported |
+| TRELLIS.2 upstream, future | Spark 2 | 7860/TCP | Spark 2 LAN; firewall source gateway only | upstream token plus proxy isolation |
 | Browser UI | external host | 3000/TCP | LAN; exact host firewall source list | UI login plus Caddy API key |
 
 No client route exists on the fabric. Because the fabric is a dedicated point-to-point network, its peer-to-peer runtime port range is allowed only between the two recorded fabric IPs rather than exposed on the LAN.
@@ -200,7 +204,7 @@ The prebuilt Anemll image is acceptable only after provenance and contents are i
 - Runs in its own pinned container/environment on Spark 2.
 - Uses local checkpoints and output storage.
 - Starts with 512-cubed generation for acceptance testing before higher resolutions.
-- Binds its upstream to Spark 2's LAN address with a firewall rule allowing only the NAS and is advertised through Caddy.
+- Initially binds to Spark 2 loopback and is reached through an SSH tunnel. After gateway deployment it binds to Spark 2's LAN address with a firewall rule allowing only the gateway and is advertised through Caddy.
 
 ### `maintenance`
 
@@ -355,18 +359,18 @@ The source results came from specific upstream hardware state and profile settin
 8. Validate Docker GPU access and image architecture on both nodes.
 9. Audit and pin the MiaAI-Lab source, Anemll image digest, patches, encoder, configuration, and sampling presets.
 10. Check disk gates; download the pinned snapshot online during maintenance, generate/verify manifests on both nodes, then enforce offline mode.
-11. Inventory the DS218+, install the external Caddy and one-shot controller containers, install forced `spark-nodectl` access on both Sparks, and validate TLS, bearer rejection, upstream failure, private admin networking, restricted node control, route switching, state locking, and log limits.
-12. Run `deepseek-baseline` and pass structural plus deterministic quality gates.
-13. Add DSpark, pass quality gates, and record speculative acceptance.
-14. Add padded NVFP4, pass the greater-than-411-token regression and 8K quality gates.
-15. Run `deepseek-agent`, verify `P >= 1,200,000`, six concurrent requests with at most 200,000 live tokens each, and overload behavior.
-16. Run `deepseek-long`, derive `Cfull` from the boot log, complete a 900K sentinel request at the admitted limit, and verify one excess request queues or rejects safely.
-17. Run reasoning, tool-call, streaming, restart, output-quality, and performance gates through Caddy.
-18. Stop DeepSeek; verify memory recovery and the clean stopped state.
-19. Install and validate TRELLIS.2 at 512-cubed resolution.
-20. Switch repeatedly between DeepSeek and TRELLIS.2 and confirm deterministic recovery.
-21. Reboot both Sparks while the NAS remains available; confirm Caddy returns maintenance/upstream-unhealthy HTTP 503 and status says `stopped-after-reboot` until an explicit start.
-22. Add the browser UI, then optional LiteLLM and Tailscale as separate acceptance steps.
+11. Run `deepseek-baseline` through a Spark 1 SSH tunnel and pass structural plus deterministic quality gates.
+12. Add DSpark, pass quality gates, and record speculative acceptance.
+13. Add padded NVFP4, pass the greater-than-411-token regression and 8K quality gates.
+14. Run `deepseek-agent`, verify `P >= 1,200,000`, six concurrent requests with at most 200,000 live tokens each, and overload behavior.
+15. Run `deepseek-long`, derive `Cfull` from the boot log, complete a 900K sentinel request at the admitted limit, and verify one excess request queues or rejects safely.
+16. Run reasoning, tool-call, streaming, restart, output-quality, and performance gates through the SSH tunnel.
+17. Stop DeepSeek; verify memory recovery and the clean stopped state.
+18. Install and validate TRELLIS.2 at 512-cubed resolution through a Spark 2 SSH tunnel.
+19. Switch repeatedly between DeepSeek and TRELLIS.2 with direct scripts and confirm deterministic recovery.
+20. After the new external host arrives, install Caddy and the one-shot controller, install forced `spark-nodectl` access, and validate TLS, bearer rejection, upstream failure, private admin networking, restricted node control, route switching, state locking, and log limits.
+21. Reboot both Sparks while the external host remains available; confirm Caddy returns HTTP 503 and status says `stopped-after-reboot` until an explicit start.
+22. Add the browser UI, then apply the LiteLLM gate and add Tailscale in separate acceptance steps.
 
 ## Acceptance Criteria
 

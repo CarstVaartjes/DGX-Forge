@@ -1,6 +1,6 @@
 # Dual DGX Spark Architecture Overview
 
-The platform separates AI compute from every surrounding service. The two DGX Sparks run model workloads and their required NVIDIA runtime only. Gateway, orchestration, user interface, remote access, and optional routing services run as containers on the DS218+ or another non-Spark host.
+The platform separates AI compute from every surrounding service. The two DGX Sparks run model workloads and their required NVIDIA runtime only. Initial DeepSeek and TRELLIS.2 testing uses loopback endpoints through SSH tunnels. When the new NAS arrives, gateway, orchestration, user interface, remote access, and optional routing services run there as containers.
 
 ```mermaid
 flowchart LR
@@ -11,7 +11,7 @@ flowchart LR
         remote[Remote users<br/>later]
     end
 
-    subgraph external[External container services]
+    subgraph external[Future external container services - new NAS]
         caddy[Caddy gateway<br/>TLS, API keys, health, drain]
         controller[Profile controller<br/>state, lock, switching, tests]
         ui[Browser UI]
@@ -39,8 +39,8 @@ flowchart LR
     litellm -. optional routing .-> caddy
     caddy -->|HTTPS/API| head
     caddy -->|TRELLIS route| trellis
-    mac -. admin SSH .-> head
-    mac -. admin SSH .-> worker
+    mac -. admin SSH / API tunnel .-> head
+    mac -. admin SSH / UI tunnel .-> worker
     controller -. restricted SSH .-> head
     controller -. restricted SSH .-> worker
     controller -. private container network .-> caddy
@@ -64,7 +64,7 @@ flowchart LR
 | Host | Responsibility |
 | --- | --- |
 | Mac | Human administration through the 1Password-managed SSH key. It is not an always-on platform dependency. |
-| DS218+ or another external server | Runs all non-AI containers: Caddy, the one-shot controller, browser UI, optional LiteLLM, and later Tailscale ingress. |
+| Future new NAS or another external server | Later runs all non-AI containers: Caddy, the one-shot controller, browser UI, optional LiteLLM, and Tailscale ingress. |
 | DGX Spark 1 | DeepSeek head, tensor-parallel rank 0, authenticated upstream API, and a complete local model cache. |
 | DGX Spark 2 | DeepSeek worker, tensor-parallel rank 1, mutually exclusive TRELLIS.2 workload, and a complete local model cache. |
 
@@ -84,7 +84,8 @@ flowchart LR
 
 ## Traffic paths
 
-- **Inference:** client or UI → Caddy → the currently advertised AI profile.
+- **Initial inference:** Mac → SSH tunnel → Spark loopback endpoint.
+- **Future shared inference:** client or UI → Caddy → the currently advertised AI profile.
 - **Control:** external controller → restricted SSH commands on each Spark.
 - **Administration:** Mac → each Spark through the 1Password SSH agent.
 - **Tensor parallelism:** Spark 1 ↔ direct ConnectX-7 ↔ Spark 2 using NCCL/RoCE.
