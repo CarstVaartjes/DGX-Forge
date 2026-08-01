@@ -267,29 +267,49 @@ inventories.
 
 | Field | Spark 2 (worker) | Spark 1 (head) |
 | --- | --- | --- |
-| Dashboard checked at (UTC) | 2026-08-01; exact time not recorded | |
-| Dashboard result | `No Available Updates` (user-confirmed) | |
-| Installation completed at (UTC), or `not required` | `not required` | |
-| Reboot completed at (UTC), or `not required` | 2026-08-01; identity-repair reboot, exact time not recorded | |
-| Effective DGX OS OTA | `7.5.0` | |
-| Kernel | `6.17.0-1029-nvidia` | |
-| NVIDIA driver | `580.173.02` | |
-| CUDA Toolkit package | `13.0.3-1` | |
-| Docker Engine package | `5:29.2.1-1~ubuntu.24.04~noble` | |
-| Docker Compose | `5.0.2` | |
-| containerd package | `2.2.1-1~ubuntu.24.04~noble` | |
-| NVIDIA Container Toolkit package | `1.19.1-1` | |
-| UEFI | | |
-| Embedded Controller | | |
-| USB Power Delivery | | |
-| TPM | | |
-| SoC | | |
-| Collector/schema gate | pass after reboot; boot ID changed | |
-| Host GPU gate | pass: NVIDIA GB10, 39 C | |
-| GPU-container gate | pending one audited sudo command | |
-| Filesystem/kernel-log gate | mount/systemd/new journal directory pass; privileged current-boot log check pending | |
-| Interface-presence gate | pass: exact pre/post interface-name set | |
+| Dashboard checked at (UTC) | 2026-08-01; exact time not recorded | 2026-08-01; exact time not recorded |
+| Dashboard result | `No Available Updates` (user-confirmed) | `No Available Updates` (user-confirmed) |
+| Installation completed at (UTC), or `not required` | `not required` | `not required` |
+| Reboot completed at (UTC), or `not required` | 2026-08-01; identity-repair reboot, exact time not recorded | 2026-08-01; identity-repair reboot, exact time not recorded |
+| Effective DGX OS OTA | `7.5.0` | `7.5.0` |
+| Kernel | `6.17.0-1029-nvidia` | `6.17.0-1029-nvidia` |
+| NVIDIA driver | `580.173.02` | `580.173.02` |
+| CUDA Toolkit package | `13.0.3-1` | `13.0.3-1` |
+| Docker Engine package | `5:29.2.1-1~ubuntu.24.04~noble` | `5:29.2.1-1~ubuntu.24.04~noble` |
+| Docker Compose | `5.0.2` | `5.0.2` |
+| containerd package | `2.2.1-1~ubuntu.24.04~noble` | `2.2.1-1~ubuntu.24.04~noble` |
+| NVIDIA Container Toolkit package | `1.19.1-1` | `1.19.1-1` |
+| UEFI | BIOS `5.36_0ACUM027`; Dashboard current | BIOS `5.36_0ACUM027`; Dashboard current |
+| Embedded Controller | fwupd `0x03000508` | fwupd `0x03000508` |
+| USB Power Delivery | fwupd GUID `dd1a238a-...`: `0x00000516` | fwupd GUID `dd1a238a-...`: `0x00000516` |
+| TPM | not exposed to the running OS; Dashboard current | not exposed to the running OS; Dashboard current |
+| SoC | fwupd GUID `b488217b-...`: `0x02009b0b` | fwupd GUID `b488217b-...`: `0x02009b0b` |
+| Collector/schema gate | pass after reboot; boot ID changed | pass after reboot; boot ID changed |
+| Host GPU gate | pass: NVIDIA GB10, 39 C | pass: NVIDIA GB10, 39 C |
+| GPU-container gate | pass: GB10, driver `580.173.02`, CUDA `13.0` | pass: GB10, driver `580.173.02`, CUDA `13.0` |
+| Filesystem/kernel-log gate | pass: non-empty log matched running boot | pass: non-empty log matched running boot |
+| Interface-presence gate | pass: exact pre/post interface-name set | pass: exact pre/post interface-name set |
 
 Commit `inventory/raw/spark2-post-update.json`,
 `inventory/raw/spark1-post-update.json`, and this completed record together
 only after all gates pass.
+
+### Completed comparison
+
+No package or firmware installation was necessary. Both Dashboards reported
+no available updates; the only reboots were the required worker-first and
+head-second reboots that completed the earlier machine-ID repair.
+
+The two live normalized platform captures matched byte-for-byte across DGX
+build/OTA, Ubuntu, kernel, driver, CUDA Toolkit, Docker Engine/CLI, Compose,
+containerd, NVIDIA Container Toolkit, BIOS version/date, and every
+fwupd-exposed firmware name, version, and GUID. The normalized post-inventory
+platform fields also matched exactly across OS, kernel, total memory, total
+swap, root filesystem size, earlyoom state, Compose, physical NVMe size, and
+interface names/types/MTUs. Snap loop-device numbers differed because loop
+assignment is runtime state; they are not physical platform fields.
+
+TPM firmware is listed in NVIDIA's release table but no TPM device is exposed
+to `tpm2_getcap` or fwupd on either running node. Exact local TPM interrogation
+was therefore unavailable; both Dashboards independently reported the systems
+current with no available update.
