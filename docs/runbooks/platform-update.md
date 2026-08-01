@@ -381,3 +381,19 @@ sudo systemctl unmask earlyoom && sudo systemctl start earlyoom && \
 Do not run these commands for the observed absent state; there is nothing to
 roll back. After both nodes pass, remove `/tmp/disable-earlyoom` from each
 node and mark the evidence document complete.
+
+### Completed earlyoom record
+
+The audited apply path ran on Spark 2 first and Spark 1 second. Both executions
+classified the service as `absent` and printed `PASS: earlyoom is absent; no
+change required`; no package, unit, or host configuration was changed. The
+exact interactive execution times were not recorded and are left null rather
+than inferred.
+
+Independent post-action probes at `2026-08-01T21:42:43Z` on Spark 2 and
+`2026-08-01T21:42:44Z` on Spark 1 reproduced the before state and exact exit
+codes: `LoadState=not-found`/0, `is-enabled=not-found`/4,
+`is-active=inactive`/4, and absent package/1. The worker and head therefore
+both meet the DeepSeek earlyoom gate without a mutation. The staged script
+used SHA-256
+`e9a16bce353cf85600b48dc4641db64635035c67328b8f10a2cb9d06d377657f`.
