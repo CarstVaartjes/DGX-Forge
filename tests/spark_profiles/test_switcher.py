@@ -1,0 +1,440 @@
+from __future__ import annotations
+
+from contextlib import contextmanager
+from dataclasses import replace
+from pathlib import Path
+
+from spark_profiles.admission import AdmissionReport, check_admission
+from spark_profiles.backend import CommandResult
+from spark_profiles.catalog import Catalog, fingerprint
+from spark_profiles.contracts import (
+    AdapterCommands,
+    CheckpointPin,
+    ClusterProfile,
+    Endpoint,
+    ImagePin,
+    ResourceEnvelope,
+    SourcePin,
+    WorkloadDefinition,
+    WorkloadPaths,
+)
+from spark_profiles.state import ControllerState
+from spark_profiles.switcher import ProfileSwitcher
+
+SHA_A = "a" * 64
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+def command_result(ok: bool = True, stderr: bytes = b"") -> CommandResult:
+    return CommandResult(
+        returncode=0 if ok else 1,
+        stdout=b"",
+        stderr=stderr,
+        timed_out=False,
+        stdout_truncated=False,
+        stderr_truncated=False,
+    )
+
+
+def workload(
+    identifier: str = "generator", *, distributed: bool = False
+) -> WorkloadDefinition:
+    nodes = ("spark1", "spark2") if distributed else ("spark2",)
+    start_order = ("spark2", "spark1") if distributed else ("spark2",)
+    stop_order = ("spark1", "spark2") if distributed else ("spark2",)
+    command = lambda operation: (f"profile-{operation}", identifier)
+    return WorkloadDefinition(
+        id=identifier,
+        adapter="fixture",
+        topology="distributed" if distributed else "single",
+        placement_class="dual-exclusive" if distributed else "single-exclusive",
+        nodes=nodes,
+        start_order=start_order,
+        stop_order=stop_order,
+        conflicts=(),
+        co_location="exclusive",
+        accepted_evidence=Path("accepted.json"),
+        source=SourcePin("https://example.test/source", "1" * 40),
+        checkpoint=CheckpointPin(
+            "example/checkpoint", "2" * 40, Path("/srv/manifest.json"), "3" * 64
+        ),
+        image=ImagePin("example.test/image@sha256:" + "4" * 64),
+        paths=WorkloadPaths(
+            Path(f"/srv/cache/{identifier}"),
+            Path(f"/srv/scratch/{identifier}"),
+            Path(f"/srv/output/{identifier}"),
+        ),
+        endpoint=Endpoint("127.0.0.1", 9000),
+        commands=AdapterCommands(
+            prepare=command("prepare"),
+            verify=command("verify"),
+            start=command("start"),
+            health=command("health"),
+            infer=command("infer"),
+            stop=command("stop"),
+            verify_release=command("verify-release"),
+        ),
+        resources=ResourceEnvelope(1, 1, 1),
+    )
+
+
+def profile(identifier: str, definition: WorkloadDefinition | None) -> ClusterProfile:
+    placements = {"spark1": (), "spark2": ()}
+    endpoints = {}
+    if definition is not None:
+        for node in definition.nodes:
+            placements[node] = (definition.id,)
+        endpoints = {"model": definition.id}
+    return ClusterProfile(
+        id=identifier,
+        accepted_evidence=Path("accepted.json"),
+        placements=placements,
+        endpoints=endpoints,
+    )
+
+
+def catalog(*profiles: ClusterProfile, definition: WorkloadDefinition) -> Catalog:
+    definition_sha = fingerprint(definition)
+    profile_map = {item.id: item for item in profiles}
+    return Catalog(
+        definitions={definition.id: definition},
+        profiles=profile_map,
+        selectors={"default": profiles[0].id},
+        definition_fingerprints={definition.id: definition_sha},
+        profile_fingerprints={
+            key: fingerprint(value) for key, value in profile_map.items()
+        },
+        maturity={definition.id: "accepted"},
+        maturity_fingerprints={definition.id: definition_sha},
+        accepted_profiles={},
+    )
+
+
+class FakeBackend:
+    def __init__(
+        self, events: list[tuple], *, fail: tuple[str, str] | None = None
+    ) -> None:
+        self.events = events
+        self.fail = fail
+
+    def run(self, node: str, argv: tuple[str, ...], timeout: float) -> CommandResult:
+        self.events.append(("remote", node, argv))
+        operation = argv[0]
+        identifier = argv[1]
+        if self.fail == (operation, identifier):
+            return command_result(False, b"fixture failure")
+        return command_result()
+
+
+class FakeStore:
+    def __init__(self, state: ControllerState, events: list[tuple]) -> None:
+        self.state = state
+        self.events = events
+        self.saves: list[ControllerState] = []
+
+    @contextmanager
+    def acquire(self):
+        self.events.append(("lock",))
+        yield self.state
+
+    def save(self, state: ControllerState) -> None:
+        self.state = state
+        self.saves.append(state)
+        self.events.append(("save", state.status, state.active_profile))
+
+    def load(self) -> ControllerState:
+        return self.state
+
+
+def inventory() -> dict[str, dict[str, int | bool]]:
+    return {
+        "spark1": {"healthy": True, "free_memory_bytes": 100, "free_disk_bytes": 100},
+        "spark2": {"healthy": True, "free_memory_bytes": 100, "free_disk_bytes": 100},
+    }
+
+
+def make_switcher(
+    catalog_value: Catalog,
+    state: ControllerState,
+    *,
+    fail: tuple[str, str] | None = None,
+) -> tuple[ProfileSwitcher, list[tuple], FakeStore]:
+    events: list[tuple] = []
+    store = FakeStore(state, events)
+    switcher = ProfileSwitcher(
+        catalog=catalog_value,
+        backend=FakeBackend(events, fail=fail),
+        state_store=store,
+        inventory_provider=inventory,
+        timeout_seconds=10,
+    )
+    return switcher, events, store
+
+
+def active_state(
+    profile_value: ClusterProfile, definition: WorkloadDefinition
+) -> ControllerState:
+    return ControllerState(
+        status="active",
+        active_profile=profile_value.id,
+        target_profile=None,
+        restore_profile=None,
+        last_error=None,
+        active_profile_sha256=fingerprint(profile_value),
+        active_definition_sha256={definition.id: fingerprint(definition)},
+    )
+
+
+def test_distributed_stop_is_head_first_and_start_is_worker_first() -> None:
+    definition = workload("deepseek-agent-dual", distributed=True)
+    current = profile("current", definition)
+    maintenance = profile("maintenance", None)
+    target = replace(current, id="target")
+    catalog_value = catalog(current, maintenance, target, definition=definition)
+    switcher, events, _ = make_switcher(
+        catalog_value, active_state(current, definition)
+    )
+
+    stopped = switcher.switch_profile("maintenance")
+    assert stopped.status == "stopped"
+    assert [event for event in events if event[0] == "remote"][:2] == [
+        ("remote", "spark1", ("profile-stop", "deepseek-agent-dual", "head")),
+        ("remote", "spark2", ("profile-stop", "deepseek-agent-dual", "worker")),
+    ]
+
+    events.clear()
+    started = switcher.switch_profile("target")
+    assert started.status == "active"
+    start_calls = [
+        event
+        for event in events
+        if event[0] == "remote" and event[2][0] == "profile-start"
+    ]
+    assert start_calls == [
+        ("remote", "spark2", ("profile-start", "deepseek-agent-dual", "worker")),
+        ("remote", "spark1", ("profile-start", "deepseek-agent-dual", "head")),
+    ]
+
+
+def test_dry_run_does_not_call_backend_or_save_state() -> None:
+    definition = workload()
+    target = profile("target", definition)
+    catalog_value = catalog(target, definition=definition)
+    switcher, events, store = make_switcher(catalog_value, ControllerState.stopped())
+
+    report = switcher.switch_profile("target", dry_run=True)
+
+    assert report.status == "planned"
+    assert events == [("lock",)]
+    assert store.saves == []
+
+
+def test_planned_definition_is_not_activated() -> None:
+    definition = workload()
+    target = profile("target", definition)
+    catalog_value = catalog(target, definition=definition)
+    catalog_value.maturity[definition.id] = "planned"
+    switcher, events, store = make_switcher(catalog_value, ControllerState.stopped())
+
+    report = switcher.switch_profile("target")
+
+    assert report.status == "blocked"
+    assert "maturity is planned" in " ".join(report.errors)
+    assert [event for event in events if event[0] == "remote"] == []
+    assert store.saves == []
+
+
+def test_checked_in_production_home_remains_truthfully_unactivatable() -> None:
+    catalog_value = Catalog.load(REPOSITORY_ROOT)
+    switcher, events, store = make_switcher(catalog_value, ControllerState.stopped())
+
+    report = switcher.switch_profile("default")
+
+    assert report.target_profile == "agent-full-dual"
+    assert report.status == "blocked"
+    assert "deepseek-agent-dual maturity is planned" in report.errors
+    assert [event for event in events if event[0] == "remote"] == []
+    assert store.saves == []
+
+
+def test_changed_endpoint_is_withdrawn_before_stop() -> None:
+    definition = workload()
+    current = profile("current", definition)
+    maintenance = profile("maintenance", None)
+    catalog_value = catalog(current, maintenance, definition=definition)
+    switcher, events, _ = make_switcher(
+        catalog_value, active_state(current, definition)
+    )
+
+    switcher.switch_profile("maintenance")
+
+    transitioning = events.index(("save", "transitioning", None))
+    first_stop = next(
+        index
+        for index, event in enumerate(events)
+        if event[0] == "remote" and event[2][0] == "profile-stop"
+    )
+    assert transitioning < first_stop
+
+
+def test_retention_requires_matching_hashes_and_health() -> None:
+    definition = workload()
+    current = profile("current", definition)
+    target = replace(current, id="target")
+    catalog_value = catalog(current, target, definition=definition)
+    switcher, events, _ = make_switcher(
+        catalog_value, active_state(current, definition)
+    )
+
+    report = switcher.switch_profile("target")
+
+    assert report.retained_workloads == (definition.id,)
+    operations = [event[2][0] for event in events if event[0] == "remote"]
+    assert operations == ["profile-health"]
+
+    stale = replace(
+        active_state(current, definition),
+        active_definition_sha256={definition.id: SHA_A},
+    )
+    switcher, events, _ = make_switcher(catalog_value, stale)
+    switcher.switch_profile("target")
+    operations = [event[2][0] for event in events if event[0] == "remote"]
+    assert "profile-stop" in operations
+    assert "profile-start" in operations
+
+
+def test_failed_health_cleans_up_target_and_finishes_stopped() -> None:
+    definition = workload("generator")
+    target = profile("generator-only", definition)
+    catalog_value = catalog(target, definition=definition)
+    switcher, events, store = make_switcher(
+        catalog_value,
+        ControllerState.stopped(),
+        fail=("profile-health", "generator"),
+    )
+
+    report = switcher.switch_profile("generator-only")
+
+    assert report.status == "stopped"
+    assert report.published_endpoints == {}
+    operations = [event[2][0] for event in events if event[0] == "remote"]
+    assert operations[-2:] == ["profile-stop", "profile-verify-release"]
+    assert store.state.status == "stopped"
+    assert "fixture failure" in (store.state.last_error or "")
+
+
+def test_failed_distributed_start_still_runs_full_ordered_cleanup() -> None:
+    definition = workload("generator", distributed=True)
+    target = profile("generator-only", definition)
+    catalog_value = catalog(target, definition=definition)
+    switcher, events, store = make_switcher(
+        catalog_value,
+        ControllerState.stopped(),
+        fail=("profile-start", "generator"),
+    )
+
+    report = switcher.switch_profile("generator-only")
+
+    assert report.status == "stopped"
+    cleanup = [
+        event
+        for event in events
+        if event[0] == "remote"
+        and event[2][0] in {"profile-stop", "profile-verify-release"}
+    ]
+    assert cleanup == [
+        ("remote", "spark1", ("profile-stop", "generator", "head")),
+        ("remote", "spark2", ("profile-stop", "generator", "worker")),
+        ("remote", "spark1", ("profile-verify-release", "generator", "head")),
+        ("remote", "spark2", ("profile-verify-release", "generator", "worker")),
+    ]
+    assert store.state.status == "stopped"
+
+
+def test_unreconciled_degraded_state_blocks_activation() -> None:
+    definition = workload()
+    target = profile("target", definition)
+    catalog_value = catalog(target, definition=definition)
+    degraded = ControllerState(
+        status="degraded",
+        active_profile=None,
+        target_profile="old-target",
+        restore_profile=None,
+        last_error="unknown remote process state",
+    )
+    switcher, events, store = make_switcher(catalog_value, degraded)
+
+    report = switcher.switch_profile("target")
+
+    assert report.status == "blocked"
+    assert "manual recovery" in " ".join(report.errors)
+    assert [event for event in events if event[0] == "remote"] == []
+    assert store.saves == []
+
+
+def test_restore_is_second_transition_and_keeps_producing_provenance() -> None:
+    definition = workload()
+    home = profile("home", definition)
+    temporary = replace(home, id="temporary")
+    catalog_value = catalog(home, temporary, definition=definition)
+    switcher, _, store = make_switcher(catalog_value, ControllerState.stopped())
+
+    report = switcher.switch_profile("temporary", restore_to="default")
+
+    assert report.target_profile == "temporary"
+    assert report.profile_sha256 == fingerprint(temporary)
+    assert report.definition_sha256 == {definition.id: fingerprint(definition)}
+    assert report.output_provenance["profile_sha256"] == fingerprint(temporary)
+    assert report.restoration is not None
+    assert report.restoration.target_profile == "home"
+    assert store.state.active_profile == "home"
+    assert report.profile_sha256 != store.state.active_profile_sha256
+
+
+def test_failed_restoration_is_reported_without_rewriting_provenance() -> None:
+    definition = workload()
+    home = profile("home", definition)
+    temporary = replace(home, id="temporary")
+    catalog_value = catalog(home, temporary, definition=definition)
+    events: list[tuple] = []
+    store = FakeStore(ControllerState.stopped(), events)
+
+    def block_home(profile_value, catalog_value, inventory_value):
+        if profile_value.id == "home":
+            return AdmissionReport(("home restoration evidence expired",))
+        return check_admission(profile_value, catalog_value, inventory_value)
+
+    switcher = ProfileSwitcher(
+        catalog=catalog_value,
+        backend=FakeBackend(events),
+        state_store=store,
+        inventory_provider=inventory,
+        admission_checker=block_home,
+    )
+
+    report = switcher.switch_profile("temporary", restore_to="default")
+
+    assert report.status == "active"
+    assert report.profile_sha256 == fingerprint(temporary)
+    assert report.restoration is not None
+    assert report.restoration.status == "blocked"
+    assert report.restoration.errors == ("home restoration evidence expired",)
+    assert store.state.active_profile == "temporary"
+    assert store.state.active_profile_sha256 == fingerprint(temporary)
+
+
+def test_dry_run_reports_primary_and_restoration_without_side_effects() -> None:
+    definition = workload()
+    home = profile("home", definition)
+    temporary = replace(home, id="temporary")
+    catalog_value = catalog(home, temporary, definition=definition)
+    switcher, events, store = make_switcher(catalog_value, ControllerState.stopped())
+
+    report = switcher.switch_profile("temporary", restore_to="default", dry_run=True)
+
+    assert report.status == "planned"
+    assert report.restoration is not None
+    assert report.restoration.target_profile == "home"
+    assert report.restoration.status == "planned"
+    assert events == [("lock",)]
+    assert store.saves == []

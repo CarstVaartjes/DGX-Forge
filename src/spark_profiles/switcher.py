@@ -1,0 +1,529 @@
+"""Fail-closed reconciliation of whole-cluster Spark profiles."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
+from typing import Protocol
+
+from .admission import AdmissionReport, check_admission
+from .backend import CommandResult, SshBackend
+from .catalog import Catalog
+from .contracts import ClusterProfile, WorkloadDefinition
+from .state import ControllerState, StateStore
+
+_MAX_ERROR_CHARS = 2_048
+_MAX_DIAGNOSTICS = 64
+
+
+class _StateStore(Protocol):
+    def acquire(self): ...
+
+    def load(self) -> ControllerState: ...
+
+    def save(self, state: ControllerState) -> None: ...
+
+
+@dataclass(frozen=True)
+class Diagnostic:
+    operation: str
+    workload: str
+    node: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class SwitchReport:
+    target_profile: str
+    status: str
+    profile_sha256: str
+    definition_sha256: Mapping[str, str]
+    published_endpoints: Mapping[str, str]
+    retained_workloads: tuple[str, ...] = ()
+    errors: tuple[str, ...] = ()
+    diagnostics: tuple[Diagnostic, ...] = ()
+    output_provenance: Mapping[str, object] = field(default_factory=dict)
+    restoration: SwitchReport | None = None
+    dry_run: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "definition_sha256", MappingProxyType(dict(self.definition_sha256))
+        )
+        object.__setattr__(
+            self,
+            "published_endpoints",
+            MappingProxyType(dict(self.published_endpoints)),
+        )
+        object.__setattr__(
+            self, "output_provenance", MappingProxyType(dict(self.output_provenance))
+        )
+
+
+InventoryProvider = Callable[[], Mapping[str, object]]
+AdmissionChecker = Callable[
+    [ClusterProfile, Catalog, Mapping[str, object]], AdmissionReport
+]
+
+
+class _TransitionFailure(RuntimeError):
+    pass
+
+
+class ProfileSwitcher:
+    """Reconcile one complete accepted profile while holding the local lock."""
+
+    def __init__(
+        self,
+        *,
+        catalog: Catalog,
+        backend: SshBackend,
+        state_store: StateStore | _StateStore,
+        inventory_provider: InventoryProvider,
+        admission_checker: AdmissionChecker = check_admission,
+        timeout_seconds: float = 120,
+    ) -> None:
+        if timeout_seconds <= 0:
+            raise ValueError("timeout must be positive")
+        self.catalog = catalog
+        self.backend = backend
+        self.state_store = state_store
+        self.inventory_provider = inventory_provider
+        self.admission_checker = admission_checker
+        self.timeout_seconds = timeout_seconds
+
+    def switch_profile(
+        self,
+        target_id: str,
+        *,
+        restore_to: str | None = None,
+        dry_run: bool = False,
+    ) -> SwitchReport:
+        """Activate one profile and optionally restore through a second transition."""
+        with self.state_store.acquire() as state:
+            target = self._resolve(target_id)
+            restoration = self._resolve(restore_to) if restore_to is not None else None
+            primary = self._transition(
+                state,
+                target,
+                restore_profile=restoration.id if restoration is not None else None,
+                dry_run=dry_run,
+            )
+            if restoration is None or primary.status not in {"active", "planned"}:
+                return primary
+
+            if dry_run:
+                restored = self._transition(
+                    state,
+                    restoration,
+                    restore_profile=None,
+                    dry_run=True,
+                )
+            else:
+                restored = self._transition(
+                    self.state_store.load(),
+                    restoration,
+                    restore_profile=None,
+                    dry_run=False,
+                )
+            return SwitchReport(
+                target_profile=primary.target_profile,
+                status=primary.status,
+                profile_sha256=primary.profile_sha256,
+                definition_sha256=primary.definition_sha256,
+                published_endpoints=primary.published_endpoints,
+                retained_workloads=primary.retained_workloads,
+                errors=primary.errors,
+                diagnostics=primary.diagnostics,
+                output_provenance=primary.output_provenance,
+                restoration=restored,
+                dry_run=False,
+            )
+
+    def _resolve(self, identifier: str | None) -> ClusterProfile:
+        assert identifier is not None
+        if identifier in self.catalog.selectors:
+            return self.catalog.profiles[self.catalog.selectors[identifier]]
+        try:
+            return self.catalog.profiles[identifier]
+        except KeyError as error:
+            raise ValueError(
+                f"unknown cluster profile or selector: {identifier}"
+            ) from error
+
+    def _transition(
+        self,
+        state: ControllerState,
+        target: ClusterProfile,
+        *,
+        restore_profile: str | None,
+        dry_run: bool,
+    ) -> SwitchReport:
+        inventory = self.inventory_provider()
+        admission = self.admission_checker(target, self.catalog, inventory)
+        target_definitions = self._profile_definitions(target)
+        target_hashes = {
+            identifier: self.catalog.definition_fingerprints[identifier]
+            for identifier in target_definitions
+        }
+        profile_hash = self.catalog.profile_fingerprints[target.id]
+        if not admission.ok:
+            return SwitchReport(
+                target_profile=target.id,
+                status="blocked",
+                profile_sha256=profile_hash,
+                definition_sha256=target_hashes,
+                published_endpoints={},
+                errors=admission.errors,
+                dry_run=dry_run,
+            )
+        state_error = self._state_error(state)
+        if state_error is not None:
+            return SwitchReport(
+                target_profile=target.id,
+                status="blocked",
+                profile_sha256=profile_hash,
+                definition_sha256=target_hashes,
+                published_endpoints={},
+                errors=(state_error,),
+                dry_run=dry_run,
+            )
+        if dry_run:
+            return SwitchReport(
+                target_profile=target.id,
+                status="planned",
+                profile_sha256=profile_hash,
+                definition_sha256=target_hashes,
+                published_endpoints={},
+                dry_run=True,
+            )
+
+        diagnostics: list[Diagnostic] = []
+        current = self.catalog.profiles.get(state.active_profile or "")
+        retained = self._healthy_retained(state, current, target, diagnostics)
+
+        # An active profile is the publication source. Clearing it withdraws all
+        # changed aliases before the first stop command is issued.
+        self.state_store.save(
+            ControllerState(
+                status="transitioning",
+                active_profile=None,
+                target_profile=target.id,
+                restore_profile=restore_profile,
+                last_error=None,
+                boot_ids=state.boot_ids,
+            )
+        )
+
+        live_workloads = (
+            self._profile_definitions(current) if current is not None else set()
+        )
+        outputs: dict[str, str] = {}
+        try:
+            if current is not None:
+                for identifier in self._workload_order(current, reverse=True):
+                    if identifier in retained:
+                        continue
+                    self._stop_definition(
+                        self.catalog.definitions[identifier], diagnostics
+                    )
+                    live_workloads.discard(identifier)
+
+            for identifier in self._workload_order(target):
+                if identifier in retained:
+                    continue
+                definition = self.catalog.definitions[identifier]
+                self._verify_definition(definition, diagnostics)
+                # A failed start may still have created a remote process. Mark
+                # it live before issuing the command so cleanup is conservative.
+                live_workloads.add(identifier)
+                self._start_definition(definition, diagnostics)
+                self._health_definition(definition, diagnostics)
+                outputs[identifier] = self._infer_definition(definition, diagnostics)
+
+            status = "active" if target_definitions else "stopped"
+            if status == "active":
+                final_state = ControllerState(
+                    status="active",
+                    active_profile=target.id,
+                    target_profile=None,
+                    restore_profile=restore_profile,
+                    last_error=None,
+                    active_profile_sha256=profile_hash,
+                    active_definition_sha256=target_hashes,
+                    boot_ids=state.boot_ids,
+                )
+                endpoints = dict(target.endpoints)
+            else:
+                final_state = ControllerState.stopped(boot_ids=state.boot_ids)
+                endpoints = {}
+            self.state_store.save(final_state)
+            provenance: dict[str, object] = {
+                "profile": target.id,
+                "profile_sha256": profile_hash,
+                "definition_sha256": dict(target_hashes),
+                "infer_outputs": outputs,
+            }
+            return SwitchReport(
+                target_profile=target.id,
+                status=status,
+                profile_sha256=profile_hash,
+                definition_sha256=target_hashes,
+                published_endpoints=endpoints,
+                retained_workloads=tuple(sorted(retained)),
+                diagnostics=tuple(diagnostics),
+                output_provenance=provenance,
+            )
+        except _TransitionFailure as error:
+            cleanup_ok = self._cleanup_live(
+                current, target, live_workloads, diagnostics
+            )
+            message = str(error)[:_MAX_ERROR_CHARS]
+            status = "stopped" if cleanup_ok else "degraded"
+            if status == "stopped":
+                failed_state = ControllerState(
+                    status="stopped",
+                    active_profile=None,
+                    target_profile=target.id,
+                    restore_profile=restore_profile,
+                    last_error=message,
+                    boot_ids=state.boot_ids,
+                )
+            else:
+                failed_state = ControllerState(
+                    status="degraded",
+                    active_profile=None,
+                    target_profile=target.id,
+                    restore_profile=restore_profile,
+                    last_error=message,
+                    boot_ids=state.boot_ids,
+                )
+            self.state_store.save(failed_state)
+            return SwitchReport(
+                target_profile=target.id,
+                status=status,
+                profile_sha256=profile_hash,
+                definition_sha256=target_hashes,
+                published_endpoints={},
+                errors=(message,),
+                diagnostics=tuple(diagnostics),
+            )
+
+    def _state_error(self, state: ControllerState) -> str | None:
+        if (
+            state.active_profile is not None
+            and state.active_profile not in self.catalog.profiles
+        ):
+            return "persisted active profile is absent from the catalog; manual recovery required"
+        if state.status in {"transitioning", "degraded"}:
+            return f"controller state is {state.status}; manual recovery required"
+        return None
+
+    def _profile_definitions(self, profile: ClusterProfile) -> set[str]:
+        return {
+            identifier
+            for node in ("spark1", "spark2")
+            for identifier in profile.placements[node]
+        }
+
+    def _workload_order(
+        self, profile: ClusterProfile, *, reverse: bool = False
+    ) -> tuple[str, ...]:
+        identifiers: list[str] = []
+        nodes = ("spark1", "spark2") if reverse else ("spark2", "spark1")
+        for node in nodes:
+            values = (
+                reversed(profile.placements[node])
+                if reverse
+                else profile.placements[node]
+            )
+            for identifier in values:
+                if identifier not in identifiers:
+                    identifiers.append(identifier)
+        return tuple(identifiers)
+
+    def _healthy_retained(
+        self,
+        state: ControllerState,
+        current: ClusterProfile | None,
+        target: ClusterProfile,
+        diagnostics: list[Diagnostic],
+    ) -> set[str]:
+        if current is None:
+            return set()
+        if state.active_profile_sha256 != self.catalog.profile_fingerprints.get(
+            current.id
+        ):
+            return set()
+        current_definitions = self._profile_definitions(current)
+        target_definitions = self._profile_definitions(target)
+        result: set[str] = set()
+        for identifier in sorted(current_definitions & target_definitions):
+            definition_hash = self.catalog.definition_fingerprints[identifier]
+            if state.active_definition_sha256.get(identifier) != definition_hash:
+                continue
+            current_nodes = tuple(
+                node
+                for node in ("spark1", "spark2")
+                if identifier in current.placements[node]
+            )
+            target_nodes = tuple(
+                node
+                for node in ("spark1", "spark2")
+                if identifier in target.placements[node]
+            )
+            if current_nodes != target_nodes:
+                continue
+            current_aliases = sorted(
+                alias
+                for alias, target_id in current.endpoints.items()
+                if target_id == identifier
+            )
+            target_aliases = sorted(
+                alias
+                for alias, target_id in target.endpoints.items()
+                if target_id == identifier
+            )
+            if current_aliases != target_aliases:
+                continue
+            try:
+                self._health_definition(
+                    self.catalog.definitions[identifier], diagnostics
+                )
+            except _TransitionFailure:
+                continue
+            result.add(identifier)
+        return result
+
+    def _argv(
+        self, definition: WorkloadDefinition, command: tuple[str, ...], node: str
+    ) -> tuple[str, ...]:
+        if definition.topology != "distributed":
+            return command
+        role = "head" if node == definition.stop_order[0] else "worker"
+        return (*command, role)
+
+    def _call(
+        self,
+        definition: WorkloadDefinition,
+        operation: str,
+        node: str,
+        command: tuple[str, ...],
+        diagnostics: list[Diagnostic],
+    ) -> CommandResult:
+        result = self.backend.run(
+            node, self._argv(definition, command, node), self.timeout_seconds
+        )
+        if not result.ok:
+            detail = self._detail(result)
+            self._diagnostic(diagnostics, operation, definition.id, node, detail)
+            raise _TransitionFailure(
+                f"{operation} failed for {definition.id} on {node}: {detail}"
+            )
+        return result
+
+    def _verify_definition(
+        self, definition: WorkloadDefinition, diagnostics: list[Diagnostic]
+    ) -> None:
+        for node in definition.start_order:
+            self._call(
+                definition, "verify", node, definition.commands.verify, diagnostics
+            )
+
+    def _start_definition(
+        self, definition: WorkloadDefinition, diagnostics: list[Diagnostic]
+    ) -> None:
+        for node in definition.start_order:
+            self._call(
+                definition, "start", node, definition.commands.start, diagnostics
+            )
+
+    def _health_definition(
+        self, definition: WorkloadDefinition, diagnostics: list[Diagnostic]
+    ) -> None:
+        for node in definition.start_order:
+            self._call(
+                definition, "health", node, definition.commands.health, diagnostics
+            )
+
+    def _infer_definition(
+        self, definition: WorkloadDefinition, diagnostics: list[Diagnostic]
+    ) -> str:
+        node = definition.stop_order[0]
+        result = self._call(
+            definition, "infer", node, definition.commands.infer, diagnostics
+        )
+        return result.stdout.decode("utf-8", errors="replace")[:_MAX_ERROR_CHARS]
+
+    def _stop_definition(
+        self, definition: WorkloadDefinition, diagnostics: list[Diagnostic]
+    ) -> None:
+        for node in definition.stop_order:
+            self._call(definition, "stop", node, definition.commands.stop, diagnostics)
+        for node in definition.stop_order:
+            self._call(
+                definition,
+                "verify-release",
+                node,
+                definition.commands.verify_release,
+                diagnostics,
+            )
+
+    def _cleanup_live(
+        self,
+        current: ClusterProfile | None,
+        target: ClusterProfile,
+        identifiers: set[str],
+        diagnostics: list[Diagnostic],
+    ) -> bool:
+        ok = True
+        ordered: list[str] = []
+        for profile in (target, current):
+            if profile is None:
+                continue
+            for identifier in self._workload_order(profile, reverse=True):
+                if identifier not in ordered:
+                    ordered.append(identifier)
+        for identifier in ordered:
+            if identifier not in identifiers:
+                continue
+            definition = self.catalog.definitions[identifier]
+            for node in definition.stop_order:
+                try:
+                    self._call(
+                        definition, "stop", node, definition.commands.stop, diagnostics
+                    )
+                except _TransitionFailure:
+                    ok = False
+            for node in definition.stop_order:
+                try:
+                    self._call(
+                        definition,
+                        "verify-release",
+                        node,
+                        definition.commands.verify_release,
+                        diagnostics,
+                    )
+                except _TransitionFailure:
+                    ok = False
+        return ok
+
+    def _detail(self, result: CommandResult) -> str:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        timeout = "timeout" if result.timed_out else f"exit={result.returncode}"
+        truncation = " (truncated)" if result.stderr_truncated else ""
+        return f"{timeout}: {stderr or 'no diagnostic output'}{truncation}"[
+            :_MAX_ERROR_CHARS
+        ]
+
+    def _diagnostic(
+        self,
+        diagnostics: list[Diagnostic],
+        operation: str,
+        workload: str,
+        node: str,
+        detail: str,
+    ) -> None:
+        if len(diagnostics) < _MAX_DIAGNOSTICS:
+            diagnostics.append(Diagnostic(operation, workload, node, detail))
