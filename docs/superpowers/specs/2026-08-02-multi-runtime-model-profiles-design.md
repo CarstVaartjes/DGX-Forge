@@ -1,7 +1,7 @@
 # Multi-Runtime Model Profiles Design
 
 Date: 2026-08-02
-Status: approved
+Status: approved, including profile/provisioning amendment
 
 ## Purpose
 
@@ -30,9 +30,89 @@ The concise [model capacity overview](../../model-capacity-overview.md) compares
 
 ## Decision
 
-Use a common profile contract with runtime-specific adapters. A profile describes placement, conflicts, storage, lifecycle, health, and acceptance behavior. Its adapter preserves the best loader for the model family.
+The unit users activate is a **cluster profile**, not an individual model. A
+cluster profile declares the complete set of workloads that are simultaneously
+active on Spark 1 and Spark 2, plus the stable endpoint names exposed to
+clients. Individual model start/stop switches are not part of the public
+control model because they could create an unmeasured combination.
+
+The platform separates five concepts:
+
+| Layer | Responsibility |
+| --- | --- |
+| Model | Stable model identity and function, such as DeepSeek-V4-Flash-0731 or Qwen-Image. |
+| Provisioning lane | Exact checkpoint, auxiliary artifacts, container or source build, optimized loader, load/residency method, and validation state for one way of running a model. |
+| Workload | A runnable instance of one provisioning lane, including lifecycle commands, resource envelope, placement constraints, storage, health, and endpoint behavior. |
+| Cluster profile | The complete desired active state of both Sparks: zero or more workloads per node plus stable capability aliases. |
+| Catalog | Every known provisioning lane and profile, including artifacts cached locally but not currently active. |
+
+```text
+model
+`-- one or more provisioning lanes
+    `-- workload definitions
+        `-- composed into accepted cluster profiles
+```
+
+A model may have several provisioning lanes. For example, one exact model can
+have an official correctness lane, an accepted Spark-optimized serving lane, a
+quantized or low-memory lane, and different single- or dual-Spark lanes. These
+are not automatically interchangeable: each keeps its own immutable artifacts,
+quality evidence, resource measurements, and lifecycle acceptance.
+
+Provisioning lanes explicitly describe these independent dimensions:
+
+| Dimension | Examples in this platform |
+| --- | --- |
+| Artifact acquisition | Complete Hugging Face snapshot, GGUF, auxiliary checkpoints, pinned container image, or pinned source build. |
+| Loader/runtime | vLLM, DS4, SGLang Diffusion, Diffusers, or a model-specific native pipeline. |
+| Loading/residency | Fully resident, persistent service, memory-mapped, staged sequential phases, accepted offload, NCCL tensor parallel, or experimental cross-host pipeline. |
+| Placement | Either single Spark, an exact Spark, both Sparks exclusively, or an accepted shareable combination. |
+| Maturity | `planned`, `prepared`, `verified`, `accepted`, or `rejected`. |
+
+`planned` lanes may exist in the catalog before their artifacts or adapters are
+installed. They fail admission and cannot be activated, advertised, or used to
+satisfy a profile. `prepared` means immutable artifacts are present;
+`verified` means offline integrity and runtime prerequisites pass; `accepted`
+additionally requires the model-specific lifecycle, quality, resource, and
+performance gates. Only accepted lanes may appear in an activatable cluster
+profile.
+
+Use a common workload contract with runtime-specific adapters. The controller
+treats lifecycle operations uniformly while each adapter preserves the best
+loader and provisioning behavior for its model family.
 
 Do not make ComfyUI, Diffusers, vLLM, or any other single runtime the platform-wide loader. ComfyUI may later run on the developer or external service host as a client, but it is not the source of truth for Spark process lifecycle or profile state.
+
+## Initial cluster profiles and stable DeepSeek identity
+
+The default profile ID is `agent-full-dual`. It dedicates both Sparks to the
+accepted dual-Spark DeepSeek lane. Other profiles normally keep the accepted
+single-Spark DeepSeek lane active on Spark 1 while Spark 2 hosts an accepted
+combination of creative workloads.
+
+The following are profile intents, not claims that every combination has
+already passed admission:
+
+| Profile | Spark 1 active workloads | Spark 2 active workloads | Stable aliases |
+| --- | --- | --- | --- |
+| `agent-full-dual` (default) | DeepSeek dual rank 0 | DeepSeek dual rank 1 | `deepseek` → dual DeepSeek workload |
+| `creative-3d` | DeepSeek single | Pixal3D, TRELLIS.2, Qwen3-VL | `deepseek` → single DeepSeek; model-specific creative aliases |
+| `image-authoring` | DeepSeek single | Qwen-Image, Qwen-Image-Edit-2511 | `deepseek` → single DeepSeek; model-specific image aliases |
+| `rigging` | DeepSeek single | accepted TokenRig and supporting evaluation workloads | `deepseek` → single DeepSeek; model-specific rigging aliases |
+
+Multiple workloads in a profile are active simultaneously. Listing a cached
+model in the catalog does not make it active. A multi-workload profile becomes
+activatable only after the exact combined placement passes co-residency,
+concurrent inference, thermal, output-quality, stop/restart, and memory-recovery
+acceptance.
+
+Both DeepSeek lanes expose the client-facing OpenAI-compatible model name
+`deepseek`. Clients do not select `single`, `dual`, `full`, `lite`, DS4, or Mia.
+The active cluster profile chooses the backing lane. The dual-Spark lane is the
+faster default; the single-Spark lane preserves DeepSeek availability while
+freeing Spark 2 for creative workloads. Status, diagnostic logs, and artifact
+provenance still record the exact workload, loader, checkpoint, and cluster
+profile so the abstraction does not hide operational identity.
 
 ## Runtime adapter contract
 
@@ -48,15 +128,15 @@ prepare -> verify -> start -> health -> infer -> stop -> verify-release
 | `verify` | Validate source/image pins, model manifests, architecture, dependencies, free disk, and declared placement. |
 | `start` | Start only the declared processes and mounts; distributed profiles obey their rank order. |
 | `health` | Prove model identity and runtime readiness, not only that a TCP port is open. |
-| `infer` | Accept the profile's declared request schema and write outputs to its declared local artifact path. |
-| `stop` | Drain where a gateway exists, terminate within the profile timeout, and retain diagnostic logs. |
+| `infer` | Accept the workload's declared request schema and write outputs to its declared local artifact path. |
+| `stop` | Drain where a gateway exists, terminate within the workload timeout, and retain diagnostic logs. |
 | `verify-release` | Prove processes exited and available memory returned within the configured tolerance. |
 
 The controller treats adapters uniformly but does not translate one model family's internal launch commands into another's. Each adapter remains directly operable over SSH for diagnosis.
 
 ## Loader and placement matrix
 
-| Profile family | Preferred loader | Placement | Residency |
+| Model / provisioning lane | Preferred loader | Placement | Residency |
 | --- | --- | --- | --- |
 | DeepSeek 0731 service | Audited MiaAI-Lab/Anemll vLLM | both Sparks, TP=2 over NCCL | exclusive, persistent |
 | DeepSeek 0731 GGUF | audited DS4 GB10/Spark CUDA build | one Spark by default; optional two-Spark TCP layer pipeline | memory-mapped |
@@ -72,7 +152,9 @@ The controller treats adapters uniformly but does not translate one model family
 | TripoSG | GB10-native build of the official TripoSG Diffusers pipeline | either single Spark | persistent lightweight worker |
 | Hunyuan3D-Omni | GB10-native official runtime with accepted FlashVDM acceleration | either single Spark | persistent lightweight worker |
 
-`either single Spark` means the controller may place the profile on Spark 1 or Spark 2 only when its complete verified cache and compatible image exist on that node. It never migrates a live request.
+`either single Spark` means the controller may place the workload on Spark 1
+or Spark 2 only when its complete verified cache and compatible image exist on
+that node. It never migrates a live request.
 
 ## Loader-specific rules
 
@@ -89,7 +171,7 @@ The controller treats adapters uniformly but does not translate one model family
 - Store a pinned GGUF on local NVMe and use DS4's `mmap` path.
 - Prefer CUDA registration of the mapped pages; record whether startup used registered no-copy mappings or a copy fallback.
 - Do not set `DS4_CUDA_COPY_MODEL` by default because it may create an unnecessary second resident copy.
-- Use one Spark for the lighter-agent profile. Treat DS4's documented two-host TCP layer pipeline as a separate experimental profile: it divides layers and KV state but adds an inter-node hop to every decoded token and does not use NCCL tensor parallelism.
+- Use one Spark for the single-Spark DeepSeek lane. Treat DS4's documented two-host TCP layer pipeline as a separate experimental provisioning lane: it divides layers and KV state but adds an inter-node hop to every decoded token and does not use NCCL tensor parallelism.
 - SSD streaming paths documented for other backends are not assumed valid for Spark CUDA.
 
 ### Nemotron
@@ -105,7 +187,7 @@ The controller treats adapters uniformly but does not translate one model family
 - Use official Diffusers output only as the correctness oracle.
 - Serve Qwen-Image through the accepted ModelOpt NVFP4 SGLang Spark path. Serve Qwen-Image-Edit through the accepted Nunchaku NVFP4 or ModelOpt FP8 path, selected by the cluster's quality, memory, and throughput results.
 - Keep DiffSynth as the Qwen-Image-Edit-2511 compatibility reference and as an offload fallback. Its staged and disk-offload modes are not enabled merely because they use less CUDA allocator space.
-- Cache-based denoising, quantization, Lightning/distilled checkpoints, or approximate step skipping are separate profiles because they may change output quality.
+- Cache-based denoising, quantization, Lightning/distilled checkpoints, or approximate step skipping are separate provisioning lanes because they may change output quality.
 - SGLang's documented multi-GPU diffusion modes do not establish two-host Spark support. Cross-host execution remains disabled until a strict fabric-only acceptance test proves it; one Spark has sufficient capacity for the requested image models.
 
 ### Pixal3D and TRELLIS.2
@@ -160,10 +242,10 @@ Candidate status has four meanings:
 | Qwen3-VL-8B-Instruct | vLLM/SGLang FlashAttention path; no exact official 8B NVFP4 Spark artifact found | Upstream optimization. Do not substitute NVIDIA's different-size Qwen3-VL NVFP4 artifacts for the required 8B model. Benchmark BF16, FP8, and an audited weight-quantized 8B candidate if available. |
 | SkinTokens / TokenRig | FP16 Spark integration in Super-Idol-Master | Spark community path. No dedicated exact-model optimized loader was found; audit the integration while retaining official TokenRig as the non-serving correctness oracle. |
 | Step1X-3D | Official sequential geometry/texture loading and offload controls | No exact Spark path found. Build the official runtime for ARM64/GB10 and measure phase release rather than assuming a community quantization. |
-| TripoSG | Official lightweight Diffusers pipeline | No exact Spark path found. Its published memory requirement already makes single-Spark serving practical; produce and profile the GB10-native build before declaring the profile ready. |
+| TripoSG | Official lightweight Diffusers pipeline | No exact Spark path found. Its published memory requirement already makes single-Spark serving practical; produce and measure the GB10-native build before declaring its lane accepted. |
 | Hunyuan3D-Omni | Official FlashVDM mode | Upstream optimization. A Spark container for Hunyuan3D 2.1 is useful as an ARM64 build reference but is not the requested Omni model and cannot replace it. |
 
-Before an optimized lane becomes selectable, its checked-in evidence must include immutable source, container, checkpoint, and quantization-recipe pins; proof of `aarch64` and GB10 `sm_121` compatibility; offline startup; model-specific output comparison; memory and throughput measurements; license and provenance review; and three clean lifecycle cycles. A community claim or benchmark is discovery evidence, never an acceptance result for this cluster. Once a lane passes, the profile points to it by default; users do not have to opt into Spark optimization manually.
+Before an optimized lane becomes selectable, its checked-in evidence must include immutable source, container, checkpoint, and quantization-recipe pins; proof of `aarch64` and GB10 `sm_121` compatibility; offline startup; model-specific output comparison; memory and throughput measurements; license and provenance review; and three clean lifecycle cycles. A community claim or benchmark is discovery evidence, never an acceptance result for this cluster. Once a lane passes, applicable cluster profiles point to it by default; users do not have to opt into Spark optimization manually.
 
 ## Memory and residency policy
 
@@ -178,7 +260,7 @@ resident weights
 <= measured safe per-node limit
 ```
 
-Profiles have one of these placement classes:
+Workloads have one of these placement classes:
 
 1. `dual-exclusive`: reserves both Sparks, such as the Mia DeepSeek profile.
 2. `single-exclusive`: uses one Spark and forbids other GPU profiles there until measured otherwise.
@@ -214,11 +296,26 @@ The platform exposes two endpoint classes:
 - OpenAI-compatible endpoints for DeepSeek, Nemotron, and Qwen3-VL, and for image runtimes only where the selected upstream provides a compatible API.
 - Typed job endpoints for image generation, image editing, 3D generation, texturing, and rigging. These return a job identifier, status, runtime/model identity, pinned parameters, and artifact references.
 
+DeepSeek clients always request the stable model name `deepseek`. Activating a
+different cluster profile may change its internal single- or dual-Spark
+provisioning lane, but does not change the client URL, authentication, request
+schema, or model name. A profile switch can still require a bounded maintenance
+window when the old and new workloads cannot coexist; stable naming prevents
+client reconfiguration but does not falsely promise spare-compute failover.
+
 Generated artifacts remain on Spark-local output storage during initial testing and are retrieved through SSH. The later gateway may provide an authenticated artifact route after size, timeout, and NAS-transfer behavior are measured.
 
 ## Switching and failure behavior
 
 Before a switch, the controller checks the target's placement, declared conflicts, cache manifest, free memory, free disk, boot IDs, runtime image, and required fabric state. A distributed target additionally requires the strict fabric test state.
+
+Profile activation is the only state-changing public operation. The controller
+may retain an unchanged workload, such as the same accepted single-Spark
+DeepSeek lane on Spark 1, only when its definition hash, health, endpoint, and
+placement are identical in both profiles. Changed workloads follow their
+declared stop and start order. Convenience commands that mention a model must
+resolve to an accepted named cluster profile; they never toggle that model into
+the current state independently.
 
 A failed start or failed quality gate leaves every process started for the target stopped. It does not delete snapshots, runtime caches, inputs, outputs, or diagnostic logs. The prior heavyweight profile is not automatically restarted.
 
@@ -249,7 +346,10 @@ Model-specific minimums are:
 | Qwen3-VL | expected defect classification, ranking, and structured response for pinned turntable fixtures |
 | TokenRig | nonempty acyclic skeleton, valid joint references, normalized bounded skin weights, and loadable rigged artifact |
 
-Availability means every required profile can be selected, started, used, stopped, and reselected reproducibly. It does not mean all models remain resident simultaneously.
+Availability means every required model has at least one accepted provisioning
+lane in an accepted cluster profile, and that profile can be selected, started,
+used, stopped, and reselected reproducibly. It does not mean every catalog
+entry remains resident simultaneously.
 
 ## Research snapshot
 
