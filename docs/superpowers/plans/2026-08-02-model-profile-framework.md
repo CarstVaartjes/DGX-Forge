@@ -51,7 +51,7 @@ installed or accepted.
 - `ClusterProfile` does not contain restoration policy; restoration is an explicit switch request.
 - `CheckpointPin.manifest_sha256` is optional while a definition is planned and must match `^[0-9a-f]{64}$` when present.
 
-- [ ] **Step 1: Write failing contract tests**
+- [x] **Step 1: Write failing contract tests**
 
 ```python
 def test_cluster_profile_requires_both_nodes(tmp_path):
@@ -74,14 +74,14 @@ def test_home_profile_uses_canonical_id_and_deepseek_alias():
     assert not hasattr(profile, "restore_home")
 ```
 
-- [ ] **Step 2: Run the focused tests and confirm failure**
+- [x] **Step 2: Run the focused tests and confirm failure**
 
 Run: `uv run --with pytest --with jsonschema pytest tests/spark_profiles/test_contracts.py -v`
 
 Expected: FAIL because `agent-full-dual.toml` is absent and the existing
 contract still requires `restore_home`.
 
-- [ ] **Step 3: Implement strict typed contracts**
+- [x] **Step 3: Implement strict typed contracts**
 
 Keep the existing frozen strict workload dataclasses and unknown-key rejection.
 Remove `restore_home` from both cluster-profile schema copies, the dataclass,
@@ -94,7 +94,7 @@ definition omits it truthfully; Task 2 admission must reject any `accepted`
 definition that lacks it. Adding the real digest later changes the definition
 fingerprint and correctly invalidates prior evidence.
 
-- [ ] **Step 4: Add the initial DeepSeek home definitions**
+- [x] **Step 4: Add the initial DeepSeek home definitions**
 
 `deepseek-agent-dual` remains a declarative planned definition; do not add an
 adapter executable, local manifest, or acceptance claim in this task. Rename
@@ -108,7 +108,7 @@ default = "agent-full-dual"
 agent = "agent-full-dual"
 ```
 
-- [ ] **Step 5: Run validation and commit**
+- [x] **Step 5: Run validation and commit**
 
 Run: `uv run --with pytest --with jsonschema pytest tests/spark_profiles/test_contracts.py -v && git diff --check`
 
