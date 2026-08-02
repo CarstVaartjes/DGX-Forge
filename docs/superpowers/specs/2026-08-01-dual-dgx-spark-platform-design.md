@@ -34,14 +34,14 @@ truth.
 3. Configure and validate the direct ConnectX-7 fabric with NVIDIA-supported tooling.
 4. Validate NCCL/RoCE communication independently of any model runtime.
 5. Serve `deepseek-ai/DeepSeek-V4-Flash-0731` across both nodes with vLLM tensor parallelism.
-6. Support explicit switching and measured co-residency between the required profiles defined in the multi-runtime design, while keeping DeepSeek 0731 as the default agent.
+6. Support explicit Cluster Profile switching and measured co-residency for the exact Model Definition sets declared in the multi-runtime design, while keeping DeepSeek 0731 as the default agent.
 7. Provide one stable authenticated API endpoint and a browser interface.
 8. Add Tailscale access only after the LAN deployment is stable.
 
 ## Non-goals
 
 - Kubernetes, Slurm, or Docker Swarm during the initial deployment.
-- Assuming arbitrary model pairs can run concurrently before their pairwise co-residency gate passes.
+- Assuming arbitrary Model Definition sets can run concurrently before the exact N-way set in a named Cluster Profile passes co-residency acceptance.
 - Loading model weights from the NAS during inference.
 - Public internet exposure or router port forwarding.
 - Automatic operating-system, firmware, container, model, or distributed-profile updates.
@@ -157,27 +157,37 @@ Tailscale is added after LAN acceptance as a container or signed-package install
 
 No client route exists on the fabric. Because the fabric is a dedicated point-to-point network, its peer-to-peer runtime port range is allowed only between the two recorded fabric IPs rather than exposed on the LAN.
 
-## Runtime Profiles
+## DeepSeek Model Definition qualification
 
 ### DeepSeek bring-up ladder
 
 The three experimental features—speculative decoding, padded NVFP4 KV, and million-token context—are not enabled simultaneously on first boot. They are introduced one at a time:
 
-| Profile | Context ceiling | `max_num_seqs` | KV cache | DSpark | Purpose |
+| Model Definition candidate | Context ceiling | `max_num_seqs` | KV cache | DSpark | Purpose |
 | --- | ---: | ---: | --- | --- | --- |
 | `deepseek-baseline` | 16,384 | 1 | FP8 | off | prove TP=2 weight load, encoding, API, and deterministic output |
 | `deepseek-dspark` | 16,384 | 1 | FP8 | MTP=5 | isolate speculative decoding and record acceptance |
 | `deepseek-nvfp4` | 16,384 | 1 | `nvfp4_ds_mla` | MTP=5 | validate the padded Stage-C NVFP4 workaround, including an 8K prompt |
-| `deepseek-agent` | 200,000 | 6 | `nvfp4_ds_mla` | MTP=5 | normal short/mid-context concurrent agent traffic |
-| `deepseek-long` | 1,048,576 | derived, maximum 2 | `nvfp4_ds_mla` | MTP=5 | controlled deep-context work |
+| `deepseek-agent-dual` | 200,000 | 6 | `nvfp4_ds_mla` | MTP=5 | normal short/mid-context concurrent agent traffic backing `agent-full-dual` |
+| `deepseek-long-dual` | 1,048,576 | derived, maximum 2 | `nvfp4_ds_mla` | MTP=5 | controlled deep-context work backing a separately accepted `agent-long-dual` Cluster Profile |
 
-Only `deepseek-agent` and `deepseek-long` are advertised after the ladder passes. Each reserves both Sparks, starts the worker first, starts the head second, stops the head first, and exposes only the head through Caddy.
+Only accepted serving definitions are referenced by activatable Cluster
+Profiles. Each dual definition reserves both Sparks, starts the worker first,
+starts the head second, stops the head first, and exposes only the head. Both
+serving definitions advertise the stable OpenAI model name `deepseek`; clients
+select a Cluster Profile, never an internal qualification definition.
 
 The `nvfp4_ds_mla` path is the upstream **padded Stage-C workaround** using the known-good 584-byte sparse-MLA envelope. It is not described as a true-layout NVFP4 kernel. The discarded true-layout experiment failed beyond roughly 411 real prompt tokens; the NVFP4 gate therefore uses at least an 8,192-token prompt and asserts correct sentinel output.
 
 ### Capacity and admission parameters
 
-The 128 GB per-node memory figure is marketed unified memory, not wholly available runtime memory. TP=2 partitions roughly 155.44 GiB of SafeTensor payload to about 77.72 GiB per rank, while the OS, CUDA graphs, JIT artifacts, model metadata, and runtime workspaces consume additional memory. Raw subtraction is not used to declare KV capacity.
+The 128 GB per-node memory figure is marketed unified memory, not wholly
+available runtime memory. Inventory exposes 121.69 GiB per node, and the
+initial admission budgets after an 8 GiB OS reserve are 110.27 GiB on Spark 1
+and 110.23 GiB on Spark 2. TP=2 partitions roughly 155.44 GiB of SafeTensor
+payload to about 77.72 GiB per rank, while the OS, CUDA graphs, JIT artifacts,
+model metadata, and runtime workspaces consume additional memory. Raw
+subtraction is not used to declare KV capacity.
 
 The adopted upstream 0731 recipe defaults to `gpu_memory_utilization=0.80`, `max_num_batched_tokens=8192`, and `MTP_NUM_TOKENS=5`. One upstream run at utilization 0.835 reported a 2,493,464-token shared KV pool and 2.38 maximum full-context concurrency. The live boot log on this cluster is authoritative.
 
@@ -189,7 +199,12 @@ full-context slots:   Cfull = min(2, floor(P / 1,048,576))
 agent worst case:     6 * 200,000 = 1,200,000 tokens
 ```
 
-The `deepseek-long` configuration renders `max_num_seqs=Cfull`; startup fails if `Cfull < 1`. It never advertises more than two full-context slots. The `deepseek-agent` configuration fixes `max_num_seqs=6` and requires `P >= 1,200,000`. Six simultaneous 1M requests are neither admitted nor claimed. If two full-context slots do not fit according to the live pool, the long profile runs with one slot rather than relying on preemption.
+The `deepseek-long-dual` definition renders `max_num_seqs=Cfull`; startup fails
+if `Cfull < 1`. It never advertises more than two full-context slots. The
+`deepseek-agent-dual` definition fixes `max_num_seqs=6` and requires
+`P >= 1,200,000`. Six simultaneous 1M requests are neither admitted nor
+claimed. If two full-context slots do not fit according to the live pool, the
+long definition runs with one slot rather than relying on preemption.
 
 Context and concurrency acceptance tests are coupled to these lanes: six requests are tested only at or below 200,000 live tokens each, while 900K acceptance is tested at the derived `Cfull` limit. One request beyond the configured scheduler limit must queue or receive the documented overload response without killing either rank.
 
@@ -213,7 +228,10 @@ The prebuilt Anemll image is acceptable only after provenance and contents are i
 
 ### `trellis2`
 
-- Requires every DeepSeek profile to be fully stopped first.
+- Requires any conflicting dual-Spark DeepSeek definition to be stopped first.
+  Co-residency with the accepted single-Spark DeepSeek definition on Spark 1 is
+  permitted only through an exact accepted Cluster Profile such as
+  `creative-3d`.
 - Runs in its own pinned container/environment on Spark 2.
 - Uses local checkpoints and output storage.
 - Starts with 512-cubed generation for acceptance testing before higher resolutions.
@@ -225,35 +243,55 @@ The prebuilt Anemll image is acceptable only after provenance and contents are i
 - Leaves Spark SSH and DGX Dashboard available; external Caddy continues returning its maintenance response.
 - Is the required state before OS, firmware, driver, or fabric maintenance.
 
-### Multi-runtime profiles
+### Multi-runtime Model Definitions and Cluster Profiles
 
-The required model catalog, runtime adapters, optimized-artifact policy, placement classes, and model-specific acceptance gates are defined in the [multi-runtime profile design](2026-08-02-multi-runtime-model-profiles-design.md). Each profile declares nodes, exact ports, local cache paths, CPU and memory limits, startup order, health timeouts, stop grace period, log limits, and acceptance tests. A profile is not advertised until its health and output-quality checks pass.
+The required model catalog, runtime adapters, optimized-artifact policy,
+placement classes, and model-specific acceptance gates are defined in the
+[multi-runtime profile design](2026-08-02-multi-runtime-model-profiles-design.md).
+A Model Definition owns runtime details; a Cluster Profile assigns the complete
+accepted definition set to both nodes and exposes stable aliases. A profile is
+not advertised until every definition and the exact combined placement pass
+health, output-quality, capacity, and lifecycle gates.
 
-## Workload Controller
+## Cluster Profile controller
 
-There is no NVIDIA-standard model-profile switcher for DGX Spark. The platform therefore uses a thin, project-local controller container over ordinary Docker Compose, Caddy's private admin API, and restricted SSH commands. It is not a daemon and does not hide the underlying commands.
+There is no NVIDIA-standard Cluster Profile switcher for DGX Spark. The
+platform therefore uses thin, project-local `sparkctl` logic over ordinary
+runtime commands and SSH. It is not a daemon and does not hide the underlying
+commands.
 
-The controller executes as a one-shot container only on the external control host. Its container path `/var/lib/dgx-spark-platform` is a persistent bind mount; `state.json` contains the prior profile, target profile, phase, controller PID, start timestamp, last error, and both Spark boot IDs. The shared lock file is `/var/lib/dgx-spark-platform/switch.lock`.
+Before the external control host arrives, the controller executes on the
+developer machine and stores state under `.state/sparkctl`. After the external
+host arrives, the same contract moves to a one-shot container with
+`/var/lib/dgx-spark-platform` as a persistent bind mount. State contains the
+prior canonical profile, target canonical profile, phase, controller PID, host
+identity, start timestamp, last error, and both Spark boot IDs.
 
-The controller uses the control host kernel's `flock` on the bind-mounted lock file, not file existence, for mutual exclusion across one-shot container runs. A crashed process automatically releases the kernel lock, so stale contents cannot wedge future operations. If state shows an interrupted transition, `status` reports `recovery-required`; `recover --force` is permitted only after it proves no controller process and no profile container are still active on either Spark.
+The developer-machine lock records PID, host identity, and timestamp; breaking
+it is an explicit operation that refuses a live PID or a lock younger than the
+configured threshold. The future container uses the control host kernel's
+`flock` on the bind-mounted lock for mutual exclusion. If state shows an
+interrupted transition, status reports `recovery-required`; recovery is
+permitted only after it proves no controller process and no Model Definition
+process is still active on either Spark.
 
 The controller provides:
 
-- `switch <profile>`
-- `start <profile>`
-- `stop`
-- `status`
-- `logs <profile>`
+- `profile list`
+- `profile activate <profile> [--restore <profile>]`
+- `profile status`
+- `profile validate <profile>`
+- `logs <model-definition>`
 - `doctor`
-- `recover --force`
+- `break-stale-lock`
 
 A profile switch performs this sequence:
 
 1. Acquire `flock` and write transition metadata.
-2. Load Caddy's draining route over the private container network and confirm new inference receives HTTP 503.
-3. Poll the active-request metric for up to 300 seconds by default. The configured grace may be 30–1,800 seconds; expiry is logged.
+2. When Caddy exists, load its draining route over the private container network and confirm new inference receives HTTP 503. Initial SSH-tunnel operation has no shared gateway and therefore performs a documented hard cutover after the operator starts the transition.
+3. When a gateway exposes an active-request metric, poll it for up to 300 seconds by default. The configured grace may be 30–1,800 seconds; expiry is logged.
 4. Invoke restricted node commands to stop the head before the worker with a 120-second Compose stop grace.
-5. Confirm all target and prior-profile containers exited on both nodes within 60 seconds.
+5. Confirm all changed prior-definition processes exited on both nodes within 60 seconds.
 6. Confirm the quantitative memory, swap, and disk gates for the target profile.
 7. Validate image digests, model manifests, encoder checksum, offline mode, fabric connectivity, and rendered configuration.
 8. Invoke restricted node commands to start target workers before the target head.
