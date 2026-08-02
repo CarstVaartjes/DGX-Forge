@@ -347,6 +347,7 @@ def test_distributed_workload_reserves_both_nodes(
 def test_planned_definition_blocks_production_home(
     catalog: Catalog, healthy_inventory: dict[str, dict[str, int | bool]]
 ) -> None:
+    catalog.maturity = {"deepseek-agent-dual": "planned"}
     report = check_admission(
         catalog.resolve_profile("default"), catalog, healthy_inventory
     )

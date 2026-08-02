@@ -37,6 +37,12 @@ def catalog_root(tmp_path: Path) -> Path:
             shutil.copytree(source, destination)
         else:
             shutil.copy2(source, destination)
+    maturity_path = tmp_path / "inventory/reports/model-definitions.json"
+    maturity = json.loads(maturity_path.read_text(encoding="utf-8"))
+    for definition in maturity["definitions"]:
+        definition["maturity"] = "planned"
+        definition["history"] = [definition["history"][0]]
+    maturity_path.write_text(json.dumps(maturity, indent=2) + "\n", encoding="utf-8")
     return tmp_path
 
 
