@@ -9,7 +9,7 @@ from typing import Protocol
 
 from .admission import AdmissionReport, check_admission
 from .backend import CommandResult, SshBackend
-from .catalog import Catalog
+from .catalog import Catalog, fingerprint
 from .contracts import ClusterProfile, WorkloadDefinition
 from .state import ControllerState, StateStore
 
@@ -40,11 +40,11 @@ class SwitchReport:
     profile_sha256: str
     definition_sha256: Mapping[str, str]
     published_endpoints: Mapping[str, str]
+    restore_profile: str | None = None
     retained_workloads: tuple[str, ...] = ()
     errors: tuple[str, ...] = ()
     diagnostics: tuple[Diagnostic, ...] = ()
     output_provenance: Mapping[str, object] = field(default_factory=dict)
-    restoration: SwitchReport | None = None
     dry_run: bool = False
 
     def __post_init__(self) -> None:
@@ -100,45 +100,19 @@ class ProfileSwitcher:
         restore_to: str | None = None,
         dry_run: bool = False,
     ) -> SwitchReport:
-        """Activate one profile and optionally restore through a second transition."""
+        """Activate one profile and persist, but never execute, restore intent."""
         with self.state_store.acquire() as state:
             target = self._resolve(target_id)
-            restoration = self._resolve(restore_to) if restore_to is not None else None
-            primary = self._transition(
+            restore_target = (
+                self._resolve(restore_to) if restore_to is not None else None
+            )
+            return self._transition(
                 state,
                 target,
-                restore_profile=restoration.id if restoration is not None else None,
+                restore_profile=restore_target.id
+                if restore_target is not None
+                else None,
                 dry_run=dry_run,
-            )
-            if restoration is None or primary.status not in {"active", "planned"}:
-                return primary
-
-            if dry_run:
-                restored = self._transition(
-                    state,
-                    restoration,
-                    restore_profile=None,
-                    dry_run=True,
-                )
-            else:
-                restored = self._transition(
-                    self.state_store.load(),
-                    restoration,
-                    restore_profile=None,
-                    dry_run=False,
-                )
-            return SwitchReport(
-                target_profile=primary.target_profile,
-                status=primary.status,
-                profile_sha256=primary.profile_sha256,
-                definition_sha256=primary.definition_sha256,
-                published_endpoints=primary.published_endpoints,
-                retained_workloads=primary.retained_workloads,
-                errors=primary.errors,
-                diagnostics=primary.diagnostics,
-                output_provenance=primary.output_provenance,
-                restoration=restored,
-                dry_run=False,
             )
 
     def _resolve(self, identifier: str | None) -> ClusterProfile:
@@ -160,22 +134,25 @@ class ProfileSwitcher:
         restore_profile: str | None,
         dry_run: bool,
     ) -> SwitchReport:
-        inventory = self.inventory_provider()
-        admission = self.admission_checker(target, self.catalog, inventory)
         target_definitions = self._profile_definitions(target)
+        profile_hash = self.catalog.profile_fingerprints.get(target.id, "")
+        target_content_error = self._target_content_error(
+            target, target_definitions, profile_hash
+        )
         target_hashes = {
             identifier: self.catalog.definition_fingerprints[identifier]
             for identifier in target_definitions
+            if identifier in self.catalog.definition_fingerprints
         }
-        profile_hash = self.catalog.profile_fingerprints[target.id]
-        if not admission.ok:
+        if target_content_error is not None:
             return SwitchReport(
                 target_profile=target.id,
                 status="blocked",
                 profile_sha256=profile_hash,
                 definition_sha256=target_hashes,
                 published_endpoints={},
-                errors=admission.errors,
+                restore_profile=restore_profile,
+                errors=(target_content_error,),
                 dry_run=dry_run,
             )
         state_error = self._state_error(state)
@@ -186,7 +163,21 @@ class ProfileSwitcher:
                 profile_sha256=profile_hash,
                 definition_sha256=target_hashes,
                 published_endpoints={},
+                restore_profile=restore_profile,
                 errors=(state_error,),
+                dry_run=dry_run,
+            )
+        inventory = self.inventory_provider()
+        admission = self.admission_checker(target, self.catalog, inventory)
+        if not admission.ok:
+            return SwitchReport(
+                target_profile=target.id,
+                status="blocked",
+                profile_sha256=profile_hash,
+                definition_sha256=target_hashes,
+                published_endpoints={},
+                restore_profile=restore_profile,
+                errors=admission.errors,
                 dry_run=dry_run,
             )
         if dry_run:
@@ -196,6 +187,7 @@ class ProfileSwitcher:
                 profile_sha256=profile_hash,
                 definition_sha256=target_hashes,
                 published_endpoints={},
+                restore_profile=restore_profile,
                 dry_run=True,
             )
 
@@ -239,6 +231,11 @@ class ProfileSwitcher:
                 # it live before issuing the command so cleanup is conservative.
                 live_workloads.add(identifier)
                 self._start_definition(definition, diagnostics)
+
+            # Publication is gated only after the complete target residency is
+            # established. Retained workloads receive these final gates too.
+            for identifier in self._workload_order(target):
+                definition = self.catalog.definitions[identifier]
                 self._health_definition(definition, diagnostics)
                 outputs[identifier] = self._infer_definition(definition, diagnostics)
 
@@ -256,7 +253,14 @@ class ProfileSwitcher:
                 )
                 endpoints = dict(target.endpoints)
             else:
-                final_state = ControllerState.stopped(boot_ids=state.boot_ids)
+                final_state = ControllerState(
+                    status="stopped",
+                    active_profile=None,
+                    target_profile=None,
+                    restore_profile=restore_profile,
+                    last_error=None,
+                    boot_ids=state.boot_ids,
+                )
                 endpoints = {}
             self.state_store.save(final_state)
             provenance: dict[str, object] = {
@@ -271,6 +275,7 @@ class ProfileSwitcher:
                 profile_sha256=profile_hash,
                 definition_sha256=target_hashes,
                 published_endpoints=endpoints,
+                restore_profile=restore_profile,
                 retained_workloads=tuple(sorted(retained)),
                 diagnostics=tuple(diagnostics),
                 output_provenance=provenance,
@@ -306,9 +311,38 @@ class ProfileSwitcher:
                 profile_sha256=profile_hash,
                 definition_sha256=target_hashes,
                 published_endpoints={},
+                restore_profile=restore_profile,
                 errors=(message,),
                 diagnostics=tuple(diagnostics),
             )
+
+    def _target_content_error(
+        self,
+        target: ClusterProfile,
+        identifiers: set[str],
+        profile_hash: str,
+    ) -> str | None:
+        unknown = sorted(
+            identifier
+            for identifier in identifiers
+            if identifier not in self.catalog.definitions
+        )
+        if unknown:
+            return f"unknown workload: {unknown[0]}"
+        if not profile_hash:
+            return "target profile fingerprint is missing; manual recovery required"
+        if profile_hash != fingerprint(target):
+            return "target profile fingerprint does not match catalog; manual recovery required"
+        for identifier in sorted(identifiers):
+            definition_hash = self.catalog.definition_fingerprints.get(identifier)
+            if definition_hash is None:
+                return f"target definition fingerprint is missing: {identifier}"
+            if definition_hash != fingerprint(self.catalog.definitions[identifier]):
+                return (
+                    f"target definition fingerprint does not match catalog: {identifier}; "
+                    "manual recovery required"
+                )
+        return None
 
     def _state_error(self, state: ControllerState) -> str | None:
         if (
@@ -318,6 +352,60 @@ class ProfileSwitcher:
             return "persisted active profile is absent from the catalog; manual recovery required"
         if state.status in {"transitioning", "degraded"}:
             return f"controller state is {state.status}; manual recovery required"
+        if state.active_profile is None:
+            if state.status == "active":
+                return "controller state is active without a profile; manual recovery required"
+            return None
+        if state.status != "active":
+            return (
+                f"controller state is {state.status} with an active profile; "
+                "manual recovery required"
+            )
+        current = self.catalog.profiles[state.active_profile]
+        expected_profile_hash = self.catalog.profile_fingerprints.get(current.id)
+        if expected_profile_hash != fingerprint(current):
+            return "catalog active profile content is inconsistent; manual recovery required"
+        if state.active_profile_sha256 != expected_profile_hash:
+            return (
+                "persisted active profile fingerprint does not match catalog; "
+                "manual recovery required"
+            )
+        identifiers = self._profile_definitions(current)
+        unknown = sorted(
+            identifier
+            for identifier in identifiers
+            if identifier not in self.catalog.definitions
+        )
+        if unknown:
+            return (
+                f"persisted active profile references unknown workload: {unknown[0]}; "
+                "manual recovery required"
+            )
+        missing_fingerprints = sorted(
+            identifier
+            for identifier in identifiers
+            if identifier not in self.catalog.definition_fingerprints
+        )
+        if missing_fingerprints:
+            return (
+                "catalog active definition fingerprint is missing: "
+                f"{missing_fingerprints[0]}; manual recovery required"
+            )
+        expected_definitions = {
+            identifier: self.catalog.definition_fingerprints[identifier]
+            for identifier in identifiers
+        }
+        if any(
+            expected_definitions[identifier]
+            != fingerprint(self.catalog.definitions[identifier])
+            for identifier in identifiers
+        ):
+            return "catalog active definition content is inconsistent; manual recovery required"
+        if dict(state.active_definition_sha256) != expected_definitions:
+            return (
+                "persisted active definition fingerprints do not match catalog; "
+                "manual recovery required"
+            )
         return None
 
     def _profile_definitions(self, profile: ClusterProfile) -> set[str]:
@@ -412,9 +500,16 @@ class ProfileSwitcher:
         command: tuple[str, ...],
         diagnostics: list[Diagnostic],
     ) -> CommandResult:
-        result = self.backend.run(
-            node, self._argv(definition, command, node), self.timeout_seconds
-        )
+        try:
+            result = self.backend.run(
+                node, self._argv(definition, command, node), self.timeout_seconds
+            )
+        except Exception as error:
+            detail = f"{type(error).__name__}: {error}"[:_MAX_ERROR_CHARS]
+            self._diagnostic(diagnostics, operation, definition.id, node, detail)
+            raise _TransitionFailure(
+                f"{operation} failed for {definition.id} on {node}: {detail}"
+            ) from error
         if not result.ok:
             detail = self._detail(result)
             self._diagnostic(diagnostics, operation, definition.id, node, detail)

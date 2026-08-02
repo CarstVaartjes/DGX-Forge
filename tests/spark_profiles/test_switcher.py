@@ -290,17 +290,17 @@ def test_retention_requires_matching_hashes_and_health() -> None:
 
     assert report.retained_workloads == (definition.id,)
     operations = [event[2][0] for event in events if event[0] == "remote"]
-    assert operations == ["profile-health"]
+    assert operations == ["profile-health", "profile-health", "profile-infer"]
 
     stale = replace(
         active_state(current, definition),
         active_definition_sha256={definition.id: SHA_A},
     )
     switcher, events, _ = make_switcher(catalog_value, stale)
-    switcher.switch_profile("target")
+    stale_report = switcher.switch_profile("target")
     operations = [event[2][0] for event in events if event[0] == "remote"]
-    assert "profile-stop" in operations
-    assert "profile-start" in operations
+    assert stale_report.status == "blocked"
+    assert operations == []
 
 
 def test_failed_health_cleans_up_target_and_finishes_stopped() -> None:
@@ -372,12 +372,12 @@ def test_unreconciled_degraded_state_blocks_activation() -> None:
     assert store.saves == []
 
 
-def test_restore_is_second_transition_and_keeps_producing_provenance() -> None:
+def test_restore_intent_is_persisted_but_never_runs_automatically() -> None:
     definition = workload()
     home = profile("home", definition)
     temporary = replace(home, id="temporary")
     catalog_value = catalog(home, temporary, definition=definition)
-    switcher, _, store = make_switcher(catalog_value, ControllerState.stopped())
+    switcher, events, store = make_switcher(catalog_value, ControllerState.stopped())
 
     report = switcher.switch_profile("temporary", restore_to="default")
 
@@ -385,13 +385,20 @@ def test_restore_is_second_transition_and_keeps_producing_provenance() -> None:
     assert report.profile_sha256 == fingerprint(temporary)
     assert report.definition_sha256 == {definition.id: fingerprint(definition)}
     assert report.output_provenance["profile_sha256"] == fingerprint(temporary)
-    assert report.restoration is not None
-    assert report.restoration.target_profile == "home"
+    assert report.restore_profile == "home"
+    assert store.state.active_profile == "temporary"
+    assert store.state.restore_profile == "home"
+    assert [event[2][0] for event in events if event[0] == "remote"].count(
+        "profile-infer"
+    ) == 1
+
+    restored = switcher.switch_profile("default")
+
+    assert restored.target_profile == "home"
     assert store.state.active_profile == "home"
-    assert report.profile_sha256 != store.state.active_profile_sha256
 
 
-def test_failed_restoration_is_reported_without_rewriting_provenance() -> None:
+def test_explicit_restoration_is_readmitted_and_can_fail_separately() -> None:
     definition = workload()
     home = profile("home", definition)
     temporary = replace(home, id="temporary")
@@ -413,17 +420,17 @@ def test_failed_restoration_is_reported_without_rewriting_provenance() -> None:
     )
 
     report = switcher.switch_profile("temporary", restore_to="default")
+    restored = switcher.switch_profile("default")
 
     assert report.status == "active"
     assert report.profile_sha256 == fingerprint(temporary)
-    assert report.restoration is not None
-    assert report.restoration.status == "blocked"
-    assert report.restoration.errors == ("home restoration evidence expired",)
+    assert restored.status == "blocked"
+    assert restored.errors == ("home restoration evidence expired",)
     assert store.state.active_profile == "temporary"
     assert store.state.active_profile_sha256 == fingerprint(temporary)
 
 
-def test_dry_run_reports_primary_and_restoration_without_side_effects() -> None:
+def test_dry_run_reports_restore_intent_without_executing_restoration() -> None:
     definition = workload()
     home = profile("home", definition)
     temporary = replace(home, id="temporary")
@@ -433,8 +440,155 @@ def test_dry_run_reports_primary_and_restoration_without_side_effects() -> None:
     report = switcher.switch_profile("temporary", restore_to="default", dry_run=True)
 
     assert report.status == "planned"
-    assert report.restoration is not None
-    assert report.restoration.target_profile == "home"
-    assert report.restoration.status == "planned"
+    assert report.restore_profile == "home"
     assert events == [("lock",)]
     assert store.saves == []
+
+
+def test_active_content_mismatch_blocks_before_remote_or_state_mutation() -> None:
+    definition = workload()
+    current = profile("current", definition)
+    target = replace(current, id="target")
+    catalog_value = catalog(current, target, definition=definition)
+    stale = replace(
+        active_state(current, definition),
+        active_profile_sha256="f" * 64,
+    )
+    switcher, events, store = make_switcher(catalog_value, stale)
+
+    report = switcher.switch_profile("target")
+
+    assert report.status == "blocked"
+    assert report.errors == (
+        "persisted active profile fingerprint does not match catalog; manual recovery required",
+    )
+    assert events == [("lock",)]
+    assert store.saves == []
+
+
+def test_active_definition_set_or_hash_drift_blocks_before_mutation() -> None:
+    definition = workload()
+    current = profile("current", definition)
+    target = replace(current, id="target")
+    catalog_value = catalog(current, target, definition=definition)
+    stale = replace(
+        active_state(current, definition),
+        active_definition_sha256={definition.id: "f" * 64, "unknown-old": "e" * 64},
+    )
+    switcher, events, store = make_switcher(catalog_value, stale)
+
+    report = switcher.switch_profile("target")
+
+    assert report.status == "blocked"
+    assert report.errors == (
+        "persisted active definition fingerprints do not match catalog; manual recovery required",
+    )
+    assert events == [("lock",)]
+    assert store.saves == []
+
+
+def test_unknown_current_definition_blocks_without_using_new_commands() -> None:
+    definition = workload()
+    target = profile("target", definition)
+    unknown_current = replace(
+        target,
+        id="unknown-current",
+        placements={"spark1": (), "spark2": ("removed-runtime",)},
+        endpoints={},
+    )
+    catalog_value = catalog(unknown_current, target, definition=definition)
+    state = ControllerState(
+        status="active",
+        active_profile="unknown-current",
+        target_profile=None,
+        restore_profile=None,
+        last_error=None,
+        active_profile_sha256=fingerprint(unknown_current),
+        active_definition_sha256={"removed-runtime": "d" * 64},
+    )
+    switcher, events, store = make_switcher(catalog_value, state)
+
+    report = switcher.switch_profile("target")
+
+    assert report.status == "blocked"
+    assert report.errors == (
+        "persisted active profile references unknown workload: removed-runtime; manual recovery required",
+    )
+    assert events == [("lock",)]
+    assert store.saves == []
+
+
+def test_unknown_target_definition_is_a_stable_block_not_key_error() -> None:
+    definition = workload()
+    valid = profile("valid", definition)
+    unknown = replace(
+        valid,
+        id="unknown",
+        placements={"spark1": (), "spark2": ("missing",)},
+        endpoints={},
+    )
+    catalog_value = catalog(valid, unknown, definition=definition)
+    switcher, events, store = make_switcher(catalog_value, ControllerState.stopped())
+
+    report = switcher.switch_profile("unknown")
+
+    assert report.status == "blocked"
+    assert "unknown workload: missing" in report.errors
+    assert events == [("lock",)]
+    assert store.saves == []
+
+
+def test_retained_workload_gets_final_health_and_quality_gate_after_residency() -> None:
+    definition = workload()
+    current = profile("current", definition)
+    target = replace(current, id="target")
+    catalog_value = catalog(current, target, definition=definition)
+    switcher, events, _ = make_switcher(
+        catalog_value, active_state(current, definition)
+    )
+
+    report = switcher.switch_profile("target")
+
+    assert report.status == "active"
+    assert [event[2][0] for event in events if event[0] == "remote"] == [
+        "profile-health",
+        "profile-health",
+        "profile-infer",
+    ]
+
+
+def test_unexpected_backend_exception_is_normalized_and_cleanup_continues() -> None:
+    definition = workload("generator", distributed=True)
+    target = profile("target", definition)
+    catalog_value = catalog(target, definition=definition)
+    events: list[tuple] = []
+    store = FakeStore(ControllerState.stopped(), events)
+
+    class RaisingBackend(FakeBackend):
+        def run(self, node, argv, timeout):
+            self.events.append(("remote", node, argv))
+            if argv[0] == "profile-health":
+                raise RuntimeError("runtime exploded")
+            if argv[0] == "profile-stop" and node == "spark1":
+                raise OSError("one cleanup node failed")
+            return command_result()
+
+    switcher = ProfileSwitcher(
+        catalog=catalog_value,
+        backend=RaisingBackend(events),
+        state_store=store,
+        inventory_provider=inventory,
+    )
+
+    report = switcher.switch_profile("target")
+
+    assert report.status == "degraded"
+    assert "runtime exploded" in " ".join(report.errors)
+    assert len(report.errors[0]) <= 2_048
+    cleanup_nodes = [
+        event[1]
+        for event in events
+        if event[0] == "remote" and event[2][0] == "profile-stop"
+    ]
+    assert cleanup_nodes == ["spark1", "spark2"]
+    assert store.state.status == "degraded"

@@ -14,6 +14,12 @@ change, the controller resolves a selector or canonical profile ID and runs
 admission against the exact profile hash, definition hashes, maturity records,
 accepted combination evidence, and current inventory.
 
+If controller state names an active profile, its profile hash and complete
+definition ID/hash set must match the current content-addressed catalog before
+any mutation. Unknown or changed old runtime content is blocked for manual
+recovery; the controller never guesses that a newly cataloged stop command is
+safe for an unknown old process.
+
 The checked-in `agent-full-dual` intent is currently `planned`. Its presence in
 the catalog does not make it activatable. Until its adapter, checkpoint
 manifest digest, and acceptance evidence have been recorded, activation must
@@ -40,8 +46,9 @@ For an admitted activation the controller:
 5. runs `verify-release` after every stop sequence;
 6. verifies target runtime prerequisites;
 7. starts distributed workloads worker first and head second;
-8. runs model-identity health checks and the adapter's pinned inference quality
-   gate; and
+8. after complete target residency is established, runs model-identity health
+   checks and the adapter's pinned inference quality gate for every target
+   workload, including retained workloads; and
 9. atomically publishes only accepted, healthy endpoints with the exact active
    profile and definition fingerprints.
 
@@ -67,12 +74,14 @@ or assume an always-present gateway.
 
 ## Failure behavior
 
-Any start, health, or quality-gate failure withdraws every target endpoint and
-stops all target processes that may have started, including a command that
-returned failure after creating a process. Cleanup follows each definition's
-declared stop order and then verifies resource release. Successful cleanup is
-persisted as `stopped`; a failed stop or release check is persisted as
-`degraded`. Diagnostics and remote output retained by the report are bounded.
+Any start, health, quality-gate, or unexpected backend operational failure
+withdraws every target endpoint and stops all target processes that may have
+started, including a command that returned failure after creating a process.
+Cleanup continues across per-node errors, follows each definition's declared
+stop order, and then verifies resource release. Successful cleanup is persisted
+as `stopped`; a failed stop or release check is persisted as `degraded`.
+Diagnostics, remote output, and `last_error` retained by the report or state
+are bounded.
 
 The controller never chooses another profile and never automatically restarts
 the previous heavyweight profile. A persisted `transitioning` or `degraded`
@@ -89,13 +98,14 @@ sparkctl switch creative-3d --restore default
 ```
 
 The selector `default` resolves to canonical profile `agent-full-dual`.
-Restoration is a second ordinary, admitted transition after the temporary
-profile succeeds and its output provenance has been captured. Its report is
-nested separately under `restoration`. The top-level report retains the
-temporary producing profile hash and definition hashes even when the final
-controller state records the restored profile. A failed restoration is
-reported separately and does not rewrite artifact provenance or trigger a
-fallback profile.
+This option stores only the canonical restore intent in controller state and
+the switch report. It never restores within the same `sparkctl switch` call.
+After the caller has completed its work and explicitly recovered the outputs
+and provenance, the future `sparkctl restore-default` command performs a later
+ordinary profile switch. That later switch reacquires the lock and repeats all
+admission, health, quality, and failure gates. The original switch report keeps
+the temporary producing profile and definition hashes; no fallback profile is
+chosen automatically.
 
 ## Recovery checklist
 
