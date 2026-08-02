@@ -2,12 +2,22 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 from .catalog import Catalog, fingerprint
 from .contracts import ClusterProfile, WorkloadDefinition
+
+_VALID_PLACEMENT_DECLARATIONS = frozenset(
+    {
+        ("distributed", "dual-exclusive", "exclusive"),
+        ("distributed", "dual-pipeline-experimental", "exclusive"),
+        ("single", "single-exclusive", "exclusive"),
+        ("single", "single-shareable", "accepted"),
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -42,9 +52,27 @@ def _accepted_for_profile(
     catalog: Catalog,
     accepted: Mapping[str, tuple[str, ...]] | None,
 ) -> bool:
-    hashes = sorted(catalog.definition_fingerprints[identifier] for identifier in definitions)
+    hashes = sorted(
+        catalog.definition_fingerprints[identifier] for identifier in definitions
+    )
     index = catalog.accepted_profiles if accepted is None else accepted
     return tuple(hashes) == tuple(index.get(fingerprint(profile), ()))
+
+
+def _placement_declaration_is_consistent(definition: WorkloadDefinition) -> bool:
+    return (
+        definition.topology,
+        definition.placement_class,
+        definition.co_location,
+    ) in _VALID_PLACEMENT_DECLARATIONS
+
+
+def _can_co_locate(definition: WorkloadDefinition) -> bool:
+    return (
+        definition.topology == "single"
+        and definition.placement_class == "single-shareable"
+        and definition.co_location == "accepted"
+    )
 
 
 def check_admission(
@@ -73,18 +101,35 @@ def check_admission(
 
     for identifier, nodes in assigned.items():
         definition = catalog.definitions[identifier]
+        if not _placement_declaration_is_consistent(definition):
+            errors.add(f"inconsistent workload placement declaration: {identifier}")
         if definition.topology == "distributed" and nodes != set(definition.nodes):
             errors.add(f"distributed reservation is partial for {identifier}")
         elif definition.topology == "single" and nodes - set(definition.nodes):
             errors.add(f"single workload placement is invalid for {identifier}")
         if catalog.maturity.get(identifier) != "accepted":
-            errors.add(f"{identifier} maturity is {catalog.maturity.get(identifier, 'missing')}")
-        elif catalog.maturity_fingerprints.get(identifier) != catalog.definition_fingerprints[identifier]:
+            errors.add(
+                f"{identifier} maturity is {catalog.maturity.get(identifier, 'missing')}"
+            )
+        elif (
+            catalog.maturity_fingerprints.get(identifier)
+            != catalog.definition_fingerprints[identifier]
+        ):
             errors.add(f"{identifier} accepted fingerprint does not match definition")
         elif definition.checkpoint.manifest_sha256 is None:
             errors.add("accepted definition requires manifest_sha256")
 
     for node, definitions in per_node.items():
+        if len(definitions) > 1:
+            incompatible = sorted(
+                definition.id
+                for definition in definitions
+                if not _can_co_locate(definition)
+            )
+            if incompatible:
+                errors.add(
+                    f"incompatible co-location on {node}: {', '.join(incompatible)}"
+                )
         for definition in definitions:
             if definition.conflicts and any(
                 other.id in definition.conflicts for other in definitions
@@ -93,7 +138,10 @@ def check_admission(
         paths: dict[Path, str] = {}
         ports: dict[int, str] = {}
         for definition in definitions:
-            for kind, path in (("cache", definition.paths.cache), ("output", definition.paths.output)):
+            for kind, path in (
+                ("cache", definition.paths.cache),
+                ("output", definition.paths.output),
+            ):
                 previous = paths.get(path)
                 if previous is not None and previous != kind:
                     errors.add(f"cache/output overlap on {node}: {path.as_posix()}")
@@ -102,11 +150,17 @@ def check_admission(
             if previous_port is not None and previous_port != definition.id:
                 errors.add(f"port collision on {node}: {definition.endpoint.port}")
             ports[definition.endpoint.port] = definition.id
-        required_memory = sum(item.resources.minimum_free_memory_bytes for item in definitions)
-        required_disk = sum(item.resources.minimum_free_disk_bytes for item in definitions)
+        required_memory = sum(
+            item.resources.minimum_free_memory_bytes for item in definitions
+        )
+        required_disk = sum(
+            item.resources.minimum_free_disk_bytes for item in definitions
+        )
         measured_memory = _value(inventory.get(node), "free_memory_bytes")
         measured_disk = _value(inventory.get(node), "free_disk_bytes")
-        if definitions and (measured_memory is None or measured_memory < required_memory):
+        if definitions and (
+            measured_memory is None or measured_memory < required_memory
+        ):
             errors.add(f"insufficient measured memory on {node}")
         if definitions and (measured_disk is None or measured_disk < required_disk):
             errors.add(f"insufficient measured disk on {node}")
@@ -134,11 +188,16 @@ def check_admission(
             continue
         previous = endpoint_ports.get(definition.endpoint.port)
         if previous is not None:
-            errors.add(f"port collision for published endpoints: {previous}, {endpoint}")
+            errors.add(
+                f"port collision for published endpoints: {previous}, {endpoint}"
+            )
         endpoint_ports[definition.endpoint.port] = endpoint
         if catalog.maturity.get(identifier) != "accepted":
             errors.add(f"endpoint {endpoint} targets unaccepted workload: {identifier}")
-        if any(not _healthy(inventory.get(node)) for node in assigned.get(identifier, set())):
+        if any(
+            not _healthy(inventory.get(node))
+            for node in assigned.get(identifier, set())
+        ):
             errors.add(f"endpoint {endpoint} targets unhealthy workload: {identifier}")
 
     return AdmissionReport(errors=tuple(sorted(errors)))
