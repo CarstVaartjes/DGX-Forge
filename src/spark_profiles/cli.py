@@ -187,6 +187,8 @@ def _resolve_endpoint(
         inventory = dependencies.inventory_provider()
     except (OSError, RuntimeError, TypeError, ValueError):
         return unavailable("live Spark health gate failed")
+    if not isinstance(inventory, Mapping):
+        return unavailable("live Spark health gate failed")
     publication_error = _live_publication_error(state, inventory)
     if publication_error is not None:
         return unavailable(publication_error)
@@ -624,6 +626,15 @@ def main(
         except OSError as error:
             _emit(
                 {"error": str(error), "error_type": "configuration"}, args
+            )
+            return 2
+        if not isinstance(inventory, Mapping):
+            _emit(
+                {
+                    "error": "live inventory is malformed",
+                    "error_type": "configuration",
+                },
+                args,
             )
             return 2
         report = check_admission(profile, dependencies.catalog, inventory)

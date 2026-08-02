@@ -287,6 +287,23 @@ def test_planned_definition_is_not_activated() -> None:
     assert store.saves == []
 
 
+def test_profile_without_exact_accepted_evidence_is_not_activated() -> None:
+    definition = workload()
+    target = profile("target", definition)
+    catalog_value = catalog(target, definition=definition)
+    catalog_value.accepted_profiles = {}
+    switcher, events, store = make_switcher(
+        catalog_value, ControllerState.stopped()
+    )
+
+    report = switcher.switch_profile("target")
+
+    assert report.status == "blocked"
+    assert report.errors == ("profile has no exact accepted evidence",)
+    assert [event for event in events if event[0] == "remote"] == []
+    assert store.saves == []
+
+
 def test_checked_in_production_home_remains_truthfully_unactivatable() -> None:
     catalog_value = Catalog.load(REPOSITORY_ROOT)
     switcher, events, store = make_switcher(catalog_value, ControllerState.stopped())

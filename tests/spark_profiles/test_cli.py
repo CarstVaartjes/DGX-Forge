@@ -470,6 +470,30 @@ def test_endpoint_refuses_an_unreachable_node() -> None:
     assert result.json["reason"] == "live Spark health gate failed"
 
 
+@pytest.mark.parametrize("malformed", (None, []), ids=("none", "list"))
+def test_endpoint_refuses_malformed_live_inventory_without_traceback(
+    malformed: object,
+) -> None:
+    catalog_value = accepted_catalog()
+
+    result = invoke(
+        "endpoint",
+        "deepseek",
+        "--json",
+        state=active_state(catalog_value),
+        catalog_value=catalog_value,
+        inventory_provider=lambda: malformed,  # type: ignore[return-value]
+    )
+
+    assert result.exit_code == 3
+    assert result.json == {
+        "available": False,
+        "endpoint": "deepseek",
+        "reason": "live Spark health gate failed",
+    }
+    assert result.stderr == ""
+
+
 def test_endpoint_refuses_a_dead_workload_on_healthy_nodes() -> None:
     catalog_value = accepted_catalog()
     switcher = FakeSwitcher(workload_healthy=False)
@@ -790,6 +814,25 @@ def test_validate_live_health_failure_is_bounded_and_sanitized() -> None:
     assert "super-secret-value" not in result.stdout
     assert "<redacted>" in result.stdout
     assert len(result.json["error"]) <= 1_024
+    assert result.stderr == ""
+
+
+@pytest.mark.parametrize("malformed", (None, []), ids=("none", "list"))
+def test_validate_rejects_malformed_live_inventory_without_traceback(
+    malformed: object,
+) -> None:
+    result = invoke(
+        "validate",
+        "default",
+        "--json",
+        inventory_provider=lambda: malformed,  # type: ignore[return-value]
+    )
+
+    assert result.exit_code == 2
+    assert result.json == {
+        "error": "live inventory is malformed",
+        "error_type": "configuration",
+    }
     assert result.stderr == ""
 
 
