@@ -1,3 +1,4 @@
+from importlib import resources
 from pathlib import Path
 
 import pytest
@@ -70,6 +71,54 @@ def test_distributed_workload_declares_rank_order() -> None:
     assert workload.nodes == ("spark1", "spark2")
     assert workload.start_order == ("spark2", "spark1")
     assert workload.stop_order == ("spark1", "spark2")
+
+
+def test_distributed_workload_requires_worker_first_start_order(
+    tmp_path: Path,
+) -> None:
+    source = (
+        REPOSITORY_ROOT / "config/workloads/deepseek-agent-dual.toml"
+    ).read_text(encoding="utf-8")
+    path = write_toml(
+        tmp_path,
+        "head-first-start.toml",
+        source.replace(
+            'start_order = ["spark2", "spark1"]',
+            'start_order = ["spark1", "spark2"]',
+        ),
+    )
+
+    with pytest.raises(ProfileValidationError, match="worker-first"):
+        load_workload(path)
+
+
+def test_distributed_workload_requires_head_first_stop_order(
+    tmp_path: Path,
+) -> None:
+    source = (
+        REPOSITORY_ROOT / "config/workloads/deepseek-agent-dual.toml"
+    ).read_text(encoding="utf-8")
+    path = write_toml(
+        tmp_path,
+        "worker-first-stop.toml",
+        source.replace(
+            'stop_order = ["spark1", "spark2"]',
+            'stop_order = ["spark2", "spark1"]',
+        ),
+    )
+
+    with pytest.raises(ProfileValidationError, match="head-first"):
+        load_workload(path)
+
+
+def test_contract_schemas_are_package_resources() -> None:
+    workload_schema = resources.files("spark_profiles").joinpath(
+        "schemas", "workload.schema.json"
+    )
+
+    assert '"additionalProperties": false' in workload_schema.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_home_workload_uses_an_immutable_image_and_declarative_adapter_commands() -> None:

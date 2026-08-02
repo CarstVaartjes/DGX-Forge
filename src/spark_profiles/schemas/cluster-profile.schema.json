@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "restore_home", "accepted_evidence", "placements", "endpoints"],
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "restore_home": {"type": "boolean"},
+    "accepted_evidence": {"type": "string", "minLength": 1},
+    "placements": {
+      "type": "object", "additionalProperties": false, "required": ["spark1", "spark2"],
+      "properties": {
+        "spark1": {"$ref": "#/$defs/workloadIds"},
+        "spark2": {"$ref": "#/$defs/workloadIds"}
+      }
+    },
+    "endpoints": {
+      "type": "object", "additionalProperties": {"type": "string", "minLength": 1},
+      "propertyNames": {"pattern": "^[a-z][a-z0-9-]*$"}
+    }
+  },
+  "$defs": {"workloadIds": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true}}
+}

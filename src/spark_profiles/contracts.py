@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import json
+from importlib import resources
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any, Mapping
@@ -12,8 +12,6 @@ import tomllib
 from jsonschema import ValidationError, validate
 
 
-_REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-_SCHEMA_DIRECTORY = _REPOSITORY_ROOT / "schemas"
 _NODES = frozenset(("spark1", "spark2"))
 
 
@@ -110,7 +108,10 @@ def _read_toml(path: Path) -> dict[str, Any]:
 
 def _load_schema(name: str) -> dict[str, Any]:
     try:
-        with (_SCHEMA_DIRECTORY / name).open(encoding="utf-8") as schema_file:
+        schema = resources.files("spark_profiles").joinpath("schemas", name)
+        with schema.open(encoding="utf-8") as schema_file:
+            import json
+
             return json.load(schema_file)
     except (OSError, ValueError) as error:
         raise RuntimeError(f"cannot load contract schema {name}: {error}") from error
@@ -137,6 +138,10 @@ def _require_rank_orders(data: dict[str, Any]) -> None:
         raise ProfileValidationError("stop_order must rank every declared node exactly once")
     if data["topology"] == "distributed" and set(nodes) != _NODES:
         raise ProfileValidationError("distributed workloads require spark1 and spark2")
+    if data["topology"] == "distributed" and start_order != ("spark2", "spark1"):
+        raise ProfileValidationError("distributed workloads require worker-first start order")
+    if data["topology"] == "distributed" and stop_order != ("spark1", "spark2"):
+        raise ProfileValidationError("distributed workloads require head-first stop order")
     if data["topology"] == "single" and len(nodes) != 1:
         raise ProfileValidationError("single workloads require exactly one node")
 
