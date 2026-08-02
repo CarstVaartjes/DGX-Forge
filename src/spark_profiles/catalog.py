@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, fields, is_dataclass
+from datetime import datetime
 import hashlib
 import json
 from pathlib import Path
@@ -135,7 +136,75 @@ def _load_profiles(root: Path) -> dict[str, ClusterProfile]:
     return result
 
 
-def _maturity_records(index: Mapping[str, Any], fingerprints: Mapping[str, str]) -> dict[str, str]:
+_LEGAL_MATURITY_TRANSITIONS = {
+    "planned": "prepared",
+    "prepared": "verified",
+    "verified": ("accepted", "rejected"),
+}
+
+
+def _audit_timestamp(value: str, context: str) -> datetime:
+    try:
+        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError) as error:
+        raise CatalogError(f"{context} has an invalid timestamp") from error
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise CatalogError(f"{context} timestamp must include a UTC offset")
+    return timestamp
+
+
+def _validate_evidence_refs(root: Path, references: list[str], context: str) -> None:
+    for reference in references:
+        path = Path(reference)
+        if path.is_absolute() or ".." in path.parts:
+            raise CatalogError(
+                f"{context} evidence reference must be repository-relative: {reference}"
+            )
+        candidate = (root / path).resolve()
+        if not candidate.is_relative_to(root) or not candidate.is_file():
+            raise CatalogError(
+                f"{context} evidence reference does not exist: {reference}"
+            )
+
+
+def _validate_maturity_history(root: Path, record: Mapping[str, Any]) -> None:
+    identifier = record["id"]
+    history = record["history"]
+    states = [transition["state"] for transition in history]
+    if states[0] != "planned":
+        raise CatalogError(f"maturity history must begin at planned: {identifier}")
+
+    previous_timestamp: datetime | None = None
+    for position, transition in enumerate(history):
+        context = f"maturity history for {identifier} at transition {position}"
+        timestamp = _audit_timestamp(transition["timestamp"], context)
+        if previous_timestamp is not None and timestamp <= previous_timestamp:
+            raise CatalogError(f"maturity history timestamps must increase: {identifier}")
+        previous_timestamp = timestamp
+        _validate_evidence_refs(root, transition["evidence_refs"], context)
+
+    for previous, current in zip(states, states[1:], strict=False):
+        if previous == "rejected":
+            raise CatalogError(f"rejected maturity is terminal without an audited correction: {identifier}")
+        expected = _LEGAL_MATURITY_TRANSITIONS.get(previous, ())
+        if isinstance(expected, str):
+            allowed = (expected,)
+        else:
+            allowed = expected
+        if current not in allowed:
+            raise CatalogError(
+                f"illegal maturity transition for {identifier}: {previous} -> {current}"
+            )
+
+    if record["maturity"] != states[-1]:
+        raise CatalogError(f"current maturity does not match history: {identifier}")
+
+
+def _maturity_records(
+    root: Path,
+    index: Mapping[str, Any],
+    fingerprints: Mapping[str, str],
+) -> dict[str, str]:
     records = index["definitions"]
     maturity: dict[str, str] = {}
     for record in records:
@@ -145,6 +214,7 @@ def _maturity_records(index: Mapping[str, Any], fingerprints: Mapping[str, str])
         maturity[identifier] = record["maturity"]
         if fingerprints.get(identifier) != record["sha256"]:
             raise CatalogError(f"maturity fingerprint does not match definition: {identifier}")
+        _validate_maturity_history(root, record)
     missing = sorted(set(fingerprints) - set(maturity))
     extra = sorted(set(maturity) - set(fingerprints))
     if missing or extra:
@@ -185,7 +255,7 @@ class Catalog:
 
         validate_evidence_indexes(root)
         maturity_index = _load_json(root / "inventory/reports/model-definitions.json")
-        maturity = _maturity_records(maturity_index, definition_fingerprints)
+        maturity = _maturity_records(root, maturity_index, definition_fingerprints)
         maturity_fingerprints = {
             record["id"]: record["sha256"] for record in maturity_index["definitions"]
         }
@@ -198,6 +268,9 @@ class Catalog:
             hashes = tuple(record["definition_sha256"])
             if tuple(sorted(hashes)) != hashes or len(set(hashes)) != len(hashes):
                 raise CatalogError("accepted definition hashes must be sorted and unique")
+            context = f"accepted profile {profile_hash}"
+            _audit_timestamp(record["accepted_at"], context)
+            _validate_evidence_refs(root, record["evidence_refs"], context)
             accepted_profiles[profile_hash] = hashes
 
         return cls(
