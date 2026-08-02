@@ -19,6 +19,7 @@ from spark_profiles.switcher import SwitchReport
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+BOOT_IDS = {"spark1": "1" * 32, "spark2": "2" * 32}
 
 
 class FakeStore:
@@ -86,7 +87,7 @@ def invoke(
         catalog=catalog,
         state_store=store or FakeStore(state),
         switcher=switcher or FakeSwitcher(),
-        inventory_provider=inventory_provider or (lambda: {}),
+        inventory_provider=inventory_provider or live_inventory,
         health_service=health_service,
     )
     stdout = StringIO()
@@ -109,13 +110,13 @@ class FakeHealthService:
 
 
 def health_result(*, spark2_status="healthy") -> ClusterHealth:
-    def node(status: str) -> NodeHealth:
+    def node(name: str, status: str) -> NodeHealth:
         full = status not in {"unreachable", "critical"}
         return NodeHealth.from_dict({
             "status": status,
             "errors": ["ssh_unreachable"] if status == "unreachable" else [],
             "warnings": [],
-            "identity": {"hostname": "spark", "boot_id": "1" * 32, "uptime_seconds": 12345} if full else None,
+            "identity": {"hostname": "spark", "boot_id": BOOT_IDS[name], "uptime_seconds": 12345} if full else None,
             "cpu": {"logical_processors": 20, "utilization_percent": 12.3, "load_1": 1.2, "load_5": 1.0, "load_15": 0.8} if full else None,
             "memory": {"total_bytes": 130663231488, "available_bytes": 120000000000, "used_bytes": 10663231488, "used_percent": 8.2} if full else None,
             "swap": {"total_bytes": 0, "free_bytes": 0, "used_bytes": 0, "used_percent": 0.0} if full else None,
@@ -128,8 +129,28 @@ def health_result(*, spark2_status="healthy") -> ClusterHealth:
             ]} if full else None,
             "services": {"docker_available": True, "docker_version": "29", "earlyoom_load_state": "not-found", "earlyoom_enabled": False, "earlyoom_active": False} if full else None,
         })
-    nodes = {"spark1": node("healthy"), "spark2": node(spark2_status)}
+    nodes = {"spark1": node("spark1", "healthy"), "spark2": node("spark2", spark2_status)}
     return ClusterHealth(1, "2026-08-02T12:00:00Z", "critical" if spark2_status in {"critical", "unreachable"} else "healthy", nodes)
+
+
+def live_inventory(
+    *, boot_ids: Mapping[str, str] = BOOT_IDS,
+    spark2_healthy: bool = True,
+) -> Mapping[str, object]:
+    return {
+        "spark1": {
+            "healthy": True,
+            "free_memory_bytes": 120_000_000_000,
+            "free_disk_bytes": 3_700_000_000_000,
+            "boot_id": boot_ids["spark1"],
+        },
+        "spark2": {
+            "healthy": spark2_healthy,
+            "free_memory_bytes": 120_000_000_000,
+            "free_disk_bytes": 3_700_000_000_000,
+            "boot_id": boot_ids["spark2"],
+        },
+    }
 
 
 def accepted_catalog(
@@ -184,6 +205,7 @@ def active_state(catalog: Catalog) -> ControllerState:
                 "deepseek-agent-dual"
             ]
         },
+        boot_ids=BOOT_IDS,
     )
 
 
@@ -217,12 +239,22 @@ def test_endpoint_refuses_workload_when_controller_is_stopped() -> None:
 
 
 def test_status_is_a_local_stopped_snapshot() -> None:
-    result = invoke("status", "--json")
+    calls = 0
+
+    def forbidden_live_inventory():
+        nonlocal calls
+        calls += 1
+        raise AssertionError("status must stay local")
+
+    result = invoke(
+        "status", "--json", inventory_provider=forbidden_live_inventory
+    )
 
     assert result.exit_code == 0
     assert result.json["status"] == "stopped"
     assert result.json["active_profile"] is None
     assert result.json["published_endpoints"] == {}
+    assert calls == 0
 
 
 def test_catalog_supports_global_json_and_shows_planned_profiles() -> None:
@@ -353,6 +385,23 @@ def test_status_requires_complete_current_acceptance_evidence(
     assert result.json["published_endpoints"] == {}
 
 
+def test_status_never_claims_live_endpoint_availability() -> None:
+    catalog_value = accepted_catalog()
+
+    result = invoke(
+        "status",
+        "--json",
+        state=active_state(catalog_value),
+        catalog_value=catalog_value,
+        inventory_provider=lambda: (_ for _ in ()).throw(
+            AssertionError("status must not probe nodes")
+        ),
+    )
+
+    assert result.exit_code == 0
+    assert result.json["published_endpoints"] == {}
+
+
 def test_endpoint_allows_exact_currently_accepted_content() -> None:
     catalog_value = accepted_catalog()
 
@@ -367,6 +416,41 @@ def test_endpoint_allows_exact_currently_accepted_content() -> None:
     assert result.exit_code == 0
     assert result.json["available"] is True
     assert result.json["workload_id"] == "deepseek-agent-dual"
+
+
+def test_endpoint_refuses_a_boot_id_mismatch() -> None:
+    catalog_value = accepted_catalog()
+    changed = {"spark1": BOOT_IDS["spark1"], "spark2": "3" * 32}
+
+    result = invoke(
+        "endpoint",
+        "deepseek",
+        "--json",
+        state=active_state(catalog_value),
+        catalog_value=catalog_value,
+        inventory_provider=lambda: live_inventory(boot_ids=changed),
+    )
+
+    assert result.exit_code == 3
+    assert result.json["available"] is False
+    assert result.json["reason"] == "Spark boot IDs changed since activation"
+
+
+def test_endpoint_refuses_an_unreachable_node() -> None:
+    catalog_value = accepted_catalog()
+
+    result = invoke(
+        "endpoint",
+        "deepseek",
+        "--json",
+        state=active_state(catalog_value),
+        catalog_value=catalog_value,
+        inventory_provider=lambda: live_inventory(spark2_healthy=False),
+    )
+
+    assert result.exit_code == 3
+    assert result.json["available"] is False
+    assert result.json["reason"] == "live Spark health gate failed"
 
 
 def test_unknown_selector_is_a_configuration_error() -> None:
@@ -623,6 +707,27 @@ def test_validate_inventory_oserror_is_bounded_and_sanitized() -> None:
 
     assert result.exit_code == 2
     assert result.json["error_type"] == "configuration"
+    assert "super-secret-value" not in result.stdout
+    assert "<redacted>" in result.stdout
+    assert len(result.json["error"]) <= 1_024
+    assert result.stderr == ""
+
+
+def test_validate_live_health_failure_is_bounded_and_sanitized() -> None:
+    from spark_profiles.health import LocalHealthError
+
+    def failed_health_inventory() -> Mapping[str, object]:
+        raise LocalHealthError("token=super-secret-value " + "x" * 5_000)
+
+    result = invoke(
+        "validate",
+        "default",
+        "--json",
+        inventory_provider=failed_health_inventory,
+    )
+
+    assert result.exit_code == 5
+    assert result.json["error_type"] == "health_configuration"
     assert "super-secret-value" not in result.stdout
     assert "<redacted>" in result.stdout
     assert len(result.json["error"]) <= 1_024

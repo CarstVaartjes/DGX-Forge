@@ -185,7 +185,43 @@ class ProfileSwitcher:
                 errors=(state_error,),
                 dry_run=dry_run,
             )
-        inventory = self.inventory_provider()
+        try:
+            inventory = self.inventory_provider()
+        except Exception as error:
+            detail = f"{type(error).__name__}: {error}"[:_MAX_ERROR_CHARS]
+            return SwitchReport(
+                target_profile=target.id,
+                status="blocked",
+                profile_sha256=profile_hash,
+                definition_sha256=target_hashes,
+                published_endpoints={},
+                restore_profile=restore_profile,
+                errors=(f"live inventory unavailable: {detail}",),
+                dry_run=dry_run,
+            )
+        if not isinstance(inventory, Mapping):
+            return SwitchReport(
+                target_profile=target.id,
+                status="blocked",
+                profile_sha256=profile_hash,
+                definition_sha256=target_hashes,
+                published_endpoints={},
+                restore_profile=restore_profile,
+                errors=("live inventory is malformed",),
+                dry_run=dry_run,
+            )
+        live_boot_ids, boot_error = self._live_boot_ids(inventory)
+        if boot_error is not None:
+            return SwitchReport(
+                target_profile=target.id,
+                status="blocked",
+                profile_sha256=profile_hash,
+                definition_sha256=target_hashes,
+                published_endpoints={},
+                restore_profile=restore_profile,
+                errors=(boot_error,),
+                dry_run=dry_run,
+            )
         admission = self.admission_checker(target, self.catalog, inventory)
         if not admission.ok:
             return SwitchReport(
@@ -211,7 +247,9 @@ class ProfileSwitcher:
 
         diagnostics: list[Diagnostic] = []
         current = self.catalog.profiles.get(state.active_profile or "")
-        retained = self._healthy_retained(state, current, target, diagnostics)
+        retained = self._healthy_retained(
+            state, current, target, live_boot_ids, diagnostics
+        )
 
         # An active profile is the publication source. Clearing it withdraws all
         # changed aliases before the first stop command is issued.
@@ -222,7 +260,7 @@ class ProfileSwitcher:
                 target_profile=target.id,
                 restore_profile=restore_profile,
                 last_error=None,
-                boot_ids=state.boot_ids,
+                boot_ids=live_boot_ids,
             )
         )
 
@@ -267,7 +305,7 @@ class ProfileSwitcher:
                     last_error=None,
                     active_profile_sha256=profile_hash,
                     active_definition_sha256=target_hashes,
-                    boot_ids=state.boot_ids,
+                    boot_ids=live_boot_ids,
                 )
                 endpoints = dict(target.endpoints)
             else:
@@ -277,7 +315,7 @@ class ProfileSwitcher:
                     target_profile=None,
                     restore_profile=restore_profile,
                     last_error=None,
-                    boot_ids=state.boot_ids,
+                    boot_ids=live_boot_ids,
                 )
                 endpoints = {}
             self.state_store.save(final_state)
@@ -311,7 +349,7 @@ class ProfileSwitcher:
                     target_profile=target.id,
                     restore_profile=restore_profile,
                     last_error=message,
-                    boot_ids=state.boot_ids,
+                    boot_ids=live_boot_ids,
                 )
             else:
                 failed_state = ControllerState(
@@ -320,7 +358,7 @@ class ProfileSwitcher:
                     target_profile=target.id,
                     restore_profile=restore_profile,
                     last_error=message,
-                    boot_ids=state.boot_ids,
+                    boot_ids=live_boot_ids,
                 )
             self.state_store.save(failed_state)
             return SwitchReport(
@@ -433,6 +471,23 @@ class ProfileSwitcher:
             for identifier in profile.placements[node]
         }
 
+    @staticmethod
+    def _live_boot_ids(
+        inventory: Mapping[str, object],
+    ) -> tuple[dict[str, str], str | None]:
+        boot_ids: dict[str, str] = {}
+        for node in ("spark1", "spark2"):
+            measurement = inventory.get(node)
+            boot_id = (
+                measurement.get("boot_id")
+                if isinstance(measurement, Mapping)
+                else None
+            )
+            if not isinstance(boot_id, str) or not boot_id:
+                return {}, f"live boot ID unavailable on {node}"
+            boot_ids[node] = boot_id
+        return boot_ids, None
+
     def _workload_order(
         self, profile: ClusterProfile, *, reverse: bool = False
     ) -> tuple[str, ...]:
@@ -454,9 +509,12 @@ class ProfileSwitcher:
         state: ControllerState,
         current: ClusterProfile | None,
         target: ClusterProfile,
+        live_boot_ids: Mapping[str, str],
         diagnostics: list[Diagnostic],
     ) -> set[str]:
         if current is None:
+            return set()
+        if dict(state.boot_ids) != dict(live_boot_ids):
             return set()
         if state.active_profile_sha256 != self.catalog.profile_fingerprints.get(
             current.id

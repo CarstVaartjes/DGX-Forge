@@ -102,19 +102,65 @@ def build_dependencies(
     catalog = Catalog.load(repository_root)
 
     def conservative_inventory() -> Mapping[str, object]:
-        # Live node-health collection is a later explicit integration. Missing
-        # measurements fail admission closed and never contact a remote node.
         return {"spark1": {}, "spark2": {}}
+
+    def live_inventory() -> Mapping[str, object]:
+        assert health_service is not None
+        return _inventory_from_health(health_service.collect())
+
+    inventory_provider = (
+        live_inventory if health_service is not None else conservative_inventory
+    )
 
     switcher = ProfileSwitcher(
         catalog=catalog,
         backend=backend,
         state_store=store,
-        inventory_provider=conservative_inventory,
+        inventory_provider=inventory_provider,
     )
     return CliDependencies(
-        catalog, store, switcher, conservative_inventory, health_service
+        catalog, store, switcher, inventory_provider, health_service
     )
+
+
+def _inventory_from_health(health: ClusterHealth) -> Mapping[str, object]:
+    """Project live health into the small admission/publication inventory."""
+    inventory: dict[str, object] = {}
+    for node_name in ("spark1", "spark2"):
+        node = health.nodes[node_name]
+        inventory[node_name] = {
+            "healthy": node.status in {"healthy", "warning"},
+            "free_memory_bytes": (
+                node.memory.available_bytes if node.memory is not None else None
+            ),
+            "free_disk_bytes": (
+                node.root_filesystem.available_bytes
+                if node.root_filesystem is not None
+                else None
+            ),
+            "boot_id": node.identity.boot_id if node.identity is not None else None,
+        }
+    return inventory
+
+
+def _live_publication_error(
+    state: ControllerState, inventory: Mapping[str, object]
+) -> str | None:
+    live_boot_ids: dict[str, str] = {}
+    for node_name in ("spark1", "spark2"):
+        measurement = inventory.get(node_name)
+        if (
+            not isinstance(measurement, Mapping)
+            or measurement.get("healthy") is not True
+        ):
+            return "live Spark health gate failed"
+        boot_id = measurement.get("boot_id")
+        if not isinstance(boot_id, str) or not boot_id:
+            return "live Spark health gate failed"
+        live_boot_ids[node_name] = boot_id
+    if dict(state.boot_ids) != live_boot_ids:
+        return "Spark boot IDs changed since activation"
+    return None
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -377,7 +423,11 @@ def main(
         return 2
     if dependencies is None:
         try:
-            dependencies = build_dependencies(root, include_health=args.command == "nodes")
+            dependencies = build_dependencies(
+                root,
+                include_health=args.command
+                in {"nodes", "endpoint", "validate", "switch", "restore-default"},
+            )
         except LocalHealthError as error:
             _emit(
                 {
@@ -477,11 +527,9 @@ def main(
             )
             return 2
         payload = state.to_dict()
-        payload["published_endpoints"] = (
-            dict(dependencies.catalog.profiles[state.active_profile].endpoints)
-            if _active_content_is_accepted(state, dependencies.catalog)
-            else {}
-        )
+        # This command is deliberately local. Only `endpoint` performs the
+        # live publication gate, so local status never advertises availability.
+        payload["published_endpoints"] = {}
         _emit(payload, args)
         return 0
 
@@ -537,6 +585,29 @@ def main(
                 args,
             )
             return 3
+        try:
+            inventory = dependencies.inventory_provider()
+        except (OSError, RuntimeError, TypeError, ValueError):
+            _emit(
+                {
+                    "available": False,
+                    "endpoint": args.name,
+                    "reason": "live Spark health gate failed",
+                },
+                args,
+            )
+            return 3
+        publication_error = _live_publication_error(state, inventory)
+        if publication_error is not None:
+            _emit(
+                {
+                    "available": False,
+                    "endpoint": args.name,
+                    "reason": publication_error,
+                },
+                args,
+            )
+            return 3
         workload_id = profile.endpoints[args.name]
         definition = dependencies.catalog.definitions[workload_id]
         nodes = sorted(
@@ -570,6 +641,11 @@ def main(
             return 2
         try:
             inventory = dependencies.inventory_provider()
+        except LocalHealthError as error:
+            _emit(
+                {"error": str(error), "error_type": "health_configuration"}, args
+            )
+            return 5
         except OSError as error:
             _emit(
                 {"error": str(error), "error_type": "configuration"}, args

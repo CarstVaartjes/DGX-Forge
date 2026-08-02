@@ -15,7 +15,8 @@ uv run --no-project --with jsonschema -- /path/to/spark/bin/sparkctl status --js
 
 `--json` may be placed before the command or on the command itself. Human
 output is the default. `status --json` is the stable local interface intended
-for the future NAS controller. `nodes status --json` performs a fresh,
+for the future NAS controller. It is a persisted snapshot and deliberately
+reports no live published endpoints. `nodes status --json` performs a fresh,
 read-only SSH probe of both Sparks; it is not persisted in controller state.
 
 ## Commands
@@ -34,12 +35,11 @@ sparkctl break-stale-lock [--json]
 - `catalog` lists profiles, workload definitions, content hashes, maturity, and
   selector mappings. Planned profiles remain visible.
 - `validate` resolves the selector, confirms the checked-in contracts loaded,
-  and runs admission. `valid: true` does not imply `admitted: true`.
+  collects live health and capacity from both Sparks, and runs admission.
+  `valid: true` does not imply `admitted: true`.
 - `status` reads only local controller state. It makes no SSH call. Endpoint
-  aliases are published only when the active profile and complete definition
-  fingerprints still match the current catalog, every definition still has
-  matching accepted maturity and a manifest digest, and the exact profile and
-  definition hash set still has accepted Cluster Profile evidence.
+  availability is always fail-closed as `published_endpoints: {}` because a
+  persisted snapshot cannot establish that either Spark is still alive.
 - `nodes status` concurrently probes both configured Sparks and reports live
   host, NVIDIA, thermal, and direct-fabric health without retaining history or
   changing either node or the active profile. See
@@ -52,16 +52,20 @@ sparkctl break-stale-lock [--json]
 - `restore-default` is a later, explicit ordinary switch to selector `default`.
   Run it only after outputs and provenance from temporary work are recovered.
 - `endpoint` returns an address only for an alias published by an active,
-  currently accepted profile. Stopped, stale, planned, or unpublished
+  currently accepted profile after a fresh health probe confirms both Sparks
+  are reachable and their exact boot IDs still match the successful
+  activation. Stopped, stale, rebooted, unhealthy, planned, or unpublished
   endpoints are denied.
 - `break-stale-lock` uses the state-store safety checks. It refuses a held lock,
   a live local PID, or a lock younger than the configured threshold.
 
-The initial profile bring-up intentionally uses conservative empty admission
-measurements. That keeps profile validation and activation fail-closed without
-confusing the separate read-only health probe with model-specific admission.
-The checked-in `agent-full-dual` profile resolves correctly but remains
-unactivatable while `deepseek-agent-dual` has `planned` maturity.
+Operational `validate`, `switch`, `restore-default`, and `endpoint` commands
+use the same live health collector as `nodes status`. Health is projected into
+the bounded admission inventory: node health, available memory, root-disk
+space, and boot ID. A missing or failed probe blocks admission or publication;
+it never falls back to stale local measurements. The checked-in
+`agent-full-dual` profile resolves correctly but remains unactivatable while
+`deepseek-agent-dual` has `planned` maturity.
 
 ## Exit codes
 
@@ -71,7 +75,7 @@ unactivatable while `deepseek-agent-dual` has `planned` maturity.
 | `2` | Invalid arguments, selector, catalog, or controller configuration |
 | `3` | Admission blocked or endpoint unavailable |
 | `4` | `nodes status`: at least one node is `critical` or `unreachable` |
-| `5` | `nodes status`: local collector, schema, inventory, or baseline failure before probing |
+| `5` | Local health collector, schema, inventory, or baseline failure before probing |
 | `6` | Transition or explicit restoration failed |
 | `7` | Switch-lock conflict or unsafe stale-lock override |
 
@@ -83,8 +87,8 @@ whitespace-separated option value cannot be echoed by the parser.
 
 ## Safe bring-up checks
 
-These commands load only checked-in contracts and local state; they do not
-mutate either Spark node:
+These commands do not mutate either Spark node. `catalog` and `status` are
+local; `validate` and `nodes status` perform live read-only probes:
 
 ```bash
 uv run --no-project --with jsonschema -- bin/sparkctl catalog --json
@@ -95,6 +99,5 @@ uv run --no-project --with jsonschema -- bin/sparkctl nodes status --json
 
 At the current milestone, `catalog` succeeds, `validate default` exits `3` with
 the planned-maturity denial, and `status` reports `stopped` when no local state
-has been written. `nodes status` is the only command in this list that contacts
-the Sparks; it performs live read-only collection and exits `4` if either node
-is critical or unreachable.
+has been written. `nodes status` exits `4` if either node is critical or
+unreachable.

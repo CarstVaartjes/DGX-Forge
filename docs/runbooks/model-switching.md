@@ -12,7 +12,8 @@ Each activation is serialized by `.state/sparkctl/switch.lock` and recorded
 atomically in `.state/sparkctl/state.json`. Before any state or remote process
 change, the controller resolves a selector or canonical profile ID and runs
 admission against the exact profile hash, definition hashes, maturity records,
-accepted combination evidence, and current inventory.
+accepted combination evidence, and a fresh live inventory from both Sparks.
+The successful activation stores the exact boot ID observed for each node.
 
 If controller state names an active profile, its profile hash and complete
 definition ID/hash set must match the current content-addressed catalog before
@@ -39,24 +40,36 @@ directory, calls a Spark backend command, or saves controller state.
 
 For an admitted activation the controller:
 
-1. checks whether an unchanged workload is eligible for retention;
-2. verifies retained workloads are healthy;
-3. writes `transitioning` state with no active profile, withdrawing published
+1. collects live health, capacity, and exact boot IDs from both Sparks;
+2. checks whether an unchanged workload is eligible for retention;
+3. verifies retained workloads are healthy;
+4. writes `transitioning` state with no active profile, withdrawing published
    endpoint metadata before stopping changed services;
-4. stops changed distributed workloads head first and worker second;
-5. runs `verify-release` after every stop sequence;
-6. verifies target runtime prerequisites;
-7. starts distributed workloads worker first and head second;
-8. after complete target residency is established, runs model-identity health
+5. stops changed distributed workloads head first and worker second;
+6. runs `verify-release` after every stop sequence;
+7. verifies target runtime prerequisites;
+8. starts distributed workloads worker first and head second;
+9. after complete target residency is established, runs model-identity health
    checks and the adapter's pinned inference quality gate for every target
    workload, including retained workloads; and
-9. atomically publishes only accepted, healthy endpoints with the exact active
-   profile and definition fingerprints.
+10. atomically records the active profile, definition fingerprints, and the
+    exact live boot IDs used for admission.
 
 A workload is retained only when the persisted active profile hash still
 matches the catalog, its persisted definition hash is unchanged, its placement
 and endpoint aliases are identical in the old and new profiles, and its live
-health command succeeds. Merely sharing a logical workload ID is insufficient.
+health command succeeds. Both persisted boot IDs must also match the current
+live boot IDs. If either Spark rebooted, no workload is retained: an explicit
+switch performs the normal stop/start reconciliation and replaces the stored
+boot IDs only after all final gates pass. Nothing restarts automatically.
+
+`sparkctl endpoint ALIAS` is the live publication check. It repeats the node
+health probe and refuses the address if either Spark is unhealthy or
+unreachable, either boot ID differs from activation, the active content is no
+longer accepted, or the alias is not in the active profile. Local `sparkctl
+status` never performs this probe and therefore always reports
+`published_endpoints: {}` rather than presenting persisted intent as live
+availability.
 
 For the dual-Spark DeepSeek adapter, the controller appends the role argument
 derived from the declared rank order:

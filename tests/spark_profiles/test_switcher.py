@@ -22,6 +22,7 @@ from spark_profiles.state import ControllerState, StateStore
 from spark_profiles.switcher import ProfileSwitcher
 
 SHA_A = "a" * 64
+BOOT_IDS = {"spark1": "1" * 32, "spark2": "2" * 32}
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -96,6 +97,11 @@ def profile(identifier: str, definition: WorkloadDefinition | None) -> ClusterPr
 def catalog(*profiles: ClusterProfile, definition: WorkloadDefinition) -> Catalog:
     definition_sha = fingerprint(definition)
     profile_map = {item.id: item for item in profiles}
+    accepted_profiles = {
+        fingerprint(item): (definition_sha,)
+        for item in profiles
+        if any(item.placements.values())
+    }
     return Catalog(
         definitions={definition.id: definition},
         profiles=profile_map,
@@ -106,7 +112,7 @@ def catalog(*profiles: ClusterProfile, definition: WorkloadDefinition) -> Catalo
         },
         maturity={definition.id: "accepted"},
         maturity_fingerprints={definition.id: definition_sha},
-        accepted_profiles={},
+        accepted_profiles=accepted_profiles,
     )
 
 
@@ -146,10 +152,23 @@ class FakeStore:
         return self.state
 
 
-def inventory() -> dict[str, dict[str, int | bool]]:
+def inventory(
+    *, boot_ids: dict[str, str] | None = None
+) -> dict[str, dict[str, int | bool | str]]:
+    live_boot_ids = boot_ids or BOOT_IDS
     return {
-        "spark1": {"healthy": True, "free_memory_bytes": 100, "free_disk_bytes": 100},
-        "spark2": {"healthy": True, "free_memory_bytes": 100, "free_disk_bytes": 100},
+        "spark1": {
+            "healthy": True,
+            "free_memory_bytes": 100,
+            "free_disk_bytes": 100,
+            "boot_id": live_boot_ids["spark1"],
+        },
+        "spark2": {
+            "healthy": True,
+            "free_memory_bytes": 100,
+            "free_disk_bytes": 100,
+            "boot_id": live_boot_ids["spark2"],
+        },
     }
 
 
@@ -182,6 +201,7 @@ def active_state(
         last_error=None,
         active_profile_sha256=fingerprint(profile_value),
         active_definition_sha256={definition.id: fingerprint(definition)},
+        boot_ids=BOOT_IDS,
     )
 
 
@@ -324,6 +344,87 @@ def test_retention_requires_matching_hashes_and_health() -> None:
     operations = [event[2][0] for event in events if event[0] == "remote"]
     assert stale_report.status == "blocked"
     assert operations == []
+
+
+def test_successful_activation_captures_exact_live_boot_ids() -> None:
+    definition = workload()
+    target = profile("target", definition)
+    catalog_value = catalog(target, definition=definition)
+    switcher, _, store = make_switcher(catalog_value, ControllerState.stopped())
+
+    report = switcher.switch_profile("target")
+
+    assert report.status == "active"
+    assert dict(store.state.boot_ids) == BOOT_IDS
+
+
+def test_boot_id_change_forces_restart_instead_of_retention() -> None:
+    definition = workload()
+    current = profile("current", definition)
+    target = replace(current, id="target")
+    catalog_value = catalog(current, target, definition=definition)
+    events: list[tuple] = []
+    store = FakeStore(active_state(current, definition), events)
+    new_boot_ids = {"spark1": BOOT_IDS["spark1"], "spark2": "3" * 32}
+    switcher = ProfileSwitcher(
+        catalog=catalog_value,
+        backend=FakeBackend(events),
+        state_store=store,
+        inventory_provider=lambda: inventory(boot_ids=new_boot_ids),
+    )
+
+    report = switcher.switch_profile("target")
+
+    operations = [event[2][0] for event in events if event[0] == "remote"]
+    assert report.status == "active"
+    assert report.retained_workloads == ()
+    assert "profile-stop" in operations
+    assert "profile-start" in operations
+    assert dict(store.state.boot_ids) == new_boot_ids
+
+
+def test_activation_fails_closed_when_live_boot_id_is_missing() -> None:
+    definition = workload()
+    target = profile("target", definition)
+    catalog_value = catalog(target, definition=definition)
+    events: list[tuple] = []
+    store = FakeStore(ControllerState.stopped(), events)
+    incomplete = inventory()
+    del incomplete["spark2"]["boot_id"]
+    switcher = ProfileSwitcher(
+        catalog=catalog_value,
+        backend=FakeBackend(events),
+        state_store=store,
+        inventory_provider=lambda: incomplete,
+    )
+
+    report = switcher.switch_profile("target")
+
+    assert report.status == "blocked"
+    assert report.errors == ("live boot ID unavailable on spark2",)
+    assert [event for event in events if event[0] == "remote"] == []
+    assert store.saves == []
+
+
+def test_activation_fails_closed_when_live_inventory_is_malformed() -> None:
+    definition = workload()
+    target = profile("target", definition)
+    catalog_value = catalog(target, definition=definition)
+    events: list[tuple] = []
+    store = FakeStore(ControllerState.stopped(), events)
+    switcher = ProfileSwitcher(
+        catalog=catalog_value,
+        backend=FakeBackend(events),
+        state_store=store,
+        inventory_provider=lambda: None,  # type: ignore[return-value]
+    )
+
+    report = switcher.switch_profile("target")
+
+    assert report.status == "blocked"
+    assert report.errors == ("live inventory is malformed",)
+    assert [event for event in events if event[0] == "remote"] == []
+    assert store.saves == []
 
 
 def test_failed_health_cleans_up_target_and_finishes_stopped() -> None:
