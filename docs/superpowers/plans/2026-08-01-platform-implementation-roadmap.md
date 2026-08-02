@@ -1,11 +1,16 @@
 # Dual DGX Spark Platform Implementation Roadmap
 
-The approved design is implemented as four plans. Execute them in order because each later plan consumes verified artifacts from the preceding plan.
+The approved design is implemented in phases. Execute them in order because
+each later phase consumes verified artifacts from the preceding phase.
 
-1. [Secure host bootstrap and fabric](2026-08-01-secure-host-bootstrap-and-fabric.md) — install the 1Password public key, inventory and harden both Sparks, update them sequentially, disable `earlyoom`, configure the direct CX-7 link, and pass RDMA/NCCL gates.
-2. [DeepSeek 0731 runtime](2026-08-01-deepseek-0731-runtime.md) — pin and audit the Mia/Anemll stack, verify model caches, execute the staged profile ladder through a loopback endpoint, and pass correctness, capacity, and performance gates without waiting for Caddy.
-3. [Secondary AI and access services](2026-08-01-secondary-ai-and-access-services.md), Tasks 1–2 — add and validate TRELLIS.2 locally through an SSH tunnel.
-4. After the new NAS arrives, [external control plane](2026-08-01-external-control-plane.md) — build the one-shot controller, restricted node command, Caddy gateway, state/lock handling, and fail-to-stopped switching around the validated AI profiles.
-5. [Secondary AI and access services](2026-08-01-secondary-ai-and-access-services.md), Tasks 3–6 — add the external browser UI, apply the LiteLLM deployment gate, configure Tailscale ingress, and run full shared-platform acceptance.
+1. **Complete:** [Secure host bootstrap and fabric](2026-08-01-secure-host-bootstrap-and-fabric.md) installed the 1Password public key, repaired cloned identities, inventoried and hardened both Sparks, validated their matched platform, checked `earlyoom`, configured the direct two-rail CX-7 link, and passed RDMA/NCCL gates. The as-built result is in the [installation record](../../installation-record.md).
+2. **Next:** [Model profile framework](2026-08-02-model-profile-framework.md) builds the developer-machine catalog, adapters, placement rules, fail-to-stopped switching, and `sparkctl` interface used by every model.
+3. **Then:** Reconcile and execute the [DeepSeek 0731 runtime](2026-08-01-deepseek-0731-runtime.md) through that framework, with the Mia dual-Spark service as the default agent and DS4 as the lighter alternative.
+4. **Then:** Implement the remaining adapters from the [approved multi-runtime design](../specs/2026-08-02-multi-runtime-model-profiles-design.md): Nemotron, Qwen image and vision, Pixal3D, TRELLIS.2, rigging, Step1X-3D, TripoSG, and Hunyuan3D-Omni. Every user-facing adapter uses its best accepted Spark-optimized path, and co-residency requires measured pairwise acceptance.
+5. **After the new external host arrives:** [External control plane](2026-08-01-external-control-plane.md) adds the restricted node command, Caddy gateway, durable state/lock handling, and fail-to-stopped switching around the validated profiles.
+6. **Last:** Add the external browser UI, apply the LiteLLM deployment gate, configure Tailscale ingress, and run shared-platform acceptance. The earlier [secondary services plan](2026-08-01-secondary-ai-and-access-services.md) is historical input, not the current model catalog.
 
-The immediate execution scope ends after item 3. Items 4–5 have an explicit future-host prerequisite. Every plan leaves the system in a usable, testable state and ends with a commit. Distributed AI profiles never auto-start after reboot, and no non-AI container is deployed to either Spark.
+The immediate execution scope covers phases 2–4. Phases 5–6 have an explicit
+future-host prerequisite. Every phase leaves the system in a usable, testable
+state and ends with a commit. Distributed AI profiles never auto-start after
+reboot, and no non-AI container is deployed to either Spark.

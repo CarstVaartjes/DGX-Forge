@@ -1,10 +1,17 @@
 # Secondary AI and Access Services Implementation Plan
 
+> **Superseded model scope:** The approved
+> [multi-runtime model design](../specs/2026-08-02-multi-runtime-model-profiles-design.md)
+> replaces the TRELLIS-only assumptions and covers every required image, 3D,
+> rigging, vision, DeepSeek, and Nemotron workload. This plan is retained for
+> historical TRELLIS and external-access detail; it is not the current model
+> catalog or placement source.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Add TRELLIS.2 as a mutually exclusive Spark AI profile and provide the external browser UI, explicit LiteLLM decision gate, and Tailscale-secured remote access.
 
-**Architecture:** TRELLIS.2 is the only additional workload placed on a Spark and runs on Spark 2 after DeepSeek is fully stopped. Browser UI, LiteLLM when justified, and Tailscale ingress run only on external container hosts and consume the stable Caddy endpoint.
+**Architecture:** TRELLIS.2 was the first additional workload considered and runs on Spark 2 after conflicting profiles are fully stopped. The current model design adds the remaining approved workloads and measured co-residency. Browser UI, LiteLLM when justified, and Tailscale ingress run only on external container hosts and consume the stable Caddy endpoint.
 
 **Tech Stack:** Microsoft TRELLIS.2 pinned Git commit, CUDA/ARM64 container, Docker Compose, Python/pytest, GLB validation, Open WebUI pinned image, optional LiteLLM 1.83.7 or later, Tailscale Services and grants.
 

@@ -1,5 +1,7 @@
 # Generative Asset Model Suite Design
 
+> **Superseded:** The approved [multi-runtime model profiles design](2026-08-02-multi-runtime-model-profiles-design.md) and [model capacity overview](../../model-capacity-overview.md) replace this earlier model catalog, placement survey, and delivery sequence. This file is retained as historical design context only and must not be used as an implementation source.
+
 **Date:** 2026-08-01
 
 ## Objective

@@ -1,7 +1,7 @@
 # Multi-Runtime Model Profiles Design
 
 Date: 2026-08-02
-Status: approved architecture, pending written-spec review
+Status: approved
 
 ## Purpose
 

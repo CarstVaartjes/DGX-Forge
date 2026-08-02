@@ -10,15 +10,22 @@ This specification uses measurable defaults and acceptance gates. A measured val
 
 ## Current Environment
 
+The completed host and fabric preparation is recorded chronologically in the
+[installation record and lessons learned](../../installation-record.md). The
+detailed runbooks and checked-in evidence remain the operational source of
+truth.
+
 - Spark 1 LAN address: `192.168.1.211`
 - Spark 2 LAN address: `192.168.1.212`
 - Linux user on both systems: `carst`
 - Both LAN addresses are static.
-- One QSFP/CX-7 cable directly connects matching ports on the two systems. Its part number and 200 Gb/s compatibility must be verified before fabric configuration.
+- One 1 m Amphenol `NJAAKK-C106` passive copper cable directly connects the two systems. Its exact OEM identifier is not in the public NVIDIA compatibility list, but both functions negotiate 200 Gb/s and passed bidirectional fabric, RDMA, and NCCL acceptance.
 - The administration computer is a Mac using the 1Password SSH agent.
-- A dedicated Ed25519 key named `DGX Spark Admin` exists in 1Password, but its public key has not yet been installed on either Spark.
+- The dedicated Ed25519 key named `DGX Spark Admin` is installed on both Sparks. Fresh key-only access passes, password and keyboard-interactive SSH are disabled, and the private key remains in 1Password.
 - A Synology DS218+ exists but is not part of the initial deployment. A new NAS or other external container host will be added later for Caddy, the controller, UI, LiteLLM, and Tailscale ingress.
-- Installed SSD capacity, free disk space, DGX software versions, and `earlyoom` state remain to be inventoried after key access is established.
+- Both systems have a 4,031,871,553,536-byte root filesystem, more than 3.78 TB free at baseline, DGX OS OTA `7.5.0`, kernel `6.17.0-1029-nvidia`, driver `580.173.02`, CUDA Toolkit package `13.0.3-1`, Docker `29.2.1`, and Compose `5.0.2`.
+- `earlyoom` is absent and inactive on both nodes.
+- The direct two-rail RoCEv2 fabric is configured with MTU 1500, GID index 3, no default route, and a passing two-rank NCCL result of 19.3782 GB/s average bus bandwidth.
 
 ## Goals
 
@@ -91,7 +98,13 @@ Spark 1 is the head node and Spark 2 is the worker. DeepSeek runs as one logical
 
 Inter-node model traffic uses the direct ConnectX-7 fabric. During initial AI bring-up, vLLM and TRELLIS.2 bind to loopback and the Mac reaches them through SSH tunnels. After the new external host arrives, Caddy, the profile controller, browser UI, optional LiteLLM, Tailscale ingress, and any later general-purpose monitoring services run there.
 
-NVIDIA Sync Cluster Assistant is the preferred fabric configuration path because it validates topology, software readiness, addressing, and node-to-node SSH. The official manual two-Spark playbook is the fallback if Cluster Assistant cannot complete the configuration.
+The installed fabric uses the official manual two-Spark procedure from pinned
+NVIDIA `dgx-spark-playbooks` commit
+`1fb66f059ee427c5a3678b3117ef73aab042b458`. NVIDIA Sync Cluster Assistant was
+not used because its setup flow expected password-based SSH bootstrap and did
+not import the existing hardened 1Password SSH configuration. The manual path
+retained strict host-key checking, worker-first rollout, `netplan try`, and the
+same topology, addressing, RDMA, and NCCL acceptance gates.
 
 ### Storage plane
 

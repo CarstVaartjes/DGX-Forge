@@ -1,0 +1,211 @@
+# DGX Spark Installation Record and Lessons Learned
+
+This is the chronological as-built record for the two-node DGX Spark cluster
+through secure host preparation and validated RDMA/NCCL fabric. It is the
+starting point for a rebuild or a third-party review. The linked runbooks remain
+the source for exact commands, safety checks, rollback procedures, and expected
+output.
+
+Model runtimes have not been installed yet. Their approved architecture and
+implementation work begin after the host and fabric baseline described here.
+
+## Final baseline
+
+| Item | Spark 1 / head | Spark 2 / worker |
+| --- | --- | --- |
+| Hostname | `spark-3542` | `spark-2297` |
+| Mac SSH alias | `dgx-spark-1` | `dgx-spark-2` |
+| Management address | `192.168.1.211` | `192.168.1.212` |
+| Role | head | worker |
+| Memory | 130,663,231,488 B | 130,663,231,488 B |
+| Root filesystem | 4,031,871,553,536 B | 4,031,871,553,536 B |
+| DGX OS OTA | `7.5.0` | `7.5.0` |
+| Kernel | `6.17.0-1029-nvidia` | `6.17.0-1029-nvidia` |
+| NVIDIA driver | `580.173.02` | `580.173.02` |
+| CUDA Toolkit package | `13.0.3-1` | `13.0.3-1` |
+| Docker / Compose | `29.2.1` / `5.0.2` | `29.2.1` / `5.0.2` |
+| `earlyoom` | absent and inactive | absent and inactive |
+
+Both hosts use the same Linux account, `carst`. The management addresses are
+stable on the LAN, while the direct fabric has its own static addresses and no
+default route. The machine-readable final topology is in
+[`inventory/cluster.toml`](../inventory/cluster.toml).
+
+## Installation sequence
+
+### 1. Detect and repair cloned host identities
+
+The two factory installations unexpectedly had the same `/etc/machine-id` and
+the same RSA, ECDSA, and Ed25519 SSH host keys. We treated the original
+identities as compromised, identified each physical machine using its chassis
+and DMI serial rather than its cloned keys, then regenerated the machine ID and
+all host keys one physical Spark at a time from a local console.
+
+This problem was discovered after the first password-authenticated SSH
+inspection. That was sufficient to expose the duplicate but was not a trusted
+identity ceremony. The corrected rebuild procedure now checks the NVIDIA
+security update and performs identity inspection from a local keyboard/display
+before entering a password over SSH or accepting either factory host key.
+
+Each new host fingerprint was compared between the trusted console and a
+filtered network scan before accepting it. Each Spark was rebooted once after
+machine-ID rotation because the already-running journal service continued to
+use the old machine-ID directory until reboot.
+
+The complete identity gate, guarded backup, rollback, known-hosts replacement,
+and cleanup procedure is in [SSH bootstrap](runbooks/ssh-bootstrap.md).
+
+### 2. Install the 1Password-managed administration key
+
+We created a dedicated Ed25519 key named `DGX Spark Admin` in 1Password and
+enabled the 1Password SSH agent. Only its public key was exported to
+`~/.ssh/dgx_spark_admin.pub`; no unencrypted private key was written to
+`~/.ssh`, and SSH agent forwarding was not enabled.
+
+The public key was installed on both nodes with:
+
+```bash
+ssh-copy-id -f -i "$HOME/.ssh/dgx_spark_admin.pub" dgx-spark-1
+ssh-copy-id -f -i "$HOME/.ssh/dgx_spark_admin.pub" dgx-spark-2
+```
+
+The `-f` flag was necessary because the local file contains only the public
+half and the private half remains in 1Password. Fresh `BatchMode=yes` sessions
+proved key-only access before password authentication was changed.
+
+### 3. Harden SSH without locking out recovery
+
+We kept one authenticated session and a local-console route open on each node,
+hardened Spark 2 first, verified a fresh key-only connection and a negative
+password-only test, and then repeated the process on Spark 1. The effective
+server policy is:
+
+```text
+PasswordAuthentication no
+KbdInteractiveAuthentication no
+PubkeyAuthentication yes
+PermitRootLogin prohibit-password
+```
+
+The checksum gate, installer, verification, and rollback are in
+[SSH hardening and recovery](runbooks/ssh-recovery.md).
+
+### 4. Confirm the platform version and reboot sequentially
+
+After identity rotation and SSH hardening, DGX Dashboard confirmed both
+Founders Edition systems were on DGX OS OTA `7.5.0` and reported
+`No Available Updates`. The worker was validated and rebooted before the head.
+This reboot also moved journald onto the newly generated machine-ID directory.
+Later host changes continued to use worker-first ordering wherever possible so
+Spark 1 remained the recovery point while Spark 2 was validated.
+
+The detailed maintenance, recovery-media, reboot, and validation procedure is
+in [DGX Spark platform update](runbooks/platform-update.md).
+
+### 5. Capture the pre-change platform inventory
+
+We recorded host, storage, memory, NVIDIA, Docker, networking, RDMA, and thermal
+state before fabric changes. Both nodes passed the memory, swap, and disk gates.
+The initial collector could not represent DGX Spark unified GPU memory because
+`nvidia-smi` reports that field as `N/A`; driver and temperature were therefore
+verified separately. Initial RDMA fields were intentionally incomplete because
+the fabric was not configured yet.
+
+The commands and observed baseline are in
+[Pre-change inventory](runbooks/inventory.md).
+
+### 6. Validate CUDA through the NVIDIA container path
+
+CUDA support was already present through the DGX driver and NVIDIA Container
+Toolkit even though a host `nvcc` command was not the correct first readiness
+test. We pulled and ran the pinned ARM64 CUDA development image
+`nvcr.io/nvidia/cuda:13.0.1-devel-ubuntu24.04`; it detected the GB10 GPU and
+reported driver `580.173.02` and CUDA `13.0` on both nodes. The first pull was
+large; subsequent validation reused the local image.
+
+This distinguishes three separate components that are easy to conflate: the
+host driver, the optional host CUDA Toolkit, and the container's CUDA user-space
+runtime. The exact validation gate is in
+[DGX Spark platform update](runbooks/platform-update.md).
+
+### 7. Confirm the memory-killer prerequisite
+
+The upstream DeepSeek guidance warns that `earlyoom` may kill a distributed
+worker during transient unified-memory pressure. The package and service were
+already absent on both nodes, so the guarded disable script made no change and
+accepted `absent` as a safe final state. The recorded evidence is
+[`inventory/reports/earlyoom.json`](../inventory/reports/earlyoom.json).
+
+### 8. Configure the direct ConnectX-7 fabric
+
+Cable EEPROM inspection identified the same 1 m Amphenol `NJAAKK-C106` passive
+copper PAM4 DAC from both ends. Its exact OEM identifier was not found in the
+public NVIDIA compatibility list, so acceptance was based on observed behavior:
+both functions negotiated 200 Gb/s, and both passed non-fragmenting traffic in
+both directions.
+
+The NVIDIA Sync UI was not used for the final configuration. It expected to
+bootstrap SSH using a password and did not import the already-hardened
+1Password SSH configuration. We instead used the audited manual procedure based
+on NVIDIA `dgx-spark-playbooks` commit
+`1fb66f059ee427c5a3678b3117ef73aab042b458`, applying Spark 2 first with
+`netplan try`, validating management access, and only then applying Spark 1.
+
+The final two-rail fabric is:
+
+| Rail | Spark 1 | Spark 2 | Interfaces / HCA | RoCE GID | MTU |
+| --- | --- | --- | --- | ---: | ---: |
+| 100 | `192.168.100.10` | `192.168.100.11` | `enp1s0f1np1` / `rocep1s0f1` | 3 | 1500 |
+| 101 | `192.168.101.10` | `192.168.101.11` | `enP2p1s0f1np1` / `roceP2p1s0f1` | 3 | 1500 |
+
+Neither rail has a default route. Because the cable is a direct back-to-back
+link, there is no Ethernet switch requiring PFC, ECN, DSCP, or switch-side MTU
+configuration. The exact Netplan procedure, cluster-only SSH key, rollback,
+and postchecks are in [Direct ConnectX-7 fabric](runbooks/fabric.md).
+
+### 9. Install and validate RDMA and NCCL tooling
+
+Both nodes received the pinned native ARM64/CUDA toolchain required for a real
+two-rank test: OpenMPI `4.1.6-7ubuntu2`, CUDA 13 `nvcc`, NCCL `2.30.7-1`, and
+MPI-enabled `nccl-tests` from pinned source commits. The cluster uses a separate
+head-to-worker SSH key restricted to the two fabric source addresses; it does
+not reuse or forward the 1Password administration key.
+
+Bidirectional RDMA read/write tests passed on both rails. The accepted NCCL
+`all_reduce_perf` run selected both RoCE HCAs using `NET/IB`, completed with
+zero out-of-bounds values, and reported 19.3782 GB/s average bus bandwidth.
+Full results are in
+[`inventory/reports/rdma-nccl.json`](../inventory/reports/rdma-nccl.json).
+
+## Lessons learned
+
+| Lesson | Operational rule retained in the repository |
+| --- | --- |
+| Factory-installed systems may not have unique identities. | Compare machine IDs and every configured SSH host key before first remote trust; repair one physical unit at a time using chassis/DMI serials. |
+| Regenerating `/etc/machine-id` while booted does not move the current journal immediately. | Reboot and revalidate the worker first, then the head, before trusting current-boot journal checks. |
+| A 1Password SSH key does not require a private key file in `~/.ssh`. | Export only the public half, use the 1Password agent explicitly, and use `ssh-copy-id -f` for installation. |
+| A failed password attempt is not proof that password authentication is disabled. | Inspect the server's advertised authentication methods as well as proving a fresh public-key login. |
+| `nvidia-smi` showing CUDA support and `nvcc` being absent are not contradictory. | Validate the DGX container path first; distinguish the host driver, host Toolkit, and container CUDA runtime. |
+| A GUI helper is not mandatory when it conflicts with an already-hardened SSH design. | Use the pinned NVIDIA manual playbook, preserve strict host-key checking, and document the deviation. |
+| A physical QSFP connection exposes two usable network/HCA functions here. | Inventory and pin both interface/HCA/GID consumers; do not reduce the cluster model to one fabric address. |
+| A cable part number alone did not establish support. | Record the EEPROM identity, negotiated rate, MTU behavior, bidirectional RDMA, and NCCL transport evidence. |
+| `earlyoom` absence is already a valid safe state. | Treat `absent`, `disabled and inactive`, or `masked and inactive` as explicit accepted states; do not install it merely to disable it. |
+| Worker-first ordering materially limits blast radius. | Apply host, update, SSH, fabric, and runtime changes to Spark 2 first and stop before Spark 1 if validation fails. |
+
+## Evidence and remaining scope
+
+The installation baseline is complete when all of the following remain true:
+
+- key-only Mac administration succeeds for both aliases and password-based SSH
+  remains disabled;
+- both hosts remain on matched supported platform revisions;
+- `earlyoom` remains absent or otherwise disabled and inactive;
+- both fabric rails retain their static addresses, GID index 3, MTU 1500, and
+  no default route;
+- [`scripts/validate-fabric`](../scripts/validate-fabric) reproduces the RDMA
+  and NCCL acceptance result.
+
+The next phase is model-runtime implementation, beginning with the common
+profile controller and the default dual-Spark DeepSeek 0731 profile. Caddy,
+LiteLLM, the browser UI, and Tailscale remain deferred until the new external
+container host is available; none is required for initial local model testing.

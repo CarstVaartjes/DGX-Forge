@@ -1,12 +1,18 @@
 # Secure Host Bootstrap and Fabric Implementation Plan
 
+> **Status: completed.** The final sequence, observed results, and deviations
+> from this original plan are recorded in the
+> [installation record and lessons learned](../../installation-record.md).
+> In particular, the accepted fabric used the pinned NVIDIA manual playbook,
+> not Sync Cluster Assistant.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Establish key-only administration, a reproducible inventory, matched supported software, and a validated direct CX-7/RDMA/NCCL path between both DGX Sparks.
 
-**Architecture:** The Mac administers both nodes with the dedicated 1Password SSH key. Read-only inventory is captured before mutations; Spark 2 is updated and validated before Spark 1. NVIDIA Sync Cluster Assistant configures the point-to-point fabric, and model work remains blocked until raw RDMA and NCCL tests pass.
+**Architecture:** The Mac administers both nodes with the dedicated 1Password SSH key. Read-only inventory is captured before mutations; Spark 2 is updated and validated before Spark 1. The point-to-point fabric is configured through an audited NVIDIA-supported path, and model work remains blocked until raw RDMA and NCCL tests pass.
 
-**Tech Stack:** macOS OpenSSH, 1Password SSH agent and CLI, Bash, Python 3.12/pytest for script tests, JSON/TOML inventory, DGX Dashboard, NVIDIA Sync Cluster Assistant, `ib_write_bw`, NCCL tests.
+**Tech Stack:** macOS OpenSSH, 1Password SSH agent and CLI, Bash, Python 3.12/pytest for script tests, JSON/TOML inventory, DGX Dashboard, pinned NVIDIA `dgx-spark-playbooks`, `ib_write_bw`, NCCL tests.
 
 ## Global Constraints
 

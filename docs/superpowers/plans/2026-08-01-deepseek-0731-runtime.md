@@ -1,5 +1,11 @@
 # DeepSeek V4 Flash 0731 Runtime Implementation Plan
 
+> **Reconciliation required before execution:** This initial Mia-only plan is
+> retained as detailed DeepSeek bring-up research. Implement it through the
+> newer [model profile framework](2026-08-02-model-profile-framework.md) and
+> the approved [multi-runtime model design](../specs/2026-08-02-multi-runtime-model-profiles-design.md),
+> which require both the default dual-Spark Mia path and the lighter DS4 path.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Run and validate the pinned DeepSeek-V4-Flash-0731 checkpoint across both Sparks through a loopback-only API before adding the external gateway.
