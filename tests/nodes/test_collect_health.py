@@ -371,3 +371,28 @@ def test_collector_rejects_huge_cpu_sample_before_arithmetic():
     assert completed.stdout == ""
     assert completed.stderr.startswith("Usage:")
     assert "value too great for base" not in completed.stderr
+
+
+def test_collector_streamed_to_bash_dispatches_main_under_nounset():
+    """Catches stdin execution dereferencing an unset BASH_SOURCE entry."""
+    completed = subprocess.run(
+        [
+            "bash",
+            "-s",
+            "--",
+            "--json",
+            "--cpu-sample-ms",
+            "0",
+            "--interface",
+            "eth0",
+            "--hca",
+            "rdma0",
+        ],
+        input=COLLECTOR.read_text(),
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr.startswith("Usage:")

@@ -465,6 +465,6 @@ main() {
     collect_health /proc /sys "$sample_ms" "${function_arguments[@]}"
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+if [[ -z "${BASH_SOURCE[0]:-}" || "${BASH_SOURCE[0]:-}" == "$0" ]]; then
     main "$@"
 fi
