@@ -1,0 +1,13 @@
+schema_version = 1
+
+[state]
+directory = ".state/sparkctl"
+stale_lock_seconds = 900
+
+[ssh]
+connect_timeout_seconds = 10
+output_limit_bytes = 65536
+
+[ssh.node_aliases]
+spark1 = "dgx-spark-1"
+spark2 = "dgx-spark-2"
