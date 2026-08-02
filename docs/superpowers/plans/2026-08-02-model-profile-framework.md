@@ -49,6 +49,7 @@ installed or accepted.
 - Produces: `load_cluster_profile(path: Path) -> ClusterProfile`.
 - `ClusterProfile.placements` maps exactly `spark1` and `spark2` to tuples of workload IDs.
 - `ClusterProfile` does not contain restoration policy; restoration is an explicit switch request.
+- `CheckpointPin.manifest_sha256` is optional while a definition is planned and must match `^[0-9a-f]{64}$` when present.
 
 - [ ] **Step 1: Write failing contract tests**
 
@@ -86,6 +87,12 @@ Keep the existing frozen strict workload dataclasses and unknown-key rejection.
 Remove `restore_home` from both cluster-profile schema copies, the dataclass,
 loader, and fixtures. Require a canonical profile ID, both node placements,
 allowed endpoints, and the accepted-evidence path.
+
+Add an optional `manifest_sha256` checkpoint property to both workload schema
+copies and expose it as `str | None` on `CheckpointPin`. The planned production
+definition omits it truthfully; Task 2 admission must reject any `accepted`
+definition that lacks it. Adding the real digest later changes the definition
+fingerprint and correctly invalidates prior evidence.
 
 - [ ] **Step 4: Add the initial DeepSeek home definitions**
 
@@ -159,6 +166,11 @@ def test_default_selector_resolves_to_canonical_home(catalog):
 def test_planned_definition_blocks_production_home(catalog, inventory):
     report = check_admission(catalog.resolve_profile("default"), catalog, inventory)
     assert "deepseek-agent-dual maturity is planned" in report.errors
+
+def test_accepted_definition_requires_manifest_digest(catalog, inventory):
+    mark_definition_accepted(catalog, "deepseek-agent-dual")
+    report = check_admission(catalog.resolve_profile("default"), catalog, inventory)
+    assert "accepted definition requires manifest_sha256" in report.errors
 
 def test_definition_change_invalidates_lock(catalog_root):
     rewrite_resource_envelope(catalog_root, "deepseek-agent-dual")
