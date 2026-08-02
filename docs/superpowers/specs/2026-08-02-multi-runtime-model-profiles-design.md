@@ -11,6 +11,8 @@ The developer machine owns the creative pipeline and decides which model to call
 
 ## Required model set
 
+The concise [model capacity overview](../../model-capacity-overview.md) compares official releases, preferred Spark-optimized paths, published memory evidence, placement, and validation status.
+
 | Model | Pipeline function | Priority |
 | --- | --- | --- |
 | DeepSeek-V4-Flash-0731 | Default agent, reasoning, tool use, and pipeline control | Default |
