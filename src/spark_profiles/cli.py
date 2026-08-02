@@ -14,6 +14,7 @@ from typing import Callable, Mapping, Protocol, Sequence
 from .admission import check_admission
 from .backend import SshBackend
 from .catalog import Catalog
+from .health import ClusterHealth, LocalHealthError, NodeHealthService
 from .state import ControllerState, LockBusy, LockNotStale, StateError, StateStore
 from .switcher import ProfileSwitcher, SwitchReport
 
@@ -44,18 +45,24 @@ class _StateStore(Protocol):
     def break_stale_lock(self) -> bool: ...
 
 
+class _HealthService(Protocol):
+    def collect(self) -> ClusterHealth: ...
+
+
 @dataclass(frozen=True)
 class CliDependencies:
     catalog: Catalog
     state_store: _StateStore
     switcher: ProfileSwitcher
     inventory_provider: Callable[[], Mapping[str, object]]
+    health_service: _HealthService | None = None
 
 
 def build_dependencies(
     root: Path | None = None,
     *,
     state_directory: Path | None = None,
+    include_health: bool = False,
 ) -> CliDependencies:
     """Build the production controller without contacting either Spark node."""
     repository_root = (
@@ -81,6 +88,17 @@ def build_dependencies(
         connect_timeout_seconds=ssh_configuration["connect_timeout_seconds"],
         output_limit_bytes=ssh_configuration["output_limit_bytes"],
     )
+    health_service = None
+    if include_health:
+        health_configuration = configuration["health"]
+        health_backend = SshBackend(
+            node_aliases=ssh_configuration["node_aliases"],
+            connect_timeout_seconds=ssh_configuration["connect_timeout_seconds"],
+            output_limit_bytes=health_configuration["max_output_bytes"],
+        )
+        health_service = NodeHealthService.from_repository(
+            repository_root, health_backend
+        )
     catalog = Catalog.load(repository_root)
 
     def conservative_inventory() -> Mapping[str, object]:
@@ -94,7 +112,9 @@ def build_dependencies(
         state_store=store,
         inventory_provider=conservative_inventory,
     )
-    return CliDependencies(catalog, store, switcher, conservative_inventory)
+    return CliDependencies(
+        catalog, store, switcher, conservative_inventory, health_service
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -109,6 +129,13 @@ def _parser() -> argparse.ArgumentParser:
 
     status = commands.add_parser("status")
     status.add_argument("--json", action="store_true")
+
+    nodes = commands.add_parser("nodes")
+    node_commands = nodes.add_subparsers(
+        dest="nodes_command", required=True, parser_class=_CliParser
+    )
+    nodes_status = node_commands.add_parser("status")
+    nodes_status.add_argument("--json", action="store_true")
 
     endpoint = commands.add_parser("endpoint")
     endpoint.add_argument("name")
@@ -247,6 +274,81 @@ def _emit(payload: Mapping[str, object], args: argparse.Namespace) -> None:
         print(f"{key}: {rendered}")
 
 
+def _human_bytes(value: object) -> str:
+    if not isinstance(value, int):
+        return "-"
+    units = ("B", "KiB", "MiB", "GiB", "TiB")
+    amount = float(value)
+    unit = units[0]
+    for unit in units:
+        if amount < 1024 or unit == units[-1]:
+            break
+        amount /= 1024
+    return f"{amount:.1f} {unit}" if unit != "B" else f"{value} B"
+
+
+def _human_uptime(value: object) -> str:
+    if not isinstance(value, int):
+        return "-"
+    days, remainder = divmod(value, 86400)
+    hours = remainder // 3600
+    return f"{days}d {hours:02d}h" if days else f"{hours}h"
+
+
+def _health_table(result: ClusterHealth) -> str:
+    headers = (
+        "NODE", "STATE", "CPU", "LOAD1", "MEM AVAILABLE", "SWAP USED",
+        "ROOT FREE", "GPU", "TEMP", "FABRIC", "UPTIME",
+    )
+    rows: list[tuple[str, ...]] = []
+    details: list[str] = []
+    for node_name in ("spark1", "spark2"):
+        node = result.nodes[node_name]
+        cpu = node.cpu
+        memory = node.memory
+        swap = node.swap
+        root = node.root_filesystem
+        accelerator = node.accelerator
+        identity = node.identity
+        functions = node.fabric.functions if node.fabric is not None else ()
+        up = sum(
+            1 for item in functions
+            if item.operstate == "up" and item.carrier == 1
+            and item.speed_mbps == 200000 and item.mtu == 1500
+            and str(item.rdma_state).upper() == "ACTIVE"
+            and item.rdma_interface == item.interface
+        )
+        cpu_value = cpu.utilization_percent if cpu is not None else None
+        gpu_value = accelerator.utilization_percent if accelerator is not None else None
+        temp_value = accelerator.temperature_c if accelerator is not None else None
+        rows.append((
+            node_name,
+            node.status,
+            f"{cpu_value:.1f}%" if isinstance(cpu_value, (int, float)) else "-",
+            f"{cpu.load_1:.2f}" if cpu is not None and isinstance(cpu.load_1, (int, float)) else "-",
+            _human_bytes(memory.available_bytes if memory is not None else None),
+            _human_bytes(swap.used_bytes if swap is not None else None),
+            _human_bytes(root.available_bytes if root is not None else None),
+            f"{gpu_value:.1f}%" if isinstance(gpu_value, (int, float)) else "-",
+            f"{temp_value:.1f} C" if isinstance(temp_value, (int, float)) else "-",
+            f"{up}/{len(functions)} up" if functions else "-",
+            _human_uptime(identity.uptime_seconds if identity is not None else None),
+        ))
+        if node.warnings:
+            details.append(f"{node_name} warnings: {', '.join(node.warnings)}")
+        if node.errors:
+            details.append(f"{node_name} errors: {', '.join(node.errors)}")
+    widths = [
+        max(len(headers[index]), *(len(row[index]) for row in rows))
+        for index in range(len(headers))
+    ]
+    render = lambda row: "  ".join(value.ljust(widths[index]) for index, value in enumerate(row)).rstrip()
+    lines = [render(headers), *(render(row) for row in rows)]
+    if details:
+        lines.extend(("", *details))
+    return "\n".join(lines)
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -275,7 +377,16 @@ def main(
         return 2
     if dependencies is None:
         try:
-            dependencies = build_dependencies(root)
+            dependencies = build_dependencies(root, include_health=args.command == "nodes")
+        except LocalHealthError as error:
+            _emit(
+                {
+                    "error": f"cannot load live node health: {error}",
+                    "error_type": "health_configuration",
+                },
+                args,
+            )
+            return 5
         except (OSError, KeyError, TypeError, ValueError) as error:
             _emit(
                 {
@@ -285,6 +396,25 @@ def main(
                 args,
             )
             return 2
+    if args.command == "nodes":
+        if dependencies.health_service is None:
+            _emit(
+                {"error": "live node health service is unavailable", "error_type": "health_configuration"},
+                args,
+            )
+            return 5
+        try:
+            health = dependencies.health_service.collect()
+        except LocalHealthError as error:
+            _emit(
+                {"error": str(error), "error_type": "health_configuration"}, args
+            )
+            return 5
+        if args.global_json or args.json:
+            print(json.dumps(health.to_dict(), separators=(",", ":")))
+        else:
+            print(_health_table(health))
+        return 4 if health.status == "critical" else 0
     if args.command == "break-stale-lock":
         try:
             broken = dependencies.state_store.break_stale_lock()

@@ -13,6 +13,7 @@ import pytest
 
 from spark_profiles.catalog import Catalog, fingerprint
 from spark_profiles.cli import CliDependencies, build_dependencies, main
+from spark_profiles.health import ClusterHealth, NodeHealth
 from spark_profiles.state import ControllerState, LockBusy, LockNotStale, StateFormatError
 from spark_profiles.switcher import SwitchReport
 
@@ -78,6 +79,7 @@ def invoke(
     switcher: FakeSwitcher | None = None,
     catalog_value: Catalog | None = None,
     inventory_provider: Callable[[], Mapping[str, object]] | None = None,
+    health_service=None,
 ) -> Result:
     catalog = catalog_value or Catalog.load(REPOSITORY_ROOT)
     dependencies = CliDependencies(
@@ -85,12 +87,49 @@ def invoke(
         state_store=store or FakeStore(state),
         switcher=switcher or FakeSwitcher(),
         inventory_provider=inventory_provider or (lambda: {}),
+        health_service=health_service,
     )
     stdout = StringIO()
     stderr = StringIO()
     with redirect_stdout(stdout), redirect_stderr(stderr):
         exit_code = main(argv, dependencies=dependencies)
     return Result(exit_code, stdout.getvalue(), stderr.getvalue())
+
+
+class FakeHealthService:
+    def __init__(self, result: ClusterHealth | Exception):
+        self.result = result
+        self.calls = 0
+
+    def collect(self) -> ClusterHealth:
+        self.calls += 1
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def health_result(*, spark2_status="healthy") -> ClusterHealth:
+    def node(status: str) -> NodeHealth:
+        full = status not in {"unreachable", "critical"}
+        return NodeHealth.from_dict({
+            "status": status,
+            "errors": ["ssh_unreachable"] if status == "unreachable" else [],
+            "warnings": [],
+            "identity": {"hostname": "spark", "boot_id": "1" * 32, "uptime_seconds": 12345} if full else None,
+            "cpu": {"logical_processors": 20, "utilization_percent": 12.3, "load_1": 1.2, "load_5": 1.0, "load_15": 0.8} if full else None,
+            "memory": {"total_bytes": 130663231488, "available_bytes": 120000000000, "used_bytes": 10663231488, "used_percent": 8.2} if full else None,
+            "swap": {"total_bytes": 0, "free_bytes": 0, "used_bytes": 0, "used_percent": 0.0} if full else None,
+            "root_filesystem": {"total_bytes": 4031871553536, "available_bytes": 3787009835008, "used_bytes": 244861718528, "used_percent": 6.1, "read_only": False} if full else None,
+            "accelerator": {"available": True, "name": "NVIDIA GB10", "driver_version": "580", "utilization_percent": 0.0, "temperature_c": 40.0, "performance_state": "P8", "power_watts": None} if full else None,
+            "thermal_zones": [],
+            "fabric": {"functions": [
+                {"interface": interface, "hca": hca, "operstate": "up", "carrier": 1, "speed_mbps": 200000, "mtu": 1500, "rdma_interface": interface, "rdma_state": "ACTIVE", "counters": {}}
+                for interface, hca in (("enp1s0f1np1", "rocep1s0f1"), ("enP2p1s0f1np1", "roceP2p1s0f1"))
+            ]} if full else None,
+            "services": {"docker_available": True, "docker_version": "29", "earlyoom_load_state": "not-found", "earlyoom_enabled": False, "earlyoom_active": False} if full else None,
+        })
+    nodes = {"spark1": node("healthy"), "spark2": node(spark2_status)}
+    return ClusterHealth(1, "2026-08-02T12:00:00Z", "critical" if spark2_status in {"critical", "unreachable"} else "healthy", nodes)
 
 
 def accepted_catalog(
@@ -407,7 +446,19 @@ def test_default_dependencies_use_local_state_and_conservative_inventory(
 
     assert dependencies.state_store.load().status == "stopped"
     assert dependencies.inventory_provider() == {"spark1": {}, "spark2": {}}
+    assert dependencies.health_service is None
     assert not (tmp_path / "sparkctl").exists()
+
+
+def test_node_health_dependencies_use_the_health_specific_output_cap(tmp_path: Path) -> None:
+    dependencies = build_dependencies(
+        REPOSITORY_ROOT,
+        state_directory=tmp_path / "sparkctl",
+        include_health=True,
+    )
+
+    assert dependencies.health_service is not None
+    assert dependencies.health_service.backend._output_limit == 262144
 
 
 def test_bin_script_finds_the_repository_when_run_elsewhere(tmp_path: Path) -> None:
@@ -576,3 +627,54 @@ def test_validate_inventory_oserror_is_bounded_and_sanitized() -> None:
     assert "<redacted>" in result.stdout
     assert len(result.json["error"]) <= 1_024
     assert result.stderr == ""
+
+
+def test_nodes_status_json_preserves_reachable_node_and_exits_four() -> None:
+    service = FakeHealthService(health_result(spark2_status="unreachable"))
+
+    result = invoke("nodes", "status", "--json", health_service=service)
+
+    assert result.exit_code == 4
+    assert result.json["schema_version"] == 1
+    assert list(result.json["nodes"]) == ["spark1", "spark2"]
+    assert result.json["nodes"]["spark1"]["status"] == "healthy"
+    assert result.json["nodes"]["spark2"]["status"] == "unreachable"
+    assert service.calls == 1
+
+
+def test_nodes_status_human_table_has_approved_columns() -> None:
+    result = invoke("nodes", "status", health_service=FakeHealthService(health_result()))
+
+    assert result.exit_code == 0
+    header = result.stdout.splitlines()[0]
+    for column in (
+        "NODE", "STATE", "CPU", "LOAD1", "MEM AVAILABLE", "SWAP USED",
+        "ROOT FREE", "GPU", "TEMP", "FABRIC", "UPTIME",
+    ):
+        assert column in header
+    assert "spark1" in result.stdout
+    assert "2/2 up" in result.stdout
+
+
+def test_nodes_status_warning_is_exit_zero() -> None:
+    cluster = health_result()
+    warning = replace(cluster.nodes["spark2"], status="warning", warnings=("swap_used_high",))
+    service = FakeHealthService(replace(cluster, status="warning", nodes={"spark1": cluster.nodes["spark1"], "spark2": warning}))
+
+    result = invoke("nodes", "status", "--json", health_service=service)
+
+    assert result.exit_code == 0
+    assert result.json["status"] == "warning"
+
+
+def test_nodes_status_missing_local_health_assets_is_exit_five() -> None:
+    from spark_profiles.health import LocalHealthError
+
+    result = invoke(
+        "nodes", "status", "--json",
+        health_service=FakeHealthService(LocalHealthError("collector missing token=secret")),
+    )
+
+    assert result.exit_code == 5
+    assert result.json["error_type"] == "health_configuration"
+    assert "secret" not in result.stdout

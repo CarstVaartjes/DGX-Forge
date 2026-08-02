@@ -11,3 +11,11 @@ output_limit_bytes = 65536
 [ssh.node_aliases]
 spark1 = "dgx-spark-1"
 spark2 = "dgx-spark-2"
+
+[health]
+timeout_seconds = 10
+cpu_sample_milliseconds = 250
+max_output_bytes = 262144
+collector = "nodes/bin/collect-health"
+inventory = "inventory/cluster.toml"
+rdma_baseline = "inventory/reports/rdma-nccl.json"

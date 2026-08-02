@@ -111,9 +111,10 @@ merely because it starts successfully.
 | Aggregate RDMA, latency, error counters, NCCL | Accepted and recorded |
 | Model Definition and Cluster Profile schemas | Implemented |
 | `deepseek-agent-dual` configuration | Scaffolded, but its adapter, local manifest, and runtime acceptance are not installed yet |
-| Canonical `agent-full-dual` profile | Approved intent; the existing `default.toml` scaffold still requires migration to the canonical ID |
+| Canonical `agent-full-dual` profile | Implemented as the canonical planned profile; `default` and `agent` are selectors |
 | Remaining Model Definitions and profiles | Planned; configuration and acceptance evidence not created yet |
-| `sparkctl` admission, switching, CLI, and live node health | Implementation pending |
+| `sparkctl` catalog, admission, switching, and local state | Implemented; model activation remains blocked until runtime acceptance evidence exists |
+| `sparkctl nodes status` | Implemented as concurrent, live, read-only health; no database or retained history |
 
 ## Maturity and activation
 
