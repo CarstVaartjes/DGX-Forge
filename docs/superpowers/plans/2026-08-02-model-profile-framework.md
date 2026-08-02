@@ -362,7 +362,7 @@ git commit -m "feat: reconcile Spark cluster profiles"
   `restore-default`, `endpoint`, and `break-stale-lock`.
 - `status --json` is the stable interface consumed by the future NAS controller.
 
-- [ ] **Step 1: Write failing CLI tests**
+- [x] **Step 1: Write failing CLI tests**
 
 ```python
 def test_agent_alias_resolves_to_full_default(cli):
@@ -382,11 +382,11 @@ def test_planned_home_is_visible_but_not_activatable(cli):
     assert result.exit_code == 3
 ```
 
-- [ ] **Step 2: Confirm tests fail**
+- [x] **Step 2: Confirm tests fail**
 
 Run: `uv run --with pytest pytest tests/spark_profiles/test_cli.py -v`
 
-- [ ] **Step 3: Implement stable human and JSON output**
+- [x] **Step 3: Implement stable human and JSON output**
 
 Every command supports `--json`; errors use stable exit codes and never print
 secrets, environment variables, private keys, or full unbounded remote logs.
@@ -397,7 +397,7 @@ Use exit 0 for success, 2 for arguments/configuration, 3 for admission or
 endpoint denial, 6 for transition/restoration failure, and 7 for lock conflict.
 Reserve 4 and 5 for live node health.
 
-- [ ] **Step 4: Verify the local default profile**
+- [x] **Step 4: Verify the local default profile**
 
 Run: `uv run sparkctl catalog --json && uv run sparkctl validate default --json && uv run sparkctl status --json`
 
@@ -406,7 +406,7 @@ Expected: catalog and contracts load; `default` resolves to
 `deepseek-agent-dual` remains planned until the runtime phase; status is local
 and stopped, with no remote mutation.
 
-- [ ] **Step 5: Run the suite and commit**
+- [x] **Step 5: Run the suite and commit**
 
 Run: `uv run --with pytest pytest tests/spark_profiles -v && git diff --check`
 
