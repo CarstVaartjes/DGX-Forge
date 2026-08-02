@@ -3,9 +3,8 @@
 
 The script deliberately uses the head's ``dgx-spark-2-fabric`` SSH alias for
 every Spark1-to-Spark2 action.  It never enables agent forwarding and never
-copies a private key.  Docker is checked with ``sudo -n`` before any temporary
-NCCL staging is attempted, so ordinary callers receive a safe, actionable
-failure instead of a password prompt or an implicit docker-group change.
+copies a private key.  NCCL is built natively from pinned NVIDIA sources only
+after worker-first, read-only MPI/CUDA prerequisite gates pass.
 """
 
 from __future__ import annotations
@@ -283,6 +282,13 @@ def run_rdma(runner: Runner, head: Host, worker: Host) -> list[dict[str, Any]]:
 def nccl_prerequisite_command() -> str:
     """Read-only checks required before either home-directory build mutates."""
     return f"""set -euo pipefail
+check_existing_checkout() {{
+  directory="$1" repository="$2" revision="$3"
+  [ ! -e "$directory" ] && return 0
+  test -d "$directory/.git"
+  test "$(git -C "$directory" remote get-url origin)" = "$repository"
+  test "$(git -C "$directory" rev-parse HEAD)" = "$revision"
+}}
 test -x {CUDA_NVCC}
 {CUDA_NVCC} --version
 command -v git >/dev/null
@@ -290,8 +296,8 @@ command -v make >/dev/null
 command -v mpirun >/dev/null
 test "$(dpkg-query -W -f='${{db:Status-Status}} ${{Version}}' libopenmpi-dev)" = "installed 4.1.6-7ubuntu2"
 test "$(dpkg-query -W -f='${{db:Status-Status}} ${{Version}}' openmpi-bin)" = "installed 4.1.6-7ubuntu2"
-test ! -e "$HOME/nccl"
-test ! -e "$HOME/nccl-tests"
+check_existing_checkout "$HOME/nccl" https://github.com/NVIDIA/nccl.git {NCCL_COMMIT}
+check_existing_checkout "$HOME/nccl-tests" https://github.com/NVIDIA/nccl-tests.git {NCCL_TESTS_COMMIT}
 """
 
 

@@ -126,3 +126,12 @@ def test_native_nccl_launch_uses_restricted_fabric_transport(validate_module):
     assert "StrictHostKeyChecking=no" not in command
     assert "192.168.1.211" not in command
     assert "192.168.1.212" not in command
+
+
+def test_native_prerequisite_allows_an_exactly_pinned_retry(validate_module):
+    """An interrupted matching checkout is resumed, while a foreign tree is rejected."""
+    command = validate_module.nccl_prerequisite_command()
+
+    assert 'test ! -e "$HOME/nccl"' not in command
+    assert 'git -C "$directory" rev-parse HEAD' in command
+    assert "73cf112295c33aee2b895f329f592f2a9b4b0f97" in command
