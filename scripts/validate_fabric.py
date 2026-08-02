@@ -4,20 +4,19 @@
 The script deliberately uses the head's ``dgx-spark-2-fabric`` SSH alias for
 every Spark1-to-Spark2 action.  It never enables agent forwarding and never
 copies a private key.  NCCL is built natively from pinned NVIDIA sources only
-after worker-first, read-only MPI/CUDA prerequisite gates pass.
+as a documented prerequisite; this validator verifies the completed artifacts
+worker-first before the live fabric gates.
 """
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
-import fcntl
 import json
 import re
 import shlex
 import subprocess
 import sys
-import tempfile
 import time
 import tomllib
 from datetime import UTC, datetime
@@ -74,7 +73,7 @@ class Host:
 def parse_nccl(output: str) -> NCCLResult:
     """Parse NCCL diagnostics and reject socket fallback or absent bandwidth."""
     socket_selected = bool(re.search(r"NET/Socket\b", output, re.IGNORECASE))
-    ib_selected = bool(re.search(r"NET/IB\b", output, re.IGNORECASE))
+    ib_selected = bool(re.search(r"NET/IB\s*:\s*Using\b", output, re.IGNORECASE))
     transport = "Socket" if socket_selected else "IB" if ib_selected else None
 
     values = [
@@ -93,7 +92,7 @@ def parse_nccl(output: str) -> NCCLResult:
     if socket_selected:
         return NCCLResult(False, transport, bandwidth, "NCCL selected NET/Socket")
     if not ib_selected:
-        return NCCLResult(False, transport, bandwidth, "NCCL did not report NET/IB")
+        return NCCLResult(False, transport, bandwidth, "NCCL did not report NET/IB : Using")
     if bandwidth is None or bandwidth <= 0:
         return NCCLResult(False, transport, bandwidth, "NCCL reported no positive bus bandwidth")
     return NCCLResult(True, transport, bandwidth)
@@ -242,9 +241,15 @@ def run_one_rdma(
 ) -> dict[str, Any]:
     label = f"{tool}:{client_host.name}->{server_host.name}:{server_rail.name}"
     server_log = f"/tmp/validate-fabric-{tool}-{port}.log"
+    server_status = f"/tmp/validate-fabric-{tool}-{port}.status"
+    server_body = (
+        f'{perftest_command(tool, server_rail, "", port, server=True)} > "$1" 2>&1; '
+        'exit_code=$?; printf "%s\\n" "$exit_code" > "$2"; exit "$exit_code"'
+    )
     server_command = (
-        f"rm -f {server_log}; nohup {perftest_command(tool, server_rail, '', port, server=True)} "
-        f">{server_log} 2>&1 & echo $!"
+        f"rm -f {server_log} {server_status}; nohup bash -c {shlex.quote(server_body)} "
+        f"validate-fabric-perftest {shlex.quote(server_log)} {shlex.quote(server_status)} "
+        "</dev/null >/dev/null 2>&1 & echo $!"
     )
     def call_on(host: Host, command: str, *, check: bool = True) -> subprocess.CompletedProcess[str]:
         if host is runner.head:
@@ -256,17 +261,47 @@ def run_one_rdma(
     server_pid = server_call(server_command).stdout.strip()
     if not server_pid.isdigit():
         raise GateError(f"{label} did not return a perftest server PID")
+    collect_server = f"""set -u
+for _ in $(seq 1 300); do
+  [ -s {shlex.quote(server_status)} ] && break
+  kill -0 {server_pid} 2>/dev/null || break
+  sleep 0.1
+done
+if [ ! -s {shlex.quote(server_status)} ]; then
+  kill {server_pid} 2>/dev/null || true
+  cat {shlex.quote(server_log)} 2>/dev/null || true
+  rm -f {shlex.quote(server_log)} {shlex.quote(server_status)}
+  exit 124
+fi
+exit_code="$(cat {shlex.quote(server_status)})"
+cat {shlex.quote(server_log)}
+rm -f {shlex.quote(server_log)} {shlex.quote(server_status)}
+case "$exit_code" in
+  ''|*[!0-9]*) exit 125 ;;
+esac
+exit "$exit_code"
+"""
     try:
         time.sleep(1)
-        client = client_call(perftest_command(tool, client_rail, server_rail.fabric_ip, port, server=False))
-        server_log_output = server_call(f"kill {server_pid} 2>/dev/null || true; cat {server_log}; rm -f {server_log}", check=False)
+        client = client_call(perftest_command(tool, client_rail, server_rail.fabric_ip, port, server=False), check=False)
+        server = server_call(collect_server, check=False)
     except BaseException:
-        server_call(f"kill {server_pid} 2>/dev/null || true; rm -f {server_log}", check=False)
+        server_call(f"kill {server_pid} 2>/dev/null || true; rm -f {server_log} {server_status}", check=False)
         raise
-    parsed = parse_rdma(client.stdout + "\n" + server_log_output.stdout)
+    if client.returncode:
+        raise GateError(f"{label} client exited {client.returncode}")
+    if server.returncode:
+        raise GateError(f"{label} server exited {server.returncode}")
+    parsed = parse_rdma(client.stdout + "\n" + client.stderr + "\n" + server.stdout + "\n" + server.stderr)
     if not parsed.passed:
         raise GateError(f"{label}: {parsed.reason}")
-    return {"name": label, "passed": True, "bandwidth_gbps": parsed.bandwidth_gbps}
+    return {
+        "name": label,
+        "passed": True,
+        "bandwidth_gbps": parsed.bandwidth_gbps,
+        "client_exit_code": client.returncode,
+        "server_exit_code": server.returncode,
+    }
 
 
 def run_rdma(runner: Runner, head: Host, worker: Host) -> list[dict[str, Any]]:
@@ -282,59 +317,26 @@ def run_rdma(runner: Runner, head: Host, worker: Host) -> list[dict[str, Any]]:
 
 
 def nccl_prerequisite_command() -> str:
-    """Read-only checks required before either home-directory build mutates."""
+    """Read-only checks for the documented completed native NCCL build."""
     return f"""set -euo pipefail
-check_existing_checkout() {{
+check_completed_checkout() {{
   directory="$1" repository="$2" revision="$3"
-  [ ! -e "$directory" ] && return 0
+  test -d "$directory"
+  test ! -L "$directory"
   test -d "$directory/.git"
+  test ! -L "$directory/.git"
   test "$(git -C "$directory" remote get-url origin)" = "$repository"
   test "$(git -C "$directory" rev-parse HEAD)" = "$revision"
 }}
 test -x {CUDA_NVCC}
 {CUDA_NVCC} --version
 command -v git >/dev/null
-command -v make >/dev/null
 command -v mpirun >/dev/null
-command -v flock >/dev/null
 test "$(dpkg-query -W -f='${{db:Status-Status}} ${{Version}}' libopenmpi-dev)" = "installed 4.1.6-7ubuntu2"
 test "$(dpkg-query -W -f='${{db:Status-Status}} ${{Version}}' openmpi-bin)" = "installed 4.1.6-7ubuntu2"
-check_existing_checkout "$HOME/nccl" https://github.com/NVIDIA/nccl.git {NCCL_COMMIT}
-check_existing_checkout "$HOME/nccl-tests" https://github.com/NVIDIA/nccl-tests.git {NCCL_TESTS_COMMIT}
-"""
-
-
-def nccl_build_command() -> str:
-    """Idempotently build the pinned host-native NCCL and MPI test binary."""
-    return f"""set -euo pipefail
-install -d -m 0700 "$HOME/.cache"
-exec 9>"$HOME/.cache/validate-fabric-nccl.lock"
-flock -n 9 || {{ echo "another validate-fabric NCCL build is active" >&2; exit 75; }}
-ensure_checkout() {{
-  directory="$1" repository="$2" revision="$3"
-  if [ -e "$directory" ] && [ ! -d "$directory/.git" ]; then
-    echo "refusing non-git path $directory" >&2; exit 1
-  fi
-  if [ ! -d "$directory/.git" ]; then
-    git clone "$repository" "$directory"
-  fi
-  test "$(git -C "$directory" remote get-url origin)" = "$repository"
-  git -C "$directory" fetch --tags origin
-  git -C "$directory" checkout --detach "$revision"
-  test "$(git -C "$directory" rev-parse HEAD)" = "$revision"
-}}
-ensure_checkout "$HOME/nccl" https://github.com/NVIDIA/nccl.git {NCCL_COMMIT}
-git -C "$HOME/nccl" checkout --detach {NCCL_COMMIT}
-cd "$HOME/nccl"
-make -j"$(nproc)" src.build NVCC={CUDA_NVCC} NVCC_GENCODE='-gencode=arch=compute_121,code=sm_121'
-ensure_checkout "$HOME/nccl-tests" https://github.com/NVIDIA/nccl-tests.git {NCCL_TESTS_COMMIT}
-git -C "$HOME/nccl-tests" checkout --detach {NCCL_TESTS_COMMIT}
-cd "$HOME/nccl-tests"
-export CUDA_HOME=/usr/local/cuda
-export MPI_HOME={MPI_HOME}
-export NCCL_HOME="$HOME/nccl/build"
-export LD_LIBRARY_PATH="$NCCL_HOME/lib:$CUDA_HOME/lib64:$MPI_HOME/lib:${{LD_LIBRARY_PATH:-}}"
-make -j"$(nproc)" MPI=1 NVCC={CUDA_NVCC} CUDA_HOME="$CUDA_HOME" MPI_HOME="$MPI_HOME" NCCL_HOME="$NCCL_HOME"
+check_completed_checkout "$HOME/nccl" https://github.com/NVIDIA/nccl.git {NCCL_COMMIT}
+check_completed_checkout "$HOME/nccl-tests" https://github.com/NVIDIA/nccl-tests.git {NCCL_TESTS_COMMIT}
+test -r "$HOME/nccl/build/lib/libnccl.so"
 test -x "$HOME/nccl-tests/build/all_reduce_perf"
 """
 
@@ -368,18 +370,11 @@ mpirun -np 2 -H localhost:1,{FABRIC_WORKER_ALIAS}:1 \\
 """
 
 
-def nccl_cleanup_command() -> str:
-    """Remove only the two exact build trees created by this acceptance gate."""
-    return "set -euo pipefail\nrm -rf -- \"$HOME/nccl\" \"$HOME/nccl-tests\"\n"
-
-
 def run_nccl(runner: Runner, head: Host, worker: Host) -> NCCLResult:
-    # The worker prerequisite and build are deliberately first. No sudo, agent
-    # forwarding, management-plane host list, or shared key is involved.
+    # The worker prerequisite is deliberately first. No source staging, sudo,
+    # agent forwarding, management-plane host list, or shared key is involved.
     runner.worker_via_fabric(nccl_prerequisite_command())
     runner.remote(head.ssh_alias, nccl_prerequisite_command())
-    runner.worker_via_fabric(nccl_build_command())
-    runner.remote(head.ssh_alias, nccl_build_command())
     result = runner.remote(head.ssh_alias, nccl_launch_command(head, worker))
     parsed = parse_nccl(result.stdout + "\n" + result.stderr)
     if not parsed.passed:
@@ -392,21 +387,10 @@ def write_json(path: Path, document: dict[str, Any]) -> None:
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
 
 
-def acquire_controller_lock(_output: Path) -> Any:
-    """Serialize all acceptance controllers on this machine."""
-    lock_path = Path(tempfile.gettempdir()) / "validate-fabric-controller.lock"
-    handle = lock_path.open("w")
-    try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError as error:
-        handle.close()
-        raise GateError("another validate-fabric controller is active") from error
-    return handle
-
-
-def release_controller_lock(handle: Any) -> None:
-    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    handle.close()
+def run_preflights(runner: Runner, head: Host, worker: Host) -> None:
+    """Check the worker first at every remote prerequisite boundary."""
+    remote_preflight(runner, worker, via_fabric=True)
+    remote_preflight(runner, head, via_fabric=False)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -431,9 +415,7 @@ def main(argv: list[str] | None = None) -> int:
         "nccl": None,
         "commands": evidence,
     }
-    lock_handle = None
     try:
-        lock_handle = acquire_controller_lock(args.output)
         head, worker = load_hosts(args.inventory)
         validate_consumers(head, worker)
         document["inventory"] = str(args.inventory)
@@ -442,8 +424,7 @@ def main(argv: list[str] | None = None) -> int:
             for key in ("NCCL_SOCKET_IFNAME", "NCCL_IB_HCA", "NCCL_IB_GID_INDEX", "TP_SOCKET_IFNAME", "GLOO_SOCKET_IFNAME")
         }
         runner = Runner(head, worker, evidence)
-        remote_preflight(runner, head, via_fabric=False)
-        remote_preflight(runner, worker, via_fabric=True)
+        run_preflights(runner, head, worker)
         if args.preflight_only:
             document["status"] = "preflight_passed"
             document["evidence_scope"] = "live_read_only_preflight"
@@ -465,8 +446,6 @@ def main(argv: list[str] | None = None) -> int:
         document["failure"] = str(error)
         return 1
     finally:
-        if lock_handle is not None:
-            release_controller_lock(lock_handle)
         write_json(args.output, document)
 
 

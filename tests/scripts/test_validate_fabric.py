@@ -43,6 +43,14 @@ def test_accepts_ib_transport(parse_nccl):
     assert result.transport == "IB"
 
 
+def test_rejects_ib_diagnostic_without_a_using_selection(parse_nccl):
+    """Discovery output is not evidence that NCCL selected an RDMA transport."""
+    result = parse_nccl("NET/IB : No device found\nAvg bus bandwidth : 19.3")
+
+    assert result.passed is False
+    assert result.reason == "NCCL did not report NET/IB : Using"
+
+
 def test_rejects_nccl_output_without_measured_bandwidth(parse_nccl):
     """NCCL initialization alone does not make an all-reduce an acceptance result."""
     result = parse_nccl("NET/IB : Using rocep1s0f1\n# Out of bounds values")
@@ -72,29 +80,61 @@ def test_runs_head_rdma_client_through_the_head_alias(validate_module):
         def remote(self, host, command, *, check=True):
             self.calls.append(("remote", host, command, check))
             if "nohup" in command:
-                return SimpleNamespace(stdout="1234\n")
-            return SimpleNamespace(stdout="Transport type : IB\nLink type : Ethernet\n65536 5000 0.0 88.5 0.1\n")
+                return SimpleNamespace(stdout="1234\n", stderr="", returncode=0)
+            return SimpleNamespace(
+                stdout="Transport type : IB\nLink type : Ethernet\n65536 5000 0.0 88.5 0.1\n",
+                stderr="",
+                returncode=0,
+            )
 
         def worker_via_fabric(self, command, *, check=True):
             self.calls.append(("worker", command, check))
-            return SimpleNamespace(stdout="1234\n" if "nohup" in command else "")
+            return SimpleNamespace(
+                stdout="1234\n" if "nohup" in command else "Transport type : IB\nLink type : Ethernet\n65536 5000 0.0 88.5 0.1\n",
+                stderr="",
+                returncode=0,
+            )
 
     result = validate_module.run_one_rdma(Runner(), worker, head, rail, rail, "ib_write_bw", 12000)
 
     assert result["passed"] is True
+    assert result["client_exit_code"] == 0
+    assert result["server_exit_code"] == 0
 
 
-def test_native_nccl_build_is_pinned_and_never_uses_docker(validate_module):
-    """The DGX Spark source build is reproducible without a container runtime."""
-    command = validate_module.nccl_build_command()
+def test_rejects_nonzero_rdma_server_even_with_positive_output(validate_module):
+    """The client metric cannot hide a failed perftest server process."""
+    rail = validate_module.Rail("rail100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
+    head = validate_module.Host("spark1", "dgx-spark-1", {}, (rail, rail))
+    worker = validate_module.Host("spark2", "dgx-spark-2", {}, (rail, rail))
+    positive = "Transport type : IB\nLink type : Ethernet\n65536 5000 0.0 88.5 0.1\n"
 
-    assert "ensure_checkout \"$HOME/nccl\" https://github.com/NVIDIA/nccl.git 73cf112295c33aee2b895f329f592f2a9b4b0f97" in command
-    assert "ensure_checkout \"$HOME/nccl-tests\" https://github.com/NVIDIA/nccl-tests.git" in command
-    assert "git -C \"$HOME/nccl-tests\" checkout --detach a0b82b2260cf5152b9f8c061bbf7eaf0ba096432" in command
+    class Runner:
+        def __init__(self):
+            self.head = head
+
+        def remote(self, host, command, *, check=True):
+            if "nohup" in command:
+                return SimpleNamespace(stdout="1234\n", stderr="", returncode=0)
+            return SimpleNamespace(stdout=positive, stderr="server failure", returncode=1)
+
+        def worker_via_fabric(self, command, *, check=True):
+            return SimpleNamespace(stdout=positive, stderr="", returncode=0)
+
+    with pytest.raises(validate_module.GateError, match="server exited 1"):
+        validate_module.run_one_rdma(Runner(), head, worker, rail, rail, "ib_write_bw", 12000)
+
+
+def test_native_nccl_prerequisites_require_the_pinned_completed_build(validate_module):
+    """The validator verifies the documented host-native result without staging it."""
+    command = validate_module.nccl_prerequisite_command()
+
+    assert "https://github.com/NVIDIA/nccl.git" in command
+    assert "73cf112295c33aee2b895f329f592f2a9b4b0f97" in command
+    assert "a0b82b2260cf5152b9f8c061bbf7eaf0ba096432" in command
     assert "/usr/local/cuda/bin/nvcc" in command
-    assert "NVCC_GENCODE='-gencode=arch=compute_121,code=sm_121'" in command
-    assert "MPI=1" in command
-    assert "NCCL_HOME=\"$HOME/nccl/build\"" in command
+    assert "libnccl.so" in command
+    assert "all_reduce_perf" in command
     assert "docker" not in command
     assert "sudo" not in command
 
@@ -128,15 +168,6 @@ def test_native_nccl_launch_uses_restricted_fabric_transport(validate_module):
     assert "192.168.1.212" not in command
 
 
-def test_native_prerequisite_allows_an_exactly_pinned_retry(validate_module):
-    """An interrupted matching checkout is resumed, while a foreign tree is rejected."""
-    command = validate_module.nccl_prerequisite_command()
-
-    assert 'test ! -e "$HOME/nccl"' not in command
-    assert 'git -C "$directory" rev-parse HEAD' in command
-    assert "73cf112295c33aee2b895f329f592f2a9b4b0f97" in command
-
-
 def test_native_prerequisite_checks_each_openmpi_package(validate_module):
     """The required OpenMPI packages are verified independently."""
     command = validate_module.nccl_prerequisite_command()
@@ -145,19 +176,49 @@ def test_native_prerequisite_checks_each_openmpi_package(validate_module):
     assert "openmpi-bin)" in command
 
 
-def test_native_build_holds_a_per_host_nonblocking_lock(validate_module):
-    """A second controller cannot concurrently write either NCCL build tree."""
-    command = validate_module.nccl_build_command()
+def test_worker_preflight_precedes_head_preflight(validate_module):
+    """Every remote prerequisite gate starts with Spark 2 via the fabric alias."""
+    rail = validate_module.Rail("rail100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
+    head = validate_module.Host("spark1", "dgx-spark-1", {}, (rail, rail))
+    worker = validate_module.Host("spark2", "dgx-spark-2", {}, (rail, rail))
 
-    assert 'exec 9>"$HOME/.cache/validate-fabric-nccl.lock"' in command
-    assert "flock -n 9" in command
+    class Runner:
+        def __init__(self):
+            self.calls = []
+
+        def remote(self, host, command, *, check=True):
+            self.calls.append("head")
+
+        def worker_via_fabric(self, command, *, check=True):
+            self.calls.append("worker")
+
+    runner = Runner()
+    validate_module.run_preflights(runner, head, worker)
+
+    assert runner.calls == ["worker", "head"]
 
 
-def test_controller_lock_rejects_a_second_run_for_any_report(validate_module, tmp_path):
-    """A duplicate controller cannot start another set of remote stages."""
-    first = validate_module.acquire_controller_lock(tmp_path / "rdma-nccl.json")
-    try:
-        with pytest.raises(validate_module.GateError, match="another validate-fabric controller"):
-            validate_module.acquire_controller_lock(tmp_path / "other-report.json")
-    finally:
-        validate_module.release_controller_lock(first)
+def test_nccl_validation_is_worker_first_and_launch_only(validate_module):
+    """Completed native artifacts are checked, not rebuilt, before the collective."""
+    rail = validate_module.Rail("rail100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
+    fabric = {"NCCL_SOCKET_IFNAME": "=enp1s0f1np1", "NCCL_IB_HCA": "=rocep1s0f1:1", "NCCL_IB_GID_INDEX": 3, "TP_SOCKET_IFNAME": "enp1s0f1np1", "GLOO_SOCKET_IFNAME": "enp1s0f1np1"}
+    head = validate_module.Host("spark1", "dgx-spark-1", fabric, (rail, rail))
+    worker = validate_module.Host("spark2", "dgx-spark-2", fabric, (rail, rail))
+
+    class Runner:
+        def __init__(self):
+            self.calls = []
+
+        def remote(self, host, command, *, check=True):
+            self.calls.append(("head", command))
+            return SimpleNamespace(stdout="NET/IB : Using rocep1s0f1\nAvg bus bandwidth : 19.3", stderr="", returncode=0)
+
+        def worker_via_fabric(self, command, *, check=True):
+            self.calls.append(("worker", command))
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    runner = Runner()
+    validate_module.run_nccl(runner, head, worker)
+
+    assert [host for host, _ in runner.calls] == ["worker", "head", "head"]
+    assert all("ensure_checkout" not in command for _, command in runner.calls)

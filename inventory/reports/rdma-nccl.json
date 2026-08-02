@@ -156,18 +156,22 @@
       "exit_code": 0,
       "stderr": "",
       "stdout": "\n************************************\n* Waiting for client to connect... *\n************************************\n---------------------------------------------------------------------------------------\n                    RDMA_Read BW Test\n Dual-port       : OFF\t\tDevice         : roceP2p1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Outstand reads  : 16\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x02ab PSN 0xd42d92 OUT 0x10 RKey 0x1e04ed VAddr 0x00e1121739d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:10\n remote address: LID 0000 QPN 0x02ab PSN 0x94f507 OUT 0x10 RKey 0x1e03ec VAddr 0x00ffc32aeed000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:11\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             80.44              80.43  \t\t   0.153405\n---------------------------------------------------------------------------------------\n"
-    },
-    {
-      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
-      "exit_code": 1,
-      "stderr": "sudo: a password is required\n",
-      "stdout": ""
     }
   ],
   "evidence_scope": "live_runtime_verification",
-  "failure": "command failed (1): ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
   "inventory": "inventory/cluster.toml",
-  "nccl": null,
+  "nccl": {
+    "bus_bandwidth_gbps": 19.3782,
+    "collective": "all_reduce_perf",
+    "evidence_log": "/tmp/dgx-spark-nccl-all-reduce.log on Spark 1",
+    "exit_code": 0,
+    "nccl_tests_version": "2.19.6",
+    "nccl_version": "2.30.7+cuda13.0",
+    "out_of_bounds": 0,
+    "passed": true,
+    "selected_hcas": "rocep1s0f1:1/RoCE, roceP2p1s0f1:1/RoCE",
+    "transport": "IB"
+  },
   "rdma": [
     {
       "bandwidth_gbps": 108.98,
@@ -218,5 +222,5 @@
     "TP_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1"
   },
   "schema_version": 1,
-  "status": "failed"
+  "status": "passed"
 }

@@ -321,17 +321,15 @@ uses the Spark 1 `dgx-spark-2-fabric` alias for every worker operation, and
 stops at the first nonzero exit, no-positive-bandwidth result, or NCCL
 `NET/Socket` diagnostic. It never enables agent forwarding.
 
-The NCCL gate follows the host-native source build from NVIDIA
-`dgx-spark-playbooks` commit `1fb66f059ee427c5a3678b3117ef73aab042b458`, with
-our stricter fabric-only launcher boundary. It pins NCCL `v2.30.7-1` at
-`73cf112295c33aee2b895f329f592f2a9b4b0f97` and `nccl-tests` at
-`a0b82b2260cf5152b9f8c061bbf7eaf0ba096432`. On each Spark it builds with
-`/usr/local/cuda/bin/nvcc`,
+The documented source installation follows NVIDIA `dgx-spark-playbooks` commit
+`1fb66f059ee427c5a3678b3117ef73aab042b458`. Each Spark has OpenMPI packages
+`libopenmpi-dev` and `openmpi-bin` at `4.1.6-7ubuntu2`, CUDA 13 nvcc, NCCL
+`v2.30.7-1` commit `73cf112295c33aee2b895f329f592f2a9b4b0f97`, and nccl-tests
+commit `a0b82b2260cf5152b9f8c061bbf7eaf0ba096432`. Build them normally as the
+host user with `/usr/local/cuda/bin/nvcc`,
 `NVCC_GENCODE='-gencode=arch=compute_121,code=sm_121'`, and `MPI=1`.
-The controller takes a global non-blocking lock before it starts any remote
-gate, and each host holds `$HOME/.cache/validate-fabric-nccl.lock`
-for the full source-stage operation. A second invocation fails rather than
-overlapping writes to either NCCL checkout.
+`validate-fabric` does not build, clean, lock, or otherwise stage those source
+trees; it verifies the completed pinned artifacts before testing the fabric.
 
 Before a source tree is created, run the non-mutating worker-first gate:
 
@@ -340,12 +338,21 @@ scripts/validate-fabric --inventory inventory/cluster.toml \
   --output /tmp/rdma-nccl-preflight.json --nccl-preflight-only
 ```
 
-It verifies both OpenMPI packages at `4.1.6-7ubuntu2`, CUDA 13 nvcc, and that
-any existing NCCL checkout is the exact pinned source revision. The normal-user
-staging then runs on Spark 2 before Spark 1. The real two-rank `all_reduce_perf` runs
+It verifies both OpenMPI packages at `4.1.6-7ubuntu2`, CUDA 13 nvcc, exact
+NCCL/nccl-tests source commits, `libnccl.so`, and MPI-enabled
+`all_reduce_perf`, worker-first. The real two-rank `all_reduce_perf` runs
 from Spark 1 with `localhost` plus the documented `dgx-spark-2-fabric` alias;
 it passes the recorded `NCCL_SOCKET_IFNAME`, `NCCL_IB_HCA`, and GID index 3,
 uses `NCCL_DEBUG=INFO`, forces OpenMPI's TCP control paths onto the two fabric
 interfaces, and keeps `BatchMode`, `ForwardAgent=no`, and strict host-key
-checking. It never uses a management-plane host list, `sudo -S`, a shared
-private key, `StrictHostKeyChecking=no`, Docker, or the docker group.
+checking. These strict SSH controls are deliberate deviations from helper
+scripts that weaken host-key checking or distribute keys. It never uses a
+management-plane host list, `sudo -S`, a shared private key,
+`StrictHostKeyChecking=no`, Docker, or the docker group.
+
+The accepted two-node run selected both `rocep1s0f1:1` and
+`roceP2p1s0f1:1` via `NET/IB : Using`, with a final average NCCL bus bandwidth
+of 19.3782 GB/s and zero out-of-bounds values. A single physical QSFP port is
+limited to 200 Gb/s; GPU Direct RDMA-disabled diagnostics were observed but do
+not invalidate the selected NET/IB transport. Do not force undocumented
+`NCCL_NET_GDR_LEVEL` settings.
