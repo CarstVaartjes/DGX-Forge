@@ -63,9 +63,12 @@ jobs:
             '  exit 2' \
             '}' \
             'shift' \
-            'exec docker-compose "$@"' \
+            'exec compose "$@"' \
             > "$shim_dir/docker"
           chmod 0755 "$shim_dir/docker"
           echo "$shim_dir" >> "$GITHUB_PATH"
+      - name: Verify Docker Compose compatibility
+        if: runner.os == 'macOS'
+        run: docker compose version
       - name: Run Python and Bash tests
         run: uv run --python 3.12 --frozen --with pytest==9.1.1 pytest
