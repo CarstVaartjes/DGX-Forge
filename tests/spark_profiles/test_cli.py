@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 import subprocess
 import sys
+from typing import Callable, Mapping
 
 import pytest
 
@@ -76,13 +77,14 @@ def invoke(
     store: FakeStore | None = None,
     switcher: FakeSwitcher | None = None,
     catalog_value: Catalog | None = None,
+    inventory_provider: Callable[[], Mapping[str, object]] | None = None,
 ) -> Result:
     catalog = catalog_value or Catalog.load(REPOSITORY_ROOT)
     dependencies = CliDependencies(
         catalog=catalog,
         state_store=store or FakeStore(state),
         switcher=switcher or FakeSwitcher(),
-        inventory_provider=lambda: {},
+        inventory_provider=inventory_provider or (lambda: {}),
     )
     stdout = StringIO()
     stderr = StringIO()
@@ -555,3 +557,22 @@ def test_switch_oserror_is_configuration_exit_two_not_a_traceback() -> None:
         "error": "local state write failed",
         "error_type": "configuration",
     }
+
+
+def test_validate_inventory_oserror_is_bounded_and_sanitized() -> None:
+    def unreadable_inventory() -> Mapping[str, object]:
+        raise OSError("token=super-secret-value " + "x" * 5_000)
+
+    result = invoke(
+        "validate",
+        "default",
+        "--json",
+        inventory_provider=unreadable_inventory,
+    )
+
+    assert result.exit_code == 2
+    assert result.json["error_type"] == "configuration"
+    assert "super-secret-value" not in result.stdout
+    assert "<redacted>" in result.stdout
+    assert len(result.json["error"]) <= 1_024
+    assert result.stderr == ""

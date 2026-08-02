@@ -438,9 +438,14 @@ def main(
                 args,
             )
             return 2
-        report = check_admission(
-            profile, dependencies.catalog, dependencies.inventory_provider()
-        )
+        try:
+            inventory = dependencies.inventory_provider()
+        except OSError as error:
+            _emit(
+                {"error": str(error), "error_type": "configuration"}, args
+            )
+            return 2
+        report = check_admission(profile, dependencies.catalog, inventory)
         payload = {
             "profile_id": profile.id,
             "valid": True,
