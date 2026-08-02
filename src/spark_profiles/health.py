@@ -21,6 +21,9 @@ from .backend import CommandResult, SshBackend
 _NODES = ("spark1", "spark2")
 _SWAP_WARNING_BYTES = 1024**3
 _ROOT_FREE_WARNING_BYTES = 150 * 1024**3
+_APPROVED_FABRIC_MTU = 1500
+_APPROVED_LINK_RATE_MBPS = 200000
+_APPROVED_GID_INDEX = 3
 _DEVICE_NAME = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 
 
@@ -245,12 +248,14 @@ class NodeHealthService:
                 if (
                     not isinstance(fabric.get("mtu"), int)
                     or isinstance(fabric.get("mtu"), bool)
-                    or fabric["mtu"] <= 0
+                    or fabric["mtu"] != _APPROVED_FABRIC_MTU
                     or not isinstance(fabric.get("link_rate_mbps"), int)
                     or isinstance(fabric.get("link_rate_mbps"), bool)
-                    or fabric["link_rate_mbps"] <= 0
+                    or fabric["link_rate_mbps"] != _APPROVED_LINK_RATE_MBPS
                 ):
-                    raise TypeError(f"{node} fabric MTU and link rate must be positive integers")
+                    raise TypeError(
+                        f"{node} fabric must use approved MTU and link rate"
+                    )
                 function_names = tuple(
                     name for name in sorted(fabric) if name.startswith("function")
                 )
@@ -282,11 +287,13 @@ class NodeHealthService:
                     if (
                         not isinstance(item.get("gid_index"), int)
                         or isinstance(item.get("gid_index"), bool)
-                        or item["gid_index"] < 0
+                        or item["gid_index"] != _APPROVED_GID_INDEX
                         or not isinstance(item.get("fabric_ip"), str)
                         or not isinstance(item.get("peer_ip"), str)
                     ):
-                        raise TypeError(f"invalid {node} {name} fabric pin")
+                        raise TypeError(
+                            f"invalid {node} {name} accepted GID index or address pin"
+                        )
             for name in ("function100", "function101"):
                 left = hosts["spark1"]["fabric"][name]
                 right = hosts["spark2"]["fabric"][name]
@@ -300,10 +307,9 @@ class NodeHealthService:
                     raise TypeError(f"cross-node fabric pins differ for {name}")
             interfaces = ",".join(interface for interface, _ in functions["spark1"])
             hcas = ",".join(f"{hca}:1" for _, hca in functions["spark1"])
-            gid_index = hosts["spark1"]["fabric"]["function100"]["gid_index"]
             expected_consumers = {
                 "GLOO_SOCKET_IFNAME": interfaces,
-                "NCCL_IB_GID_INDEX": gid_index,
+                "NCCL_IB_GID_INDEX": _APPROVED_GID_INDEX,
                 "NCCL_IB_HCA": f"={hcas}",
                 "NCCL_SOCKET_IFNAME": f"={interfaces}",
                 "TP_SOCKET_IFNAME": interfaces,

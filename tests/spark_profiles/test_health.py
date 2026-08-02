@@ -315,7 +315,7 @@ def test_cross_node_gid_drift_fails_locally_but_gid_is_not_remote_argv():
     inventory["hosts"]["spark2"]["fabric"]["function100"]["gid_index"] = 4
     backend = FakeBackend({})
 
-    with pytest.raises(LocalHealthError, match="cross-node fabric"):
+    with pytest.raises(LocalHealthError, match="accepted GID index"):
         NodeHealthService(
             backend=backend, collector=b"x", raw_schema=RAW_SCHEMA,
             result_schema=json.loads((ROOT / "schemas/node-health.schema.json").read_text()),
@@ -334,7 +334,39 @@ def test_inventory_gid_must_match_accepted_baseline_consumers():
         for name in ("function100", "function101"):
             inventory["hosts"][node]["fabric"][name]["gid_index"] = 4
 
-    with pytest.raises(LocalHealthError, match="accepted RDMA consumers"):
+    with pytest.raises(LocalHealthError, match="accepted GID index"):
+        NodeHealthService(
+            backend=FakeBackend({}), collector=b"x", raw_schema=RAW_SCHEMA,
+            result_schema=json.loads((ROOT / "schemas/node-health.schema.json").read_text()),
+            inventory=inventory, rdma_baseline=BASELINE,
+            timeout_seconds=10, cpu_sample_milliseconds=250,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("mtu", 9000), ("link_rate_mbps", 100000)),
+)
+def test_symmetric_inventory_link_drift_is_rejected(field, value):
+    inventory = deepcopy(INVENTORY)
+    for node in ("spark1", "spark2"):
+        inventory["hosts"][node]["fabric"][field] = value
+
+    with pytest.raises(LocalHealthError, match="approved MTU and link rate"):
+        NodeHealthService(
+            backend=FakeBackend({}), collector=b"x", raw_schema=RAW_SCHEMA,
+            result_schema=json.loads((ROOT / "schemas/node-health.schema.json").read_text()),
+            inventory=inventory, rdma_baseline=BASELINE,
+            timeout_seconds=10, cpu_sample_milliseconds=250,
+        )
+
+
+def test_symmetric_function101_gid_drift_is_rejected():
+    inventory = deepcopy(INVENTORY)
+    for node in ("spark1", "spark2"):
+        inventory["hosts"][node]["fabric"]["function101"]["gid_index"] = 4
+
+    with pytest.raises(LocalHealthError, match="accepted GID index"):
         NodeHealthService(
             backend=FakeBackend({}), collector=b"x", raw_schema=RAW_SCHEMA,
             result_schema=json.loads((ROOT / "schemas/node-health.schema.json").read_text()),
