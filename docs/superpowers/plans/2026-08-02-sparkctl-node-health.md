@@ -44,7 +44,7 @@
 - Emits one raw JSON object; it does not assign final health.
 - When sourced for tests, functions accept explicit proc/sys roots; normal execution always uses `/proc` and `/sys`.
 
-- [ ] **Step 1: Write failing raw-collector tests**
+- [x] **Step 1: Write failing raw-collector tests**
 
 Write tests before the collector exists:
 
@@ -79,7 +79,7 @@ The fixture provides deterministic `/proc/stat`, `/proc/meminfo`,
 output, thermal zones/trip points, interface/HCA sysfs, RDMA links/counters,
 Docker version, and `earlyoom` state.
 
-- [ ] **Step 2: Run the collector tests and confirm the intended failure**
+- [x] **Step 2: Run the collector tests and confirm the intended failure**
 
 Run:
 
@@ -90,7 +90,7 @@ uv run --no-project --with pytest --with jsonschema \
 
 Expected: FAIL because `nodes/bin/collect-health` and its schema are absent.
 
-- [ ] **Step 3: Implement strict bounded raw collection**
+- [x] **Step 3: Implement strict bounded raw collection**
 
 Use `set -euo pipefail`, exact argument parsing, and `jq -n`. Reject unknown,
 missing, duplicate-mismatched, or odd interface/HCA arguments with exit 2.
@@ -111,7 +111,7 @@ The script never grades, enumerates processes/containers, invokes sudo, writes
 files, or reads arbitrary paths during normal execution. Guard `main` with
 `[[ "${BASH_SOURCE[0]}" == "$0" ]]` so fixture tests can source pure helpers.
 
-- [ ] **Step 4: Verify raw collection**
+- [x] **Step 4: Verify raw collection**
 
 Run:
 
@@ -124,7 +124,7 @@ git diff --check
 
 Expected: all collector/schema tests pass and the script parses cleanly.
 
-- [ ] **Step 5: Commit the collector**
+- [x] **Step 5: Commit the collector**
 
 ```bash
 git add nodes/bin/collect-health schemas/node-health-raw.schema.json \
@@ -295,4 +295,3 @@ The feature is complete only when both tasks pass task review, the full offline
 suite passes, the live probe returns a truthful bounded result for both aliases,
 and the final whole-tree review has no unresolved load-bearing finding. Health
 completion does not install or accept a model runtime.
-
