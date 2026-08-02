@@ -365,29 +365,46 @@ remains exclusive and makes the target profile non-activatable.
 ## Distributed fabric admission
 
 Every distributed Model Definition pins and verifies the accepted direct-fabric
-state before startup:
+state before startup. One physical QSFP cable connects one `200000 Mb/s` port
+on each Spark. The port is exposed through two Linux Ethernet/RoCE functions
+because the NIC reaches the SoC over two PCIe Gen5 x4 links. The functions are
+not independent 200 Gb/s physical rails and their duplicated link-rate reports
+must not be added to claim 400 Gb/s.
 
-- net-device MTU `1500` and RoCE path MTU `1024`;
-- both `200000 Mb/s` rails up, with the inventory-pinned interface-to-HCA
-  mappings;
+The pinned state requires:
+
+- physical link rate `200000 Mb/s`, net-device MTU `1500`, and RoCE path MTU
+  `1024`;
+- both inventory-pinned interface-to-HCA functions up and selected by NCCL;
 - GID index `3` on both HCAs; and
 - no default route on either fabric subnet.
 
-The strict regression floor is derived from the accepted cluster evidence and
-must pass in both directions on both rails:
+NVIDIA Sync treats `184 Gb/s` as the lower bound for the 200 Gb/s physical-link
+speed test. The equivalent command-line acceptance gate runs simultaneous RDMA
+writes across both functions, sums only measurements from the same timed
+interval, and requires at least `184 Gb/s` in each node-to-node direction. The
+existing sequential single-function tests remain diagnostics and regression
+checks; they do not prove physical-link bandwidth.
+
+The strict gates are:
 
 | Metric | Accepted evidence | Admission floor |
 | --- | ---: | ---: |
+| Physical negotiated link rate | 200 Gb/s | exactly 200 Gb/s |
+| Simultaneous aggregate RDMA write, each direction | not yet recorded | at least 184 Gb/s |
+| Single-function RDMA write diagnostic | worst result 108.9 Gb/s | at least 98.01 Gb/s per function and direction |
+| Single-function RDMA read diagnostic | worst result 80.41 Gb/s | at least 72.37 Gb/s per function and direction |
 | NCCL bus bandwidth | 19.3782 GB/s | at least 17.44 GB/s |
-| RDMA write bandwidth | worst result 108.9 Gb/s | at least 98.01 Gb/s |
-| RDMA read bandwidth | worst result 80.41 Gb/s | at least 72.37 Gb/s |
 
-These floors are 90% of the recorded accepted results. The current fabric
-report does not contain a reproducible latency baseline, so the design does not
-invent one. Every distributed Model Definition remains non-activatable until a
-fixed latency test records the baseline; subsequent admission requires its p95
-latency to be no more than 125% of that baseline. The test command, payload,
-iterations, warm-up, CPU placement, result, and boot IDs are recorded with the
+The per-function and NCCL regression floors are 90% of the recorded accepted
+results; the aggregate floor is NVIDIA's independent lower bound. The current
+fabric report contains neither simultaneous aggregate bandwidth nor a
+reproducible latency baseline, so the design does not invent either result.
+Every distributed Model Definition remains non-activatable until the aggregate
+gate passes and a fixed latency test records the baseline. Subsequent admission
+requires p95 latency no more than 125% of that baseline. The test command,
+payload, iterations, warm-up, CPU placement, per-function results, aggregate,
+result overlap interval, error counters, and boot IDs are recorded with the
 fabric report.
 
 ## Storage layout
