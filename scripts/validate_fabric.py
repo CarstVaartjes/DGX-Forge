@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import fcntl
 import json
 import re
 import shlex
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 from datetime import UTC, datetime
@@ -294,6 +296,7 @@ test -x {CUDA_NVCC}
 command -v git >/dev/null
 command -v make >/dev/null
 command -v mpirun >/dev/null
+command -v flock >/dev/null
 test "$(dpkg-query -W -f='${{db:Status-Status}} ${{Version}}' libopenmpi-dev)" = "installed 4.1.6-7ubuntu2"
 test "$(dpkg-query -W -f='${{db:Status-Status}} ${{Version}}' openmpi-bin)" = "installed 4.1.6-7ubuntu2"
 check_existing_checkout "$HOME/nccl" https://github.com/NVIDIA/nccl.git {NCCL_COMMIT}
@@ -304,6 +307,9 @@ check_existing_checkout "$HOME/nccl-tests" https://github.com/NVIDIA/nccl-tests.
 def nccl_build_command() -> str:
     """Idempotently build the pinned host-native NCCL and MPI test binary."""
     return f"""set -euo pipefail
+install -d -m 0700 "$HOME/.cache"
+exec 9>"$HOME/.cache/validate-fabric-nccl.lock"
+flock -n 9 || {{ echo "another validate-fabric NCCL build is active" >&2; exit 75; }}
 ensure_checkout() {{
   directory="$1" repository="$2" revision="$3"
   if [ -e "$directory" ] && [ ! -d "$directory/.git" ]; then
@@ -386,6 +392,23 @@ def write_json(path: Path, document: dict[str, Any]) -> None:
     path.write_text(json.dumps(document, indent=2, sort_keys=True) + "\n")
 
 
+def acquire_controller_lock(_output: Path) -> Any:
+    """Serialize all acceptance controllers on this machine."""
+    lock_path = Path(tempfile.gettempdir()) / "validate-fabric-controller.lock"
+    handle = lock_path.open("w")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        handle.close()
+        raise GateError("another validate-fabric controller is active") from error
+    return handle
+
+
+def release_controller_lock(handle: Any) -> None:
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+    handle.close()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--inventory", type=Path, required=True)
@@ -408,7 +431,9 @@ def main(argv: list[str] | None = None) -> int:
         "nccl": None,
         "commands": evidence,
     }
+    lock_handle = None
     try:
+        lock_handle = acquire_controller_lock(args.output)
         head, worker = load_hosts(args.inventory)
         validate_consumers(head, worker)
         document["inventory"] = str(args.inventory)
@@ -440,6 +465,8 @@ def main(argv: list[str] | None = None) -> int:
         document["failure"] = str(error)
         return 1
     finally:
+        if lock_handle is not None:
+            release_controller_lock(lock_handle)
         write_json(args.output, document)
 
 

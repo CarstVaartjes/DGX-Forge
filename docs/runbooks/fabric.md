@@ -328,6 +328,10 @@ our stricter fabric-only launcher boundary. It pins NCCL `v2.30.7-1` at
 `a0b82b2260cf5152b9f8c061bbf7eaf0ba096432`. On each Spark it builds with
 `/usr/local/cuda/bin/nvcc`,
 `NVCC_GENCODE='-gencode=arch=compute_121,code=sm_121'`, and `MPI=1`.
+The controller takes a global non-blocking lock before it starts any remote
+gate, and each host holds `$HOME/.cache/validate-fabric-nccl.lock`
+for the full source-stage operation. A second invocation fails rather than
+overlapping writes to either NCCL checkout.
 
 Before a source tree is created, run the non-mutating worker-first gate:
 
@@ -337,8 +341,8 @@ scripts/validate-fabric --inventory inventory/cluster.toml \
 ```
 
 It verifies both OpenMPI packages at `4.1.6-7ubuntu2`, CUDA 13 nvcc, and that
-neither `~/nccl` nor `~/nccl-tests` already exists. The normal-user staging
-then runs on Spark 2 before Spark 1. The real two-rank `all_reduce_perf` runs
+any existing NCCL checkout is the exact pinned source revision. The normal-user
+staging then runs on Spark 2 before Spark 1. The real two-rank `all_reduce_perf` runs
 from Spark 1 with `localhost` plus the documented `dgx-spark-2-fabric` alias;
 it passes the recorded `NCCL_SOCKET_IFNAME`, `NCCL_IB_HCA`, and GID index 3,
 uses `NCCL_DEBUG=INFO`, forces OpenMPI's TCP control paths onto the two fabric

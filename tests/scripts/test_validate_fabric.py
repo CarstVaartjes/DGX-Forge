@@ -143,3 +143,21 @@ def test_native_prerequisite_checks_each_openmpi_package(validate_module):
 
     assert "libopenmpi-dev)" in command
     assert "openmpi-bin)" in command
+
+
+def test_native_build_holds_a_per_host_nonblocking_lock(validate_module):
+    """A second controller cannot concurrently write either NCCL build tree."""
+    command = validate_module.nccl_build_command()
+
+    assert 'exec 9>"$HOME/.cache/validate-fabric-nccl.lock"' in command
+    assert "flock -n 9" in command
+
+
+def test_controller_lock_rejects_a_second_run_for_any_report(validate_module, tmp_path):
+    """A duplicate controller cannot start another set of remote stages."""
+    first = validate_module.acquire_controller_lock(tmp_path / "rdma-nccl.json")
+    try:
+        with pytest.raises(validate_module.GateError, match="another validate-fabric controller"):
+            validate_module.acquire_controller_lock(tmp_path / "other-report.json")
+    finally:
+        validate_module.release_controller_lock(first)
