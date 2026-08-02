@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+adapter_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"
+docker_bin=${MIA_DOCKER_BIN:-docker}
+curl_bin=${MIA_CURL_BIN:-curl}
+ip_bin=${MIA_IP_BIN:-ip}
+models_root=${MIA_MODELS_ROOT:-/srv/models}
+sys_class_net=${MIA_SYS_CLASS_NET:-/sys/class/net}
+sys_class_infiniband=${MIA_SYS_CLASS_INFINIBAND:-/sys/class/infiniband}
+operation=${1:-}
+
+case ${2:-} in
+  head) role_env="$adapter_root/config/spark1.env" ;;
+  worker) role_env="$adapter_root/config/spark2.env" ;;
+  *)
+    echo "role must be head or worker" >&2
+    exit 2
+    ;;
+esac
+
+# The controller supplies a role, but the physical node remains authoritative.
+# MIA_LOCAL_HOSTNAME is a test hook; production calls use the kernel hostname.
+# shellcheck disable=SC1090
+source "$role_env"
+actual_hostname=${MIA_LOCAL_HOSTNAME:-$(hostname)}
+if [[ $actual_hostname != "$EXPECTED_HOSTNAME" ]]; then
+  echo "role ${2} requires $EXPECTED_NODE/$EXPECTED_HOSTNAME; local host is $actual_hostname" >&2
+  exit 2
+fi
+
+compose() {
+  "$docker_bin" compose \
+    --project-directory "$adapter_root" \
+    --env-file "$adapter_root/config/common.env" \
+    --env-file "$role_env" \
+    -f "$adapter_root/compose.yaml" \
+    "$@"
+}
+
+verify_rail() {
+  local interface=$1
+  local expected_ip=$2
+  local hca=$3
+  local expected_gid=$4
+  local port_root="$sys_class_infiniband/$hca/ports/1"
+  local actual_gid
+
+  [[ $(cat "$sys_class_net/$interface/operstate") == up ]] || {
+    echo "fabric interface is not up: $interface" >&2
+    return 1
+  }
+  [[ $(cat "$sys_class_net/$interface/mtu") == "$EXPECTED_MTU" ]] || {
+    echo "fabric MTU mismatch: $interface" >&2
+    return 1
+  }
+  "$ip_bin" -4 -o address show dev "$interface" |
+    grep -F " inet $expected_ip/" >/dev/null || {
+      echo "fabric IPv4 address mismatch: $interface expected $expected_ip" >&2
+      return 1
+    }
+  grep -F "ACTIVE" "$port_root/state" >/dev/null || {
+    echo "fabric HCA port is not active: $hca/1" >&2
+    return 1
+  }
+  [[ $(cat "$port_root/gid_attrs/ndevs/3") == "$interface" ]] || {
+    echo "fabric GID device mismatch: $hca/1/3" >&2
+    return 1
+  }
+  [[ $(cat "$port_root/gid_attrs/types/3") == "RoCE v2" ]] || {
+    echo "fabric GID type mismatch: $hca/1/3" >&2
+    return 1
+  }
+  actual_gid=$(tr '[:upper:]' '[:lower:]' <"$port_root/gids/3")
+  [[ $actual_gid == "$expected_gid" ]] || {
+    echo "fabric GID value mismatch: $hca/1/3" >&2
+    return 1
+  }
+}
+
+container="mia-deepseek-dual-${2}"
+
+case "$operation" in
+  render)
+    compose config
+    ;;
+  prepare)
+    install -d -m 0750 \
+      "$models_root/runtime-cache/deepseek-agent-dual/tmp" \
+      "$models_root/runtime-cache/deepseek-agent-dual/vllm" \
+      "$models_root/runtime-cache/deepseek-agent-dual/flashinfer" \
+      "$models_root/outputs/deepseek-agent-dual" \
+      "$models_root/logs/deepseek-agent-dual" \
+      "$models_root/manifests" \
+      "$models_root/snapshots"
+    printf 'prepared role=%s\n' "${2}"
+    ;;
+  verify)
+    compose config --quiet
+    "$docker_bin" image inspect \
+      ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8 \
+      >/dev/null
+    manifest="$models_root/manifests/deepseek-v4-flash-0731.json"
+    snapshot="$models_root/snapshots/deepseek-v4-flash-0731"
+    test -f "$manifest"
+    manifest_sha256=$(sha256sum "$manifest" | awk '{print $1}')
+    if [[ $manifest_sha256 != 82e965c1caa019b31f4d776d0b3eddb0cc0d8e076f189822b8a3bbe3fa115121 ]]; then
+      echo "checkpoint manifest digest mismatch" >&2
+      exit 1
+    fi
+    manifest_tool=${MIA_MODEL_MANIFEST_TOOL:-$adapter_root/tools/model_manifest.py}
+    test -f "$manifest_tool"
+    python3 "$manifest_tool" verify --manifest "$manifest" --snapshot "$snapshot" >/dev/null
+    verify_rail "$FABRIC_INTERFACE_0" "$FABRIC_IP_0" "$FABRIC_HCA_0" "$FABRIC_GID_0"
+    verify_rail "$FABRIC_INTERFACE_1" "$FABRIC_IP_1" "$FABRIC_HCA_1" "$FABRIC_GID_1"
+    printf 'verified role=%s\n' "${2}"
+    ;;
+  start)
+    compose up --detach --no-build --pull never --remove-orphans
+    ;;
+  health)
+    running=$("$docker_bin" inspect --format '{{.State.Running}}' "$container")
+    [[ $running == true ]]
+    if [[ ${2} == head ]]; then
+      "$curl_bin" --fail --silent --show-error --max-time 10 \
+        http://127.0.0.1:8888/health >/dev/null
+      "$curl_bin" --fail --silent --show-error --max-time 10 \
+        http://127.0.0.1:8888/v1/models >/dev/null
+    fi
+    printf 'healthy role=%s\n' "${2}"
+    ;;
+  infer)
+    if [[ ${2} != head ]]; then
+      echo "infer is head-only" >&2
+      exit 2
+    fi
+    exec "$curl_bin" --fail --silent --show-error --max-time 300 \
+      -H 'Content-Type: application/json' \
+      -d '{"model":"deepseek","messages":[{"role":"user","content":"Reply with exactly: SPARK_OK"}],"temperature":0,"max_tokens":32}' \
+      http://127.0.0.1:8888/v1/chat/completions
+    ;;
+  stop)
+    compose down --timeout 120 --remove-orphans
+    ;;
+  verify-release)
+    if "$docker_bin" inspect "$container" >/dev/null 2>&1; then
+      echo "runtime container still exists: $container" >&2
+      exit 1
+    fi
+    if [[ ${2} == head ]] && "$curl_bin" --silent --max-time 2 \
+      http://127.0.0.1:8888/health >/dev/null 2>&1; then
+      echo "head API still responds" >&2
+      exit 1
+    fi
+    printf 'released role=%s\n' "${2}"
+    ;;
+  *)
+    echo "operation must be prepare, verify, start, health, infer, stop, verify-release, or render" >&2
+    exit 2
+    ;;
+esac

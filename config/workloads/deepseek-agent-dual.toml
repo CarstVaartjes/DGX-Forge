@@ -22,6 +22,10 @@ manifest_sha256 = "82e965c1caa019b31f4d776d0b3eddb0cc0d8e076f189822b8a3bbe3fa115
 [image]
 reference = "ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8"
 
+[runtime_release]
+manifest = "adapters/deepseek/mia-vllm/runtime-manifest.json"
+sha256 = "fe397f9bf912e7b0e0e362d3f756814501e903f166a7b06156f95850e32afa1d"
+
 [paths]
 cache = "/srv/models/snapshots/deepseek-v4-flash-0731"
 scratch = "/srv/models/runtime-cache/deepseek-agent-dual"
@@ -32,13 +36,22 @@ host = "127.0.0.1"
 port = 8888
 
 [commands]
-prepare = ["profile-prepare", "deepseek-agent-dual"]
-verify = ["profile-verify", "deepseek-agent-dual"]
-start = ["profile-start", "deepseek-agent-dual"]
-health = ["profile-health", "deepseek-agent-dual"]
-infer = ["profile-infer", "deepseek-agent-dual"]
-stop = ["profile-stop", "deepseek-agent-dual"]
-verify-release = ["profile-verify-release", "deepseek-agent-dual"]
+prepare = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/fe397f9bf912e7b0e0e362d3f756814501e903f166a7b06156f95850e32afa1d/bin/mia-deepseek-dual", "prepare"]
+verify = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/fe397f9bf912e7b0e0e362d3f756814501e903f166a7b06156f95850e32afa1d/bin/mia-deepseek-dual", "verify"]
+start = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/fe397f9bf912e7b0e0e362d3f756814501e903f166a7b06156f95850e32afa1d/bin/mia-deepseek-dual", "start"]
+health = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/fe397f9bf912e7b0e0e362d3f756814501e903f166a7b06156f95850e32afa1d/bin/mia-deepseek-dual", "health"]
+infer = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/fe397f9bf912e7b0e0e362d3f756814501e903f166a7b06156f95850e32afa1d/bin/mia-deepseek-dual", "infer"]
+stop = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/fe397f9bf912e7b0e0e362d3f756814501e903f166a7b06156f95850e32afa1d/bin/mia-deepseek-dual", "stop"]
+verify-release = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/fe397f9bf912e7b0e0e362d3f756814501e903f166a7b06156f95850e32afa1d/bin/mia-deepseek-dual", "verify-release"]
+
+[deadlines]
+prepare = 86400
+verify = 300
+start = 1800
+health = 120
+infer = 900
+stop = 300
+verify-release = 300
 
 [resources]
 minimum_free_memory_bytes = 120000000000

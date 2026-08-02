@@ -24,6 +24,7 @@ def catalog_root(tmp_path: Path) -> Path:
         "config/workloads",
         "config/cluster-profiles",
         "config/profile-selectors.toml",
+        "adapters/deepseek/mia-vllm",
         "locks/model-definitions.toml",
         "inventory/reports/model-definitions.json",
         "inventory/reports/accepted-cluster-profiles.json",
@@ -147,9 +148,14 @@ def _enable_runtime_release(catalog_root: Path) -> str:
         encoding="utf-8",
     )
     workload = catalog_root / "config/workloads/deepseek-agent-dual.toml"
+    old_release = '''[runtime_release]
+manifest = "adapters/deepseek/mia-vllm/runtime-manifest.json"
+sha256 = "fe397f9bf912e7b0e0e362d3f756814501e903f166a7b06156f95850e32afa1d"'''
+    new_release = f'''[runtime_release]
+manifest = "adapters/example/runtime-manifest.json"
+sha256 = "{_sha256(manifest)}"'''
     workload.write_text(
-        workload.read_text(encoding="utf-8")
-        + f'''\n[runtime_release]\nmanifest = "adapters/example/runtime-manifest.json"\nsha256 = "{_sha256(manifest)}"\n''',
+        workload.read_text(encoding="utf-8").replace(old_release, new_release),
         encoding="utf-8",
     )
     return _refresh_definition_fingerprint(catalog_root)
