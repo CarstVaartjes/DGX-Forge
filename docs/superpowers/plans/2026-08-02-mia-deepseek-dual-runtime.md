@@ -156,8 +156,8 @@ logs live under `/srv/models` bind mounts.
 - Modify: `docs/runbooks/sparkctl.md`
 
 - [ ] Test selector resolution, shared controller locking, refusal in non-stopped
-  state, worker-first order, resumability, absence/timeout failures, and no
-  active-profile mutation.
+  state, concurrent node preparation, deterministic reporting, resumability,
+  absence/timeout failures, and no active-profile mutation.
 - [ ] Implement `sparkctl prepare <selector>` and the 86,400-second deadline.
 - [ ] Have the adapter start or reattach to a deterministic named preparation
   container with durable progress; SSH interruption must not kill the download.
@@ -200,7 +200,8 @@ logs live under `/srv/models` bind mounts.
   fabric rails, and absence of model containers.
 - [ ] Deploy the immutable adapter release to both nodes with `--apply`.
 - [ ] Run `sparkctl prepare agent-full-dual`; pull the pinned image and download
-  approximately 155.4 GiB to each node with periodic progress updates.
+  approximately 155.4 GiB concurrently on both nodes with periodic progress
+  updates.
 - [ ] Offline-verify both snapshots and image digests.
 - [ ] Record schema-valid evidence and advance only `planned -> prepared`.
 

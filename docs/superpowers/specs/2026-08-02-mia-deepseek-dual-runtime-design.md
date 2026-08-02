@@ -185,9 +185,12 @@ Preparation is an explicit operation separate from profile switching. It may:
 4. generate and verify per-file manifests; and
 5. create only the declared writable directories.
 
-Preparation may not start a serving container. It is serialized and unavailable
-while a Cluster Profile is active. Progress and resumability are required because
-each node receives approximately 155.4 GiB of checkpoint artifacts.
+Preparation may not start a serving container. It is serialized against profile
+transitions and unavailable while a Cluster Profile is active, but artifact
+pulls and checkpoint materialization run concurrently on both Sparks. One node
+must never wait for the other node's full download. Progress and resumability
+are required because each node receives approximately 155.4 GiB of checkpoint
+artifacts.
 
 Bootstrapping the node-local adapter is a separate developer-machine operation:
 
@@ -213,9 +216,10 @@ sparkctl prepare agent-full-dual
 ```
 
 It acquires the controller's host lock, refuses any non-stopped or transitional
-state, prepares worker then head, and writes a resumable per-node report. A
-failed or interrupted prepare remains safe to repeat and never changes the
-active-profile state.
+state, submits both node preparations concurrently, and writes a deterministic
+resumable per-node report. Worker-first/head-first ordering applies to runtime
+start and stop, not artifact downloads. A failed or interrupted prepare remains
+safe to repeat and never changes the active-profile state.
 
 Preparation runs as a deterministic named one-shot Docker job on each node.
 The adapter starts or reattaches to that job and persists progress plus final
