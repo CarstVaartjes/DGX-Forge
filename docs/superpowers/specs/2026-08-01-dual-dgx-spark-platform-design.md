@@ -4,7 +4,7 @@ Date: 2026-08-01
 
 ## Purpose
 
-Configure two DGX Spark systems as a reliable local model platform. The primary workload is `deepseek-ai/DeepSeek-V4-Flash-0731` running across both Sparks. The platform must also run TRELLIS.2 and additional models through explicit workload profiles, expose an OpenAI-compatible API, provide a browser UI, and support secure Tailscale access later.
+Configure two DGX Spark systems as a reliable local model platform. The primary workload is `deepseek-ai/DeepSeek-V4-Flash-0731` running across both Sparks. The platform also runs the complete required model set defined in the [multi-runtime profile design](2026-08-02-multi-runtime-model-profiles-design.md), including Nemotron, Qwen image and vision models, Pixal3D, TRELLIS.2, rigging, and the requested alternative 3D generators. It exposes suitable model APIs, provides a browser UI later, and supports secure Tailscale access later.
 
 This specification uses measurable defaults and acceptance gates. A measured value may replace a provisional threshold only when the command, result, date, and reason are committed to the private inventory or benchmark record.
 
@@ -27,14 +27,14 @@ This specification uses measurable defaults and acceptance gates. A measured val
 3. Configure and validate the direct ConnectX-7 fabric with NVIDIA-supported tooling.
 4. Validate NCCL/RoCE communication independently of any model runtime.
 5. Serve `deepseek-ai/DeepSeek-V4-Flash-0731` across both nodes with vLLM tensor parallelism.
-6. Support explicit switching between DeepSeek lanes, TRELLIS.2, maintenance, and future model profiles.
+6. Support explicit switching and measured co-residency between the required profiles defined in the multi-runtime design, while keeping DeepSeek 0731 as the default agent.
 7. Provide one stable authenticated API endpoint and a browser interface.
 8. Add Tailscale access only after the LAN deployment is stable.
 
 ## Non-goals
 
 - Kubernetes, Slurm, or Docker Swarm during the initial deployment.
-- Serving DeepSeek and TRELLIS.2 concurrently.
+- Assuming arbitrary model pairs can run concurrently before their pairwise co-residency gate passes.
 - Loading model weights from the NAS during inference.
 - Public internet exposure or router port forwarding.
 - Automatic operating-system, firmware, container, model, or distributed-profile updates.
@@ -212,9 +212,9 @@ The prebuilt Anemll image is acceptable only after provenance and contents are i
 - Leaves Spark SSH and DGX Dashboard available; external Caddy continues returning its maintenance response.
 - Is the required state before OS, firmware, driver, or fabric maintenance.
 
-### Future profiles
+### Multi-runtime profiles
 
-Each future model is isolated with declared nodes, exact ports, local cache paths, CPU and memory limits, startup order, health timeouts, stop grace period, log limits, and acceptance tests. A profile is not advertised until its health and output-quality checks pass.
+The required model catalog, runtime adapters, optimized-artifact policy, placement classes, and model-specific acceptance gates are defined in the [multi-runtime profile design](2026-08-02-multi-runtime-model-profiles-design.md). Each profile declares nodes, exact ports, local cache paths, CPU and memory limits, startup order, health timeouts, stop grace period, log limits, and acceptance tests. A profile is not advertised until its health and output-quality checks pass.
 
 ## Workload Controller
 

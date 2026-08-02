@@ -1,6 +1,6 @@
 # Dual DGX Spark Architecture Overview
 
-The platform separates AI compute from every surrounding service. The two DGX Sparks run model workloads and their required NVIDIA runtime only. Initial DeepSeek and TRELLIS.2 testing uses loopback endpoints through SSH tunnels. When the new NAS arrives, gateway, orchestration, user interface, remote access, and optional routing services run there as containers.
+The platform separates AI compute from every surrounding service. The two DGX Sparks run model workloads and their required NVIDIA runtime adapters only. Initial testing uses loopback endpoints through SSH tunnels. When the new NAS arrives, gateway, orchestration, user interface, remote access, and optional routing services run there as containers.
 
 ```mermaid
 flowchart LR
@@ -21,12 +21,11 @@ flowchart LR
 
     subgraph compute[AI-only compute plane]
         subgraph spark1[DGX Spark 1 - Head]
-            head[DeepSeek vLLM<br/>TP rank 0]
+            head[Active runtime adapter<br/>DeepSeek TP rank 0 or single-node model]
             cache1[Verified local<br/>model cache]
         end
         subgraph spark2[DGX Spark 2 - Worker]
-            worker[DeepSeek vLLM<br/>TP rank 1]
-            trellis[TRELLIS.2]
+            worker[Active runtime adapter<br/>DeepSeek TP rank 1 or single-node model]
             cache2[Verified local<br/>model cache]
         end
     end
@@ -38,7 +37,7 @@ flowchart LR
     ui --> caddy
     litellm -. optional routing .-> caddy
     caddy -->|HTTPS/API| head
-    caddy -->|TRELLIS route| trellis
+    caddy -->|typed model/job route| worker
     mac -. admin SSH / API tunnel .-> head
     mac -. admin SSH / UI tunnel .-> worker
     controller -. restricted SSH .-> head
@@ -56,7 +55,7 @@ flowchart LR
     class remote future;
     class caddy,controller,ui control;
     class litellm,tailscale future;
-    class head,worker,trellis,cache1,cache2 ai;
+    class head,worker,cache1,cache2 ai;
 ```
 
 ## Hosts
@@ -65,8 +64,8 @@ flowchart LR
 | --- | --- |
 | Mac | Human administration through the 1Password-managed SSH key. It is not an always-on platform dependency. |
 | Future new NAS or another external server | Later runs all non-AI containers: Caddy, the one-shot controller, browser UI, optional LiteLLM, and Tailscale ingress. |
-| DGX Spark 1 | DeepSeek head, tensor-parallel rank 0, authenticated upstream API, and a complete local model cache. |
-| DGX Spark 2 | DeepSeek worker, tensor-parallel rank 1, mutually exclusive TRELLIS.2 workload, and a complete local model cache. |
+| DGX Spark 1 | DeepSeek tensor-parallel rank 0 or a selected single-node model profile, plus complete verified caches for profiles eligible to run there. |
+| DGX Spark 2 | DeepSeek tensor-parallel rank 1 or a selected single-node model profile, plus complete verified caches for profiles eligible to run there. |
 
 ## Services
 
@@ -79,7 +78,7 @@ flowchart LR
 | Tailscale gateway | Later exposes the named gateway service and restricted subnet access without placing remote-access software on the Sparks. | External host/container |
 | DeepSeek vLLM head | Runs TP rank 0, scheduling, detokenization, and the upstream API consumed by Caddy. | Spark 1 |
 | DeepSeek vLLM worker | Runs TP rank 1 and exchanges tensor data with rank 0 over the direct fabric. | Spark 2 |
-| TRELLIS.2 | Runs 3D generation when the two-node DeepSeek profile is stopped. | Spark 2 |
+| Runtime adapters | Run official or audited model-specific loaders for Nemotron, Qwen image/vision, Pixal3D, TRELLIS.2, TokenRig, Step1X-3D, TripoSG, and Hunyuan3D-Omni. | One or both Sparks as declared by each profile |
 | Local model caches | Keep complete, manifest-verified snapshots on both nodes so the NAS and LAN are never in the model hot path. | Both Sparks |
 
 ## Traffic paths
@@ -95,12 +94,14 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    drain[1. Drain<br/>Caddy returns 503] --> stop[2. Stop<br/>head then worker]
+    drain[1. Drain<br/>Caddy returns 503] --> stop[2. Stop<br/>adapter-declared order]
     stop --> verify[3. Verify<br/>memory, disk, cache, fabric]
-    verify --> start[4. Start<br/>worker then head]
+    verify --> start[4. Start<br/>adapter-declared order]
     start --> test[5. Test<br/>health and output quality]
     test --> advertise[6. Advertise<br/>Caddy routes traffic]
     test -->|failure| stopped[Known stopped state]
 ```
 
 The NAS or other external service host is an availability dependency for client access, but it never carries model weights, KV-cache data, CUDA/JIT work, or tensor-parallel traffic.
+
+The detailed model catalog, preferred loaders, optimized DGX Spark candidates, placement classes, and quality gates live in the [multi-runtime model profile design](superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md).
