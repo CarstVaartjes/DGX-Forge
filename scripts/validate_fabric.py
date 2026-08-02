@@ -36,6 +36,29 @@ PHYSICAL_LINK_MIN_GBPS = 184.0
 WRITE_FUNCTION_MIN_GBPS = 98.01
 READ_FUNCTION_MIN_GBPS = 72.37
 NCCL_MIN_GB_PER_SECOND = 17.44
+LATENCY_MESSAGE_BYTES = 8
+LATENCY_ITERATIONS = 10000
+RDMA_ERROR_COUNTERS = (
+    "out_of_buffer",
+    "out_of_sequence",
+    "duplicate_request",
+    "rnr_nak_retry_err",
+    "packet_seq_err",
+    "implied_nak_seq_err",
+    "local_ack_timeout_err",
+    "resp_local_length_error",
+    "resp_cqe_error",
+    "req_cqe_error",
+    "req_remote_invalid_request",
+    "req_remote_access_errors",
+    "resp_remote_access_errors",
+    "resp_cqe_flush_error",
+    "req_cqe_flush_error",
+    "req_transport_retries_exceeded",
+    "req_rnr_retries_exceeded",
+    "roce_adp_retrans",
+    "roce_adp_retrans_to",
+)
 
 
 class GateError(RuntimeError):
@@ -54,6 +77,21 @@ class NCCLResult:
 class RDMAResult:
     passed: bool
     bandwidth_gbps: float | None
+    reason: str | None = None
+
+
+@dataclasses.dataclass(frozen=True)
+class RDMALatencyResult:
+    passed: bool
+    message_bytes: int | None = None
+    iterations: int | None = None
+    minimum_usec: float | None = None
+    maximum_usec: float | None = None
+    typical_usec: float | None = None
+    average_usec: float | None = None
+    standard_deviation_usec: float | None = None
+    p99_usec: float | None = None
+    p999_usec: float | None = None
     reason: str | None = None
 
 
@@ -81,18 +119,19 @@ def parse_nccl(output: str) -> NCCLResult:
     ib_selected = bool(re.search(r"NET/IB\s*:\s*Using\b", output, re.IGNORECASE))
     transport = "Socket" if socket_selected else "IB" if ib_selected else None
 
-    values = [
+    averages = [
         float(match)
-        for match in re.findall(r"(?:Avg\s+)?bus\s+bandwidth\s*:\s*([0-9]+(?:\.[0-9]+)?)", output, re.I)
+        for match in re.findall(r"Avg\s+bus\s+bandwidth\s*:\s*([0-9]+(?:\.[0-9]+)?)", output, re.I)
     ]
     # Standard nccl-tests rows contain: bytes, iterations, type, op, time,
-    # algbw, busbw, error, ... .  The first busbw is enough for acceptance.
+    # algbw, busbw, error, ... . Prefer the suite's final average when present;
+    # row values are retained only for older output without that summary.
     row = re.compile(
         r"^\s*\d+\s+\d+\s+\S+\s+\S+\s+[-+0-9.eE]+\s+[-+0-9.eE]+\s+([-+0-9.eE]+)\b",
         re.MULTILINE,
     )
-    values.extend(float(match) for match in row.findall(output))
-    bandwidth = max(values) if values else None
+    row_values = [float(match) for match in row.findall(output)]
+    bandwidth = averages[-1] if averages else max(row_values) if row_values else None
 
     if socket_selected:
         return NCCLResult(False, transport, bandwidth, "NCCL selected NET/Socket")
@@ -103,18 +142,105 @@ def parse_nccl(output: str) -> NCCLResult:
     return NCCLResult(True, transport, bandwidth)
 
 
+def selected_nccl_hcas(output: str) -> set[str]:
+    """Return HCA names from NCCL's actual NET/IB selection diagnostics."""
+    selected: set[str] = set()
+    for line in output.splitlines():
+        if not re.search(r"NET/IB\s*:\s*Using\b", line, re.IGNORECASE):
+            continue
+        selected.update(re.findall(r"\broce[A-Za-z0-9]+\b", line))
+    return selected
+
+
 def parse_rdma(output: str) -> RDMAResult:
     """Require an IB/RoCE perftest with a positive average Gb/s measurement."""
     if not re.search(r"Transport type\s*:\s*IB\b", output, re.I):
         return RDMAResult(False, None, "perftest did not report IB transport")
     if not re.search(r"Link type\s*:\s*Ethernet\b", output, re.I):
         return RDMAResult(False, None, "perftest did not report Ethernet/RoCE link")
+    if not re.search(r"Mtu\s*:\s*1024\[B\]", output, re.I):
+        return RDMAResult(False, None, "perftest did not report 1024-byte RoCE MTU")
+    if not re.search(r"GID index\s*:\s*3\b", output, re.I):
+        return RDMAResult(False, None, "perftest did not report GID index 3")
     rows = re.compile(r"^\s*\d+\s+\d+\s+[-+0-9.eE]+\s+([-+0-9.eE]+)\s+[-+0-9.eE]+\s*$", re.MULTILINE)
     values = [float(value) for value in rows.findall(output)]
     bandwidth = max(values) if values else None
     if bandwidth is None or bandwidth <= 0:
         return RDMAResult(False, bandwidth, "perftest reported no positive average bandwidth")
     return RDMAResult(True, bandwidth)
+
+
+def parse_rdma_latency(output: str) -> RDMALatencyResult:
+    """Parse the fixed RoCE write-latency distribution in microseconds."""
+    if not re.search(r"Transport type\s*:\s*IB\b", output, re.I):
+        return RDMALatencyResult(False, reason="latency test did not report IB transport")
+    if not re.search(r"Link type\s*:\s*Ethernet\b", output, re.I):
+        return RDMALatencyResult(False, reason="latency test did not report Ethernet/RoCE link")
+    if not re.search(r"Mtu\s*:\s*1024\[B\]", output, re.I):
+        return RDMALatencyResult(False, reason="latency test did not report 1024-byte RoCE MTU")
+    if not re.search(r"GID index\s*:\s*3\b", output, re.I):
+        return RDMALatencyResult(False, reason="latency test did not report GID index 3")
+    row = re.compile(
+        r"^\s*(\d+)\s+(\d+)\s+"
+        r"([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+"
+        r"([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s*$",
+        re.MULTILINE,
+    )
+    match = row.search(output)
+    if match is None:
+        return RDMALatencyResult(False, reason="latency test did not report a distribution row")
+    message_bytes, iterations = (int(match.group(1)), int(match.group(2)))
+    if message_bytes != LATENCY_MESSAGE_BYTES or iterations != LATENCY_ITERATIONS:
+        return RDMALatencyResult(False, reason="latency test parameters did not match the fixed baseline")
+    metrics = [float(match.group(index)) for index in range(3, 10)]
+    return RDMALatencyResult(True, message_bytes, iterations, *metrics)
+
+
+def parse_rdma_counters(
+    output: str,
+    *,
+    expected_hcas: tuple[str, ...],
+    monitored_counters: tuple[str, ...] = RDMA_ERROR_COUNTERS,
+) -> dict[str, int]:
+    """Extract every monitored error counter for the active RoCE functions."""
+    by_hca: dict[str, dict[str, int]] = {}
+    for line in output.splitlines():
+        match = re.match(r"^link\s+(\S+)/\d+\s+(.+)$", line.strip())
+        if match is None or match.group(1) not in expected_hcas:
+            continue
+        tokens = match.group(2).split()
+        if len(tokens) % 2:
+            raise GateError(f"malformed RDMA counter row for {match.group(1)}")
+        try:
+            by_hca[match.group(1)] = {
+                tokens[index]: int(tokens[index + 1]) for index in range(0, len(tokens), 2)
+            }
+        except ValueError as error:
+            raise GateError(f"non-integer RDMA counter for {match.group(1)}") from error
+    result: dict[str, int] = {}
+    for hca in expected_hcas:
+        counters = by_hca.get(hca)
+        if counters is None:
+            raise GateError(f"RDMA statistics missing active HCA {hca}")
+        for counter in monitored_counters:
+            if counter not in counters:
+                raise GateError(f"RDMA statistics for {hca} missing {counter}")
+            result[f"{hca}/{counter}"] = counters[counter]
+    return dict(sorted(result.items()))
+
+
+def validate_counter_delta(before: dict[str, int], after: dict[str, int]) -> dict[str, int]:
+    """Reject missing snapshots or any monitored error growth during acceptance."""
+    if before.keys() != after.keys():
+        missing = sorted(before.keys() ^ after.keys())
+        raise GateError(f"RDMA counter snapshots differ: {', '.join(missing)}")
+    deltas = {key: after[key] - before[key] for key in sorted(before)}
+    for key, delta in deltas.items():
+        if delta < 0:
+            raise GateError(f"RDMA counter {key} decreased during the run")
+        if delta > 0:
+            raise GateError(f"RDMA counter {key} grew from {before[key]} to {after[key]}")
+    return deltas
 
 
 def load_hosts(inventory_path: Path) -> tuple[Host, Host]:
@@ -210,12 +336,14 @@ def remote_preflight(runner: Runner, host: Host, *, via_fabric: bool) -> None:
 set -euo pipefail
 test -x /usr/bin/ib_write_bw
 test -x /usr/bin/ib_read_bw
+test -x /usr/bin/ib_write_lat
 test -x /usr/bin/ibv_devinfo
 command -v rdma >/dev/null
 """
     for rail in host.rails:
         command += (
-            f"test -r /sys/class/net/{shlex.quote(rail.interface)}/mtu\n"
+            f"test \"$(cat /sys/class/net/{shlex.quote(rail.interface)}/speed)\" = 200000\n"
+            f"test \"$(cat /sys/class/net/{shlex.quote(rail.interface)}/mtu)\" = 1500\n"
             f"test -r /sys/class/infiniband/{shlex.quote(rail.hca)}/ports/1/gids/{rail.gid_index}\n"
             f"test -r /sys/class/infiniband/{shlex.quote(rail.hca)}/ports/1/gid_attrs/ndevs/{rail.gid_index}\n"
             f"test \"$(cat /sys/class/infiniband/{shlex.quote(rail.hca)}/ports/1/gid_attrs/ndevs/{rail.gid_index})\" = {shlex.quote(rail.interface)}\n"
@@ -430,6 +558,127 @@ def run_rdma(runner: Runner, head: Host, worker: Host) -> list[dict[str, Any]]:
     return results
 
 
+def latency_command(rail: Rail, peer_ip: str, port: int, *, server: bool) -> str:
+    """Render the immutable write-latency baseline command."""
+    base = (
+        f"/usr/bin/ib_write_lat -d {shlex.quote(rail.hca)} -i 1 -x {rail.gid_index} -p {port} "
+        f"-F --size {LATENCY_MESSAGE_BYTES} --iters {LATENCY_ITERATIONS}"
+    )
+    return base if server else f"{base} {shlex.quote(peer_ip)}"
+
+
+def run_one_rdma_latency(
+    runner: Runner,
+    server_host: Host,
+    client_host: Host,
+    server_function: Rail,
+    client_function: Rail,
+    port: int,
+) -> dict[str, Any]:
+    """Run one fixed per-function latency distribution and verify both processes."""
+    label = f"ib_write_lat:{client_host.name}->{server_host.name}:{server_function.name}"
+    server_log = f"/tmp/validate-fabric-ib_write_lat-{port}.log"
+    server_status = f"/tmp/validate-fabric-ib_write_lat-{port}.status"
+    server_body = (
+        f'{latency_command(server_function, "", port, server=True)} > "$1" 2>&1; '
+        'exit_code=$?; printf "%s\n" "$exit_code" > "$2"; exit "$exit_code"'
+    )
+    server_command = (
+        f"rm -f {server_log} {server_status}; nohup bash -c {shlex.quote(server_body)} "
+        f"validate-fabric-latency {shlex.quote(server_log)} {shlex.quote(server_status)} "
+        "</dev/null >/dev/null 2>&1 & echo $!"
+    )
+
+    def call_on(host: Host, command: str, *, check: bool = True) -> subprocess.CompletedProcess[str]:
+        if host is runner.head:
+            return runner.remote(host.ssh_alias, command, check=check)
+        return runner.worker_via_fabric(command, check=check)
+
+    server_call = lambda command, check=True: call_on(server_host, command, check=check)
+    client_call = lambda command, check=True: call_on(client_host, command, check=check)
+    server_pid = server_call(server_command).stdout.strip()
+    if not server_pid.isdigit():
+        raise GateError(f"{label} did not return a perftest server PID")
+    collect_server = f"""set -u
+for _ in $(seq 1 300); do
+  [ -s {shlex.quote(server_status)} ] && break
+  kill -0 {server_pid} 2>/dev/null || break
+  sleep 0.1
+done
+if [ ! -s {shlex.quote(server_status)} ]; then
+  kill {server_pid} 2>/dev/null || true
+  cat {shlex.quote(server_log)} 2>/dev/null || true
+  rm -f {shlex.quote(server_log)} {shlex.quote(server_status)}
+  exit 124
+fi
+exit_code="$(cat {shlex.quote(server_status)})"
+cat {shlex.quote(server_log)}
+rm -f {shlex.quote(server_log)} {shlex.quote(server_status)}
+case "$exit_code" in
+  ''|*[!0-9]*) exit 125 ;;
+esac
+exit "$exit_code"
+"""
+    try:
+        time.sleep(1)
+        client = client_call(
+            latency_command(client_function, server_function.fabric_ip, port, server=False),
+            check=False,
+        )
+        server = server_call(collect_server, check=False)
+    except BaseException:
+        server_call(f"kill {server_pid} 2>/dev/null || true; rm -f {server_log} {server_status}", check=False)
+        raise
+    if client.returncode:
+        raise GateError(f"{label} client exited {client.returncode}")
+    if server.returncode:
+        raise GateError(f"{label} server exited {server.returncode}")
+    parsed = parse_rdma_latency(client.stdout + "\n" + client.stderr)
+    if not parsed.passed:
+        raise GateError(f"{label}: {parsed.reason}")
+    metrics = dataclasses.asdict(parsed)
+    metrics.pop("passed")
+    metrics.pop("reason")
+    return {
+        "name": label,
+        "passed": True,
+        **metrics,
+        "client_exit_code": client.returncode,
+        "server_exit_code": server.returncode,
+    }
+
+
+def run_rdma_latency(runner: Runner, head: Host, worker: Host) -> list[dict[str, Any]]:
+    """Record fixed latency distributions on both functions and directions."""
+    results: list[dict[str, Any]] = []
+    port = 14000
+    for head_function, worker_function in zip(head.rails, worker.rails, strict=True):
+        results.append(
+            run_one_rdma_latency(runner, worker, head, worker_function, head_function, port)
+        )
+        port += 1
+        results.append(
+            run_one_rdma_latency(runner, head, worker, head_function, worker_function, port)
+        )
+        port += 1
+    return results
+
+
+def capture_rdma_counters(runner: Runner, head: Host, worker: Host) -> dict[str, int]:
+    """Capture monitored counters worker-first for both active RoCE functions."""
+    command = "/usr/bin/rdma statistic show"
+    worker_result = runner.worker_via_fabric(command)
+    head_result = runner.remote(head.ssh_alias, command)
+    snapshot: dict[str, int] = {}
+    for host, result in ((worker, worker_result), (head, head_result)):
+        counters = parse_rdma_counters(
+            result.stdout,
+            expected_hcas=tuple(function.hca for function in host.rails),
+        )
+        snapshot.update({f"{host.name}/{key}": value for key, value in counters.items()})
+    return dict(sorted(snapshot.items()))
+
+
 def nccl_prerequisite_command() -> str:
     """Read-only checks for the documented completed native NCCL build."""
     return f"""set -euo pipefail
@@ -490,7 +739,8 @@ def run_nccl(runner: Runner, head: Host, worker: Host) -> NCCLResult:
     runner.worker_via_fabric(nccl_prerequisite_command())
     runner.remote(head.ssh_alias, nccl_prerequisite_command())
     result = runner.remote(head.ssh_alias, nccl_launch_command(head, worker))
-    parsed = parse_nccl(result.stdout + "\n" + result.stderr)
+    output = result.stdout + "\n" + result.stderr
+    parsed = parse_nccl(output)
     if not parsed.passed:
         raise GateError(parsed.reason or "NCCL all-reduce failed")
     if parsed.bus_bandwidth_gbps is None or parsed.bus_bandwidth_gbps < NCCL_MIN_GB_PER_SECOND:
@@ -498,6 +748,10 @@ def run_nccl(runner: Runner, head: Host, worker: Host) -> NCCLResult:
             f"NCCL bus bandwidth {parsed.bus_bandwidth_gbps or 0.0:.2f} GB/s "
             f"is below {NCCL_MIN_GB_PER_SECOND:.2f} GB/s"
         )
+    selected_hcas = selected_nccl_hcas(output)
+    for function in head.rails:
+        if function.hca not in selected_hcas:
+            raise GateError(f"NCCL did not select {function.hca}")
     return parsed
 
 
@@ -526,11 +780,15 @@ def main(argv: list[str] | None = None) -> int:
 
     evidence: list[dict[str, Any]] = []
     document: dict[str, Any] = {
-        "schema_version": 1,
+        "schema_version": 2,
         "captured_at": datetime.now(UTC).isoformat(),
         "evidence_scope": "live_runtime_verification",
         "status": "failed",
         "rdma": [],
+        "latency": [],
+        "rdma_counters_before": None,
+        "rdma_counters_after": None,
+        "rdma_counter_deltas": None,
         "nccl": None,
         "commands": evidence,
     }
@@ -554,11 +812,29 @@ def main(argv: list[str] | None = None) -> int:
             document["status"] = "nccl_preflight_passed"
             document["evidence_scope"] = "live_read_only_preflight"
             return 0
-        document["rdma"] = run_rdma(runner, head, worker)
-        nccl = run_nccl(runner, head, worker)
-        document["nccl"] = dataclasses.asdict(nccl)
-        if not nccl.passed:
-            raise GateError(nccl.reason or "NCCL failed")
+        document["rdma_counters_before"] = capture_rdma_counters(runner, head, worker)
+        traffic_error: GateError | None = None
+        try:
+            document["rdma"] = run_rdma(runner, head, worker)
+            document["latency"] = run_rdma_latency(runner, head, worker)
+            nccl = run_nccl(runner, head, worker)
+            document["nccl"] = dataclasses.asdict(nccl)
+            if not nccl.passed:
+                raise GateError(nccl.reason or "NCCL failed")
+        except GateError as error:
+            traffic_error = error
+        try:
+            document["rdma_counters_after"] = capture_rdma_counters(runner, head, worker)
+            document["rdma_counter_deltas"] = validate_counter_delta(
+                document["rdma_counters_before"], document["rdma_counters_after"]
+            )
+        except GateError as error:
+            if traffic_error is None:
+                traffic_error = error
+            else:
+                document["counter_failure"] = str(error)
+        if traffic_error is not None:
+            raise traffic_error
         document["status"] = "passed"
         return 0
     except GateError as error:

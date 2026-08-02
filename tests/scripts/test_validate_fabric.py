@@ -67,6 +67,19 @@ def test_rejects_non_positive_nccl_bandwidth(parse_nccl):
     assert result.passed is False
 
 
+def test_nccl_prefers_reported_average_over_faster_individual_row(parse_nccl):
+    """The admission floor applies to the final average, not the best message size."""
+    output = """
+NET/IB : Using rocep1s0f1,roceP2p1s0f1
+ 8388608 1 float sum 1.0 21.0 20.0 0
+Avg bus bandwidth : 17.0
+"""
+
+    result = parse_nccl(output)
+
+    assert result.bus_bandwidth_gbps == 17.0
+
+
 def test_runs_head_rdma_client_through_the_head_alias(validate_module):
     """The bound remote method needs the head alias as its first argument."""
     rail = validate_module.Rail("rail100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
@@ -83,7 +96,10 @@ def test_runs_head_rdma_client_through_the_head_alias(validate_module):
             if "nohup" in command:
                 return SimpleNamespace(stdout="1234\n", stderr="", returncode=0)
             return SimpleNamespace(
-                stdout="Transport type : IB\nLink type : Ethernet\n65536 5000 0.0 88.5 0.1\n",
+                stdout=(
+                    "Transport type : IB\nLink type : Ethernet\n"
+                    "Mtu : 1024[B]\nGID index : 3\n65536 5000 0.0 88.5 0.1\n"
+                ),
                 stderr="",
                 returncode=0,
             )
@@ -91,7 +107,12 @@ def test_runs_head_rdma_client_through_the_head_alias(validate_module):
         def worker_via_fabric(self, command, *, check=True):
             self.calls.append(("worker", command, check))
             return SimpleNamespace(
-                stdout="1234\n" if "nohup" in command else "Transport type : IB\nLink type : Ethernet\n65536 5000 0.0 88.5 0.1\n",
+                stdout=(
+                    "1234\n"
+                    if "nohup" in command
+                    else "Transport type : IB\nLink type : Ethernet\nMtu : 1024[B]\n"
+                    "GID index : 3\n65536 5000 0.0 88.5 0.1\n"
+                ),
                 stderr="",
                 returncode=0,
             )
@@ -131,7 +152,10 @@ def test_rejects_rdma_component_below_declared_floor(validate_module):
     rail = validate_module.Rail("rail100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
     head = validate_module.Host("spark1", "dgx-spark-1", {}, (rail, rail))
     worker = validate_module.Host("spark2", "dgx-spark-2", {}, (rail, rail))
-    positive_but_low = "Transport type : IB\nLink type : Ethernet\n65536 5000 0.0 97.0 0.1\n"
+    positive_but_low = (
+        "Transport type : IB\nLink type : Ethernet\nMtu : 1024[B]\n"
+        "GID index : 3\n65536 5000 0.0 97.0 0.1\n"
+    )
 
     class Runner:
         def __init__(self):
@@ -271,6 +295,234 @@ def test_nccl_rejects_bus_bandwidth_below_regression_floor(validate_module):
         validate_module.run_nccl(Runner(), head, worker)
 
 
+def test_nccl_rejects_missing_active_hca(validate_module):
+    """A distributed run cannot pass while using only half of the physical-link functions."""
+    head, worker = aggregate_hosts(validate_module)
+    fabric = {
+        "NCCL_SOCKET_IFNAME": "=enp1s0f1np1,enP2p1s0f1np1",
+        "NCCL_IB_HCA": "=rocep1s0f1:1,roceP2p1s0f1:1",
+        "NCCL_IB_GID_INDEX": 3,
+        "TP_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1",
+        "GLOO_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1",
+    }
+    head = validate_module.Host(head.name, head.ssh_alias, fabric, head.rails)
+    worker = validate_module.Host(worker.name, worker.ssh_alias, fabric, worker.rails)
+
+    class Runner:
+        def remote(self, host, command, *, check=True):
+            return SimpleNamespace(
+                stdout=(
+                    "NCCL_IB_HCA=rocep1s0f1,roceP2p1s0f1\n"
+                    "NET/IB : Using rocep1s0f1\n"
+                    "Avg bus bandwidth : 19.3"
+                ),
+                stderr="",
+                returncode=0,
+            )
+
+        def worker_via_fabric(self, command, *, check=True):
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    with pytest.raises(validate_module.GateError, match="did not select roceP2p1s0f1"):
+        validate_module.run_nccl(Runner(), head, worker)
+
+
+@pytest.mark.parametrize(
+    ("header", "reason"),
+    [
+        ("Mtu : 2048[B]\nGID index : 3", "1024-byte RoCE MTU"),
+        ("Mtu : 1024[B]\nGID index : 2", "GID index 3"),
+    ],
+)
+def test_rejects_rdma_bandwidth_with_wrong_roce_path(validate_module, header, reason):
+    """Bandwidth is invalid when perftest did not use the pinned RoCE path."""
+    output = (
+        "Transport type : IB\n"
+        "Link type : Ethernet\n"
+        f"{header}\n"
+        "65536 5000 0.0 108.9 0.1\n"
+    )
+
+    result = validate_module.parse_rdma(output)
+
+    assert result.passed is False
+    assert reason in result.reason
+
+
+def test_parses_fixed_rdma_write_latency_distribution(validate_module):
+    """The cluster baseline retains tail latency rather than only an average."""
+    output = """
+                    RDMA_Write Latency Test
+ Transport type : IB
+ Mtu             : 1024[B]
+ Link type       : Ethernet
+ GID index       : 3
+ #bytes #iterations    t_min[usec]    t_max[usec]  t_typical[usec]    t_avg[usec]    t_stdev[usec]   99% percentile[usec]   99.9% percentile[usec]
+ 8       10000          1.91           4.80         1.98               1.98            0.02            2.05                    2.19
+"""
+
+    result = validate_module.parse_rdma_latency(output)
+
+    assert result.passed is True
+    assert result.message_bytes == 8
+    assert result.iterations == 10000
+    assert result.minimum_usec == 1.91
+    assert result.maximum_usec == 4.80
+    assert result.typical_usec == 1.98
+    assert result.average_usec == 1.98
+    assert result.standard_deviation_usec == 0.02
+    assert result.p99_usec == 2.05
+    assert result.p999_usec == 2.19
+
+
+def test_rejects_latency_without_roce_transport(validate_module):
+    """A numeric latency row over the wrong transport cannot establish the baseline."""
+    output = """
+ Transport type : TCP
+ Link type : Ethernet
+ 8 10000 1.91 4.80 1.98 1.98 0.02 2.05 2.19
+"""
+
+    result = validate_module.parse_rdma_latency(output)
+
+    assert result.passed is False
+    assert result.reason == "latency test did not report IB transport"
+
+
+def test_parses_only_expected_hca_error_counters(validate_module):
+    """Counter evidence excludes inactive functions while requiring every monitored key."""
+    output = """
+link rocep1s0f0/1 packet_seq_err 99 local_ack_timeout_err 99 roce_adp_retrans 99
+link rocep1s0f1/1 packet_seq_err 0 local_ack_timeout_err 1 roce_adp_retrans 2
+"""
+
+    result = validate_module.parse_rdma_counters(
+        output,
+        expected_hcas=("rocep1s0f1",),
+        monitored_counters=("packet_seq_err", "local_ack_timeout_err", "roce_adp_retrans"),
+    )
+
+    assert result == {
+        "rocep1s0f1/local_ack_timeout_err": 1,
+        "rocep1s0f1/packet_seq_err": 0,
+        "rocep1s0f1/roce_adp_retrans": 2,
+    }
+
+
+def test_rejects_missing_rdma_error_counter(validate_module):
+    """A truncated counter snapshot is not accepted as an all-zero result."""
+    with pytest.raises(validate_module.GateError, match="missing packet_seq_err"):
+        validate_module.parse_rdma_counters(
+            "link rocep1s0f1/1 local_ack_timeout_err 0",
+            expected_hcas=("rocep1s0f1",),
+            monitored_counters=("packet_seq_err", "local_ack_timeout_err"),
+        )
+
+
+def test_rejects_growing_rdma_error_counter(validate_module):
+    """Any new sequence, retry, or timeout error fails the live acceptance run."""
+    before = {
+        "spark1/rocep1s0f1/packet_seq_err": 0,
+        "spark1/rocep1s0f1/local_ack_timeout_err": 2,
+    }
+    after = {
+        "spark1/rocep1s0f1/packet_seq_err": 1,
+        "spark1/rocep1s0f1/local_ack_timeout_err": 2,
+    }
+
+    with pytest.raises(validate_module.GateError, match="packet_seq_err grew from 0 to 1"):
+        validate_module.validate_counter_delta(before, after)
+
+
+def test_accepts_unchanged_rdma_error_counters(validate_module):
+    """Pre-existing counters are recorded but only growth during the run is rejected."""
+    before = {"spark1/rocep1s0f1/packet_seq_err": 3}
+    after = {"spark1/rocep1s0f1/packet_seq_err": 3}
+
+    assert validate_module.validate_counter_delta(before, after) == {
+        "spark1/rocep1s0f1/packet_seq_err": 0
+    }
+
+
+def test_latency_command_pins_baseline_parameters(validate_module):
+    """Every future latency comparison uses the same verb, payload, and sample count."""
+    rail = validate_module.Rail("function100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
+
+    command = validate_module.latency_command(
+        rail, "192.168.100.11", 14000, server=False
+    )
+
+    assert command == (
+        "/usr/bin/ib_write_lat -d rocep1s0f1 -i 1 -x 3 -p 14000 "
+        "-F --size 8 --iters 10000 192.168.100.11"
+    )
+
+
+def test_runs_fixed_latency_and_records_distribution(validate_module):
+    """The live latency wrapper checks both process exits and returns parsed metrics."""
+    rail = validate_module.Rail("function100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
+    head = validate_module.Host("spark1", "dgx-spark-1", {}, (rail, rail))
+    worker = validate_module.Host("spark2", "dgx-spark-2", {}, (rail, rail))
+    latency = """
+ Transport type : IB
+ Mtu : 1024[B]
+ Link type : Ethernet
+ GID index : 3
+ 8 10000 1.91 4.80 1.98 1.98 0.02 2.05 2.19
+"""
+
+    class Runner:
+        def __init__(self):
+            self.head = head
+
+        def remote(self, host, command, *, check=True):
+            if "nohup" in command:
+                return SimpleNamespace(stdout="4321\n", stderr="", returncode=0)
+            return SimpleNamespace(stdout=latency, stderr="", returncode=0)
+
+        def worker_via_fabric(self, command, *, check=True):
+            return SimpleNamespace(
+                stdout="4321\n" if "nohup" in command else latency,
+                stderr="",
+                returncode=0,
+            )
+
+    result = validate_module.run_one_rdma_latency(
+        Runner(), worker, head, rail, rail, 14000
+    )
+
+    assert result["name"] == "ib_write_lat:spark1->spark2:function100"
+    assert result["p99_usec"] == 2.05
+    assert result["client_exit_code"] == 0
+    assert result["server_exit_code"] == 0
+
+
+def test_counter_capture_is_worker_first_and_scoped_to_active_hcas(validate_module):
+    """Snapshots use both active functions on both hosts without management-plane counters."""
+    head, worker = aggregate_hosts(validate_module)
+    pairs = " ".join(f"{name} 0" for name in validate_module.RDMA_ERROR_COUNTERS)
+    output = f"link rocep1s0f1/1 {pairs}\nlink roceP2p1s0f1/1 {pairs}\n"
+
+    class Runner:
+        def __init__(self):
+            self.calls = []
+
+        def remote(self, host, command, *, check=True):
+            self.calls.append("head")
+            return SimpleNamespace(stdout=output, stderr="", returncode=0)
+
+        def worker_via_fabric(self, command, *, check=True):
+            self.calls.append("worker")
+            return SimpleNamespace(stdout=output, stderr="", returncode=0)
+
+    runner = Runner()
+    snapshot = validate_module.capture_rdma_counters(runner, head, worker)
+
+    assert runner.calls == ["worker", "head"]
+    assert len(snapshot) == 4 * len(validate_module.RDMA_ERROR_COUNTERS)
+    assert all(key.startswith(("spark1/", "spark2/")) for key in snapshot)
+
+
 def test_native_nccl_prerequisites_require_the_pinned_completed_build(validate_module):
     """The validator verifies the documented host-native result without staging it."""
     command = validate_module.nccl_prerequisite_command()
@@ -344,6 +596,32 @@ def test_worker_preflight_precedes_head_preflight(validate_module):
     assert runner.calls == ["worker", "head"]
 
 
+def test_remote_preflight_pins_physical_link_speed_and_interface_mtu(validate_module):
+    """Admission checks the exact physical-link state rather than file presence."""
+    rail = validate_module.Rail(
+        "function100",
+        "enp1s0f1np1",
+        "rocep1s0f1",
+        3,
+        "192.168.100.10",
+        "192.168.100.11",
+    )
+    host = validate_module.Host("spark1", "dgx-spark-1", {}, (rail,))
+
+    class Runner:
+        def __init__(self):
+            self.command = ""
+
+        def remote(self, ssh_alias, command, *, check=True):
+            self.command = command
+
+    runner = Runner()
+    validate_module.remote_preflight(runner, host, via_fabric=False)
+
+    assert '/sys/class/net/enp1s0f1np1/speed)" = 200000' in runner.command
+    assert '/sys/class/net/enp1s0f1np1/mtu)" = 1500' in runner.command
+
+
 def test_nccl_validation_is_worker_first_and_launch_only(validate_module):
     """Completed native artifacts are checked, not rebuilt, before the collective."""
     rail = validate_module.Rail("rail100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
@@ -357,7 +635,7 @@ def test_nccl_validation_is_worker_first_and_launch_only(validate_module):
 
         def remote(self, host, command, *, check=True):
             self.calls.append(("head", command))
-            return SimpleNamespace(stdout="NET/IB : Using rocep1s0f1\nAvg bus bandwidth : 19.3", stderr="", returncode=0)
+            return SimpleNamespace(stdout="NET/IB : Using rocep1s0f1,roceP2p1s0f1\nAvg bus bandwidth : 19.3", stderr="", returncode=0)
 
         def worker_via_fabric(self, command, *, check=True):
             self.calls.append(("worker", command))
