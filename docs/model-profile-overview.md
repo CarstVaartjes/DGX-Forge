@@ -1,10 +1,11 @@
 # DGX Spark Model and Profile Overview
 
 This is the concise map of what a user selects, what runs on each DGX Spark,
-and which optimized Model Definition backs each capability. It distinguishes
-approved intent from runtime acceptance: a listed profile is not activatable
-until every referenced definition and the exact combined placement have passed
-their acceptance gates.
+and which optimized Model Definition is intended to back each capability. It
+distinguishes checked-in catalog entries from design intent and runtime
+acceptance: a listed row is not activatable until it is cataloged and every
+referenced definition plus the exact combined placement has passed its
+acceptance gates.
 
 ## Control model
 
@@ -35,24 +36,25 @@ flowchart LR
   placement passes co-residency acceptance.
 - `default` and `agent` resolve to the canonical `agent-full-dual` profile.
   They are convenience selectors, not separate profile IDs.
-- Clients always request the stable model name `deepseek`; the selected profile
-  decides whether the dual- or single-Spark definition backs it.
+- Once an accepted profile publishes it, clients request the stable model name
+  `deepseek`; the selected profile decides whether the dual- or single-Spark
+  definition backs it.
 
 ## Profile map
 
 ```mermaid
 flowchart TB
-    default[default / agent] --> full[agent-full-dual]
-    full --> full1[Spark 1<br/>DeepSeek dual rank 0]
-    full --> full2[Spark 2<br/>DeepSeek dual rank 1]
+    default[default / agent] --> full[agent-full-dual<br/>planned, cataloged]
+    full --> full1[Spark 1<br/>DeepSeek dual rank 0<br/>planned, cataloged]
+    full --> full2[Spark 2<br/>DeepSeek dual rank 1<br/>planned, cataloged]
 
-    creative[creative-3d] --> creative1[Spark 1<br/>DeepSeek single]
+    creative[creative-3d<br/>design intent, not cataloged] --> creative1[Spark 1<br/>DeepSeek single]
     creative --> creative2[Spark 2<br/>Pixal3D + TRELLIS.2 + Qwen3-VL]
 
-    image[image-authoring] --> image1[Spark 1<br/>DeepSeek single]
+    image[image-authoring<br/>design intent, not cataloged] --> image1[Spark 1<br/>DeepSeek single]
     image --> image2[Spark 2<br/>Qwen-Image + Qwen-Image-Edit]
 
-    geometry[geometry alternatives] --> geometry1[Spark 1<br/>DeepSeek single]
+    geometry[geometry alternatives<br/>design intent, not cataloged] --> geometry1[Spark 1<br/>DeepSeek single]
     geometry --> geometry2[Spark 2<br/>selected Step1X / TripoSG / Hunyuan profile]
 
     classDef selector fill:#eff6ff,stroke:#2563eb,color:#172554;
@@ -65,43 +67,45 @@ flowchart TB
 
 | Cluster Profile intent | Spark 1 | Spark 2 | Stable aliases | State |
 | --- | --- | --- | --- | --- |
-| `agent-full-dual` (canonical default) | `deepseek-agent-dual` rank 0 | `deepseek-agent-dual` rank 1 | `deepseek` | Planned; framework and runtime acceptance pending |
-| `agent-long-dual` | `deepseek-long-dual` rank 0 | `deepseek-long-dual` rank 1 | `deepseek` | Planned |
-| `creative-3d` | `deepseek-agent-single` | `pixal3d-single`, `trellis2-4b-single`, `qwen3-vl-8b-single` | `deepseek`, creative model aliases | Planned; exact four-definition placement must be accepted |
-| `image-authoring` | `deepseek-agent-single` | `qwen-image-single`, `qwen-image-edit-2511-single` | `deepseek`, `qwen-image`, `qwen-image-edit` | Planned; exact three-definition placement must be accepted |
-| `rigging` | `deepseek-agent-single` | `tokenrig-single` plus accepted evaluation definitions | `deepseek`, `tokenrig` | Planned |
-| `agent-nemotron-super` | `nemotron-super-single` | Idle | `nemotron-super` | Planned |
-| `agent-nemotron-nano-omni` | `nemotron-nano-omni-single` | Idle | `nemotron-nano-omni` | Planned |
-| `geometry-step1x` | `deepseek-agent-single` | `step1x-3d-single` | `deepseek`, `step1x-3d` | Planned |
-| `geometry-triposg` | `deepseek-agent-single` | `triposg-single` | `deepseek`, `triposg` | Planned |
-| `geometry-hunyuan3d-omni` | `deepseek-agent-single` | `hunyuan3d-omni-single` | `deepseek`, `hunyuan3d-omni` | Planned |
+| `agent-full-dual` (canonical default) | `deepseek-agent-dual` rank 0 | `deepseek-agent-dual` rank 1 | `deepseek` | Planned (cataloged); not activatable |
+| `agent-long-dual` | `deepseek-long-dual` rank 0 | `deepseek-long-dual` rank 1 | `deepseek` | Design intent; not cataloged |
+| `creative-3d` | `deepseek-agent-single` | `pixal3d-single`, `trellis2-4b-single`, `qwen3-vl-8b-single` | `deepseek`, creative model aliases | Design intent; not cataloged |
+| `image-authoring` | `deepseek-agent-single` | `qwen-image-single`, `qwen-image-edit-2511-single` | `deepseek`, `qwen-image`, `qwen-image-edit` | Design intent; not cataloged |
+| `rigging` | `deepseek-agent-single` | `tokenrig-single` plus evaluation definitions | `deepseek`, `tokenrig` | Design intent; not cataloged |
+| `agent-nemotron-super` | `nemotron-super-single` | Idle | `nemotron-super` | Design intent; not cataloged |
+| `agent-nemotron-nano-omni` | `nemotron-nano-omni-single` | Idle | `nemotron-nano-omni` | Design intent; not cataloged |
+| `geometry-step1x` | `deepseek-agent-single` | `step1x-3d-single` | `deepseek`, `step1x-3d` | Design intent; not cataloged |
+| `geometry-triposg` | `deepseek-agent-single` | `triposg-single` | `deepseek`, `triposg` | Design intent; not cataloged |
+| `geometry-hunyuan3d-omni` | `deepseek-agent-single` | `hunyuan3d-omni-single` | `deepseek`, `hunyuan3d-omni` | Design intent; not cataloged |
 
-“Planned” means cataloged intent, not installed or selectable. An accepted
-profile has accepted fingerprints for every referenced Model Definition plus
+“Planned (cataloged)” means a checked-in catalog entry exists, not that its
+runtime is installed, accepted, or selectable. “Design intent” rows are visual
+roadmap entries only: `sparkctl` cannot resolve or activate them. An accepted
+profile needs accepted fingerprints for every referenced Model Definition plus
 accepted evidence for the exact placement and combination.
 
-## Model Definition catalog
+## Model Definition map
 
-| Type | Model Definition | Preferred DGX Spark path | Placement | Initial maturity |
+| Type | Model Definition | Preferred DGX Spark path | Placement | State |
 | --- | --- | --- | --- | --- |
-| Default agent | `deepseek-agent-dual` | Audited Mia/vLLM TP=2 path with the accepted Spark-specific optimizations | Both Sparks, exclusive | Planned |
-| Long-context agent | `deepseek-long-dual` | Controlled Mia/vLLM long-context variant with explicit concurrency limits | Both Sparks, exclusive | Planned |
-| Resident agent | `deepseek-agent-single` | Audited DS4 quantized single-Spark service | One Spark, exclusive initially | Planned |
-| Alternative agent | `nemotron-super-single` | NVIDIA Nemotron 3 Super NVFP4 Spark path | One Spark, exclusive | Planned |
-| Multimodal agent | `nemotron-nano-omni-single` | NVIDIA Nano Omni NVFP4 Spark path | One Spark, co-residency candidate | Planned |
-| Image generation | `qwen-image-single` | ModelOpt NVFP4 through a GB10-native SGLang Diffusion build | One Spark, exclusive initially | Planned |
-| Image editing | `qwen-image-edit-2511-single` | Best accepted Nunchaku NVFP4 or ModelOpt optimized path | One Spark, exclusive initially | Planned |
-| Image-to-3D | `pixal3d-single` | Audited CUDA 13, ARM64, GB10 build of Pixal3D | One Spark, exclusive initially | Planned |
-| Image-to-3D | `trellis2-4b-single` | Audited TRELLIS.2 Spark build | One Spark, exclusive initially | Planned |
-| Vision/evaluation | `qwen3-vl-8b-single` | GB10-native vLLM or SGLang service | One Spark, co-residency candidate | Planned |
-| Rigging | `tokenrig-single` | Audited FP16 or GB10-native TokenRig build | One Spark, co-residency candidate | Planned |
-| Geometry/texture | `step1x-3d-single` | GB10-native sequential geometry and texture pipeline | One Spark, exclusive initially | Planned |
-| Fast geometry | `triposg-single` | GB10-native official Diffusers pipeline | One Spark, co-residency candidate | Planned |
-| Controllable 3D | `hunyuan3d-omni-single` | GB10-native official runtime with accepted FlashVDM acceleration | One Spark, co-residency candidate | Planned |
+| Default agent | `deepseek-agent-dual` | Mia/vLLM TP=2 candidate with Spark-specific optimizations, subject to acceptance | Both Sparks, exclusive | Planned (cataloged) |
+| Long-context agent | `deepseek-long-dual` | Mia/vLLM long-context candidate with explicit concurrency limits | Both Sparks, exclusive | Design intent; not cataloged |
+| Resident agent | `deepseek-agent-single` | DS4 quantized single-Spark candidate | One Spark, exclusive initially | Design intent; not cataloged |
+| Alternative agent | `nemotron-super-single` | NVIDIA Nemotron 3 Super NVFP4 Spark candidate | One Spark, exclusive | Design intent; not cataloged |
+| Multimodal agent | `nemotron-nano-omni-single` | NVIDIA Nano Omni NVFP4 Spark candidate | One Spark, co-residency candidate | Design intent; not cataloged |
+| Image generation | `qwen-image-single` | ModelOpt NVFP4 candidate through a GB10-native SGLang Diffusion build | One Spark, exclusive initially | Design intent; not cataloged |
+| Image editing | `qwen-image-edit-2511-single` | Nunchaku NVFP4 or ModelOpt candidate, subject to acceptance | One Spark, exclusive initially | Design intent; not cataloged |
+| Image-to-3D | `pixal3d-single` | CUDA 13, ARM64, GB10 build candidate for Pixal3D | One Spark, exclusive initially | Design intent; not cataloged |
+| Image-to-3D | `trellis2-4b-single` | TRELLIS.2 Spark build candidate | One Spark, exclusive initially | Design intent; not cataloged |
+| Vision/evaluation | `qwen3-vl-8b-single` | GB10-native vLLM or SGLang service candidate | One Spark, co-residency candidate | Design intent; not cataloged |
+| Rigging | `tokenrig-single` | FP16 or GB10-native TokenRig build candidate | One Spark, co-residency candidate | Design intent; not cataloged |
+| Geometry/texture | `step1x-3d-single` | GB10-native sequential geometry and texture candidate | One Spark, exclusive initially | Design intent; not cataloged |
+| Fast geometry | `triposg-single` | GB10-native official Diffusers candidate | One Spark, co-residency candidate | Design intent; not cataloged |
+| Controllable 3D | `hunyuan3d-omni-single` | GB10-native official runtime candidate; FlashVDM remains subject to acceptance | One Spark, co-residency candidate | Design intent; not cataloged |
 
-Each optimized serving definition retains an official generic definition as a
-non-serving correctness oracle. A generic path does not become user-selectable
-merely because it starts successfully.
+Each future optimized serving definition must retain an official generic
+definition as a non-serving correctness oracle. A generic path does not become
+user-selectable merely because it starts successfully.
 
 ## Current implementation state
 
@@ -110,10 +114,11 @@ merely because it starts successfully.
 | Hosts, SSH, platform, direct fabric | Accepted and recorded |
 | Aggregate RDMA, latency, error counters, NCCL | Accepted and recorded |
 | Model Definition and Cluster Profile schemas | Implemented |
-| `deepseek-agent-dual` configuration | Scaffolded, but its adapter, local manifest, and runtime acceptance are not installed yet |
-| Canonical `agent-full-dual` profile | Implemented as the canonical planned profile; `default` and `agent` are selectors |
-| Remaining Model Definitions and profiles | Planned; configuration and acceptance evidence not created yet |
-| `sparkctl` catalog, admission, switching, and local state | Implemented; model activation remains blocked until runtime acceptance evidence exists |
+| Framework catalog, admission, switching, CLI, and local state | Implemented |
+| `deepseek-agent-dual` Model Definition | Planned (cataloged); its adapter, checkpoint manifest, and runtime are not installed or accepted |
+| Canonical `agent-full-dual` profile | Planned (cataloged) with `default` and `agent` selectors; not activatable while its definition remains planned |
+| Remaining Model Definitions and profiles | Design intent; configuration and acceptance evidence do not exist yet |
+| Model activation | Blocked until the required runtime artifacts are installed and exact acceptance evidence exists |
 | `sparkctl nodes status` | Implemented as concurrent, live, read-only health; no database or retained history |
 
 ## Maturity and activation
@@ -128,9 +133,10 @@ stateDiagram-v2
     accepted --> [*]: eligible for an accepted Cluster Profile
 ```
 
-Only an `accepted` definition fingerprint may satisfy profile admission.
-Changing a checkpoint, image, source commit, command, resource envelope, or
-placement produces a new fingerprint and invalidates old acceptance evidence.
+Only a cataloged definition enters this maturity flow, and only an `accepted`
+definition fingerprint may satisfy profile admission. Changing a checkpoint,
+image, source commit, command, resource envelope, or placement produces a new
+fingerprint and invalidates old acceptance evidence.
 
 ## Sources of truth
 
@@ -140,8 +146,9 @@ placement produces a new fingerprint and invalidates old acceptance evidence.
   optimized Spark paths, published fit evidence, and research status.
 - [Multi-runtime model profile design](superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md)
   — normative definitions, loader rules, placement, admission, and acceptance.
-- `config/workloads/` and `config/cluster-profiles/` — executable catalog once
-  each artifact is reconciled with the normative design.
-- `inventory/reports/model-definitions.json` and
-  `inventory/reports/accepted-cluster-profiles.json` — maturity and accepted
-  evidence once produced.
+- `config/workloads/` and `config/cluster-profiles/` — executable catalog;
+  currently contains only `deepseek-agent-dual` and `agent-full-dual`.
+- `inventory/reports/model-definitions.json` — current maturity fingerprints;
+  today it records only `deepseek-agent-dual` as planned.
+- `inventory/reports/accepted-cluster-profiles.json` — accepted exact-profile
+  evidence; currently empty.
