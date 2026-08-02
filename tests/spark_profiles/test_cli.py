@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from contextlib import redirect_stderr, redirect_stdout
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import StringIO
 import json
 from pathlib import Path
 import subprocess
 import sys
 
-from spark_profiles.catalog import Catalog
+import pytest
+
+from spark_profiles.catalog import Catalog, fingerprint
 from spark_profiles.cli import CliDependencies, build_dependencies, main
 from spark_profiles.state import ControllerState, LockBusy, LockNotStale, StateFormatError
 from spark_profiles.switcher import SwitchReport
@@ -73,8 +75,9 @@ def invoke(
     state: ControllerState | None = None,
     store: FakeStore | None = None,
     switcher: FakeSwitcher | None = None,
+    catalog_value: Catalog | None = None,
 ) -> Result:
-    catalog = Catalog.load(REPOSITORY_ROOT)
+    catalog = catalog_value or Catalog.load(REPOSITORY_ROOT)
     dependencies = CliDependencies(
         catalog=catalog,
         state_store=store or FakeStore(state),
@@ -86,6 +89,61 @@ def invoke(
     with redirect_stdout(stdout), redirect_stderr(stderr):
         exit_code = main(argv, dependencies=dependencies)
     return Result(exit_code, stdout.getvalue(), stderr.getvalue())
+
+
+def accepted_catalog(
+    *,
+    matching_maturity_fingerprint: bool = True,
+    manifest_digest: bool = True,
+    profile_evidence: bool = True,
+) -> Catalog:
+    base = Catalog.load(REPOSITORY_ROOT)
+    identifier = "deepseek-agent-dual"
+    original = base.definitions[identifier]
+    definition = replace(
+        original,
+        checkpoint=replace(
+            original.checkpoint,
+            manifest_sha256="9" * 64 if manifest_digest else None,
+        ),
+    )
+    definition_hash = fingerprint(definition)
+    profile_hash = base.profile_fingerprints["agent-full-dual"]
+    return Catalog(
+        definitions={identifier: definition},
+        profiles=base.profiles,
+        selectors=base.selectors,
+        definition_fingerprints={identifier: definition_hash},
+        profile_fingerprints=base.profile_fingerprints,
+        maturity={identifier: "accepted"},
+        maturity_fingerprints={
+            identifier: definition_hash
+            if matching_maturity_fingerprint
+            else "f" * 64
+        },
+        accepted_profiles={
+            profile_hash: (definition_hash,)
+        }
+        if profile_evidence
+        else {},
+    )
+
+
+def active_state(catalog: Catalog) -> ControllerState:
+    profile = catalog.profiles["agent-full-dual"]
+    return ControllerState(
+        status="active",
+        active_profile=profile.id,
+        target_profile=None,
+        restore_profile=None,
+        last_error=None,
+        active_profile_sha256=catalog.profile_fingerprints[profile.id],
+        active_definition_sha256={
+            "deepseek-agent-dual": catalog.definition_fingerprints[
+                "deepseek-agent-dual"
+            ]
+        },
+    )
 
 
 def test_agent_alias_resolves_to_full_default() -> None:
@@ -181,7 +239,7 @@ def test_break_stale_lock_refuses_an_unsafe_override() -> None:
     }
 
 
-def test_endpoint_reports_only_the_active_published_alias() -> None:
+def test_endpoint_refuses_matching_but_planned_active_content() -> None:
     catalog = Catalog.load(REPOSITORY_ROOT)
     profile = catalog.profiles["agent-full-dual"]
     state = ControllerState(
@@ -200,16 +258,74 @@ def test_endpoint_reports_only_the_active_published_alias() -> None:
 
     result = invoke("endpoint", "deepseek", "--json", state=state)
 
-    assert result.exit_code == 0
+    assert result.exit_code == 3
     assert result.json == {
-        "available": True,
+        "available": False,
         "endpoint": "deepseek",
-        "host": "127.0.0.1",
-        "nodes": ["spark1", "spark2"],
-        "port": 8888,
-        "profile_id": "agent-full-dual",
-        "workload_id": "deepseek-agent-dual",
+        "reason": "active profile content is not currently accepted",
     }
+
+
+def test_status_hides_matching_but_planned_active_endpoints() -> None:
+    catalog = Catalog.load(REPOSITORY_ROOT)
+    profile = catalog.profiles["agent-full-dual"]
+    state = ControllerState(
+        status="active",
+        active_profile=profile.id,
+        target_profile=None,
+        restore_profile=None,
+        last_error=None,
+        active_profile_sha256=catalog.profile_fingerprints[profile.id],
+        active_definition_sha256={
+            "deepseek-agent-dual": catalog.definition_fingerprints[
+                "deepseek-agent-dual"
+            ]
+        },
+    )
+
+    result = invoke("status", "--json", state=state)
+
+    assert result.exit_code == 0
+    assert result.json["published_endpoints"] == {}
+
+
+@pytest.mark.parametrize(
+    "catalog_value",
+    (
+        accepted_catalog(matching_maturity_fingerprint=False),
+        accepted_catalog(manifest_digest=False),
+        accepted_catalog(profile_evidence=False),
+    ),
+    ids=("stale-maturity-hash", "missing-manifest", "missing-profile-evidence"),
+)
+def test_status_requires_complete_current_acceptance_evidence(
+    catalog_value: Catalog,
+) -> None:
+    result = invoke(
+        "status",
+        "--json",
+        state=active_state(catalog_value),
+        catalog_value=catalog_value,
+    )
+
+    assert result.exit_code == 0
+    assert result.json["published_endpoints"] == {}
+
+
+def test_endpoint_allows_exact_currently_accepted_content() -> None:
+    catalog_value = accepted_catalog()
+
+    result = invoke(
+        "endpoint",
+        "deepseek",
+        "--json",
+        state=active_state(catalog_value),
+        catalog_value=catalog_value,
+    )
+
+    assert result.exit_code == 0
+    assert result.json["available"] is True
+    assert result.json["workload_id"] == "deepseek-agent-dual"
 
 
 def test_unknown_selector_is_a_configuration_error() -> None:
@@ -258,6 +374,28 @@ def test_argument_errors_use_exit_two_and_json_when_requested() -> None:
     assert "selector" in result.json["error"]
 
 
+@pytest.mark.parametrize(
+    ("option", "secret_value"),
+    (
+        ("--token", "token-value-123"),
+        ("--api-key", "key-value-456"),
+        ("--password", "password-value-789"),
+        ("--authorization", "Bearer bearer-value-321"),
+    ),
+)
+def test_argument_errors_never_echo_whitespace_separated_secrets(
+    option: str, secret_value: str
+) -> None:
+    result = invoke("--json", "status", option, secret_value)
+
+    assert result.exit_code == 2
+    assert secret_value not in result.stdout
+    assert result.json == {
+        "error": "invalid command arguments",
+        "error_type": "arguments",
+    }
+
+
 def test_default_dependencies_use_local_state_and_conservative_inventory(
     tmp_path: Path,
 ) -> None:
@@ -304,23 +442,15 @@ def test_switch_rejects_unknown_selector_before_the_switcher() -> None:
 
 
 def test_active_profile_refuses_an_unpublished_endpoint() -> None:
-    catalog = Catalog.load(REPOSITORY_ROOT)
-    profile = catalog.profiles["agent-full-dual"]
-    state = ControllerState(
-        status="active",
-        active_profile=profile.id,
-        target_profile=None,
-        restore_profile=None,
-        last_error=None,
-        active_profile_sha256=catalog.profile_fingerprints[profile.id],
-        active_definition_sha256={
-            "deepseek-agent-dual": catalog.definition_fingerprints[
-                "deepseek-agent-dual"
-            ]
-        },
-    )
+    catalog_value = accepted_catalog()
 
-    result = invoke("endpoint", "unknown", "--json", state=state)
+    result = invoke(
+        "endpoint",
+        "unknown",
+        "--json",
+        state=active_state(catalog_value),
+        catalog_value=catalog_value,
+    )
 
     assert result.exit_code == 3
     assert result.json == {
@@ -380,3 +510,48 @@ def test_malformed_local_state_is_a_bounded_configuration_error() -> None:
     assert result.exit_code == 2
     assert result.json["error_type"] == "configuration"
     assert len(result.json["error"]) <= 1_024
+
+
+@pytest.mark.parametrize(
+    "argv", (("status", "--json"), ("endpoint", "deepseek", "--json"))
+)
+def test_state_load_oserror_is_a_bounded_configuration_error(
+    argv: tuple[str, ...],
+) -> None:
+    class UnreadableStore(FakeStore):
+        def load(self):
+            raise OSError("local state read failed " + "x" * 5_000)
+
+    result = invoke(*argv, store=UnreadableStore())
+
+    assert result.exit_code == 2
+    assert result.json["error_type"] == "configuration"
+    assert len(result.json["error"]) <= 1_024
+
+
+def test_stale_lock_oserror_is_a_bounded_configuration_error() -> None:
+    result = invoke(
+        "break-stale-lock",
+        "--json",
+        store=FakeStore(stale_error=OSError("local lock read failed")),
+    )
+
+    assert result.exit_code == 2
+    assert result.json == {
+        "error": "local lock read failed",
+        "error_type": "configuration",
+    }
+
+
+def test_switch_oserror_is_configuration_exit_two_not_a_traceback() -> None:
+    class UnreadableSwitcher(FakeSwitcher):
+        def switch_profile(self, target_id, *, restore_to=None, dry_run=False):
+            raise OSError("local state write failed")
+
+    result = invoke("switch", "default", "--json", switcher=UnreadableSwitcher())
+
+    assert result.exit_code == 2
+    assert result.json == {
+        "error": "local state write failed",
+        "error_type": "configuration",
+    }

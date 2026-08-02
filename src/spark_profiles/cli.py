@@ -24,6 +24,9 @@ _SENSITIVE_ASSIGNMENT = re.compile(
     r"(\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+"
 )
 _BEARER = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
+_SENSITIVE_OPTION = re.compile(
+    r"(?i)^--(?:[a-z0-9]+-)*(?:authorization|api-key|password|secret|token|private-key)(?:=|$)"
+)
 
 
 class _UsageError(ValueError):
@@ -164,6 +167,24 @@ def _active_state_matches_catalog(state: ControllerState, catalog: Catalog) -> b
     )
 
 
+def _active_content_is_accepted(state: ControllerState, catalog: Catalog) -> bool:
+    if not _active_state_matches_catalog(state, catalog):
+        return False
+    identifiers = sorted(state.active_definition_sha256)
+    for identifier in identifiers:
+        definition_hash = catalog.definition_fingerprints[identifier]
+        if (
+            catalog.maturity.get(identifier) != "accepted"
+            or catalog.maturity_fingerprints.get(identifier) != definition_hash
+            or catalog.definitions[identifier].checkpoint.manifest_sha256 is None
+        ):
+            return False
+    profile_hash = catalog.profile_fingerprints[state.active_profile]
+    return catalog.accepted_profiles.get(profile_hash) == tuple(
+        sorted(catalog.definition_fingerprints[identifier] for identifier in identifiers)
+    )
+
+
 def _sanitize_text(value: object) -> str:
     text = str(value).replace("\x00", "")
     text = _SENSITIVE_ASSIGNMENT.sub(lambda match: f"{match.group(1)}: <redacted>", text)
@@ -183,6 +204,16 @@ def _sanitize(value: object) -> object:
     if isinstance(value, (tuple, list)):
         return [_sanitize(item) for item in value[:64]]
     return value
+
+
+def _arguments_may_contain_secrets(argv: Sequence[str]) -> bool:
+    return any(
+        _SENSITIVE_OPTION.match(argument.replace("_", "-"))
+        or _SENSITIVE_ASSIGNMENT.search(argument)
+        or _BEARER.search(argument)
+        or "-----BEGIN " in argument
+        for argument in argv
+    )
 
 
 def _emit(payload: Mapping[str, object], args: argparse.Namespace) -> None:
@@ -231,7 +262,14 @@ def main(
             json=False,
         )
         _emit(
-            {"error": str(error), "error_type": "arguments"},
+            {
+                "error": (
+                    "invalid command arguments"
+                    if _arguments_may_contain_secrets(raw_argv)
+                    else str(error)
+                ),
+                "error_type": "arguments",
+            },
             error_args,
         )
         return 2
@@ -254,7 +292,7 @@ def main(
             payload = {"error": str(error), "error_type": "lock_conflict"}
             _emit(payload, args)
             return 7
-        except StateError as error:
+        except (StateError, OSError) as error:
             _emit(
                 {"error": str(error), "error_type": "configuration"}, args
             )
@@ -303,7 +341,7 @@ def main(
     if args.command == "status":
         try:
             state = dependencies.state_store.load()
-        except StateError as error:
+        except (StateError, OSError) as error:
             _emit(
                 {"error": str(error), "error_type": "configuration"}, args
             )
@@ -311,7 +349,7 @@ def main(
         payload = state.to_dict()
         payload["published_endpoints"] = (
             dict(dependencies.catalog.profiles[state.active_profile].endpoints)
-            if _active_state_matches_catalog(state, dependencies.catalog)
+            if _active_content_is_accepted(state, dependencies.catalog)
             else {}
         )
         _emit(payload, args)
@@ -320,7 +358,7 @@ def main(
     if args.command == "endpoint":
         try:
             state = dependencies.state_store.load()
-        except StateError as error:
+        except (StateError, OSError) as error:
             _emit(
                 {"error": str(error), "error_type": "configuration"}, args
             )
@@ -341,6 +379,16 @@ def main(
                     "reason": (
                         "active controller fingerprints do not match the catalog"
                     ),
+                },
+                args,
+            )
+            return 3
+        if not _active_content_is_accepted(state, dependencies.catalog):
+            _emit(
+                {
+                    "available": False,
+                    "endpoint": args.name,
+                    "reason": "active profile content is not currently accepted",
                 },
                 args,
             )
@@ -445,7 +493,7 @@ def main(
     except (LockBusy, LockNotStale) as error:
         _emit({"error": str(error), "error_type": "lock_conflict"}, args)
         return 7
-    except StateError as error:
+    except (StateError, OSError) as error:
         _emit({"error": str(error), "error_type": "configuration"}, args)
         return 2
     payload = _switch_payload(report)

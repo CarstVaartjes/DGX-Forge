@@ -35,7 +35,9 @@ sparkctl break-stale-lock [--json]
   and runs admission. `valid: true` does not imply `admitted: true`.
 - `status` reads only local controller state. It makes no SSH call. Endpoint
   aliases are published only when the active profile and complete definition
-  fingerprints still match the current catalog.
+  fingerprints still match the current catalog, every definition still has
+  matching accepted maturity and a manifest digest, and the exact profile and
+  definition hash set still has accepted Cluster Profile evidence.
 - `switch` resolves selectors before invoking the ordinary switch path.
   `--dry-run` reports only the truthful status, hashes, and restore intent
   exposed by the switcher; the CLI does not maintain a second action planner.
@@ -44,8 +46,8 @@ sparkctl break-stale-lock [--json]
 - `restore-default` is a later, explicit ordinary switch to selector `default`.
   Run it only after outputs and provenance from temporary work are recovered.
 - `endpoint` returns an address only for an alias published by an active,
-  fingerprint-matching profile. Stopped, stale, or unpublished endpoints are
-  denied.
+  currently accepted profile. Stopped, stale, planned, or unpublished
+  endpoints are denied.
 - `break-stale-lock` uses the state-store safety checks. It refuses a held lock,
   a live local PID, or a lock younger than the configured threshold.
 
@@ -70,6 +72,8 @@ unactivatable while `deepseek-agent-dual` has `planned` maturity.
 CLI errors and switch diagnostics are bounded and redact common credential,
 authorization, token, password, secret, and private-key forms. Do not place
 credentials in profile files, command arguments, or remote diagnostic output.
+Argument failures that include a sensitive option use generic error text so a
+whitespace-separated option value cannot be echoed by the parser.
 
 ## Safe bring-up checks
 
