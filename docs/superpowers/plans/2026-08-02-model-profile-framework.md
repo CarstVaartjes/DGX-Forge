@@ -144,7 +144,7 @@ git commit -m "fix: reconcile canonical Spark home profile"
 - Produces content SHA-256 fingerprints from normalized dataclass JSON with sorted keys and compact separators.
 - Produces: `check_admission(profile, catalog, inventory) -> AdmissionReport`.
 
-- [ ] **Step 1: Write failing catalog/admission tests**
+- [x] **Step 1: Write failing catalog/admission tests**
 
 ```python
 def test_unknown_workload_is_rejected(catalog, profile):
@@ -181,13 +181,13 @@ def test_evidence_indexes_satisfy_packaged_schemas(catalog_root):
     validate_evidence_indexes(catalog_root)
 ```
 
-- [ ] **Step 2: Confirm tests fail**
+- [x] **Step 2: Confirm tests fail**
 
 Run: `uv run --with pytest pytest tests/spark_profiles/test_catalog.py tests/spark_profiles/test_admission.py -v`
 
 Expected: import failure for catalog/admission modules.
 
-- [ ] **Step 3: Implement deterministic validation**
+- [x] **Step 3: Implement deterministic validation**
 
 Reject missing definitions, port collisions, cache/output overlap, conflicting
 workloads, partial distributed placement, insufficient measured memory/disk,
@@ -201,7 +201,7 @@ with an empty `profiles` array. Generate and commit the actual fingerprint—do
 not use a placeholder. Only the exact `accepted` fingerprint may satisfy
 admission.
 
-- [ ] **Step 4: Add signed-off evidence indexing**
+- [x] **Step 4: Add signed-off evidence indexing**
 
 Normalize definitions and profiles as UTF-8 JSON using `sort_keys=True` and
 `separators=(",", ":")`, representing paths as POSIX strings. Index acceptance
@@ -209,7 +209,7 @@ by Cluster Profile content SHA-256 plus sorted Model Definition hashes. A
 changed resource envelope, runtime pin, placement, endpoint, or command
 invalidates prior acceptance. TOML whitespace and comments do not.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 Run: `uv run --with pytest pytest tests/spark_profiles/test_catalog.py tests/spark_profiles/test_admission.py -v && git diff --check`
 
