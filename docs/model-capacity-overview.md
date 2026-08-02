@@ -74,5 +74,6 @@ Disk capacity is tracked separately. Before downloading the catalog, implementat
 ## Related design documents
 
 - [Dual DGX Spark architecture](architecture-overview.md)
+- [Visual model and profile overview](model-profile-overview.md)
 - [Dual DGX Spark platform design](superpowers/specs/2026-08-01-dual-dgx-spark-platform-design.md)
 - [Multi-runtime model profiles](superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md)

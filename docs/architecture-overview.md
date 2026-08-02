@@ -114,7 +114,12 @@ flowchart LR
 
 The NAS or other external service host is an availability dependency for client access, but it never carries model weights, KV-cache data, CUDA/JIT work, or tensor-parallel traffic.
 
-The [model capacity overview](model-capacity-overview.md) compares every official model with its preferred Spark-optimized Model Definition and placement. Detailed loader policy, placement classes, Cluster Profiles, and quality gates live in the [multi-runtime model profile design](superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md).
+The [model and profile overview](model-profile-overview.md) visually maps each
+Cluster Profile to both Sparks and its Model Definitions. The [model capacity
+overview](model-capacity-overview.md) compares every official model with its
+preferred Spark-optimized Model Definition and placement. Detailed loader
+policy, placement classes, Cluster Profiles, and quality gates live in the
+[multi-runtime model profile design](superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md).
 
 The completed host, SSH, platform, fabric, and NCCL preparation is summarized
 chronologically in the [installation record and lessons learned](installation-record.md).
