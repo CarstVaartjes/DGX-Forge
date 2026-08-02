@@ -152,6 +152,31 @@ class FakeStore:
         return self.state
 
 
+class FailingSaveStore(FakeStore):
+    def __init__(
+        self,
+        state: ControllerState,
+        events: list[tuple],
+        *,
+        fail_from_attempt: int,
+        fail_once: bool = False,
+    ) -> None:
+        super().__init__(state, events)
+        self.fail_from_attempt = fail_from_attempt
+        self.fail_once = fail_once
+        self.save_attempts = 0
+
+    def save(self, state: ControllerState) -> None:
+        self.save_attempts += 1
+        should_fail = self.save_attempts >= self.fail_from_attempt and (
+            not self.fail_once or self.save_attempts == self.fail_from_attempt
+        )
+        if should_fail:
+            self.events.append(("save-error", state.status, state.active_profile))
+            raise OSError(f"fixture save failure {self.save_attempts}")
+        super().save(state)
+
+
 def inventory(
     *, boot_ids: dict[str, str] | None = None
 ) -> dict[str, dict[str, int | bool | str]]:
@@ -490,6 +515,93 @@ def test_failed_distributed_start_still_runs_full_ordered_cleanup() -> None:
         ("remote", "spark2", ("profile-verify-release", "generator", "worker")),
     ]
     assert store.state.status == "stopped"
+
+
+def test_final_state_save_failure_stops_distributed_workload_in_order() -> None:
+    definition = workload("generator", distributed=True)
+    target = profile("generator-only", definition)
+    catalog_value = catalog(target, definition=definition)
+    events: list[tuple] = []
+    store = FailingSaveStore(
+        ControllerState.stopped(), events, fail_from_attempt=2, fail_once=True
+    )
+    switcher = ProfileSwitcher(
+        catalog=catalog_value,
+        backend=FakeBackend(events),
+        state_store=store,
+        inventory_provider=inventory,
+    )
+
+    report = switcher.switch_profile("generator-only")
+
+    assert report.status == "stopped"
+    assert "fixture save failure 2" in " ".join(report.errors)
+    cleanup = [
+        event
+        for event in events
+        if event[0] == "remote"
+        and event[2][0] in {"profile-stop", "profile-verify-release"}
+    ]
+    assert cleanup == [
+        ("remote", "spark1", ("profile-stop", "generator", "head")),
+        ("remote", "spark2", ("profile-stop", "generator", "worker")),
+        ("remote", "spark1", ("profile-verify-release", "generator", "head")),
+        ("remote", "spark2", ("profile-verify-release", "generator", "worker")),
+    ]
+    assert store.state.status == "stopped"
+
+
+def test_recovery_save_failure_returns_degraded_after_cleanup() -> None:
+    definition = workload("generator", distributed=True)
+    target = profile("generator-only", definition)
+    catalog_value = catalog(target, definition=definition)
+    events: list[tuple] = []
+    store = FailingSaveStore(ControllerState.stopped(), events, fail_from_attempt=2)
+    switcher = ProfileSwitcher(
+        catalog=catalog_value,
+        backend=FakeBackend(events),
+        state_store=store,
+        inventory_provider=inventory,
+    )
+
+    report = switcher.switch_profile("generator-only")
+
+    assert report.status == "degraded"
+    assert report.published_endpoints == {}
+    assert report.output_provenance == {}
+    assert "fixture save failure 2" in " ".join(report.errors)
+    assert "fixture save failure 3" in " ".join(report.errors)
+    assert len(" ".join(report.errors)) <= 2 * 2_048
+    cleanup_nodes = [
+        event[1]
+        for event in events
+        if event[0] == "remote" and event[2][0] == "profile-stop"
+    ]
+    assert cleanup_nodes == ["spark1", "spark2"]
+    assert store.state.status == "transitioning"
+
+
+def test_final_state_save_failure_never_reports_active_endpoints() -> None:
+    definition = workload("generator")
+    target = profile("generator-only", definition)
+    catalog_value = catalog(target, definition=definition)
+    events: list[tuple] = []
+    store = FailingSaveStore(
+        ControllerState.stopped(), events, fail_from_attempt=2, fail_once=True
+    )
+    switcher = ProfileSwitcher(
+        catalog=catalog_value,
+        backend=FakeBackend(events),
+        state_store=store,
+        inventory_provider=inventory,
+    )
+
+    report = switcher.switch_profile("generator-only")
+
+    assert report.status == "stopped"
+    assert report.published_endpoints == {}
+    assert report.output_provenance == {}
+    assert store.state.active_profile is None
 
 
 def test_unreconciled_degraded_state_blocks_activation() -> None:

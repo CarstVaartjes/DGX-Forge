@@ -330,7 +330,13 @@ class ProfileSwitcher:
                     boot_ids=live_boot_ids,
                 )
                 endpoints = {}
-            self.state_store.save(final_state)
+            try:
+                self.state_store.save(final_state)
+            except OSError as error:
+                detail = f"{type(error).__name__}: {error}"[:_MAX_ERROR_CHARS]
+                raise _TransitionFailure(
+                    f"final state persistence failed: {detail}"
+                ) from error
             provenance: dict[str, object] = {
                 "profile": target.id,
                 "profile_sha256": profile_hash,
@@ -372,7 +378,15 @@ class ProfileSwitcher:
                     last_error=message,
                     boot_ids=live_boot_ids,
                 )
-            self.state_store.save(failed_state)
+            errors = [message]
+            try:
+                self.state_store.save(failed_state)
+            except OSError as error:
+                detail = f"{type(error).__name__}: {error}"[:_MAX_ERROR_CHARS]
+                errors.append(
+                    f"recovery state persistence failed: {detail}"[:_MAX_ERROR_CHARS]
+                )
+                status = "degraded"
             return SwitchReport(
                 target_profile=target.id,
                 status=status,
@@ -380,7 +394,7 @@ class ProfileSwitcher:
                 definition_sha256=target_hashes,
                 published_endpoints={},
                 restore_profile=restore_profile,
-                errors=(message,),
+                errors=tuple(errors),
                 diagnostics=tuple(diagnostics),
             )
 
