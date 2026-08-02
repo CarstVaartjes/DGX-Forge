@@ -1,5 +1,4 @@
-id = "default"
-restore_home = false
+id = "agent-full-dual"
 accepted_evidence = "inventory/reports/accepted-cluster-profiles.json"
 
 [placements]
@@ -7,4 +6,4 @@ spark1 = ["deepseek-agent-dual"]
 spark2 = ["deepseek-agent-dual"]
 
 [endpoints]
-agent = "deepseek-agent-dual"
+deepseek = "deepseek-agent-dual"

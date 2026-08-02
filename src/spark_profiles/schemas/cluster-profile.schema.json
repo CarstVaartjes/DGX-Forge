@@ -2,10 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
   "additionalProperties": false,
-  "required": ["id", "restore_home", "accepted_evidence", "placements", "endpoints"],
+  "required": ["id", "accepted_evidence", "placements", "endpoints"],
   "properties": {
     "id": {"type": "string", "minLength": 1},
-    "restore_home": {"type": "boolean"},
     "accepted_evidence": {"type": "string", "minLength": 1},
     "placements": {
       "type": "object", "additionalProperties": false, "required": ["spark1", "spark2"],

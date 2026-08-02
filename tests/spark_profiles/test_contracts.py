@@ -25,7 +25,6 @@ def test_cluster_profile_requires_both_nodes(tmp_path: Path) -> None:
         "missing-worker.toml",
         """
 id = "missing-worker"
-restore_home = false
 accepted_evidence = "inventory/reports/missing-worker.json"
 
 [placements]
@@ -46,7 +45,6 @@ def test_cluster_profile_rejects_unknown_keys(tmp_path: Path) -> None:
         "unknown-key.toml",
         """
 id = "unknown-key"
-restore_home = false
 accepted_evidence = "inventory/reports/unknown-key.json"
 surprise = true
 
@@ -207,22 +205,44 @@ def test_workload_endpoint_must_be_loopback(tmp_path: Path) -> None:
         load_workload(path)
 
 
-def test_default_profile_places_home_workload_on_both_nodes() -> None:
+def test_home_profile_uses_canonical_id_and_deepseek_alias() -> None:
     profile = load_cluster_profile(
-        REPOSITORY_ROOT / "config/cluster-profiles/default.toml"
+        REPOSITORY_ROOT / "config/cluster-profiles/agent-full-dual.toml"
     )
 
+    assert profile.id == "agent-full-dual"
     assert profile.placements == {
         "spark1": ("deepseek-agent-dual",),
         "spark2": ("deepseek-agent-dual",),
     }
-    assert profile.endpoints == {"agent": "deepseek-agent-dual"}
-    assert profile.restore_home is False
+    assert profile.endpoints == {"deepseek": "deepseek-agent-dual"}
+    assert not hasattr(profile, "restore_home")
+
+
+def test_cluster_profile_rejects_restoration_policy(tmp_path: Path) -> None:
+    path = write_toml(
+        tmp_path,
+        "restoration-policy.toml",
+        """
+id = "restoration-policy"
+restore_home = false
+accepted_evidence = "inventory/reports/restoration-policy.json"
+
+[placements]
+spark1 = []
+spark2 = []
+
+[endpoints]
+""",
+    )
+
+    with pytest.raises(ProfileValidationError, match="restore_home"):
+        load_cluster_profile(path)
 
 
 def test_cluster_profile_collections_are_immutable() -> None:
     profile = load_cluster_profile(
-        REPOSITORY_ROOT / "config/cluster-profiles/default.toml"
+        REPOSITORY_ROOT / "config/cluster-profiles/agent-full-dual.toml"
     )
 
     with pytest.raises(TypeError):

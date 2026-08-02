@@ -92,7 +92,6 @@ class WorkloadDefinition:
 @dataclass(frozen=True)
 class ClusterProfile:
     id: str
-    restore_home: bool
     accepted_evidence: Path
     placements: Mapping[str, tuple[str, ...]]
     endpoints: Mapping[str, str]
@@ -205,7 +204,6 @@ def load_cluster_profile(path: Path) -> ClusterProfile:
     }
     return ClusterProfile(
         id=data["id"],
-        restore_home=data["restore_home"],
         accepted_evidence=Path(data["accepted_evidence"]),
         placements=MappingProxyType(placements),
         endpoints=MappingProxyType(dict(data["endpoints"])),
