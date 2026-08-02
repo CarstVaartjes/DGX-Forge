@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["profiles"],
+  "properties": {
+    "profiles": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["profile_sha256", "definition_sha256"],
+        "properties": {
+          "profile_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "definition_sha256": {
+            "type": "array",
+            "minItems": 1,
+            "items": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+            "uniqueItems": true
+          }
+        }
+      }
+    }
+  }
+}
