@@ -40,6 +40,8 @@ class _CliParser(argparse.ArgumentParser):
 
 
 class _StateStore(Protocol):
+    def acquire(self): ...
+
     def load(self) -> ControllerState: ...
 
     def break_stale_lock(self) -> bool: ...
@@ -161,6 +163,56 @@ def _live_publication_error(
     if dict(state.boot_ids) != live_boot_ids:
         return "Spark boot IDs changed since activation"
     return None
+
+
+def _resolve_endpoint(
+    name: str, dependencies: CliDependencies, state: ControllerState
+) -> tuple[dict[str, object], int]:
+    unavailable = lambda reason: (
+        {"available": False, "endpoint": name, "reason": reason},
+        3,
+    )
+    if state.status != "active":
+        return unavailable(f"controller status is {state.status}")
+    if not _active_state_matches_catalog(state, dependencies.catalog):
+        return unavailable("active controller fingerprints do not match the catalog")
+    if not _active_content_is_accepted(state, dependencies.catalog):
+        return unavailable("active profile content is not currently accepted")
+    profile = dependencies.catalog.profiles[state.active_profile]
+    if name not in profile.endpoints:
+        return unavailable(
+            f"endpoint is not published by active profile {profile.id}"
+        )
+    try:
+        inventory = dependencies.inventory_provider()
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return unavailable("live Spark health gate failed")
+    publication_error = _live_publication_error(state, inventory)
+    if publication_error is not None:
+        return unavailable(publication_error)
+    workload_id = profile.endpoints[name]
+    if not dependencies.switcher.workload_is_healthy(workload_id):
+        return unavailable("active workload health gate failed")
+    if dependencies.state_store.load() != state:
+        return unavailable("controller state changed during endpoint check")
+    definition = dependencies.catalog.definitions[workload_id]
+    nodes = sorted(
+        node
+        for node, workloads in profile.placements.items()
+        if workload_id in workloads
+    )
+    return (
+        {
+            "available": True,
+            "endpoint": name,
+            "host": definition.endpoint.host,
+            "nodes": nodes,
+            "port": definition.endpoint.port,
+            "profile_id": profile.id,
+            "workload_id": workload_id,
+        },
+        0,
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -535,97 +587,20 @@ def main(
 
     if args.command == "endpoint":
         try:
-            state = dependencies.state_store.load()
+            with dependencies.state_store.acquire() as state:
+                payload, exit_code = _resolve_endpoint(
+                    args.name, dependencies, state
+                )
+                _emit(payload, args)
+                return exit_code
+        except (LockBusy, LockNotStale) as error:
+            _emit({"error": str(error), "error_type": "lock_conflict"}, args)
+            return 7
         except (StateError, OSError) as error:
             _emit(
                 {"error": str(error), "error_type": "configuration"}, args
             )
             return 2
-        if state.status != "active":
-            payload = {
-                "available": False,
-                "endpoint": args.name,
-                "reason": f"controller status is {state.status}",
-            }
-            _emit(payload, args)
-            return 3
-        if not _active_state_matches_catalog(state, dependencies.catalog):
-            _emit(
-                {
-                    "available": False,
-                    "endpoint": args.name,
-                    "reason": (
-                        "active controller fingerprints do not match the catalog"
-                    ),
-                },
-                args,
-            )
-            return 3
-        if not _active_content_is_accepted(state, dependencies.catalog):
-            _emit(
-                {
-                    "available": False,
-                    "endpoint": args.name,
-                    "reason": "active profile content is not currently accepted",
-                },
-                args,
-            )
-            return 3
-        profile = dependencies.catalog.profiles[state.active_profile]
-        if args.name not in profile.endpoints:
-            _emit(
-                {
-                    "available": False,
-                    "endpoint": args.name,
-                    "reason": (
-                        "endpoint is not published by active profile "
-                        f"{profile.id}"
-                    ),
-                },
-                args,
-            )
-            return 3
-        try:
-            inventory = dependencies.inventory_provider()
-        except (OSError, RuntimeError, TypeError, ValueError):
-            _emit(
-                {
-                    "available": False,
-                    "endpoint": args.name,
-                    "reason": "live Spark health gate failed",
-                },
-                args,
-            )
-            return 3
-        publication_error = _live_publication_error(state, inventory)
-        if publication_error is not None:
-            _emit(
-                {
-                    "available": False,
-                    "endpoint": args.name,
-                    "reason": publication_error,
-                },
-                args,
-            )
-            return 3
-        workload_id = profile.endpoints[args.name]
-        definition = dependencies.catalog.definitions[workload_id]
-        nodes = sorted(
-            node
-            for node, workloads in profile.placements.items()
-            if workload_id in workloads
-        )
-        payload = {
-            "available": True,
-            "endpoint": args.name,
-            "host": definition.endpoint.host,
-            "nodes": nodes,
-            "port": definition.endpoint.port,
-            "profile_id": profile.id,
-            "workload_id": workload_id,
-        }
-        _emit(payload, args)
-        return 0
 
     if args.command == "validate":
         profile_id = dependencies.catalog.selectors.get(args.selector, args.selector)

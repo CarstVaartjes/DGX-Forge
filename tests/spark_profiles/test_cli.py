@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from contextlib import redirect_stderr, redirect_stdout
+from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass, replace
 from io import StringIO
 import json
@@ -33,6 +33,15 @@ class FakeStore:
         self.state = state or ControllerState.stopped()
         self.stale_result = stale_result
         self.stale_error = stale_error
+        self.locked = False
+
+    @contextmanager
+    def acquire(self):
+        self.locked = True
+        try:
+            yield self.load()
+        finally:
+            self.locked = False
 
     def load(self) -> ControllerState:
         return self.state
@@ -44,6 +53,10 @@ class FakeStore:
 
 
 class FakeSwitcher:
+    def __init__(self, *, workload_healthy: bool = True) -> None:
+        self.workload_healthy = workload_healthy
+        self.health_calls: list[str] = []
+
     def switch_profile(
         self,
         target_id: str,
@@ -60,6 +73,10 @@ class FakeSwitcher:
             restore_profile=restore_to,
             dry_run=dry_run,
         )
+
+    def workload_is_healthy(self, definition_id: str) -> bool:
+        self.health_calls.append(definition_id)
+        return self.workload_healthy
 
 
 @dataclass(frozen=True)
@@ -451,6 +468,48 @@ def test_endpoint_refuses_an_unreachable_node() -> None:
     assert result.exit_code == 3
     assert result.json["available"] is False
     assert result.json["reason"] == "live Spark health gate failed"
+
+
+def test_endpoint_refuses_a_dead_workload_on_healthy_nodes() -> None:
+    catalog_value = accepted_catalog()
+    switcher = FakeSwitcher(workload_healthy=False)
+
+    result = invoke(
+        "endpoint",
+        "deepseek",
+        "--json",
+        state=active_state(catalog_value),
+        catalog_value=catalog_value,
+        switcher=switcher,
+    )
+
+    assert result.exit_code == 3
+    assert result.json["available"] is False
+    assert result.json["reason"] == "active workload health gate failed"
+    assert switcher.health_calls == ["deepseek-agent-dual"]
+
+
+def test_endpoint_refuses_state_changed_during_live_probe() -> None:
+    catalog_value = accepted_catalog()
+    store = FakeStore(active_state(catalog_value))
+
+    def changing_inventory() -> Mapping[str, object]:
+        assert store.locked is True
+        store.state = ControllerState.stopped(boot_ids=BOOT_IDS)
+        return live_inventory()
+
+    result = invoke(
+        "endpoint",
+        "deepseek",
+        "--json",
+        store=store,
+        catalog_value=catalog_value,
+        inventory_provider=changing_inventory,
+    )
+
+    assert result.exit_code == 3
+    assert result.json["available"] is False
+    assert result.json["reason"] == "controller state changed during endpoint check"
 
 
 def test_unknown_selector_is_a_configuration_error() -> None:

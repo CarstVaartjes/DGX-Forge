@@ -66,8 +66,11 @@ boot IDs only after all final gates pass. Nothing restarts automatically.
 `sparkctl endpoint ALIAS` is the live publication check. It repeats the node
 health probe and refuses the address if either Spark is unhealthy or
 unreachable, either boot ID differs from activation, the active content is no
-longer accepted, or the alias is not in the active profile. Local `sparkctl
-status` never performs this probe and therefore always reports
+longer accepted, the adapter's read-only workload health check fails, or the
+alias is not in the active profile. The check holds the same exclusive lock as
+a transition and confirms persisted state is unchanged before returning, so a
+concurrent switch cannot publish a withdrawn endpoint. Local `sparkctl status`
+never performs this probe and therefore always reports
 `published_endpoints: {}` rather than presenting persisted intent as live
 availability.
 

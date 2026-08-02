@@ -116,6 +116,18 @@ class ProfileSwitcher:
                 dry_run=False,
             )
 
+    def workload_is_healthy(self, definition_id: str) -> bool:
+        """Run only the declared read-only health gate for one workload."""
+        definition = self.catalog.definitions.get(definition_id)
+        if definition is None:
+            return False
+        diagnostics: list[Diagnostic] = []
+        try:
+            self._health_definition(definition, diagnostics)
+        except _TransitionFailure:
+            return False
+        return True
+
     def _switch_with_state(
         self,
         state: ControllerState,

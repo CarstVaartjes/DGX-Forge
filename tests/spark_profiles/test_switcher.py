@@ -716,3 +716,22 @@ def test_unexpected_backend_exception_is_normalized_and_cleanup_continues() -> N
     ]
     assert cleanup_nodes == ["spark1", "spark2"]
     assert store.state.status == "degraded"
+
+
+def test_read_only_workload_health_probe_reports_adapter_failure() -> None:
+    definition = workload("generator")
+    target = profile("target", definition)
+    catalog_value = catalog(target, definition=definition)
+    switcher, events, store = make_switcher(
+        catalog_value,
+        ControllerState.stopped(),
+        fail=("profile-health", "generator"),
+    )
+
+    healthy = switcher.workload_is_healthy("generator")
+
+    assert healthy is False
+    assert [event[2][0] for event in events if event[0] == "remote"] == [
+        "profile-health"
+    ]
+    assert store.saves == []

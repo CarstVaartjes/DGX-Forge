@@ -54,8 +54,9 @@ sparkctl break-stale-lock [--json]
 - `endpoint` returns an address only for an alias published by an active,
   currently accepted profile after a fresh health probe confirms both Sparks
   are reachable and their exact boot IDs still match the successful
-  activation. Stopped, stale, rebooted, unhealthy, planned, or unpublished
-  endpoints are denied.
+  activation. It holds the transition lock and runs the workload adapter's
+  read-only health check before returning the address. Stopped, stale,
+  rebooted, unhealthy, planned, dead, or unpublished endpoints are denied.
 - `break-stale-lock` uses the state-store safety checks. It refuses a held lock,
   a live local PID, or a lock younger than the configured threshold.
 
