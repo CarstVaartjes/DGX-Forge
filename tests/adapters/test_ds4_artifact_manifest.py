@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from adapters.deepseek.ds4.tools import artifact_manifest
 from adapters.deepseek.ds4.tools.artifact_manifest import verify_manifest
 
 SCRIPT = (
@@ -15,6 +16,10 @@ SCRIPT = (
 )
 BASE_PATH = "base.gguf"
 DRAFTER_PATH = "drafter.gguf"
+PRODUCTION_MANIFEST = (
+    Path(__file__).resolve().parents[2]
+    / "adapters/deepseek/ds4/manifests/deepseek-v4-flash-0731-ds4.json"
+)
 
 
 def _entry(name: str, path: str, content: bytes) -> dict[str, object]:
@@ -216,3 +221,93 @@ def test_rejects_a_symlink_in_place_of_an_artifact(
         if artifact_path == DRAFTER_PATH
         else {"path": DRAFTER_PATH, "status": "verified"},
     ]
+
+
+def test_rejects_a_directory_in_place_of_an_artifact(tmp_path: Path) -> None:
+    base = b"base artifact"
+    drafter = b"drafter artifact"
+    (tmp_path / BASE_PATH).mkdir()
+    (tmp_path / DRAFTER_PATH).write_bytes(drafter)
+    manifest = _write_manifest(tmp_path, _manifest(base, drafter))
+
+    report = verify_manifest(manifest, tmp_path)
+
+    assert report == {
+        "artifacts": [
+            {"path": BASE_PATH, "status": "unsafe"},
+            {"path": DRAFTER_PATH, "status": "verified"},
+        ],
+        "ok": False,
+        "total_bytes": len(base) + len(drafter),
+    }
+
+
+def test_fails_closed_when_no_follow_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = b"base artifact"
+    drafter = b"drafter artifact"
+    (tmp_path / BASE_PATH).write_bytes(base)
+    (tmp_path / DRAFTER_PATH).write_bytes(drafter)
+    manifest = _write_manifest(tmp_path, _manifest(base, drafter))
+    monkeypatch.delattr(artifact_manifest.os, "O_NOFOLLOW", raising=False)
+
+    def forbid_open(*args: object, **kwargs: object) -> int:
+        raise AssertionError("artifacts must not be opened without O_NOFOLLOW")
+
+    monkeypatch.setattr(artifact_manifest.os, "open", forbid_open)
+
+    report = verify_manifest(manifest, tmp_path)
+
+    assert report == {
+        "artifacts": [
+            {"path": BASE_PATH, "status": "unsafe"},
+            {"path": DRAFTER_PATH, "status": "unsafe"},
+        ],
+        "ok": False,
+        "total_bytes": len(base) + len(drafter),
+    }
+
+
+def test_checked_production_manifest_has_every_audited_pin(tmp_path: Path) -> None:
+    with PRODUCTION_MANIFEST.open(encoding="utf-8") as manifest_file:
+        manifest = json.load(manifest_file)
+
+    report = verify_manifest(PRODUCTION_MANIFEST, tmp_path)
+
+    assert manifest == {
+        "schema_version": 1,
+        "artifacts": [
+            {
+                "name": "base",
+                "repository": "antirez/deepseek-v4-gguf",
+                "revision": "1cd7b564460821938add0475a60b942c409295e0",
+                "path": "DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix-0731.gguf",
+                "size": 86720111488,
+                "sha256": "ca22ae2f838e14077c22bc1c1417b71b45b5e5a3687bd96c2ac6e17fdb6261c0",
+            },
+            {
+                "name": "drafter",
+                "repository": "bleysg/DeepSeek-V4-Flash-DSpark-drafter-GGUF",
+                "revision": "81c6fdd38f9582da45ba27f0ed7b63bcd3ea3b62",
+                "path": "DSpark-drafter-Q2K-Q8-0731.gguf",
+                "size": 6971241504,
+                "sha256": "8fa269560dc76fd73e4233ad9b1938b5f65dd363381fd9b1a5c6183f7d12d686",
+            },
+        ],
+        "total_bytes": 93691352992,
+    }
+    assert report == {
+        "artifacts": [
+            {
+                "path": "DSpark-drafter-Q2K-Q8-0731.gguf",
+                "status": "missing",
+            },
+            {
+                "path": "DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix-0731.gguf",
+                "status": "missing",
+            },
+        ],
+        "ok": False,
+        "total_bytes": 93691352992,
+    }

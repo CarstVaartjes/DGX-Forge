@@ -546,7 +546,7 @@ The design was checked on 2026-08-02 against these upstream source snapshots. Th
 
 ## References
 
-- [DS4](https://github.com/antirez/ds4)
+- [DS4 audited source](https://github.com/Entrpi/ds4)
 - [MiaAI-Lab DeepSeek dual-Spark recipe](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark)
 - [NVIDIA DeepSeek-V4-Flash NVFP4](https://huggingface.co/nvidia/DeepSeek-V4-Flash-NVFP4)
 - [DS4 on Spark](https://github.com/Entrpi/ds4-on-spark)

@@ -109,7 +109,9 @@ def _validate_manifest(manifest: object) -> list[dict[str, Any]]:
 
 
 def _open_regular_file(root: Path, relative_path: str) -> int:
-    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if not isinstance(nofollow, int) or nofollow == 0:
+        raise ManifestError("O_NOFOLLOW is required to verify artifacts safely")
     root_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow
     directory_flags = root_flags
     file_flags = os.O_RDONLY | nofollow
@@ -143,7 +145,7 @@ def _artifact_status(root: Path, artifact: Mapping[str, Any]) -> str:
         file_fd = _open_regular_file(root, artifact["path"])
     except FileNotFoundError:
         return "missing"
-    except OSError:
+    except (ManifestError, OSError):
         return "unsafe"
     try:
         if os.fstat(file_fd).st_size != artifact["size"]:
