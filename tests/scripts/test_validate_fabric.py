@@ -4,6 +4,7 @@ from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
 import sys
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -123,6 +124,151 @@ def test_rejects_nonzero_rdma_server_even_with_positive_output(validate_module):
 
     with pytest.raises(validate_module.GateError, match="server exited 1"):
         validate_module.run_one_rdma(Runner(), head, worker, rail, rail, "ib_write_bw", 12000)
+
+
+def test_rejects_rdma_component_below_declared_floor(validate_module):
+    """A positive result is not enough when it misses the accepted floor."""
+    rail = validate_module.Rail("rail100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
+    head = validate_module.Host("spark1", "dgx-spark-1", {}, (rail, rail))
+    worker = validate_module.Host("spark2", "dgx-spark-2", {}, (rail, rail))
+    positive_but_low = "Transport type : IB\nLink type : Ethernet\n65536 5000 0.0 97.0 0.1\n"
+
+    class Runner:
+        def __init__(self):
+            self.head = head
+
+        def remote(self, host, command, *, check=True):
+            if "nohup" in command:
+                return SimpleNamespace(stdout="1234\n", stderr="", returncode=0)
+            return SimpleNamespace(stdout=positive_but_low, stderr="", returncode=0)
+
+        def worker_via_fabric(self, command, *, check=True):
+            return SimpleNamespace(
+                stdout="1234\n" if "nohup" in command else positive_but_low,
+                stderr="",
+                returncode=0,
+            )
+
+    with pytest.raises(validate_module.GateError, match="below 98.01"):
+        validate_module.run_one_rdma(
+            Runner(),
+            worker,
+            head,
+            rail,
+            rail,
+            "ib_write_bw",
+            12000,
+            minimum_bandwidth_gbps=98.01,
+        )
+
+
+def aggregate_hosts(validate_module):
+    head_rails = (
+        validate_module.Rail("function100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11"),
+        validate_module.Rail("function101", "enP2p1s0f1np1", "roceP2p1s0f1", 3, "192.168.101.10", "192.168.101.11"),
+    )
+    worker_rails = (
+        validate_module.Rail("function100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.11", "192.168.100.10"),
+        validate_module.Rail("function101", "enP2p1s0f1np1", "roceP2p1s0f1", 3, "192.168.101.11", "192.168.101.10"),
+    )
+    return (
+        validate_module.Host("spark1", "dgx-spark-1", {}, head_rails),
+        validate_module.Host("spark2", "dgx-spark-2", {}, worker_rails),
+    )
+
+
+def test_aggregate_requires_concurrent_components(validate_module):
+    """Two qualifying functions must actually overlap to prove physical-link bandwidth."""
+    head, worker = aggregate_hosts(validate_module)
+    barrier = threading.Barrier(2)
+    durations = []
+
+    def component(*args, **kwargs):
+        barrier.wait(timeout=1)
+        durations.append(kwargs.get("duration_seconds"))
+        return {
+            "name": f"component-{args[6]}",
+            "passed": True,
+            "bandwidth_gbps": 92.5,
+            "started_monotonic": 10.0,
+            "finished_monotonic": 12.0,
+        }
+
+    result = validate_module.run_aggregate_rdma_write(
+        SimpleNamespace(), worker, head, base_port=13000, run_component=component
+    )
+
+    assert result["aggregate_bandwidth_gbps"] == 185.0
+    assert result["overlap_seconds"] == 2.0
+    assert len(result["components"]) == 2
+    assert durations == [5, 5]
+
+
+def test_aggregate_rejects_non_overlapping_components(validate_module):
+    """Sequentially adding two function results must never claim 200 Gb/s-class service."""
+    head, worker = aggregate_hosts(validate_module)
+
+    def component(*args, **kwargs):
+        port = args[6]
+        return {
+            "name": f"component-{port}",
+            "passed": True,
+            "bandwidth_gbps": 100.0,
+            "started_monotonic": 10.0 if port == 13000 else 12.0,
+            "finished_monotonic": 11.0 if port == 13000 else 13.0,
+        }
+
+    with pytest.raises(validate_module.GateError, match="did not overlap"):
+        validate_module.run_aggregate_rdma_write(
+            SimpleNamespace(), worker, head, base_port=13000, run_component=component
+        )
+
+
+def test_aggregate_rejects_bandwidth_below_nvidia_floor(validate_module):
+    """Concurrent traffic below NVIDIA's 184 Gb/s floor blocks distributed models."""
+    head, worker = aggregate_hosts(validate_module)
+
+    def component(*args, **kwargs):
+        return {
+            "name": f"component-{args[6]}",
+            "passed": True,
+            "bandwidth_gbps": 91.5,
+            "started_monotonic": 10.0,
+            "finished_monotonic": 12.0,
+        }
+
+    with pytest.raises(validate_module.GateError, match="below 184.00"):
+        validate_module.run_aggregate_rdma_write(
+            SimpleNamespace(), worker, head, base_port=13000, run_component=component
+        )
+
+
+def test_nccl_rejects_bus_bandwidth_below_regression_floor(validate_module):
+    """NET/IB selection alone cannot hide a material NCCL regression."""
+    rail = validate_module.Rail("function100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
+    fabric = {
+        "NCCL_SOCKET_IFNAME": "=enp1s0f1np1,enP2p1s0f1np1",
+        "NCCL_IB_HCA": "=rocep1s0f1:1,roceP2p1s0f1:1",
+        "NCCL_IB_GID_INDEX": 3,
+        "TP_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1",
+        "GLOO_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1",
+    }
+    head = validate_module.Host("spark1", "dgx-spark-1", fabric, (rail, rail))
+    worker = validate_module.Host("spark2", "dgx-spark-2", fabric, (rail, rail))
+
+    class Runner:
+        def remote(self, host, command, *, check=True):
+            return SimpleNamespace(
+                stdout="NET/IB : Using rocep1s0f1\nAvg bus bandwidth : 17.0",
+                stderr="",
+                returncode=0,
+            )
+
+        def worker_via_fabric(self, command, *, check=True):
+            return SimpleNamespace(stdout="", stderr="", returncode=0)
+
+    with pytest.raises(validate_module.GateError, match="below 17.44"):
+        validate_module.run_nccl(Runner(), head, worker)
 
 
 def test_native_nccl_prerequisites_require_the_pinned_completed_build(validate_module):
