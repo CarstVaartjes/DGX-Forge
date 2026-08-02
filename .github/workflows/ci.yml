@@ -41,5 +41,31 @@ jobs:
           version: "0.12.1"
           python-version: "3.12"
           enable-cache: true
+      - name: Install standalone Docker Compose
+        if: runner.os == 'macOS'
+        uses: docker/setup-compose-action@4eb059ff7f16592f9c84d5ca339c53cb7c5064e2 # v2.3.0
+        with:
+          version: v5.1.4
+      # ARM macOS runners have no Docker CLI or daemon. The render tests only
+      # need `compose config`, so adapt the production `docker compose` shape
+      # to the pinned standalone Compose binary without starting a VM.
+      - name: Provide Docker Compose compatibility shim
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          shim_dir="$RUNNER_TEMP/docker-compose-shim"
+          install -d "$shim_dir"
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'set -euo pipefail' \
+            '[[ ${1:-} == compose ]] || {' \
+            '  echo "only docker compose is available in macOS CI" >&2' \
+            '  exit 2' \
+            '}' \
+            'shift' \
+            'exec docker-compose "$@"' \
+            > "$shim_dir/docker"
+          chmod 0755 "$shim_dir/docker"
+          echo "$shim_dir" >> "$GITHUB_PATH"
       - name: Run Python and Bash tests
         run: uv run --python 3.12 --frozen --with pytest==9.1.1 pytest
