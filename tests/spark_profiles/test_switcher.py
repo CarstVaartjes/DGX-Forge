@@ -581,6 +581,43 @@ def test_recovery_save_failure_returns_degraded_after_cleanup() -> None:
     assert store.state.status == "transitioning"
 
 
+def test_ambiguous_final_commit_is_replaced_with_conservative_state() -> None:
+    definition = workload("generator", distributed=True)
+    target = profile("generator-only", definition)
+    catalog_value = catalog(target, definition=definition)
+    events: list[tuple] = []
+
+    class AmbiguousCommitStore(FakeStore):
+        def __init__(self) -> None:
+            super().__init__(ControllerState.stopped(), events)
+            self.save_attempts = 0
+
+        def save(self, state: ControllerState) -> None:
+            self.save_attempts += 1
+            if self.save_attempts == 2:
+                super().save(state)
+                raise OSError("final directory fsync failed")
+            if self.save_attempts == 3:
+                raise OSError("recovery write failed before replace")
+            super().save(state)
+
+    store = AmbiguousCommitStore()
+    switcher = ProfileSwitcher(
+        catalog=catalog_value,
+        backend=FakeBackend(events),
+        state_store=store,
+        inventory_provider=inventory,
+    )
+
+    report = switcher.switch_profile("generator-only")
+
+    assert report.status == "degraded"
+    assert report.published_endpoints == {}
+    assert store.save_attempts == 4
+    assert store.state.status == "degraded"
+    assert store.state.active_profile is None
+
+
 def test_final_state_save_failure_never_reports_active_endpoints() -> None:
     definition = workload("generator")
     target = profile("generator-only", definition)

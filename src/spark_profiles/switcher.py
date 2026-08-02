@@ -387,6 +387,29 @@ class ProfileSwitcher:
                     f"recovery state persistence failed: {detail}"[:_MAX_ERROR_CHARS]
                 )
                 status = "degraded"
+                conservative_state = ControllerState(
+                    status="degraded",
+                    active_profile=None,
+                    target_profile=target.id,
+                    restore_profile=restore_profile,
+                    last_error="; ".join(errors)[:_MAX_ERROR_CHARS],
+                    boot_ids=live_boot_ids,
+                )
+                try:
+                    # The failed final save may have raised after atomically
+                    # replacing state.json. Make one bounded extra attempt so
+                    # a transient recovery-write failure cannot leave that
+                    # active publication consumable after cleanup.
+                    self.state_store.save(conservative_state)
+                except OSError as fallback_error:
+                    fallback_detail = (
+                        f"{type(fallback_error).__name__}: {fallback_error}"
+                    )[:_MAX_ERROR_CHARS]
+                    errors.append(
+                        f"conservative state persistence failed: {fallback_detail}"[
+                            :_MAX_ERROR_CHARS
+                        ]
+                    )
             return SwitchReport(
                 target_profile=target.id,
                 status=status,
