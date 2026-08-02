@@ -26,10 +26,15 @@ On the current hosts, one physical QSFP connection is exposed as two Linux
 interfaces and RDMA HCAs. This is expected on DGX Spark; do **not** treat it as
 two cables or select only one function:
 
-| Node | Linux interfaces reported `LOWER_UP` | RDMA HCAs | Observed speed |
+| Node | Linux interfaces reported `LOWER_UP` | RDMA HCAs | Observed physical-link state |
 | --- | --- | --- | --- |
-| Spark 1 | `enp1s0f1np1`, `enP2p1s0f1np1` | `rocep1s0f1`, `roceP2p1s0f1` | 200000 Mb/s each |
-| Spark 2 | `enp1s0f1np1`, `enP2p1s0f1np1` | `rocep1s0f1`, `roceP2p1s0f1` | 200000 Mb/s each |
+| Spark 1 | `enp1s0f1np1`, `enP2p1s0f1np1` | `rocep1s0f1`, `roceP2p1s0f1` | both functions report 200000 Mb/s |
+| Spark 2 | `enp1s0f1np1`, `enP2p1s0f1np1` | `rocep1s0f1`, `roceP2p1s0f1` | both functions report 200000 Mb/s |
+
+Those duplicate reports describe one 200 Gb/s physical QSFP link. They must
+not be added to claim 400 Gb/s. NVIDIA documents the two functions as the NIC's
+two PCIe Gen5 x4 paths into the SoC, while NVIDIA Sync defines 184 Gb/s as the
+lower accepted speed-test result for this 200 Gb/s connection.
 
 The controller's elevated, read-only `ethtool -m` evidence identifies the
 installed cable at both ends as `Amphenol`, OUI `78:a7:14`, vendor PN
@@ -216,7 +221,7 @@ Spark 2 was applied and locally validated before Spark 1. Both nodes retain the
 management default route through `wlP9s9`; neither fabric interface has a
 default route.
 
-| Node | Rail | Interface | Fabric IPv4 | HCA | RoCEv2 GID | MTU | Link rate |
+| Node | Function label | Interface | Fabric IPv4 | HCA | RoCEv2 GID | MTU | Physical-link state |
 | --- | --- | --- | --- | --- | ---: | ---: | ---: |
 | Spark 1/head | 100 | `enp1s0f1np1` | `192.168.100.10/24` | `rocep1s0f1` | 3 | 1500 | 200000 Mb/s |
 | Spark 1/head | 101 | `enP2p1s0f1np1` | `192.168.101.10/24` | `roceP2p1s0f1` | 3 | 1500 | 200000 Mb/s |
@@ -226,7 +231,7 @@ default route.
 Each recorded GID is IPv4-mapped, type `RoCE v2`, and has `gid_attrs/ndevs`
 bound to the interface in the table. At `2026-08-01T22:34:27Z`, normal and
 non-fragmenting `-M do -s 1472` pings succeeded 3/3 with zero loss in both
-directions on both rails.
+directions on both functions.
 
 Use these exact values for distributed consumers on both nodes:
 
@@ -311,15 +316,19 @@ The verified values above are recorded in `inventory/cluster.toml` and
 `inventory/reports/fabric.json`. Do not replace them using the management LAN
 or link-local GIDs.
 
-## RDMA and NCCL acceptance
+## RDMA, latency, error-counter, and NCCL acceptance
 
 Run `scripts/validate-fabric --inventory inventory/cluster.toml --output
 inventory/reports/rdma-nccl.json` from the controller only after the recorded
-postchecks pass. The wrapper is fail-closed: it validates both recorded
-HCA/GID/netdev consumers, uses `-x 3` with `ib_write_bw` and `ib_read_bw`,
-uses the Spark 1 `dgx-spark-2-fabric` alias for every worker operation, and
-stops at the first nonzero exit, no-positive-bandwidth result, or NCCL
-`NET/Socket` diagnostic. It never enables agent forwarding.
+postchecks pass. The wrapper is fail-closed: it validates the exact 200000 Mb/s
+physical-link state, net-device MTU 1500, both recorded HCA/GID/netdev
+consumers, and the RoCE path MTU 1024. It uses `-x 3` with `ib_write_bw`,
+`ib_read_bw`, and `ib_write_lat`; runs both write functions simultaneously to
+measure the one physical link; captures named RDMA error counters before and
+after traffic; and uses the Spark 1 `dgx-spark-2-fabric` alias for every worker
+operation. It stops on a failed command, wrong transport/path, a result below
+its floor, any monitored counter growth, NCCL `NET/Socket`, or NCCL selecting
+only one active HCA. It never enables agent forwarding.
 
 The documented source installation follows NVIDIA `dgx-spark-playbooks` commit
 `1fb66f059ee427c5a3678b3117ef73aab042b458`. Each Spark has OpenMPI packages
@@ -350,9 +359,38 @@ scripts that weaken host-key checking or distribute keys. It never uses a
 management-plane host list, `sudo -S`, a shared private key,
 `StrictHostKeyChecking=no`, Docker, or the docker group.
 
-The accepted two-node run selected both `rocep1s0f1:1` and
-`roceP2p1s0f1:1` via `NET/IB : Using`, with a final average NCCL bus bandwidth
-of 19.3782 GB/s and zero out-of-bounds values. A single physical QSFP port is
-limited to 200 Gb/s; GPU Direct RDMA-disabled diagnostics were observed but do
-not invalidate the selected NET/IB transport. Do not force undocumented
-`NCCL_NET_GDR_LEVEL` settings.
+The accepted run captured at `2026-08-02T10:46:10Z` produced:
+
+| Gate | Spark 1 to Spark 2 | Spark 2 to Spark 1 | Floor |
+| --- | ---: | ---: | ---: |
+| Simultaneous two-function RDMA write aggregate | 185.14 Gb/s | 185.14 Gb/s | 184.00 Gb/s |
+| Sequential function write range | 108.88–109.00 Gb/s | 108.99–109.02 Gb/s | 98.01 Gb/s each |
+| Sequential function read range | 80.42–80.43 Gb/s | 80.43 Gb/s | 72.37 Gb/s each |
+
+The aggregate components each measured 92.57 Gb/s while sharing the same
+physical link. Their controller-observed client-call intervals overlapped for
+6.90 and 7.23 seconds respectively; only same-interval results were summed.
+This is the physical-link proof. Sequential ~109 Gb/s function results remain
+diagnostics and are never added together as capacity evidence.
+
+The fixed `ib_write_lat` baseline uses 8-byte messages, 10,000 iterations,
+GID index 3, and RoCE path MTU 1024:
+
+| Function / direction | Average | p99 | p99.9 | Maximum |
+| --- | ---: | ---: | ---: | ---: |
+| 100, Spark 1 to Spark 2 | 1.97 us | 2.05 us | 2.52 us | 4.33 us |
+| 100, Spark 2 to Spark 1 | 1.98 us | 2.03 us | 2.38 us | 4.93 us |
+| 101, Spark 1 to Spark 2 | 1.80 us | 2.20 us | 2.34 us | 3.82 us |
+| 101, Spark 2 to Spark 1 | 1.82 us | 2.22 us | 2.30 us | 3.62 us |
+
+All monitored RDMA sequence, retry, timeout, CQE, access, and adaptive-
+retransmission counters were zero before and after the run. The accepted
+two-node NCCL run selected both `rocep1s0f1:1` and `roceP2p1s0f1:1` through
+`NET/IB : Using`, reported 19.308 GB/s average bus bandwidth against the
+17.44 GB/s regression floor, and had zero out-of-bounds values. GPU Direct
+RDMA-disabled diagnostics were observed but do not invalidate the selected
+NET/IB transport. Do not force undocumented `NCCL_NET_GDR_LEVEL` settings.
+
+Primary references: [NVIDIA DGX Spark clustering](https://docs.nvidia.com/dgx/dgx-spark/spark-clustering.html)
+for the physical topology and [NVIDIA Sync Cluster Assistant](https://docs.nvidia.com/sync/latest/cluster-assistant.html)
+for the 200 Gb/s negotiated state and 184 Gb/s lower speed-test bound.

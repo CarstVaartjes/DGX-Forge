@@ -19,13 +19,13 @@ truth.
 - Spark 2 LAN address: `192.168.1.212`
 - Linux user on both systems: `carst`
 - Both LAN addresses are static.
-- One 1 m Amphenol `NJAAKK-C106` passive copper cable directly connects the two systems. Its exact OEM identifier is not in the public NVIDIA compatibility list, but both functions negotiate 200 Gb/s and passed bidirectional fabric, RDMA, and NCCL acceptance.
+- One 1 m Amphenol `NJAAKK-C106` passive copper cable directly connects the two systems. Its exact OEM identifier is not in the public NVIDIA compatibility list, but its two PCIe/RoCE functions report the same 200 Gb/s physical-link state. Simultaneous traffic across both functions reached 185.14 Gb/s in each direction and passed RDMA, latency, error-counter, and NCCL acceptance.
 - The administration computer is a Mac using the 1Password SSH agent.
 - The dedicated Ed25519 key named `DGX Spark Admin` is installed on both Sparks. Fresh key-only access passes, password and keyboard-interactive SSH are disabled, and the private key remains in 1Password.
 - A Synology DS218+ exists but is not part of the initial deployment. A new NAS or other external container host will be added later for Caddy, the controller, UI, LiteLLM, and Tailscale ingress.
 - Both systems have a 4,031,871,553,536-byte root filesystem, more than 3.78 TB free at baseline, DGX OS OTA `7.5.0`, kernel `6.17.0-1029-nvidia`, driver `580.173.02`, CUDA Toolkit package `13.0.3-1`, Docker `29.2.1`, and Compose `5.0.2`.
 - `earlyoom` is absent and inactive on both nodes.
-- The direct two-rail RoCEv2 fabric is configured with MTU 1500, GID index 3, no default route, and a passing two-rank NCCL result of 19.3782 GB/s average bus bandwidth.
+- The direct one-link/two-function RoCEv2 fabric is configured with MTU 1500, GID index 3, no default route, a passing 185.14 Gb/s simultaneous aggregate in each direction, and a passing two-rank NCCL result of 19.308 GB/s average bus bandwidth.
 
 ## Goals
 

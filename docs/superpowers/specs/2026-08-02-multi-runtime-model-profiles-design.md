@@ -391,21 +391,24 @@ The strict gates are:
 | Metric | Accepted evidence | Admission floor |
 | --- | ---: | ---: |
 | Physical negotiated link rate | 200 Gb/s | exactly 200 Gb/s |
-| Simultaneous aggregate RDMA write, each direction | not yet recorded | at least 184 Gb/s |
-| Single-function RDMA write diagnostic | worst result 108.9 Gb/s | at least 98.01 Gb/s per function and direction |
-| Single-function RDMA read diagnostic | worst result 80.41 Gb/s | at least 72.37 Gb/s per function and direction |
-| NCCL bus bandwidth | 19.3782 GB/s | at least 17.44 GB/s |
+| Simultaneous aggregate RDMA write, each direction | 185.14 Gb/s | at least 184 Gb/s |
+| Single-function RDMA write diagnostic | worst result 108.88 Gb/s | at least 98.01 Gb/s per function and direction |
+| Single-function RDMA read diagnostic | worst result 80.42 Gb/s | at least 72.37 Gb/s per function and direction |
+| Fixed 8-byte write-latency p99 | 2.03–2.22 us by function/direction | no more than 125% of the corresponding accepted baseline |
+| Monitored RDMA error-counter growth | zero | exactly zero |
+| NCCL bus bandwidth | 19.308 GB/s | at least 17.44 GB/s |
 
 The per-function and NCCL regression floors are 90% of the recorded accepted
-results; the aggregate floor is NVIDIA's independent lower bound. The current
-fabric report contains neither simultaneous aggregate bandwidth nor a
-reproducible latency baseline, so the design does not invent either result.
-Every distributed Model Definition remains non-activatable until the aggregate
-gate passes and a fixed latency test records the baseline. Subsequent admission
-requires p95 latency no more than 125% of that baseline. The test command,
-payload, iterations, warm-up, CPU placement, per-function results, aggregate,
-result overlap interval, error counters, and boot IDs are recorded with the
-fabric report.
+results; the aggregate floor is NVIDIA's independent lower bound. The accepted
+2026-08-02 run reached 185.14 Gb/s in each direction, established fixed
+8-byte/10,000-iteration latency distributions for both functions and
+directions, and observed no monitored error counter before or after traffic.
+The fabric itself therefore no longer blocks a distributed Model Definition;
+all definition-specific gates still apply. Subsequent admission requires p99
+latency no more than 125% of the corresponding function/direction baseline.
+The test command, payload, iterations, per-function results, aggregate, result
+overlap interval, counter snapshots, and command evidence are recorded in
+`inventory/reports/rdma-nccl.json`.
 
 ## Storage layout
 

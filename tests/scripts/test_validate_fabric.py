@@ -30,6 +30,14 @@ def parse_nccl(validate_module):
     return validate_module.parse_nccl
 
 
+def test_inventory_uses_two_fabric_functions_per_host(validate_module):
+    """The canonical inventory uses function labels, not fictional rails."""
+    head, worker = validate_module.load_hosts(ROOT / "inventory" / "cluster.toml")
+
+    assert [function.name for function in head.rails] == ["function100", "function101"]
+    assert [function.name for function in worker.rails] == ["function100", "function101"]
+
+
 def test_rejects_tcp_fallback(parse_nccl):
     """A successful process is not evidence of RDMA if NCCL selected sockets."""
     result = parse_nccl("NET/Socket : Using enp...\nAvg bus bandwidth : 11.0")

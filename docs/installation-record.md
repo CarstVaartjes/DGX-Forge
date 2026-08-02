@@ -141,8 +141,9 @@ accepted `absent` as a safe final state. The recorded evidence is
 Cable EEPROM inspection identified the same 1 m Amphenol `NJAAKK-C106` passive
 copper PAM4 DAC from both ends. Its exact OEM identifier was not found in the
 public NVIDIA compatibility list, so acceptance was based on observed behavior:
-both functions negotiated 200 Gb/s, and both passed non-fragmenting traffic in
-both directions.
+both functions reported the same negotiated 200 Gb/s physical-link state, and
+both passed non-fragmenting traffic in both directions. These are two PCIe/RoCE
+functions of one QSFP link, not two independent 200 Gb/s links.
 
 The NVIDIA Sync UI was not used for the final configuration. It expected to
 bootstrap SSH using a password and did not import the already-hardened
@@ -151,14 +152,14 @@ on NVIDIA `dgx-spark-playbooks` commit
 `1fb66f059ee427c5a3678b3117ef73aab042b458`, applying Spark 2 first with
 `netplan try`, validating management access, and only then applying Spark 1.
 
-The final two-rail fabric is:
+The final physical link is exposed through these two addressable functions:
 
-| Rail | Spark 1 | Spark 2 | Interfaces / HCA | RoCE GID | MTU |
+| Function label | Spark 1 | Spark 2 | Interfaces / HCA | RoCE GID | MTU |
 | --- | --- | --- | --- | ---: | ---: |
 | 100 | `192.168.100.10` | `192.168.100.11` | `enp1s0f1np1` / `rocep1s0f1` | 3 | 1500 |
 | 101 | `192.168.101.10` | `192.168.101.11` | `enP2p1s0f1np1` / `roceP2p1s0f1` | 3 | 1500 |
 
-Neither rail has a default route. Because the cable is a direct back-to-back
+Neither function-addressed subnet has a default route. Because the cable is a direct back-to-back
 link, there is no Ethernet switch requiring PFC, ECN, DSCP, or switch-side MTU
 configuration. The exact Netplan procedure, cluster-only SSH key, rollback,
 and postchecks are in [Direct ConnectX-7 fabric](runbooks/fabric.md).
@@ -171,10 +172,16 @@ MPI-enabled `nccl-tests` from pinned source commits. The cluster uses a separate
 head-to-worker SSH key restricted to the two fabric source addresses; it does
 not reuse or forward the 1Password administration key.
 
-Bidirectional RDMA read/write tests passed on both rails. The accepted NCCL
-`all_reduce_perf` run selected both RoCE HCAs using `NET/IB`, completed with
-zero out-of-bounds values, and reported 19.3782 GB/s average bus bandwidth.
-Full results are in
+The final acceptance run on 2026-08-02 proved the one physical link rather than
+adding two sequential function results. Simultaneous `ib_write_bw` traffic on
+both functions reached 185.14 Gb/s in each direction, above NVIDIA Sync's
+184 Gb/s lower bound for a 200 Gb/s Spark link. Sequential function diagnostics
+were 108.88–109.02 Gb/s write and 80.42–80.43 Gb/s read. Fixed 8-byte,
+10,000-iteration write-latency runs averaged 1.80–1.98 us with p99 of
+2.03–2.22 us, and every monitored RDMA error counter remained zero. The
+accepted NCCL `all_reduce_perf` run selected both RoCE HCAs using `NET/IB`,
+completed with zero out-of-bounds values, and reported 19.308 GB/s average bus
+bandwidth. Full command evidence and distributions are in
 [`inventory/reports/rdma-nccl.json`](../inventory/reports/rdma-nccl.json).
 
 ## Lessons learned
@@ -187,7 +194,7 @@ Full results are in
 | A failed password attempt is not proof that password authentication is disabled. | Inspect the server's advertised authentication methods as well as proving a fresh public-key login. |
 | `nvidia-smi` showing CUDA support and `nvcc` being absent are not contradictory. | Validate the DGX container path first; distinguish the host driver, host Toolkit, and container CUDA runtime. |
 | A GUI helper is not mandatory when it conflicts with an already-hardened SSH design. | Use the pinned NVIDIA manual playbook, preserve strict host-key checking, and document the deviation. |
-| A physical QSFP connection exposes two usable network/HCA functions here. | Inventory and pin both interface/HCA/GID consumers; do not reduce the cluster model to one fabric address. |
+| A physical QSFP connection exposes two usable network/HCA functions here. | Inventory and pin both interface/HCA/GID consumers, but never add their duplicated 200 Gb/s link-state reports as if they were independent physical links. |
 | A cable part number alone did not establish support. | Record the EEPROM identity, negotiated rate, MTU behavior, bidirectional RDMA, and NCCL transport evidence. |
 | `earlyoom` absence is already a valid safe state. | Treat `absent`, `disabled and inactive`, or `masked and inactive` as explicit accepted states; do not install it merely to disable it. |
 | Worker-first ordering materially limits blast radius. | Apply host, update, SSH, fabric, and runtime changes to Spark 2 first and stop before Spark 1 if validation fails. |
@@ -200,10 +207,10 @@ The installation baseline is complete when all of the following remain true:
   remains disabled;
 - both hosts remain on matched supported platform revisions;
 - `earlyoom` remains absent or otherwise disabled and inactive;
-- both fabric rails retain their static addresses, GID index 3, MTU 1500, and
+- both fabric functions retain their static addresses, GID index 3, MTU 1500, and
   no default route;
 - [`scripts/validate-fabric`](../scripts/validate-fabric) reproduces the RDMA
-  and NCCL acceptance result.
+  aggregate-bandwidth, latency, error-counter, and NCCL acceptance result.
 
 The next phase is model-runtime implementation, beginning with the common
 profile controller and the default dual-Spark DeepSeek 0731 profile. Caddy,

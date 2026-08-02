@@ -50,7 +50,7 @@ flowchart LR
     controller -. restricted SSH .-> head
     controller -. restricted SSH .-> worker
     controller -. private container network .-> caddy
-    head <-->|direct ConnectX-7<br/>NCCL / RoCE| worker
+    head <-->|one physical 200 Gb/s ConnectX-7 link<br/>two RoCE functions; NCCL / tensor traffic| worker
     cache1 --- head
     cache2 --- worker
 
@@ -94,7 +94,10 @@ flowchart LR
 - **Future shared inference:** client or UI → Caddy → the aliases advertised by the active Cluster Profile.
 - **Control:** developer-machine controller initially, later external controller → restricted SSH commands on each Spark.
 - **Administration:** Mac → each Spark through the 1Password SSH agent.
-- **Tensor parallelism:** Spark 1 ↔ direct ConnectX-7 ↔ Spark 2 using NCCL/RoCE.
+- **Tensor parallelism:** Spark 1 ↔ one direct 200 Gb/s ConnectX-7 physical
+  link ↔ Spark 2 using both PCIe/RoCE functions. The accepted simultaneous
+  aggregate is 185.14 Gb/s in each direction; the duplicated function link
+  states are not independent 200 Gb/s links.
 - **Model storage:** each Spark reads only its own verified local cache during serving.
 
 ## Model switching

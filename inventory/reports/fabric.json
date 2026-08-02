@@ -95,7 +95,7 @@
     {
       "name": "cable identity",
       "status": "passed_with_undocumented_oem_identifier",
-      "evidence": "Both rails negotiated 200000 Mb/s Direct Attach Copper and passed normal plus 1472-byte non-fragmenting ping in both directions. The matching 1 m Amphenol NJAAKK-C106 passive PAM4 DAC remains an undocumented OEM identifier."
+      "evidence": "Both PCIe/RoCE functions reported the same 200000 Mb/s physical Direct Attach Copper link state and passed normal plus 1472-byte non-fragmenting ping in both directions. They are not independent 200 Gb/s rails. The matching 1 m Amphenol NJAAKK-C106 passive PAM4 DAC remains an undocumented OEM identifier."
     },
     {
       "name": "manual CLI rollout",
@@ -106,7 +106,7 @@
       "name": "fabric acceptance",
       "status": "passed",
       "captured_at": "2026-08-01T22:34:27Z",
-      "evidence": "Both rails on both nodes have IPv4-mapped RoCE v2 GID index 3 bound to the selected netdev. Normal and 1472-byte non-fragmenting pings completed 3/3 with zero loss in both directions; no fabric interface has a default route."
+      "evidence": "Both functions on both nodes have IPv4-mapped RoCE v2 GID index 3 bound to the selected netdev. Normal and 1472-byte non-fragmenting pings completed 3/3 with zero loss in both directions; no fabric interface has a default route."
     }
   ],
   "cluster_ssh": {

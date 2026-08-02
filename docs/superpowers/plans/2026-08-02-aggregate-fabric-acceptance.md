@@ -33,7 +33,7 @@
 - Extends: `run_one_rdma(..., minimum_bandwidth_gbps: float) -> dict[str, Any]` with monotonic start/end timestamps in the result.
 - Produces report records named `ib_write_bw:aggregate:<client>-><server>` with component results, overlap seconds, aggregate Gb/s, and the 184 Gb/s floor.
 
-- [ ] **Step 1: Write failing threshold and concurrency tests**
+- [x] **Step 1: Write failing threshold and concurrency tests**
 
 Add tests that prove a 97 Gb/s write fails the 98.01 floor, a 72 Gb/s read fails the 72.37 floor, a 17 GB/s NCCL result fails the 17.44 floor, and two concurrent 92.5 Gb/s components pass the 184 Gb/s aggregate gate. Use a `threading.Barrier(2)` in the injected component runner so a sequential implementation cannot pass accidentally.
 
@@ -57,13 +57,13 @@ def test_aggregate_requires_two_overlapping_components(validate_module):
     assert result["overlap_seconds"] == 2.0
 ```
 
-- [ ] **Step 2: Run the focused tests and confirm failure**
+- [x] **Step 2: Run the focused tests and confirm failure**
 
 Run: `uv run --with pytest pytest tests/scripts/test_validate_fabric.py -v`
 
 Expected: FAIL because the aggregate function, explicit floors, and interval fields do not exist.
 
-- [ ] **Step 3: Implement the minimal fail-closed aggregate gate**
+- [x] **Step 3: Implement the minimal fail-closed aggregate gate**
 
 Add constants for the four approved floors. Use `ThreadPoolExecutor(max_workers=2)` to run one `ib_write_bw` component per HCA concurrently. Record `time.monotonic()` immediately around each client call. Require exactly two results, a positive interval intersection, and an aggregate at or above 184 Gb/s. Apply the per-function floor inside `run_one_rdma` and the NCCL floor inside `run_nccl`.
 
@@ -83,13 +83,13 @@ if aggregate < PHYSICAL_LINK_MIN_GBPS:
     raise GateError(f"aggregate RDMA write {aggregate:.2f} Gb/s is below 184.00 Gb/s")
 ```
 
-- [ ] **Step 4: Run the focused tests**
+- [x] **Step 4: Run the focused tests**
 
 Run: `uv run --with pytest pytest tests/scripts/test_validate_fabric.py -v`
 
 Expected: PASS, including low-bandwidth, non-overlap, partial-failure, and concurrent-pass cases.
 
-- [ ] **Step 5: Commit the executable gate**
+- [x] **Step 5: Commit the executable gate**
 
 ```bash
 git add scripts/validate_fabric.py tests/scripts/test_validate_fabric.py
@@ -108,7 +108,7 @@ git commit -m "fix: require aggregate Spark fabric bandwidth"
 - Produces: `capture_rdma_counters(runner, head, worker) -> dict[str, Any]` before and after traffic.
 - Adds top-level report fields `latency`, `rdma_counters_before`, and `rdma_counters_after`.
 
-- [ ] **Step 1: Write failing parser and counter-delta tests**
+- [x] **Step 1: Write failing parser and counter-delta tests**
 
 Use a saved representative `ib_write_lat` fixture with the fixed message size and iteration count. Assert extraction of minimum, maximum, typical, average, standard deviation, p99, and p99.9 microseconds. Add counter fixtures proving unchanged zeros pass and a growing `packet_seq_err`, `rnr_nak_retry_err`, or `local_ack_timeout_err` fails.
 
@@ -120,23 +120,23 @@ def test_rejects_growing_rdma_error_counter(validate_module):
         validate_module.validate_counter_delta(before, after)
 ```
 
-- [ ] **Step 2: Run tests and confirm failure**
+- [x] **Step 2: Run tests and confirm failure**
 
 Run: `uv run --with pytest pytest tests/scripts/test_validate_fabric.py -v`
 
 Expected: FAIL because latency and counter interfaces do not exist.
 
-- [ ] **Step 3: Implement fixed latency and counter capture**
+- [x] **Step 3: Implement fixed latency and counter capture**
 
 Require `/usr/bin/ib_write_lat` during preflight. Run it with the pinned HCA, port, GID index 3, 8-byte payload, 10,000 iterations, and CPU-frequency warning suppression in both directions for both functions. Capture `rdma statistic show` before and after all RDMA traffic, preserve the raw command evidence, normalize only named error counters, and fail when any monitored counter grows.
 
-- [ ] **Step 4: Run focused and full offline tests**
+- [x] **Step 4: Run focused and full offline tests**
 
 Run: `uv run --with pytest pytest tests/scripts/test_validate_fabric.py tests/scripts -v && git diff --check`
 
 Expected: PASS with no live SSH invocation from tests.
 
-- [ ] **Step 5: Commit latency and counter evidence**
+- [x] **Step 5: Commit latency and counter evidence**
 
 ```bash
 git add scripts/validate_fabric.py tests/scripts/test_validate_fabric.py
@@ -157,7 +157,7 @@ git commit -m "feat: record Spark fabric latency and errors"
 - Consumes: the updated `scripts/validate-fabric` wrapper and key-only Spark SSH aliases.
 - Produces: a checked-in report proving or rejecting 184 Gb/s aggregate performance in both directions plus the first latency baseline.
 
-- [ ] **Step 1: Run the read-only preflight**
+- [x] **Step 1: Run the read-only preflight**
 
 Run:
 
@@ -168,7 +168,7 @@ scripts/validate-fabric --inventory inventory/cluster.toml \
 
 Expected: exit 0, both functions mapped to the pinned HCAs/GID 3, physical link speed 200000 Mb/s, MTU 1500, and no fabric default route.
 
-- [ ] **Step 2: Run the live aggregate acceptance**
+- [x] **Step 2: Run the live aggregate acceptance**
 
 Run:
 
@@ -179,11 +179,11 @@ scripts/validate-fabric --inventory inventory/cluster.toml \
 
 Expected: aggregate writes at least 184 Gb/s in both directions, per-function diagnostics above their floors, both latency directions recorded, no growing monitored error counter, NCCL `NET/IB` on both HCAs, bus bandwidth at least 17.44 GB/s, and overall `status: passed`. If it fails, keep the failed report, leave distributed Model Definitions blocked, and diagnose without lowering a threshold.
 
-- [ ] **Step 3: Update the operational record from measured evidence**
+- [x] **Step 3: Update the operational record from measured evidence**
 
 Replace “two 200 Gb/s rails” with “one 200 Gb/s physical link exposed through two PCIe/RoCE functions.” Record the exact aggregate results, latency baseline, counter result, NCCL result, command, date, and NVIDIA's 184 Gb/s lower bound. Do not describe the link as accepted if either direction failed.
 
-- [ ] **Step 4: Verify documents and repository tests**
+- [x] **Step 4: Verify documents and repository tests**
 
 Run:
 
@@ -194,7 +194,7 @@ git diff --check
 
 Also verify every local Markdown link in the changed documents resolves.
 
-- [ ] **Step 5: Commit the accepted evidence and documentation**
+- [x] **Step 5: Commit the accepted evidence and documentation**
 
 ```bash
 git add inventory/reports/rdma-nccl.json docs/runbooks/fabric.md \
