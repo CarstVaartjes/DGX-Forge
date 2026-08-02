@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import shlex
 import subprocess
 import threading
 from typing import Callable, Mapping, Protocol
@@ -216,6 +217,7 @@ class SshBackend:
         except KeyError as error:
             raise ValueError(f"unknown node: {node}") from error
         _validate_remote_argv((alias, *remote_argv))
+        remote_command = shlex.join(remote_argv)
         connect_timeout = min(self._connect_timeout, max(1, math.ceil(timeout)))
         command = (
             "ssh",
@@ -230,7 +232,7 @@ class SshBackend:
             "-o",
             f"ConnectTimeout={connect_timeout}",
             alias,
-            *remote_argv,
+            remote_command,
         )
         try:
             if self._executor is None:

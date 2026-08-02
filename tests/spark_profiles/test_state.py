@@ -18,6 +18,11 @@ from spark_profiles.state import (
 )
 
 
+PROFILE_SHA = "1" * 64
+DEFINITION_A_SHA = "a" * 64
+DEFINITION_B_SHA = "b" * 64
+
+
 def test_state_round_trip_and_atomic_replacement(tmp_path: Path) -> None:
     store = StateStore(tmp_path)
     state = ControllerState(
@@ -26,12 +31,21 @@ def test_state_round_trip_and_atomic_replacement(tmp_path: Path) -> None:
         target_profile=None,
         restore_profile=None,
         last_error=None,
+        active_profile_sha256=PROFILE_SHA,
+        active_definition_sha256={
+            "visual-evaluator": DEFINITION_B_SHA,
+            "deepseek-agent-dual": DEFINITION_A_SHA,
+        },
         boot_ids={"spark1": "boot-a", "spark2": "boot-b"},
     )
 
     store.save(state)
 
     assert store.load() == state
+    assert list(store.load().active_definition_sha256) == [
+        "deepseek-agent-dual",
+        "visual-evaluator",
+    ]
     assert not list(tmp_path.glob(".state.json.*.tmp"))
 
 
@@ -43,6 +57,8 @@ def test_state_write_is_atomic_when_replace_is_interrupted(tmp_path: Path) -> No
         target_profile=None,
         restore_profile=None,
         last_error=None,
+        active_profile_sha256=PROFILE_SHA,
+        active_definition_sha256={"deepseek-agent-dual": DEFINITION_A_SHA},
         boot_ids={},
     )
     store.save(original)
@@ -60,7 +76,82 @@ def test_missing_state_loads_safe_stopped_default(tmp_path: Path) -> None:
 
     assert state.status == "stopped"
     assert state.active_profile is None
+    assert state.active_profile_sha256 is None
+    assert state.active_definition_sha256 == {}
     assert state.schema_version == 1
+
+
+def test_changed_active_definition_hash_is_persistently_distinguishable(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path)
+    before = ControllerState(
+        status="active",
+        active_profile="agent-full-dual",
+        target_profile=None,
+        restore_profile=None,
+        last_error=None,
+        active_profile_sha256=PROFILE_SHA,
+        active_definition_sha256={"deepseek-agent-dual": DEFINITION_A_SHA},
+    )
+    after = replace(
+        before,
+        active_definition_sha256={"deepseek-agent-dual": DEFINITION_B_SHA},
+    )
+
+    store.save(before)
+    first_fingerprints = store.load().active_definition_sha256
+    store.save(after)
+    second_fingerprints = store.load().active_definition_sha256
+
+    assert first_fingerprints != second_fingerprints
+    assert second_fingerprints["deepseek-agent-dual"] == DEFINITION_B_SHA
+
+
+@pytest.mark.parametrize(
+    ("profile_sha", "definition_sha"),
+    [
+        ("A" * 64, DEFINITION_A_SHA),
+        ("a" * 63, DEFINITION_A_SHA),
+        (PROFILE_SHA, "B" * 64),
+        (PROFILE_SHA, "b" * 63),
+    ],
+)
+def test_active_fingerprints_require_lowercase_sha256(
+    profile_sha: str, definition_sha: str
+) -> None:
+    with pytest.raises(ValueError, match="SHA-256"):
+        ControllerState(
+            status="active",
+            active_profile="agent-full-dual",
+            target_profile=None,
+            restore_profile=None,
+            last_error=None,
+            active_profile_sha256=profile_sha,
+            active_definition_sha256={"deepseek-agent-dual": definition_sha},
+        )
+
+
+def test_persisted_state_requires_fingerprint_schema_fields(tmp_path: Path) -> None:
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "active",
+                "active_profile": "agent-full-dual",
+                "target_profile": None,
+                "restore_profile": None,
+                "last_error": None,
+                "boot_ids": {},
+                "updated_at": "2026-08-02T10:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(StateFormatError, match="invalid controller state fields"):
+        StateStore(tmp_path).load()
 
 
 def test_malformed_state_json_is_rejected(tmp_path: Path) -> None:

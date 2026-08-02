@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
+import shlex
 import subprocess
+import sys
 
 import pytest
 
@@ -53,7 +56,7 @@ def test_backend_never_uses_shell_and_pins_strict_ssh_options() -> None:
     assert "IdentitiesOnly=yes" in fake_exec.argv
     assert "StrictHostKeyChecking=yes" in fake_exec.argv
     assert "ConnectTimeout=10" in fake_exec.argv
-    assert fake_exec.argv[-3:] == ("dgx-spark-1", "profile-status", "--json")
+    assert fake_exec.argv[-2:] == ("dgx-spark-1", "profile-status --json")
     assert fake_exec.input_bytes is None
     assert result.returncode == 0
     assert result.stdout == b"ok\n"
@@ -67,13 +70,62 @@ def test_run_script_delivers_fixed_bytes_on_stdin() -> None:
 
     assert fake_exec.input_bytes == script
     assert fake_exec.shell is False
-    assert fake_exec.argv[-5:] == (
-        "dgx-spark-2",
-        "bash",
-        "-s",
-        "--",
-        "--json",
+    assert fake_exec.argv[-2:] == ("dgx-spark-2", "bash -s -- --json")
+
+
+@pytest.mark.parametrize("script_mode", [False, True])
+def test_remote_argv_is_one_posix_quoted_command_and_cannot_be_evaluated(
+    script_mode: bool,
+) -> None:
+    fake_exec = FakeExec()
+    arguments = (
+        "white space",
+        "; printf evaluated",
+        "$(printf evaluated)",
+        "*",
+        "single'quote",
+        'double"quote',
+        "",
     )
+    backend = SshBackend(fake_exec)
+    if script_mode:
+        script = b'printf "%s\\0" "$@"\n'
+        backend.run_script("spark1", script, arguments, 10)
+        expected = ("bash", "-s", "--", *arguments)
+    else:
+        probe = (
+            sys.executable,
+            "-c",
+            "import json,sys; print(json.dumps(sys.argv[1:]))",
+            *arguments,
+        )
+        backend.run("spark1", probe, 10)
+        expected = probe
+
+    alias_index = fake_exec.argv.index("dgx-spark-1")
+    assert len(fake_exec.argv[alias_index + 1 :]) == 1
+    remote_command = fake_exec.argv[alias_index + 1]
+    assert shlex.split(remote_command) == list(expected)
+    if script_mode:
+        completed = subprocess.run(
+            ("/bin/sh", "-c", remote_command),
+            input=script,
+            check=True,
+            capture_output=True,
+            shell=False,
+        )
+        assert completed.stdout.split(b"\0")[:-1] == [
+            argument.encode() for argument in arguments
+        ]
+    else:
+        completed = subprocess.run(
+            ("/bin/sh", "-c", remote_command),
+            check=True,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+        assert json.loads(completed.stdout) == list(arguments)
 
 
 @pytest.mark.parametrize("bad", ["bad\narg", "bad\rarg", "bad\0arg"])

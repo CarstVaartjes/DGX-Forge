@@ -9,6 +9,7 @@ import fcntl
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import tempfile
 from types import MappingProxyType
@@ -18,6 +19,7 @@ from typing import Iterator, Mapping
 _STATUSES = frozenset(
     ("stopped", "transitioning", "active", "degraded", "stopped-after-reboot")
 )
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class StateError(RuntimeError):
@@ -61,6 +63,8 @@ class ControllerState:
     target_profile: str | None
     restore_profile: str | None
     last_error: str | None
+    active_profile_sha256: str | None = None
+    active_definition_sha256: Mapping[str, str] = field(default_factory=dict)
     boot_ids: Mapping[str, str] = field(default_factory=dict)
     schema_version: int = 1
     updated_at: str = field(default_factory=_utc_now)
@@ -70,6 +74,28 @@ class ControllerState:
             raise ValueError("unsupported controller state schema version")
         if self.status not in _STATUSES:
             raise ValueError(f"unsupported controller status: {self.status}")
+        if self.active_profile_sha256 is not None and not _SHA256.fullmatch(
+            self.active_profile_sha256
+        ):
+            raise ValueError("active profile fingerprint must be a lowercase SHA-256")
+        if not isinstance(self.active_definition_sha256, Mapping):
+            raise TypeError("active_definition_sha256 must be a mapping")
+        if any(
+            not isinstance(definition_id, str)
+            or not definition_id
+            or not isinstance(fingerprint, str)
+            or not _SHA256.fullmatch(fingerprint)
+            for definition_id, fingerprint in self.active_definition_sha256.items()
+        ):
+            raise ValueError(
+                "active definition fingerprints must be lowercase SHA-256 values"
+            )
+        if self.active_profile is None and (
+            self.active_profile_sha256 is not None or self.active_definition_sha256
+        ):
+            raise ValueError("stopped state cannot retain active fingerprints")
+        if self.active_profile is not None and self.active_profile_sha256 is None:
+            raise ValueError("an active profile requires its lowercase SHA-256 fingerprint")
         if not isinstance(self.boot_ids, Mapping):
             raise TypeError("boot_ids must be a mapping")
         if any(
@@ -78,6 +104,11 @@ class ControllerState:
         ):
             raise TypeError("boot_ids must map strings to strings")
         _parse_timestamp(self.updated_at, Path("controller state"))
+        object.__setattr__(
+            self,
+            "active_definition_sha256",
+            MappingProxyType(dict(sorted(self.active_definition_sha256.items()))),
+        )
         object.__setattr__(self, "boot_ids", MappingProxyType(dict(self.boot_ids)))
 
     @classmethod
@@ -88,6 +119,8 @@ class ControllerState:
             target_profile=None,
             restore_profile=None,
             last_error=None,
+            active_profile_sha256=None,
+            active_definition_sha256={},
             boot_ids=boot_ids or {},
         )
 
@@ -99,6 +132,8 @@ class ControllerState:
             "target_profile": self.target_profile,
             "restore_profile": self.restore_profile,
             "last_error": self.last_error,
+            "active_profile_sha256": self.active_profile_sha256,
+            "active_definition_sha256": dict(self.active_definition_sha256),
             "boot_ids": dict(self.boot_ids),
             "updated_at": self.updated_at,
         }
@@ -114,6 +149,8 @@ class ControllerState:
             "target_profile",
             "restore_profile",
             "last_error",
+            "active_profile_sha256",
+            "active_definition_sha256",
             "boot_ids",
             "updated_at",
         }
@@ -138,6 +175,8 @@ class ControllerState:
                 target_profile=data["target_profile"],
                 restore_profile=data["restore_profile"],
                 last_error=data["last_error"],
+                active_profile_sha256=data["active_profile_sha256"],
+                active_definition_sha256=data["active_definition_sha256"],
                 boot_ids=data["boot_ids"],
                 updated_at=data["updated_at"],
             )
