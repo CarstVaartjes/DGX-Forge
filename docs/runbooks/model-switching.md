@@ -31,8 +31,9 @@ Use a dry run before an accepted transition:
 sparkctl switch PROFILE --dry-run
 ```
 
-A dry run acquires the controller lock and performs resolution and admission.
-It never calls a Spark backend command and never saves controller state.
+A dry run loads existing controller state read-only and performs resolution and
+admission without acquiring the switch lock. It never creates the state
+directory, calls a Spark backend command, or saves controller state.
 
 ## Transition order
 

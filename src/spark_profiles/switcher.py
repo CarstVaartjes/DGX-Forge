@@ -101,19 +101,37 @@ class ProfileSwitcher:
         dry_run: bool = False,
     ) -> SwitchReport:
         """Activate one profile and persist, but never execute, restore intent."""
+        if dry_run:
+            return self._switch_with_state(
+                self.state_store.load(),
+                target_id,
+                restore_to=restore_to,
+                dry_run=True,
+            )
         with self.state_store.acquire() as state:
-            target = self._resolve(target_id)
-            restore_target = (
-                self._resolve(restore_to) if restore_to is not None else None
-            )
-            return self._transition(
+            return self._switch_with_state(
                 state,
-                target,
-                restore_profile=restore_target.id
-                if restore_target is not None
-                else None,
-                dry_run=dry_run,
+                target_id,
+                restore_to=restore_to,
+                dry_run=False,
             )
+
+    def _switch_with_state(
+        self,
+        state: ControllerState,
+        target_id: str,
+        *,
+        restore_to: str | None,
+        dry_run: bool,
+    ) -> SwitchReport:
+        target = self._resolve(target_id)
+        restore_target = self._resolve(restore_to) if restore_to is not None else None
+        return self._transition(
+            state,
+            target,
+            restore_profile=restore_target.id if restore_target is not None else None,
+            dry_run=dry_run,
+        )
 
     def _resolve(self, identifier: str | None) -> ClusterProfile:
         assert identifier is not None

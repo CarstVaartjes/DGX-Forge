@@ -18,7 +18,7 @@ from spark_profiles.contracts import (
     WorkloadDefinition,
     WorkloadPaths,
 )
-from spark_profiles.state import ControllerState
+from spark_profiles.state import ControllerState, StateStore
 from spark_profiles.switcher import ProfileSwitcher
 
 SHA_A = "a" * 64
@@ -225,8 +225,31 @@ def test_dry_run_does_not_call_backend_or_save_state() -> None:
     report = switcher.switch_profile("target", dry_run=True)
 
     assert report.status == "planned"
-    assert events == [("lock",)]
+    assert events == []
     assert store.saves == []
+
+
+def test_dry_run_with_real_store_creates_no_state_directory_or_lock(
+    tmp_path: Path,
+) -> None:
+    definition = workload()
+    target = profile("target", definition)
+    catalog_value = catalog(target, definition=definition)
+    state_directory = tmp_path / "state"
+    events: list[tuple] = []
+    switcher = ProfileSwitcher(
+        catalog=catalog_value,
+        backend=FakeBackend(events),
+        state_store=StateStore(state_directory),
+        inventory_provider=inventory,
+    )
+
+    report = switcher.switch_profile("target", dry_run=True)
+
+    assert report.status == "planned"
+    assert report.dry_run is True
+    assert events == []
+    assert not state_directory.exists()
 
 
 def test_planned_definition_is_not_activated() -> None:
@@ -441,7 +464,7 @@ def test_dry_run_reports_restore_intent_without_executing_restoration() -> None:
 
     assert report.status == "planned"
     assert report.restore_profile == "home"
-    assert events == [("lock",)]
+    assert events == []
     assert store.saves == []
 
 
