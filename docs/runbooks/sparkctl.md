@@ -68,6 +68,28 @@ it never falls back to stale local measurements. The checked-in
 `agent-full-dual` profile resolves correctly but remains unactivatable while
 `deepseek-agent-dual` has `planned` maturity.
 
+## Remote container prerequisite
+
+Profile transitions must start and stop containers noninteractively. On each
+dedicated Spark, the trusted `carst` administrator therefore belongs to the
+`docker` group. This is root-equivalent access and must not be extended to
+untrusted accounts.
+
+After adding the group membership, close the SSH session and reconnect before
+testing because an existing login retains its original supplementary groups:
+
+```bash
+sudo usermod -aG docker carst
+exit
+ssh dgx-spark-1  # or dgx-spark-2
+id -nG
+docker version --format '{{.Server.Version}}'
+```
+
+The group list must include `docker`, and the server query must succeed. For
+live-collector failures, continue with the Docker-specific troubleshooting in
+[Live node health](node-health.md).
+
 ## Exit codes
 
 | Code | Meaning |
@@ -100,5 +122,9 @@ uv run --no-project --with jsonschema -- bin/sparkctl nodes status --json
 
 At the current milestone, `catalog` succeeds, `validate default` exits `3` with
 the planned-maturity denial, and `status` reports `stopped` when no local state
-has been written. `nodes status` exits `4` if either node is critical or
-unreachable.
+has been written. On 2026-08-02, `nodes status --json` exited `0` with both
+nodes healthy, Docker available, and no warnings or errors. It exits `4` if a
+later probe finds either node critical or unreachable. The controller/profile
+framework and live health are implemented, but no model runtime is installed
+or accepted; the next phase is the DeepSeek runtime adapter, checkpoint
+manifest, and acceptance.

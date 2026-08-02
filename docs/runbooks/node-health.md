@@ -42,6 +42,13 @@ does not report a live GID field; therefore `nodes status` does not claim to
 have observed GID 3. Use the accepted fabric validation in
 [the fabric runbook](fabric.md) after changes that could affect GID selection.
 
+## Accepted observation on 2026-08-02
+
+A fresh `sparkctl nodes status --json` exited `0`. Both nodes were `healthy`
+with no warnings or errors. Docker was available, each GPU reported 39 C, and
+both fabric functions on each node reported speed `200000`, MTU 1500, and RDMA
+state `ACTIVE`.
+
 ## States and exit codes
 
 - `healthy`: no approved warning or critical condition; exit `0`.
@@ -75,11 +82,19 @@ prerequisites for live collection.
    and do not weaken strict host-key checking.
 3. For `hostname_mismatch`, inspect the SSH alias target; do not accept the
    wrong logical node.
-4. For fabric/RDMA errors, run the read-only checks in
+4. For an unavailable Docker query, verify the login's group membership with
+   `id -nG` and Docker daemon access with
+   `docker version --format '{{.Server.Version}}'`. If `docker` is absent from
+   the group list, run `sudo usermod -aG docker carst` on that Spark, then log
+   out and reconnect before retrying; an existing SSH session does not acquire
+   the new supplementary group. Docker-group membership is root-equivalent and
+   is approved only for the trusted `carst` administrator on these dedicated
+   hosts.
+5. For fabric/RDMA errors, run the read-only checks in
    [the fabric runbook](fabric.md) and compare with
    `inventory/reports/rdma-nccl.json`. The health comparison uses the accepted
    absolute `rdma_counters_after` values, not the recorded deltas.
-5. For collector errors, run the checked-in collector tests locally. Do not
+6. For collector errors, run the checked-in collector tests locally. Do not
    copy or leave the collector on a Spark.
 
 Warnings are observations, not automatic permission or denial for a model.

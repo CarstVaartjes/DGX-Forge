@@ -131,3 +131,19 @@ unverified, and no fabric address was configured at capture time. Two wired
 ports had carrier but no address on each node. These are observations only;
 later fabric discovery must identify the actual cabled ports before changing
 their configuration.
+
+## Post-bootstrap observation on 2026-08-02
+
+The preceding section remains the historical pre-change baseline. After
+bootstrap, `carst` was added to the `docker` group on both dedicated Sparks so
+`sparkctl` can manage profile containers without an interactive sudo prompt.
+This grants root-equivalent access and is intentionally scoped to the trusted
+administration account. Both sessions were closed and reopened before testing.
+
+Fresh checks on both nodes showed `docker` in `carst`'s groups and Docker
+Server `29.2.1`. Running
+`docker run --rm --gpus all nvcr.io/nvidia/cuda:13.0.1-devel-ubuntu24.04`
+exposed the NVIDIA GB10 with driver `580.173.02` on each Spark. A fresh
+`sparkctl nodes status --json` exited `0`; both nodes were healthy with no
+warnings or errors, Docker available, GPU temperature 39 C, and both fabric
+functions per node at speed `200000`, MTU 1500, and RDMA state `ACTIVE`.

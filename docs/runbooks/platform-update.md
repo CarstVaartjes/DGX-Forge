@@ -179,10 +179,10 @@ REMOTE
 
 Stage the audited privileged validator from the Mac and compare its local and
 remote SHA-256 before running it. The script uses the exact CUDA image in
-NVIDIA's DGX Spark container-runtime guide and requires sudo because `carst`
-is intentionally not assumed to be in the Docker group. It also reads the
-root-only kernel log and fails closed on read errors or storage/filesystem
-errors.
+NVIDIA's DGX Spark container-runtime guide. The validator still intentionally
+runs with sudo even though `carst` now belongs to the Docker group: it also
+reads the root-only kernel log and validates privileged storage/filesystem
+state, failing closed on read errors or storage/filesystem errors.
 
 ```bash
 scp nodes/bin/validate-platform-update-root \

@@ -6,8 +6,9 @@ starting point for a rebuild or a third-party review. The linked runbooks remain
 the source for exact commands, safety checks, rollback procedures, and expected
 output.
 
-Model runtimes have not been installed yet. Their approved architecture and
-implementation work begin after the host and fabric baseline described here.
+The controller/profile framework and live node-health path are implemented.
+No model runtime has been installed or accepted yet; that work begins after
+the host, fabric, and controller baseline described here.
 
 ## Final baseline
 
@@ -184,6 +185,22 @@ completed with zero out-of-bounds values, and reported 19.308 GB/s average bus
 bandwidth. Full command evidence and distributions are in
 [`inventory/reports/rdma-nccl.json`](../inventory/reports/rdma-nccl.json).
 
+### 10. Enable controller container access and validate live health
+
+On 2026-08-02, `carst` was added to the `docker` group on both dedicated
+Sparks so `sparkctl` can start and stop profile containers noninteractively.
+Docker-group membership is root-equivalent access and is intentionally limited
+to this trusted administration account. Both sessions were closed and reopened
+after the group change before validation.
+
+Both nodes then reported `docker` in `carst`'s groups and Docker Server
+`29.2.1`. The pinned
+`nvcr.io/nvidia/cuda:13.0.1-devel-ubuntu24.04` container saw the NVIDIA GB10
+with driver `580.173.02` on each node. A fresh
+`sparkctl nodes status --json` exited `0`: both nodes were `healthy`, with no
+warnings or errors, Docker available, GPU temperature 39 C, and both fabric
+functions reporting speed `200000`, MTU 1500, and RDMA state `ACTIVE`.
+
 ## Lessons learned
 
 | Lesson | Operational rule retained in the repository |
@@ -198,6 +215,7 @@ bandwidth. Full command evidence and distributions are in
 | A cable part number alone did not establish support. | Record the EEPROM identity, negotiated rate, MTU behavior, bidirectional RDMA, and NCCL transport evidence. |
 | `earlyoom` absence is already a valid safe state. | Treat `absent`, `disabled and inactive`, or `masked and inactive` as explicit accepted states; do not install it merely to disable it. |
 | Worker-first ordering materially limits blast radius. | Apply host, update, SSH, fabric, and runtime changes to Spark 2 first and stop before Spark 1 if validation fails. |
+| Noninteractive container lifecycle requires Docker daemon access. | Grant the trusted `carst` administrator Docker-group membership on these dedicated hosts, reconnect before testing, and treat that membership as root-equivalent. |
 
 ## Evidence and remaining scope
 
@@ -210,9 +228,13 @@ The installation baseline is complete when all of the following remain true:
 - both fabric functions retain their static addresses, GID index 3, MTU 1500, and
   no default route;
 - [`scripts/validate-fabric`](../scripts/validate-fabric) reproduces the RDMA
-  aggregate-bandwidth, latency, error-counter, and NCCL acceptance result.
+  aggregate-bandwidth, latency, error-counter, and NCCL acceptance result;
+- `sparkctl nodes status --json` reports both nodes healthy with Docker
+  available and no warnings or errors.
 
-The next phase is model-runtime implementation, beginning with the common
-profile controller and the default dual-Spark DeepSeek 0731 profile. Caddy,
-LiteLLM, the browser UI, and Tailscale remain deferred until the new external
-container host is available; none is required for initial local model testing.
+The common controller/profile framework and live-health integration are now
+implemented. The next phase is the DeepSeek runtime adapter, checkpoint
+manifest, and model-runtime acceptance. No model runtime is currently
+installed or accepted. Caddy, LiteLLM, the browser UI, and Tailscale remain
+deferred until the new external container host is available; none is required
+for initial local model testing.
