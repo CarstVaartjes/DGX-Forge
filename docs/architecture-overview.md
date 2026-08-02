@@ -1,11 +1,13 @@
 # Dual DGX Spark Architecture Overview
 
-The platform separates AI compute from every surrounding service. The two DGX
-Sparks run accepted Model Definitions and their required NVIDIA runtime adapters
-only. Initial testing uses the developer-machine `sparkctl` controller and
-loopback endpoints through SSH tunnels. When the new NAS arrives, gateway,
-profile control, user interface, remote access, and optional routing services
-move there as containers.
+The platform separates AI compute from every surrounding service. Under an
+accepted Cluster Profile, the two DGX Sparks run only its accepted Model
+Definitions and required NVIDIA runtime adapters. Initial testing of an
+accepted definition uses the developer-machine `sparkctl` controller and
+loopback endpoints through SSH tunnels. No model runtime is accepted or
+installed merely because it appears in this architecture. When the new NAS
+arrives, gateway, profile control, user interface, remote access, and optional
+routing services move there as containers.
 
 ```mermaid
 flowchart LR
@@ -43,8 +45,9 @@ flowchart LR
     litellm -. optional routing .-> caddy
     caddy -->|HTTPS/API| head
     caddy -->|typed model/job route| worker
-    mac -. admin SSH / API tunnel .-> head
-    mac -. admin SSH / UI tunnel .-> worker
+    mac -. admin SSH .-> head
+    mac -. admin SSH .-> worker
+    mac -. planned dual DeepSeek API tunnel to Spark 1 .-> head
     mac -. initial profile control .-> head
     mac -. initial profile control .-> worker
     controller -. restricted SSH .-> head
@@ -83,16 +86,20 @@ flowchart LR
 | Browser UI | Provides chat and model selection while using only the Caddy endpoint. | External container |
 | LiteLLM | Optionally adds model aliases, routing, quotas, or usage tracking when those features become useful. It is not required initially. | Optional external container |
 | Tailscale gateway | Later exposes the named gateway service and restricted subnet access without placing remote-access software on the Sparks. | External host/container |
-| DeepSeek vLLM head | Runs TP rank 0, scheduling, detokenization, and the upstream API consumed by Caddy. | Spark 1 |
-| DeepSeek vLLM worker | Runs TP rank 1 and exchanges tensor data with rank 0 over the direct fabric. | Spark 2 |
+| Planned DeepSeek vLLM head | If accepted, the planned dual-Spark definition runs TP rank 0, scheduling, detokenization, and the upstream API here. The initial developer-machine SSH tunnel terminates at this API on Spark 1; future Caddy will consume the same definition-specific endpoint. | Spark 1 |
+| Planned DeepSeek vLLM worker | If accepted, the planned dual-Spark definition runs TP rank 1 here and exchanges tensor data with rank 0 over the direct fabric. Spark 2 is not the API-serving endpoint for that definition. | Spark 2 |
 | Runtime adapters | Implement the common lifecycle for official or audited model-specific loaders used by each immutable Model Definition. | One or both Sparks as declared by each Cluster Profile |
 | Local model caches | Keep complete, manifest-verified snapshots on both nodes so the NAS and LAN are never in the model hot path. | Both Sparks |
 
 ## Traffic paths
 
-- **Current inference:** the developer machine resolves accepted local endpoint
-  metadata with `sparkctl endpoint`, opens an SSH tunnel, and reaches the Spark
-  loopback endpoint through that tunnel. Caddy and the NAS are not in this path.
+- **Initial inference after acceptance:** the developer machine resolves
+  accepted local endpoint metadata with `sparkctl endpoint`, opens an SSH
+  tunnel, and reaches the definition's loopback endpoint through that tunnel.
+  For the planned dual-Spark DeepSeek definition, Spark 1 is the API-serving
+  head and the tunnel destination; Spark 2 remains its tensor-parallel worker.
+  This placement is specific to that definition, not a generic ingress field
+  or cluster-wide routing contract. Caddy and the NAS are not in this path.
 - **Future shared inference:** client or UI → Caddy → the aliases advertised by the active Cluster Profile.
 - **Control:** developer-machine controller initially, later external controller → restricted SSH commands on each Spark.
 - **Administration:** Mac → each Spark through the 1Password SSH agent.
@@ -104,11 +111,11 @@ flowchart LR
 
 ## Model switching
 
-Today the developer-machine controller withdraws and republishes its local
-endpoint metadata around stop, verify, start, health, and quality gates. Clients
-reach a published loopback endpoint only through an SSH tunnel. The following
-Caddy drain and route steps describe the **future NAS gateway path**, not a
-current dependency:
+For an accepted definition, the initial developer-machine controller behavior
+is to withdraw and republish local endpoint metadata around stop, verify,
+start, health, and quality gates. Clients reach a published loopback endpoint
+only through an SSH tunnel. The following Caddy drain and route steps describe
+the **future NAS gateway path**, not a current dependency:
 
 ```mermaid
 flowchart LR
@@ -123,8 +130,8 @@ flowchart LR
 After that future gateway is deployed, the NAS or other external service host
 will be an availability dependency for shared client access, but it will never
 carry model weights, KV-cache data, CUDA/JIT work, or tensor-parallel traffic.
-It is not an availability dependency for the current developer-machine SSH
-tunnel path.
+It is not an availability dependency for the initial developer-machine SSH
+tunnel path after a definition is accepted.
 
 The [model and profile overview](model-profile-overview.md) visually maps each
 Cluster Profile to both Sparks and its Model Definitions. The [model capacity
