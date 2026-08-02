@@ -133,6 +133,46 @@ def test_home_workload_uses_an_immutable_image_and_declarative_adapter_commands(
         "profile-verify-release",
         "deepseek-agent-dual",
     )
+    assert workload.checkpoint.manifest_sha256 is None
+
+
+def test_workload_exposes_a_valid_manifest_digest_when_declared(
+    tmp_path: Path,
+) -> None:
+    source = (
+        REPOSITORY_ROOT / "config/workloads/deepseek-agent-dual.toml"
+    ).read_text(encoding="utf-8")
+    path = write_toml(
+        tmp_path,
+        "manifest-digest.toml",
+        source.replace(
+            'manifest = "/srv/models/manifests/deepseek-v4-flash-0731.json"',
+            'manifest = "/srv/models/manifests/deepseek-v4-flash-0731.json"\n'
+            'manifest_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"',
+        ),
+    )
+
+    workload = load_workload(path)
+
+    assert workload.checkpoint.manifest_sha256 == "a" * 64
+
+
+def test_workload_rejects_malformed_manifest_digest(tmp_path: Path) -> None:
+    source = (
+        REPOSITORY_ROOT / "config/workloads/deepseek-agent-dual.toml"
+    ).read_text(encoding="utf-8")
+    path = write_toml(
+        tmp_path,
+        "malformed-manifest-digest.toml",
+        source.replace(
+            'manifest = "/srv/models/manifests/deepseek-v4-flash-0731.json"',
+            'manifest = "/srv/models/manifests/deepseek-v4-flash-0731.json"\n'
+            'manifest_sha256 = "not-a-sha256"',
+        ),
+    )
+
+    with pytest.raises(ProfileValidationError, match="does not match"):
+        load_workload(path)
 
 
 def test_workload_requires_every_adapter_operation(tmp_path: Path) -> None:

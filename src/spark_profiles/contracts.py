@@ -30,6 +30,7 @@ class CheckpointPin:
     repository: str
     revision: str
     manifest: Path
+    manifest_sha256: str | None
 
 
 @dataclass(frozen=True)
@@ -174,6 +175,7 @@ def load_workload(path: Path) -> WorkloadDefinition:
             repository=data["checkpoint"]["repository"],
             revision=data["checkpoint"]["revision"],
             manifest=Path(data["checkpoint"]["manifest"]),
+            manifest_sha256=data["checkpoint"].get("manifest_sha256"),
         ),
         image=ImagePin(reference=data["image"]["reference"]),
         paths=WorkloadPaths(

@@ -20,7 +20,7 @@
     },
     "checkpoint": {
       "type": "object", "additionalProperties": false, "required": ["repository", "revision", "manifest"],
-      "properties": {"repository": {"type": "string", "minLength": 1}, "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "manifest": {"type": "string", "minLength": 1}}
+      "properties": {"repository": {"type": "string", "minLength": 1}, "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "manifest": {"type": "string", "minLength": 1}, "manifest_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}}
     },
     "image": {
       "type": "object", "additionalProperties": false, "required": ["reference"],
