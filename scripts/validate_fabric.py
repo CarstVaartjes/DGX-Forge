@@ -24,8 +24,11 @@ from pathlib import Path
 from typing import Any
 
 
+NCCL_VERSION = "v2.30.7-1"
+NCCL_COMMIT = "73cf112295c33aee2b895f329f592f2a9b4b0f97"
 NCCL_TESTS_COMMIT = "a0b82b2260cf5152b9f8c061bbf7eaf0ba096432"
-PYTORCH_IMAGE = "nvcr.io/nvidia/pytorch:25.12-py3"
+CUDA_NVCC = "/usr/local/cuda/bin/nvcc"
+MPI_HOME = "/usr/lib/aarch64-linux-gnu/openmpi"
 FABRIC_WORKER_ALIAS = "dgx-spark-2-fabric"
 SSH_OPTIONS = ("-o", "BatchMode=yes", "-o", "ForwardAgent=no", "-o", "ConnectTimeout=10")
 
@@ -277,15 +280,99 @@ def run_rdma(runner: Runner, head: Host, worker: Host) -> list[dict[str, Any]]:
     return results
 
 
+def nccl_prerequisite_command() -> str:
+    """Read-only checks required before either home-directory build mutates."""
+    return f"""set -euo pipefail
+test -x {CUDA_NVCC}
+{CUDA_NVCC} --version
+command -v git >/dev/null
+command -v make >/dev/null
+command -v mpirun >/dev/null
+test "$(dpkg-query -W -f='${{db:Status-Status}} ${{Version}}' libopenmpi-dev)" = "installed 4.1.6-7ubuntu2"
+test "$(dpkg-query -W -f='${{db:Status-Status}} ${{Version}}' openmpi-bin)" = "installed 4.1.6-7ubuntu2"
+test ! -e "$HOME/nccl"
+test ! -e "$HOME/nccl-tests"
+"""
+
+
+def nccl_build_command() -> str:
+    """Idempotently build the pinned host-native NCCL and MPI test binary."""
+    return f"""set -euo pipefail
+ensure_checkout() {{
+  directory="$1" repository="$2" revision="$3"
+  if [ -e "$directory" ] && [ ! -d "$directory/.git" ]; then
+    echo "refusing non-git path $directory" >&2; exit 1
+  fi
+  if [ ! -d "$directory/.git" ]; then
+    git clone "$repository" "$directory"
+  fi
+  test "$(git -C "$directory" remote get-url origin)" = "$repository"
+  git -C "$directory" fetch --tags origin
+  git -C "$directory" checkout --detach "$revision"
+  test "$(git -C "$directory" rev-parse HEAD)" = "$revision"
+}}
+ensure_checkout "$HOME/nccl" https://github.com/NVIDIA/nccl.git {NCCL_COMMIT}
+git -C "$HOME/nccl" checkout --detach {NCCL_COMMIT}
+cd "$HOME/nccl"
+make -j"$(nproc)" src.build NVCC={CUDA_NVCC} NVCC_GENCODE='-gencode=arch=compute_121,code=sm_121'
+ensure_checkout "$HOME/nccl-tests" https://github.com/NVIDIA/nccl-tests.git {NCCL_TESTS_COMMIT}
+git -C "$HOME/nccl-tests" checkout --detach {NCCL_TESTS_COMMIT}
+cd "$HOME/nccl-tests"
+export CUDA_HOME=/usr/local/cuda
+export MPI_HOME={MPI_HOME}
+export NCCL_HOME="$HOME/nccl/build"
+export LD_LIBRARY_PATH="$NCCL_HOME/lib:$CUDA_HOME/lib64:$MPI_HOME/lib:${{LD_LIBRARY_PATH:-}}"
+make -j"$(nproc)" MPI=1 NVCC={CUDA_NVCC} CUDA_HOME="$CUDA_HOME" MPI_HOME="$MPI_HOME" NCCL_HOME="$NCCL_HOME"
+test -x "$HOME/nccl-tests/build/all_reduce_perf"
+"""
+
+
+def nccl_launch_command(head: Host, worker: Host) -> str:
+    """Launch a two-rank all-reduce only through the restricted fabric alias."""
+    fabric = head.fabric
+    exports = {
+        "NCCL_DEBUG": "INFO",
+        "NCCL_SOCKET_IFNAME": fabric["NCCL_SOCKET_IFNAME"],
+        "NCCL_IB_HCA": fabric["NCCL_IB_HCA"],
+        "NCCL_IB_GID_INDEX": str(fabric["NCCL_IB_GID_INDEX"]),
+        "TP_SOCKET_IFNAME": fabric["TP_SOCKET_IFNAME"],
+        "GLOO_SOCKET_IFNAME": fabric["GLOO_SOCKET_IFNAME"],
+        "OMPI_MCA_oob_tcp_if_include": fabric["TP_SOCKET_IFNAME"],
+        "OMPI_MCA_btl_tcp_if_include": fabric["TP_SOCKET_IFNAME"],
+    }
+    export_lines = "\n".join(f"export {key}='{value}'" for key, value in exports.items())
+    x_args = " ".join(f"-x {key}" for key in exports)
+    return f"""set -euo pipefail
+export CUDA_HOME=/usr/local/cuda
+export MPI_HOME={MPI_HOME}
+export NCCL_HOME="$HOME/nccl/build"
+export LD_LIBRARY_PATH="$NCCL_HOME/lib:$CUDA_HOME/lib64:$MPI_HOME/lib:${{LD_LIBRARY_PATH:-}}"
+{export_lines}
+test -x "$HOME/nccl-tests/build/all_reduce_perf"
+mpirun -np 2 -H localhost:1,{FABRIC_WORKER_ALIAS}:1 \\
+  --mca plm_rsh_agent "ssh -o BatchMode=yes -o ForwardAgent=no -o StrictHostKeyChecking=yes" \\
+  {x_args} -x LD_LIBRARY_PATH \\
+  "$HOME/nccl-tests/build/all_reduce_perf" -b 8M -e 1G -f 2 -g 1 -c 1
+"""
+
+
+def nccl_cleanup_command() -> str:
+    """Remove only the two exact build trees created by this acceptance gate."""
+    return "set -euo pipefail\nrm -rf -- \"$HOME/nccl\" \"$HOME/nccl-tests\"\n"
+
+
 def run_nccl(runner: Runner, head: Host, worker: Host) -> NCCLResult:
-    # This gate intentionally comes before any temporary source/image staging.
-    # A failing sudo -n proves that a human must provide the narrow sudo action.
-    runner.remote(head.ssh_alias, "sudo -n /usr/bin/docker info >/dev/null")
-    runner.worker_via_fabric("sudo -n /usr/bin/docker info >/dev/null")
-    raise GateError(
-        "NCCL temporary-container runner is intentionally staged only after explicit sudo authorization; "
-        "see docs/runbooks/fabric.md"
-    )
+    # The worker prerequisite and build are deliberately first. No sudo, agent
+    # forwarding, management-plane host list, or shared key is involved.
+    runner.worker_via_fabric(nccl_prerequisite_command())
+    runner.remote(head.ssh_alias, nccl_prerequisite_command())
+    runner.worker_via_fabric(nccl_build_command())
+    runner.remote(head.ssh_alias, nccl_build_command())
+    result = runner.remote(head.ssh_alias, nccl_launch_command(head, worker))
+    parsed = parse_nccl(result.stdout + "\n" + result.stderr)
+    if not parsed.passed:
+        raise GateError(parsed.reason or "NCCL all-reduce failed")
+    return parsed
 
 
 def write_json(path: Path, document: dict[str, Any]) -> None:
@@ -298,6 +385,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--inventory", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--preflight-only", action="store_true", help="run only non-mutating inventory and host checks")
+    parser.add_argument(
+        "--nccl-preflight-only",
+        action="store_true",
+        help="also verify native NCCL/MPI prerequisites on worker then head without staging sources",
+    )
     args = parser.parse_args(argv)
 
     evidence: list[dict[str, Any]] = []
@@ -323,6 +415,12 @@ def main(argv: list[str] | None = None) -> int:
         remote_preflight(runner, worker, via_fabric=True)
         if args.preflight_only:
             document["status"] = "preflight_passed"
+            document["evidence_scope"] = "live_read_only_preflight"
+            return 0
+        if args.nccl_preflight_only:
+            runner.worker_via_fabric(nccl_prerequisite_command())
+            runner.remote(head.ssh_alias, nccl_prerequisite_command())
+            document["status"] = "nccl_preflight_passed"
             document["evidence_scope"] = "live_read_only_preflight"
             return 0
         document["rdma"] = run_rdma(runner, head, worker)

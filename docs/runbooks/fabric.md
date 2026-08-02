@@ -321,36 +321,27 @@ uses the Spark 1 `dgx-spark-2-fabric` alias for every worker operation, and
 stops at the first nonzero exit, no-positive-bandwidth result, or NCCL
 `NET/Socket` diagnostic. It never enables agent forwarding.
 
-The NCCL gate uses NVIDIA's official `nccl-tests` source pinned at
-`a0b82b2260cf5152b9f8c061bbf7eaf0ba096432`, compiled with MPI support for
-`all_reduce_perf_mpi`, in the DGX-Spark-validated NGC PyTorch image
-`nvcr.io/nvidia/pytorch:25.12-py3`. NVIDIA's DGX Spark guide directs users to
-the stacked-Sparks NCCL playbook; the `nccl-tests` project documents that a
-multi-node benchmark must be built with `MPI=1` and launched by `mpirun`.
-This avoids installing MPI, CUDA, or an NCCL test binary on either host.
+The NCCL gate follows the host-native source build from NVIDIA
+`dgx-spark-playbooks` commit `1fb66f059ee427c5a3678b3117ef73aab042b458`, with
+our stricter fabric-only launcher boundary. It pins NCCL `v2.30.7-1` at
+`73cf112295c33aee2b895f329f592f2a9b4b0f97` and `nccl-tests` at
+`a0b82b2260cf5152b9f8c061bbf7eaf0ba096432`. On each Spark it builds with
+`/usr/local/cuda/bin/nvcc`,
+`NVCC_GENCODE='-gencode=arch=compute_121,code=sm_121'`, and `MPI=1`.
 
-The first NCCL container action is deliberately a narrow, noninteractive
-authorization probe on Spark 1 and then through its fabric alias to Spark 2:
-
-```bash
-sudo -n /usr/bin/docker info >/dev/null
-```
-
-Do not add `carst` to the `docker` group. If that probe fails, stop; do not
-pull an image, clone sources, or stage a container. A controller with a fresh
-1Password SSH-agent session must first rerun the wrapper's read-only gate:
+Before a source tree is created, run the non-mutating worker-first gate:
 
 ```bash
 scripts/validate-fabric --inventory inventory/cluster.toml \
-  --output /tmp/rdma-nccl-preflight.json --preflight-only
+  --output /tmp/rdma-nccl-preflight.json --nccl-preflight-only
 ```
 
-Only after a controller approves narrowly scoped `sudo docker` execution on
-both Sparks may the temporary NGC container be used. Every container command
-must include `--rm --network host --ipc host --gpus all`; source and build
-directories belong under a unique `/tmp/validate-fabric-nccl-*` directory and
-must be removed after the result has been copied to
-`inventory/reports/rdma-nccl.json`. Mount only Spark 1's existing
-`dgx_spark_fabric_ed25519` key and known-hosts file read-only into the
-head-side ephemeral AI container. Never copy either private key to Spark 2 or
-the controller, and never mount an agent socket.
+It verifies both OpenMPI packages at `4.1.6-7ubuntu2`, CUDA 13 nvcc, and that
+neither `~/nccl` nor `~/nccl-tests` already exists. The normal-user staging
+then runs on Spark 2 before Spark 1. The real two-rank `all_reduce_perf` runs
+from Spark 1 with `localhost` plus the documented `dgx-spark-2-fabric` alias;
+it passes the recorded `NCCL_SOCKET_IFNAME`, `NCCL_IB_HCA`, and GID index 3,
+uses `NCCL_DEBUG=INFO`, forces OpenMPI's TCP control paths onto the two fabric
+interfaces, and keeps `BatchMode`, `ForwardAgent=no`, and strict host-key
+checking. It never uses a management-plane host list, `sudo -S`, a shared
+private key, `StrictHostKeyChecking=no`, Docker, or the docker group.

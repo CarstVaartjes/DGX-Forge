@@ -82,3 +82,47 @@ def test_runs_head_rdma_client_through_the_head_alias(validate_module):
     result = validate_module.run_one_rdma(Runner(), worker, head, rail, rail, "ib_write_bw", 12000)
 
     assert result["passed"] is True
+
+
+def test_native_nccl_build_is_pinned_and_never_uses_docker(validate_module):
+    """The DGX Spark source build is reproducible without a container runtime."""
+    command = validate_module.nccl_build_command()
+
+    assert "ensure_checkout \"$HOME/nccl\" https://github.com/NVIDIA/nccl.git 73cf112295c33aee2b895f329f592f2a9b4b0f97" in command
+    assert "ensure_checkout \"$HOME/nccl-tests\" https://github.com/NVIDIA/nccl-tests.git" in command
+    assert "git -C \"$HOME/nccl-tests\" checkout --detach a0b82b2260cf5152b9f8c061bbf7eaf0ba096432" in command
+    assert "/usr/local/cuda/bin/nvcc" in command
+    assert "NVCC_GENCODE='-gencode=arch=compute_121,code=sm_121'" in command
+    assert "MPI=1" in command
+    assert "NCCL_HOME=\"$HOME/nccl/build\"" in command
+    assert "docker" not in command
+    assert "sudo" not in command
+
+
+def test_native_nccl_launch_uses_restricted_fabric_transport(validate_module):
+    """MPI launch cannot weaken the dedicated Spark1-to-Spark2 SSH boundary."""
+    head_rail = validate_module.Rail("rail100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
+    worker_rail = validate_module.Rail("rail100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.11", "192.168.100.10")
+    fabric = {
+        "NCCL_SOCKET_IFNAME": "=enp1s0f1np1,enP2p1s0f1np1",
+        "NCCL_IB_HCA": "=rocep1s0f1:1,roceP2p1s0f1:1",
+        "NCCL_IB_GID_INDEX": 3,
+        "TP_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1",
+        "GLOO_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1",
+    }
+    head = validate_module.Host("spark1", "dgx-spark-1", fabric, (head_rail, head_rail))
+    worker = validate_module.Host("spark2", "dgx-spark-2", fabric, (worker_rail, worker_rail))
+
+    command = validate_module.nccl_launch_command(head, worker)
+
+    assert "mpirun -np 2 -H localhost:1,dgx-spark-2-fabric:1" in command
+    assert "$HOME/nccl-tests/build/all_reduce_perf" in command
+    assert "NCCL_DEBUG='INFO'" in command
+    assert "NCCL_SOCKET_IFNAME='=enp1s0f1np1,enP2p1s0f1np1'" in command
+    assert "NCCL_IB_HCA='=rocep1s0f1:1,roceP2p1s0f1:1'" in command
+    assert "StrictHostKeyChecking=yes" in command
+    assert "ForwardAgent=no" in command
+    assert "NET/Socket" not in command
+    assert "StrictHostKeyChecking=no" not in command
+    assert "192.168.1.211" not in command
+    assert "192.168.1.212" not in command
