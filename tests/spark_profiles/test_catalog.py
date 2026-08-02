@@ -96,8 +96,10 @@ def _transition(
     timestamp: str,
     *,
     rejection_reason: str | None = None,
+    correction_of: int | None = None,
+    correction_reason: str | None = None,
 ) -> dict:
-    return {
+    transition = {
         "state": state,
         "timestamp": timestamp,
         "evidence_refs": [
@@ -105,6 +107,11 @@ def _transition(
         ],
         "rejection_reason": rejection_reason,
     }
+    if correction_of is not None:
+        transition["correction_of"] = correction_of
+    if correction_reason is not None:
+        transition["correction_reason"] = correction_reason
+    return transition
 
 
 def _profile_workload_ids(profile) -> tuple[str, ...]:
@@ -183,8 +190,10 @@ def test_rejection_reason_is_present_only_for_rejected_transitions(
         Catalog.load(catalog_root)
 
 
-def test_rejected_definition_cannot_be_silently_corrected(catalog_root: Path) -> None:
-    """Removing the terminal rejection rule must make this regression fail."""
+def test_rejected_definition_requires_audited_correction_metadata(
+    catalog_root: Path,
+) -> None:
+    """A bare rejected-to-verified transition must remain fail-closed."""
     report = _read_report(catalog_root, "model-definitions.json")
     report["definitions"][0]["maturity"] = "verified"
     report["definitions"][0]["history"] = [
@@ -200,7 +209,89 @@ def test_rejected_definition_cannot_be_silently_corrected(catalog_root: Path) ->
     ]
     _write_report(catalog_root, "model-definitions.json", report)
 
-    with pytest.raises(CatalogError, match="rejected maturity is terminal"):
+    with pytest.raises(
+        CatalogError,
+        match="rejected to verified requires correction_of and correction_reason",
+    ):
+        Catalog.load(catalog_root)
+
+
+def test_rejected_definition_accepts_exact_audited_correction(
+    catalog_root: Path,
+) -> None:
+    """The approved correction path must restore the fingerprint to verified."""
+    report = _read_report(catalog_root, "model-definitions.json")
+    report["definitions"][0]["maturity"] = "verified"
+    report["definitions"][0]["history"] = [
+        _transition("planned", "2026-08-02T08:00:00Z"),
+        _transition("prepared", "2026-08-02T08:01:00Z"),
+        _transition("verified", "2026-08-02T08:02:00Z"),
+        _transition(
+            "rejected",
+            "2026-08-02T08:03:00Z",
+            rejection_reason="runtime output regressed",
+        ),
+        _transition(
+            "verified",
+            "2026-08-02T08:04:00Z",
+            correction_of=3,
+            correction_reason="audit proved the regression fixture was corrupt",
+        ),
+    ]
+    _write_report(catalog_root, "model-definitions.json", report)
+
+    catalog = Catalog.load(catalog_root)
+
+    assert catalog.maturity["deepseek-agent-dual"] == "verified"
+
+
+def test_rejected_correction_must_reference_immediately_prior_transition(
+    catalog_root: Path,
+) -> None:
+    """A correction cannot point at an older non-rejection audit event."""
+    report = _read_report(catalog_root, "model-definitions.json")
+    report["definitions"][0]["maturity"] = "verified"
+    report["definitions"][0]["history"] = [
+        _transition("planned", "2026-08-02T08:00:00Z"),
+        _transition("prepared", "2026-08-02T08:01:00Z"),
+        _transition("verified", "2026-08-02T08:02:00Z"),
+        _transition(
+            "rejected",
+            "2026-08-02T08:03:00Z",
+            rejection_reason="runtime output regressed",
+        ),
+        _transition(
+            "verified",
+            "2026-08-02T08:04:00Z",
+            correction_of=2,
+            correction_reason="audit proved the regression fixture was corrupt",
+        ),
+    ]
+    _write_report(catalog_root, "model-definitions.json", report)
+
+    with pytest.raises(CatalogError, match="must reference transition 3"):
+        Catalog.load(catalog_root)
+
+
+def test_correction_metadata_is_forbidden_on_normal_progression(
+    catalog_root: Path,
+) -> None:
+    """Removing the prior-rejection check must make this regression fail."""
+    report = _read_report(catalog_root, "model-definitions.json")
+    report["definitions"][0]["maturity"] = "verified"
+    report["definitions"][0]["history"] = [
+        _transition("planned", "2026-08-02T08:00:00Z"),
+        _transition("prepared", "2026-08-02T08:01:00Z"),
+        _transition(
+            "verified",
+            "2026-08-02T08:02:00Z",
+            correction_of=1,
+            correction_reason="not actually correcting a rejection",
+        ),
+    ]
+    _write_report(catalog_root, "model-definitions.json", report)
+
+    with pytest.raises(CatalogError, match="correction metadata may only follow rejected"):
         Catalog.load(catalog_root)
 
 

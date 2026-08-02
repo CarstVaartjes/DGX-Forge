@@ -183,9 +183,35 @@ def _validate_maturity_history(root: Path, record: Mapping[str, Any]) -> None:
         previous_timestamp = timestamp
         _validate_evidence_refs(root, transition["evidence_refs"], context)
 
-    for previous, current in zip(states, states[1:], strict=False):
+    for position, (previous, current) in enumerate(
+        zip(states, states[1:], strict=False),
+        start=1,
+    ):
+        transition = history[position]
+        has_correction = (
+            "correction_of" in transition or "correction_reason" in transition
+        )
         if previous == "rejected":
-            raise CatalogError(f"rejected maturity is terminal without an audited correction: {identifier}")
+            if current != "verified":
+                raise CatalogError(
+                    f"rejected maturity may only return to verified: {identifier}"
+                )
+            if not has_correction:
+                raise CatalogError(
+                    "rejected to verified requires correction_of and "
+                    f"correction_reason: {identifier}"
+                )
+            rejected_position = position - 1
+            if transition["correction_of"] != rejected_position:
+                raise CatalogError(
+                    f"correction_of must reference transition {rejected_position}: "
+                    f"{identifier}"
+                )
+            continue
+        if has_correction:
+            raise CatalogError(
+                f"correction metadata may only follow rejected: {identifier}"
+            )
         expected = _LEGAL_MATURITY_TRANSITIONS.get(previous, ())
         if isinstance(expected, str):
             allowed = (expected,)

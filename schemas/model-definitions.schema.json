@@ -41,13 +41,27 @@
         "state": {"$ref": "#/$defs/maturity"},
         "timestamp": {"type": "string", "format": "date-time"},
         "evidence_refs": {"$ref": "#/$defs/evidenceRefs"},
-        "rejection_reason": {"type": ["string", "null"]}
+        "rejection_reason": {"type": ["string", "null"]},
+        "correction_of": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Zero-based history index of the immediately prior rejected transition."
+        },
+        "correction_reason": {"type": "string", "minLength": 1}
+      },
+      "dependentRequired": {
+        "correction_of": ["correction_reason"],
+        "correction_reason": ["correction_of"]
       },
       "allOf": [
         {
           "if": {"properties": {"state": {"const": "rejected"}}},
           "then": {"properties": {"rejection_reason": {"type": "string", "minLength": 1}}},
           "else": {"properties": {"rejection_reason": {"type": "null"}}}
+        },
+        {
+          "if": {"required": ["correction_of"]},
+          "then": {"properties": {"state": {"const": "verified"}}}
         }
       ]
     }
