@@ -5,10 +5,15 @@ adapter_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"
 docker_bin=${MIA_DOCKER_BIN:-docker}
 curl_bin=${MIA_CURL_BIN:-curl}
 ip_bin=${MIA_IP_BIN:-ip}
+df_bin=${MIA_DF_BIN:-df}
 models_root=${MIA_MODELS_ROOT:-/srv/models}
 sys_class_net=${MIA_SYS_CLASS_NET:-/sys/class/net}
 sys_class_infiniband=${MIA_SYS_CLASS_INFINIBAND:-/sys/class/infiniband}
 operation=${1:-}
+image_reference=ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8
+checkpoint_manifest_sha256=82e965c1caa019b31f4d776d0b3eddb0cc0d8e076f189822b8a3bbe3fa115121
+checkpoint_revision=9e165c30e2704aec5d9d593cce3eebd58bbef1cb
+prepare_container=mia-deepseek-dual-prepare
 
 case ${2:-} in
   head) role_env="$adapter_root/config/spark1.env" ;;
@@ -78,6 +83,36 @@ verify_rail() {
   }
 }
 
+checkpoint_manifest_path() {
+  printf '%s/manifests/deepseek-v4-flash-0731.json\n' "$models_root"
+}
+
+snapshot_path() {
+  printf '%s/snapshots/deepseek-v4-flash-0731\n' "$models_root"
+}
+
+manifest_tool_path() {
+  local tool=${MIA_MODEL_MANIFEST_TOOL:-$adapter_root/tools/model_manifest.py}
+  test -f "$tool"
+  printf '%s\n' "$tool"
+}
+
+verify_local_snapshot() {
+  local manifest snapshot tool
+  manifest=$(checkpoint_manifest_path)
+  snapshot=$(snapshot_path)
+  tool=$(manifest_tool_path)
+  test -d "$snapshot"
+  test ! -L "$snapshot"
+  python3 "$tool" verify --manifest "$manifest" --snapshot "$snapshot" >/dev/null
+}
+
+inspect_prepare_label() {
+  local label=$1
+  "$docker_bin" inspect --format "{{ index .Config.Labels \"$label\" }}" \
+    "$prepare_container"
+}
+
 container="mia-deepseek-dual-${2}"
 
 case "$operation" in
@@ -85,20 +120,173 @@ case "$operation" in
     compose config
     ;;
   prepare)
+    release_digest=${MIA_RELEASE_SHA256:-$(basename "$adapter_root")}
+    if [[ ! $release_digest =~ ^[0-9a-f]{64}$ ]]; then
+      echo "runtime release path is not digest-qualified" >&2
+      exit 1
+    fi
+    prepare_fingerprint=$(printf '%s:%s' \
+      "$release_digest" "$checkpoint_manifest_sha256" | sha256sum | awk '{print $1}')
+    manifest_source=${MIA_CHECKPOINT_MANIFEST_SOURCE:-$adapter_root/manifests/deepseek-v4-flash-0731.json}
+    manifest=$(checkpoint_manifest_path)
+    snapshot=$(snapshot_path)
     install -d -m 0750 \
       "$models_root/runtime-cache/deepseek-agent-dual/tmp" \
       "$models_root/runtime-cache/deepseek-agent-dual/vllm" \
       "$models_root/runtime-cache/deepseek-agent-dual/flashinfer" \
+      "$models_root/runtime-cache/deepseek-agent-dual/prepare" \
       "$models_root/outputs/deepseek-agent-dual" \
       "$models_root/logs/deepseek-agent-dual" \
       "$models_root/manifests" \
       "$models_root/snapshots"
+    if [[ $(sha256sum "$manifest_source" | awk '{print $1}') != "$checkpoint_manifest_sha256" ]]; then
+      echo "release checkpoint manifest digest mismatch" >&2
+      exit 1
+    fi
+    if [[ -e "$manifest" || -L "$manifest" ]]; then
+      if [[ ! -f "$manifest" || -L "$manifest" ]] || ! cmp -s "$manifest_source" "$manifest"; then
+        echo "installed checkpoint manifest differs" >&2
+        exit 1
+      fi
+    else
+      install -m 0644 "$manifest_source" "$manifest"
+    fi
+
+    container_exists=false
+    if "$docker_bin" container inspect "$prepare_container" >/dev/null 2>&1; then
+      container_exists=true
+      runtime_label=$(inspect_prepare_label spark.runtime-release)
+      checkpoint_label=$(inspect_prepare_label spark.checkpoint-manifest)
+      fingerprint_label=$(inspect_prepare_label spark.prepare-fingerprint)
+      container_image_reference=$(
+        "$docker_bin" inspect --format '{{.Config.Image}}' "$prepare_container"
+      )
+      if [[ $runtime_label != "$release_digest" || \
+            $checkpoint_label != "$checkpoint_manifest_sha256" || \
+            $fingerprint_label != "$prepare_fingerprint" ]]; then
+        echo "preparation container fingerprint mismatch" >&2
+        exit 1
+      fi
+      if [[ $container_image_reference != "$image_reference" ]]; then
+        echo "preparation container image mismatch" >&2
+        exit 1
+      fi
+    fi
+
+    if ! "$docker_bin" image inspect "$image_reference" >/dev/null 2>&1; then
+      "$docker_bin" pull "$image_reference"
+    fi
+    "$docker_bin" image inspect "$image_reference" >/dev/null
+    if [[ $container_exists == true ]]; then
+      container_image_id=$(
+        "$docker_bin" inspect --format '{{.Image}}' "$prepare_container"
+      )
+      pinned_image_id=$(
+        "$docker_bin" image inspect --format '{{.Id}}' "$image_reference"
+      )
+      if [[ $container_image_id != "$pinned_image_id" ]]; then
+        echo "preparation container image mismatch" >&2
+        exit 1
+      fi
+    fi
+
+    if [[ $container_exists == false && ( -e "$snapshot" || -L "$snapshot" ) ]]; then
+      verify_local_snapshot
+      printf 'prepared role=%s\n' "${2}"
+      exit 0
+    fi
+
+    if [[ $container_exists == true ]]; then
+      prepare_status=$("$docker_bin" inspect --format '{{.State.Status}}' "$prepare_container")
+      case "$prepare_status" in
+        running)
+          ;;
+        created)
+          "$docker_bin" start "$prepare_container" >/dev/null
+          ;;
+        exited)
+          prepare_exit=$("$docker_bin" inspect --format '{{.State.ExitCode}}' "$prepare_container")
+          if [[ $prepare_exit == 0 ]]; then
+            verify_local_snapshot
+            printf 'prepared role=%s\n' "${2}"
+            exit 0
+          fi
+          "$docker_bin" start "$prepare_container" >/dev/null
+          ;;
+        *)
+          echo "unsupported preparation container state: $prepare_status" >&2
+          exit 1
+          ;;
+      esac
+    else
+      available_bytes=$("$df_bin" -PB1 "$models_root" | awk 'NR == 2 {print $4}')
+      if [[ ! $available_bytes =~ ^[0-9]+$ || $available_bytes -lt 350000000000 ]]; then
+        echo "preparation requires at least 350000000000 free bytes" >&2
+        exit 1
+      fi
+      staging_name=.deepseek-v4-flash-0731.prepare-$prepare_fingerprint
+      "$docker_bin" run --detach \
+        --name "$prepare_container" \
+        --restart no \
+        --pull never \
+        --network bridge \
+        --user "$(id -u):$(id -g)" \
+        --read-only \
+        --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1g \
+        --cap-drop ALL \
+        --security-opt no-new-privileges \
+        --label "spark.runtime-release=$release_digest" \
+        --label "spark.checkpoint-manifest=$checkpoint_manifest_sha256" \
+        --label "spark.prepare-fingerprint=$prepare_fingerprint" \
+        --env NVIDIA_VISIBLE_DEVICES=void \
+        --env PYTHONDONTWRITEBYTECODE=1 \
+        --env HF_HOME=/prepare-cache/huggingface \
+        --env HF_HUB_DISABLE_XET=1 \
+        --env HF_HUB_DISABLE_SYMLINKS=1 \
+        --env HF_HUB_DISABLE_TELEMETRY=1 \
+        --env HF_HUB_DOWNLOAD_TIMEOUT=600 \
+        --env "STAGING_DIR=/snapshots/$staging_name" \
+        --env FINAL_DIR=/snapshots/deepseek-v4-flash-0731 \
+        --env "METADATA_DIR=/snapshots/.deepseek-v4-flash-0731.metadata-$prepare_fingerprint" \
+        --volume "$models_root/snapshots:/snapshots:rw" \
+        --volume "$models_root/runtime-cache/deepseek-agent-dual/prepare:/prepare-cache:rw" \
+        --volume "$adapter_root:/release:ro" \
+        --entrypoint bash \
+        "$image_reference" \
+        -lc "$(cat <<PREPARE_SCRIPT
+	set -euo pipefail
+	[[ "\$STAGING_DIR" == /snapshots/.deepseek-v4-flash-0731.prepare-* ]]
+	if [[ -e "\$METADATA_DIR" || -L "\$METADATA_DIR" ]]; then
+	  [[ -d "\$METADATA_DIR" && ! -L "\$METADATA_DIR" ]]
+	  [[ ! -e "\$STAGING_DIR/.cache" && ! -L "\$STAGING_DIR/.cache" ]]
+	  mkdir -p -- "\$STAGING_DIR"
+	  mv -- "\$METADATA_DIR" "\$STAGING_DIR/.cache"
+	fi
+	python3 -c 'import inspect, sys; from huggingface_hub import snapshot_download; kwargs={"repo_id":"deepseek-ai/DeepSeek-V4-Flash-0731","revision":"$checkpoint_revision","local_dir":sys.argv[1],"token":False,"max_workers":1}; kwargs.update(local_dir_use_symlinks=False) if "local_dir_use_symlinks" in inspect.signature(snapshot_download).parameters else None; snapshot_download(**kwargs)' "\$STAGING_DIR"
+	[[ ! -e "\$METADATA_DIR" && ! -L "\$METADATA_DIR" ]]
+	if [[ -e "\$STAGING_DIR/.cache" || -L "\$STAGING_DIR/.cache" ]]; then
+	  [[ -d "\$STAGING_DIR/.cache" && ! -L "\$STAGING_DIR/.cache" ]]
+	  mv -- "\$STAGING_DIR/.cache" "\$METADATA_DIR"
+	fi
+python3 /release/tools/model_manifest.py verify --manifest /release/manifests/deepseek-v4-flash-0731.json --snapshot "\$STAGING_DIR"
+python3 -c 'import ctypes, os, sys; libc=ctypes.CDLL(None,use_errno=True); fn=libc.renameat2; fn.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_int,ctypes.c_char_p,ctypes.c_uint]; fn.restype=ctypes.c_int; rc=fn(-100,os.fsencode(sys.argv[1]),-100,os.fsencode(sys.argv[2]),1); error=ctypes.get_errno(); rc == 0 or (_ for _ in ()).throw(OSError(error,os.strerror(error),sys.argv[2]))' "\$STAGING_DIR" "\$FINAL_DIR"
+PREPARE_SCRIPT
+)" >/dev/null
+    fi
+
+    prepare_exit=$("$docker_bin" wait "$prepare_container" | tail -n 1)
+    if [[ $prepare_exit != 0 ]]; then
+      "$docker_bin" logs --tail 200 "$prepare_container" >&2 || true
+      echo "preparation container failed with exit code $prepare_exit" >&2
+      exit 1
+    fi
+    verify_local_snapshot
     printf 'prepared role=%s\n' "${2}"
     ;;
   verify)
     compose config --quiet
     "$docker_bin" image inspect \
-      ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8 \
+      "$image_reference" \
       >/dev/null
     manifest="$models_root/manifests/deepseek-v4-flash-0731.json"
     snapshot="$models_root/snapshots/deepseek-v4-flash-0731"
@@ -108,8 +296,7 @@ case "$operation" in
       echo "checkpoint manifest digest mismatch" >&2
       exit 1
     fi
-    manifest_tool=${MIA_MODEL_MANIFEST_TOOL:-$adapter_root/tools/model_manifest.py}
-    test -f "$manifest_tool"
+    manifest_tool=$(manifest_tool_path)
     python3 "$manifest_tool" verify --manifest "$manifest" --snapshot "$snapshot" >/dev/null
     verify_rail "$FABRIC_INTERFACE_0" "$FABRIC_IP_0" "$FABRIC_HCA_0" "$FABRIC_GID_0"
     verify_rail "$FABRIC_INTERFACE_1" "$FABRIC_IP_1" "$FABRIC_HCA_1" "$FABRIC_GID_1"

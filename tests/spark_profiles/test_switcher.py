@@ -4,6 +4,7 @@ import json
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 
 from spark_profiles.admission import AdmissionReport, check_admission
 from spark_profiles.backend import CommandResult
@@ -28,12 +29,14 @@ BOOT_IDS = {"spark1": "1" * 32, "spark2": "2" * 32}
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
-def command_result(ok: bool = True, stderr: bytes = b"") -> CommandResult:
+def command_result(
+    ok: bool = True, stderr: bytes = b"", *, timed_out: bool = False
+) -> CommandResult:
     return CommandResult(
-        returncode=0 if ok else 1,
+        returncode=None if timed_out else 0 if ok else 1,
         stdout=b"",
         stderr=stderr,
-        timed_out=False,
+        timed_out=timed_out,
         stdout_truncated=False,
         stderr_truncated=False,
     )
@@ -124,10 +127,15 @@ def catalog(*profiles: ClusterProfile, definition: WorkloadDefinition) -> Catalo
 
 class FakeBackend:
     def __init__(
-        self, events: list[tuple], *, fail: tuple[str, str] | None = None
+        self,
+        events: list[tuple],
+        *,
+        fail: tuple[str, str] | None = None,
+        results: dict[tuple[str, str], CommandResult | Exception] | None = None,
     ) -> None:
         self.events = events
         self.fail = fail
+        self.results = results or {}
         self.calls: list[tuple[str, tuple[str, ...], float]] = []
 
     def run(self, node: str, argv: tuple[str, ...], timeout: float) -> CommandResult:
@@ -135,6 +143,11 @@ class FakeBackend:
         self.calls.append((node, argv, timeout))
         operation = argv[0]
         identifier = argv[1]
+        configured = self.results.get((node, operation))
+        if isinstance(configured, Exception):
+            raise configured
+        if configured is not None:
+            return configured
         if self.fail == (operation, identifier):
             return command_result(False, b"fixture failure")
         return command_result()
@@ -312,6 +325,210 @@ def test_definition_deadlines_select_each_lifecycle_operation_timeout() -> None:
         ("profile-health", 14),
         ("profile-infer", 15),
     ]
+
+
+def test_prepare_holds_the_shared_lock_and_does_not_mutate_state() -> None:
+    definition = workload(
+        "deepseek-agent-dual",
+        distributed=True,
+        deadlines=OperationTimeouts(86400, 300, 1800, 120, 900, 300, 300),
+    )
+    target = profile("agent-full-dual", definition)
+    catalog_value = catalog(target, definition=definition)
+    initial = ControllerState.stopped(boot_ids=BOOT_IDS)
+    events: list[tuple] = []
+    backend = FakeBackend(events)
+    store = FakeStore(initial, events)
+    switcher = ProfileSwitcher(
+        catalog=catalog_value,
+        backend=backend,
+        state_store=store,
+        inventory_provider=lambda: (_ for _ in ()).throw(
+            AssertionError("prepare must not collect inventory")
+        ),
+    )
+
+    report = switcher.prepare_profile("default")
+
+    assert report.status == "prepared"
+    assert events[0] == ("lock",)
+    assert set(events[1:]) == {
+        ("remote", "spark2", ("profile-prepare", "deepseek-agent-dual", "worker")),
+        ("remote", "spark1", ("profile-prepare", "deepseek-agent-dual", "head")),
+    }
+    assert [timeout for _, _, timeout in backend.calls] == [86400, 86400]
+    assert [result.status for result in report.results] == ["prepared", "prepared"]
+    assert store.state is initial
+    assert store.saves == []
+    assert store.transition_fenced is False
+
+
+def test_prepare_starts_all_workload_nodes_in_parallel_and_orders_results() -> None:
+    definition = workload(
+        "deepseek-agent-dual",
+        distributed=True,
+        deadlines=OperationTimeouts(86400, 300, 1800, 120, 900, 300, 300),
+    )
+    target = profile("agent-full-dual", definition)
+    events: list[tuple] = []
+    worker_started = Event()
+    head_started = Event()
+
+    class ParallelBackend(FakeBackend):
+        def run(
+            self, node: str, argv: tuple[str, ...], timeout: float
+        ) -> CommandResult:
+            self.events.append(("remote", node, argv))
+            self.calls.append((node, argv, timeout))
+            if node == "spark2":
+                worker_started.set()
+                if not head_started.wait(0.5):
+                    return command_result(False, b"head did not start concurrently")
+            else:
+                if not worker_started.wait(0.5):
+                    return command_result(False, b"worker was not submitted first")
+                head_started.set()
+            return command_result()
+
+    backend = ParallelBackend(events)
+    store = FakeStore(ControllerState.stopped(), events)
+    switcher = ProfileSwitcher(
+        catalog=catalog(target, definition=definition),
+        backend=backend,
+        state_store=store,
+        inventory_provider=inventory,
+    )
+
+    report = switcher.prepare_profile("default")
+
+    assert report.status == "prepared"
+    assert worker_started.is_set()
+    assert head_started.is_set()
+    assert [(result.node, result.role) for result in report.results] == [
+        ("spark2", "worker"),
+        ("spark1", "head"),
+    ]
+    assert [result.timeout_seconds for result in report.results] == [86400, 86400]
+    assert store.saves == []
+    assert store.transition_fenced is False
+
+
+def test_prepare_refuses_every_non_clean_stopped_state() -> None:
+    definition = workload(
+        "deepseek-agent-dual",
+        distributed=True,
+        deadlines=OperationTimeouts(86400, 300, 1800, 120, 900, 300, 300),
+    )
+    target = profile("agent-full-dual", definition)
+    catalog_value = catalog(target, definition=definition)
+    states = (
+        active_state(target, definition),
+        ControllerState(
+            status="transitioning",
+            active_profile=None,
+            target_profile=target.id,
+            restore_profile=None,
+            last_error=None,
+        ),
+        ControllerState(
+            status="degraded",
+            active_profile=None,
+            target_profile=target.id,
+            restore_profile=None,
+            last_error="recovery required",
+        ),
+        ControllerState(
+            status="stopped",
+            active_profile=None,
+            target_profile="previous-target",
+            restore_profile=None,
+            last_error="previous failure",
+        ),
+    )
+
+    for state in states:
+        switcher, events, store = make_switcher(catalog_value, state)
+
+        report = switcher.prepare_profile("default")
+
+        assert report.status == "blocked"
+        assert report.results == ()
+        assert report.errors
+        assert [event for event in events if event[0] == "remote"] == []
+        assert store.saves == []
+
+
+def test_prepare_timeout_is_resumable_and_never_stops_the_remote_job() -> None:
+    definition = workload(
+        "deepseek-agent-dual",
+        distributed=True,
+        deadlines=OperationTimeouts(86400, 300, 1800, 120, 900, 300, 300),
+    )
+    target = profile("agent-full-dual", definition)
+    events: list[tuple] = []
+    backend = FakeBackend(
+        events,
+        results={
+            ("spark2", "profile-prepare"): command_result(
+                False, b"still running", timed_out=True
+            )
+        },
+    )
+    store = FakeStore(ControllerState.stopped(), events)
+    switcher = ProfileSwitcher(
+        catalog=catalog(target, definition=definition),
+        backend=backend,
+        state_store=store,
+        inventory_provider=inventory,
+    )
+
+    report = switcher.prepare_profile("default")
+
+    assert report.status == "in-progress"
+    assert report.resumable is True
+    assert [(result.node, result.status, result.timed_out) for result in report.results] == [
+        ("spark2", "in-progress", True),
+        ("spark1", "prepared", False),
+    ]
+    assert all(event[2][0] == "profile-prepare" for event in events if event[0] == "remote")
+    assert store.saves == []
+    assert store.transition_fenced is False
+
+
+def test_prepare_reports_nonzero_and_requires_an_explicit_deadline() -> None:
+    definition = workload(
+        "deepseek-agent-dual",
+        distributed=True,
+        deadlines=OperationTimeouts(86400, 300, 1800, 120, 900, 300, 300),
+    )
+    target = profile("agent-full-dual", definition)
+    catalog_value = catalog(target, definition=definition)
+    switcher, events, store = make_switcher(
+        catalog_value,
+        ControllerState.stopped(),
+        fail=("profile-prepare", definition.id),
+    )
+
+    failed = switcher.prepare_profile("default")
+
+    assert failed.status == "failed"
+    assert [result.status for result in failed.results] == ["failed", "failed"]
+    assert all("exit=1" in result.detail for result in failed.results)
+    assert failed.errors
+    assert store.saves == []
+
+    missing_deadline = replace(definition, deadlines=None)
+    missing_target = profile("missing-deadline", missing_deadline)
+    switcher, events, _ = make_switcher(
+        catalog(missing_target, definition=missing_deadline),
+        ControllerState.stopped(),
+    )
+
+    blocked = switcher.prepare_profile("missing-deadline")
+
+    assert blocked.status == "blocked"
+    assert "deadline" in " ".join(blocked.errors)
+    assert [event for event in events if event[0] == "remote"] == []
 
 
 def test_definition_without_deadlines_uses_switcher_default_timeout() -> None:

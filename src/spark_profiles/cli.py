@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import json
 from pathlib import Path
 import re
@@ -16,7 +16,7 @@ from .backend import SshBackend
 from .catalog import Catalog
 from .health import ClusterHealth, LocalHealthError, NodeHealthService
 from .state import ControllerState, LockBusy, LockNotStale, StateError, StateStore
-from .switcher import ProfileSwitcher, SwitchReport
+from .switcher import PrepareReport, ProfileSwitcher, SwitchReport
 
 
 _MAX_TEXT_CHARS = 1_024
@@ -253,6 +253,10 @@ def _parser() -> argparse.ArgumentParser:
     switch.add_argument("--restore")
     switch.add_argument("--json", action="store_true")
 
+    prepare = commands.add_parser("prepare")
+    prepare.add_argument("selector")
+    prepare.add_argument("--json", action="store_true")
+
     restore_default = commands.add_parser("restore-default")
     restore_default.add_argument("--dry-run", action="store_true")
     restore_default.add_argument("--json", action="store_true")
@@ -272,6 +276,18 @@ def _switch_payload(report: SwitchReport) -> dict[str, object]:
         "restore_profile": report.restore_profile,
         "errors": list(report.errors[:16]),
         "dry_run": report.dry_run,
+    }
+
+
+def _prepare_payload(report: PrepareReport) -> dict[str, object]:
+    return {
+        "target_profile": report.target_profile,
+        "status": report.status,
+        "profile_sha256": report.profile_sha256,
+        "definition_sha256": dict(report.definition_sha256),
+        "resumable": report.resumable,
+        "results": [asdict(result) for result in report.results],
+        "errors": list(report.errors[:16]),
     }
 
 
@@ -659,6 +675,36 @@ def main(
         }
         _emit(payload, args)
         return 0 if report.ok else 3
+
+    if args.command == "prepare":
+        target = dependencies.catalog.selectors.get(args.selector, args.selector)
+        if target not in dependencies.catalog.profiles:
+            _emit(
+                {
+                    "error": (
+                        "unknown cluster profile or selector: "
+                        f"{args.selector}"
+                    ),
+                    "error_type": "configuration",
+                },
+                args,
+            )
+            return 2
+        try:
+            report = dependencies.switcher.prepare_profile(target)
+        except (LockBusy, LockNotStale) as error:
+            _emit({"error": str(error), "error_type": "lock_conflict"}, args)
+            return 7
+        except (StateError, OSError) as error:
+            _emit({"error": str(error), "error_type": "configuration"}, args)
+            return 2
+        _emit(_prepare_payload(report), args)
+        return {
+            "prepared": 0,
+            "blocked": 3,
+            "failed": 6,
+            "in-progress": 8,
+        }.get(report.status, 6)
 
     selector = "default" if args.command == "restore-default" else args.selector
     target = dependencies.catalog.selectors.get(selector, selector)

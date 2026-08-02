@@ -1,10 +1,11 @@
 {
   "files": {
-    "adapters/deepseek/mia-vllm/bin/mia-deepseek-dual": "e5a3083eedd74aabb67eca13ed4d74e606fcc3a0c8365a2231cd0cda84e112d7",
+    "adapters/deepseek/mia-vllm/bin/mia-deepseek-dual": "d484b11dad4a57ec078f4c67e1e96a930784bb916fee2aa5d877c9b06c1fe41b",
     "adapters/deepseek/mia-vllm/compose.yaml": "504bd8f8836578df206bf1ecd555d678a08b4a5f8b7acac9bac60399b1b42602",
     "adapters/deepseek/mia-vllm/config/common.env": "824a8d5ee47163e0344a810d866087dd874d7aebae9abef60bc7751dcfbb8308",
     "adapters/deepseek/mia-vllm/config/spark1.env": "4b59783eaf5e5930a7bbfc48ded6c255de703710789634c1cf558c8cbbe934b0",
     "adapters/deepseek/mia-vllm/config/spark2.env": "8e8b04234831c8511b63eb30a1658ff220f7bfe4c4e8c4bc8cba0e2a5f689606",
+    "adapters/deepseek/mia-vllm/manifests/deepseek-v4-flash-0731.json": "82e965c1caa019b31f4d776d0b3eddb0cc0d8e076f189822b8a3bbe3fa115121",
     "adapters/deepseek/mia-vllm/tools/model_manifest.py": "02e3070f9f4cbb50feb6ac37ec19c3279b3ec0cc99fb4614d978937630a8101c"
   }
 }

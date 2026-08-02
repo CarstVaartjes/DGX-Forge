@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import subprocess
@@ -129,26 +130,210 @@ def fake_command(tmp_path: Path, name: str, body: str) -> Path:
     return command
 
 
-def test_prepare_creates_only_declared_persistent_directories(tmp_path: Path) -> None:
+def _prepare_environment(
+    tmp_path: Path,
+    *,
+    container_state: str = "absent",
+    runtime_label: str = "a" * 64,
+    container_image: str = IMAGE,
+) -> tuple[dict[str, str], Path]:
+    models_root = tmp_path / "models"
+    docker_log = tmp_path / "docker.log"
+    verifier_log = tmp_path / "verifier.log"
+    snapshot = models_root / "snapshots/deepseek-v4-flash-0731"
+    docker = fake_command(
+        tmp_path,
+        "docker",
+        f'''printf "%s\\n" "$*" >> {docker_log!s}
+if [[ ${{1:-}} == image && ${{2:-}} == inspect ]]; then
+  if [[ $* == *--format* ]]; then printf "%s\n" "$FAKE_PINNED_IMAGE_ID"; fi
+  exit 0
+fi
+if [[ ${{1:-}} == container && ${{2:-}} == inspect ]]; then
+  [[ ${{FAKE_CONTAINER_STATE}} != absent ]]
+  exit
+fi
+if [[ ${{1:-}} == inspect && ${{2:-}} == --format ]]; then
+  case ${{3:-}} in
+    *runtime-release*) printf "%s\\n" "$FAKE_RUNTIME_LABEL" ;;
+    *checkpoint-manifest*) printf "%s\\n" "82e965c1caa019b31f4d776d0b3eddb0cc0d8e076f189822b8a3bbe3fa115121" ;;
+    *prepare-fingerprint*) printf "%s\\n" "$FAKE_PREPARE_FINGERPRINT" ;;
+    *Config.Image*) printf "%s\\n" "$FAKE_CONTAINER_IMAGE" ;;
+    *.Image*) printf "%s\\n" "$FAKE_CONTAINER_IMAGE_ID" ;;
+    *State.Status*) printf "%s\\n" "$FAKE_CONTAINER_STATE" ;;
+    *State.ExitCode*) printf "0\\n" ;;
+  esac
+  exit 0
+fi
+if [[ ${{1:-}} == wait ]]; then
+  mkdir -p -- "$FAKE_SNAPSHOT"
+  printf "0\\n"
+fi
+''',
+    )
+    df = fake_command(
+        tmp_path,
+        "df",
+        'printf "Filesystem 1-blocks Used Available Capacity Mounted on\\n"\n'
+        'printf "fake 1000000000000 1 999999999999 1%% /srv/models\\n"\n',
+    )
+    verifier = tmp_path / "model_manifest.py"
+    verifier.write_text(
+        "from pathlib import Path\n"
+        "import sys\n"
+        f"Path({str(verifier_log)!r}).write_text(' '.join(sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+    checkpoint_digest = (
+        "82e965c1caa019b31f4d776d0b3eddb0cc0d8e076f189822b8a3bbe3fa115121"
+    )
+    release_digest = "a" * 64
+    prepare_fingerprint = hashlib.sha256(
+        f"{release_digest}:{checkpoint_digest}".encode()
+    ).hexdigest()
+    return (
+        {
+            **os.environ,
+            "MIA_DOCKER_BIN": str(docker),
+            "MIA_DF_BIN": str(df),
+            "MIA_MODEL_MANIFEST_TOOL": str(verifier),
+            "MIA_MODELS_ROOT": str(models_root),
+            "MIA_LOCAL_HOSTNAME": "spark-2297",
+            "MIA_RELEASE_SHA256": release_digest,
+            "FAKE_CONTAINER_STATE": container_state,
+            "FAKE_RUNTIME_LABEL": runtime_label,
+            "FAKE_CONTAINER_IMAGE": container_image,
+            "FAKE_CONTAINER_IMAGE_ID": "sha256:" + "c" * 64,
+            "FAKE_PINNED_IMAGE_ID": "sha256:" + "c" * 64,
+            "FAKE_PREPARE_FINGERPRINT": prepare_fingerprint,
+            "FAKE_SNAPSHOT": str(snapshot),
+        },
+        docker_log,
+    )
+
+
+def test_prepare_starts_a_durable_exact_revision_job(tmp_path: Path) -> None:
+    environment, docker_log = _prepare_environment(tmp_path)
+
     completed = subprocess.run(
         [str(ADAPTER), "prepare", "worker"],
         cwd=ROOT,
         check=True,
         capture_output=True,
         text=True,
-        env={
-            **os.environ,
-            "MIA_MODELS_ROOT": str(tmp_path),
-            "MIA_LOCAL_HOSTNAME": "spark-2297",
-        },
+        env=environment,
     )
 
     assert completed.stdout == "prepared role=worker\n"
-    assert (tmp_path / "runtime-cache/deepseek-agent-dual/tmp").is_dir()
-    assert (tmp_path / "runtime-cache/deepseek-agent-dual/vllm").is_dir()
-    assert (tmp_path / "runtime-cache/deepseek-agent-dual/flashinfer").is_dir()
-    assert (tmp_path / "outputs/deepseek-agent-dual").is_dir()
-    assert (tmp_path / "logs/deepseek-agent-dual").is_dir()
+    models_root = Path(environment["MIA_MODELS_ROOT"])
+    assert (models_root / "runtime-cache/deepseek-agent-dual/tmp").is_dir()
+    assert (models_root / "runtime-cache/deepseek-agent-dual/prepare").is_dir()
+    assert (models_root / "snapshots/deepseek-v4-flash-0731").is_dir()
+    assert (models_root / "manifests/deepseek-v4-flash-0731.json").read_bytes() == (
+        ROOT / "manifests/deepseek-v4-flash-0731.json"
+    ).read_bytes()
+    calls = docker_log.read_text(encoding="utf-8")
+    assert "image inspect " + IMAGE in calls
+    assert "run --detach --name mia-deepseek-dual-prepare" in calls
+    assert "--restart no" in calls
+    assert "--pull never" in calls
+    assert "--network bridge" in calls
+    assert "--read-only" in calls
+    assert "--cap-drop ALL" in calls
+    assert "--security-opt no-new-privileges" in calls
+    assert "--user " in calls
+    assert "NVIDIA_VISIBLE_DEVICES=void" in calls
+    assert "spark.runtime-release=" + "a" * 64 in calls
+    assert "spark.checkpoint-manifest=82e965" in calls
+    assert "HF_HUB_DISABLE_XET=1" in calls
+    assert "HF_HUB_DISABLE_SYMLINKS=1" in calls
+    assert "deepseek-ai/DeepSeek-V4-Flash-0731" in calls
+    assert "9e165c30e2704aec5d9d593cce3eebd58bbef1cb" in calls
+    assert '"max_workers":1' in calls
+    assert '"max_workers":8' not in calls
+    assert "local_dir_use_symlinks" in calls
+    assert "METADATA_DIR=/snapshots/.deepseek-v4-flash-0731.metadata-" in calls
+    assert r'\"$STAGING_DIR' not in calls
+    assert 'rm -rf -- "$STAGING_DIR/.cache"' not in calls
+    assert 'mv -- "$STAGING_DIR/.cache" "$METADATA_DIR"' in calls
+    assert "--gpus" not in calls
+    assert "wait mia-deepseek-dual-prepare" in calls
+
+
+def test_prepare_reattaches_to_the_matching_running_job(tmp_path: Path) -> None:
+    environment, docker_log = _prepare_environment(
+        tmp_path, container_state="running"
+    )
+
+    completed = subprocess.run(
+        [str(ADAPTER), "prepare", "worker"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.stdout == "prepared role=worker\n"
+    calls = docker_log.read_text(encoding="utf-8")
+    assert "wait mia-deepseek-dual-prepare" in calls
+    assert "run --detach" not in calls
+    assert "start mia-deepseek-dual-prepare" not in calls
+
+
+def test_prepare_refuses_a_job_from_a_different_release(tmp_path: Path) -> None:
+    environment, docker_log = _prepare_environment(
+        tmp_path,
+        container_state="running",
+        runtime_label="b" * 64,
+    )
+
+    completed = subprocess.run(
+        [str(ADAPTER), "prepare", "worker"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 1
+    assert "preparation container fingerprint mismatch" in completed.stderr
+    calls = docker_log.read_text(encoding="utf-8")
+    assert "run --detach" not in calls
+    assert "wait mia-deepseek-dual-prepare" not in calls
+
+
+def test_prepare_refuses_a_matching_job_that_uses_another_image(
+    tmp_path: Path,
+) -> None:
+    environment, docker_log = _prepare_environment(
+        tmp_path,
+        container_state="running",
+        container_image="ghcr.io/example/wrong@sha256:" + "d" * 64,
+    )
+
+    completed = subprocess.run(
+        [str(ADAPTER), "prepare", "worker"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 1
+    assert "preparation container image mismatch" in completed.stderr
+    calls = docker_log.read_text(encoding="utf-8")
+    assert "start mia-deepseek-dual-prepare" not in calls
+    assert "wait mia-deepseek-dual-prepare" not in calls
+
+
+def test_vendored_checkpoint_manifest_matches_the_checked_manifest() -> None:
+    assert (
+        ROOT
+        / "adapters/deepseek/mia-vllm/manifests/deepseek-v4-flash-0731.json"
+    ).read_bytes() == (ROOT / "manifests/deepseek-v4-flash-0731.json").read_bytes()
 
 
 def test_start_and_stop_control_only_the_local_role(tmp_path: Path) -> None:

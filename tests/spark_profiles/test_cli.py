@@ -15,7 +15,7 @@ from spark_profiles.catalog import Catalog, fingerprint
 from spark_profiles.cli import CliDependencies, build_dependencies, main
 from spark_profiles.health import ClusterHealth, NodeHealth
 from spark_profiles.state import ControllerState, LockBusy, LockNotStale, StateFormatError
-from spark_profiles.switcher import SwitchReport
+from spark_profiles.switcher import PrepareNodeResult, PrepareReport, SwitchReport
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -53,9 +53,16 @@ class FakeStore:
 
 
 class FakeSwitcher:
-    def __init__(self, *, workload_healthy: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        workload_healthy: bool = True,
+        prepare_report: PrepareReport | None = None,
+    ) -> None:
         self.workload_healthy = workload_healthy
         self.health_calls: list[str] = []
+        self.prepare_calls: list[str] = []
+        self.prepare_report = prepare_report
 
     def switch_profile(
         self,
@@ -77,6 +84,28 @@ class FakeSwitcher:
     def workload_is_healthy(self, definition_id: str) -> bool:
         self.health_calls.append(definition_id)
         return self.workload_healthy
+
+    def prepare_profile(self, target_id: str) -> PrepareReport:
+        self.prepare_calls.append(target_id)
+        if self.prepare_report is not None:
+            return self.prepare_report
+        return PrepareReport(
+            target_profile=target_id,
+            status="prepared",
+            profile_sha256="a" * 64,
+            definition_sha256={"deepseek-agent-dual": "b" * 64},
+            results=(
+                PrepareNodeResult(
+                    workload="deepseek-agent-dual",
+                    node="spark2",
+                    role="worker",
+                    status="prepared",
+                    timeout_seconds=86400,
+                    returncode=0,
+                    timed_out=False,
+                ),
+            ),
+        )
 
 
 @dataclass(frozen=True)
@@ -304,6 +333,129 @@ def test_agent_alias_resolves_to_full_default() -> None:
     assert result.exit_code == 0
     assert result.json["target_profile"] == "agent-full-dual"
     assert result.json["status"] == "planned"
+
+
+def test_prepare_resolves_selector_and_emits_a_dedicated_payload() -> None:
+    switcher = FakeSwitcher()
+
+    result = invoke("prepare", "default", "--json", switcher=switcher)
+
+    assert result.exit_code == 0
+    assert switcher.prepare_calls == ["agent-full-dual"]
+    assert result.json == {
+        "target_profile": "agent-full-dual",
+        "status": "prepared",
+        "profile_sha256": "a" * 64,
+        "definition_sha256": {"deepseek-agent-dual": "b" * 64},
+        "resumable": False,
+        "results": [
+            {
+                "workload": "deepseek-agent-dual",
+                "node": "spark2",
+                "role": "worker",
+                "status": "prepared",
+                "timeout_seconds": 86400,
+                "returncode": 0,
+                "timed_out": False,
+                "detail": "",
+            }
+        ],
+        "errors": [],
+    }
+
+
+def test_prepare_timeout_is_exit_eight_and_resumable() -> None:
+    report = PrepareReport(
+        target_profile="agent-full-dual",
+        status="in-progress",
+        profile_sha256="a" * 64,
+        definition_sha256={"deepseek-agent-dual": "b" * 64},
+        results=(
+            PrepareNodeResult(
+                workload="deepseek-agent-dual",
+                node="spark2",
+                role="worker",
+                status="in-progress",
+                timeout_seconds=86400,
+                returncode=None,
+                timed_out=True,
+                detail="timeout: no diagnostic output",
+            ),
+        ),
+        errors=("prepare remains in progress",),
+        resumable=True,
+    )
+
+    result = invoke(
+        "prepare",
+        "default",
+        "--json",
+        switcher=FakeSwitcher(prepare_report=report),
+    )
+
+    assert result.exit_code == 8
+    assert result.json["status"] == "in-progress"
+    assert result.json["resumable"] is True
+    assert result.json["results"][0]["timed_out"] is True
+
+
+def test_prepare_failed_and_blocked_have_distinct_exit_codes() -> None:
+    reports = (
+        (
+            PrepareReport(
+                target_profile="agent-full-dual",
+                status="failed",
+                profile_sha256="a" * 64,
+                definition_sha256={},
+                errors=("remote prepare failed",),
+            ),
+            6,
+        ),
+        (
+            PrepareReport(
+                target_profile="agent-full-dual",
+                status="blocked",
+                profile_sha256="a" * 64,
+                definition_sha256={},
+                errors=("controller is active",),
+            ),
+            3,
+        ),
+    )
+
+    for report, expected_exit in reports:
+        result = invoke(
+            "prepare",
+            "default",
+            "--json",
+            switcher=FakeSwitcher(prepare_report=report),
+        )
+
+        assert result.exit_code == expected_exit
+        assert result.json["errors"] == list(report.errors)
+
+
+def test_prepare_unknown_selector_and_lock_conflict_fail_closed() -> None:
+    switcher = FakeSwitcher()
+    unknown = invoke("prepare", "missing", "--json", switcher=switcher)
+
+    assert unknown.exit_code == 2
+    assert unknown.json["error_type"] == "configuration"
+    assert switcher.prepare_calls == []
+
+    class LockedPrepareSwitcher(FakeSwitcher):
+        def prepare_profile(self, target_id: str) -> PrepareReport:
+            raise LockBusy("prepare lock is held")
+
+    locked = invoke(
+        "prepare", "default", "--json", switcher=LockedPrepareSwitcher()
+    )
+
+    assert locked.exit_code == 7
+    assert locked.json == {
+        "error": "prepare lock is held",
+        "error_type": "lock_conflict",
+    }
 
 
 def test_planned_home_is_visible_but_not_activatable() -> None:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Protocol
@@ -62,6 +63,34 @@ class SwitchReport:
         )
         object.__setattr__(
             self, "output_provenance", MappingProxyType(dict(self.output_provenance))
+        )
+
+
+@dataclass(frozen=True)
+class PrepareNodeResult:
+    workload: str
+    node: str
+    role: str
+    status: str
+    timeout_seconds: float
+    returncode: int | None
+    timed_out: bool
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class PrepareReport:
+    target_profile: str
+    status: str
+    profile_sha256: str
+    definition_sha256: Mapping[str, str]
+    results: tuple[PrepareNodeResult, ...] = ()
+    errors: tuple[str, ...] = ()
+    resumable: bool = False
+
+    def __post_init__(self) -> None:
+        object.__setattr__(
+            self, "definition_sha256", MappingProxyType(dict(self.definition_sha256))
         )
 
 
@@ -131,6 +160,141 @@ class ProfileSwitcher:
         except _TransitionFailure:
             return False
         return True
+
+    def prepare_profile(self, target_id: str) -> PrepareReport:
+        """Prepare a stopped target profile without mutating controller state."""
+
+        with self.state_store.acquire() as state:
+            target = self._resolve(target_id)
+            identifiers = self._profile_definitions(target)
+            profile_hash = self.catalog.profile_fingerprints.get(target.id, "")
+            definition_hashes = {
+                identifier: self.catalog.definition_fingerprints[identifier]
+                for identifier in identifiers
+                if identifier in self.catalog.definition_fingerprints
+            }
+            content_error = self._target_content_error(
+                target, identifiers, profile_hash
+            )
+            state_error = self._prepare_state_error(state)
+            contract_error = next(
+                (
+                    f"prepare deadline is missing for {identifier}"
+                    for identifier in self._workload_order(target)
+                    if identifier in self.catalog.definitions
+                    and self.catalog.definitions[identifier].deadlines is None
+                ),
+                None,
+            )
+            if contract_error is None:
+                contract_error = next(
+                    (
+                        f"prepare command is missing for {identifier}"
+                        for identifier in self._workload_order(target)
+                        if identifier in self.catalog.definitions
+                        and not self.catalog.definitions[identifier].commands.prepare
+                    ),
+                    None,
+                )
+            blocked_error = content_error or state_error or contract_error
+            if blocked_error is not None:
+                return PrepareReport(
+                    target_profile=target.id,
+                    status="blocked",
+                    profile_sha256=profile_hash,
+                    definition_sha256=definition_hashes,
+                    errors=(blocked_error,),
+                )
+
+            results: list[PrepareNodeResult] = []
+            errors: list[str] = []
+            for identifier in self._workload_order(target):
+                definition = self.catalog.definitions[identifier]
+                assert definition.deadlines is not None
+                timeout = definition.deadlines.prepare
+                nodes_and_commands = tuple(
+                    (
+                        node,
+                        self._argv(definition, definition.commands.prepare, node),
+                    )
+                    for node in definition.start_order
+                )
+                with ThreadPoolExecutor(
+                    max_workers=len(nodes_and_commands)
+                ) as executor:
+                    futures = tuple(
+                        executor.submit(self.backend.run, node, command, timeout)
+                        for node, command in nodes_and_commands
+                    )
+                    node_results = zip(nodes_and_commands, futures, strict=True)
+                    for (node, command), future in node_results:
+                        try:
+                            result = future.result()
+                        except Exception as error:
+                            detail = f"{type(error).__name__}: {error}"[
+                                :_MAX_ERROR_CHARS
+                            ]
+                            status = "failed"
+                            returncode = None
+                            timed_out = False
+                        else:
+                            detail = "" if result.ok else self._detail(result)
+                            status = (
+                                "in-progress"
+                                if result.timed_out
+                                else "prepared"
+                                if result.ok
+                                else "failed"
+                            )
+                            returncode = result.returncode
+                            timed_out = result.timed_out
+                        if status != "prepared":
+                            message = (
+                                f"prepare {status} for {identifier} on {node}: "
+                                f"{detail or 'no diagnostic output'}"
+                            )
+                            errors.append(message[:_MAX_ERROR_CHARS])
+                        results.append(
+                            PrepareNodeResult(
+                                workload=identifier,
+                                node=node,
+                                role=(
+                                    command[-1]
+                                    if definition.topology == "distributed"
+                                    else "single"
+                                ),
+                                status=status,
+                                timeout_seconds=timeout,
+                                returncode=returncode,
+                                timed_out=timed_out,
+                                detail=detail,
+                            )
+                        )
+            if any(result.status == "failed" for result in results):
+                status = "failed"
+            elif any(result.status == "in-progress" for result in results):
+                status = "in-progress"
+            else:
+                status = "prepared"
+            return PrepareReport(
+                target_profile=target.id,
+                status=status,
+                profile_sha256=profile_hash,
+                definition_sha256=definition_hashes,
+                results=tuple(results),
+                errors=tuple(errors),
+                resumable=status == "in-progress",
+            )
+
+    @staticmethod
+    def _prepare_state_error(state: ControllerState) -> str | None:
+        if state.status != "stopped":
+            return f"prepare requires stopped controller state; found {state.status}"
+        if state.active_profile is not None:
+            return "prepare requires no active profile"
+        if state.target_profile is not None:
+            return "prepare requires no transitional target profile"
+        return None
 
     def _switch_with_state(
         self,

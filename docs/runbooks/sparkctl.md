@@ -26,6 +26,7 @@ sparkctl catalog [--json]
 sparkctl validate PROFILE_OR_SELECTOR [--json]
 sparkctl status [--json]
 sparkctl nodes status [--json]
+sparkctl prepare PROFILE_OR_SELECTOR [--json]
 sparkctl switch PROFILE_OR_SELECTOR [--restore PROFILE_OR_SELECTOR] [--dry-run] [--json]
 sparkctl restore-default [--dry-run] [--json]
 sparkctl endpoint ENDPOINT_ALIAS [--json]
@@ -44,6 +45,13 @@ sparkctl break-stale-lock [--json]
   host, NVIDIA, thermal, and direct-fabric health without retaining history or
   changing either node or the active profile. See
   [Live node health](node-health.md).
+- `prepare` resolves a selector, acquires the same controller lock used by
+  transitions, and requires a clean `stopped` state with no active profile or
+  transitional target. It invokes each workload's declared `prepare` command
+  concurrently on all of that workload's nodes, with the definition's
+  operation-specific deadline applied independently to every node. Preparation
+  does not run admission, change controller state, publish an endpoint, or
+  activate a profile.
 - `switch` resolves selectors before invoking the ordinary switch path.
   `--dry-run` reports only the truthful status, hashes, and restore intent
   exposed by the switcher; the CLI does not maintain a second action planner.
@@ -67,6 +75,37 @@ space, and boot ID. A missing or failed probe blocks admission or publication;
 it never falls back to stale local measurements. The checked-in
 `agent-full-dual` profile resolves correctly but remains unactivatable while
 `deepseek-agent-dual` has `planned` maturity.
+
+## Durable preparation
+
+Run preparation only after deploying the exact digest-qualified runtime
+release and while `sparkctl status` reports a clean stopped state:
+
+```bash
+uv run --no-project --with jsonschema -- \
+  bin/sparkctl prepare default --json
+```
+
+The adapter owns the durable node-local preparation job. For each workload, the
+controller submits Spark 2 with role `worker` and Spark 1 with role `head`
+concurrently, using the declared 86,400-second deadline independently for each
+call. It reports every workload/node result, role, timeout, return code, and
+bounded diagnostic independently, in the definition's deterministic
+`start_order` even when the calls finish in a different order. A timeout or
+failure on one Spark does not prevent the other Spark from starting or being
+collected.
+
+Worker-first and head-first ordering applies to runtime startup and shutdown,
+not artifact preparation. Both Sparks must download and prepare in parallel.
+
+A client-side timeout returns status `in-progress`, `resumable: true`, and exit
+code `8`. It does not issue `stop`, kill the remote job, write controller
+state, or change the active profile. Re-run the same command to reattach to the
+deterministic preparation job. A nonzero adapter result is `failed` and exit
+code `6`; a non-clean controller state is `blocked` and exit code `3`.
+
+Preparation starting or finishing does not advance Model Definition maturity.
+The separate prepared, verified, and accepted evidence gates remain required.
 
 ## Remote container prerequisite
 
@@ -101,6 +140,7 @@ live-collector failures, continue with the Docker-specific troubleshooting in
 | `5` | Local health collector, schema, inventory, or baseline failure before probing |
 | `6` | Transition or explicit restoration failed |
 | `7` | Switch-lock conflict or unsafe stale-lock override |
+| `8` | Durable preparation is still running after the client deadline; rerun to resume |
 
 CLI errors and switch diagnostics are bounded and redact common credential,
 authorization, token, password, secret, and private-key forms. Do not place
