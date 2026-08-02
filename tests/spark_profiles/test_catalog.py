@@ -174,8 +174,9 @@ def _stage_report(
     predecessor: str | None,
     fingerprint_value: str,
     correction_position: int | None = None,
+    workload_name: str = "deepseek-agent-dual",
 ) -> str:
-    definition = load_workload(catalog_root / "config/workloads/deepseek-agent-dual.toml")
+    definition = load_workload(catalog_root / f"config/workloads/{workload_name}.toml")
     suffix = (
         f"{stage}-correction-{correction_position}"
         if correction_position is not None
@@ -198,16 +199,25 @@ def _stage_report(
         "image": {"reference": definition.image.reference},
         "recorded_at": "2026-08-02T08:00:00Z",
         "nodes": [
-            {"node": "spark1", "boot_id": "1" * 32},
-            {"node": "spark2", "boot_id": "2" * 32},
+            {"node": node, "boot_id": str(position + 1) * 32}
+            for position, node in enumerate(definition.nodes)
         ],
         "predecessor": predecessor,
         "gates": {
             "prepared": {"artifacts": True, "node_manifests": True},
-            "verified": {
-                "offline": True, "release": True, "image": True,
-                "architecture": True, "fabric": True, "role": True, "compose": True,
-            },
+            "verified": (
+                {
+                    "offline": True, "release": True, "image": True,
+                    "architecture": True, "manifest": True, "mmap": True,
+                    "api_identity": True,
+                }
+                if definition.topology == "single"
+                else {
+                    "offline": True, "release": True, "image": True,
+                    "architecture": True, "fabric": True, "role": True,
+                    "compose": True,
+                }
+            ),
             "accepted": {
                 "quality": True, "lifecycle": True, "capacity": True,
                 "performance": True, "thermal": True, "release": True, "reboot": True,
@@ -218,6 +228,119 @@ def _stage_report(
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return path
+
+
+def _add_single_definition(catalog_root: Path) -> tuple[str, str, str]:
+    """Add an independently evidenced, Spark 1-only definition to the fixture."""
+    source = (catalog_root / "config/workloads/deepseek-agent-dual.toml").read_text(
+        encoding="utf-8"
+    )
+    (catalog_root / "config/workloads/single.toml").write_text(
+        source.replace('id = "deepseek-agent-dual"', 'id = "single"')
+        .replace('topology = "distributed"', 'topology = "single"')
+        .replace('placement_class = "dual-exclusive"', 'placement_class = "single-exclusive"')
+        .replace('nodes = ["spark1", "spark2"]', 'nodes = ["spark1"]')
+        .replace('start_order = ["spark2", "spark1"]', 'start_order = ["spark1"]')
+        .replace('stop_order = ["spark1", "spark2"]', 'stop_order = ["spark1"]'),
+        encoding="utf-8",
+    )
+    definition = load_workload(catalog_root / "config/workloads/single.toml")
+    fingerprint_value = fingerprint(definition)
+    locks = catalog_root / "locks/model-definitions.toml"
+    locks.write_text(
+        locks.read_text(encoding="utf-8") + f'single = "{fingerprint_value}"\n',
+        encoding="utf-8",
+    )
+    prepared = _stage_report(
+        catalog_root,
+        stage="prepared",
+        predecessor=None,
+        fingerprint_value=fingerprint_value,
+        workload_name="single",
+    )
+    verified = _stage_report(
+        catalog_root,
+        stage="verified",
+        predecessor=prepared,
+        fingerprint_value=fingerprint_value,
+        workload_name="single",
+    )
+    index = _read_report(catalog_root, "model-definitions.json")
+    index["definitions"].append(
+        {
+            "id": "single",
+            "sha256": fingerprint_value,
+            "maturity": "verified",
+            "history": [
+                _transition("planned", "2026-08-02T08:00:00Z"),
+                {
+                    **_transition("prepared", "2026-08-02T08:01:00Z"),
+                    "evidence_refs": [prepared],
+                },
+                {
+                    **_transition("verified", "2026-08-02T08:02:00Z"),
+                    "evidence_refs": [verified],
+                },
+            ],
+        }
+    )
+    _write_report(catalog_root, "model-definitions.json", index)
+    return fingerprint_value, prepared, verified
+
+
+def test_single_node_evidence_chain_loads_for_its_declared_node(
+    catalog_root: Path,
+) -> None:
+    _add_single_definition(catalog_root)
+
+    catalog = Catalog.load(catalog_root)
+
+    assert catalog.maturity["single"] == "verified"
+
+
+@pytest.mark.parametrize(
+    ("nodes", "error"),
+    (
+        ([{"node": "spark2", "boot_id": "2" * 32}], "maturity evidence nodes"),
+        (
+            [
+                {"node": "spark1", "boot_id": "1" * 32},
+                {"node": "spark2", "boot_id": "2" * 32},
+            ], "maturity evidence nodes"),
+        (
+            [
+                {"node": "spark1", "boot_id": "1" * 32},
+                {"node": "spark1", "boot_id": "2" * 32},
+            ], "maturity evidence nodes"),
+    ),
+)
+def test_single_node_evidence_rejects_missing_extra_or_duplicate_nodes(
+    catalog_root: Path, nodes: list[dict[str, str]], error: str
+) -> None:
+    _, prepared, _ = _add_single_definition(catalog_root)
+    report_path = catalog_root / prepared
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    report["nodes"] = nodes
+    report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(CatalogError, match=error):
+        Catalog.load(catalog_root)
+
+
+def test_single_node_report_is_rejected_for_the_dual_definition(
+    catalog_root: Path,
+) -> None:
+    catalog = Catalog.load(catalog_root)
+    fingerprint_value = catalog.definition_fingerprints["deepseek-agent-dual"]
+    _advance_to(catalog_root, "prepared", fingerprint_value)
+    report_path = "inventory/reports/model-definitions/deepseek-agent-dual-prepared.json"
+    destination = catalog_root / report_path
+    report = json.loads(destination.read_text(encoding="utf-8"))
+    report["nodes"] = [{"node": "spark1", "boot_id": "1" * 32}]
+    destination.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+
+    with pytest.raises(CatalogError, match="maturity evidence nodes"):
+        Catalog.load(catalog_root)
 
 
 def _advance_to(catalog_root: Path, stage: str, fingerprint_value: str) -> None:

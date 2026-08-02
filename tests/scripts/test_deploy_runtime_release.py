@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/deploy-runtime-release"
 
@@ -16,7 +18,9 @@ def _sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _release_root(tmp_path: Path) -> tuple[Path, str]:
+def _release_root(
+    tmp_path: Path, *, nodes: tuple[object, ...] = ("spark1", "spark2")
+) -> tuple[Path, str]:
     root = tmp_path / "repository"
     release = root / "adapters/example"
     (release / "bin").mkdir(parents=True)
@@ -40,6 +44,7 @@ def _release_root(tmp_path: Path) -> tuple[Path, str]:
     workload.parent.mkdir(parents=True)
     workload.write_text(
         f'''id = "example"
+nodes = {json.dumps(list(nodes))}
 
 [runtime_release]
 manifest = "adapters/example/runtime-manifest.json"
@@ -249,6 +254,27 @@ def test_default_is_a_validated_dry_run_without_remote_commands(tmp_path: Path) 
     assert f"/opt/spark/model-adapters/example/releases/{digest}" in completed.stdout
 
 
+def test_dry_run_targets_only_the_workload_declared_node(tmp_path: Path) -> None:
+    root, _ = _release_root(tmp_path, nodes=("spark1",))
+
+    completed = _run(root, "example")
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout)["hosts"] == ["dgx-spark-1"]
+
+
+@pytest.mark.parametrize("nodes", ((), ("spark1", "spark1"), ("spark3",)))
+def test_dry_run_rejects_invalid_workload_nodes(
+    tmp_path: Path, nodes: tuple[object, ...]
+) -> None:
+    root, _ = _release_root(tmp_path, nodes=nodes)
+
+    completed = _run(root, "example")
+
+    assert completed.returncode != 0
+    assert "workload nodes must be a non-empty unique Spark node subset" in completed.stderr
+
+
 def test_dry_run_rejects_changed_manifest_and_payload(tmp_path: Path) -> None:
     root, _ = _release_root(tmp_path)
     workload = root / "config/workloads/example.toml"
@@ -372,6 +398,22 @@ def test_apply_stages_verifies_and_atomically_installs_both_nodes(
     assert "docker" not in transcript
     assert "pull" not in transcript
     assert "compose up" not in transcript
+
+
+def test_apply_targets_only_the_workload_declared_node(tmp_path: Path) -> None:
+    root, _ = _release_root(tmp_path, nodes=("spark1",))
+    env, ssh_log, scp_log = _fake_remote_environment(tmp_path)
+
+    completed = _run(root, "--apply", "example", env=env)
+
+    assert completed.returncode == 0, completed.stderr
+    assert len(_json_lines(ssh_log)) == 3
+    assert len(_json_lines(scp_log)) == 2
+    assert all("dgx-spark-1" in call["argv"] for call in _json_lines(ssh_log))
+    assert all(
+        call["argv"][-1].startswith("dgx-spark-1:")
+        for call in _json_lines(scp_log)
+    )
 
 
 def test_apply_is_idempotent_when_both_installed_releases_are_identical(

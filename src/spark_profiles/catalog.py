@@ -269,8 +269,16 @@ def _validate_stage_evidence(
         raise CatalogError(f"checkpoint pin does not match definition: {definition.id}")
     if report["image"] != {"reference": definition.image.reference}:
         raise CatalogError(f"image pin does not match definition: {definition.id}")
-    if {node["node"] for node in report["nodes"]} != {"spark1", "spark2"}:
-        raise CatalogError(f"maturity evidence must contain both Spark nodes: {definition.id}")
+    report_nodes = report["nodes"]
+    reported_node_ids = {node["node"] for node in report_nodes}
+    if (
+        len(reported_node_ids) != len(report_nodes)
+        or reported_node_ids != set(definition.nodes)
+    ):
+        raise CatalogError(
+            f"maturity evidence nodes must exactly match definition nodes: "
+            f"{definition.id}"
+        )
     _audit_timestamp(report["recorded_at"], f"{stage} maturity evidence")
     if report["predecessor"] != predecessor:
         raise CatalogError(f"maturity evidence predecessor does not name the immediately prior valid report: {definition.id}")

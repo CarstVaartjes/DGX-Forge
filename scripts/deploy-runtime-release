@@ -263,6 +263,15 @@ def _load_release(root: Path, workload_name: str) -> Release:
         raise DeployError(f"cannot load workload: {workload_name}") from error
     if workload.get("id") != workload_name:
         raise DeployError("workload id does not match requested release")
+    nodes = workload.get("nodes")
+    if (
+        not isinstance(nodes, list)
+        or not nodes
+        or any(not isinstance(node, str) for node in nodes)
+        or len(nodes) != len(set(nodes))
+        or not set(nodes).issubset({"spark1", "spark2"})
+    ):
+        raise DeployError("workload nodes must be a non-empty unique Spark node subset")
     runtime = workload.get("runtime_release")
     if not isinstance(runtime, dict):
         raise DeployError("workload has no runtime_release")
@@ -319,10 +328,10 @@ def _load_release(root: Path, workload_name: str) -> Release:
         with inventory_path.open("rb") as source:
             inventory = tomllib.load(source)
         aliases = tuple(
-            inventory["hosts"][node]["ssh_alias"] for node in ("spark1", "spark2")
+            inventory["hosts"][node]["ssh_alias"] for node in nodes
         )
     except (FileNotFoundError, KeyError, TypeError, tomllib.TOMLDecodeError) as error:
-        raise DeployError("inventory must declare both Spark SSH aliases") from error
+        raise DeployError("inventory must declare SSH aliases for workload nodes") from error
     if any(
         not isinstance(alias, str)
         or not re.fullmatch(r"[A-Za-z0-9._-]+", alias)
