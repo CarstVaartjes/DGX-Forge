@@ -4,7 +4,7 @@
 
 **Goal:** Build the developer-machine workload catalog, whole-cluster profile model, and fail-to-stopped `sparkctl` switcher used by every local AI workload.
 
-**Architecture:** Immutable workload definitions describe one model service; cluster profiles compose the complete desired state of both Sparks. A developer-machine controller validates explicit placement, reconciles node state through key-only SSH, publishes only healthy loopback endpoints, and returns to the full dual-Spark DeepSeek home profile after temporary generation jobs.
+**Architecture:** Immutable Model Definitions describe one model service; Cluster Profiles compose the complete desired state of both Sparks. A developer-machine controller resolves stable selectors, validates content-addressed maturity and placement evidence, reconciles node state through key-only SSH, and publishes only healthy accepted loopback endpoints. Explicit restoration runs as a second ordinary transition after temporary outputs are recovered.
 
 **Tech Stack:** Python 3.12, dataclasses, `tomllib`, JSON Schema, pytest, Bash, OpenSSH, Docker Compose, TOML.
 
@@ -12,7 +12,8 @@
 
 ## Global Constraints
 
-- Full dual-Spark DeepSeek 0731 is the `default` and `agent` home profile.
+- The canonical home Cluster Profile ID is `agent-full-dual`; `default` and `agent` are convenience selectors for it, not profile IDs.
+- Both DeepSeek definitions expose the stable client-facing model name `deepseek`; clients never select `single`, `dual`, `full`, `lite`, Mia, or DS4 as model names.
 - A cluster profile specifies the complete state of Spark 1 and Spark 2.
 - Dual-Spark workloads reserve both nodes; worker starts first and head stops first.
 - Co-location is denied unless the exact cluster profile has passed measured acceptance.
@@ -20,28 +21,34 @@
 - Failed transitions end stopped or degraded and never silently select another model.
 - Canonical artifacts and controller state live on the developer machine.
 - Container images, source commits, checkpoints, and manifests are immutable.
+- A cataloged production definition may remain `planned`; configuration presence never implies installation, acceptance, or activatability.
 - The user-facing workload always selects the best accepted DGX Spark-optimized path; generic upstream paths are non-serving correctness references.
 - Every adapter exposes `prepare`, `verify`, `start`, `health`, `infer`, `stop`, and `verify-release` operations.
 - No model profile auto-starts after reboot.
+- Work proceeds directly on `main` by explicit user instruction.
 
 ---
 
-### Task 1: Define workload and cluster-profile contracts
+### Task 1: Reconcile workload contracts and the planned canonical home profile
+
+This task continues the existing scaffold from commits `59ec2e6` and
+`e102e75`. It closes the prior review block by representing DeepSeek as planned
+intent rather than claiming that its Phase 3 adapter and manifest are already
+installed or accepted.
 
 **Files:**
-- Create: `pyproject.toml`
-- Create: `src/spark_profiles/__init__.py`
-- Create: `src/spark_profiles/contracts.py`
-- Create: `schemas/workload.schema.json`
-- Create: `schemas/cluster-profile.schema.json`
-- Create: `tests/spark_profiles/test_contracts.py`
-- Create: `config/workloads/deepseek-agent-dual.toml`
-- Create: `config/cluster-profiles/default.toml`
+- Modify: `src/spark_profiles/contracts.py`
+- Modify: `schemas/cluster-profile.schema.json`
+- Modify: `src/spark_profiles/schemas/cluster-profile.schema.json`
+- Modify: `tests/spark_profiles/test_contracts.py`
+- Rename: `config/cluster-profiles/default.toml` to `config/cluster-profiles/agent-full-dual.toml`
+- Create: `config/profile-selectors.toml`
 
 **Interfaces:**
 - Produces: `load_workload(path: Path) -> WorkloadDefinition`.
 - Produces: `load_cluster_profile(path: Path) -> ClusterProfile`.
 - `ClusterProfile.placements` maps exactly `spark1` and `spark2` to tuples of workload IDs.
+- `ClusterProfile` does not contain restoration policy; restoration is an explicit switch request.
 
 - [ ] **Step 1: Write failing contract tests**
 
@@ -56,27 +63,43 @@ def test_distributed_workload_declares_rank_order(workload_path):
     assert workload.topology == "distributed"
     assert workload.start_order == ("spark2", "spark1")
     assert workload.stop_order == ("spark1", "spark2")
+
+def test_home_profile_uses_canonical_id_and_deepseek_alias():
+    profile = load_cluster_profile(
+        ROOT / "config/cluster-profiles/agent-full-dual.toml"
+    )
+    assert profile.id == "agent-full-dual"
+    assert profile.endpoints == {"deepseek": "deepseek-agent-dual"}
+    assert not hasattr(profile, "restore_home")
 ```
 
 - [ ] **Step 2: Run the focused tests and confirm failure**
 
 Run: `uv run --with pytest --with jsonschema pytest tests/spark_profiles/test_contracts.py -v`
 
-Expected: FAIL because `spark_profiles.contracts` and both schemas are absent.
+Expected: FAIL because `agent-full-dual.toml` is absent and the existing
+contract still requires `restore_home`.
 
 - [ ] **Step 3: Implement strict typed contracts**
 
-Use frozen dataclasses and reject unknown keys. Require workload ID, topology,
-nodes, source/checkpoint/image pins, cache/scratch/output paths, loopback port,
-start/stop/health commands, resource envelope, conflicts, and co-location
-status. Require cluster profile ID, both node placements, allowed endpoints,
-accepted-evidence path, and home-profile restoration policy.
+Keep the existing frozen strict workload dataclasses and unknown-key rejection.
+Remove `restore_home` from both cluster-profile schema copies, the dataclass,
+loader, and fixtures. Require a canonical profile ID, both node placements,
+allowed endpoints, and the accepted-evidence path.
 
 - [ ] **Step 4: Add the initial DeepSeek home definitions**
 
-`deepseek-agent-dual` consumes both nodes and references the already accepted
-DeepSeek profile scripts. `default.toml` places that workload on both nodes
-and exposes the alias `agent`; it must not duplicate model runtime commands.
+`deepseek-agent-dual` remains a declarative planned definition; do not add an
+adapter executable, local manifest, or acceptance claim in this task. Rename
+the profile to `agent-full-dual.toml`, set `id = "agent-full-dual"`, place the
+definition on both nodes, and expose `deepseek = "deepseek-agent-dual"`.
+Create exactly:
+
+```toml
+[selectors]
+default = "agent-full-dual"
+agent = "agent-full-dual"
+```
 
 - [ ] **Step 5: Run validation and commit**
 
@@ -85,8 +108,10 @@ Run: `uv run --with pytest --with jsonschema pytest tests/spark_profiles/test_co
 Expected: PASS.
 
 ```bash
-git add pyproject.toml src schemas tests/spark_profiles config/workloads/deepseek-agent-dual.toml config/cluster-profiles/default.toml
-git commit -m "feat: define Spark workload and cluster profiles"
+git add src/spark_profiles/contracts.py src/spark_profiles/schemas \
+  schemas/cluster-profile.schema.json tests/spark_profiles/test_contracts.py \
+  config/cluster-profiles config/profile-selectors.toml
+git commit -m "fix: reconcile canonical Spark home profile"
 ```
 
 ### Task 2: Build catalog and admission validation
@@ -96,11 +121,20 @@ git commit -m "feat: define Spark workload and cluster profiles"
 - Create: `src/spark_profiles/admission.py`
 - Create: `tests/spark_profiles/test_catalog.py`
 - Create: `tests/spark_profiles/test_admission.py`
+- Create: `schemas/model-definitions.schema.json`
+- Create: `schemas/accepted-cluster-profiles.schema.json`
+- Create: `src/spark_profiles/schemas/model-definitions.schema.json`
+- Create: `src/spark_profiles/schemas/accepted-cluster-profiles.schema.json`
+- Modify: `pyproject.toml`
+- Create: `locks/model-definitions.toml`
+- Create: `inventory/reports/model-definitions.json`
 - Create: `inventory/reports/accepted-cluster-profiles.json`
 
 **Interfaces:**
 - Consumes: `WorkloadDefinition` and `ClusterProfile`.
 - Produces: `Catalog.load(root: Path) -> Catalog`.
+- Produces: `Catalog.resolve_profile(selector: str) -> ClusterProfile`.
+- Produces content SHA-256 fingerprints from normalized dataclass JSON with sorted keys and compact separators.
 - Produces: `check_admission(profile, catalog, inventory) -> AdmissionReport`.
 
 - [ ] **Step 1: Write failing catalog/admission tests**
@@ -118,6 +152,21 @@ def test_distributed_workload_reserves_both_nodes(catalog, invalid_dual_profile)
     assert "distributed reservation" in check_admission(
         invalid_dual_profile, catalog, inventory()
     ).errors[0]
+
+def test_default_selector_resolves_to_canonical_home(catalog):
+    assert catalog.resolve_profile("default").id == "agent-full-dual"
+
+def test_planned_definition_blocks_production_home(catalog, inventory):
+    report = check_admission(catalog.resolve_profile("default"), catalog, inventory)
+    assert "deepseek-agent-dual maturity is planned" in report.errors
+
+def test_definition_change_invalidates_lock(catalog_root):
+    rewrite_resource_envelope(catalog_root, "deepseek-agent-dual")
+    with pytest.raises(CatalogError, match="lock fingerprint"):
+        Catalog.load(catalog_root)
+
+def test_evidence_indexes_satisfy_packaged_schemas(catalog_root):
+    validate_evidence_indexes(catalog_root)
 ```
 
 - [ ] **Step 2: Confirm tests fail**
@@ -133,19 +182,31 @@ workloads, partial distributed placement, insufficient measured memory/disk,
 unaccepted co-location, and publication of an unhealthy/unaccepted endpoint.
 Return all errors in stable sorted order without mutating state.
 
+Also reject missing/duplicate selector targets, locks, or maturity records. The
+checked-in `deepseek-agent-dual` fingerprint begins at `planned` in
+`inventory/reports/model-definitions.json`; the accepted-profile index begins
+with an empty `profiles` array. Generate and commit the actual fingerprint—do
+not use a placeholder. Only the exact `accepted` fingerprint may satisfy
+admission.
+
 - [ ] **Step 4: Add signed-off evidence indexing**
 
-Index acceptance by cluster-profile content SHA-256 plus workload definition
-hashes. A changed resource envelope, runtime pin, placement, or command
-invalidates prior acceptance.
+Normalize definitions and profiles as UTF-8 JSON using `sort_keys=True` and
+`separators=(",", ":")`, representing paths as POSIX strings. Index acceptance
+by Cluster Profile content SHA-256 plus sorted Model Definition hashes. A
+changed resource envelope, runtime pin, placement, endpoint, or command
+invalidates prior acceptance. TOML whitespace and comments do not.
 
 - [ ] **Step 5: Run tests and commit**
 
 Run: `uv run --with pytest pytest tests/spark_profiles/test_catalog.py tests/spark_profiles/test_admission.py -v && git diff --check`
 
 ```bash
-git add src/spark_profiles tests/spark_profiles inventory/reports/accepted-cluster-profiles.json
-git commit -m "feat: validate model profile admission"
+git add src/spark_profiles schemas pyproject.toml tests/spark_profiles \
+  locks/model-definitions.toml \
+  inventory/reports/model-definitions.json \
+  inventory/reports/accepted-cluster-profiles.json
+git commit -m "feat: validate content-addressed profile admission"
 ```
 
 ### Task 3: Implement SSH node backend and persisted state
@@ -159,6 +220,7 @@ git commit -m "feat: validate model profile admission"
 
 **Interfaces:**
 - Produces: `SshBackend.run(node, argv, timeout) -> CommandResult`.
+- Produces: `SshBackend.run_script(node, script, argv, timeout) -> CommandResult` for fixed repository-owned read-only collectors sent over stdin.
 - Produces: `StateStore.acquire() -> ContextManager[ControllerState]`.
 - Stores state under `.state/sparkctl/state.json` and locks
   `.state/sparkctl/switch.lock` on the developer machine.
@@ -168,7 +230,17 @@ git commit -m "feat: validate model profile admission"
 ```python
 def test_backend_never_uses_shell(fake_exec):
     SshBackend(fake_exec).run("spark1", ("profile-status", "--json"), 10)
-    assert fake_exec.argv[:4] == ("ssh", "-o", "BatchMode=yes", "dgx-spark-1")
+    assert fake_exec.shell is False
+    assert "BatchMode=yes" in fake_exec.argv
+    assert "ForwardAgent=no" in fake_exec.argv
+    assert "IdentitiesOnly=yes" in fake_exec.argv
+    assert "StrictHostKeyChecking=yes" in fake_exec.argv
+
+def test_run_script_delivers_fixed_bytes_on_stdin(fake_exec):
+    SshBackend(fake_exec).run_script(
+        "spark2", b"printf '{}\\n'\n", ("--json",), 10
+    )
+    assert fake_exec.input_bytes == b"printf '{}\\n'\n"
     assert fake_exec.shell is False
 
 def test_state_write_is_atomic(store, interrupted_replace):
@@ -187,6 +259,11 @@ Use argv-only subprocess calls, configured SSH aliases, BatchMode, explicit
 timeouts, bounded captured output, atomic same-directory replacement, PID plus
 timestamp lock metadata, and an explicit `--break-stale-lock` operation that
 refuses a live PID or a lock younger than the configured threshold.
+
+`run_script` uses the same strict SSH argv with remote `bash -s --` and sends
+only caller-provided repository script bytes over stdin. Reject NUL/newline
+characters in remote argv. It never persists a file or turns into a general
+interactive shell interface.
 
 - [ ] **Step 4: Test timeout, truncation, and stale recovery**
 
@@ -210,7 +287,7 @@ git commit -m "feat: add Spark controller backend and state"
 - Create: `docs/runbooks/model-switching.md`
 
 **Interfaces:**
-- Produces: `switch_profile(target_id: str, *, restore_home: bool = False) -> SwitchReport`.
+- Produces: `switch_profile(target_id: str, *, restore_to: str | None = None, dry_run: bool = False) -> SwitchReport`.
 - Consumes workload commands only through `SshBackend`.
 
 - [ ] **Step 1: Write failing transition-order tests**
@@ -244,9 +321,12 @@ and persist the stopped/degraded result with log paths.
 
 - [ ] **Step 4: Implement explicit home restoration**
 
-`restore_home=True` requests `default` only after temporary outputs have
-been recovered. Restoration failure is returned separately and never changes
-the recorded identity of the model that produced an artifact.
+`restore_to` resolves an explicit profile selector only after temporary outputs
+and provenance have been recovered. `restore-default` passes `default`, which
+resolves to `agent-full-dual`. Restoration is a second ordinary transition;
+its failure is returned separately and never changes the recorded profile and
+definition fingerprint that produced an artifact. Restoration policy never
+lives inside a Cluster Profile.
 
 - [ ] **Step 5: Run tests and commit**
 
@@ -275,12 +355,19 @@ git commit -m "feat: reconcile Spark cluster profiles"
 ```python
 def test_agent_alias_resolves_to_full_default(cli):
     result = cli("switch", "agent", "--dry-run")
-    assert result.json["target_profile"] == "default"
+    assert result.json["target_profile"] == "agent-full-dual"
 
 def test_endpoint_refuses_unhealthy_workload(cli):
-    result = cli("endpoint", "qwen-image")
+    result = cli("endpoint", "deepseek")
     assert result.exit_code == 3
     assert result.json["available"] is False
+
+def test_planned_home_is_visible_but_not_activatable(cli):
+    result = cli("validate", "default", "--json")
+    assert result.json["profile_id"] == "agent-full-dual"
+    assert result.json["valid"] is True
+    assert result.json["admitted"] is False
+    assert result.exit_code == 3
 ```
 
 - [ ] **Step 2: Confirm tests fail**
@@ -292,13 +379,18 @@ Run: `uv run --with pytest pytest tests/spark_profiles/test_cli.py -v`
 Every command supports `--json`; errors use stable exit codes and never print
 secrets, environment variables, private keys, or full unbounded remote logs.
 `switch --dry-run` shows the exact per-node transition without changing state.
+Use exit 0 for success, 2 for arguments/configuration, 3 for admission or
+endpoint denial, 6 for transition/restoration failure, and 7 for lock conflict.
+Reserve 4 and 5 for live node health.
 
 - [ ] **Step 4: Verify the local default profile**
 
-Run: `uv run sparkctl validate default && uv run sparkctl switch default --dry-run && uv run sparkctl status --json`
+Run: `uv run sparkctl catalog --json && uv run sparkctl validate default --json && uv run sparkctl status --json`
 
-Expected: contracts and admission pass; the dry run shows Spark 2 before Spark
-1 for start and no actual remote mutation.
+Expected: catalog and contracts load; `default` resolves to
+`agent-full-dual`; admission is truthfully denied because
+`deepseek-agent-dual` remains planned until the runtime phase; status is local
+and stopped, with no remote mutation.
 
 - [ ] **Step 5: Run the suite and commit**
 
