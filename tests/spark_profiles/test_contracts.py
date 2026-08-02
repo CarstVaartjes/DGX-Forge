@@ -226,12 +226,18 @@ def test_mia_documentation_marks_the_prior_staged_lane_as_superseded() -> None:
     assert "still planned and not accepted" in multi_runtime_design
 
 
-def test_profile_overview_keeps_ds4_flash_mxfp4_deferred() -> None:
+def test_profile_overview_records_the_audited_ds4_q2_imatrix_lane() -> None:
     overview = (REPOSITORY_ROOT / "docs/model-profile-overview.md").read_text(
         encoding="utf-8"
     )
+    design = (
+        REPOSITORY_ROOT
+        / "docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"
+    ).read_text(encoding="utf-8")
 
-    assert "DS4 Flash 0731 MXFP4 candidate, unaudited" in overview
+    assert "Audited DS4 v0.5.3 Q2-imatrix + DSpark GGUF pair" in overview
+    assert "MXFP4 remains deferred until both loader support and measured one-Spark admission exist." in design
+    assert "DS4 Flash 0731 MXFP4 candidate" not in overview
     assert "`deepseek`" in overview
 
 

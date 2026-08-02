@@ -90,7 +90,7 @@ accepted evidence for the exact placement and combination.
 | --- | --- | --- | --- | --- |
 | Default agent | `deepseek-agent-dual` | Mia/vLLM TP=2, 1M-capable runtime pinned to `b131b2a` | Both Sparks, exclusive | Verified and operational; final acceptance deferred |
 | Long-context agent | `deepseek-long-dual` | Mia/vLLM long-context candidate with explicit concurrency limits | Both Sparks, exclusive | Design intent; not cataloged |
-| Resident agent | `deepseek-agent-single` | DS4 Flash 0731 MXFP4 candidate, unaudited | One Spark, exclusive initially | Design intent; not cataloged |
+| Resident agent | `deepseek-agent-single` | Audited DS4 v0.5.3 Q2-imatrix + DSpark GGUF pair | One Spark, exclusive initially | Audited artifacts; runtime admission pending |
 | Alternative agent | `nemotron-super-single` | NVIDIA Nemotron 3 Super NVFP4 Spark candidate | One Spark, exclusive | Design intent; not cataloged |
 | Multimodal agent | `nemotron-nano-omni-single` | NVIDIA Nano Omni NVFP4 Spark candidate | One Spark, co-residency candidate | Design intent; not cataloged |
 | Image generation | `qwen-image-single` | ModelOpt NVFP4 candidate through a GB10-native SGLang Diffusion build | One Spark, exclusive initially | Design intent; not cataloged |

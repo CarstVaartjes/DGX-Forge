@@ -177,7 +177,7 @@ The controller treats adapters uniformly but does not translate one model family
 | Model Definition candidate | Preferred loader and precision | Placement | Residency |
 | --- | --- | --- | --- |
 | DeepSeek 0731 Mia service | Audited MiaAI-Lab/Anemll vLLM; BF16 model dtype, block-scaled FP8 E4M3 weights with UE8M0 scales, and padded `nvfp4_ds_mla` KV cache | both Sparks, TP=2 over NCCL | exclusive, persistent |
-| DeepSeek 0731 DS4 GGUF | Audited DS4 GB10/Spark CUDA build; exact GGUF quantization pinned by the definition | one Spark by default; optional two-Spark TCP layer pipeline | memory-mapped |
+| DeepSeek 0731 DS4 GGUF | Audited DS4 v0.5.3 GB10/Spark CUDA build with the Q2-imatrix base and DSpark drafter pair | one Spark by default; optional two-Spark TCP layer pipeline | mapped/registered no-copy |
 | Nemotron 3 Super 120B-A12B | NVIDIA DGX Spark vLLM NVFP4 playbook; TensorRT-LLM comparison definition | either single Spark | persistent, single-exclusive initially |
 | Nemotron 3 Nano Omni 30B-A3B | NVIDIA DGX Spark vLLM playbook with BF16 correctness and FP8/NVFP4 optimized definitions | either single Spark | persistent; shareable only after combined-load tests |
 | Qwen-Image | accepted ModelOpt NVFP4 SGLang Spark path; official Diffusers as non-serving correctness oracle | either single Spark | persistent, fully resident |
@@ -206,9 +206,9 @@ that node. It never migrates a live request.
 
 ### DeepSeek with DS4
 
-- Store a pinned GGUF on local NVMe and use DS4's `mmap` path.
-- Prefer CUDA registration of the mapped pages; record whether startup used registered no-copy mappings or a copy fallback.
-- Do not set `DS4_CUDA_COPY_MODEL` by default because it may create an unnecessary second resident copy.
+- Store the checked Q2-imatrix base GGUF and DSpark drafter on local NVMe and use DS4's `mmap` path.
+- Production uses mapped/registered no-copy startup. Never set `DS4_CUDA_COPY_MODEL` or enable `DS4_MODEL_ANON_HUGE`; full-copy startup is prohibited. Set `DS4_NO_UPDATE_CHECK=1`.
+- MXFP4 remains deferred until both loader support and measured one-Spark admission exist. DS4 v0.5.3 rejects GGUF type 39, and the available 155,976,458,848-byte MXFP4 GGUF does not fit one Spark's visible memory.
 - Use one Spark for the single-Spark DeepSeek Model Definition. Treat DS4's documented two-host TCP layer pipeline as a separate experimental Model Definition: it divides layers and KV state but adds an inter-node hop to every decoded token and does not use NCCL tensor parallelism.
 - SSD streaming paths documented for other backends are not assumed valid for Spark CUDA.
 
@@ -276,7 +276,7 @@ Candidate status has four meanings:
 
 | Model | Best optimized candidate found on 2026-08-02 | Status and adoption rule |
 | --- | --- | --- |
-| DeepSeek-V4-Flash-0731 | Mia's dual-Spark vLLM recipe with MTP and padded `nvfp4_ds_mla`; NVIDIA `DeepSeek-V4-Flash-NVFP4`; `Entrpi/ds4-on-spark` | Mia remains the first dual-Spark service candidate. NVIDIA's NVFP4 card demonstrates a larger TP configuration, so TP=2 is unproven. The DS4 Spark fork and concurrency patch are community comparison definitions only. |
+| DeepSeek-V4-Flash-0731 | Mia's dual-Spark vLLM recipe with MTP and padded `nvfp4_ds_mla`; DS4 v0.5.3 Q2-imatrix plus DSpark pair; NVIDIA `DeepSeek-V4-Flash-NVFP4` | Mia remains the first dual-Spark service candidate. The audited DS4 pair is the single-Spark candidate, subject to runtime admission. MXFP4 remains deferred until DS4 has loader support and measured one-Spark admission. |
 | Nemotron 3 Super 120B-A12B | NVIDIA's exact NVFP4 checkpoint and DGX Spark vLLM/TensorRT-LLM playbook | Official Spark path and preferred initial profile. Validate the pinned Marlin/CUTLASS, FP8 KV, MTP, reasoning, and tool settings on this cluster. |
 | Nemotron 3 Nano Omni 30B-A3B | NVIDIA's DGX Spark vLLM BF16/FP8/NVFP4 recipes and exact FP8 artifact | Official Spark path. BF16 is the semantic reference; FP8 and NVFP4 compete on quality, memory, and throughput. |
 | Qwen-Image | `lmsys/qwen-image-modelopt-nvfp4-sglang` plus NVIDIA's published NVFP4-on-Spark path | Official/upstream Spark path. Compare against official BF16 Diffusers using fixed prompt, text-rendering, and identity fixtures before promotion. |
@@ -532,7 +532,7 @@ The design was checked on 2026-08-02 against these upstream source snapshots. Th
 
 | Project | Reviewed commit |
 | --- | --- |
-| DS4 | `54b36ed9ba42da31b24f2d1a5feb075c2475dbb1` |
+| DS4 | v0.5.3, peeled commit `4ad370b4a338efe9723a386673c0e04f6e214108`; see the immutable DS4 audit |
 | MiaAI-Lab dual Spark | `b131b2a22164675890dd1465fd8862b5cfb6ff13` |
 | Qwen-Image | `6b5e1f5cec987d404be5ac6657db3b9aacb56a89` |
 | SGLang | `8d106c3d79ef885f2fc0684f1915ebc404acfbe8` |
