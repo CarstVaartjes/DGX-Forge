@@ -44,9 +44,9 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    default[default / agent] --> full[agent-full-dual<br/>planned, cataloged]
-    full --> full1[Spark 1<br/>DeepSeek dual rank 0<br/>planned, cataloged]
-    full --> full2[Spark 2<br/>DeepSeek dual rank 1<br/>planned, cataloged]
+    default[default / agent] --> full[agent-full-dual<br/>cataloged, admission blocked]
+    full --> full1[Spark 1<br/>DeepSeek dual rank 0<br/>verified and running]
+    full --> full2[Spark 2<br/>DeepSeek dual rank 1<br/>verified and running]
 
     creative[creative-3d<br/>design intent, not cataloged] --> creative1[Spark 1<br/>DeepSeek single]
     creative --> creative2[Spark 2<br/>Pixal3D + TRELLIS.2 + Qwen3-VL]
@@ -67,7 +67,7 @@ flowchart TB
 
 | Cluster Profile intent | Spark 1 | Spark 2 | Stable aliases | State |
 | --- | --- | --- | --- | --- |
-| `agent-full-dual` (canonical default) | `deepseek-agent-dual` rank 0 | `deepseek-agent-dual` rank 1 | `deepseek` | Planned (cataloged); not activatable |
+| `agent-full-dual` (canonical default) | `deepseek-agent-dual` rank 0 | `deepseek-agent-dual` rank 1 | `deepseek` | Runtime operational and definition verified; profile admission waits for final acceptance |
 | `agent-long-dual` | `deepseek-long-dual` rank 0 | `deepseek-long-dual` rank 1 | `deepseek` | Design intent; not cataloged |
 | `creative-3d` | `deepseek-agent-single` | `pixal3d-single`, `trellis2-4b-single`, `qwen3-vl-8b-single` | `deepseek`, creative model aliases | Design intent; not cataloged |
 | `image-authoring` | `deepseek-agent-single` | `qwen-image-single`, `qwen-image-edit-2511-single` | `deepseek`, `qwen-image`, `qwen-image-edit` | Design intent; not cataloged |
@@ -78,8 +78,8 @@ flowchart TB
 | `geometry-triposg` | `deepseek-agent-single` | `triposg-single` | `deepseek`, `triposg` | Design intent; not cataloged |
 | `geometry-hunyuan3d-omni` | `deepseek-agent-single` | `hunyuan3d-omni-single` | `deepseek`, `hunyuan3d-omni` | Design intent; not cataloged |
 
-“Planned (cataloged)” means a checked-in catalog entry exists, not that its
-runtime is installed, accepted, or selectable. “Design intent” rows are visual
+“Verified” means the immutable artifacts and both-node prerequisites passed;
+it does not imply final acceptance or `sparkctl` admission. “Design intent” rows are visual
 roadmap entries only: `sparkctl` cannot resolve or activate them. An accepted
 profile needs accepted fingerprints for every referenced Model Definition plus
 accepted evidence for the exact placement and combination.
@@ -88,7 +88,7 @@ accepted evidence for the exact placement and combination.
 
 | Type | Model Definition | Preferred DGX Spark path | Placement | State |
 | --- | --- | --- | --- | --- |
-| Default agent | `deepseek-agent-dual` | Mia/vLLM TP=2, 1M-capable candidate pinned to `b131b2a`, subject to acceptance | Both Sparks, exclusive | Planned (cataloged) |
+| Default agent | `deepseek-agent-dual` | Mia/vLLM TP=2, 1M-capable runtime pinned to `b131b2a` | Both Sparks, exclusive | Verified and operational; final acceptance deferred |
 | Long-context agent | `deepseek-long-dual` | Mia/vLLM long-context candidate with explicit concurrency limits | Both Sparks, exclusive | Design intent; not cataloged |
 | Resident agent | `deepseek-agent-single` | DS4 Flash 0731 MXFP4 candidate, unaudited | One Spark, exclusive initially | Design intent; not cataloged |
 | Alternative agent | `nemotron-super-single` | NVIDIA Nemotron 3 Super NVFP4 Spark candidate | One Spark, exclusive | Design intent; not cataloged |
@@ -115,10 +115,10 @@ user-selectable merely because it starts successfully.
 | Aggregate RDMA, latency, error counters, NCCL | Accepted and recorded |
 | Model Definition and Cluster Profile schemas | Implemented |
 | Framework catalog, admission, switching, CLI, and local state | Implemented |
-| `deepseek-agent-dual` Model Definition | Planned (cataloged) at audited Mia commit `b131b2a`; its adapter, checkpoint manifest, and runtime are not installed or accepted |
-| Canonical `agent-full-dual` profile | Planned (cataloged) with `default` and `agent` selectors; not activatable while its definition remains planned |
+| `deepseek-agent-dual` Model Definition | Immutable Mia release `92f5…0575e` is installed on both nodes, structurally verified, healthy, and passes all 11 live quality gates; final performance, thermal, lifecycle and reboot acceptance is deferred |
+| Canonical `agent-full-dual` profile | Cataloged with `default` and `agent` selectors; not admitted while its definition remains verified rather than accepted |
 | Remaining Model Definitions and profiles | Design intent; configuration and acceptance evidence do not exist yet |
-| Model activation | Blocked until the required runtime artifacts are installed and exact acceptance evidence exists |
+| Model activation | The verified runtime is currently running through the direct adapter; `sparkctl` activation remains blocked until exact acceptance evidence exists |
 | `sparkctl nodes status` | Implemented as concurrent, live, read-only health; no database or retained history |
 
 ## Maturity and activation
@@ -149,6 +149,6 @@ fingerprint and invalidates old acceptance evidence.
 - `config/workloads/` and `config/cluster-profiles/` — executable catalog;
   currently contains only `deepseek-agent-dual` and `agent-full-dual`.
 - `inventory/reports/model-definitions.json` — current maturity fingerprints;
-  today it records only `deepseek-agent-dual` as planned.
+  today it records `deepseek-agent-dual` as verified.
 - `inventory/reports/accepted-cluster-profiles.json` — accepted exact-profile
   evidence; currently empty.

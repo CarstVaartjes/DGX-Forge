@@ -1,8 +1,8 @@
 {
   "stage": "prepared",
   "definition_id": "deepseek-agent-dual",
-  "definition_sha256": "e096ea632459aa0496bbd383433fee6b2a6dfe9caa8f72628230004883c012d5",
-  "runtime_manifest_sha256": "452cb5736f2a56061b827f211d539f113a23ce43938e769a3c6cee0bdf733c29",
+  "definition_sha256": "de79fa38af556356008f8e3bfa46222d1a1aabebf47653e2e14e03abb6c971bb",
+  "runtime_manifest_sha256": "92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e",
   "source": {
     "repository": "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark",
     "commit": "b131b2a22164675890dd1465fd8862b5cfb6ff13"
@@ -15,7 +15,7 @@
   "image": {
     "reference": "ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8"
   },
-  "recorded_at": "2026-08-02T21:18:36Z",
+  "recorded_at": "2026-08-02T22:50:30Z",
   "nodes": [
     {
       "node": "spark1",

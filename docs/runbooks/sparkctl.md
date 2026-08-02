@@ -76,7 +76,9 @@ the bounded admission inventory: node health, available memory, root-disk
 space, and boot ID. A missing or failed probe blocks admission or publication;
 it never falls back to stale local measurements. The checked-in
 `agent-full-dual` profile resolves correctly but remains unactivatable while
-`deepseek-agent-dual` has `planned` maturity.
+`deepseek-agent-dual` has `verified` maturity. Its direct Mia runtime is
+operational, but profile admission remains fail-closed until the definition is
+`accepted`.
 
 ## Durable preparation
 
@@ -163,10 +165,11 @@ uv run --no-project --with jsonschema -- bin/sparkctl nodes status --json
 ```
 
 At the current milestone, `catalog` succeeds, `validate default` exits `3` with
-the planned-maturity denial, and `status` reports `stopped` when no local state
-has been written. On 2026-08-02, `nodes status --json` exited `0` with both
+the verified-not-accepted maturity denial, and `status` reports `stopped` when
+no local state has been written. On 2026-08-02, `nodes status --json` exited `0` with both
 nodes healthy, Docker available, and no warnings or errors. It exits `4` if a
 later probe finds either node critical or unreachable. The controller/profile
-framework and live health are implemented, but no model runtime is installed
-or accepted; the next phase is the DeepSeek runtime adapter, checkpoint
-manifest, and acceptance.
+framework and live health are implemented. The pinned Mia DeepSeek runtime is
+installed, running and quality-verified, but is not yet accepted. Performance
+fine-tuning plus sustained thermal, repeated lifecycle and reboot gates are
+deferred to the final cross-model optimization phase.

@@ -462,13 +462,13 @@ def test_prepare_unknown_selector_and_lock_conflict_fail_closed() -> None:
     }
 
 
-def test_planned_home_is_visible_but_not_activatable() -> None:
+def test_verified_home_is_visible_but_not_activatable() -> None:
     result = invoke("validate", "default", "--json")
 
     assert result.json["profile_id"] == "agent-full-dual"
     assert result.json["valid"] is True
     assert result.json["admitted"] is False
-    assert "deepseek-agent-dual maturity is planned" in result.json["errors"]
+    assert "deepseek-agent-dual maturity is verified" in result.json["errors"]
     assert result.exit_code == 3
 
 
@@ -502,7 +502,7 @@ def test_status_is_a_local_stopped_snapshot() -> None:
     assert calls == 0
 
 
-def test_catalog_supports_global_json_and_shows_planned_profiles() -> None:
+def test_catalog_supports_global_json_and_shows_verified_definition() -> None:
     result = invoke("--json", "catalog")
     per_command = invoke("catalog", "--json")
 
@@ -512,7 +512,7 @@ def test_catalog_supports_global_json_and_shows_planned_profiles() -> None:
     assert result.json["selectors"]["agent"] == "agent-full-dual"
     assert result.json["profiles"][0]["profile_id"] == "agent-full-dual"
     assert result.json["profiles"][0]["workloads"] == ["deepseek-agent-dual"]
-    assert result.json["definitions"][0]["maturity"] == "planned"
+    assert result.json["definitions"][0]["maturity"] == "verified"
 
 
 def test_restore_default_is_an_explicit_ordinary_switch() -> None:

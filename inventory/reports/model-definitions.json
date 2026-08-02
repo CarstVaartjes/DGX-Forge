@@ -3,13 +3,29 @@
     {
       "id": "deepseek-agent-dual",
       "sha256": "de79fa38af556356008f8e3bfa46222d1a1aabebf47653e2e14e03abb6c971bb",
-      "maturity": "planned",
+      "maturity": "verified",
       "history": [
         {
           "state": "planned",
           "timestamp": "2026-08-02T14:50:33Z",
           "evidence_refs": [
             "docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"
+          ],
+          "rejection_reason": null
+        },
+        {
+          "state": "prepared",
+          "timestamp": "2026-08-02T22:50:30Z",
+          "evidence_refs": [
+            "inventory/reports/model-definitions/deepseek-agent-dual-prepared.json"
+          ],
+          "rejection_reason": null
+        },
+        {
+          "state": "verified",
+          "timestamp": "2026-08-02T22:50:31Z",
+          "evidence_refs": [
+            "inventory/reports/model-definitions/deepseek-agent-dual-verified.json"
           ],
           "rejection_reason": null
         }

@@ -201,6 +201,31 @@ with driver `580.173.02` on each node. A fresh
 warnings or errors, Docker available, GPU temperature 39 C, and both fabric
 functions reporting speed `200000`, MTU 1500, and RDMA state `ACTIVE`.
 
+### 11. Install and verify the Mia dual-Spark DeepSeek runtime
+
+On 2026-08-02, both nodes received immutable runtime release
+`92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e`.
+It pins MiaAI-Lab commit `b131b2a22164675890dd1465fd8862b5cfb6ff13`,
+the DeepSeek checkpoint revision
+`9e165c30e2704aec5d9d593cce3eebd58bbef1cb`, and the Anemll image by
+digest. Preparation and verification ran on both local model caches in
+parallel. The worker started first, followed by the head; the API binds only to
+Spark 1 loopback and serves the stable model ID `deepseek`.
+
+The live startup record proves TP=2, PP=1, the `mp` executor, MTP-5, padded
+`nvfp4_ds_mla`, and a 1,048,576-token limit. Each rank loaded 79.17 GiB. The
+shared KV pool measured 1,787,827 tokens, deriving one admitted simultaneous
+full-context request. All 11 versioned output-quality gates passed, including
+reasoning modes, streaming, tool use and the historical >411-token regression.
+
+The pinned Mia quick benchmark recorded 1,997 input tok/s and 67.0 output
+tok/s at 2K/C1. Three cache-distinct C3 observations were 85.8, 88.8 and 100.0
+aggregate tok/s. These are retained as an operational baseline, not final
+performance acceptance: natural completion lengths varied substantially, and
+the user chose to reserve performance fine-tuning for the final cross-model
+optimization phase. Exact evidence and deferred gates are in
+[`inventory/reports/deepseek-mia-operational.json`](../inventory/reports/deepseek-mia-operational.json).
+
 ## Lessons learned
 
 | Lesson | Operational rule retained in the repository |
@@ -233,8 +258,10 @@ The installation baseline is complete when all of the following remain true:
   available and no warnings or errors.
 
 The common controller/profile framework and live-health integration are now
-implemented. The next phase is the DeepSeek runtime adapter, checkpoint
-manifest, and model-runtime acceptance. No model runtime is currently
-installed or accepted. Caddy, LiteLLM, the browser UI, and Tailscale remain
+implemented. The Mia DeepSeek runtime is installed, healthy and quality-
+verified on both nodes, but deliberately remains `verified` rather than
+`accepted` until final performance, thermal, lifecycle and reboot gates run.
+The next model-runtime phase is the remaining model catalog, beginning with the
+single-Spark optimized lanes. Caddy, LiteLLM, the browser UI, and Tailscale remain
 deferred until the new external container host is available; none is required
 for initial local model testing.

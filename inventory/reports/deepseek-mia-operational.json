@@ -1,0 +1,121 @@
+{
+  "schema_version": 1,
+  "status": "operational-verified",
+  "accepted": false,
+  "recorded_at": "2026-08-02T22:50:31Z",
+  "definition": {
+    "id": "deepseek-agent-dual",
+    "sha256": "de79fa38af556356008f8e3bfa46222d1a1aabebf47653e2e14e03abb6c971bb",
+    "maturity": "verified"
+  },
+  "runtime": {
+    "release_sha256": "92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e",
+    "image_reference": "ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8",
+    "source_repository": "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark",
+    "source_commit": "b131b2a22164675890dd1465fd8862b5cfb6ff13",
+    "checkpoint_revision": "9e165c30e2704aec5d9d593cce3eebd58bbef1cb",
+    "served_model": "deepseek",
+    "health_http_status": 200,
+    "max_model_len": 1048576,
+    "tensor_parallel_size": 2,
+    "pipeline_parallel_size": 1,
+    "distributed_executor": "mp",
+    "kv_cache_dtype": "nvfp4_ds_mla",
+    "speculative_method": "dspark",
+    "speculative_tokens": 5
+  },
+  "nodes": {
+    "spark1": {
+      "hostname": "spark-3542",
+      "boot_id": "276acc0c-2dc5-424d-9499-92dcd8452bcb",
+      "role": "head",
+      "container_id": "07645dc6147324a3dedd726e585da56b30eb61c075965816621cc0fe94ed3e49"
+    },
+    "spark2": {
+      "hostname": "spark-2297",
+      "boot_id": "f9eae13d-4f8d-451c-9ab1-136eb82d516b",
+      "role": "worker",
+      "container_id": "c8d5d5132f7483a5c85f857422b196557572fe2550a4918c6d7e22428ec3f257"
+    }
+  },
+  "capacity": {
+    "checkpoint_gib": 155.43,
+    "per_rank_model_load_gib": 79.17,
+    "available_kv_cache_gib": 12.64,
+    "kv_cache_tokens": 1787827,
+    "reported_full_context_concurrency": 1.71,
+    "derived_admitted_full_context_requests": 1,
+    "derivation": "min(2, floor(1787827 / 1048576))"
+  },
+  "quality": {
+    "status": "passed",
+    "generated_at": "2026-08-02T22:39:17.084705+00:00",
+    "passed": 11,
+    "failed": 0,
+    "gate_ids": [
+      "english_exact",
+      "latin_script",
+      "no_repetition",
+      "no_xml_leak",
+      "streaming",
+      "reasoning_off",
+      "reasoning_low",
+      "reasoning_high",
+      "reasoning_max",
+      "tool_call",
+      "long_411_regression"
+    ]
+  },
+  "performance_baseline": {
+    "status": "recorded-not-accepted",
+    "tuning_phase": "deferred-until-all-models-are-operational",
+    "benchmark_repository": "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark",
+    "benchmark_commit": "b131b2a22164675890dd1465fd8862b5cfb6ff13",
+    "benchmark_script": "scripts/benchmark-0731.py",
+    "benchmark_script_sha256": "ad0a4532fc1813feff9b41dff2ada14bfa97420c063e42e48f4b1cd849bc5dc9",
+    "warmup_output_tok_s": 68.62228352895477,
+    "prompt_2k_c1": {
+      "ttft_s": 1.037401912995847,
+      "prefill_tok_s": 1997.2972615949811,
+      "output_tok_s": 66.98461382405902,
+      "output_tokens": 5355
+    },
+    "prompt_2k_c3_aggregate_tok_s": [
+      85.78118981071738,
+      88.79568092112834,
+      99.95378535948518
+    ],
+    "prompt_2k_c3_median_aggregate_tok_s": 88.79568092112834,
+    "notes": [
+      "The serving Compose and environment files are byte-identical to the earlier release that produced 98.25212249826139 aggregate tok/s at C3.",
+      "The pinned upstream runner has no maximum-output-token parameter; natural completion lengths varied from 629 to 4159 tokens across the repeated C3 requests.",
+      "The initial C1 floors were exceeded. The repeated C3 median is retained as a baseline and is not promoted to formal performance acceptance."
+    ]
+  },
+  "thermal_observation": {
+    "maximum_observed_temperature_c": 55,
+    "throttle_observed": false,
+    "sustained_15_minute_gate_run": false
+  },
+  "gates": {
+    "immutable_release_deployed_both_nodes": true,
+    "checkpoint_manifest_verified_both_nodes": true,
+    "image_digest_verified_both_nodes": true,
+    "gb10_verified_both_nodes": true,
+    "fabric_verified_both_nodes": true,
+    "worker_first_start": true,
+    "startup_identity_recorded": true,
+    "health": true,
+    "quality": true,
+    "performance_acceptance": false,
+    "thermal_acceptance": false,
+    "three_cycle_lifecycle_acceptance": false,
+    "reboot_no_autostart_acceptance": false
+  },
+  "deferred_acceptance": [
+    "Performance fine-tuning and stable fixed-output baselines are deferred to the final cross-model optimization phase.",
+    "The 15-minute thermal-stability gate has not been run.",
+    "Three complete start-stop-memory-recovery cycles have not been run on this release.",
+    "The live reboot/no-autostart gate has not been run on this release."
+  ]
+}

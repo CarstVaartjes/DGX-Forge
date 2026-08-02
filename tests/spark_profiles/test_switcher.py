@@ -625,7 +625,7 @@ def test_checked_in_production_home_remains_truthfully_unactivatable() -> None:
 
     assert report.target_profile == "agent-full-dual"
     assert report.status == "blocked"
-    assert "deepseek-agent-dual maturity is planned" in report.errors
+    assert "deepseek-agent-dual maturity is verified" in report.errors
     assert [event for event in events if event[0] == "remote"] == []
     assert store.saves == []
 
