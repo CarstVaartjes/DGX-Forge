@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
 import fcntl
 import json
 import os
-from pathlib import Path
 import re
 import socket
 import tempfile
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
 from types import MappingProxyType
-from typing import Iterator, Mapping
-
 
 _STATUSES = frozenset(
     ("stopped", "transitioning", "active", "degraded", "stopped-after-reboot")
@@ -44,19 +43,19 @@ class LockNotStale(StateError):
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace(
+    return datetime.now(UTC).isoformat(timespec="seconds").replace(
         "+00:00", "Z"
     )
 
 
 def _parse_timestamp(value: str, source: Path) -> datetime:
     try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(value)
     except (TypeError, ValueError) as error:
         raise StateFormatError(f"malformed timestamp in {source}") from error
     if parsed.tzinfo is None:
         raise StateFormatError(f"timestamp in {source} must include a timezone")
-    return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(UTC)
 
 
 @dataclass(frozen=True)
@@ -379,7 +378,13 @@ class StateStore:
                 metadata = LockMetadata.from_dict(json.load(lock_file), self.lock_path)
             except json.JSONDecodeError as error:
                 raise StateFormatError(f"malformed lock metadata in {self.lock_path}") from error
-            if metadata.host == socket.gethostname() and _pid_is_live(metadata.pid):
+            local_host = socket.gethostname()
+            if metadata.host != local_host:
+                raise LockNotStale(
+                    f"lock belongs to different host {metadata.host}; "
+                    "inspect it on that controller host"
+                )
+            if _pid_is_live(metadata.pid):
                 raise LockNotStale(f"lock records live PID {metadata.pid}")
             created = _parse_timestamp(metadata.created_at, self.lock_path)
             now = _parse_timestamp(_utc_now(), Path("current time"))

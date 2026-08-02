@@ -1,16 +1,15 @@
 from __future__ import annotations
 
-from copy import deepcopy
 import json
-from pathlib import Path
 import threading
+from copy import deepcopy
+from pathlib import Path
 
 import jsonschema
 import pytest
 
 from spark_profiles.backend import CommandResult
 from spark_profiles.health import LocalHealthError, NodeHealthService
-
 
 ROOT = Path(__file__).resolve().parents[2]
 RAW_SCHEMA = json.loads((ROOT / "schemas/node-health-raw.schema.json").read_text())

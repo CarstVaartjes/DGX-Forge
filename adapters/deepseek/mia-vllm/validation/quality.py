@@ -150,8 +150,11 @@ def _evaluate(case: Mapping[str, Any], raw_response: object) -> dict[str, Any]:
 
     reasoning = checks.get("reasoning")
     if reasoning is not None:
-        reasoning_content = _message(response).get("reasoning_content")
-        present = isinstance(reasoning_content, str) and bool(reasoning_content.strip())
+        message = _message(response)
+        present = any(
+            isinstance(value, str) and bool(value.strip())
+            for value in (message.get("reasoning_content"), message.get("reasoning"))
+        )
         if reasoning == "absent" and present:
             raise QualityFailure(f"{case_id}: reasoning off leaked content")
         if reasoning == "present" and not present:
@@ -459,16 +462,86 @@ def validate_models(payload: Mapping[str, Any]) -> None:
         raise QualityFailure("API model identity mismatch")
 
 
-def validate_startup_logs(logs: str) -> None:
+def validate_startup_logs(logs: str) -> str:
+    engine_lines = [
+        line for line in logs.splitlines() if "Initializing a V1 LLM engine" in line
+    ]
+    if len(engine_lines) != 1:
+        raise QualityFailure("startup logs do not contain exactly one engine config")
+    engine = engine_lines[0]
     required = (
         "/models/deepseek-ai/DeepSeek-V4-Flash-0731",
-        "max_model_len=1048576",
+        "max_seq_len=1048576",
         "tensor_parallel_size=2",
         "pipeline_parallel_size=1",
     )
     for pin in required:
-        if pin not in logs:
+        if pin not in engine:
             raise QualityFailure(f"startup logs do not prove {pin}")
+    return engine
+
+
+def _startup_identity(
+    *, release_sha256: str, boot_id: str, container_id: str
+) -> dict[str, str]:
+    if re.fullmatch(r"[0-9a-f]{64}", release_sha256) is None:
+        raise QualityFailure("release SHA-256 must contain 64 lowercase hex characters")
+    if not boot_id.strip() or "/" in boot_id:
+        raise QualityFailure("invalid boot ID")
+    if re.fullmatch(r"[0-9a-f]{64}", container_id) is None:
+        raise QualityFailure("invalid container ID")
+    return {
+        "release_sha256": release_sha256,
+        "boot_id": boot_id.strip(),
+        "container_id": container_id,
+    }
+
+
+def record_startup_identity(
+    *,
+    output_path: Path,
+    logs: str,
+    release_sha256: str,
+    boot_id: str,
+    container_id: str,
+) -> dict[str, Any]:
+    record: dict[str, Any] = {
+        "schema_version": 1,
+        "status": "validated",
+        **_startup_identity(
+            release_sha256=release_sha256,
+            boot_id=boot_id,
+            container_id=container_id,
+        ),
+        "engine_config": validate_startup_logs(logs),
+        "recorded_at": datetime.now(UTC).isoformat(),
+    }
+    _atomic_json(output_path, record, DEFAULT_MAX_EVIDENCE_BYTES)
+    return record
+
+
+def validate_startup_identity(
+    *,
+    record_path: Path,
+    release_sha256: str,
+    boot_id: str,
+    container_id: str,
+) -> None:
+    expected = _startup_identity(
+        release_sha256=release_sha256,
+        boot_id=boot_id,
+        container_id=container_id,
+    )
+    record = _load_json(record_path)
+    if record.get("status") != "validated":
+        raise QualityFailure("startup identity status mismatch")
+    for name, value in expected.items():
+        if record.get(name) != value:
+            raise QualityFailure(f"startup identity {name} mismatch")
+    engine_config = record.get("engine_config")
+    if not isinstance(engine_config, str):
+        raise QualityFailure("startup identity engine config is missing")
+    validate_startup_logs(engine_config)
 
 
 def _mem_available_bytes(path: Path) -> int:
@@ -608,6 +681,16 @@ def _parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     compose.add_argument("--role", choices=("head", "worker"), required=True)
     subparsers.add_parser("validate-models")
     subparsers.add_parser("validate-logs")
+    record_startup = subparsers.add_parser("record-startup")
+    record_startup.add_argument("--output", type=Path, required=True)
+    record_startup.add_argument("--release-sha256", required=True)
+    record_startup.add_argument("--boot-id-file", type=Path, required=True)
+    record_startup.add_argument("--container-id", required=True)
+    validate_startup = subparsers.add_parser("validate-startup-record")
+    validate_startup.add_argument("--record", type=Path, required=True)
+    validate_startup.add_argument("--release-sha256", required=True)
+    validate_startup.add_argument("--boot-id-file", type=Path, required=True)
+    validate_startup.add_argument("--container-id", required=True)
     for operation in ("record-baseline", "verify-memory"):
         lifecycle = subparsers.add_parser(operation)
         lifecycle.add_argument("--output", type=Path, required=True)
@@ -638,6 +721,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         validate_models(json.load(sys.stdin))
     elif args.operation == "validate-logs":
         validate_startup_logs(sys.stdin.read())
+    elif args.operation == "record-startup":
+        record_startup_identity(
+            output_path=args.output,
+            logs=sys.stdin.read(),
+            release_sha256=args.release_sha256,
+            boot_id=args.boot_id_file.read_text(encoding="utf-8").strip(),
+            container_id=args.container_id,
+        )
+    elif args.operation == "validate-startup-record":
+        validate_startup_identity(
+            record_path=args.record,
+            release_sha256=args.release_sha256,
+            boot_id=args.boot_id_file.read_text(encoding="utf-8").strip(),
+            container_id=args.container_id,
+        )
     elif args.operation == "record-baseline":
         record_memory_baseline(
             output_path=args.output,

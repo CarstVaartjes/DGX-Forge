@@ -242,6 +242,13 @@ Profile activation remains acceptance-gated. The maturity sequence is:
 planned -> prepared -> verified -> accepted
 ```
 
+The workload TOML is the controller-facing declaration while each immutable
+adapter release remains independently executable on a Spark. Consequently its
+offline shell entrypoint mirrors the image, checkpoint, and resource pins. A
+repository contract test requires those mirrored values to equal the parsed
+Model Definition and rejects duplicate literal checkpoint hashes; this is
+deliberate offline defense-in-depth, not an unchecked second source of truth.
+
 - `prepared`: exact adapter, image, and complete checkpoint are present on both
   nodes and hashes match.
 - `verified`: offline preflight, architecture, fabric, Compose rendering, and

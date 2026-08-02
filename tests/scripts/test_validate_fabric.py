@@ -1,14 +1,13 @@
 """Regression tests for the offline parsers used by ``validate-fabric``."""
 
+import sys
+import threading
 from importlib.machinery import SourceFileLoader
 from importlib.util import module_from_spec, spec_from_loader
 from pathlib import Path
-import sys
-import threading
 from types import SimpleNamespace
 
 import pytest
-
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts" / "validate_fabric.py"

@@ -8,6 +8,7 @@ import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, fields, is_dataclass
 from datetime import datetime
+from itertools import pairwise
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -154,7 +155,7 @@ _LEGAL_MATURITY_TRANSITIONS = {
 
 def _audit_timestamp(value: str, context: str) -> datetime:
     try:
-        timestamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        timestamp = datetime.fromisoformat(value)
     except (TypeError, ValueError) as error:
         raise CatalogError(f"{context} has an invalid timestamp") from error
     if timestamp.tzinfo is None or timestamp.utcoffset() is None:
@@ -292,10 +293,7 @@ def _validate_maturity_history(root: Path, record: Mapping[str, Any]) -> None:
         previous_timestamp = timestamp
         _validate_evidence_refs(root, transition["evidence_refs"], context)
 
-    for position, (previous, current) in enumerate(
-        zip(states, states[1:], strict=False),
-        start=1,
-    ):
+    for position, (previous, current) in enumerate(pairwise(states), start=1):
         transition = history[position]
         has_correction = (
             "correction_of" in transition or "correction_reason" in transition

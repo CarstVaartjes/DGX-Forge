@@ -1,3 +1,5 @@
+import subprocess
+import zipfile
 from importlib import resources
 from pathlib import Path
 
@@ -10,6 +12,8 @@ from spark_profiles.contracts import (
 )
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+CANONICAL_SCHEMA_ROOT = REPOSITORY_ROOT / "src/spark_profiles/schemas"
+REPOSITORY_SCHEMA_ROOT = REPOSITORY_ROOT / "schemas"
 
 
 def write_toml(tmp_path: Path, name: str, content: str) -> Path:
@@ -118,6 +122,38 @@ def test_contract_schemas_are_package_resources() -> None:
     )
 
 
+def test_repository_schema_mirrors_match_canonical_package_schemas() -> None:
+    canonical_names = {
+        path.name for path in CANONICAL_SCHEMA_ROOT.glob("*.json")
+    }
+    repository_names = {
+        path.name for path in REPOSITORY_SCHEMA_ROOT.glob("*.json")
+    }
+
+    assert repository_names == canonical_names
+    for name in sorted(canonical_names):
+        assert (REPOSITORY_SCHEMA_ROOT / name).read_bytes() == (
+            CANONICAL_SCHEMA_ROOT / name
+        ).read_bytes()
+
+
+def test_built_wheel_contains_every_canonical_schema(tmp_path: Path) -> None:
+    subprocess.run(
+        ["uv", "build", "--wheel", "--out-dir", str(tmp_path)],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    wheel = next(tmp_path.glob("*.whl"))
+
+    with zipfile.ZipFile(wheel) as archive:
+        for schema in sorted(CANONICAL_SCHEMA_ROOT.glob("*.json")):
+            assert archive.read(f"spark_profiles/schemas/{schema.name}") == (
+                schema.read_bytes()
+            )
+
+
 def test_home_workload_uses_an_immutable_image_and_declarative_adapter_commands() -> None:
     workload = load_workload(
         REPOSITORY_ROOT / "config/workloads/deepseek-agent-dual.toml"
@@ -128,7 +164,7 @@ def test_home_workload_uses_an_immutable_image_and_declarative_adapter_commands(
         "@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8"
     )
     assert workload.endpoint.host == "127.0.0.1"
-    release_sha256 = "452cb5736f2a56061b827f211d539f113a23ce43938e769a3c6cee0bdf733c29"
+    release_sha256 = "92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e"
     adapter = (
         "/opt/spark/model-adapters/deepseek-agent-dual/releases/"
         f"{release_sha256}/bin/mia-deepseek-dual"
@@ -229,7 +265,7 @@ def test_workload_exposes_complete_optional_runtime_contracts() -> None:
         "adapters/deepseek/mia-vllm/runtime-manifest.json"
     )
     assert workload.runtime_release.sha256 == (
-        "452cb5736f2a56061b827f211d539f113a23ce43938e769a3c6cee0bdf733c29"
+        "92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e"
     )
     assert workload.deadlines is not None
     assert workload.deadlines.start == 1800
@@ -240,7 +276,7 @@ def test_workload_exposes_complete_optional_runtime_contracts() -> None:
     ("old", "new", "error"),
     (
         (
-            'sha256 = "452cb5736f2a56061b827f211d539f113a23ce43938e769a3c6cee0bdf733c29"',
+            'sha256 = "92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e"',
             "",
             "sha256",
         ),

@@ -7,7 +7,6 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 COLLECTOR = ROOT / "nodes" / "bin" / "collect-health"
 SCHEMA_PATH = ROOT / "schemas" / "node-health-raw.schema.json"
@@ -341,6 +340,7 @@ def test_collector_rejects_incomplete_unknown_or_unsafe_arguments(arguments):
     """Catches malformed mappings being accepted or turned into arbitrary sysfs paths."""
     completed = subprocess.run(
         ["bash", str(COLLECTOR), *arguments],
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -363,6 +363,7 @@ def test_collector_rejects_huge_cpu_sample_before_arithmetic():
             "--hca",
             "rdma0",
         ],
+        check=False,
         capture_output=True,
         text=True,
     )
@@ -388,6 +389,7 @@ def test_collector_streamed_to_bash_dispatches_main_under_nounset():
             "--hca",
             "rdma0",
         ],
+        check=False,
         input=COLLECTOR.read_text(),
         capture_output=True,
         text=True,

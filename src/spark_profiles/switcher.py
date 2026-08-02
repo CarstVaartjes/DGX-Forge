@@ -230,7 +230,8 @@ class ProfileSwitcher:
                     for (node, command), future in node_results:
                         try:
                             result = future.result()
-                        except Exception as error:
+                        # Worker failures are data in this per-node report.
+                        except Exception as error:  # noqa: BLE001
                             detail = f"{type(error).__name__}: {error}"[
                                 :_MAX_ERROR_CHARS
                             ]
@@ -367,7 +368,8 @@ class ProfileSwitcher:
             )
         try:
             inventory = self.inventory_provider()
-        except Exception as error:
+        # Injected inventory providers are normalized at this fail-closed boundary.
+        except Exception as error:  # noqa: BLE001
             detail = f"{type(error).__name__}: {error}"[:_MAX_ERROR_CHARS]
             return SwitchReport(
                 target_profile=target.id,

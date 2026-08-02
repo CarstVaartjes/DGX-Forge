@@ -11,7 +11,6 @@ worker-first before the live fabric gates.
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
 import dataclasses
 import json
 import re
@@ -20,10 +19,10 @@ import subprocess
 import sys
 import time
 import tomllib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
 
 NCCL_VERSION = "v2.30.7-1"
 NCCL_COMMIT = "73cf112295c33aee2b895f329f592f2a9b4b0f97"
@@ -121,7 +120,11 @@ def parse_nccl(output: str) -> NCCLResult:
 
     averages = [
         float(match)
-        for match in re.findall(r"Avg\s+bus\s+bandwidth\s*:\s*([0-9]+(?:\.[0-9]+)?)", output, re.I)
+        for match in re.findall(
+            r"Avg\s+bus\s+bandwidth\s*:\s*([0-9]+(?:\.[0-9]+)?)",
+            output,
+            re.IGNORECASE,
+        )
     ]
     # Standard nccl-tests rows contain: bytes, iterations, type, op, time,
     # algbw, busbw, error, ... . Prefer the suite's final average when present;
@@ -154,13 +157,13 @@ def selected_nccl_hcas(output: str) -> set[str]:
 
 def parse_rdma(output: str) -> RDMAResult:
     """Require an IB/RoCE perftest with a positive average Gb/s measurement."""
-    if not re.search(r"Transport type\s*:\s*IB\b", output, re.I):
+    if not re.search(r"Transport type\s*:\s*IB\b", output, re.IGNORECASE):
         return RDMAResult(False, None, "perftest did not report IB transport")
-    if not re.search(r"Link type\s*:\s*Ethernet\b", output, re.I):
+    if not re.search(r"Link type\s*:\s*Ethernet\b", output, re.IGNORECASE):
         return RDMAResult(False, None, "perftest did not report Ethernet/RoCE link")
-    if not re.search(r"Mtu\s*:\s*1024\[B\]", output, re.I):
+    if not re.search(r"Mtu\s*:\s*1024\[B\]", output, re.IGNORECASE):
         return RDMAResult(False, None, "perftest did not report 1024-byte RoCE MTU")
-    if not re.search(r"GID index\s*:\s*3\b", output, re.I):
+    if not re.search(r"GID index\s*:\s*3\b", output, re.IGNORECASE):
         return RDMAResult(False, None, "perftest did not report GID index 3")
     rows = re.compile(r"^\s*\d+\s+\d+\s+[-+0-9.eE]+\s+([-+0-9.eE]+)\s+[-+0-9.eE]+\s*$", re.MULTILINE)
     values = [float(value) for value in rows.findall(output)]
@@ -172,13 +175,13 @@ def parse_rdma(output: str) -> RDMAResult:
 
 def parse_rdma_latency(output: str) -> RDMALatencyResult:
     """Parse the fixed RoCE write-latency distribution in microseconds."""
-    if not re.search(r"Transport type\s*:\s*IB\b", output, re.I):
+    if not re.search(r"Transport type\s*:\s*IB\b", output, re.IGNORECASE):
         return RDMALatencyResult(False, reason="latency test did not report IB transport")
-    if not re.search(r"Link type\s*:\s*Ethernet\b", output, re.I):
+    if not re.search(r"Link type\s*:\s*Ethernet\b", output, re.IGNORECASE):
         return RDMALatencyResult(False, reason="latency test did not report Ethernet/RoCE link")
-    if not re.search(r"Mtu\s*:\s*1024\[B\]", output, re.I):
+    if not re.search(r"Mtu\s*:\s*1024\[B\]", output, re.IGNORECASE):
         return RDMALatencyResult(False, reason="latency test did not report 1024-byte RoCE MTU")
-    if not re.search(r"GID index\s*:\s*3\b", output, re.I):
+    if not re.search(r"GID index\s*:\s*3\b", output, re.IGNORECASE):
         return RDMALatencyResult(False, reason="latency test did not report GID index 3")
     row = re.compile(
         r"^\s*(\d+)\s+(\d+)\s+"

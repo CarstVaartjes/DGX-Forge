@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import replace
 import json
 import os
-from pathlib import Path
 import socket
+from dataclasses import replace
+from pathlib import Path
 from unittest.mock import call, patch
 
 import pytest
@@ -16,7 +16,6 @@ from spark_profiles.state import (
     StateFormatError,
     StateStore,
 )
-
 
 PROFILE_SHA = "1" * 64
 DEFINITION_A_SHA = "a" * 64
@@ -63,9 +62,10 @@ def test_state_write_is_atomic_when_replace_is_interrupted(tmp_path: Path) -> No
     )
     store.save(original)
 
-    with patch("spark_profiles.state.os.replace", side_effect=OSError("interrupted")):
-        with pytest.raises(OSError, match="interrupted"):
-            store.save(replace(original, active_profile="broken"))
+    with patch(
+        "spark_profiles.state.os.replace", side_effect=OSError("interrupted")
+    ), pytest.raises(OSError, match="interrupted"):
+        store.save(replace(original, active_profile="broken"))
 
     assert store.load().active_profile == "default"
     assert not list(tmp_path.glob(".state.json.*.tmp"))
@@ -185,9 +185,10 @@ def test_finish_transition_clears_fence_only_after_safe_state_save(
         last_error="remote cleanup could not be verified",
     )
 
-    with patch("spark_profiles.state.os.replace", side_effect=OSError("interrupted")):
-        with pytest.raises(OSError, match="interrupted"):
-            store.finish_transition(safe)
+    with patch(
+        "spark_profiles.state.os.replace", side_effect=OSError("interrupted")
+    ), pytest.raises(OSError, match="interrupted"):
+        store.finish_transition(safe)
 
     assert (tmp_path / "transition.fence").exists()
 
@@ -283,9 +284,8 @@ def test_acquire_serializes_and_yields_current_state(tmp_path: Path) -> None:
 
     with store.acquire() as state:
         assert state.status == "stopped"
-        with pytest.raises(LockBusy):
-            with StateStore(tmp_path).acquire():
-                pass
+        with pytest.raises(LockBusy), StateStore(tmp_path).acquire():
+            pass
 
 
 def test_lock_metadata_records_pid_host_and_timestamp(tmp_path: Path) -> None:
@@ -335,6 +335,25 @@ def test_break_stale_lock_refuses_young_dead_pid(tmp_path: Path) -> None:
         now.return_value = "2026-08-02T10:00:30Z"
         with pytest.raises(LockNotStale, match="younger"):
             StateStore(tmp_path, stale_lock_seconds=60).break_stale_lock()
+
+    assert lock_path.exists()
+
+
+def test_break_stale_lock_refuses_foreign_host_even_when_old(tmp_path: Path) -> None:
+    lock_path = tmp_path / "switch.lock"
+    lock_path.write_text(
+        json.dumps(
+            {
+                "pid": 999_999_999,
+                "host": "other-controller",
+                "created_at": "2000-01-01T00:00:00Z",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(LockNotStale, match="different host"):
+        StateStore(tmp_path, stale_lock_seconds=60).break_stale_lock()
 
     assert lock_path.exists()
 

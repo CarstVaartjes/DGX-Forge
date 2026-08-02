@@ -6,7 +6,6 @@ from pathlib import Path
 import jsonschema
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[2]
 COLLECTOR = ROOT / "nodes" / "bin" / "collect-inventory"
 SCHEMA_PATH = ROOT / "inventory" / "schema.json"
@@ -61,6 +60,7 @@ def test_inventory_rejects_arguments():
     """Catches a collector that silently accepts unsupported CLI arguments."""
     completed = subprocess.run(
         ["bash", str(COLLECTOR), "unexpected"],
+        check=False,
         capture_output=True,
         text=True,
     )

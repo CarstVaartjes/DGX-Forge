@@ -4,8 +4,10 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -70,9 +72,9 @@ def _passing_quality_responses() -> dict[str, object]:
             "[DONE]",
         ],
         "reasoning_off": _completion("OFF_OK"),
-        "reasoning_low": _completion("LOW_OK", reasoning="brief private reasoning"),
-        "reasoning_high": _completion("HIGH_OK", reasoning="detailed private reasoning"),
-        "reasoning_max": _completion("MAX_OK", reasoning="maximum private reasoning"),
+        "reasoning_low": _completion("4", reasoning="brief private reasoning"),
+        "reasoning_high": _completion("7", reasoning="detailed private reasoning"),
+        "reasoning_max": _completion("11", reasoning="maximum private reasoning"),
         "tool_call": _completion(
             None,
             tool_calls=[
@@ -199,6 +201,14 @@ def test_quality_fixture_covers_every_required_gate() -> None:
         "tool_call",
         "long_411_regression",
     ]
+    by_id = {case["id"]: case for case in fixtures["cases"]}
+    reasoning_off = by_id["reasoning_off"]["request"]
+    assert reasoning_off["chat_template_kwargs"] == {"thinking": False}
+    assert "reasoning_effort" not in reasoning_off
+    for effort in ("low", "high", "max"):
+        request = by_id[f"reasoning_{effort}"]["request"]
+        assert request["chat_template_kwargs"] == {"thinking": True}
+        assert request["reasoning_effort"] == effort
     long_prompt = fixtures["cases"][-1]["request"]["messages"][0]["content"]
     assert len(long_prompt.split()) > 411
 
@@ -250,9 +260,9 @@ def test_quality_runner_records_external_request_failures(tmp_path: Path) -> Non
         ("no_xml_leak", _completion("<think>secret</think>answer"), "XML leakage"),
         ("streaming", [{"choices": [{"delta": {"content": "STREAM_OK"}}]}], "stream terminator"),
         ("reasoning_off", _completion("OFF_OK", reasoning="leaked"), "reasoning off"),
-        ("reasoning_low", _completion("LOW_OK"), "reasoning low"),
-        ("reasoning_high", _completion("HIGH_OK"), "reasoning high"),
-        ("reasoning_max", _completion("MAX_OK"), "reasoning max"),
+        ("reasoning_low", _completion("4"), "reasoning low"),
+        ("reasoning_high", _completion("7"), "reasoning high"),
+        ("reasoning_max", _completion("11"), "reasoning max"),
         ("tool_call", _completion("no tool"), "tool call"),
         ("long_411_regression", _completion("LONG_CONTEXT_OK", prompt_tokens=411), ">411"),
     ],
@@ -274,6 +284,58 @@ def test_quality_runner_rejects_each_gate(
             request=lambda case: responses[case["id"]],
             release_sha256="a" * 64,
             boot_id="boot-id-1",
+        )
+
+
+def test_reasoning_alias_is_checked_when_reasoning_content_is_null() -> None:
+    quality = load_quality()
+    fixtures = json.loads(QUALITY_FIXTURES.read_text(encoding="utf-8"))
+    by_id = {case["id"]: case for case in fixtures["cases"]}
+    response = _completion("4")
+    message = response["choices"][0]["message"]
+    message["reasoning_content"] = None
+    message["reasoning"] = "private reasoning from the vLLM alias"
+
+    assert quality._evaluate(by_id["reasoning_low"], response)["passed"] is True
+
+    response["choices"][0]["message"]["content"] = "OFF_OK"
+    with pytest.raises(quality.QualityFailure, match="reasoning off"):
+        quality._evaluate(by_id["reasoning_off"], response)
+
+
+def test_startup_identity_record_is_container_release_and_boot_qualified(
+    tmp_path: Path,
+) -> None:
+    quality = load_quality()
+    output = tmp_path / "startup.json"
+    logs = (
+        "Initializing a V1 LLM engine with config: "
+        "model='/models/deepseek-ai/DeepSeek-V4-Flash-0731', "
+        "max_seq_len=1048576, tensor_parallel_size=2, pipeline_parallel_size=1\n"
+    )
+    release = "a" * 64
+    container = "b" * 64
+
+    quality.record_startup_identity(
+        output_path=output,
+        logs=logs,
+        release_sha256=release,
+        boot_id="boot-1",
+        container_id=container,
+    )
+    quality.validate_startup_identity(
+        record_path=output,
+        release_sha256=release,
+        boot_id="boot-1",
+        container_id=container,
+    )
+
+    with pytest.raises(quality.QualityFailure, match="container_id mismatch"):
+        quality.validate_startup_identity(
+            record_path=output,
+            release_sha256=release,
+            boot_id="boot-1",
+            container_id="c" * 64,
         )
 
 
@@ -357,6 +419,37 @@ def test_render_pins_model_mounts_fabric_and_vllm_arguments() -> None:
         assert value in rendered
     assert '"method":"dspark","num_speculative_tokens":5' in rendered
     assert '"reasoning_effort":"low"' in rendered
+
+
+def test_adapter_runtime_pins_match_model_definition() -> None:
+    with (ROOT / "config/workloads/deepseek-agent-dual.toml").open("rb") as source:
+        definition = tomllib.load(source)
+    adapter = ADAPTER.read_text(encoding="utf-8")
+
+    assignments = dict(
+        re.findall(
+            r"^(image_reference|checkpoint_manifest_sha256|checkpoint_revision|"
+            r"minimum_free_memory_bytes|minimum_free_disk_bytes|"
+            r"stop_memory_tolerance_bytes)=([^\n]+)$",
+            adapter,
+            flags=re.MULTILINE,
+        )
+    )
+    assert assignments == {
+        "image_reference": definition["image"]["reference"],
+        "checkpoint_manifest_sha256": definition["checkpoint"]["manifest_sha256"],
+        "checkpoint_revision": definition["checkpoint"]["revision"],
+        "minimum_free_memory_bytes": str(
+            definition["resources"]["minimum_free_memory_bytes"]
+        ),
+        "minimum_free_disk_bytes": str(
+            definition["resources"]["minimum_free_disk_bytes"]
+        ),
+        "stop_memory_tolerance_bytes": str(
+            definition["resources"]["stop_memory_tolerance_bytes"]
+        ),
+    }
+    assert adapter.count(definition["checkpoint"]["manifest_sha256"]) == 1
 
 
 def test_render_rejects_unknown_role() -> None:
@@ -942,17 +1035,18 @@ def test_head_identity_and_startup_logs_require_exact_pins() -> None:
     quality = load_quality()
     quality.validate_models({"data": [{"id": "deepseek"}]})
     quality.validate_startup_logs(
-        "model=/models/deepseek-ai/DeepSeek-V4-Flash-0731 "
-        "max_model_len=1048576 tensor_parallel_size=2 pipeline_parallel_size=1 "
-        "node_rank=0"
+        "Initializing a V1 LLM engine with config: "
+        "model='/models/deepseek-ai/DeepSeek-V4-Flash-0731', "
+        "max_seq_len=1048576, tensor_parallel_size=2, pipeline_parallel_size=1"
     )
 
     with pytest.raises(quality.QualityFailure, match="model identity"):
         quality.validate_models({"data": [{"id": "wrong"}]})
-    with pytest.raises(quality.QualityFailure, match="max_model_len"):
+    with pytest.raises(quality.QualityFailure, match="max_seq_len"):
         quality.validate_startup_logs(
-            "model=/models/deepseek-ai/DeepSeek-V4-Flash-0731 "
-            "max_model_len=411 tensor_parallel_size=2 pipeline_parallel_size=1 node_rank=0"
+            "Initializing a V1 LLM engine with config: "
+            "model='/models/deepseek-ai/DeepSeek-V4-Flash-0731', "
+            "max_seq_len=411, tensor_parallel_size=2, pipeline_parallel_size=1"
         )
 
 
@@ -1199,16 +1293,20 @@ def test_head_health_checks_model_identity_render_and_startup_logs(
     tmp_path: Path,
 ) -> None:
     call_log = tmp_path / "health.log"
+    models_root = tmp_path / "models"
+    boot_id = tmp_path / "boot_id"
+    boot_id.write_text("boot-1\n", encoding="utf-8")
     docker = fake_command(
         tmp_path,
         "docker",
         f'''printf "docker %s\\n" "$*" >> {call_log!s}
 if [[ $* == *"State.Running"* ]]; then printf "true\\n"
+elif [[ $* == *"{{{{.Id}}}}"* ]]; then printf "%s\\n" "$FAKE_CONTAINER_ID"
 elif [[ $* == *"Config.Env"* ]]; then printf "NODE_RANK=0\\n"
 elif [[ $* == *"Config.Image"* ]]; then printf "%s\\n" "$FAKE_IMAGE_REFERENCE"
 elif [[ $* == *"compose"* && $* == *"--format json"* ]]; then printf "%s\\n" "$FAKE_COMPOSE_JSON"
 elif [[ ${{1:-}} == logs ]]; then
-  printf "model=/models/deepseek-ai/DeepSeek-V4-Flash-0731 max_model_len=1048576 tensor_parallel_size=2 pipeline_parallel_size=1 node_rank=0\\n" >&2
+  printf "Initializing a V1 LLM engine with config: model='/models/deepseek-ai/DeepSeek-V4-Flash-0731', max_seq_len=1048576, tensor_parallel_size=2, pipeline_parallel_size=1\\n" >&2
 fi
 ''',
     )
@@ -1231,8 +1329,11 @@ if [[ $* == *"/v1/models"* ]]; then printf '{{"data":[{{"id":"deepseek"}}]}}\\n'
             "MIA_DOCKER_BIN": str(docker),
             "MIA_CURL_BIN": str(curl),
             "MIA_LOCAL_HOSTNAME": "spark-3542",
+            "MIA_MODELS_ROOT": str(models_root),
             "MIA_RELEASE_SHA256": "a" * 64,
+            "MIA_BOOT_ID_PATH": str(boot_id),
             "FAKE_IMAGE_REFERENCE": IMAGE,
+            "FAKE_CONTAINER_ID": "b" * 64,
             "FAKE_COMPOSE_JSON": json.dumps(_valid_compose_config("head")),
         },
     )
@@ -1242,6 +1343,29 @@ if [[ $* == *"/v1/models"* ]]; then printf '{{"data":[{{"id":"deepseek"}}]}}\\n'
     assert "/v1/models" in calls
     assert "config --format json" in calls
     assert "docker logs --tail 2000 mia-deepseek-dual-head" in calls
+
+    second = subprocess.run(
+        [str(ADAPTER), "health", "head"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "MIA_DOCKER_BIN": str(docker),
+            "MIA_CURL_BIN": str(curl),
+            "MIA_LOCAL_HOSTNAME": "spark-3542",
+            "MIA_MODELS_ROOT": str(models_root),
+            "MIA_RELEASE_SHA256": "a" * 64,
+            "MIA_BOOT_ID_PATH": str(boot_id),
+            "FAKE_IMAGE_REFERENCE": IMAGE,
+            "FAKE_CONTAINER_ID": "b" * 64,
+            "FAKE_COMPOSE_JSON": json.dumps(_valid_compose_config("head")),
+        },
+    )
+    assert second.stdout == "healthy role=head\n"
+    calls = call_log.read_text(encoding="utf-8")
+    assert calls.count("docker logs --tail 2000 mia-deepseek-dual-head") == 1
 
 
 def test_head_infer_writes_release_and_boot_qualified_evidence(tmp_path: Path) -> None:

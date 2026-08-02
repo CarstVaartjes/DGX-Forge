@@ -423,7 +423,7 @@ PREPARE_SCRIPT
     snapshot="$models_root/snapshots/deepseek-v4-flash-0731"
     test -f "$manifest"
     manifest_sha256=$(sha256sum "$manifest" | awk '{print $1}')
-    if [[ $manifest_sha256 != 82e965c1caa019b31f4d776d0b3eddb0cc0d8e076f189822b8a3bbe3fa115121 ]]; then
+    if [[ $manifest_sha256 != "$checkpoint_manifest_sha256" ]]; then
       echo "checkpoint manifest digest mismatch" >&2
       exit 1
     fi
@@ -480,7 +480,25 @@ PREPARE_SCRIPT
       "$curl_bin" --fail --silent --show-error --max-time 10 \
         http://127.0.0.1:8888/v1/models | quality validate-models
       compose config --format json | quality validate-compose --role head
-      "$docker_bin" logs --tail 2000 "$container" 2>&1 | quality validate-logs
+      release_digest=$(runtime_release_digest)
+      current_boot=$(boot_id)
+      lifecycle=$(lifecycle_root "$release_digest" "$current_boot")
+      container_id=$("$docker_bin" inspect --format '{{.Id}}' "$container")
+      startup_record="$lifecycle/head.startup.$container_id.json"
+      install -d -m 0750 "$lifecycle"
+      if [[ -f $startup_record && ! -L $startup_record ]]; then
+        quality validate-startup-record \
+          --record "$startup_record" \
+          --release-sha256 "$release_digest" \
+          --boot-id-file "$boot_id_path" \
+          --container-id "$container_id"
+      else
+        "$docker_bin" logs --tail 2000 "$container" 2>&1 | quality record-startup \
+          --output "$startup_record" \
+          --release-sha256 "$release_digest" \
+          --boot-id-file "$boot_id_path" \
+          --container-id "$container_id"
+      fi
     fi
     printf 'healthy role=%s\n' "${2}"
     ;;

@@ -1,22 +1,26 @@
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
+from collections.abc import Callable, Mapping
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass, replace
 from io import StringIO
-import json
 from pathlib import Path
-import subprocess
-import sys
-from typing import Callable, Mapping
 
 import pytest
 
 from spark_profiles.catalog import Catalog, fingerprint
 from spark_profiles.cli import CliDependencies, build_dependencies, main
 from spark_profiles.health import ClusterHealth, NodeHealth
-from spark_profiles.state import ControllerState, LockBusy, LockNotStale, StateFormatError
+from spark_profiles.state import (
+    ControllerState,
+    LockBusy,
+    LockNotStale,
+    StateFormatError,
+)
 from spark_profiles.switcher import PrepareNodeResult, PrepareReport, SwitchReport
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 BOOT_IDS = {"spark1": "1" * 32, "spark2": "2" * 32}

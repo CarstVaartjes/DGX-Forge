@@ -24,7 +24,7 @@ reference = "ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885
 
 [runtime_release]
 manifest = "adapters/deepseek/mia-vllm/runtime-manifest.json"
-sha256 = "452cb5736f2a56061b827f211d539f113a23ce43938e769a3c6cee0bdf733c29"
+sha256 = "92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e"
 
 [paths]
 cache = "/srv/models/snapshots/deepseek-v4-flash-0731"
@@ -36,13 +36,13 @@ host = "127.0.0.1"
 port = 8888
 
 [commands]
-prepare = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/452cb5736f2a56061b827f211d539f113a23ce43938e769a3c6cee0bdf733c29/bin/mia-deepseek-dual", "prepare"]
-verify = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/452cb5736f2a56061b827f211d539f113a23ce43938e769a3c6cee0bdf733c29/bin/mia-deepseek-dual", "verify"]
-start = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/452cb5736f2a56061b827f211d539f113a23ce43938e769a3c6cee0bdf733c29/bin/mia-deepseek-dual", "start"]
-health = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/452cb5736f2a56061b827f211d539f113a23ce43938e769a3c6cee0bdf733c29/bin/mia-deepseek-dual", "health"]
-infer = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/452cb5736f2a56061b827f211d539f113a23ce43938e769a3c6cee0bdf733c29/bin/mia-deepseek-dual", "infer"]
-stop = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/452cb5736f2a56061b827f211d539f113a23ce43938e769a3c6cee0bdf733c29/bin/mia-deepseek-dual", "stop"]
-verify-release = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/452cb5736f2a56061b827f211d539f113a23ce43938e769a3c6cee0bdf733c29/bin/mia-deepseek-dual", "verify-release"]
+prepare = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e/bin/mia-deepseek-dual", "prepare"]
+verify = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e/bin/mia-deepseek-dual", "verify"]
+start = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e/bin/mia-deepseek-dual", "start"]
+health = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e/bin/mia-deepseek-dual", "health"]
+infer = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e/bin/mia-deepseek-dual", "infer"]
+stop = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e/bin/mia-deepseek-dual", "stop"]
+verify-release = ["/opt/spark/model-adapters/deepseek-agent-dual/releases/92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e/bin/mia-deepseek-dual", "verify-release"]
 
 [deadlines]
 prepare = 86400

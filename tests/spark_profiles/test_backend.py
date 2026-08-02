@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 import json
 import shlex
 import subprocess
 import sys
+from dataclasses import dataclass
 
 import pytest
 

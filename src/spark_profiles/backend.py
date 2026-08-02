@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import math
 import shlex
 import subprocess
 import threading
-from typing import Callable, Mapping, Protocol
-
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import Protocol
 
 _DEFAULT_ALIASES = {"spark1": "dgx-spark-1", "spark2": "dgx-spark-2"}
 
@@ -20,6 +20,20 @@ class _Completed(Protocol):
 
 
 Executor = Callable[..., _Completed]
+
+
+class _ReadableStream(Protocol):
+    def read(self, size: int = -1) -> bytes: ...
+
+    def close(self) -> None: ...
+
+
+class _WritableStream(Protocol):
+    def write(self, data: bytes) -> int: ...
+
+    def flush(self) -> None: ...
+
+    def close(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -67,24 +81,24 @@ class _BoundedBuffer:
         return b"".join(self._parts)
 
 
-def _drain(stream: object, output: _BoundedBuffer) -> None:
-    read = getattr(stream, "read")
+def _drain(stream: _ReadableStream, output: _BoundedBuffer) -> None:
+    read = stream.read
     try:
         while chunk := read(8192):
             output.append(chunk)
     finally:
-        getattr(stream, "close")()
+        stream.close()
 
 
-def _feed(stream: object, payload: bytes) -> None:
+def _feed(stream: _WritableStream, payload: bytes) -> None:
     try:
-        getattr(stream, "write")(payload)
-        getattr(stream, "flush")()
+        stream.write(payload)
+        stream.flush()
     except BrokenPipeError:
         pass
     finally:
         try:
-            getattr(stream, "close")()
+            stream.close()
         except BrokenPipeError:
             pass
 

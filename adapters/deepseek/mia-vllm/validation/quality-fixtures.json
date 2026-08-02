@@ -13,7 +13,10 @@
           }
         ],
         "temperature": 0,
-        "max_tokens": 32
+        "max_tokens": 32,
+        "chat_template_kwargs": {
+          "thinking": false
+        }
       },
       "checks": {
         "exact_content": "SPARK QUALITY OK"
@@ -30,7 +33,10 @@
           }
         ],
         "temperature": 0,
-        "max_tokens": 48
+        "max_tokens": 48,
+        "chat_template_kwargs": {
+          "thinking": false
+        }
       },
       "checks": {
         "latin_script": true
@@ -47,7 +53,10 @@
           }
         ],
         "temperature": 0,
-        "max_tokens": 64
+        "max_tokens": 64,
+        "chat_template_kwargs": {
+          "thinking": false
+        }
       },
       "checks": {
         "no_repetition_loop": true
@@ -64,7 +73,10 @@
           }
         ],
         "temperature": 0,
-        "max_tokens": 48
+        "max_tokens": 48,
+        "chat_template_kwargs": {
+          "thinking": false
+        }
       },
       "checks": {
         "no_xml_leakage": true
@@ -82,7 +94,10 @@
         ],
         "temperature": 0,
         "max_tokens": 32,
-        "stream": true
+        "stream": true,
+        "chat_template_kwargs": {
+          "thinking": false
+        }
       },
       "checks": {
         "exact_content": "STREAM_OK",
@@ -103,8 +118,7 @@
         "max_tokens": 32,
         "chat_template_kwargs": {
           "thinking": false
-        },
-        "reasoning_effort": "low"
+        }
       },
       "checks": {
         "exact_content": "OFF_OK",
@@ -118,18 +132,18 @@
         "messages": [
           {
             "role": "user",
-            "content": "Reason briefly, then reply with exactly LOW_OK."
+            "content": "What is 2+2? Return only the numeral."
           }
         ],
         "temperature": 0,
-        "max_tokens": 64,
+        "max_tokens": 512,
         "chat_template_kwargs": {
           "thinking": true
         },
         "reasoning_effort": "low"
       },
       "checks": {
-        "exact_content": "LOW_OK",
+        "exact_content": "4",
         "reasoning": "present"
       }
     },
@@ -140,18 +154,18 @@
         "messages": [
           {
             "role": "user",
-            "content": "Reason carefully, then reply with exactly HIGH_OK."
+            "content": "What is 3+4? Return only the numeral."
           }
         ],
         "temperature": 0,
-        "max_tokens": 96,
+        "max_tokens": 512,
         "chat_template_kwargs": {
           "thinking": true
         },
         "reasoning_effort": "high"
       },
       "checks": {
-        "exact_content": "HIGH_OK",
+        "exact_content": "7",
         "reasoning": "present"
       }
     },
@@ -162,18 +176,18 @@
         "messages": [
           {
             "role": "user",
-            "content": "Use maximum supported reasoning, then reply with exactly MAX_OK."
+            "content": "What is 5+6? Return only the numeral."
           }
         ],
         "temperature": 0,
-        "max_tokens": 128,
+        "max_tokens": 512,
         "chat_template_kwargs": {
           "thinking": true
         },
         "reasoning_effort": "max"
       },
       "checks": {
-        "exact_content": "MAX_OK",
+        "exact_content": "11",
         "reasoning": "present"
       }
     },
@@ -215,6 +229,9 @@
           "function": {
             "name": "get_temperature"
           }
+        },
+        "chat_template_kwargs": {
+          "thinking": false
         }
       },
       "checks": {
@@ -237,7 +254,10 @@
           }
         ],
         "temperature": 0,
-        "max_tokens": 32
+        "max_tokens": 32,
+        "chat_template_kwargs": {
+          "thinking": false
+        }
       },
       "checks": {
         "exact_content": "LONG_CONTEXT_OK",

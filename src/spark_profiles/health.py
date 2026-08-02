@@ -2,21 +2,20 @@
 
 from __future__ import annotations
 
+import json
+import re
+import tomllib
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timezone
-import json
+from datetime import UTC, datetime
 from pathlib import Path
-import re
 from types import MappingProxyType
 from typing import Any
-import tomllib
 
-from jsonschema import ValidationError, validators, validate
+from jsonschema import ValidationError, validate, validators
 
 from .backend import CommandResult, SshBackend
-
 
 _NODES = ("spark1", "spark2")
 _SWAP_WARNING_BYTES = 1024**3
@@ -95,7 +94,7 @@ class NodeHealth:
     services: Telemetry | None
 
     @classmethod
-    def from_dict(cls, value: Mapping[str, Any]) -> "NodeHealth":
+    def from_dict(cls, value: Mapping[str, Any]) -> NodeHealth:
         section = lambda name: (
             Telemetry(value[name]) if isinstance(value.get(name), Mapping) else None
         )
@@ -180,7 +179,7 @@ class NodeHealthService:
         self._functions = self._validate_local_assets()
 
     @classmethod
-    def from_repository(cls, root: Path, backend: SshBackend) -> "NodeHealthService":
+    def from_repository(cls, root: Path, backend: SshBackend) -> NodeHealthService:
         root = root.resolve()
         try:
             with (root / "config/controller.toml").open("rb") as source:
@@ -337,7 +336,7 @@ class NodeHealthService:
         status = "critical" if states & {"critical", "unreachable"} else "warning" if "warning" in states else "healthy"
         result = ClusterHealth(
             1,
-            datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+            datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
             status,
             nodes,
         )

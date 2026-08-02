@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
 import json
-from pathlib import Path
 import re
 import sys
 import tomllib
-from typing import Callable, Mapping, Protocol, Sequence
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Protocol
 
 from .admission import check_admission, check_placement_policy
 from .backend import SshBackend
@@ -17,7 +18,6 @@ from .catalog import Catalog
 from .health import ClusterHealth, LocalHealthError, NodeHealthService
 from .state import ControllerState, LockBusy, LockNotStale, StateError, StateStore
 from .switcher import PrepareReport, ProfileSwitcher, SwitchReport
-
 
 _MAX_TEXT_CHARS = 1_024
 _SENSITIVE_ASSIGNMENT = re.compile(

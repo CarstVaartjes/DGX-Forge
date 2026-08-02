@@ -66,7 +66,9 @@ sparkctl break-stale-lock [--json]
   read-only health check before returning the address. Stopped, stale,
   rebooted, unhealthy, planned, dead, or unpublished endpoints are denied.
 - `break-stale-lock` uses the state-store safety checks. It refuses a held lock,
-  a live local PID, or a lock younger than the configured threshold.
+  a live local PID, a lock written by a different controller host, or a lock
+  younger than the configured threshold. A foreign-host record must be
+  inspected and recovered on that host; age alone never authorizes removal.
 
 Operational `validate`, `switch`, `restore-default`, and `endpoint` commands
 use the same live health collector as `nodes status`. Health is projected into
