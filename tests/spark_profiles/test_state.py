@@ -5,7 +5,7 @@ import json
 import os
 from pathlib import Path
 import socket
-from unittest.mock import patch
+from unittest.mock import call, patch
 
 import pytest
 
@@ -107,6 +107,50 @@ def test_crashed_transition_fence_quarantines_persisted_active_state(
     assert "model and output data are preserved" in (quarantined.last_error or "")
     assert len(quarantined.last_error or "") <= 512
     assert (tmp_path / "transition.fence").exists()
+
+
+def test_first_transition_durably_creates_each_state_directory_entry(
+    tmp_path: Path,
+) -> None:
+    state_directory = tmp_path / ".state" / "sparkctl"
+    store = StateStore(state_directory)
+
+    with patch.object(store, "_fsync_directory") as fsync_directory:
+        store.begin_transition()
+
+    assert fsync_directory.call_args_list == [
+        call(tmp_path),
+        call(tmp_path / ".state"),
+        call(state_directory),
+    ]
+    assert (state_directory / "transition.fence").exists()
+
+
+def test_load_rechecks_fence_after_reading_active_state(tmp_path: Path) -> None:
+    store = StateStore(tmp_path)
+    active = ControllerState(
+        status="active",
+        active_profile="agent-full-dual",
+        target_profile=None,
+        restore_profile=None,
+        last_error=None,
+        active_profile_sha256=PROFILE_SHA,
+        active_definition_sha256={"deepseek-agent-dual": DEFINITION_A_SHA},
+    )
+    store.save(active)
+    json_load = json.load
+
+    def read_then_fence(state_file):
+        data = json_load(state_file)
+        store.begin_transition()
+        return data
+
+    with patch("spark_profiles.state.json.load", side_effect=read_then_fence):
+        quarantined = store.load()
+
+    assert quarantined.status == "degraded"
+    assert quarantined.active_profile is None
+    assert "manual recovery" in (quarantined.last_error or "")
 
 
 def test_stale_transition_fence_is_not_removed_by_load_or_lock_acquisition(

@@ -239,13 +239,7 @@ class StateStore:
 
     def load(self) -> ControllerState:
         if self.transition_fence_path.exists():
-            return ControllerState(
-                status="degraded",
-                active_profile=None,
-                target_profile=None,
-                restore_profile=None,
-                last_error=_FENCED_RECOVERY,
-            )
+            return self._quarantined_state()
         if not self.state_path.exists():
             return ControllerState.stopped()
         try:
@@ -253,12 +247,15 @@ class StateStore:
                 data = json.load(state_file)
         except (OSError, json.JSONDecodeError) as error:
             raise StateFormatError(f"cannot load {self.state_path}: {error}") from error
-        return ControllerState.from_dict(data, self.state_path)
+        state = ControllerState.from_dict(data, self.state_path)
+        if self.transition_fence_path.exists():
+            return self._quarantined_state()
+        return state
 
     def save(self, state: ControllerState) -> None:
         if not isinstance(state, ControllerState):
             raise TypeError("state must be a ControllerState")
-        self.directory.mkdir(parents=True, exist_ok=True)
+        self._ensure_directory()
         temporary_path: Path | None = None
         try:
             descriptor, temporary_name = tempfile.mkstemp(
@@ -273,14 +270,14 @@ class StateStore:
                 os.fsync(state_file.fileno())
             os.replace(temporary_path, self.state_path)
             temporary_path = None
-            self._fsync_directory()
+            self._fsync_directory(self.directory)
         finally:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
 
     def begin_transition(self) -> None:
         """Durably quarantine state publication before remote mutation."""
-        self.directory.mkdir(parents=True, exist_ok=True)
+        self._ensure_directory()
         try:
             descriptor = os.open(
                 self.transition_fence_path,
@@ -302,7 +299,7 @@ class StateStore:
             fence_file.write("\n")
             fence_file.flush()
             os.fsync(fence_file.fileno())
-        self._fsync_directory()
+        self._fsync_directory(self.directory)
 
     def finish_transition(self, state: ControllerState) -> None:
         """Durably save a final state before clearing its transition fence."""
@@ -311,22 +308,43 @@ class StateStore:
         self.save(state)
         self.transition_fence_path.unlink()
         try:
-            self._fsync_directory()
+            self._fsync_directory(self.directory)
         except OSError:
             # The final state was already durably committed before unlink. If
             # the deletion is lost on a crash, the stale fence fails closed.
             pass
 
-    def _fsync_directory(self) -> None:
-        directory_fd = os.open(self.directory, os.O_RDONLY)
+    def _ensure_directory(self) -> None:
+        missing: list[Path] = []
+        candidate = self.directory
+        while not candidate.exists():
+            missing.append(candidate)
+            candidate = candidate.parent
+        for directory in reversed(missing):
+            directory.mkdir(exist_ok=True)
+            self._fsync_directory(directory.parent)
+
+    @staticmethod
+    def _fsync_directory(directory: Path) -> None:
+        directory_fd = os.open(directory, os.O_RDONLY)
         try:
             os.fsync(directory_fd)
         finally:
             os.close(directory_fd)
 
+    @staticmethod
+    def _quarantined_state() -> ControllerState:
+        return ControllerState(
+            status="degraded",
+            active_profile=None,
+            target_profile=None,
+            restore_profile=None,
+            last_error=_FENCED_RECOVERY,
+        )
+
     @contextmanager
     def acquire(self) -> Iterator[ControllerState]:
-        self.directory.mkdir(parents=True, exist_ok=True)
+        self._ensure_directory()
         lock_file = self.lock_path.open("a+", encoding="utf-8")
         try:
             try:
