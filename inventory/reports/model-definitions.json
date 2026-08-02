@@ -3,7 +3,7 @@
     {
       "id": "deepseek-agent-dual",
       "sha256": "e096ea632459aa0496bbd383433fee6b2a6dfe9caa8f72628230004883c012d5",
-      "maturity": "prepared",
+      "maturity": "verified",
       "history": [
         {
           "state": "planned",
@@ -18,6 +18,14 @@
           "timestamp": "2026-08-02T21:18:36Z",
           "evidence_refs": [
             "inventory/reports/model-definitions/deepseek-agent-dual-prepared.json"
+          ],
+          "rejection_reason": null
+        },
+        {
+          "state": "verified",
+          "timestamp": "2026-08-02T21:23:21Z",
+          "evidence_refs": [
+            "inventory/reports/model-definitions/deepseek-agent-dual-verified.json"
           ],
           "rejection_reason": null
         }
