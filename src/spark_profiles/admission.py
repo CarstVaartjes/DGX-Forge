@@ -128,6 +128,9 @@ def check_admission(
         if definition is None:
             errors.add(f"endpoint {endpoint} references unknown workload: {identifier}")
             continue
+        if identifier not in assigned:
+            errors.add(f"endpoint {endpoint} targets unassigned workload: {identifier}")
+            continue
         previous = endpoint_ports.get(definition.endpoint.port)
         if previous is not None:
             errors.add(f"port collision for published endpoints: {previous}, {endpoint}")

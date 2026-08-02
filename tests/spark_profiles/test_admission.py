@@ -118,6 +118,19 @@ def test_port_collision_is_rejected(
     ).errors[0]
 
 
+def test_endpoint_target_must_be_assigned_to_the_profile(
+    catalog: Catalog, profile, healthy_inventory: dict[str, dict[str, int | bool]]
+) -> None:
+    mark_definition_accepted(catalog, "deepseek-agent-dual")
+    stopped = replace(profile, placements={"spark1": (), "spark2": ()})
+
+    report = check_admission(stopped, catalog, healthy_inventory)
+
+    assert report.errors == (
+        "endpoint deepseek targets unassigned workload: deepseek-agent-dual",
+    )
+
+
 def test_unhealthy_endpoint_is_not_published(
     catalog: Catalog, profile, healthy_inventory: dict[str, dict[str, int | bool]]
 ) -> None:
