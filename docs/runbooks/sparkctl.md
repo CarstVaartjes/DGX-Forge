@@ -15,7 +15,8 @@ uv run --no-project --with jsonschema -- /path/to/spark/bin/sparkctl status --js
 
 `--json` may be placed before the command or on the command itself. Human
 output is the default. `status --json` is the stable local interface intended
-for the future NAS controller.
+for the future NAS controller. `nodes status --json` performs a fresh,
+read-only SSH probe of both Sparks; it is not persisted in controller state.
 
 ## Commands
 
@@ -23,6 +24,7 @@ for the future NAS controller.
 sparkctl catalog [--json]
 sparkctl validate PROFILE_OR_SELECTOR [--json]
 sparkctl status [--json]
+sparkctl nodes status [--json]
 sparkctl switch PROFILE_OR_SELECTOR [--restore PROFILE_OR_SELECTOR] [--dry-run] [--json]
 sparkctl restore-default [--dry-run] [--json]
 sparkctl endpoint ENDPOINT_ALIAS [--json]
@@ -38,6 +40,10 @@ sparkctl break-stale-lock [--json]
   fingerprints still match the current catalog, every definition still has
   matching accepted maturity and a manifest digest, and the exact profile and
   definition hash set still has accepted Cluster Profile evidence.
+- `nodes status` concurrently probes both configured Sparks and reports live
+  host, NVIDIA, thermal, and direct-fabric health without retaining history or
+  changing either node or the active profile. See
+  [Live node health](node-health.md).
 - `switch` resolves selectors before invoking the ordinary switch path.
   `--dry-run` reports only the truthful status, hashes, and restore intent
   exposed by the switcher; the CLI does not maintain a second action planner.
@@ -51,10 +57,10 @@ sparkctl break-stale-lock [--json]
 - `break-stale-lock` uses the state-store safety checks. It refuses a held lock,
   a live local PID, or a lock younger than the configured threshold.
 
-The initial bring-up intentionally uses conservative empty live measurements.
-That keeps validation and activation fail-closed without contacting either
-Spark node. Live node-health collection is a later explicit integration. The
-checked-in `agent-full-dual` profile therefore resolves correctly but remains
+The initial profile bring-up intentionally uses conservative empty admission
+measurements. That keeps profile validation and activation fail-closed without
+confusing the separate read-only health probe with model-specific admission.
+The checked-in `agent-full-dual` profile resolves correctly but remains
 unactivatable while `deepseek-agent-dual` has `planned` maturity.
 
 ## Exit codes
@@ -64,8 +70,8 @@ unactivatable while `deepseek-agent-dual` has `planned` maturity.
 | `0` | Successful read, admitted dry-run, or completed transition |
 | `2` | Invalid arguments, selector, catalog, or controller configuration |
 | `3` | Admission blocked or endpoint unavailable |
-| `4` | Reserved for live node reachability/health |
-| `5` | Reserved for live fabric/node health |
+| `4` | `nodes status`: at least one node is `critical` or `unreachable` |
+| `5` | `nodes status`: local collector, schema, inventory, or baseline failure before probing |
 | `6` | Transition or explicit restoration failed |
 | `7` | Switch-lock conflict or unsafe stale-lock override |
 
@@ -84,8 +90,11 @@ mutate either Spark node:
 uv run --no-project --with jsonschema -- bin/sparkctl catalog --json
 uv run --no-project --with jsonschema -- bin/sparkctl validate default --json
 uv run --no-project --with jsonschema -- bin/sparkctl status --json
+uv run --no-project --with jsonschema -- bin/sparkctl nodes status --json
 ```
 
 At the current milestone, `catalog` succeeds, `validate default` exits `3` with
 the planned-maturity denial, and `status` reports `stopped` when no local state
-has been written.
+has been written. `nodes status` is the only command in this list that contacts
+the Sparks; it performs live read-only collection and exits `4` if either node
+is critical or unreachable.

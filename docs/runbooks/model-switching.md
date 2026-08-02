@@ -102,10 +102,10 @@ The selector `default` resolves to canonical profile `agent-full-dual`.
 This option stores only the canonical restore intent in controller state and
 the switch report. It never restores within the same `sparkctl switch` call.
 After the caller has completed its work and explicitly recovered the outputs
-and provenance, the future `sparkctl restore-default` command performs a later
-ordinary profile switch. That later switch reacquires the lock and repeats all
-admission, health, quality, and failure gates. The original switch report keeps
-the temporary producing profile and definition hashes; no fallback profile is
+and provenance, `sparkctl restore-default` performs a later ordinary profile
+switch. That later switch reacquires the lock and repeats all admission,
+health, quality, and failure gates. The original switch report keeps the
+temporary producing profile and definition hashes; no fallback profile is
 chosen automatically.
 
 ## Recovery checklist

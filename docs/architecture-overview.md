@@ -35,11 +35,11 @@ flowchart LR
         end
     end
 
-    remote --> tailscale
-    tailscale --> caddy
-    api --> caddy
-    browser --> ui
-    ui --> caddy
+    remote -. future remote access .-> tailscale
+    tailscale -. future ingress .-> caddy
+    api -. future shared API .-> caddy
+    browser -. future UI .-> ui
+    ui -. future gateway use .-> caddy
     litellm -. optional routing .-> caddy
     caddy -->|HTTPS/API| head
     caddy -->|typed model/job route| worker
@@ -78,7 +78,7 @@ flowchart LR
 
 | Service | What it does | Placement |
 | --- | --- | --- |
-| Caddy | Provides the stable HTTPS endpoint, private-CA TLS, bearer-key enforcement, health checks, drain mode, and fail-closed HTTP 503 responses. | External control host |
+| Caddy (future) | Will provide the stable HTTPS endpoint, private-CA TLS, bearer-key enforcement, health checks, drain mode, and fail-closed HTTP 503 responses after the external control host exists. It is not in the current inference path. | Future external control host |
 | Profile controller | Runs one operation at a time, persists canonical Cluster Profile state, serializes switches with a PID/timestamp lock, controls both Sparks over restricted SSH, runs validation, and advertises only healthy profiles. | Developer machine initially; later one-shot external container |
 | Browser UI | Provides chat and model selection while using only the Caddy endpoint. | External container |
 | LiteLLM | Optionally adds model aliases, routing, quotas, or usage tracking when those features become useful. It is not required initially. | Optional external container |
@@ -90,7 +90,9 @@ flowchart LR
 
 ## Traffic paths
 
-- **Initial inference:** Mac → SSH tunnel → Spark loopback endpoint.
+- **Current inference:** the developer machine resolves accepted local endpoint
+  metadata with `sparkctl endpoint`, opens an SSH tunnel, and reaches the Spark
+  loopback endpoint through that tunnel. Caddy and the NAS are not in this path.
 - **Future shared inference:** client or UI → Caddy → the aliases advertised by the active Cluster Profile.
 - **Control:** developer-machine controller initially, later external controller → restricted SSH commands on each Spark.
 - **Administration:** Mac → each Spark through the 1Password SSH agent.
@@ -102,6 +104,12 @@ flowchart LR
 
 ## Model switching
 
+Today the developer-machine controller withdraws and republishes its local
+endpoint metadata around stop, verify, start, health, and quality gates. Clients
+reach a published loopback endpoint only through an SSH tunnel. The following
+Caddy drain and route steps describe the **future NAS gateway path**, not a
+current dependency:
+
 ```mermaid
 flowchart LR
     drain[1. Drain<br/>Caddy returns 503] --> stop[2. Stop<br/>adapter-declared order]
@@ -112,7 +120,11 @@ flowchart LR
     test -->|failure| stopped[Known stopped state]
 ```
 
-The NAS or other external service host is an availability dependency for client access, but it never carries model weights, KV-cache data, CUDA/JIT work, or tensor-parallel traffic.
+After that future gateway is deployed, the NAS or other external service host
+will be an availability dependency for shared client access, but it will never
+carry model weights, KV-cache data, CUDA/JIT work, or tensor-parallel traffic.
+It is not an availability dependency for the current developer-machine SSH
+tunnel path.
 
 The [model and profile overview](model-profile-overview.md) visually maps each
 Cluster Profile to both Sparks and its Model Definitions. The [model capacity

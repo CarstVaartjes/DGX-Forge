@@ -124,10 +124,14 @@ DGX Spark unified memory is reported from `/proc/meminfo`. A missing or `N/A`
 GPU-memory field from `nvidia-smi` is not treated as an error and is not exposed
 as a second memory pool.
 
-The collector receives the expected function/interface/HCA/GID mapping from the
-validated controller inventory. The controller also loads the accepted RDMA
-counter baseline from `inventory/reports/rdma-nccl.json`. It does not discover
-a different fabric or baseline and quietly accept it.
+The controller receives the expected function/interface/HCA mapping from the
+validated controller inventory. GID index `3` is also pinned there and is
+supported by the prior accepted fabric evidence; this live command does not
+freshly observe or re-prove the GID index. The live probe checks the declared
+interface/HCA pairing, MTU, link speed, RDMA state, and monitored counters. The
+controller also loads the accepted RDMA counter baseline from
+`inventory/reports/rdma-nccl.json`. It does not discover a different fabric or
+baseline and quietly accept it.
 
 ## Stable JSON contract
 
@@ -201,9 +205,10 @@ a different fabric or baseline and quietly accept it.
 ```
 
 Percentages are rounded to one decimal place. Byte counts, uptime, carrier,
-speed, MTU, GID indexes, and counters remain integers. Node keys and function
-records have deterministic order. Errors and warnings are stable, sorted
-machine-readable codes rather than prose-only messages.
+speed, MTU, and counters remain integers. Node keys and function records have
+deterministic order. Errors and warnings are stable, sorted machine-readable
+codes rather than prose-only messages. The inventory-pinned GID index is not a
+field in this live result because the probe does not freshly observe it.
 
 An unreachable node still receives a complete node envelope:
 
@@ -330,6 +335,6 @@ No automated test changes either Spark.
 
 The static [model and profile overview](../../model-profile-overview.md) remains
 the human map of intended profiles and Model Definitions. Live node health is
-not embedded in that document. The future `sparkctl catalog --json` and
+not embedded in that document. The `sparkctl catalog --json` and
 `sparkctl nodes status --json` interfaces provide machine-readable catalog and
 health views without generating or maintaining separate HTML.
