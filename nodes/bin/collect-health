@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export LC_ALL=C
 
 readonly MAX_OUTPUT_BYTES=262144
 readonly MAX_COMMAND_BYTES=8192
@@ -61,6 +62,10 @@ valid_device_name() {
     [[ ${#1} -ge 1 && ${#1} -le 64 && "$1" =~ ^[A-Za-z0-9_.:-]+$ ]]
 }
 
+valid_cpu_sample_ms() {
+    [[ "$1" =~ ^([1-9][0-9]{0,3}|10000)$ ]]
+}
+
 parse_function_arguments() {
     COLLECT_INTERFACES=()
     COLLECT_HCAS=()
@@ -107,13 +112,15 @@ collect_cpu() {
         --arg loads "$loads" '
         def row:
             split(" ") | map(select(length > 0) | tonumber);
+        def total:
+            .[0:8] | add;
         def optional_number:
             if . == null or . == "" then null else try tonumber catch null end;
         ($loads | split(" ")) as $load |
         (if ($first == "" or $second == "") then null else
             ($first | row) as $a |
             ($second | row) as $b |
-            (($b | add) - ($a | add)) as $total_delta |
+            (($b | total) - ($a | total)) as $total_delta |
             (($b[3] + ($b[4] // 0)) - ($a[3] + ($a[4] // 0))) as $idle_delta |
             if $total_delta > 0 then (((($total_delta - $idle_delta) * 1000 / $total_delta) | round) / 10)
             else null end
@@ -335,8 +342,16 @@ collect_services() {
         load_state="${load_state%%$'\n'*}"
         enabled="${enabled%%$'\n'*}"
         active="${active%%$'\n'*}"
-        if [[ "$enabled" == 'enabled' ]]; then earlyoom_enabled=true; else earlyoom_enabled=false; fi
-        if [[ "$active" == 'active' ]]; then earlyoom_active=true; else earlyoom_active=false; fi
+        case "$enabled" in
+            enabled|enabled-runtime) earlyoom_enabled=true ;;
+            disabled|masked|masked-runtime|static|indirect|generated|transient|not-found)
+                earlyoom_enabled=false
+                ;;
+        esac
+        case "$active" in
+            active) earlyoom_active=true ;;
+            inactive|failed|not-found) earlyoom_active=false ;;
+        esac
     fi
 
     jq -cn \
@@ -358,7 +373,7 @@ collect_health() {
     (( $# >= 7 )) || return 2
     local proc_root="$1" sys_root="$2" sample_ms="$3"
     shift 3
-    [[ "$sample_ms" =~ ^[0-9]+$ ]] && (( sample_ms >= 1 && sample_ms <= 10000 )) || return 2
+    valid_cpu_sample_ms "$sample_ms" || return 2
     parse_function_arguments "$@" || return 2
 
     local captured_at hostname boot_id uptime cpu memory_swap root accelerator thermal fabric services document
@@ -441,7 +456,7 @@ main() {
     done
 
     (( json_seen == 1 && sample_seen == 1 )) || { usage; return 2; }
-    if ! [[ "$sample_ms" =~ ^[0-9]+$ ]] || (( sample_ms < 1 || sample_ms > 10000 )); then
+    if ! valid_cpu_sample_ms "$sample_ms"; then
         usage
         return 2
     fi

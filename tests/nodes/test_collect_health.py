@@ -39,7 +39,15 @@ def raw_schema():
 def run_collector(tmp_path):
     invocation = 0
 
-    def run(fixture_name: str, *, gpu_power: str | None = None, gpu_name: str | None = None):
+    def run(
+        fixture_name: str,
+        *,
+        gpu_power: str | None = None,
+        gpu_name: str | None = None,
+        locale_name: str | None = None,
+        systemctl_fails: bool = False,
+        cpu_stat_variant: str | None = None,
+    ):
         nonlocal invocation
         invocation += 1
         fixture_root = tmp_path / f"fixture-{invocation}"
@@ -51,6 +59,17 @@ def run_collector(tmp_path):
         if gpu_power is not None:
             nvidia_fields[-1] = gpu_power
         (fixture_root / "commands" / "nvidia-smi.txt").write_text(", ".join(nvidia_fields) + "\n")
+
+        if cpu_stat_variant is not None:
+            proc_root = fixture_root / "proc"
+            stat_lines = (proc_root / "stat").read_text().splitlines()
+            stat_lines[0] = (proc_root / f"stat.{cpu_stat_variant}.aggregate").read_text().strip()
+            (proc_root / "stat").write_text("\n".join(stat_lines) + "\n")
+            sample_lines = (proc_root / "stat.sample2").read_text().splitlines()
+            sample_lines[0] = (
+                proc_root / f"stat.{cpu_stat_variant}.sample2.aggregate"
+            ).read_text().strip()
+            (proc_root / "stat.sample2").write_text("\n".join(sample_lines) + "\n")
 
         bin_dir = fixture_root / "bin"
         bin_dir.mkdir()
@@ -74,20 +93,30 @@ esac
 cat "$NODE_HEALTH_COMMAND_ROOT/docker-version.txt"
 """,
         )
-        _write_command(
-            bin_dir / "systemctl",
-            """case "$*" in
+        if systemctl_fails:
+            _write_command(bin_dir / "systemctl", "exit 1\n")
+        else:
+            _write_command(
+                bin_dir / "systemctl",
+                """case "$*" in
   "show earlyoom --property=LoadState --value") cat "$NODE_HEALTH_COMMAND_ROOT/earlyoom-load.txt" ;;
   "is-enabled earlyoom") cat "$NODE_HEALTH_COMMAND_ROOT/earlyoom-enabled.txt" ;;
   "is-active earlyoom") cat "$NODE_HEALTH_COMMAND_ROOT/earlyoom-active.txt" ;;
   *) exit 64 ;;
 esac
 """,
-        )
+            )
         _write_command(
             bin_dir / "sleep",
             'cp "$NODE_HEALTH_PROC_ROOT/stat.sample2" "$NODE_HEALTH_PROC_ROOT/stat"\n',
         )
+        if locale_name is not None:
+            _write_command(
+                bin_dir / "awk",
+                """[[ "${LC_ALL:-}" == "C" ]] || exit 65
+exec /usr/bin/awk "$@"
+""",
+            )
 
         proc_root = fixture_root / "proc"
         completed = subprocess.run(
@@ -110,6 +139,7 @@ esac
                 "PATH": f"{bin_dir}:{os.environ['PATH']}",
                 "NODE_HEALTH_COMMAND_ROOT": str(command_root),
                 "NODE_HEALTH_PROC_ROOT": str(proc_root),
+                **({"LC_ALL": locale_name} if locale_name is not None else {}),
             },
         )
         assert len(completed.stdout.encode()) <= 262144
@@ -148,6 +178,22 @@ def test_collector_reports_cpu_unified_memory_and_root(run_collector):
         "used_percent": 6.1,
         "read_only": False,
     }
+
+
+def test_collector_forces_c_numeric_locale(run_collector):
+    """Catches locale-specific decimal commas producing invalid JSON numbers."""
+    result = run_collector("healthy", locale_name="nl_NL.UTF-8")
+
+    assert result["cpu"]["utilization_percent"] == 50
+    assert result["memory"]["used_percent"] == 8.2
+    assert result["thermal_zones"][0]["temperature_c"] == 85
+
+
+def test_cpu_utilization_does_not_double_count_guest_time(run_collector):
+    """Catches Linux guest counters being added twice to total CPU time."""
+    result = run_collector("healthy", cpu_stat_variant="guest")
+
+    assert result["cpu"]["utilization_percent"] == 73.3
 
 
 def test_identity_is_read_from_explicit_fixture_roots(run_collector):
@@ -230,6 +276,15 @@ def test_services_report_query_availability_and_earlyoom_state(run_collector):
     }
 
 
+def test_failed_earlyoom_queries_remain_null(run_collector):
+    """Catches failed service queries being reported as a known disabled state."""
+    result = run_collector("healthy", systemctl_fails=True)
+
+    assert result["services"]["earlyoom_load_state"] is None
+    assert result["services"]["earlyoom_enabled"] is None
+    assert result["services"]["earlyoom_active"] is None
+
+
 def test_raw_output_is_bounded_when_a_command_returns_an_oversized_field(run_collector):
     """Catches an unbounded optional command response escaping into SSH output."""
     result = run_collector("healthy", gpu_name="x" * 300_000)
@@ -292,3 +347,27 @@ def test_collector_rejects_incomplete_unknown_or_unsafe_arguments(arguments):
 
     assert completed.returncode == 2
     assert completed.stdout == ""
+
+
+def test_collector_rejects_huge_cpu_sample_before_arithmetic():
+    """Catches attacker-sized decimal input reaching Bash arithmetic expansion."""
+    completed = subprocess.run(
+        [
+            "bash",
+            str(COLLECTOR),
+            "--json",
+            "--cpu-sample-ms",
+            "0" + "9" * 1_000,
+            "--interface",
+            "eth0",
+            "--hca",
+            "rdma0",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 2
+    assert completed.stdout == ""
+    assert completed.stderr.startswith("Usage:")
+    assert "value too great for base" not in completed.stderr
