@@ -237,7 +237,7 @@ git commit -m "feat: validate content-addressed profile admission"
 - Stores state under `.state/sparkctl/state.json` and locks
   `.state/sparkctl/switch.lock` on the developer machine.
 
-- [ ] **Step 1: Write failing backend and stale-lock tests**
+- [x] **Step 1: Write failing backend and stale-lock tests**
 
 ```python
 def test_backend_never_uses_shell(fake_exec):
@@ -261,11 +261,11 @@ def test_state_write_is_atomic(store, interrupted_replace):
     assert store.load().active_profile == "default"
 ```
 
-- [ ] **Step 2: Confirm tests fail**
+- [x] **Step 2: Confirm tests fail**
 
 Run: `uv run --with pytest pytest tests/spark_profiles/test_backend.py tests/spark_profiles/test_state.py -v`
 
-- [ ] **Step 3: Implement safe command and state boundaries**
+- [x] **Step 3: Implement safe command and state boundaries**
 
 Use argv-only subprocess calls, configured SSH aliases, BatchMode, explicit
 timeouts, bounded captured output, atomic same-directory replacement, PID plus
@@ -277,12 +277,12 @@ only caller-provided repository script bytes over stdin. Reject NUL/newline
 characters in remote argv. It never persists a file or turns into a general
 interactive shell interface.
 
-- [ ] **Step 4: Test timeout, truncation, and stale recovery**
+- [x] **Step 4: Test timeout, truncation, and stale recovery**
 
 Add fixtures for SSH timeout, nonzero remote exit, malformed JSON, oversized
 logs, live lock, old dead lock, and interrupted state replacement.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 Run: `uv run --with pytest pytest tests/spark_profiles/test_backend.py tests/spark_profiles/test_state.py -v`
 
