@@ -6,7 +6,13 @@ docker_bin=${MIA_DOCKER_BIN:-docker}
 curl_bin=${MIA_CURL_BIN:-curl}
 ip_bin=${MIA_IP_BIN:-ip}
 df_bin=${MIA_DF_BIN:-df}
+nvidia_smi_bin=${MIA_NVIDIA_SMI_BIN:-nvidia-smi}
+systemctl_bin=${MIA_SYSTEMCTL_BIN:-systemctl}
+ss_bin=${MIA_SS_BIN:-ss}
+sleep_bin=${MIA_SLEEP_BIN:-sleep}
 models_root=${MIA_MODELS_ROOT:-/srv/models}
+meminfo_path=${MIA_MEMINFO_PATH:-/proc/meminfo}
+boot_id_path=${MIA_BOOT_ID_PATH:-/proc/sys/kernel/random/boot_id}
 sys_class_net=${MIA_SYS_CLASS_NET:-/sys/class/net}
 sys_class_infiniband=${MIA_SYS_CLASS_INFINIBAND:-/sys/class/infiniband}
 operation=${1:-}
@@ -14,6 +20,9 @@ image_reference=ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42
 checkpoint_manifest_sha256=82e965c1caa019b31f4d776d0b3eddb0cc0d8e076f189822b8a3bbe3fa115121
 checkpoint_revision=9e165c30e2704aec5d9d593cce3eebd58bbef1cb
 prepare_container=mia-deepseek-dual-prepare
+minimum_free_memory_bytes=120000000000
+minimum_free_disk_bytes=375809638400
+stop_memory_tolerance_bytes=1073741824
 
 case ${2:-} in
   head) role_env="$adapter_root/config/spark1.env" ;;
@@ -41,6 +50,89 @@ compose() {
     --env-file "$role_env" \
     -f "$adapter_root/compose.yaml" \
     "$@"
+}
+
+quality() {
+  if [[ -n ${MIA_QUALITY_BIN:-} ]]; then
+    "$MIA_QUALITY_BIN" "$@"
+  else
+    python3 "$adapter_root/validation/quality.py" "$@"
+  fi
+}
+
+runtime_release_digest() {
+  local digest=${MIA_RELEASE_SHA256:-$(basename "$adapter_root")}
+  if [[ ! $digest =~ ^[0-9a-f]{64}$ ]]; then
+    echo "runtime release path is not digest-qualified" >&2
+    return 1
+  fi
+  printf '%s\n' "$digest"
+}
+
+boot_id() {
+  local value
+  value=$(cat "$boot_id_path")
+  if [[ -z $value || $value == */* ]]; then
+    echo "invalid boot ID" >&2
+    return 1
+  fi
+  printf '%s\n' "$value"
+}
+
+lifecycle_root() {
+  local release=$1
+  local current_boot=$2
+  printf '%s/runtime-cache/deepseek-agent-dual/lifecycle/%s/%s\n' \
+    "$models_root" "$release" "$current_boot"
+}
+
+verify_no_autostart() {
+  local unit="mia-deepseek-dual-${1}.service"
+  local state rc system_units user_units
+  if state=$(LC_ALL=C "$systemctl_bin" is-enabled "$unit" 2>&1); then
+    case $state in
+      disabled|masked|static|indirect|generated|transient|not-found) ;;
+      enabled|enabled-runtime|linked|linked-runtime|alias)
+        echo "autostart unit is enabled: $unit" >&2
+        return 1
+        ;;
+      *)
+        echo "cannot classify autostart unit state: $unit: $state" >&2
+        return 1
+        ;;
+    esac
+  else
+    rc=$?
+    case "$rc:$state" in
+      1:disabled|1:masked|4:not-found) ;;
+      *)
+        echo "systemd autostart inspection failed: $unit: $state" >&2
+        return 1
+        ;;
+    esac
+  fi
+  if ! system_units=$(LC_ALL=C "$systemctl_bin" list-unit-files \
+    --type=service --no-legend 2>&1); then
+    echo "systemd system-unit enumeration failed: $system_units" >&2
+    return 1
+  fi
+  if ! user_units=$(LC_ALL=C "$systemctl_bin" --user list-unit-files \
+    --type=service --no-legend 2>&1); then
+    echo "systemd user-unit enumeration failed: $user_units" >&2
+    return 1
+  fi
+  if awk '
+    tolower($1) ~ /(mia-deepseek|deepseek-agent-dual|vllm)/ &&
+      $2 ~ /^(enabled|enabled-runtime|linked|linked-runtime|alias)$/ { found=1 }
+    END { exit !found }
+  ' <<<"$system_units" || awk '
+    tolower($1) ~ /(mia-deepseek|deepseek-agent-dual|vllm)/ &&
+      $2 ~ /^(enabled|enabled-runtime|linked|linked-runtime|alias)$/ { found=1 }
+    END { exit !found }
+  ' <<<"$user_units"; then
+    echo "matching runtime autostart unit is enabled" >&2
+    return 1
+  fi
 }
 
 verify_rail() {
@@ -284,10 +376,49 @@ PREPARE_SCRIPT
     printf 'prepared role=%s\n' "${2}"
     ;;
   verify)
-    compose config --quiet
-    "$docker_bin" image inspect \
-      "$image_reference" \
-      >/dev/null
+    runtime_release_digest >/dev/null
+    compose config --format json | quality validate-compose --role "${2}"
+    inspected_image=$(
+      "$docker_bin" image inspect --format \
+        '{{range .RepoDigests}}{{println .}}{{end}}' \
+        "$image_reference"
+    )
+    if ! grep -Fx "$image_reference" <<<"$inspected_image" >/dev/null; then
+      echo "runtime image digest mismatch" >&2
+      exit 1
+    fi
+    gpu_names=$(
+      "$nvidia_smi_bin" --query-gpu=name --format=csv,noheader
+    )
+    if [[ -z $gpu_names ]] || grep -Fv 'GB10' <<<"$gpu_names" >/dev/null; then
+      echo "GB10 architecture check failed" >&2
+      exit 1
+    fi
+    mem_available_bytes=$(awk \
+      '$1 == "MemAvailable:" {printf "%.0f\n", $2 * 1024; found=1} END {if (!found) exit 1}' \
+      "$meminfo_path")
+    if [[ ! $mem_available_bytes =~ ^[0-9]+$ || \
+          $mem_available_bytes -lt $minimum_free_memory_bytes ]]; then
+      echo "insufficient free memory" >&2
+      exit 1
+    fi
+    available_disk_bytes=$(
+      "$df_bin" -PB1 "$models_root" | awk 'NR == 2 {print $4}'
+    )
+    if [[ ! $available_disk_bytes =~ ^[0-9]+$ || \
+          $available_disk_bytes -lt $minimum_free_disk_bytes ]]; then
+      echo "insufficient free disk" >&2
+      exit 1
+    fi
+    conflicting_runtimes=$(
+      "$docker_bin" ps --format '{{.Names}}' | \
+        grep -E '(^mia-deepseek-dual-(head|worker)$|vllm|ollama|litellm)' || true
+    )
+    if [[ -n $conflicting_runtimes ]]; then
+      echo "conflicting runtime is active: $conflicting_runtimes" >&2
+      exit 1
+    fi
+    verify_no_autostart "${2}"
     manifest="$models_root/manifests/deepseek-v4-flash-0731.json"
     snapshot="$models_root/snapshots/deepseek-v4-flash-0731"
     test -f "$manifest"
@@ -303,16 +434,53 @@ PREPARE_SCRIPT
     printf 'verified role=%s\n' "${2}"
     ;;
   start)
+    release_digest=$(runtime_release_digest)
+    current_boot=$(boot_id)
+    lifecycle=$(lifecycle_root "$release_digest" "$current_boot")
+    idle_seconds=${MIA_IDLE_SECONDS:-60}
+    if [[ ! $idle_seconds =~ ^[0-9]+$ ]]; then
+      echo "invalid idle baseline duration" >&2
+      exit 1
+    fi
+    install -d -m 0750 "$lifecycle"
+    "$sleep_bin" "$idle_seconds"
+    quality record-baseline \
+      --output "$lifecycle/${2}.baseline.json" \
+      --meminfo "$meminfo_path" \
+      --release-sha256 "$release_digest" \
+      --boot-id-file "$boot_id_path" \
+      --role "${2}"
     compose up --detach --no-build --pull never --remove-orphans
     ;;
   health)
     running=$("$docker_bin" inspect --format '{{.State.Running}}' "$container")
     [[ $running == true ]]
+    container_image=$(
+      "$docker_bin" inspect --format '{{.Config.Image}}' "$container"
+    )
+    if [[ $container_image != "$image_reference" ]]; then
+      echo "container image mismatch" >&2
+      exit 1
+    fi
+    expected_rank=1
+    if [[ ${2} == head ]]; then
+      expected_rank=0
+    fi
+    container_environment=$(
+      "$docker_bin" inspect --format '{{range .Config.Env}}{{println .}}{{end}}' \
+        "$container"
+    )
+    if ! grep -Fx "NODE_RANK=$expected_rank" <<<"$container_environment" >/dev/null; then
+      echo "container rank mismatch: expected $expected_rank" >&2
+      exit 1
+    fi
     if [[ ${2} == head ]]; then
       "$curl_bin" --fail --silent --show-error --max-time 10 \
         http://127.0.0.1:8888/health >/dev/null
       "$curl_bin" --fail --silent --show-error --max-time 10 \
-        http://127.0.0.1:8888/v1/models >/dev/null
+        http://127.0.0.1:8888/v1/models | quality validate-models
+      compose config --format json | quality validate-compose --role head
+      "$docker_bin" logs --tail 2000 "$container" 2>&1 | quality validate-logs
     fi
     printf 'healthy role=%s\n' "${2}"
     ;;
@@ -321,10 +489,17 @@ PREPARE_SCRIPT
       echo "infer is head-only" >&2
       exit 2
     fi
-    exec "$curl_bin" --fail --silent --show-error --max-time 300 \
-      -H 'Content-Type: application/json' \
-      -d '{"model":"deepseek","messages":[{"role":"user","content":"Reply with exactly: SPARK_OK"}],"temperature":0,"max_tokens":32}' \
-      http://127.0.0.1:8888/v1/chat/completions
+    release_digest=$(runtime_release_digest)
+    current_boot=$(boot_id)
+    evidence_dir="$models_root/outputs/deepseek-agent-dual/quality/$release_digest"
+    evidence="$evidence_dir/$current_boot.json"
+    install -d -m 0750 "$evidence_dir"
+    quality run \
+      --fixtures "$adapter_root/validation/quality-fixtures.json" \
+      --output "$evidence" \
+      --base-url http://127.0.0.1:8888 \
+      --release-sha256 "$release_digest" \
+      --boot-id-file "$boot_id_path"
     ;;
   stop)
     compose down --timeout 120 --remove-orphans
@@ -339,6 +514,41 @@ PREPARE_SCRIPT
       echo "head API still responds" >&2
       exit 1
     fi
+    listening_ports=$("$ss_bin" -H -ltn)
+    if grep -E '([.:])25000([[:space:]]|$)' <<<"$listening_ports" >/dev/null || \
+       { [[ ${2} == head ]] && \
+         grep -E '([.:])8888([[:space:]]|$)' <<<"$listening_ports" >/dev/null; }; then
+      echo "runtime port is still listening" >&2
+      exit 1
+    fi
+    verify_no_autostart "${2}"
+    release_digest=$(runtime_release_digest)
+    current_boot=$(boot_id)
+    lifecycle=$(lifecycle_root "$release_digest" "$current_boot")
+    install -d -m 0750 "$lifecycle"
+    baseline="$lifecycle/${2}.baseline.json"
+    release_result="$lifecycle/${2}.release.json"
+    wait_seconds=${MIA_RELEASE_WAIT_SECONDS:-120}
+    poll_seconds=${MIA_RELEASE_POLL_SECONDS:-5}
+    if [[ ! $wait_seconds =~ ^[0-9]+$ || ! $poll_seconds =~ ^[0-9]+$ ]]; then
+      echo "invalid memory recovery timing" >&2
+      exit 1
+    fi
+    started_at=$SECONDS
+    while ! quality verify-memory \
+      --baseline "$baseline" \
+      --output "$release_result" \
+      --meminfo "$meminfo_path" \
+      --release-sha256 "$release_digest" \
+      --boot-id-file "$boot_id_path" \
+      --role "${2}" \
+      --tolerance-bytes "$stop_memory_tolerance_bytes"; do
+      if (( SECONDS - started_at >= wait_seconds )); then
+        echo "memory did not recover within $stop_memory_tolerance_bytes bytes" >&2
+        exit 1
+      fi
+      "$sleep_bin" "$poll_seconds"
+    done
     printf 'released role=%s\n' "${2}"
     ;;
   *)

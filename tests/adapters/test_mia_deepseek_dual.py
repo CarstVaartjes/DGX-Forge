@@ -1,10 +1,14 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
+import json
 import os
 import shutil
 import subprocess
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 ADAPTER = ROOT / "adapters/deepseek/mia-vllm/bin/mia-deepseek-dual"
@@ -12,6 +16,265 @@ IMAGE = (
     "ghcr.io/anemll/dspark-vllm-gx10"
     "@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8"
 )
+QUALITY = ROOT / "adapters/deepseek/mia-vllm/validation/quality.py"
+QUALITY_FIXTURES = (
+    ROOT / "adapters/deepseek/mia-vllm/validation/quality-fixtures.json"
+)
+
+
+def load_quality():
+    spec = importlib.util.spec_from_file_location("mia_quality", QUALITY)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _completion(
+    content: str | None = None,
+    *,
+    reasoning: str | None = None,
+    tool_calls: list[dict[str, object]] | None = None,
+    prompt_tokens: int = 32,
+) -> dict[str, object]:
+    message: dict[str, object] = {"role": "assistant", "content": content}
+    if reasoning is not None:
+        message["reasoning_content"] = reasoning
+    if tool_calls is not None:
+        message["tool_calls"] = tool_calls
+    return {
+        "id": "chatcmpl-test",
+        "model": "deepseek",
+        "choices": [{"index": 0, "finish_reason": "stop", "message": message}],
+        "usage": {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": 8,
+            "total_tokens": prompt_tokens + 8,
+        },
+    }
+
+
+def _passing_quality_responses() -> dict[str, object]:
+    return {
+        "english_exact": _completion("SPARK QUALITY OK"),
+        "latin_script": _completion(
+            "The distributed runtime answers clearly in English."
+        ),
+        "no_repetition": _completion(
+            "A concise answer has varied words and finishes normally."
+        ),
+        "no_xml_leak": _completion("Reasoning remains private; the answer is clean."),
+        "streaming": [
+            {"choices": [{"delta": {"content": "STREAM_"}}]},
+            {"choices": [{"delta": {"content": "OK"}}]},
+            "[DONE]",
+        ],
+        "reasoning_off": _completion("OFF_OK"),
+        "reasoning_low": _completion("LOW_OK", reasoning="brief private reasoning"),
+        "reasoning_high": _completion("HIGH_OK", reasoning="detailed private reasoning"),
+        "reasoning_max": _completion("MAX_OK", reasoning="maximum private reasoning"),
+        "tool_call": _completion(
+            None,
+            tool_calls=[
+                {
+                    "id": "call_test",
+                    "type": "function",
+                    "function": {
+                        "name": "get_temperature",
+                        "arguments": '{"city":"Amsterdam"}',
+                    },
+                }
+            ],
+        ),
+        "long_411_regression": _completion("LONG_CONTEXT_OK", prompt_tokens=512),
+    }
+
+
+def _rendered_compose_command(role: str) -> list[str]:
+    lines = (ROOT / "adapters/deepseek/mia-vllm/compose.yaml").read_text(
+        encoding="utf-8"
+    ).splitlines()
+    marker = lines.index("      - |")
+    body: list[str] = []
+    for line in lines[marker + 1 :]:
+        if not line.startswith("        "):
+            break
+        body.append(line[8:])
+    script = "\n".join(body) + "\n"
+    headless = "" if role == "head" else "--headless"
+    return ["bash", "-lc", script.replace("${HEADLESS_FLAG}", headless)]
+
+
+def _valid_compose_config(role: str) -> dict[str, object]:
+    return {
+        "services": {
+            "runtime": {
+                "image": IMAGE,
+                "network_mode": "host",
+                "ipc": "host",
+                "shm_size": 68719476736,
+                "restart": "no",
+                "pull_policy": "never",
+                "gpus": [{"count": -1}],
+                "devices": [
+                    {
+                        "source": "/dev/infiniband",
+                        "target": "/dev/infiniband",
+                    }
+                ],
+                "ulimits": {
+                    "memlock": {"soft": -1, "hard": -1},
+                    "stack": {"soft": 67108864, "hard": 67108864},
+                },
+                "environment": {
+                    "HF_HUB_OFFLINE": "1",
+                    "TRANSFORMERS_OFFLINE": "1",
+                    "HF_HUB_DISABLE_XET": "1",
+                    "NODE_RANK": "0" if role == "head" else "1",
+                    "DSPARK_MODEL": "/models/deepseek-ai/DeepSeek-V4-Flash-0731",
+                    "DSPARK_ENCODING_FILE": "/models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py",
+                    "VLLM_HOST_IP": (
+                        "192.168.100.10" if role == "head" else "192.168.100.11"
+                    ),
+                    "MASTER_ADDR": "192.168.100.10",
+                    "MASTER_PORT": "25000",
+                    "NCCL_SOCKET_IFNAME": "=enp1s0f1np1,enP2p1s0f1np1",
+                    "NCCL_IB_HCA": "=rocep1s0f1:1,roceP2p1s0f1:1",
+                    "NCCL_IB_GID_INDEX": "3",
+                    "TP_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1",
+                    "GLOO_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1",
+                    "VLLM_CACHE_ROOT": "/runtime-cache/vllm",
+                    "FLASHINFER_WORKSPACE_BASE": "/runtime-cache/flashinfer",
+                    "MTP_NUM_TOKENS": "5",
+                    "DEFAULT_THINKING": "low",
+                    "VLLM_USE_B12X_MOE": "1",
+                },
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "source": "/srv/models/snapshots/deepseek-v4-flash-0731",
+                        "target": "/models/deepseek-ai/DeepSeek-V4-Flash-0731",
+                        "read_only": True,
+                    },
+                    {
+                        "type": "bind",
+                        "source": "/srv/models/runtime-cache/deepseek-agent-dual",
+                        "target": "/runtime-cache",
+                    },
+                    {
+                        "type": "bind",
+                        "source": "/srv/models/runtime-cache/deepseek-agent-dual/tmp",
+                        "target": "/tmp",
+                    },
+                    {
+                        "type": "bind",
+                        "source": "/srv/models/outputs/deepseek-agent-dual",
+                        "target": "/outputs",
+                    },
+                    {
+                        "type": "bind",
+                        "source": "/srv/models/logs/deepseek-agent-dual",
+                        "target": "/logs",
+                    },
+                ],
+                "command": _rendered_compose_command(role),
+            }
+        }
+    }
+
+
+def test_quality_fixture_covers_every_required_gate() -> None:
+    fixtures = json.loads(QUALITY_FIXTURES.read_text(encoding="utf-8"))
+
+    assert [case["id"] for case in fixtures["cases"]] == [
+        "english_exact",
+        "latin_script",
+        "no_repetition",
+        "no_xml_leak",
+        "streaming",
+        "reasoning_off",
+        "reasoning_low",
+        "reasoning_high",
+        "reasoning_max",
+        "tool_call",
+        "long_411_regression",
+    ]
+    long_prompt = fixtures["cases"][-1]["request"]["messages"][0]["content"]
+    assert len(long_prompt.split()) > 411
+
+
+def test_quality_runner_writes_bounded_structured_evidence(tmp_path: Path) -> None:
+    quality = load_quality()
+    evidence_path = tmp_path / "quality.json"
+
+    evidence = quality.run_quality(
+        fixtures_path=QUALITY_FIXTURES,
+        output_path=evidence_path,
+        request=lambda case: _passing_quality_responses()[case["id"]],
+        release_sha256="a" * 64,
+        boot_id="boot-id-1",
+    )
+
+    assert evidence["status"] == "passed"
+    assert evidence["release_sha256"] == "a" * 64
+    assert evidence["boot_id"] == "boot-id-1"
+    assert all(gate["passed"] for gate in evidence["gates"])
+    assert evidence_path.stat().st_size <= 65536
+    assert json.loads(evidence_path.read_text(encoding="utf-8")) == evidence
+
+
+def test_quality_runner_records_external_request_failures(tmp_path: Path) -> None:
+    quality = load_quality()
+    evidence_path = tmp_path / "quality.json"
+
+    with pytest.raises(quality.QualityFailure, match="request failed"):
+        quality.run_quality(
+            fixtures_path=QUALITY_FIXTURES,
+            output_path=evidence_path,
+            request=lambda _case: (_ for _ in ()).throw(RuntimeError("offline")),
+            release_sha256="a" * 64,
+            boot_id="boot-id-1",
+        )
+
+    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    assert evidence["status"] == "failed"
+    assert evidence["error"] == "english_exact: request failed: offline"
+
+
+@pytest.mark.parametrize(
+    ("case_id", "bad_response", "message"),
+    [
+        ("english_exact", _completion("almost"), "exact content"),
+        ("latin_script", _completion("только кириллица"), "script drift"),
+        ("no_repetition", _completion("echo " * 40), "repetition loop"),
+        ("no_xml_leak", _completion("<think>secret</think>answer"), "XML leakage"),
+        ("streaming", [{"choices": [{"delta": {"content": "STREAM_OK"}}]}], "stream terminator"),
+        ("reasoning_off", _completion("OFF_OK", reasoning="leaked"), "reasoning off"),
+        ("reasoning_low", _completion("LOW_OK"), "reasoning low"),
+        ("reasoning_high", _completion("HIGH_OK"), "reasoning high"),
+        ("reasoning_max", _completion("MAX_OK"), "reasoning max"),
+        ("tool_call", _completion("no tool"), "tool call"),
+        ("long_411_regression", _completion("LONG_CONTEXT_OK", prompt_tokens=411), ">411"),
+    ],
+)
+def test_quality_runner_rejects_each_gate(
+    tmp_path: Path,
+    case_id: str,
+    bad_response: object,
+    message: str,
+) -> None:
+    quality = load_quality()
+    responses = _passing_quality_responses()
+    responses[case_id] = bad_response
+
+    with pytest.raises(quality.QualityFailure, match=message):
+        quality.run_quality(
+            fixtures_path=QUALITY_FIXTURES,
+            output_path=tmp_path / "quality.json",
+            request=lambda case: responses[case["id"]],
+            release_sha256="a" * 64,
+            boot_id="boot-id-1",
+        )
 
 
 def render(role: str) -> str:
@@ -339,9 +602,18 @@ def test_vendored_checkpoint_manifest_matches_the_checked_manifest() -> None:
 def test_start_and_stop_control_only_the_local_role(tmp_path: Path) -> None:
     log = tmp_path / "docker.log"
     docker = fake_command(tmp_path, "docker", f'printf "%s\\n" "$*" >> {log!s}\n')
+    boot_id = tmp_path / "boot_id"
+    boot_id.write_text("boot-1\n", encoding="utf-8")
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemAvailable:       125000000 kB\n", encoding="utf-8")
     environment = {
         **os.environ,
         "MIA_DOCKER_BIN": str(docker),
+        "MIA_MODELS_ROOT": str(tmp_path / "models"),
+        "MIA_RELEASE_SHA256": "a" * 64,
+        "MIA_BOOT_ID_PATH": str(boot_id),
+        "MIA_MEMINFO_PATH": str(meminfo),
+        "MIA_IDLE_SECONDS": "0",
     }
 
     subprocess.run(
@@ -422,7 +694,7 @@ def _verification_fixture(tmp_path: Path) -> dict[str, str]:
         f"Path({str(verifier_log)!r}).write_text(' '.join(sys.argv[1:]))\n",
         encoding="utf-8",
     )
-    return {
+    environment = {
         **os.environ,
         "MIA_DOCKER_BIN": str(docker),
         "MIA_IP_BIN": str(ip),
@@ -433,6 +705,8 @@ def _verification_fixture(tmp_path: Path) -> dict[str, str]:
         "MIA_SYS_CLASS_INFINIBAND": str(sys_class_infiniband),
         "VERIFIER_LOG": str(verifier_log),
     }
+    _add_preflight_commands(environment, tmp_path)
+    return environment
 
 
 def test_verify_checks_the_exact_offline_snapshot_manifest(tmp_path: Path) -> None:
@@ -542,7 +816,11 @@ def test_worker_health_never_calls_the_head_api(tmp_path: Path) -> None:
     docker = fake_command(
         tmp_path,
         "docker",
-        'if [[ ${1:-} == inspect ]]; then printf "true\\n"; fi\n',
+        '''if [[ $* == *"State.Running"* ]]; then printf "true\\n"
+elif [[ $* == *"Config.Image"* ]]; then printf "%s\\n" "$FAKE_IMAGE_REFERENCE"
+elif [[ $* == *"Config.Env"* ]]; then printf "NODE_RANK=1\\n"
+fi
+''',
     )
     curl = fake_command(tmp_path, "curl", f'printf "%s\\n" "$*" >> {curl_log!s}\n')
 
@@ -557,6 +835,7 @@ def test_worker_health_never_calls_the_head_api(tmp_path: Path) -> None:
             "MIA_DOCKER_BIN": str(docker),
             "MIA_CURL_BIN": str(curl),
             "MIA_LOCAL_HOSTNAME": "spark-2297",
+            "FAKE_IMAGE_REFERENCE": IMAGE,
         },
     )
 
@@ -591,3 +870,518 @@ def test_adapter_never_owns_cross_node_transport() -> None:
 
     for forbidden in ("ssh ", "scp ", "rsync "):
         assert forbidden not in source
+
+
+def test_compose_validation_rejects_runtime_pin_drift() -> None:
+    quality = load_quality()
+    rendered = _valid_compose_config("worker")
+
+    quality.validate_compose(rendered, "worker")
+    rendered["services"]["runtime"]["environment"]["HF_HUB_OFFLINE"] = "0"
+    with pytest.raises(quality.QualityFailure, match="HF_HUB_OFFLINE"):
+        quality.validate_compose(rendered, "worker")
+
+
+@pytest.mark.parametrize(
+    ("drift", "expected"),
+    [
+        ("gpu", "all-GPU"),
+        ("stack", "stack ulimit"),
+        ("mount", "volume list"),
+        ("extra_mount", "volume list"),
+        ("mtp", "speculative-config"),
+        ("distributed", "--nnodes 2"),
+        ("duplicate", "runtime command mismatch"),
+    ],
+)
+def test_compose_validation_rejects_critical_lane_drift(
+    drift: str, expected: str
+) -> None:
+    quality = load_quality()
+    rendered = _valid_compose_config("worker")
+    runtime = rendered["services"]["runtime"]
+    if drift == "gpu":
+        runtime["gpus"] = []
+    elif drift == "stack":
+        runtime["ulimits"]["stack"] = 8192
+    elif drift == "mount":
+        runtime["volumes"][1]["source"] = "/tmp/mutable-cache"
+    elif drift == "extra_mount":
+        runtime["volumes"].append(
+            {
+                "type": "bind",
+                "source": "/tmp/extra",
+                "target": "/extra",
+            }
+        )
+    elif drift == "mtp":
+        runtime["command"][2] = runtime["command"][2].replace(
+            '"num_speculative_tokens":5', '"num_speculative_tokens":1'
+        )
+    elif drift == "distributed":
+        runtime["command"][2] = runtime["command"][2].replace("--nnodes 2", "")
+    else:
+        runtime["command"][2] += "--max-model-len 411\n"
+
+    with pytest.raises(quality.QualityFailure, match=expected):
+        quality.validate_compose(rendered, "worker")
+
+
+def test_compose_validation_rejects_wrong_role_network_config() -> None:
+    quality = load_quality()
+    rendered = _valid_compose_config("worker")
+    rendered["services"]["runtime"]["environment"]["VLLM_HOST_IP"] = (
+        "192.168.100.10"
+    )
+
+    with pytest.raises(quality.QualityFailure, match="VLLM_HOST_IP"):
+        quality.validate_compose(rendered, "worker")
+
+
+def test_head_identity_and_startup_logs_require_exact_pins() -> None:
+    quality = load_quality()
+    quality.validate_models({"data": [{"id": "deepseek"}]})
+    quality.validate_startup_logs(
+        "model=/models/deepseek-ai/DeepSeek-V4-Flash-0731 "
+        "max_model_len=1048576 tensor_parallel_size=2 pipeline_parallel_size=1 "
+        "node_rank=0"
+    )
+
+    with pytest.raises(quality.QualityFailure, match="model identity"):
+        quality.validate_models({"data": [{"id": "wrong"}]})
+    with pytest.raises(quality.QualityFailure, match="max_model_len"):
+        quality.validate_startup_logs(
+            "model=/models/deepseek-ai/DeepSeek-V4-Flash-0731 "
+            "max_model_len=411 tensor_parallel_size=2 pipeline_parallel_size=1 node_rank=0"
+        )
+
+
+def test_lifecycle_records_release_and_boot_qualified_memory(tmp_path: Path) -> None:
+    quality = load_quality()
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemAvailable:       125000000 kB\n", encoding="utf-8")
+    baseline = tmp_path / ("a" * 64) / "boot-1" / "worker.baseline.json"
+    result = tmp_path / ("a" * 64) / "boot-1" / "worker.release.json"
+
+    quality.record_memory_baseline(
+        output_path=baseline,
+        meminfo_path=meminfo,
+        release_sha256="a" * 64,
+        boot_id="boot-1",
+        role="worker",
+    )
+    recorded = json.loads(baseline.read_text(encoding="utf-8"))
+    assert recorded["mem_available_bytes"] == 128000000000
+    assert recorded["release_sha256"] == "a" * 64
+    assert recorded["boot_id"] == "boot-1"
+
+    meminfo.write_text("MemAvailable:       124000000 kB\n", encoding="utf-8")
+    assert quality.record_release_memory(
+        baseline_path=baseline,
+        output_path=result,
+        meminfo_path=meminfo,
+        release_sha256="a" * 64,
+        boot_id="boot-1",
+        role="worker",
+        tolerance_bytes=1073741824,
+    )
+    assert json.loads(result.read_text(encoding="utf-8"))["status"] == "recovered"
+
+    meminfo.write_text("MemAvailable:       100000000 kB\n", encoding="utf-8")
+    assert not quality.record_release_memory(
+        baseline_path=baseline,
+        output_path=result,
+        meminfo_path=meminfo,
+        release_sha256="a" * 64,
+        boot_id="boot-1",
+        role="worker",
+        tolerance_bytes=1073741824,
+    )
+    assert json.loads(result.read_text(encoding="utf-8"))["status"] == "pending"
+
+
+def test_lifecycle_without_a_baseline_records_not_started(tmp_path: Path) -> None:
+    quality = load_quality()
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemAvailable:       125000000 kB\n", encoding="utf-8")
+    result = tmp_path / "worker.release.json"
+
+    assert quality.record_release_memory(
+        baseline_path=tmp_path / "missing.json",
+        output_path=result,
+        meminfo_path=meminfo,
+        release_sha256="a" * 64,
+        boot_id="boot-1",
+        role="worker",
+        tolerance_bytes=1073741824,
+    )
+    assert json.loads(result.read_text(encoding="utf-8"))["status"] == "not-started"
+
+
+def _add_preflight_commands(environment: dict[str, str], tmp_path: Path) -> Path:
+    command_log = tmp_path / "preflight.log"
+    docker = fake_command(
+        tmp_path,
+        "docker-preflight",
+        f'''printf "docker %s\\n" "$*" >> {command_log!s}
+if [[ $* == *"compose"* && $* == *"--format json"* ]]; then
+  printf "%s\\n" "$FAKE_COMPOSE_JSON"
+elif [[ ${{1:-}} == image && ${{2:-}} == inspect && $* == *"--format"* ]]; then
+  printf "%s\\n" "$FAKE_IMAGE_REFERENCE"
+elif [[ ${{1:-}} == ps ]]; then
+  printf "%s" "${{FAKE_CONFLICTS:-}}"
+fi
+''',
+    )
+    nvidia_smi = fake_command(
+        tmp_path,
+        "nvidia-smi",
+        f'printf "nvidia-smi %s\\n" "$*" >> {command_log!s}\n'
+        'printf "%s\\n" "${FAKE_GPU_NAME:-NVIDIA GB10}"\n',
+    )
+    systemctl = fake_command(
+        tmp_path,
+        "systemctl",
+        f'''printf "systemctl %s\\n" "$*" >> {command_log!s}
+if [[ ${{FAKE_SYSTEMCTL_MODE:-}} == error ]]; then
+  printf "Failed to connect to bus\\n" >&2
+  exit 1
+fi
+if [[ ${{1:-}} == is-enabled ]]; then
+  if [[ ${{FAKE_SYSTEMCTL_MODE:-}} == enabled ]]; then
+    printf "enabled\\n"
+    exit 0
+  fi
+  printf "not-found\\n"
+  exit 4
+fi
+if [[ ${{FAKE_SYSTEMCTL_MODE:-}} == user-enabled && $* == *"--user"* ]]; then
+  printf "vllm-user.service enabled enabled\\n"
+fi
+exit 0
+''',
+    )
+    df = fake_command(
+        tmp_path,
+        "df-preflight",
+        f'printf "df %s\\n" "$*" >> {command_log!s}\n'
+        'printf "Filesystem 1-blocks Used Available Capacity Mounted on\\n"\n'
+        'printf "fake 1000000000000 1 %s 1%%%% /srv/models\\n" '
+        '"${FAKE_DISK_BYTES:-999999999999}"\n',
+    )
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemAvailable:       125000000 kB\n", encoding="utf-8")
+    environment.update(
+        {
+            "MIA_DOCKER_BIN": str(docker),
+            "MIA_NVIDIA_SMI_BIN": str(nvidia_smi),
+            "MIA_SYSTEMCTL_BIN": str(systemctl),
+            "MIA_DF_BIN": str(df),
+            "MIA_MEMINFO_PATH": str(meminfo),
+            "MIA_RELEASE_SHA256": "a" * 64,
+            "FAKE_COMPOSE_JSON": json.dumps(_valid_compose_config("worker")),
+            "FAKE_IMAGE_REFERENCE": IMAGE,
+        }
+    )
+    return command_log
+
+
+def test_verify_runs_complete_offline_node_preflight(tmp_path: Path) -> None:
+    environment = _verification_fixture(tmp_path)
+    command_log = _add_preflight_commands(environment, tmp_path)
+
+    completed = subprocess.run(
+        [str(ADAPTER), "verify", "worker"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.stdout == "verified role=worker\n"
+    calls = command_log.read_text(encoding="utf-8")
+    assert "config --format json" in calls
+    assert "image inspect --format" in calls
+    assert "nvidia-smi --query-gpu=name --format=csv,noheader" in calls
+    assert "systemctl is-enabled mia-deepseek-dual-worker.service" in calls
+    assert "docker ps --format" in calls
+    assert "df -PB1" in calls
+
+
+@pytest.mark.parametrize(
+    ("override", "expected"),
+    [
+        ({"FAKE_GPU_NAME": "NVIDIA H100"}, "GB10"),
+        ({"FAKE_DISK_BYTES": "1000"}, "free disk"),
+        ({"FAKE_CONFLICTS": "ollama\n"}, "conflicting runtime"),
+    ],
+)
+def test_verify_rejects_failed_node_preflight(
+    tmp_path: Path, override: dict[str, str], expected: str
+) -> None:
+    environment = _verification_fixture(tmp_path)
+    _add_preflight_commands(environment, tmp_path)
+    environment.update(override)
+
+    completed = subprocess.run(
+        [str(ADAPTER), "verify", "worker"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 1
+    assert expected in completed.stderr
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("error", "systemd autostart inspection failed"),
+        ("enabled", "autostart unit is enabled"),
+        ("user-enabled", "matching runtime autostart unit is enabled"),
+    ],
+)
+def test_verify_fails_closed_for_systemd_autostart_inspection(
+    tmp_path: Path, mode: str, expected: str
+) -> None:
+    environment = _verification_fixture(tmp_path)
+    _add_preflight_commands(environment, tmp_path)
+    environment["FAKE_SYSTEMCTL_MODE"] = mode
+
+    completed = subprocess.run(
+        [str(ADAPTER), "verify", "worker"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 1
+    assert expected in completed.stderr
+
+
+def test_health_rejects_a_container_with_the_wrong_local_rank(tmp_path: Path) -> None:
+    docker = fake_command(
+        tmp_path,
+        "docker",
+        '''if [[ $* == *"State.Running"* ]]; then printf "true\\n"
+elif [[ $* == *"Config.Env"* ]]; then printf "NODE_RANK=0\\n"
+elif [[ $* == *"Config.Image"* ]]; then printf "%s\\n" "$FAKE_IMAGE_REFERENCE"
+fi
+''',
+    )
+
+    completed = subprocess.run(
+        [str(ADAPTER), "health", "worker"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "MIA_DOCKER_BIN": str(docker),
+            "MIA_LOCAL_HOSTNAME": "spark-2297",
+            "MIA_RELEASE_SHA256": "a" * 64,
+            "FAKE_IMAGE_REFERENCE": IMAGE,
+        },
+    )
+
+    assert completed.returncode == 1
+    assert "container rank mismatch" in completed.stderr
+
+
+def test_head_health_checks_model_identity_render_and_startup_logs(
+    tmp_path: Path,
+) -> None:
+    call_log = tmp_path / "health.log"
+    docker = fake_command(
+        tmp_path,
+        "docker",
+        f'''printf "docker %s\\n" "$*" >> {call_log!s}
+if [[ $* == *"State.Running"* ]]; then printf "true\\n"
+elif [[ $* == *"Config.Env"* ]]; then printf "NODE_RANK=0\\n"
+elif [[ $* == *"Config.Image"* ]]; then printf "%s\\n" "$FAKE_IMAGE_REFERENCE"
+elif [[ $* == *"compose"* && $* == *"--format json"* ]]; then printf "%s\\n" "$FAKE_COMPOSE_JSON"
+elif [[ ${{1:-}} == logs ]]; then
+  printf "model=/models/deepseek-ai/DeepSeek-V4-Flash-0731 max_model_len=1048576 tensor_parallel_size=2 pipeline_parallel_size=1 node_rank=0\\n" >&2
+fi
+''',
+    )
+    curl = fake_command(
+        tmp_path,
+        "curl",
+        f'''printf "curl %s\\n" "$*" >> {call_log!s}
+if [[ $* == *"/v1/models"* ]]; then printf '{{"data":[{{"id":"deepseek"}}]}}\\n'; fi
+''',
+    )
+
+    completed = subprocess.run(
+        [str(ADAPTER), "health", "head"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "MIA_DOCKER_BIN": str(docker),
+            "MIA_CURL_BIN": str(curl),
+            "MIA_LOCAL_HOSTNAME": "spark-3542",
+            "MIA_RELEASE_SHA256": "a" * 64,
+            "FAKE_IMAGE_REFERENCE": IMAGE,
+            "FAKE_COMPOSE_JSON": json.dumps(_valid_compose_config("head")),
+        },
+    )
+
+    assert completed.stdout == "healthy role=head\n"
+    calls = call_log.read_text(encoding="utf-8")
+    assert "/v1/models" in calls
+    assert "config --format json" in calls
+    assert "docker logs --tail 2000 mia-deepseek-dual-head" in calls
+
+
+def test_head_infer_writes_release_and_boot_qualified_evidence(tmp_path: Path) -> None:
+    models_root = tmp_path / "models"
+    boot_id = tmp_path / "boot_id"
+    boot_id.write_text("boot-1\n", encoding="utf-8")
+    quality_log = tmp_path / "quality.log"
+    quality = fake_command(
+        tmp_path,
+        "quality",
+        f'''printf "%s\\n" "$*" > {quality_log!s}
+while [[ $# -gt 0 ]]; do
+  if [[ $1 == --output ]]; then shift; output=$1; fi
+  shift || true
+done
+mkdir -p -- "$(dirname -- "$output")"
+printf '{{"status":"passed"}}\\n' > "$output"
+printf "%s\\n" "$output"
+''',
+    )
+
+    completed = subprocess.run(
+        [str(ADAPTER), "infer", "head"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "MIA_LOCAL_HOSTNAME": "spark-3542",
+            "MIA_MODELS_ROOT": str(models_root),
+            "MIA_RELEASE_SHA256": "a" * 64,
+            "MIA_BOOT_ID_PATH": str(boot_id),
+            "MIA_QUALITY_BIN": str(quality),
+        },
+    )
+
+    evidence = list((models_root / "outputs/deepseek-agent-dual").rglob("*.json"))
+    assert len(evidence) == 1
+    assert ("a" * 64) in str(evidence[0])
+    assert "boot-1" in str(evidence[0])
+    assert json.loads(evidence[0].read_text(encoding="utf-8"))["status"] == "passed"
+    assert "--fixtures" in quality_log.read_text(encoding="utf-8")
+    assert completed.stdout == str(evidence[0]) + "\n"
+
+
+def test_start_records_idle_memory_baseline_before_compose_up(tmp_path: Path) -> None:
+    models_root = tmp_path / "models"
+    boot_id = tmp_path / "boot_id"
+    boot_id.write_text("boot-1\n", encoding="utf-8")
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemAvailable:       125000000 kB\n", encoding="utf-8")
+    docker_log = tmp_path / "docker.log"
+    docker = fake_command(
+        tmp_path,
+        "docker",
+        f'printf "%s\\n" "$*" >> {docker_log!s}\n',
+    )
+
+    subprocess.run(
+        [str(ADAPTER), "start", "worker"],
+        cwd=ROOT,
+        check=True,
+        env={
+            **os.environ,
+            "MIA_DOCKER_BIN": str(docker),
+            "MIA_LOCAL_HOSTNAME": "spark-2297",
+            "MIA_MODELS_ROOT": str(models_root),
+            "MIA_RELEASE_SHA256": "a" * 64,
+            "MIA_BOOT_ID_PATH": str(boot_id),
+            "MIA_MEMINFO_PATH": str(meminfo),
+            "MIA_IDLE_SECONDS": "0",
+        },
+    )
+
+    baseline = (
+        models_root
+        / "runtime-cache/deepseek-agent-dual/lifecycle"
+        / ("a" * 64)
+        / "boot-1/worker.baseline.json"
+    )
+    assert json.loads(baseline.read_text(encoding="utf-8"))["status"] == "baseline"
+    assert "up --detach" in docker_log.read_text(encoding="utf-8")
+
+
+def test_verify_release_enforces_memory_recovery_tolerance(tmp_path: Path) -> None:
+    quality = load_quality()
+    models_root = tmp_path / "models"
+    boot_id = tmp_path / "boot_id"
+    boot_id.write_text("boot-1\n", encoding="utf-8")
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemAvailable:       125000000 kB\n", encoding="utf-8")
+    baseline = (
+        models_root
+        / "runtime-cache/deepseek-agent-dual/lifecycle"
+        / ("a" * 64)
+        / "boot-1/worker.baseline.json"
+    )
+    quality.record_memory_baseline(
+        output_path=baseline,
+        meminfo_path=meminfo,
+        release_sha256="a" * 64,
+        boot_id="boot-1",
+        role="worker",
+    )
+    meminfo.write_text("MemAvailable:       100000000 kB\n", encoding="utf-8")
+    docker = fake_command(tmp_path, "docker", "exit 1\n")
+    curl = fake_command(tmp_path, "curl", "exit 1\n")
+    ss = fake_command(tmp_path, "ss", ":\n")
+    systemctl = fake_command(
+        tmp_path,
+        "systemctl-release",
+        '''if [[ ${1:-} == is-enabled ]]; then
+  printf "not-found\\n"
+  exit 4
+fi
+exit 0
+''',
+    )
+
+    completed = subprocess.run(
+        [str(ADAPTER), "verify-release", "worker"],
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "MIA_DOCKER_BIN": str(docker),
+            "MIA_CURL_BIN": str(curl),
+            "MIA_SS_BIN": str(ss),
+            "MIA_SYSTEMCTL_BIN": str(systemctl),
+            "MIA_LOCAL_HOSTNAME": "spark-2297",
+            "MIA_MODELS_ROOT": str(models_root),
+            "MIA_RELEASE_SHA256": "a" * 64,
+            "MIA_BOOT_ID_PATH": str(boot_id),
+            "MIA_MEMINFO_PATH": str(meminfo),
+            "MIA_RELEASE_WAIT_SECONDS": "0",
+        },
+    )
+
+    assert completed.returncode == 1
+    assert "memory did not recover within 1073741824 bytes" in completed.stderr
