@@ -58,6 +58,33 @@ def test_unknown_workload_is_rejected(
     assert check_admission(unknown, catalog, healthy_inventory).ok is False
 
 
+def test_serving_profile_requires_exact_acceptance(
+    catalog: Catalog, profile, healthy_inventory: dict[str, dict[str, int | bool]]
+) -> None:
+    """Removing the profile evidence gate must make this regression fail."""
+    mark_definition_accepted(catalog, "deepseek-agent-dual")
+
+    report = check_admission(profile, catalog, healthy_inventory, accepted={})
+
+    assert report.errors == ("profile has no exact accepted evidence",)
+
+
+def test_serving_profile_with_exact_acceptance_passes(
+    catalog: Catalog, profile, healthy_inventory: dict[str, dict[str, int | bool]]
+) -> None:
+    """Using a different profile hash or definition set must fail this check."""
+    mark_definition_accepted(catalog, "deepseek-agent-dual")
+    evidence = {
+        fingerprint(profile): (
+            catalog.definition_fingerprints["deepseek-agent-dual"],
+        )
+    }
+
+    report = check_admission(profile, catalog, healthy_inventory, accepted=evidence)
+
+    assert report.ok is True
+
+
 def test_colocation_requires_exact_acceptance(
     catalog: Catalog, profile, healthy_inventory: dict[str, dict[str, int | bool]]
 ) -> None:
@@ -72,7 +99,7 @@ def test_colocation_requires_exact_acceptance(
 
     report = check_admission(colocated, catalog, healthy_inventory, accepted={})
 
-    assert report.errors == ("profile has no accepted co-location evidence",)
+    assert report.errors == ("profile has no exact accepted evidence",)
 
 
 def test_distributed_workload_reserves_both_nodes(

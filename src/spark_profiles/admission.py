@@ -118,9 +118,10 @@ def check_admission(
         for identifier in assigned
         if identifier in catalog.definitions
     }
-    has_colocation = any(len(workloads) > 1 for workloads in placements.values())
-    if has_colocation and not _accepted_for_profile(profile, all_definitions, catalog, accepted):
-        errors.add("profile has no accepted co-location evidence")
+    if all_definitions and not _accepted_for_profile(
+        profile, all_definitions, catalog, accepted
+    ):
+        errors.add("profile has no exact accepted evidence")
 
     endpoint_ports: dict[int, str] = {}
     for endpoint, identifier in profile.endpoints.items():
