@@ -357,7 +357,17 @@ def test_planned_definition_blocks_production_home(
 def test_accepted_definition_requires_manifest_digest(
     catalog: Catalog, healthy_inventory: dict[str, dict[str, int | bool]]
 ) -> None:
-    catalog.maturity["deepseek-agent-dual"] = "accepted"
+    definition = replace(
+        catalog.definitions["deepseek-agent-dual"],
+        checkpoint=replace(
+            catalog.definitions["deepseek-agent-dual"].checkpoint,
+            manifest_sha256=None,
+        ),
+    )
+    catalog.definitions = {definition.id: definition}
+    catalog.definition_fingerprints = {definition.id: fingerprint(definition)}
+    catalog.maturity = {definition.id: "accepted"}
+    catalog.maturity_fingerprints = dict(catalog.definition_fingerprints)
 
     report = check_admission(
         catalog.resolve_profile("default"), catalog, healthy_inventory

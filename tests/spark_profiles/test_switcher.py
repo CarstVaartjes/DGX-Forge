@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import json
 from contextlib import contextmanager
 from dataclasses import replace
-import json
 from pathlib import Path
 
 from spark_profiles.admission import AdmissionReport, check_admission
@@ -14,6 +14,7 @@ from spark_profiles.contracts import (
     ClusterProfile,
     Endpoint,
     ImagePin,
+    OperationTimeouts,
     ResourceEnvelope,
     SourcePin,
     WorkloadDefinition,
@@ -39,7 +40,10 @@ def command_result(ok: bool = True, stderr: bytes = b"") -> CommandResult:
 
 
 def workload(
-    identifier: str = "generator", *, distributed: bool = False
+    identifier: str = "generator",
+    *,
+    distributed: bool = False,
+    deadlines: OperationTimeouts | None = None,
 ) -> WorkloadDefinition:
     nodes = ("spark1", "spark2") if distributed else ("spark2",)
     start_order = ("spark2", "spark1") if distributed else ("spark2",)
@@ -77,6 +81,7 @@ def workload(
             verify_release=command("verify-release"),
         ),
         resources=ResourceEnvelope(1, 1, 1),
+        deadlines=deadlines,
     )
 
 
@@ -123,9 +128,11 @@ class FakeBackend:
     ) -> None:
         self.events = events
         self.fail = fail
+        self.calls: list[tuple[str, tuple[str, ...], float]] = []
 
     def run(self, node: str, argv: tuple[str, ...], timeout: float) -> CommandResult:
         self.events.append(("remote", node, argv))
+        self.calls.append((node, argv, timeout))
         operation = argv[0]
         identifier = argv[1]
         if self.fail == (operation, identifier):
@@ -270,6 +277,59 @@ def test_distributed_stop_is_head_first_and_start_is_worker_first() -> None:
         ("remote", "spark2", ("profile-start", "deepseek-agent-dual", "worker")),
         ("remote", "spark1", ("profile-start", "deepseek-agent-dual", "head")),
     ]
+
+
+def test_definition_deadlines_select_each_lifecycle_operation_timeout() -> None:
+    definition = workload(
+        "generator",
+        deadlines=OperationTimeouts(
+            prepare=11,
+            verify=12,
+            start=13,
+            health=14,
+            infer=15,
+            stop=16,
+            verify_release=17,
+        ),
+    )
+    target = profile("target", definition)
+    events: list[tuple] = []
+    backend = FakeBackend(events)
+    switcher = ProfileSwitcher(
+        catalog=catalog(target, definition=definition),
+        backend=backend,
+        state_store=FakeStore(ControllerState.stopped(), events),
+        inventory_provider=inventory,
+        timeout_seconds=10,
+    )
+
+    report = switcher.switch_profile("target")
+
+    assert report.status == "active"
+    assert [(argv[0], timeout) for _, argv, timeout in backend.calls] == [
+        ("profile-verify", 12),
+        ("profile-start", 13),
+        ("profile-health", 14),
+        ("profile-infer", 15),
+    ]
+
+
+def test_definition_without_deadlines_uses_switcher_default_timeout() -> None:
+    definition = workload("generator")
+    target = profile("target", definition)
+    events: list[tuple] = []
+    backend = FakeBackend(events)
+    switcher = ProfileSwitcher(
+        catalog=catalog(target, definition=definition),
+        backend=backend,
+        state_store=FakeStore(ControllerState.stopped(), events),
+        inventory_provider=inventory,
+        timeout_seconds=10,
+    )
+
+    switcher.switch_profile("target")
+
+    assert {timeout for _, _, timeout in backend.calls} == {10}
 
 
 def test_dry_run_does_not_call_backend_or_save_state() -> None:

@@ -2,18 +2,24 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, is_dataclass
-from datetime import datetime
 import hashlib
 import json
+import tomllib
+from collections.abc import Mapping
+from dataclasses import dataclass, fields, is_dataclass
+from datetime import datetime
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping
-import tomllib
+from typing import Any
 
 from jsonschema import ValidationError, validate
 
-from .contracts import ClusterProfile, WorkloadDefinition, load_cluster_profile, load_workload
+from .contracts import (
+    ClusterProfile,
+    WorkloadDefinition,
+    load_cluster_profile,
+    load_workload,
+)
 
 
 class CatalogError(ValueError):
@@ -22,10 +28,13 @@ class CatalogError(ValueError):
 
 def _normal_form(value: Any) -> Any:
     if is_dataclass(value):
-        return {
-            field.name: _normal_form(getattr(value, field.name))
-            for field in fields(value)
-        }
+        result = {}
+        for field in fields(value):
+            item = getattr(value, field.name)
+            if field.metadata.get("omit_if_none") and item is None:
+                continue
+            result[field.name] = _normal_form(item)
+        return result
     if isinstance(value, Path):
         return value.as_posix()
     if isinstance(value, Mapping):
@@ -167,6 +176,106 @@ def _validate_evidence_refs(root: Path, references: list[str], context: str) -> 
             )
 
 
+def _repository_file(root: Path, reference: Path | str, context: str) -> Path:
+    path = Path(reference)
+    if path.is_absolute() or ".." in path.parts:
+        raise CatalogError(f"{context} must be repository-relative: {reference}")
+    candidate = (root / path).resolve()
+    if not candidate.is_relative_to(root) or not candidate.is_file():
+        raise CatalogError(f"{context} does not exist: {reference}")
+    return candidate
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _validate_runtime_release(root: Path, definition: WorkloadDefinition) -> None:
+    release = definition.runtime_release
+    if release is None:
+        return
+    manifest_path = _repository_file(root, release.manifest, "runtime release manifest")
+    if _file_sha256(manifest_path) != release.sha256:
+        raise CatalogError(f"runtime release manifest digest does not match definition: {definition.id}")
+    try:
+        manifest = _load_json(manifest_path)
+    except CatalogError as error:
+        raise CatalogError(f"invalid runtime release manifest: {definition.id}") from error
+    files = manifest.get("files")
+    if set(manifest) != {"files"} or not isinstance(files, dict) or not files:
+        raise CatalogError(f"invalid runtime release manifest: {definition.id}")
+    for reference, expected in files.items():
+        if not isinstance(reference, str) or not isinstance(expected, str):
+            raise CatalogError(f"invalid runtime release manifest: {definition.id}")
+        artifact = _repository_file(root, reference, "runtime release artifact")
+        if _file_sha256(artifact) != expected:
+            raise CatalogError(f"runtime release artifact digest does not match manifest: {reference}")
+
+
+def _stage_report_path(
+    identifier: str, stage: str, *, correction_position: int | None = None
+) -> str:
+    suffix = (
+        f"{stage}-correction-{correction_position}"
+        if correction_position is not None
+        else stage
+    )
+    return f"inventory/reports/model-definitions/{identifier}-{suffix}.json"
+
+
+def _validate_stage_evidence(
+    root: Path,
+    *,
+    definition: WorkloadDefinition,
+    definition_sha256: str,
+    transition: Mapping[str, Any],
+    predecessor: str | None,
+    history_position: int,
+    correction: bool,
+) -> str:
+    stage = transition["state"]
+    expected_path = _stage_report_path(
+        definition.id,
+        stage,
+        correction_position=history_position if correction else None,
+    )
+    if transition["evidence_refs"] != [expected_path]:
+        raise CatalogError(f"{stage} maturity evidence must name its canonical report: {definition.id}")
+    try:
+        report = _load_json(_repository_file(root, expected_path, f"{stage} maturity evidence"))
+        validate(report, _schema("model-definition-evidence.schema.json"))
+    except (CatalogError, ValidationError) as error:
+        raise CatalogError(f"invalid {stage} maturity evidence: {definition.id}") from error
+    if report["stage"] != stage or report["definition_id"] != definition.id:
+        raise CatalogError(f"maturity evidence identity does not match definition: {definition.id}")
+    if report["definition_sha256"] != definition_sha256:
+        raise CatalogError(f"maturity evidence fingerprint does not match definition: {definition.id}")
+    if report["runtime_manifest_sha256"] != (
+        definition.runtime_release.sha256 if definition.runtime_release else None
+    ):
+        raise CatalogError(f"runtime release pin does not match definition: {definition.id}")
+    if report["source"] != {"repository": definition.source.repository, "commit": definition.source.commit}:
+        raise CatalogError(f"source pin does not match definition: {definition.id}")
+    if report["checkpoint"] != {
+        "repository": definition.checkpoint.repository,
+        "revision": definition.checkpoint.revision,
+        "manifest_sha256": definition.checkpoint.manifest_sha256,
+    }:
+        raise CatalogError(f"checkpoint pin does not match definition: {definition.id}")
+    if report["image"] != {"reference": definition.image.reference}:
+        raise CatalogError(f"image pin does not match definition: {definition.id}")
+    if {node["node"] for node in report["nodes"]} != {"spark1", "spark2"}:
+        raise CatalogError(f"maturity evidence must contain both Spark nodes: {definition.id}")
+    _audit_timestamp(report["recorded_at"], f"{stage} maturity evidence")
+    if report["predecessor"] != predecessor:
+        raise CatalogError(f"maturity evidence predecessor does not name the immediately prior valid report: {definition.id}")
+    return expected_path
+
+
 def _validate_maturity_history(root: Path, record: Mapping[str, Any]) -> None:
     identifier = record["id"]
     history = record["history"]
@@ -230,6 +339,7 @@ def _maturity_records(
     root: Path,
     index: Mapping[str, Any],
     fingerprints: Mapping[str, str],
+    definitions: Mapping[str, WorkloadDefinition],
 ) -> dict[str, str]:
     records = index["definitions"]
     maturity: dict[str, str] = {}
@@ -241,6 +351,26 @@ def _maturity_records(
         if fingerprints.get(identifier) != record["sha256"]:
             raise CatalogError(f"maturity fingerprint does not match definition: {identifier}")
         _validate_maturity_history(root, record)
+        definition = definitions.get(identifier)
+        if definition is None:
+            continue
+        previous_report: str | None = None
+        for position, transition in enumerate(record["history"]):
+            if transition["state"] not in {"prepared", "verified", "accepted"}:
+                continue
+            previous_report = _validate_stage_evidence(
+                root,
+                definition=definition,
+                definition_sha256=fingerprints[identifier],
+                transition=transition,
+                predecessor=previous_report,
+                history_position=position,
+                correction=(
+                    transition["state"] == "verified"
+                    and position > 0
+                    and record["history"][position - 1]["state"] == "rejected"
+                ),
+            )
     missing = sorted(set(fingerprints) - set(maturity))
     extra = sorted(set(maturity) - set(fingerprints))
     if missing or extra:
@@ -281,7 +411,11 @@ class Catalog:
 
         validate_evidence_indexes(root)
         maturity_index = _load_json(root / "inventory/reports/model-definitions.json")
-        maturity = _maturity_records(root, maturity_index, definition_fingerprints)
+        for definition in definitions.values():
+            _validate_runtime_release(root, definition)
+        maturity = _maturity_records(
+            root, maturity_index, definition_fingerprints, definitions
+        )
         maturity_fingerprints = {
             record["id"]: record["sha256"] for record in maturity_index["definitions"]
         }

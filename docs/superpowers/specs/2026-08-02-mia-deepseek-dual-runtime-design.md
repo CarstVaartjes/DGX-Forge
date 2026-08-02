@@ -250,9 +250,15 @@ Evidence lives at these stable repository paths:
 ```text
 inventory/reports/model-definitions/deepseek-agent-dual-prepared.json
 inventory/reports/model-definitions/deepseek-agent-dual-verified.json
+inventory/reports/model-definitions/deepseek-agent-dual-verified-correction-<history-position>.json
 inventory/reports/model-definitions/deepseek-agent-dual-accepted.json
 inventory/reports/accepted-cluster-profiles.json
 ```
+
+The correction form is used only for a legal `rejected -> verified` transition.
+It is immutable, its numeric suffix equals the maturity-history position, and
+its predecessor points to the prior verified report. Arbitrary alternative
+evidence names remain invalid.
 
 Each definition report names its definition fingerprint, runtime-manifest
 digest, image digest, source/checkpoint pins, node boot IDs, timestamps, gate

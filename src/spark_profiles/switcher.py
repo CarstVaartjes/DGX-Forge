@@ -630,9 +630,14 @@ class ProfileSwitcher:
         command: tuple[str, ...],
         diagnostics: list[Diagnostic],
     ) -> CommandResult:
+        timeout = (
+            definition.deadlines.for_operation(operation)
+            if definition.deadlines is not None
+            else self.timeout_seconds
+        )
         try:
             result = self.backend.run(
-                node, self._argv(definition, command, node), self.timeout_seconds
+                node, self._argv(definition, command, node), timeout
             )
         except Exception as error:
             detail = f"{type(error).__name__}: {error}"[:_MAX_ERROR_CHARS]

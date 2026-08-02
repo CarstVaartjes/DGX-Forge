@@ -85,11 +85,15 @@ logs live under `/srv/models` bind mounts.
 
 - [ ] Write fixture tests for revision mismatch, missing/changed shards,
   missing encoder, unsafe symlinks, and a valid complete snapshot.
-- [ ] Build expected hashes from pinned Hugging Face metadata and LFS SHA-256
-  OIDs before node download.
-- [ ] Require all index-referenced shards, offline tokenizer/config files, and
-  `encoding/encoding_dsv4.py`.
-- [ ] Make node verification offline, streaming, bounded-memory, and symlink-safe.
+- [ ] Fetch the pinned revision API with `?blobs=true`, require its top-level
+  `sha`, and use `siblings[].lfs.sha256` plus `lfs.size` for LFS artifacts;
+  `blobId` is provenance rather than a raw-file SHA-256.
+- [ ] Parse the pinned weight index and require all 48 referenced shards. Build
+  a complete 74-file snapshot manifest, including all small pinned files and
+  `encoding/encoding_dsv4.py`; fetch and hash only non-LFS files during build.
+- [ ] Make node verification offline, streaming, bounded-memory, and symlink-safe,
+  using no-follow opens where supported and requiring regular files throughout
+  the materialized snapshot rather than HF cache symlinks.
 - [ ] Generate and review the real expected manifest and pin its digest.
 
 ## Task 4: Implement the role-scoped Mia Compose adapter

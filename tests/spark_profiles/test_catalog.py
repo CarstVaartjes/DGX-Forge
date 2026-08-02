@@ -1,13 +1,19 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from pathlib import Path
 
 import pytest
 
-from spark_profiles.catalog import Catalog, CatalogError, validate_evidence_indexes
-
+from spark_profiles.catalog import (
+    Catalog,
+    CatalogError,
+    fingerprint,
+    validate_evidence_indexes,
+)
+from spark_profiles.contracts import load_workload
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
@@ -68,6 +74,26 @@ def test_toml_comments_do_not_change_definition_fingerprint(catalog_root: Path) 
     assert reloaded.definition_fingerprints["deepseek-agent-dual"] == fingerprint
 
 
+def test_changed_runtime_release_artifact_invalidates_catalog(
+    catalog_root: Path,
+) -> None:
+    _enable_runtime_release(catalog_root)
+    payload = catalog_root / "adapters/example/adapter.sh"
+    payload.write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
+
+    with pytest.raises(CatalogError, match="runtime release artifact digest"):
+        Catalog.load(catalog_root)
+
+
+def test_runtime_release_manifest_digest_is_verified(catalog_root: Path) -> None:
+    _enable_runtime_release(catalog_root)
+    manifest = catalog_root / "adapters/example/runtime-manifest.json"
+    manifest.write_text('{"files": {}}\n', encoding="utf-8")
+
+    with pytest.raises(CatalogError, match="runtime release manifest digest"):
+        Catalog.load(catalog_root)
+
+
 def test_evidence_indexes_satisfy_packaged_schemas(catalog_root: Path) -> None:
     validate_evidence_indexes(catalog_root)
 
@@ -89,6 +115,119 @@ def _write_report(catalog_root: Path, name: str, report: dict) -> None:
         json.dumps(report, indent=2) + "\n",
         encoding="utf-8",
     )
+
+
+def _sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _refresh_definition_fingerprint(catalog_root: Path) -> str:
+    definition = load_workload(catalog_root / "config/workloads/deepseek-agent-dual.toml")
+    value = fingerprint(definition)
+    (catalog_root / "locks/model-definitions.toml").write_text(
+        f'[definitions]\ndeepseek-agent-dual = "{value}"\n', encoding="utf-8"
+    )
+    index = _read_report(catalog_root, "model-definitions.json")
+    index["definitions"][0]["sha256"] = value
+    _write_report(catalog_root, "model-definitions.json", index)
+    return value
+
+
+def _enable_runtime_release(catalog_root: Path) -> str:
+    release = catalog_root / "adapters/example"
+    release.mkdir(parents=True)
+    payload = release / "adapter.sh"
+    payload.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    manifest = release / "runtime-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {"files": {"adapters/example/adapter.sh": _sha256(payload)}}, indent=2
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    workload = catalog_root / "config/workloads/deepseek-agent-dual.toml"
+    workload.write_text(
+        workload.read_text(encoding="utf-8")
+        + f'''\n[runtime_release]\nmanifest = "adapters/example/runtime-manifest.json"\nsha256 = "{_sha256(manifest)}"\n''',
+        encoding="utf-8",
+    )
+    return _refresh_definition_fingerprint(catalog_root)
+
+
+def _stage_report(
+    catalog_root: Path,
+    *,
+    stage: str,
+    predecessor: str | None,
+    fingerprint_value: str,
+    correction_position: int | None = None,
+) -> str:
+    definition = load_workload(catalog_root / "config/workloads/deepseek-agent-dual.toml")
+    suffix = (
+        f"{stage}-correction-{correction_position}"
+        if correction_position is not None
+        else stage
+    )
+    path = f"inventory/reports/model-definitions/{definition.id}-{suffix}.json"
+    report = {
+        "stage": stage,
+        "definition_id": definition.id,
+        "definition_sha256": fingerprint_value,
+        "runtime_manifest_sha256": (
+            definition.runtime_release.sha256 if definition.runtime_release else None
+        ),
+        "source": {"repository": definition.source.repository, "commit": definition.source.commit},
+        "checkpoint": {
+            "repository": definition.checkpoint.repository,
+            "revision": definition.checkpoint.revision,
+            "manifest_sha256": definition.checkpoint.manifest_sha256,
+        },
+        "image": {"reference": definition.image.reference},
+        "recorded_at": "2026-08-02T08:00:00Z",
+        "nodes": [
+            {"node": "spark1", "boot_id": "1" * 32},
+            {"node": "spark2", "boot_id": "2" * 32},
+        ],
+        "predecessor": predecessor,
+        "gates": {
+            "prepared": {"artifacts": True, "node_manifests": True},
+            "verified": {
+                "offline": True, "release": True, "image": True,
+                "architecture": True, "fabric": True, "role": True, "compose": True,
+            },
+            "accepted": {
+                "quality": True, "lifecycle": True, "capacity": True,
+                "performance": True, "thermal": True, "release": True, "reboot": True,
+            },
+        }[stage],
+    }
+    destination = catalog_root / path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def _advance_to(catalog_root: Path, stage: str, fingerprint_value: str) -> None:
+    index = _read_report(catalog_root, "model-definitions.json")
+    history = index["definitions"][0]["history"]
+    predecessor = None
+    if stage in {"verified", "accepted"}:
+        previous = "prepared" if stage == "verified" else "verified"
+        predecessor = f"inventory/reports/model-definitions/deepseek-agent-dual-{previous}.json"
+    evidence_path = _stage_report(
+        catalog_root, stage=stage, predecessor=predecessor, fingerprint_value=fingerprint_value
+    )
+    history.append(
+        {
+            "state": stage,
+            "timestamp": f"2026-08-02T15:0{len(history)}:00Z",
+            "evidence_refs": [evidence_path],
+            "rejection_reason": None,
+        }
+    )
+    index["definitions"][0]["maturity"] = stage
+    _write_report(catalog_root, "model-definitions.json", index)
 
 
 def _transition(
@@ -216,33 +355,94 @@ def test_rejected_definition_requires_audited_correction_metadata(
         Catalog.load(catalog_root)
 
 
-def test_rejected_definition_accepts_exact_audited_correction(
+def test_rejected_definition_accepts_a_positioned_canonical_correction_report(
     catalog_root: Path,
 ) -> None:
-    """The approved correction path must restore the fingerprint to verified."""
+    """A correction carries fresh evidence without reusing the verified report."""
+    catalog = Catalog.load(catalog_root)
+    fingerprint_value = catalog.definition_fingerprints["deepseek-agent-dual"]
+    prepared = _stage_report(
+        catalog_root,
+        stage="prepared",
+        predecessor=None,
+        fingerprint_value=fingerprint_value,
+    )
+    verified = _stage_report(
+        catalog_root,
+        stage="verified",
+        predecessor=prepared,
+        fingerprint_value=fingerprint_value,
+    )
+    correction = _stage_report(
+        catalog_root,
+        stage="verified",
+        predecessor=verified,
+        fingerprint_value=fingerprint_value,
+        correction_position=4,
+    )
     report = _read_report(catalog_root, "model-definitions.json")
     report["definitions"][0]["maturity"] = "verified"
     report["definitions"][0]["history"] = [
         _transition("planned", "2026-08-02T08:00:00Z"),
-        _transition("prepared", "2026-08-02T08:01:00Z"),
-        _transition("verified", "2026-08-02T08:02:00Z"),
+        {
+            **_transition("prepared", "2026-08-02T08:01:00Z"),
+            "evidence_refs": [prepared],
+        },
+        {
+            **_transition("verified", "2026-08-02T08:02:00Z"),
+            "evidence_refs": [verified],
+        },
         _transition(
             "rejected",
             "2026-08-02T08:03:00Z",
             rejection_reason="runtime output regressed",
         ),
-        _transition(
-            "verified",
-            "2026-08-02T08:04:00Z",
-            correction_of=3,
-            correction_reason="audit proved the regression fixture was corrupt",
-        ),
+        {
+            **_transition(
+                "verified",
+                "2026-08-02T08:04:00Z",
+                correction_of=3,
+                correction_reason="audit proved the regression fixture was corrupt",
+            ),
+            "evidence_refs": [correction],
+        },
     ]
     _write_report(catalog_root, "model-definitions.json", report)
 
-    catalog = Catalog.load(catalog_root)
+    loaded = Catalog.load(catalog_root)
 
-    assert catalog.maturity["deepseek-agent-dual"] == "verified"
+    assert loaded.maturity["deepseek-agent-dual"] == "verified"
+
+
+def test_rejected_definition_correction_rejects_reused_verified_report(
+    catalog_root: Path,
+) -> None:
+    catalog = Catalog.load(catalog_root)
+    fingerprint_value = catalog.definition_fingerprints["deepseek-agent-dual"]
+    prepared = _stage_report(
+        catalog_root, stage="prepared", predecessor=None, fingerprint_value=fingerprint_value
+    )
+    verified = _stage_report(
+        catalog_root, stage="verified", predecessor=prepared, fingerprint_value=fingerprint_value
+    )
+    report = _read_report(catalog_root, "model-definitions.json")
+    report["definitions"][0]["maturity"] = "verified"
+    report["definitions"][0]["history"] = [
+        _transition("planned", "2026-08-02T08:00:00Z"),
+        {**_transition("prepared", "2026-08-02T08:01:00Z"), "evidence_refs": [prepared]},
+        {**_transition("verified", "2026-08-02T08:02:00Z"), "evidence_refs": [verified]},
+        _transition("rejected", "2026-08-02T08:03:00Z", rejection_reason="runtime output regressed"),
+        {
+            **_transition("verified", "2026-08-02T08:04:00Z", correction_of=3, correction_reason="fixture"),
+                "evidence_refs": [
+                    "docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"
+                ],
+        },
+    ]
+    _write_report(catalog_root, "model-definitions.json", report)
+
+    with pytest.raises(CatalogError, match="verified maturity evidence must name its canonical report"):
+        Catalog.load(catalog_root)
 
 
 def test_rejected_correction_must_reference_immediately_prior_transition(
@@ -318,6 +518,82 @@ def test_maturity_history_evidence_reference_must_exist(catalog_root: Path) -> N
     _write_report(catalog_root, "model-definitions.json", report)
 
     with pytest.raises(CatalogError, match="evidence reference does not exist"):
+        Catalog.load(catalog_root)
+
+
+def test_prepared_transition_requires_schema_valid_evidence_report(
+    catalog_root: Path,
+) -> None:
+    Catalog.load(catalog_root)
+    index = _read_report(catalog_root, "model-definitions.json")
+    path = "inventory/reports/model-definitions/deepseek-agent-dual-prepared.json"
+    destination = catalog_root / path
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text('{"stage": "prepared"}\n', encoding="utf-8")
+    index["definitions"][0]["maturity"] = "prepared"
+    index["definitions"][0]["history"].append(
+        {
+            "state": "prepared",
+            "timestamp": "2026-08-02T15:01:00Z",
+            "evidence_refs": [path],
+            "rejection_reason": None,
+        }
+    )
+    _write_report(catalog_root, "model-definitions.json", index)
+
+    with pytest.raises(CatalogError, match="invalid prepared maturity evidence"):
+        Catalog.load(catalog_root)
+
+
+def test_prepared_transition_rejects_an_arbitrary_existing_evidence_reference(
+    catalog_root: Path,
+) -> None:
+    index = _read_report(catalog_root, "model-definitions.json")
+    index["definitions"][0]["maturity"] = "prepared"
+    index["definitions"][0]["history"].append(
+        {
+            "state": "prepared",
+            "timestamp": "2026-08-02T15:01:00Z",
+            "evidence_refs": [
+                "docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"
+            ],
+            "rejection_reason": None,
+        }
+    )
+    _write_report(catalog_root, "model-definitions.json", index)
+
+    with pytest.raises(CatalogError, match="prepared maturity evidence must name its canonical report"):
+        Catalog.load(catalog_root)
+
+
+def test_maturity_evidence_pins_must_match_current_definition(
+    catalog_root: Path,
+) -> None:
+    catalog = Catalog.load(catalog_root)
+    fingerprint_value = catalog.definition_fingerprints["deepseek-agent-dual"]
+    _advance_to(catalog_root, "prepared", fingerprint_value)
+    path = catalog_root / "inventory/reports/model-definitions/deepseek-agent-dual-prepared.json"
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["image"]["reference"] = "example.invalid/image@sha256:" + "a" * 64
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(CatalogError, match="image pin does not match definition"):
+        Catalog.load(catalog_root)
+
+
+def test_verified_evidence_requires_immediately_prior_report(
+    catalog_root: Path,
+) -> None:
+    catalog = Catalog.load(catalog_root)
+    fingerprint_value = catalog.definition_fingerprints["deepseek-agent-dual"]
+    _advance_to(catalog_root, "prepared", fingerprint_value)
+    _advance_to(catalog_root, "verified", fingerprint_value)
+    path = catalog_root / "inventory/reports/model-definitions/deepseek-agent-dual-verified.json"
+    report = json.loads(path.read_text(encoding="utf-8"))
+    report["predecessor"] = "inventory/reports/model-definitions/not-the-prepared-report.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+
+    with pytest.raises(CatalogError, match="predecessor does not name the immediately prior"):
         Catalog.load(catalog_root)
 
 

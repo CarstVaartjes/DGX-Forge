@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import tomllib
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping
-import tomllib
+from typing import Any
 
 from jsonschema import ValidationError, validate
-
 
 _NODES = frozenset(("spark1", "spark2"))
 
@@ -36,6 +36,26 @@ class CheckpointPin:
 @dataclass(frozen=True)
 class ImagePin:
     reference: str
+
+
+@dataclass(frozen=True)
+class RuntimeRelease:
+    manifest: Path
+    sha256: str
+
+
+@dataclass(frozen=True)
+class OperationTimeouts:
+    prepare: float
+    verify: float
+    start: float
+    health: float
+    infer: float
+    stop: float
+    verify_release: float
+
+    def for_operation(self, operation: str) -> float:
+        return getattr(self, operation.replace("-", "_"))
 
 
 @dataclass(frozen=True)
@@ -88,6 +108,12 @@ class WorkloadDefinition:
     endpoint: Endpoint
     commands: AdapterCommands
     resources: ResourceEnvelope
+    runtime_release: RuntimeRelease | None = field(
+        default=None, metadata={"omit_if_none": True}
+    )
+    deadlines: OperationTimeouts | None = field(
+        default=None, metadata={"omit_if_none": True}
+    )
 
 
 @dataclass(frozen=True)
@@ -178,6 +204,14 @@ def load_workload(path: Path) -> WorkloadDefinition:
             manifest_sha256=data["checkpoint"].get("manifest_sha256"),
         ),
         image=ImagePin(reference=data["image"]["reference"]),
+        runtime_release=(
+            RuntimeRelease(
+                manifest=Path(data["runtime_release"]["manifest"]),
+                sha256=data["runtime_release"]["sha256"],
+            )
+            if "runtime_release" in data
+            else None
+        ),
         paths=WorkloadPaths(
             cache=Path(data["paths"]["cache"]),
             scratch=Path(data["paths"]["scratch"]),
@@ -194,6 +228,19 @@ def load_workload(path: Path) -> WorkloadDefinition:
             verify_release=_command(commands["verify-release"]),
         ),
         resources=ResourceEnvelope(**data["resources"]),
+        deadlines=(
+            OperationTimeouts(
+                prepare=data["deadlines"]["prepare"],
+                verify=data["deadlines"]["verify"],
+                start=data["deadlines"]["start"],
+                health=data["deadlines"]["health"],
+                infer=data["deadlines"]["infer"],
+                stop=data["deadlines"]["stop"],
+                verify_release=data["deadlines"]["verify-release"],
+            )
+            if "deadlines" in data
+            else None
+        ),
     )
 
 

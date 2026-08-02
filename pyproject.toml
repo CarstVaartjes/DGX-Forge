@@ -13,10 +13,11 @@ dependencies = ["jsonschema>=4.23"]
 "src/spark_profiles/schemas/workload.schema.json" = "spark_profiles/schemas/workload.schema.json"
 "src/spark_profiles/schemas/cluster-profile.schema.json" = "spark_profiles/schemas/cluster-profile.schema.json"
 "src/spark_profiles/schemas/model-definitions.schema.json" = "spark_profiles/schemas/model-definitions.schema.json"
+"src/spark_profiles/schemas/model-definition-evidence.schema.json" = "spark_profiles/schemas/model-definition-evidence.schema.json"
 "src/spark_profiles/schemas/accepted-cluster-profiles.schema.json" = "spark_profiles/schemas/accepted-cluster-profiles.schema.json"
 "src/spark_profiles/schemas/node-health-raw.schema.json" = "spark_profiles/schemas/node-health-raw.schema.json"
 "src/spark_profiles/schemas/node-health.schema.json" = "spark_profiles/schemas/node-health.schema.json"
 
 [tool.pytest.ini_options]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 testpaths = ["tests"]
