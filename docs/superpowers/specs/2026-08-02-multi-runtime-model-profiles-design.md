@@ -307,12 +307,12 @@ parameters, licenses, rejected candidates, and evidence references. Research
 snapshot commits below remain discovery evidence and never override this lock
 file implicitly.
 
-The provisional DeepSeek configuration currently names Mia commit
-`914c35bd7d5607560048e4467c3fdd42e892e297`, while this research snapshot
-reviewed `b131b2a22164675890dd1465fd8862b5cfb6ff13`. Neither becomes the accepted
-production pin merely by being newer or already present in configuration. The
-DeepSeek audit must compare them, choose deliberately, and record the result
-before the definition can become `accepted`.
+The Mia-first audit selected
+`b131b2a22164675890dd1465fd8862b5cfb6ff13` as the planned production
+candidate, replacing the earlier provisional
+`914c35bd7d5607560048e4467c3fdd42e892e297` configuration pin. The candidate is
+still planned and not accepted: only exact runtime, checkpoint, and acceptance
+evidence may advance its definition.
 
 ## Memory and residency policy
 

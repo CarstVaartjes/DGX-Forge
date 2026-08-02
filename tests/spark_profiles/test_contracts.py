@@ -136,6 +136,61 @@ def test_home_workload_uses_an_immutable_image_and_declarative_adapter_commands(
     assert workload.checkpoint.manifest_sha256 is None
 
 
+def test_mia_dual_workload_uses_the_audited_immutable_runtime_contract() -> None:
+    workload = load_workload(
+        REPOSITORY_ROOT / "config/workloads/deepseek-agent-dual.toml"
+    )
+
+    assert workload.source.repository == (
+        "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark"
+    )
+    assert workload.source.commit == "b131b2a22164675890dd1465fd8862b5cfb6ff13"
+    assert workload.checkpoint.repository == "deepseek-ai/DeepSeek-V4-Flash-0731"
+    assert workload.checkpoint.revision == "9e165c30e2704aec5d9d593cce3eebd58bbef1cb"
+    assert workload.image.reference == (
+        "ghcr.io/anemll/dspark-vllm-gx10"
+        "@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8"
+    )
+    assert workload.topology == "distributed"
+    assert workload.nodes == ("spark1", "spark2")
+    assert workload.start_order == ("spark2", "spark1")
+    assert workload.stop_order == ("spark1", "spark2")
+    assert workload.endpoint.host == "127.0.0.1"
+    assert workload.endpoint.port == 8888
+
+
+def test_mia_documentation_marks_the_prior_staged_lane_as_superseded() -> None:
+    historical_plan = (
+        REPOSITORY_ROOT / "docs/superpowers/plans/2026-08-01-deepseek-0731-runtime.md"
+    ).read_text(encoding="utf-8")
+    platform_design = (
+        REPOSITORY_ROOT
+        / "docs/superpowers/specs/2026-08-01-dual-dgx-spark-platform-design.md"
+    ).read_text(encoding="utf-8")
+    multi_runtime_design = (
+        REPOSITORY_ROOT
+        / "docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"
+    ).read_text(encoding="utf-8")
+
+    audited_commit = "b131b2a22164675890dd1465fd8862b5cfb6ff13"
+    assert "Superseded by the Mia dual-Spark implementation plan" in historical_plan
+    assert "Historical, superseded staged-lane design" in platform_design
+    assert "Mia-first audit selected" in multi_runtime_design
+    assert audited_commit in historical_plan
+    assert audited_commit in platform_design
+    assert audited_commit in multi_runtime_design
+    assert "still planned and not accepted" in multi_runtime_design
+
+
+def test_profile_overview_keeps_ds4_flash_mxfp4_deferred() -> None:
+    overview = (REPOSITORY_ROOT / "docs/model-profile-overview.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "DS4 Flash 0731 MXFP4 candidate, unaudited" in overview
+    assert "`deepseek`" in overview
+
+
 def test_workload_exposes_a_valid_manifest_digest_when_declared(
     tmp_path: Path,
 ) -> None:

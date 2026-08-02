@@ -1,10 +1,13 @@
 # DeepSeek V4 Flash 0731 Runtime Implementation Plan
 
-> **Reconciliation required before execution:** This initial Mia-only plan is
-> retained as detailed DeepSeek bring-up research. Implement it through the
-> newer [model profile framework](2026-08-02-model-profile-framework.md) and
-> the approved [multi-runtime model design](../specs/2026-08-02-multi-runtime-model-profiles-design.md),
-> which require both the default dual-Spark Mia path and the lighter DS4 path.
+> **Superseded by the Mia dual-Spark implementation plan:** This initial
+> staged-lane plan is retained as historical DeepSeek bring-up research. The
+> approved implementation pins Mia commit
+> `b131b2a22164675890dd1465fd8862b5cfb6ff13` and treats the 1M-capable
+> dual-Spark runtime as the planned candidate. Execute
+> [the superseding plan](2026-08-02-mia-deepseek-dual-runtime.md), not the
+> tasks below. The historical rationale remains useful for later acceptance
+> gates and the DS4 comparison path.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -16,7 +19,9 @@
 
 ## Global Constraints
 
-- Pin MiaAI-Lab source commit `914c35bd7d5607560048e4467c3fdd42e892e297`.
+- Historical research initially used MiaAI-Lab commit
+  `914c35bd7d5607560048e4467c3fdd42e892e297`; the superseding plan pins
+  `b131b2a22164675890dd1465fd8862b5cfb6ff13`.
 - Pin model revision `9e165c30e2704aec5d9d593cce3eebd58bbef1cb`.
 - Resolve `ghcr.io/anemll/dspark-vllm-gx10:0.1.1` to and run by immutable digest.
 - Require the complete 166,898,660,330-byte snapshot and 166,886,535,336 SafeTensor bytes on both nodes.

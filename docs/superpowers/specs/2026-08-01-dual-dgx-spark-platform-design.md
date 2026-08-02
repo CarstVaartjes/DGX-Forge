@@ -159,7 +159,14 @@ No client route exists on the fabric. Because the fabric is a dedicated point-to
 
 ## DeepSeek Model Definition qualification
 
-### DeepSeek bring-up ladder
+### Historical, superseded staged-lane design
+
+This staged-lane ladder is retained as historical qualification rationale. It
+does not define the active `deepseek-agent-dual` configuration: the approved
+Mia-first implementation uses commit
+`b131b2a22164675890dd1465fd8862b5cfb6ff13` for the planned, 1M-capable
+dual-Spark candidate. It remains unaccepted until its exact runtime and
+acceptance evidence are recorded.
 
 The three experimental features—speculative decoding, padded NVFP4 KV, and million-token context—are not enabled simultaneously on first boot. They are introduced one at a time:
 
@@ -210,7 +217,11 @@ Context and concurrency acceptance tests are coupled to these lanes: six request
 
 ### Runtime pins and sampling
 
-The initial candidate reference is MiaAI-Lab commit `914c35bd7d5607560048e4467c3fdd42e892e297`, model revision `9e165c30e2704aec5d9d593cce3eebd58bbef1cb`, and the Anemll `0.1.1` image resolved to an immutable digest during implementation. Deployment does not use mutable branches, tags, or an unverified image.
+The approved planned candidate is MiaAI-Lab commit
+`b131b2a22164675890dd1465fd8862b5cfb6ff13`, model revision
+`9e165c30e2704aec5d9d593cce3eebd58bbef1cb`, and image
+`ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8`.
+Deployment does not use mutable branches, tags, or an unverified image.
 
 The local configuration pins:
 
@@ -452,8 +463,8 @@ The source results came from specific upstream hardware state and profile settin
 - [NVIDIA two-Spark networking guide](https://build.nvidia.com/spark/connect-two-sparks/stacked-sparks)
 - [NVIDIA DGX Spark update guide](https://docs.nvidia.com/dgx/dgx-spark/os-and-component-update.html)
 - [DeepSeek-V4-Flash-0731 model card](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731)
-- [MiaAI-Lab dual-Spark 0731 recipe](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/tree/914c35bd7d5607560048e4467c3fdd42e892e297)
-- [MiaAI-Lab 0731 measurements](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/blob/914c35bd7d5607560048e4467c3fdd42e892e297/docs/DEEPSEEK_V4_FLASH_0731.md)
+- [MiaAI-Lab dual-Spark 0731 recipe](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/tree/b131b2a22164675890dd1465fd8862b5cfb6ff13)
+- [MiaAI-Lab 0731 measurements](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docs/DEEPSEEK_V4_FLASH_0731.md)
 - [Microsoft TRELLIS.2](https://github.com/microsoft/TRELLIS.2)
 - [Docker Compose production guidance](https://docs.docker.com/compose/how-tos/production/)
 - [Caddy configuration API](https://caddyserver.com/docs/api)

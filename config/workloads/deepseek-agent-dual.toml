@@ -11,7 +11,7 @@ accepted_evidence = "inventory/reports/accepted-cluster-profiles.json"
 
 [source]
 repository = "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark"
-commit = "914c35bd7d5607560048e4467c3fdd42e892e297"
+commit = "b131b2a22164675890dd1465fd8862b5cfb6ff13"
 
 [checkpoint]
 repository = "deepseek-ai/DeepSeek-V4-Flash-0731"

@@ -88,9 +88,9 @@ accepted evidence for the exact placement and combination.
 
 | Type | Model Definition | Preferred DGX Spark path | Placement | State |
 | --- | --- | --- | --- | --- |
-| Default agent | `deepseek-agent-dual` | Mia/vLLM TP=2 candidate with Spark-specific optimizations, subject to acceptance | Both Sparks, exclusive | Planned (cataloged) |
+| Default agent | `deepseek-agent-dual` | Mia/vLLM TP=2, 1M-capable candidate pinned to `b131b2a`, subject to acceptance | Both Sparks, exclusive | Planned (cataloged) |
 | Long-context agent | `deepseek-long-dual` | Mia/vLLM long-context candidate with explicit concurrency limits | Both Sparks, exclusive | Design intent; not cataloged |
-| Resident agent | `deepseek-agent-single` | DS4 quantized single-Spark candidate | One Spark, exclusive initially | Design intent; not cataloged |
+| Resident agent | `deepseek-agent-single` | DS4 Flash 0731 MXFP4 candidate, unaudited | One Spark, exclusive initially | Design intent; not cataloged |
 | Alternative agent | `nemotron-super-single` | NVIDIA Nemotron 3 Super NVFP4 Spark candidate | One Spark, exclusive | Design intent; not cataloged |
 | Multimodal agent | `nemotron-nano-omni-single` | NVIDIA Nano Omni NVFP4 Spark candidate | One Spark, co-residency candidate | Design intent; not cataloged |
 | Image generation | `qwen-image-single` | ModelOpt NVFP4 candidate through a GB10-native SGLang Diffusion build | One Spark, exclusive initially | Design intent; not cataloged |
@@ -115,7 +115,7 @@ user-selectable merely because it starts successfully.
 | Aggregate RDMA, latency, error counters, NCCL | Accepted and recorded |
 | Model Definition and Cluster Profile schemas | Implemented |
 | Framework catalog, admission, switching, CLI, and local state | Implemented |
-| `deepseek-agent-dual` Model Definition | Planned (cataloged); its adapter, checkpoint manifest, and runtime are not installed or accepted |
+| `deepseek-agent-dual` Model Definition | Planned (cataloged) at audited Mia commit `b131b2a`; its adapter, checkpoint manifest, and runtime are not installed or accepted |
 | Canonical `agent-full-dual` profile | Planned (cataloged) with `default` and `agent` selectors; not activatable while its definition remains planned |
 | Remaining Model Definitions and profiles | Design intent; configuration and acceptance evidence do not exist yet |
 | Model activation | Blocked until the required runtime artifacts are installed and exact acceptance evidence exists |
