@@ -152,7 +152,7 @@ git commit -m "feat: collect live Spark node telemetry"
 - Adds: `sparkctl nodes status [--json]`.
 - Emits the exact schema-version-1 envelope from the approved design.
 
-- [ ] **Step 1: Write failing concurrency, grading, and CLI tests**
+- [x] **Step 1: Write failing concurrency, grading, and CLI tests**
 
 ```python
 def test_node_probes_overlap(service, probe_barrier):
@@ -195,7 +195,7 @@ NVIDIA unavailable, fabric speed/MTU/HCA mismatch, thermal trip, swap warning,
 disk warning, optional null fields, deterministic error ordering, schema
 validation, table columns, and exit codes 0/4/5.
 
-- [ ] **Step 2: Run health and CLI tests and confirm failure**
+- [x] **Step 2: Run health and CLI tests and confirm failure**
 
 ```bash
 uv run --no-project --with pytest --with jsonschema \
@@ -205,7 +205,7 @@ uv run --no-project --with pytest --with jsonschema \
 
 Expected: FAIL because `spark_profiles.health` and `nodes status` are absent.
 
-- [ ] **Step 3: Implement concurrent probing and fail-closed evaluation**
+- [x] **Step 3: Implement concurrent probing and fail-closed evaluation**
 
 Use a two-worker `ThreadPoolExecutor`. Read the fixed collector bytes locally,
 construct inventory-pinned repeated interface/HCA arguments, and call
@@ -241,7 +241,7 @@ inventory = "inventory/cluster.toml"
 rdma_baseline = "inventory/reports/rdma-nccl.json"
 ```
 
-- [ ] **Step 4: Implement human/JSON CLI and run the live smoke test**
+- [x] **Step 4: Implement human/JSON CLI and run the live smoke test**
 
 The table columns are `NODE`, `STATE`, `CPU`, `LOAD1`,
 `MEM AVAILABLE`, `SWAP USED`, `ROOT FREE`, `GPU`, `TEMP`, `FABRIC`,
@@ -264,7 +264,7 @@ jq -e '
 Do not lower a rule when the live result is critical. Preserve the result and
 diagnose the exact mismatch.
 
-- [ ] **Step 5: Verify, document, and commit**
+- [x] **Step 5: Verify, document, and commit**
 
 Update the visual overview's implementation-state table truthfully; do not mark
 any model runtime accepted. Document fields, null semantics, exit codes, and
