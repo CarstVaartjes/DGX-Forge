@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import replace
+import json
 from pathlib import Path
 
 from spark_profiles.admission import AdmissionReport, check_admission
@@ -137,6 +138,7 @@ class FakeStore:
         self.state = state
         self.events = events
         self.saves: list[ControllerState] = []
+        self.transition_fenced = False
 
     @contextmanager
     def acquire(self):
@@ -150,6 +152,15 @@ class FakeStore:
 
     def load(self) -> ControllerState:
         return self.state
+
+    def begin_transition(self) -> None:
+        self.transition_fenced = True
+        self.events.append(("fence",))
+
+    def finish_transition(self, state: ControllerState) -> None:
+        self.save(state)
+        self.transition_fenced = False
+        self.events.append(("fence-clear",))
 
 
 class FailingSaveStore(FakeStore):
@@ -362,6 +373,25 @@ def test_changed_endpoint_is_withdrawn_before_stop() -> None:
     assert transitioning < first_stop
 
 
+def test_transition_fence_wraps_remote_mutation_and_final_state_save() -> None:
+    definition = workload()
+    target = profile("target", definition)
+    catalog_value = catalog(target, definition=definition)
+    switcher, events, store = make_switcher(catalog_value, ControllerState.stopped())
+
+    report = switcher.switch_profile("target")
+
+    fence = events.index(("fence",))
+    first_remote = next(
+        index for index, event in enumerate(events) if event[0] == "remote"
+    )
+    final_save = events.index(("save", "active", "target"))
+    fence_clear = events.index(("fence-clear",))
+    assert fence < first_remote < final_save < fence_clear
+    assert report.status == "active"
+    assert store.transition_fenced is False
+
+
 def test_retention_requires_matching_hashes_and_health() -> None:
     definition = workload()
     current = profile("current", definition)
@@ -487,6 +517,10 @@ def test_failed_health_cleans_up_target_and_finishes_stopped() -> None:
     assert operations[-2:] == ["profile-stop", "profile-verify-release"]
     assert store.state.status == "stopped"
     assert "fixture failure" in (store.state.last_error or "")
+    safe_save = events.index(("save", "stopped", None))
+    fence_clear = events.index(("fence-clear",))
+    assert safe_save < fence_clear
+    assert store.transition_fenced is False
 
 
 def test_failed_distributed_start_still_runs_full_ordered_cleanup() -> None:
@@ -616,6 +650,74 @@ def test_ambiguous_final_commit_is_replaced_with_conservative_state() -> None:
     assert store.save_attempts == 4
     assert store.state.status == "degraded"
     assert store.state.active_profile is None
+
+
+def test_transition_fence_masks_active_after_all_bounded_recovery_saves_fail(
+    tmp_path: Path,
+) -> None:
+    definition = workload("generator", distributed=True)
+    target = profile("generator-only", definition)
+    catalog_value = catalog(target, definition=definition)
+    events: list[tuple] = []
+
+    class ThreeFailureStore(StateStore):
+        def __init__(self, directory: Path) -> None:
+            super().__init__(directory)
+            self.save_attempts = 0
+
+        def save(self, state: ControllerState) -> None:
+            self.save_attempts += 1
+            if self.save_attempts == 2:
+                super().save(state)
+                raise OSError("final save failed after replace")
+            if self.save_attempts in {3, 4}:
+                raise OSError(
+                    f"recovery save {self.save_attempts - 2} failed before replace"
+                )
+            super().save(state)
+
+    store = ThreeFailureStore(tmp_path)
+    switcher = ProfileSwitcher(
+        catalog=catalog_value,
+        backend=FakeBackend(events),
+        state_store=store,
+        inventory_provider=inventory,
+    )
+
+    report = switcher.switch_profile("generator-only")
+
+    raw_state = json.loads((tmp_path / "state.json").read_text(encoding="utf-8"))
+    quarantined = store.load()
+    assert raw_state["status"] == "active"
+    assert raw_state["active_profile"] == "generator-only"
+    assert report.status == "degraded"
+    assert report.published_endpoints == {}
+    assert store.save_attempts == 4
+    assert quarantined.status == "degraded"
+    assert quarantined.active_profile is None
+    assert "manual recovery" in (quarantined.last_error or "")
+    assert (tmp_path / "transition.fence").exists()
+    cleanup = [
+        event[2][0]
+        for event in events
+        if event[0] == "remote"
+        and event[2][0] in {"profile-stop", "profile-verify-release"}
+    ]
+    assert cleanup == [
+        "profile-stop",
+        "profile-stop",
+        "profile-verify-release",
+        "profile-verify-release",
+    ]
+
+    remote_count = len([event for event in events if event[0] == "remote"])
+    blocked = switcher.switch_profile("generator-only")
+
+    assert blocked.status == "blocked"
+    assert blocked.published_endpoints == {}
+    assert "manual recovery" in " ".join(blocked.errors)
+    assert len([event for event in events if event[0] == "remote"]) == remote_count
+    assert (tmp_path / "transition.fence").exists()
 
 
 def test_final_state_save_failure_never_reports_active_endpoints() -> None:

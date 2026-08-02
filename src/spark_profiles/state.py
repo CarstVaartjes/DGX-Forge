@@ -20,6 +20,11 @@ _STATUSES = frozenset(
     ("stopped", "transitioning", "active", "degraded", "stopped-after-reboot")
 )
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_FENCED_RECOVERY = (
+    "incomplete transition is quarantined; manual recovery required: inspect and "
+    "stop remote workloads, persist a safe stopped or degraded state, then remove "
+    "transition.fence; model and output data are preserved"
+)
 
 
 class StateError(RuntimeError):
@@ -229,9 +234,18 @@ class StateStore:
         self.directory = Path(directory)
         self.state_path = self.directory / "state.json"
         self.lock_path = self.directory / "switch.lock"
+        self.transition_fence_path = self.directory / "transition.fence"
         self.stale_lock_seconds = stale_lock_seconds
 
     def load(self) -> ControllerState:
+        if self.transition_fence_path.exists():
+            return ControllerState(
+                status="degraded",
+                active_profile=None,
+                target_profile=None,
+                restore_profile=None,
+                last_error=_FENCED_RECOVERY,
+            )
         if not self.state_path.exists():
             return ControllerState.stopped()
         try:
@@ -259,14 +273,56 @@ class StateStore:
                 os.fsync(state_file.fileno())
             os.replace(temporary_path, self.state_path)
             temporary_path = None
-            directory_fd = os.open(self.directory, os.O_RDONLY)
-            try:
-                os.fsync(directory_fd)
-            finally:
-                os.close(directory_fd)
+            self._fsync_directory()
         finally:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
+
+    def begin_transition(self) -> None:
+        """Durably quarantine state publication before remote mutation."""
+        self.directory.mkdir(parents=True, exist_ok=True)
+        try:
+            descriptor = os.open(
+                self.transition_fence_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o600,
+            )
+        except FileExistsError as error:
+            raise StateError(
+                "transition fence exists; manual recovery required"
+            ) from error
+        metadata = LockMetadata(os.getpid(), socket.gethostname(), _utc_now())
+        with os.fdopen(descriptor, "w", encoding="utf-8") as fence_file:
+            json.dump(
+                metadata.to_dict(),
+                fence_file,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            fence_file.write("\n")
+            fence_file.flush()
+            os.fsync(fence_file.fileno())
+        self._fsync_directory()
+
+    def finish_transition(self, state: ControllerState) -> None:
+        """Durably save a final state before clearing its transition fence."""
+        if state.status == "transitioning":
+            raise ValueError("cannot finish a transition with transitioning state")
+        self.save(state)
+        self.transition_fence_path.unlink()
+        try:
+            self._fsync_directory()
+        except OSError:
+            # The final state was already durably committed before unlink. If
+            # the deletion is lost on a crash, the stale fence fails closed.
+            pass
+
+    def _fsync_directory(self) -> None:
+        directory_fd = os.open(self.directory, os.O_RDONLY)
+        try:
+            os.fsync(directory_fd)
+        finally:
+            os.close(directory_fd)
 
     @contextmanager
     def acquire(self) -> Iterator[ControllerState]:

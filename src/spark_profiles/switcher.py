@@ -24,6 +24,10 @@ class _StateStore(Protocol):
 
     def save(self, state: ControllerState) -> None: ...
 
+    def begin_transition(self) -> None: ...
+
+    def finish_transition(self, state: ControllerState) -> None: ...
+
 
 @dataclass(frozen=True)
 class Diagnostic:
@@ -275,6 +279,7 @@ class ProfileSwitcher:
                 boot_ids=live_boot_ids,
             )
         )
+        self.state_store.begin_transition()
 
         live_workloads = (
             self._profile_definitions(current) if current is not None else set()
@@ -331,7 +336,7 @@ class ProfileSwitcher:
                 )
                 endpoints = {}
             try:
-                self.state_store.save(final_state)
+                self.state_store.finish_transition(final_state)
             except OSError as error:
                 detail = f"{type(error).__name__}: {error}"[:_MAX_ERROR_CHARS]
                 raise _TransitionFailure(
@@ -380,7 +385,7 @@ class ProfileSwitcher:
                 )
             errors = [message]
             try:
-                self.state_store.save(failed_state)
+                self.state_store.finish_transition(failed_state)
             except OSError as error:
                 detail = f"{type(error).__name__}: {error}"[:_MAX_ERROR_CHARS]
                 errors.append(
@@ -400,7 +405,7 @@ class ProfileSwitcher:
                     # replacing state.json. Make one bounded extra attempt so
                     # a transient recovery-write failure cannot leave that
                     # active publication consumable after cleanup.
-                    self.state_store.save(conservative_state)
+                    self.state_store.finish_transition(conservative_state)
                 except OSError as fallback_error:
                     fallback_detail = (
                         f"{type(fallback_error).__name__}: {fallback_error}"

@@ -81,6 +81,78 @@ def test_missing_state_loads_safe_stopped_default(tmp_path: Path) -> None:
     assert state.schema_version == 1
 
 
+def test_crashed_transition_fence_quarantines_persisted_active_state(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path)
+    active = ControllerState(
+        status="active",
+        active_profile="agent-full-dual",
+        target_profile=None,
+        restore_profile=None,
+        last_error=None,
+        active_profile_sha256=PROFILE_SHA,
+        active_definition_sha256={"deepseek-agent-dual": DEFINITION_A_SHA},
+    )
+    store.save(active)
+    store.begin_transition()
+
+    quarantined = store.load()
+
+    assert quarantined.status == "degraded"
+    assert quarantined.active_profile is None
+    assert quarantined.active_profile_sha256 is None
+    assert quarantined.active_definition_sha256 == {}
+    assert "manual recovery" in (quarantined.last_error or "")
+    assert "model and output data are preserved" in (quarantined.last_error or "")
+    assert len(quarantined.last_error or "") <= 512
+    assert (tmp_path / "transition.fence").exists()
+
+
+def test_stale_transition_fence_is_not_removed_by_load_or_lock_acquisition(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path)
+    store.save(ControllerState.stopped())
+    store.begin_transition()
+    (tmp_path / "transition.fence").write_text(
+        '{"created_at":"2000-01-01T00:00:00Z","host":"retired","pid":1}\n',
+        encoding="utf-8",
+    )
+
+    assert store.load().status == "degraded"
+    with store.acquire() as state:
+        assert state.status == "degraded"
+
+    assert (tmp_path / "transition.fence").exists()
+
+
+def test_finish_transition_clears_fence_only_after_safe_state_save(
+    tmp_path: Path,
+) -> None:
+    store = StateStore(tmp_path)
+    store.save(ControllerState.stopped())
+    store.begin_transition()
+    safe = ControllerState(
+        status="degraded",
+        active_profile=None,
+        target_profile="generator-only",
+        restore_profile=None,
+        last_error="remote cleanup could not be verified",
+    )
+
+    with patch("spark_profiles.state.os.replace", side_effect=OSError("interrupted")):
+        with pytest.raises(OSError, match="interrupted"):
+            store.finish_transition(safe)
+
+    assert (tmp_path / "transition.fence").exists()
+
+    store.finish_transition(safe)
+
+    assert not (tmp_path / "transition.fence").exists()
+    assert store.load() == safe
+
+
 def test_changed_active_definition_hash_is_persistently_distinguishable(
     tmp_path: Path,
 ) -> None:
