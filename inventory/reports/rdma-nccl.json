@@ -1,5 +1,5 @@
 {
-  "captured_at": "2026-08-01T22:57:55.463738+00:00",
+  "captured_at": "2026-08-02T06:43:05.353728+00:00",
   "commands": [
     {
       "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
@@ -17,50 +17,199 @@
       "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
       "exit_code": 0,
       "stderr": "",
-      "stdout": "123138\n"
+      "stdout": "339050\n"
     },
     {
       "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
       "exit_code": 0,
       "stderr": "",
-      "stdout": "---------------------------------------------------------------------------------------\n                    RDMA_Write BW Test\n Dual-port       : OFF\t\tDevice         : rocep1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n TX depth        : 128\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Max inline data : 0[B]\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x0228 PSN 0x71b12a RKey 0x1c03ec VAddr 0x00e608d5c7d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:10\n remote address: LID 0000 QPN 0x0228 PSN 0x2a3c06 RKey 0x1c03ec VAddr 0x00fd5b477fd000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             109.00             108.97 \t\t   0.207852\n---------------------------------------------------------------------------------------\n"
+      "stdout": "---------------------------------------------------------------------------------------\n                    RDMA_Write BW Test\n Dual-port       : OFF\t\tDevice         : rocep1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n TX depth        : 128\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Max inline data : 0[B]\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x022a PSN 0x18186a RKey 0x1c0400 VAddr 0x00e65bbc3c5000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:10\n remote address: LID 0000 QPN 0x022a PSN 0xafd0bb RKey 0x1c0300 VAddr 0x00fb74ab1fd000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             109.00             108.98 \t\t   0.207859\n---------------------------------------------------------------------------------------\n"
     },
     {
       "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
       "exit_code": 0,
       "stderr": "",
-      "stdout": "\n************************************\n* Waiting for client to connect... *\n************************************\n---------------------------------------------------------------------------------------\n                    RDMA_Write BW Test\n Dual-port       : OFF\t\tDevice         : rocep1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Max inline data : 0[B]\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x0228 PSN 0x2a3c06 RKey 0x1c03ec VAddr 0x00fd5b477fd000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11\n remote address: LID 0000 QPN 0x0228 PSN 0x71b12a RKey 0x1c03ec VAddr 0x00e608d5c7d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:10\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             109.00             108.97 \t\t   0.207852\n---------------------------------------------------------------------------------------\n"
+      "stdout": "\n************************************\n* Waiting for client to connect... *\n************************************\n---------------------------------------------------------------------------------------\n                    RDMA_Write BW Test\n Dual-port       : OFF\t\tDevice         : rocep1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Max inline data : 0[B]\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x022a PSN 0xafd0bb RKey 0x1c0300 VAddr 0x00fb74ab1fd000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11\n remote address: LID 0000 QPN 0x022a PSN 0x18186a RKey 0x1c0400 VAddr 0x00e65bbc3c5000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:10\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             109.00             108.98 \t\t   0.207859\n---------------------------------------------------------------------------------------\n"
     },
     {
       "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
       "exit_code": 0,
       "stderr": "",
-      "stdout": "123744\n"
+      "stdout": "314147\n"
     },
     {
       "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
       "exit_code": 0,
       "stderr": "",
-      "stdout": "---------------------------------------------------------------------------------------\n                    RDMA_Write BW Test\n Dual-port       : OFF\t\tDevice         : rocep1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n TX depth        : 128\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Max inline data : 0[B]\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x0229 PSN 0xae9fd6 RKey 0x1c03ec VAddr 0x00fceff427d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11\n remote address: LID 0000 QPN 0x0229 PSN 0x99f1ae RKey 0x1c03ec VAddr 0x00fe8365f0d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:10\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             109.00             108.99 \t\t   0.207879\n---------------------------------------------------------------------------------------\n"
+      "stdout": "---------------------------------------------------------------------------------------\n                    RDMA_Write BW Test\n Dual-port       : OFF\t\tDevice         : rocep1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n TX depth        : 128\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Max inline data : 0[B]\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x022b PSN 0xa7dab2 RKey 0x1c0300 VAddr 0x00e4aa15a4d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11\n remote address: LID 0000 QPN 0x022b PSN 0xb59d5 RKey 0x1c0400 VAddr 0x00f9c9f46dd000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:10\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             109.05             109.03 \t\t   0.207953\n---------------------------------------------------------------------------------------\n"
     },
     {
       "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
-      "exit_code": 255,
-      "stderr": "sign_and_send_pubkey: signing failed for ED25519 \"/Users/cvaartjes/.ssh/dgx_spark_admin.pub\" from agent: agent refused operation\ncarst@192.168.1.211: Permission denied (publickey).\n",
-      "stdout": ""
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "\n************************************\n* Waiting for client to connect... *\n************************************\n---------------------------------------------------------------------------------------\n                    RDMA_Write BW Test\n Dual-port       : OFF\t\tDevice         : rocep1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Max inline data : 0[B]\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x022b PSN 0xb59d5 RKey 0x1c0400 VAddr 0x00f9c9f46dd000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:10\n remote address: LID 0000 QPN 0x022b PSN 0xa7dab2 RKey 0x1c0300 VAddr 0x00e4aa15a4d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             109.05             109.03 \t\t   0.207953\n---------------------------------------------------------------------------------------\n"
     },
     {
       "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
-      "exit_code": 255,
-      "stderr": "sign_and_send_pubkey: signing failed for ED25519 \"/Users/cvaartjes/.ssh/dgx_spark_admin.pub\" from agent: agent refused operation\ncarst@192.168.1.211: Permission denied (publickey).\n",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "339594\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "---------------------------------------------------------------------------------------\n                    RDMA_Write BW Test\n Dual-port       : OFF\t\tDevice         : roceP2p1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n TX depth        : 128\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Max inline data : 0[B]\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x02a8 PSN 0x83a7c5 RKey 0x1e04ed VAddr 0x00e26304c5d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:10\n remote address: LID 0000 QPN 0x02a8 PSN 0xa39eb4 RKey 0x1e03ec VAddr 0x00fc351ffed000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:11\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             108.91             108.90 \t\t   0.207702\n---------------------------------------------------------------------------------------\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "\n************************************\n* Waiting for client to connect... *\n************************************\n---------------------------------------------------------------------------------------\n                    RDMA_Write BW Test\n Dual-port       : OFF\t\tDevice         : roceP2p1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Max inline data : 0[B]\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x02a8 PSN 0xa39eb4 RKey 0x1e03ec VAddr 0x00fc351ffed000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:11\n remote address: LID 0000 QPN 0x02a8 PSN 0x83a7c5 RKey 0x1e04ed VAddr 0x00e26304c5d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:10\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             108.91             108.90 \t\t   0.207702\n---------------------------------------------------------------------------------------\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "315224\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "---------------------------------------------------------------------------------------\n                    RDMA_Write BW Test\n Dual-port       : OFF\t\tDevice         : roceP2p1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n TX depth        : 128\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Max inline data : 0[B]\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x02a9 PSN 0x81c6c5 RKey 0x1e04ed VAddr 0x00fa6ca3d94000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:11\n remote address: LID 0000 QPN 0x02a9 PSN 0x5a8fc6 RKey 0x1e04ed VAddr 0x00f2e59981d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:10\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             109.05             109.04 \t\t   0.207969\n---------------------------------------------------------------------------------------\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "\n************************************\n* Waiting for client to connect... *\n************************************\n---------------------------------------------------------------------------------------\n                    RDMA_Write BW Test\n Dual-port       : OFF\t\tDevice         : roceP2p1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Max inline data : 0[B]\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x02a9 PSN 0x5a8fc6 RKey 0x1e04ed VAddr 0x00f2e59981d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:10\n remote address: LID 0000 QPN 0x02a9 PSN 0x81c6c5 RKey 0x1e04ed VAddr 0x00fa6ca3d94000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:11\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             109.05             109.04 \t\t   0.207969\n---------------------------------------------------------------------------------------\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "340138\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "---------------------------------------------------------------------------------------\n                    RDMA_Read BW Test\n Dual-port       : OFF\t\tDevice         : rocep1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n TX depth        : 128\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Outstand reads  : 16\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x022c PSN 0x3c468a OUT 0x10 RKey 0x1c0400 VAddr 0x00fa263de8d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:10\n remote address: LID 0000 QPN 0x022c PSN 0xa7dceb OUT 0x10 RKey 0x1c0300 VAddr 0x00e15440dad000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             80.42              80.41  \t\t   0.153378\n---------------------------------------------------------------------------------------\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "\n************************************\n* Waiting for client to connect... *\n************************************\n---------------------------------------------------------------------------------------\n                    RDMA_Read BW Test\n Dual-port       : OFF\t\tDevice         : rocep1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Outstand reads  : 16\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x022c PSN 0xa7dceb OUT 0x10 RKey 0x1c0300 VAddr 0x00e15440dad000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11\n remote address: LID 0000 QPN 0x022c PSN 0x3c468a OUT 0x10 RKey 0x1c0400 VAddr 0x00fa263de8d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:10\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             80.42              80.41  \t\t   0.153378\n---------------------------------------------------------------------------------------\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "316316\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "---------------------------------------------------------------------------------------\n                    RDMA_Read BW Test\n Dual-port       : OFF\t\tDevice         : rocep1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n TX depth        : 128\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Outstand reads  : 16\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x022d PSN 0x4a610d OUT 0x10 RKey 0x1c0300 VAddr 0x00e0e7c35ed000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11\n remote address: LID 0000 QPN 0x022d PSN 0x761784 OUT 0x10 RKey 0x1c0400 VAddr 0x00ec825ca2d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:10\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             80.43              80.42  \t\t   0.153397\n---------------------------------------------------------------------------------------\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "\n************************************\n* Waiting for client to connect... *\n************************************\n---------------------------------------------------------------------------------------\n                    RDMA_Read BW Test\n Dual-port       : OFF\t\tDevice         : rocep1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Outstand reads  : 16\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x022d PSN 0x761784 OUT 0x10 RKey 0x1c0400 VAddr 0x00ec825ca2d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:10\n remote address: LID 0000 QPN 0x022d PSN 0x4a610d OUT 0x10 RKey 0x1c0300 VAddr 0x00e0e7c35ed000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:100:11\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             80.43              80.42  \t\t   0.153397\n---------------------------------------------------------------------------------------\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "340687\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "---------------------------------------------------------------------------------------\n                    RDMA_Read BW Test\n Dual-port       : OFF\t\tDevice         : roceP2p1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n TX depth        : 128\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Outstand reads  : 16\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x02aa PSN 0xd586ca OUT 0x10 RKey 0x1e04ed VAddr 0x00e02aa6f6d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:10\n remote address: LID 0000 QPN 0x02aa PSN 0xba954c OUT 0x10 RKey 0x1e03ec VAddr 0x00f4e5b73ed000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:11\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             80.44              80.43  \t\t   0.153409\n---------------------------------------------------------------------------------------\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "\n************************************\n* Waiting for client to connect... *\n************************************\n---------------------------------------------------------------------------------------\n                    RDMA_Read BW Test\n Dual-port       : OFF\t\tDevice         : roceP2p1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Outstand reads  : 16\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x02aa PSN 0xba954c OUT 0x10 RKey 0x1e03ec VAddr 0x00f4e5b73ed000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:11\n remote address: LID 0000 QPN 0x02aa PSN 0xd586ca OUT 0x10 RKey 0x1e04ed VAddr 0x00e02aa6f6d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:10\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             80.44              80.43  \t\t   0.153409\n---------------------------------------------------------------------------------------\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "317400\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "---------------------------------------------------------------------------------------\n                    RDMA_Read BW Test\n Dual-port       : OFF\t\tDevice         : roceP2p1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n TX depth        : 128\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Outstand reads  : 16\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x02ab PSN 0x94f507 OUT 0x10 RKey 0x1e03ec VAddr 0x00ffc32aeed000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:11\n remote address: LID 0000 QPN 0x02ab PSN 0xd42d92 OUT 0x10 RKey 0x1e04ed VAddr 0x00e1121739d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:10\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             80.44              80.43  \t\t   0.153405\n---------------------------------------------------------------------------------------\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 0,
+      "stderr": "",
+      "stdout": "\n************************************\n* Waiting for client to connect... *\n************************************\n---------------------------------------------------------------------------------------\n                    RDMA_Read BW Test\n Dual-port       : OFF\t\tDevice         : roceP2p1s0f1\n Number of qps   : 1\t\tTransport type : IB\n Connection type : RC\t\tUsing SRQ      : OFF\n PCIe relax order: ON\n ibv_wr* API     : ON\n CQ Moderation   : 1\n Mtu             : 1024[B]\n Link type       : Ethernet\n GID index       : 3\n Outstand reads  : 16\n rdma_cm QPs\t : OFF\n Data ex. method : Ethernet\n---------------------------------------------------------------------------------------\n local address: LID 0000 QPN 0x02ab PSN 0xd42d92 OUT 0x10 RKey 0x1e04ed VAddr 0x00e1121739d000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:10\n remote address: LID 0000 QPN 0x02ab PSN 0x94f507 OUT 0x10 RKey 0x1e03ec VAddr 0x00ffc32aeed000\n GID: 00:00:00:00:00:00:00:00:00:00:255:255:192:168:101:11\n---------------------------------------------------------------------------------------\n #bytes     #iterations    BW peak[Gb/sec]    BW average[Gb/sec]   MsgRate[Mpps]\n 65536      5000             80.44              80.43  \t\t   0.153405\n---------------------------------------------------------------------------------------\n"
+    },
+    {
+      "command": "ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+      "exit_code": 1,
+      "stderr": "sudo: a password is required\n",
       "stdout": ""
     }
   ],
   "evidence_scope": "live_runtime_verification",
-  "failure": "command failed (255): ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
+  "failure": "command failed (1): ssh -o BatchMode=yes -o ForwardAgent=no -o ConnectTimeout=10 dgx-spark-1 bash -s",
   "inventory": "inventory/cluster.toml",
   "nccl": null,
-  "rdma": [],
+  "rdma": [
+    {
+      "bandwidth_gbps": 108.98,
+      "name": "ib_write_bw:spark1->spark2:rail100",
+      "passed": true
+    },
+    {
+      "bandwidth_gbps": 109.03,
+      "name": "ib_write_bw:spark2->spark1:rail100",
+      "passed": true
+    },
+    {
+      "bandwidth_gbps": 108.9,
+      "name": "ib_write_bw:spark1->spark2:rail101",
+      "passed": true
+    },
+    {
+      "bandwidth_gbps": 109.04,
+      "name": "ib_write_bw:spark2->spark1:rail101",
+      "passed": true
+    },
+    {
+      "bandwidth_gbps": 80.41,
+      "name": "ib_read_bw:spark1->spark2:rail100",
+      "passed": true
+    },
+    {
+      "bandwidth_gbps": 80.42,
+      "name": "ib_read_bw:spark2->spark1:rail100",
+      "passed": true
+    },
+    {
+      "bandwidth_gbps": 80.43,
+      "name": "ib_read_bw:spark1->spark2:rail101",
+      "passed": true
+    },
+    {
+      "bandwidth_gbps": 80.43,
+      "name": "ib_read_bw:spark2->spark1:rail101",
+      "passed": true
+    }
+  ],
   "resolved_consumers": {
     "GLOO_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1",
     "NCCL_IB_GID_INDEX": 3,
