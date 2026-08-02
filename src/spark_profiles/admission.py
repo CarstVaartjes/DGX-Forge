@@ -75,13 +75,13 @@ def _can_co_locate(definition: WorkloadDefinition) -> bool:
     )
 
 
-def check_admission(
-    profile: ClusterProfile,
-    catalog: Catalog,
-    inventory: Mapping[str, Any],
-    accepted: Mapping[str, tuple[str, ...]] | None = None,
-) -> AdmissionReport:
-    """Return all deterministic reasons a profile must not be activated."""
+def _placement_policy(
+    profile: ClusterProfile, catalog: Catalog
+) -> tuple[
+    AdmissionReport,
+    dict[str, set[str]],
+    dict[str, list[WorkloadDefinition]],
+]:
     errors: set[str] = set()
     placements = profile.placements
     known_nodes = {"spark1", "spark2"}
@@ -107,17 +107,6 @@ def check_admission(
             errors.add(f"distributed reservation is partial for {identifier}")
         elif definition.topology == "single" and nodes - set(definition.nodes):
             errors.add(f"single workload placement is invalid for {identifier}")
-        if catalog.maturity.get(identifier) != "accepted":
-            errors.add(
-                f"{identifier} maturity is {catalog.maturity.get(identifier, 'missing')}"
-            )
-        elif (
-            catalog.maturity_fingerprints.get(identifier)
-            != catalog.definition_fingerprints[identifier]
-        ):
-            errors.add(f"{identifier} accepted fingerprint does not match definition")
-        elif definition.checkpoint.manifest_sha256 is None:
-            errors.add("accepted definition requires manifest_sha256")
 
     for node, definitions in per_node.items():
         if len(definitions) > 1:
@@ -135,6 +124,49 @@ def check_admission(
                 other.id in definition.conflicts for other in definitions
             ):
                 errors.add(f"conflicting workloads on {node}: {definition.id}")
+
+    for endpoint, identifier in profile.endpoints.items():
+        if identifier not in catalog.definitions:
+            errors.add(f"endpoint {endpoint} references unknown workload: {identifier}")
+        elif identifier not in assigned:
+            errors.add(f"endpoint {endpoint} targets unassigned workload: {identifier}")
+
+    return AdmissionReport(errors=tuple(sorted(errors))), assigned, per_node
+
+
+def check_placement_policy(
+    profile: ClusterProfile, catalog: Catalog
+) -> AdmissionReport:
+    """Return deterministic structural placement and co-residency violations."""
+    report, _, _ = _placement_policy(profile, catalog)
+    return report
+
+
+def check_admission(
+    profile: ClusterProfile,
+    catalog: Catalog,
+    inventory: Mapping[str, Any],
+    accepted: Mapping[str, tuple[str, ...]] | None = None,
+) -> AdmissionReport:
+    """Return all deterministic reasons a profile must not be activated."""
+    placement_report, assigned, per_node = _placement_policy(profile, catalog)
+    errors = set(placement_report.errors)
+
+    for identifier in assigned:
+        definition = catalog.definitions[identifier]
+        if catalog.maturity.get(identifier) != "accepted":
+            errors.add(
+                f"{identifier} maturity is {catalog.maturity.get(identifier, 'missing')}"
+            )
+        elif (
+            catalog.maturity_fingerprints.get(identifier)
+            != catalog.definition_fingerprints[identifier]
+        ):
+            errors.add(f"{identifier} accepted fingerprint does not match definition")
+        elif definition.checkpoint.manifest_sha256 is None:
+            errors.add("accepted definition requires manifest_sha256")
+
+    for node, definitions in per_node.items():
         paths: dict[Path, str] = {}
         ports: dict[int, str] = {}
         for definition in definitions:

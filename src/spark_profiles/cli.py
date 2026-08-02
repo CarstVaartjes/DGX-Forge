@@ -11,7 +11,7 @@ import sys
 import tomllib
 from typing import Callable, Mapping, Protocol, Sequence
 
-from .admission import check_admission
+from .admission import check_admission, check_placement_policy
 from .backend import SshBackend
 from .catalog import Catalog
 from .health import ClusterHealth, LocalHealthError, NodeHealthService
@@ -179,6 +179,8 @@ def _resolve_endpoint(
     if not _active_content_is_accepted(state, dependencies.catalog):
         return unavailable("active profile content is not currently accepted")
     profile = dependencies.catalog.profiles[state.active_profile]
+    if not check_placement_policy(profile, dependencies.catalog).ok:
+        return unavailable("active profile violates current placement policy")
     if name not in profile.endpoints:
         return unavailable(
             f"endpoint is not published by active profile {profile.id}"

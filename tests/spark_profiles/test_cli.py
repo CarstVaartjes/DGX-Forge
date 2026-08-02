@@ -208,8 +208,81 @@ def accepted_catalog(
     )
 
 
+def legacy_exclusive_colocation_catalog() -> Catalog:
+    base = accepted_catalog()
+    original = base.definitions["deepseek-agent-dual"]
+    definitions = tuple(
+        replace(
+            original,
+            id=identifier,
+            topology="single",
+            placement_class="single-exclusive",
+            nodes=("spark1",),
+            start_order=("spark1",),
+            stop_order=("spark1",),
+            paths=replace(
+                original.paths,
+                cache=Path(f"/srv/models/snapshots/{identifier}"),
+                scratch=Path(f"/srv/models/runtime-cache/{identifier}"),
+                output=Path(f"/srv/models/outputs/{identifier}"),
+            ),
+            endpoint=replace(original.endpoint, port=port),
+        )
+        for identifier, port in (("exclusive-one", 9001), ("exclusive-two", 9002))
+    )
+    profile = replace(
+        base.profiles["agent-full-dual"],
+        placements={
+            "spark1": tuple(definition.id for definition in definitions),
+            "spark2": (),
+        },
+        endpoints={"deepseek": "exclusive-one"},
+    )
+    definition_fingerprints = {
+        definition.id: fingerprint(definition) for definition in definitions
+    }
+    profile_fingerprint = fingerprint(profile)
+    return Catalog(
+        definitions={definition.id: definition for definition in definitions},
+        profiles={profile.id: profile},
+        selectors=base.selectors,
+        definition_fingerprints=definition_fingerprints,
+        profile_fingerprints={profile.id: profile_fingerprint},
+        maturity={definition.id: "accepted" for definition in definitions},
+        maturity_fingerprints=definition_fingerprints,
+        accepted_profiles={
+            profile_fingerprint: tuple(sorted(definition_fingerprints.values()))
+        },
+    )
+
+
+def accepted_empty_catalog(*, endpoint_target: str | None = None) -> Catalog:
+    base = accepted_catalog()
+    profile = replace(
+        base.profiles["agent-full-dual"],
+        placements={"spark1": (), "spark2": ()},
+        endpoints={"deepseek": endpoint_target} if endpoint_target else {},
+    )
+    profile_fingerprint = fingerprint(profile)
+    return Catalog(
+        definitions=base.definitions,
+        profiles={profile.id: profile},
+        selectors=base.selectors,
+        definition_fingerprints=base.definition_fingerprints,
+        profile_fingerprints={profile.id: profile_fingerprint},
+        maturity=base.maturity,
+        maturity_fingerprints=base.maturity_fingerprints,
+        accepted_profiles={profile_fingerprint: ()},
+    )
+
+
 def active_state(catalog: Catalog) -> ControllerState:
     profile = catalog.profiles["agent-full-dual"]
+    identifiers = {
+        identifier
+        for node_identifiers in profile.placements.values()
+        for identifier in node_identifiers
+    }
     return ControllerState(
         status="active",
         active_profile=profile.id,
@@ -218,9 +291,8 @@ def active_state(catalog: Catalog) -> ControllerState:
         last_error=None,
         active_profile_sha256=catalog.profile_fingerprints[profile.id],
         active_definition_sha256={
-            "deepseek-agent-dual": catalog.definition_fingerprints[
-                "deepseek-agent-dual"
-            ]
+            identifier: catalog.definition_fingerprints[identifier]
+            for identifier in identifiers
         },
         boot_ids=BOOT_IDS,
     )
@@ -421,6 +493,13 @@ def test_status_never_claims_live_endpoint_availability() -> None:
 
 def test_endpoint_allows_exact_currently_accepted_content() -> None:
     catalog_value = accepted_catalog()
+    inventory_calls = 0
+    switcher = FakeSwitcher()
+
+    def counting_inventory() -> Mapping[str, object]:
+        nonlocal inventory_calls
+        inventory_calls += 1
+        return live_inventory()
 
     result = invoke(
         "endpoint",
@@ -428,11 +507,100 @@ def test_endpoint_allows_exact_currently_accepted_content() -> None:
         "--json",
         state=active_state(catalog_value),
         catalog_value=catalog_value,
+        inventory_provider=counting_inventory,
+        switcher=switcher,
     )
 
     assert result.exit_code == 0
     assert result.json["available"] is True
     assert result.json["workload_id"] == "deepseek-agent-dual"
+    assert inventory_calls == 1
+    assert switcher.health_calls == ["deepseek-agent-dual"]
+
+
+def test_endpoint_refuses_legacy_active_exclusive_colocation() -> None:
+    catalog_value = legacy_exclusive_colocation_catalog()
+    inventory_calls = 0
+    switcher = FakeSwitcher()
+
+    def counting_inventory() -> Mapping[str, object]:
+        nonlocal inventory_calls
+        inventory_calls += 1
+        return live_inventory()
+
+    result = invoke(
+        "endpoint",
+        "deepseek",
+        "--json",
+        state=active_state(catalog_value),
+        catalog_value=catalog_value,
+        inventory_provider=counting_inventory,
+        switcher=switcher,
+    )
+
+    assert result.exit_code == 3
+    assert result.json == {
+        "available": False,
+        "endpoint": "deepseek",
+        "reason": "active profile violates current placement policy",
+    }
+    assert inventory_calls == 0
+    assert switcher.health_calls == []
+
+
+def test_empty_active_profile_has_no_endpoint() -> None:
+    catalog_value = accepted_empty_catalog()
+
+    result = invoke(
+        "endpoint",
+        "deepseek",
+        "--json",
+        state=active_state(catalog_value),
+        catalog_value=catalog_value,
+        inventory_provider=lambda: (_ for _ in ()).throw(
+            AssertionError("an empty profile must not probe nodes")
+        ),
+    )
+
+    assert result.exit_code == 3
+    assert result.json == {
+        "available": False,
+        "endpoint": "deepseek",
+        "reason": "endpoint is not published by active profile agent-full-dual",
+    }
+
+
+@pytest.mark.parametrize(
+    "target", ("deepseek-agent-dual", "missing"), ids=("unassigned", "unknown")
+)
+def test_endpoint_refuses_legacy_empty_profile_endpoint(target: str) -> None:
+    catalog_value = accepted_empty_catalog(endpoint_target=target)
+    inventory_calls = 0
+    switcher = FakeSwitcher()
+
+    def counting_inventory() -> Mapping[str, object]:
+        nonlocal inventory_calls
+        inventory_calls += 1
+        return live_inventory()
+
+    result = invoke(
+        "endpoint",
+        "deepseek",
+        "--json",
+        state=active_state(catalog_value),
+        catalog_value=catalog_value,
+        inventory_provider=counting_inventory,
+        switcher=switcher,
+    )
+
+    assert result.exit_code == 3
+    assert result.json == {
+        "available": False,
+        "endpoint": "deepseek",
+        "reason": "active profile violates current placement policy",
+    }
+    assert inventory_calls == 0
+    assert switcher.health_calls == []
 
 
 def test_endpoint_refuses_a_boot_id_mismatch() -> None:
