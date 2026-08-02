@@ -302,7 +302,7 @@ git commit -m "feat: add Spark controller backend and state"
 - Produces: `switch_profile(target_id: str, *, restore_to: str | None = None, dry_run: bool = False) -> SwitchReport`.
 - Consumes workload commands only through `SshBackend`.
 
-- [ ] **Step 1: Write failing transition-order tests**
+- [x] **Step 1: Write failing transition-order tests**
 
 ```python
 def test_distributed_stop_is_head_first(harness):
@@ -319,11 +319,11 @@ def test_failed_start_finishes_stopped(harness):
     assert harness.published_endpoints == ()
 ```
 
-- [ ] **Step 2: Confirm tests fail**
+- [x] **Step 2: Confirm tests fail**
 
 Run: `uv run --with pytest pytest tests/spark_profiles/test_switcher.py -v`
 
-- [ ] **Step 3: Implement reconciliation**
+- [x] **Step 3: Implement reconciliation**
 
 Acquire the host-level lock, validate admission, drain changed endpoints, stop
 heads before workers, verify memory/scratch recovery, retain unchanged healthy
@@ -331,16 +331,16 @@ workloads, start workers before heads, run health then quality gates, and
 publish only accepted endpoints. On failure, stop partially started workloads
 and persist the stopped/degraded result with log paths.
 
-- [ ] **Step 4: Implement explicit home restoration**
+- [x] **Step 4: Implement explicit home restoration**
 
-`restore_to` resolves an explicit profile selector only after temporary outputs
-and provenance have been recovered. `restore-default` passes `default`, which
-resolves to `agent-full-dual`. Restoration is a second ordinary transition;
-its failure is returned separately and never changes the recorded profile and
-definition fingerprint that produced an artifact. Restoration policy never
-lives inside a Cluster Profile.
+`restore_to` records a canonical restoration intent but never unloads the
+temporary profile automatically. After the caller has recovered outputs and
+provenance, the later explicit `restore-default` command passes `default`,
+which resolves to `agent-full-dual`, through the same ordinary switch path.
+Restoration policy never lives inside a Cluster Profile, and the producing
+profile and definition fingerprints remain in the caller's switch result.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 Run: `uv run --with pytest pytest tests/spark_profiles/test_switcher.py -v && git diff --check`
 
@@ -390,7 +390,9 @@ Run: `uv run --with pytest pytest tests/spark_profiles/test_cli.py -v`
 
 Every command supports `--json`; errors use stable exit codes and never print
 secrets, environment variables, private keys, or full unbounded remote logs.
-`switch --dry-run` shows the exact per-node transition without changing state.
+`switch --dry-run` shows the resolved target, admission result, content hashes,
+and declared lifecycle ordering without changing controller or remote state.
+It does not introduce a second action-planning engine beside the switcher.
 Use exit 0 for success, 2 for arguments/configuration, 3 for admission or
 endpoint denial, 6 for transition/restoration failure, and 7 for lock conflict.
 Reserve 4 and 5 for live node health.
