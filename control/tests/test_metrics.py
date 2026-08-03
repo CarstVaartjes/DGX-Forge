@@ -1,0 +1,59 @@
+from dgx_control.metrics import MetricsRegistry
+from dgx_control.api import create_app
+from dgx_control.audit import MemoryAuditStore
+from dgx_control.auth import TokenCodec
+from fastapi.testclient import TestClient
+
+
+def test_metrics_use_node_id_not_hostname_or_address() -> None:
+    metrics = MetricsRegistry()
+    metrics.update_node("spk_00000000000000000000000000000001", ready=True, memory_available_bytes=1200, disk_available_bytes=3400, probe_age_seconds=5)
+    text = metrics.render()
+    assert 'node_id="spk_00000000000000000000000000000001"' in text
+    assert "192.168." not in text and "spark.local" not in text
+
+
+def test_metrics_do_not_contain_request_content_or_credentials() -> None:
+    metrics = MetricsRegistry()
+    metrics.observe_api("POST", 202, 0.25)
+    metrics.set_job_count("reconcile", "running", 1)
+    metrics.set_route_state("maintenance")
+    text = metrics.render()
+    assert "prompt" not in text.lower()
+    assert "bearer" not in text.lower()
+    assert "authorization" not in text.lower()
+    assert 'method="POST",status_class="2xx"' in text
+
+
+def test_metric_labels_are_allowlisted_and_unknown_values_collapse() -> None:
+    metrics = MetricsRegistry()
+    metrics.set_job_count("user-supplied-unique-kind", "surprise", 3)
+    text = metrics.render()
+    assert 'kind="other",state="other"' in text
+    assert "user-supplied" not in text and "surprise" not in text
+
+
+def test_invalid_node_id_is_rejected() -> None:
+    try:
+        MetricsRegistry().update_node("spark.local", ready=True, memory_available_bytes=1, disk_available_bytes=1, probe_age_seconds=1)
+    except ValueError as error:
+        assert "node ID" in str(error)
+    else:
+        raise AssertionError("unsafe node label was accepted")
+
+
+def test_metrics_endpoint_is_separately_authenticated() -> None:
+    class Jobs:
+        def list(self): return []
+        def get(self, _): raise KeyError
+        def enqueue(self, *_args, **_kwargs): raise AssertionError
+    metrics = MetricsRegistry()
+    app = create_app(
+        jobs=Jobs(), tokens=TokenCodec(b"k" * 32), audits=MemoryAuditStore(),
+        fleet=lambda: {"nodes": []}, metrics=metrics, metrics_token="metrics-token-long",
+    )
+    client = TestClient(app)
+    assert client.get("/metrics").status_code == 401
+    response = client.get("/metrics", headers={"Authorization": "Bearer metrics-token-long"})
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/openmetrics-text")

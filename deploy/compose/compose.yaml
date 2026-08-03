@@ -27,9 +27,10 @@ services:
       DGX_DEPLOYMENT_MODE: production
       DGX_DATABASE_URL_FILE: /run/secrets/database-url
       DGX_TOKEN_SIGNING_KEY_FILE: /run/secrets/token-signing-key
+      DGX_METRICS_TOKEN_FILE: /run/secrets/metrics-token
       DGX_REPOSITORY_PATH: /repository
       DGX_STATE_PATH: /state
-    secrets: [database-url, token-signing-key]
+    secrets: [database-url, token-signing-key, metrics-token]
     volumes:
       - ${REPOSITORY_PATH:?set repository path}:/repository:ro
       - control-state:/state
@@ -50,7 +51,7 @@ services:
     read_only: true
     user: "10001:10001"
     environment: *control-environment
-    secrets: [database-url, token-signing-key]
+    secrets: [database-url, token-signing-key, metrics-token]
     volumes:
       - ${REPOSITORY_PATH:?set repository path}:/repository:ro
       - control-state:/state
@@ -78,6 +79,26 @@ services:
       timeout: 5s
       retries: 10
 
+  prometheus:
+    image: ${PROMETHEUS_IMAGE:?set a digest-pinned Prometheus image}
+    restart: unless-stopped
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=15d
+      - --storage.tsdb.retention.size=10GB
+      - --web.enable-lifecycle=false
+    read_only: true
+    user: "65534:65534"
+    secrets: [metrics-token]
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    tmpfs: [/tmp]
+    networks: [application]
+    depends_on:
+      control-api: {condition: service_healthy}
+
   caddy:
     image: ${CADDY_IMAGE:?set a digest-pinned Caddy image}
     restart: unless-stopped
@@ -99,6 +120,8 @@ secrets:
     file: "${POSTGRES_PASSWORD_FILE:?set PostgreSQL password secret file}"
   token-signing-key:
     file: "${TOKEN_SIGNING_KEY_FILE:?set token signing key secret file}"
+  metrics-token:
+    file: "${METRICS_TOKEN_FILE:?set metrics scrape token secret file}"
   litellm-master-key:
     file: "${LITELLM_MASTER_KEY_FILE:?set LiteLLM master key secret file}"
   litellm-upstream-key:
@@ -117,3 +140,4 @@ volumes:
   control-state: {}
   caddy-data: {}
   caddy-config: {}
+  prometheus-data: {}

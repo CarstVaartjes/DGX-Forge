@@ -11,10 +11,12 @@ def _rendered() -> dict:
         "CADDY_IMAGE": "caddy:2@sha256:" + "b" * 64,
         "CONTROL_IMAGE": "example/control:1@sha256:" + "c" * 64,
         "LITELLM_IMAGE": "example/litellm:1@sha256:" + "d" * 64,
+        "PROMETHEUS_IMAGE": "prom/prometheus:1@sha256:" + "e" * 64,
         "REPOSITORY_PATH": "/srv/dgx-forge/repository",
         "DATABASE_URL_FILE": "/dev/null",
         "POSTGRES_PASSWORD_FILE": "/dev/null",
         "TOKEN_SIGNING_KEY_FILE": "/dev/null",
+        "METRICS_TOKEN_FILE": "/dev/null",
         "LITELLM_MASTER_KEY_FILE": "/dev/null",
         "LITELLM_UPSTREAM_KEY_FILE": "/dev/null",
         "LITELLM_DATABASE_URL_FILE": "/dev/null",
@@ -40,6 +42,7 @@ def test_database_has_only_data_network_and_ingress_is_segmented() -> None:
     assert set(services["control-worker"]["networks"]) == {"application", "cluster-egress", "data"}
     assert set(services["control-api"]["networks"]) == {"application", "data", "ingress"}
     assert set(services["litellm"]["networks"]) == {"cluster-egress", "data", "ingress"}
+    assert set(services["prometheus"]["networks"]) == {"application"}
 
 
 def test_caddy_disables_admin_and_sets_edge_guards() -> None:

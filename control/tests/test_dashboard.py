@@ -23,7 +23,8 @@ def test_dashboard_joins_repository_fleet_with_latest_observation(tmp_path) -> N
         session.add(Observation(node_id="spk_00000000000000000000000000000001", kind="health", payload={"status": "healthy"}, observed_at=datetime(2026, 8, 3, tzinfo=UTC)))
     result = DashboardService(Repository(), sessions).fleet()
     assert result["commit"] == "a" * 40
-    assert result["nodes"] == [{
+    node = result["nodes"][0]
+    assert {key: node[key] for key in ("id", "display_name", "hostname", "lifecycle", "healthy", "labels", "profile")} == {
         "id": "spk_00000000000000000000000000000001", "display_name": "Alpha", "hostname": "alpha", "lifecycle": "ready", "healthy": True, "labels": {"zone": "lab"}, "profile": None,
-    }]
+    }
     assert "management" not in result["nodes"][0]

@@ -20,6 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from .audit import AuditRecord
 from .auth import Actor, AuthError, TokenCodec
 from .proposals import DocumentChange
+from .metrics import MetricsRegistry
 
 
 @dataclass(frozen=True)
@@ -99,11 +100,15 @@ def create_app(
     fleet: Callable[[], Mapping[str, object]],
     now: Callable[[], int] = lambda: int(time.time()),
     admin: AdminServices | None = None,
+    metrics: MetricsRegistry | None = None,
+    metrics_token: str | None = None,
+    metrics_refresh: Callable[[], None] | None = None,
 ) -> FastAPI:
     app = FastAPI(title="DGX Forge Control", version="1.0", docs_url=None, redoc_url=None)
 
     @app.middleware("http")
     async def request_boundary(request: Request, call_next):
+        started = time.monotonic()
         request_id = request.headers.get("x-request-id")
         try:
             request_id = str(uuid.UUID(request_id)) if request_id else str(uuid.uuid4())
@@ -117,6 +122,8 @@ def create_app(
             response = await call_next(request)
         response.headers["x-request-id"] = request_id
         response.headers["x-content-type-options"] = "nosniff"
+        if metrics is not None:
+            metrics.observe_api(request.method, response.status_code, time.monotonic() - started)
         return response
 
     def actor(request: Request) -> Actor:
@@ -147,6 +154,17 @@ def create_app(
     @app.get("/api/v1/readyz")
     def readyz() -> dict[str, str]:
         return {"status": "ready"}
+
+    @app.get("/metrics", include_in_schema=False)
+    def platform_metrics(request: Request) -> Response:
+        if metrics is None or metrics_token is None:
+            raise HTTPException(status_code=404, detail="not found")
+        authorization = request.headers.get("authorization", "")
+        if not secrets.compare_digest(authorization, f"Bearer {metrics_token}"):
+            raise HTTPException(status_code=401, detail="authentication required")
+        if metrics_refresh is not None:
+            metrics_refresh()
+        return Response(metrics.render(), media_type="application/openmetrics-text; version=1.0.0; charset=utf-8")
 
     @app.get("/api/v1/fleet")
     def fleet_view(_actor: Actor = Depends(actor)) -> Mapping[str, object]:
@@ -269,6 +287,9 @@ def production_app() -> FastAPI:
     from .repository import RepositoryService
     from .proposals import ProposalService
     from .dashboard import DashboardService
+    from .metrics import MetricsRegistry
+    from .models import Job
+    from sqlalchemy import func, select
 
     settings = Settings.from_env_and_secrets()
     sessions = session_factory(build_engine(settings.database_url))
@@ -278,12 +299,29 @@ def production_app() -> FastAPI:
     job_service = JobService(sessions, clock=clock)
     repository = RepositoryService(settings.repository_path)
     proposals = ProposalService(repository, head=repository.head)
+    dashboard = DashboardService(repository, sessions)
+    metrics = MetricsRegistry()
+    def refresh_metrics() -> None:
+        fleet_state = dashboard.fleet()
+        for node in fleet_state["nodes"]:
+            metrics.update_node(
+                node["id"], ready=node["healthy"] is True,
+                memory_available_bytes=int(node["memory_available_bytes"]),
+                disk_available_bytes=int(node["disk_available_bytes"]),
+                probe_age_seconds=float(node["probe_age_seconds"]),
+            )
+        with sessions() as session:
+            for kind, state, count in session.execute(select(Job.kind, Job.state, func.count()).group_by(Job.kind, Job.state)):
+                metrics.set_job_count(kind, state, count)
     app = create_app(
         jobs=job_service,
         tokens=TokenCodec(settings.token_signing_key),
         audits=SqlAuditStore(sessions, clock),
-        fleet=DashboardService(repository, sessions).fleet,
+        fleet=dashboard.fleet,
         admin=AdminServices(repository, proposals, None, None),
+        metrics=metrics,
+        metrics_token=settings.metrics_token,
+        metrics_refresh=refresh_metrics,
     )
     web_root = Path(__file__).resolve().parent / "web"
     if web_root.is_dir():

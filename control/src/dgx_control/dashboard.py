@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import UTC, datetime
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -26,7 +27,7 @@ class DashboardService:
             reconciliations = list(session.scalars(select(Reconciliation).where(Reconciliation.status == "succeeded").order_by(Reconciliation.created_at.desc()).limit(1)))
         latest = {}
         for observation in observations:
-            latest.setdefault(observation.node_id, observation.payload)
+            latest.setdefault(observation.node_id, (observation.payload, observation.observed_at))
         active_profiles = {}
         if reconciliations and isinstance(reconciliations[0].summary, Mapping):
             raw = reconciliations[0].summary.get("node_profiles", {})
@@ -35,7 +36,9 @@ class DashboardService:
         for node_id, raw in sorted(parsed["nodes"].items()):
             if not isinstance(node_id, str) or not isinstance(raw, Mapping):
                 continue
-            health = latest.get(node_id, {})
+            health, observed_at = latest.get(node_id, ({}, None))
+            if observed_at is not None and observed_at.tzinfo is None:
+                observed_at = observed_at.replace(tzinfo=UTC)
             nodes.append({
                 "id": node_id,
                 "display_name": str(raw.get("display_name", node_id)),
@@ -44,5 +47,8 @@ class DashboardService:
                 "healthy": health.get("status") in {"healthy", "warning"} if isinstance(health, Mapping) else None,
                 "labels": dict(raw.get("labels", {})) if isinstance(raw.get("labels"), Mapping) else {},
                 "profile": active_profiles.get(node_id),
+                "memory_available_bytes": health.get("memory_available_bytes", 0) if isinstance(health, Mapping) else 0,
+                "disk_available_bytes": health.get("disk_available_bytes", 0) if isinstance(health, Mapping) else 0,
+                "probe_age_seconds": max(0.0, (datetime.now(UTC) - observed_at).total_seconds()) if observed_at is not None else 0.0,
             })
         return {"commit": commit, "nodes": nodes}

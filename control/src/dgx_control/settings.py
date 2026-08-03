@@ -37,6 +37,7 @@ class Settings:
     state_path: Path
     deployment_mode: str
     token_signing_key: bytes
+    metrics_token: str
 
     @property
     def database_host(self) -> str | None:
@@ -62,10 +63,23 @@ class Settings:
             signing_key = b"development-only-signing-key-32b"
         if len(signing_key) < 32:
             raise SettingsError("token signing key must contain at least 32 bytes")
+        metrics_file = os.environ.get("DGX_METRICS_TOKEN_FILE")
+        if metrics_file:
+            metrics_path = Path(metrics_file)
+            if metrics_path.is_symlink() or not metrics_path.is_file():
+                raise SettingsError("metrics token must be a regular non-symlink file")
+            metrics_token = metrics_path.read_text().strip()
+        elif mode == "production":
+            raise SettingsError("DGX_METRICS_TOKEN_FILE is required in production")
+        else:
+            metrics_token = "development-metrics-token"
+        if len(metrics_token) < 16 or any(character.isspace() for character in metrics_token):
+            raise SettingsError("metrics token is invalid")
         return cls(
             database_url=database_url,
             repository_path=Path(os.environ.get("DGX_REPOSITORY_PATH", "/srv/dgx-forge/repository")),
             state_path=Path(os.environ.get("DGX_STATE_PATH", "/srv/dgx-forge/state")),
             deployment_mode=mode,
             token_signing_key=signing_key,
+            metrics_token=metrics_token,
         )
