@@ -23,6 +23,14 @@ def _rendered() -> dict:
         "LITELLM_MASTER_KEY_FILE": "/dev/null",
         "LITELLM_UPSTREAM_KEY_FILE": "/dev/null",
         "LITELLM_DATABASE_URL_FILE": "/dev/null",
+        "STEP_CA_IMAGE": "smallstep/step-ca:0.30.2@sha256:" + "1" * 64,
+        "AGENT_CLIENT_CA_FILE": "/dev/null",
+        "AGENT_INTERMEDIATE_CERTIFICATE_FILE": "/dev/null",
+        "AGENT_PROXY_AUTH_FILE": "/dev/null",
+        "AGENT_CA_CREDENTIAL_FILE": "/dev/null",
+        "STEP_CA_ROOT_CERTIFICATE_FILE": "/dev/null",
+        "STEP_CA_INTERMEDIATE_KEY_FILE": "/dev/null",
+        "STEP_CA_PASSWORD_FILE": "/dev/null",
     }
     result = subprocess.run(
         ["docker", "compose", "-f", str(root / "deploy/compose/compose.yaml"), "config", "--format", "json"],
@@ -41,9 +49,9 @@ def test_only_caddy_publishes_ports_and_images_are_digest_pinned() -> None:
 def test_database_has_only_data_network_and_ingress_is_segmented() -> None:
     services = _rendered()["services"]
     assert set(services["postgres"]["networks"]) == {"data"}
-    assert set(services["caddy"]["networks"]) == {"ingress"}
+    assert set(services["caddy"]["networks"]) == {"agent-proxy", "ingress"}
     assert set(services["control-worker"]["networks"]) == {"application", "cluster-egress", "data"}
-    assert set(services["control-api"]["networks"]) == {"application", "data", "ingress"}
+    assert set(services["control-api"]["networks"]) == {"agent-proxy", "application", "data"}
     assert set(services["litellm"]["networks"]) == {"cluster-egress", "data", "ingress"}
     assert set(services["prometheus"]["networks"]) == {"application"}
 

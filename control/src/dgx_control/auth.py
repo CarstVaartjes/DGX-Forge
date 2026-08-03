@@ -79,9 +79,9 @@ class TrustedProxyAgentIdentityMiddleware:
     the typed ASGI scope value, never a client supplied header.
     """
 
-    def __init__(self, app: Any, *, trusted_proxy_sources: frozenset[str] = frozenset(), agent_identity_validator: Callable[[AgentIdentity], bool] | None = None) -> None:
+    def __init__(self, app: Any, *, trusted_proxy_auth: bytes = b"", agent_identity_validator: Callable[[AgentIdentity], bool] | None = None) -> None:
         self.app = app
-        self._trusted_proxy_sources = trusted_proxy_sources
+        self._trusted_proxy_auth = trusted_proxy_auth
         self._agent_identity_validator = agent_identity_validator
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
@@ -105,9 +105,8 @@ class TrustedProxyAgentIdentityMiddleware:
         safe_scope = dict(scope)
         safe_scope.pop(_AGENT_IDENTITY_SCOPE_KEY, None)
         safe_scope["headers"] = sanitized
-        client = scope.get("client")
-        source = client[0] if isinstance(client, (tuple, list)) and client else None
-        if source in self._trusted_proxy_sources and not duplicate_forwarded_headers:
+        supplied_proxy_auth = forwarded.get("x-dgx-agent-proxy-auth", "").encode()
+        if self._trusted_proxy_auth and hmac.compare_digest(supplied_proxy_auth, self._trusted_proxy_auth) and not duplicate_forwarded_headers:
             try:
                 safe_scope[_AGENT_IDENTITY_SCOPE_KEY] = AgentIdentity(
                     node_id=forwarded["x-dgx-agent-node"],

@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .audit import AuditRecord
 from .auth import Actor, AuthError, MUTATION_ROLES, TokenCodec, TrustedProxyAgentIdentityMiddleware
-from .agent_api import AgentApiServices, active_agent_identity, install_agent_routes
+from .agent_api import AgentApiServices, EnrollmentRateLimiter, active_agent_identity, install_agent_routes
 from .proposals import DocumentChange
 from .metrics import MetricsRegistry
 
@@ -106,12 +106,13 @@ def create_app(
     metrics_refresh: Callable[[], None] | None = None,
     job_logs=None,
     agent: AgentApiServices | None = None,
-    trusted_agent_proxy_sources: frozenset[str] = frozenset(),
+    trusted_agent_proxy_auth: bytes = b"",
+    enrollment_rate_limiter: EnrollmentRateLimiter | None = None,
 ) -> FastAPI:
     app = FastAPI(title="DGX Forge Control", version="1.0", docs_url=None, redoc_url=None)
     app.add_middleware(
         TrustedProxyAgentIdentityMiddleware,
-        trusted_proxy_sources=trusted_agent_proxy_sources,
+        trusted_proxy_auth=trusted_agent_proxy_auth,
         agent_identity_validator=(lambda identity: active_agent_identity(agent, identity)) if agent is not None else None,
     )
 
@@ -160,7 +161,12 @@ def create_app(
         if authenticated.role not in MUTATION_ROLES[("POST", path)]:
             raise HTTPException(status_code=403, detail="insufficient role")
 
-    install_agent_routes(app, actor_dependency=actor, services=agent)
+    install_agent_routes(
+        app,
+        actor_dependency=actor,
+        services=agent,
+        enrollment_rate_limiter=enrollment_rate_limiter,
+    )
 
     @app.get("/api/v1/healthz")
     def healthz() -> dict[str, str]:
@@ -385,6 +391,7 @@ def production_app() -> FastAPI:
         metrics_token=settings.metrics_token,
         metrics_refresh=refresh_metrics,
         job_logs=JobLogStore(settings.state_path / "job-logs"),
+        trusted_agent_proxy_auth=settings.agent_proxy_auth,
     )
     web_root = Path(__file__).resolve().parent / "web"
     if web_root.is_dir():

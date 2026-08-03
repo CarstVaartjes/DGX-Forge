@@ -9,10 +9,13 @@ import os
 import re
 import stat
 import tempfile
+import time
 from collections.abc import Callable, Mapping
+from collections import deque
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Lock
 from typing import Any, Protocol
 
 from dgx_agent_protocol import AgentProgress, AgentProtocolError, AgentResult, canonical_message
@@ -51,6 +54,42 @@ class AgentApiServices:
     artifact_root: Path
     max_artifact_bytes: int = _MAX_ARTIFACT_BYTES
     max_range_bytes: int = _MAX_RANGE_BYTES
+
+
+class EnrollmentRateLimiter:
+    """Fixed global admission limit for unauthenticated enrollment bodies.
+
+    The limiter intentionally has no client-keyed state: before enrollment a
+    caller is unauthenticated, so attacker-chosen client addresses must not
+    allocate unbounded memory. It is process-local; the deployment runs one
+    control API instance behind the sole Caddy ingress boundary.
+    """
+
+    def __init__(
+        self,
+        *,
+        maximum: int = 20,
+        window_seconds: float = 60.0,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        if maximum < 1 or window_seconds <= 0:
+            raise ValueError("enrollment rate limit must be positive")
+        self._maximum = maximum
+        self._window_seconds = window_seconds
+        self._clock = clock
+        self._admitted: deque[float] = deque()
+        self._lock = Lock()
+
+    def admit(self) -> bool:
+        now = self._clock()
+        with self._lock:
+            cutoff = now - self._window_seconds
+            while self._admitted and self._admitted[0] <= cutoff:
+                self._admitted.popleft()
+            if len(self._admitted) >= self._maximum:
+                return False
+            self._admitted.append(now)
+            return True
 
 
 class GrantRequest(BaseModel):
@@ -442,9 +481,11 @@ def install_agent_routes(
     *,
     actor_dependency: _ActorDependency,
     services: AgentApiServices | None,
+    enrollment_rate_limiter: EnrollmentRateLimiter | None = None,
 ) -> None:
     human = APIRouter(prefix="/api/v1/agents")
     agent = APIRouter(prefix="/agent/v1")
+    limiter = enrollment_rate_limiter or EnrollmentRateLimiter()
 
     @human.post("/enrollments/grants", status_code=status.HTTP_201_CREATED)
     def create_grant(body: GrantRequest, authenticated: Actor = Depends(actor_dependency)) -> dict[str, object]:
@@ -526,6 +567,8 @@ def install_agent_routes(
     @agent.post("/enroll", status_code=status.HTTP_202_ACCEPTED)
     async def enroll(request: Request) -> dict[str, object]:
         required = _require_services(services)
+        if not limiter.admit():
+            raise HTTPException(status_code=429, detail="enrollment rate limit exceeded")
         raw = await _bounded_enrollment_body(request, required)
         scan = _scan_enrollment_grants(raw)
         content_type = request.headers.get("content-type", "")

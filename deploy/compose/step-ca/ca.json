@@ -1,0 +1,11 @@
+{
+  "root": "/run/secrets/root_ca.crt",
+  "crt": "/run/secrets/intermediate_ca.crt",
+  "key": "/run/secrets/intermediate_ca_key",
+  "address": ":9000",
+  "insecureAddress": "",
+  "dnsNames": ["step-ca"],
+  "logger": {"format": "json"},
+  "db": {"type": "badgerv2", "dataSource": "/home/step/db"},
+  "authority": {"provisioners": []}
+}

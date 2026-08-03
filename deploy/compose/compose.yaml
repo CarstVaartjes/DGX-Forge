@@ -6,6 +6,17 @@ x-bounded-logging: &bounded-logging
     max-size: 10m
     max-file: "5"
 
+x-control-environment: &control-environment
+  DGX_DEPLOYMENT_MODE: production
+  DGX_DATABASE_URL_FILE: /run/secrets/database-url
+  DGX_TOKEN_SIGNING_KEY_FILE: /run/secrets/token-signing-key
+  DGX_METRICS_TOKEN_FILE: /run/secrets/metrics-token
+  DGX_REPOSITORY_PATH: /repository
+  DGX_STATE_PATH: /state
+  DGX_GIT_SIGNING_KEY_FILE: /run/secrets/git-signing-key
+  DGX_DEPLOYMENT_BRANCH: ${DEPLOYMENT_BRANCH:-deploy}
+  DGX_REQUIRED_CHECKS: ${REQUIRED_CHECKS:-}
+
 services:
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929}
@@ -31,22 +42,19 @@ services:
     command: [python, -m, dgx_control.api]
     read_only: true
     user: "10001:10001"
-    environment: &control-environment
-      DGX_DEPLOYMENT_MODE: production
-      DGX_DATABASE_URL_FILE: /run/secrets/database-url
-      DGX_TOKEN_SIGNING_KEY_FILE: /run/secrets/token-signing-key
-      DGX_METRICS_TOKEN_FILE: /run/secrets/metrics-token
-      DGX_REPOSITORY_PATH: /repository
-      DGX_STATE_PATH: /state
-      DGX_GIT_SIGNING_KEY_FILE: /run/secrets/git-signing-key
-      DGX_DEPLOYMENT_BRANCH: ${DEPLOYMENT_BRANCH:-deploy}
-      DGX_REQUIRED_CHECKS: ${REQUIRED_CHECKS:-}
-    secrets: [database-url, token-signing-key, metrics-token, git-signing-key]
+    environment:
+      <<: *control-environment
+      DGX_AGENT_CA_PROVIDER: step-ca
+      DGX_AGENT_CLIENT_CA_FILE: /run/secrets/agent-client-ca
+      DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE: /run/secrets/agent-intermediate-certificate
+      DGX_AGENT_CA_CREDENTIAL_FILE: /run/secrets/agent-ca-credential
+      DGX_AGENT_PROXY_AUTH_FILE: /run/secrets/agent-proxy-auth
+    secrets: [database-url, token-signing-key, metrics-token, git-signing-key, agent-client-ca, agent-intermediate-certificate, agent-ca-credential, agent-proxy-auth]
     volumes:
       - ${REPOSITORY_PATH:?set repository path}:/repository
       - control-state:/state
     tmpfs: [/tmp]
-    networks: [application, data, ingress]
+    networks: [application, data, agent-proxy]
     depends_on:
       postgres: {condition: service_healthy}
     healthcheck:
@@ -148,8 +156,36 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     tmpfs: [/tmp]
-    networks: [ingress]
+    command: [/bin/sh, -ec, 'export DGX_AGENT_PROXY_AUTH="$$(cat /run/secrets/agent-proxy-auth)"; exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile']
+    secrets: [agent-client-ca, agent-proxy-auth]
+    networks: [ingress, agent-proxy]
     depends_on: [control-api]
+
+  step-ca:
+    image: ${STEP_CA_IMAGE:-smallstep/step-ca:0.30.2@sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270}
+    restart: unless-stopped
+    logging: *bounded-logging
+    read_only: true
+    command: [step-ca, /home/step/config/ca.json, --password-file, /run/secrets/step-ca-password]
+    secrets:
+      - source: step-ca-root-certificate
+        target: root_ca.crt
+      - source: agent-intermediate-certificate
+        target: intermediate_ca.crt
+      - source: step-ca-intermediate-key
+        target: intermediate_ca_key
+      - source: step-ca-password
+        target: step-ca-password
+    volumes:
+      - ./step-ca/ca.json:/home/step/config/ca.json:ro
+      - step-ca-data:/home/step/db
+    tmpfs: [/tmp]
+    networks: [ca]
+    healthcheck:
+      test: [CMD, step, ca, health, --ca-url, https://127.0.0.1:9000, --root, /run/secrets/root_ca.crt]
+      interval: 15s
+      timeout: 5s
+      retries: 10
 
 secrets:
   database-url:
@@ -170,11 +206,27 @@ secrets:
     file: "${LITELLM_DATABASE_URL_FILE:?set LiteLLM database URL secret file}"
   grafana-admin-password:
     file: "${GRAFANA_ADMIN_PASSWORD_FILE:?set Grafana admin password secret file}"
+  agent-client-ca:
+    file: "${AGENT_CLIENT_CA_FILE:?set agent client CA certificate secret file}"
+  agent-intermediate-certificate:
+    file: "${AGENT_INTERMEDIATE_CERTIFICATE_FILE:?set agent intermediate certificate secret file}"
+  agent-proxy-auth:
+    file: "${AGENT_PROXY_AUTH_FILE:?set agent proxy authentication secret file}"
+  agent-ca-credential:
+    file: "${AGENT_CA_CREDENTIAL_FILE:?set agent CA provider credential secret file}"
+  step-ca-root-certificate:
+    file: "${STEP_CA_ROOT_CERTIFICATE_FILE:?set step-ca root certificate secret file}"
+  step-ca-intermediate-key:
+    file: "${STEP_CA_INTERMEDIATE_KEY_FILE:?set encrypted step-ca intermediate signing key secret file}"
+  step-ca-password:
+    file: "${STEP_CA_PASSWORD_FILE:?set step-ca password secret file}"
 
 networks:
   ingress: {}
+  agent-proxy: {internal: true}
   application: {internal: true}
   data: {internal: true}
+  ca: {internal: true}
   cluster-egress: {}
 
 volumes:
@@ -184,3 +236,4 @@ volumes:
   caddy-config: {}
   prometheus-data: {}
   grafana-data: {}
+  step-ca-data: {}

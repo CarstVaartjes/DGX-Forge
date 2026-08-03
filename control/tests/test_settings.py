@@ -16,6 +16,7 @@ def test_database_secret_is_read_from_file(tmp_path: Path, monkeypatch) -> None:
 
 def test_production_rejects_raw_database_secret(monkeypatch) -> None:
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
+    monkeypatch.setenv("DGX_AGENT_CA_PROVIDER", "step-ca")
     monkeypatch.setenv("DGX_DATABASE_URL", "postgresql://unsafe")
     with pytest.raises(SettingsError, match="secret file"):
         Settings.from_env_and_secrets()
@@ -56,3 +57,38 @@ def test_compose_is_platform_neutral_and_only_caddy_publishes_ports() -> None:
     assert text.count("ports:") == 1
     assert "control-api:" in text and "control-worker:" in text
     assert "postgres:" in text and "caddy:" in text
+
+
+def test_production_agent_boundary_requires_secret_files_and_step_ca(tmp_path: Path, monkeypatch) -> None:
+    values = {
+        "DGX_DATABASE_URL_FILE": "postgresql://db/control",
+        "DGX_TOKEN_SIGNING_KEY_FILE": "k" * 32,
+        "DGX_METRICS_TOKEN_FILE": "m" * 16,
+        "DGX_GIT_SIGNING_KEY_FILE": "git-key",
+        "DGX_AGENT_CLIENT_CA_FILE": "client-ca",
+        "DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE": "intermediate-certificate",
+        "DGX_AGENT_CA_CREDENTIAL_FILE": "provider-credential",
+        "DGX_AGENT_PROXY_AUTH_FILE": "p" * 32,
+    }
+    monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
+    for name, value in values.items():
+        path = tmp_path / name
+        path.write_text(value)
+        monkeypatch.setenv(name, str(path))
+    monkeypatch.setenv("DGX_AGENT_CA_PROVIDER", "step-ca")
+
+    settings = Settings.from_env_and_secrets()
+
+    assert settings.agent_ca_provider == "step-ca"
+    assert settings.agent_proxy_auth == ("p" * 32).encode()
+
+
+def test_agent_proxy_auth_defaults_empty_and_production_rejects_builtin_ca(monkeypatch) -> None:
+    monkeypatch.setenv("DGX_DATABASE_URL", "postgresql://db/control")
+    settings = Settings.from_env_and_secrets()
+    assert settings.agent_proxy_auth == b""
+
+    monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
+    monkeypatch.setenv("DGX_AGENT_CA_PROVIDER", "builtin")
+    with pytest.raises(SettingsError, match="step-ca"):
+        Settings.from_env_and_secrets()

@@ -18,6 +18,7 @@ from sqlalchemy.orm import sessionmaker
 
 from dgx_control.agent_api import (
     AgentApiServices,
+    EnrollmentRateLimiter,
     _bounded_enrollment_body,
     _read_chunks,
     _sealed_snapshot,
@@ -105,7 +106,7 @@ def agent_system(tmp_path):
     )
     services.artifact_root.mkdir()
     codec = TokenCodec(b"k" * 32)
-    app = create_app(jobs=Jobs(), tokens=codec, audits=MemoryAuditStore(), fleet=lambda: {}, now=lambda: 0, agent=services, trusted_agent_proxy_sources=frozenset({"testclient"}))
+    app = create_app(jobs=Jobs(), tokens=codec, audits=MemoryAuditStore(), fleet=lambda: {}, now=lambda: 0, agent=services, trusted_agent_proxy_auth=b"p" * 32)
     return TestClient(app), services, codec, clock
 
 
@@ -115,6 +116,7 @@ def agent_headers(node: str, serial: str) -> dict[str, str]:
         "x-dgx-agent-serial": serial,
         "x-dgx-agent-fingerprint": f"fingerprint-{serial}",
         "x-dgx-agent-verified": "1",
+        "x-dgx-agent-proxy-auth": "p" * 32,
     }
 
 
@@ -314,6 +316,38 @@ def test_enrollment_routes_are_admin_only_and_replay_is_rejected(agent_system) -
     body = {"grant_token": grant["token"], "csr": csr.decode(), "evidence": {"node_id": NODE_A, "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(), "host_key_fingerprint": "host", "hardware_fingerprint": "hardware", "agent_digest": "a" * 64, "boot_id": "boot"}}
     assert client.post("/agent/v1/enroll", json=body).status_code == 202
     assert client.post("/agent/v1/enroll", json=body).status_code == 403
+
+
+def test_enrollment_rate_limit_rejects_before_reading_request_body(agent_system) -> None:
+    _, services, codec, _ = agent_system
+    limiter = EnrollmentRateLimiter(maximum=1, window_seconds=60, clock=lambda: 0.0)
+    app = create_app(
+        jobs=Jobs(), tokens=codec, audits=MemoryAuditStore(), fleet=lambda: {}, agent=services,
+        enrollment_rate_limiter=limiter,
+    )
+    assert asgi_post(app, "/agent/v1/enroll", valid_enrollment_body(enrollment_grant(services)))[0] == 202
+    sent: list[dict[str, object]] = []
+    reads = 0
+
+    async def receive() -> dict[str, object]:
+        nonlocal reads
+        reads += 1
+        return {"type": "http.request", "body": b"never-read", "more_body": False}
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    scope = {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1", "method": "POST", "scheme": "http",
+        "path": "/agent/v1/enroll", "raw_path": b"/agent/v1/enroll", "query_string": b"",
+        "headers": ((b"content-type", b"application/json"),), "client": ("testclient", 1234),
+        "server": ("testserver", 80), "root_path": "", "state": {},
+    }
+    asyncio.run(asyncio.wait_for(app(scope, receive, send), timeout=0.5))
+
+    assert next(message for message in sent if message["type"] == "http.response.start")["status"] == 429
+    assert reads == 0
 
 
 def test_duplicate_enrollment_grants_consume_unicode_escaped_token_values(agent_system) -> None:

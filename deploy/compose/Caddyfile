@@ -2,7 +2,7 @@
 	admin off
 }
 
-:443 {
+(edge_guards) {
 	request_body {
 		max_size 1MB
 	}
@@ -13,6 +13,23 @@
 		Referrer-Policy "no-referrer"
 		-Server
 	}
+}
+
+(control_proxy) {
+	reverse_proxy control-api:8000 {
+		# Never permit a caller to inject agent identity into control-api.
+		header_up -X-DGX-Agent-*
+	}
+}
+
+# Browser and operator traffic. Agent paths have no route on this SNI.
+{$DGX_CONTROL_HOSTNAME:control.example.invalid} {
+	import edge_guards
+
+	@agent_path path /agent/v1/*
+	handle @agent_path {
+		respond 404
+	}
 	handle /v1/* {
 		reverse_proxy litellm:4000
 	}
@@ -20,6 +37,54 @@
 		reverse_proxy grafana:3000
 	}
 	handle {
-		reverse_proxy control-api:8000
+		import control_proxy
 	}
+}
+
+# Bootstrap is server-authenticated but intentionally does not request a client
+# certificate. It exposes exactly the bounded enrollment submission route.
+{$DGX_AGENT_ENROLL_HOSTNAME:enroll.example.invalid} {
+	import edge_guards
+
+	@not_enrollment not path /agent/v1/enroll
+	handle @not_enrollment {
+		respond 404
+	}
+	handle /agent/v1/enroll {
+		import control_proxy
+	}
+}
+
+# The agent endpoint is a distinct TLS SNI because client authentication cannot
+# be conditional on an HTTP path. The subject is mapped strictly to the exact
+# node-ID grammar before it reaches the application.
+{$DGX_AGENT_HOSTNAME:agents.example.invalid} {
+	import edge_guards
+	tls {
+		client_auth {
+			trust_pool file /run/secrets/agent-client-ca
+			mode require_and_verify
+		}
+	}
+	map {tls_client_subject} {dgx_agent_node} {
+		~^CN=(spk_[0-9a-f]{32})$ "${1}"
+		default ""
+	}
+
+	@agent_api {
+		path /agent/v1/*
+		not path /agent/v1/enroll
+	}
+	handle @agent_api {
+		reverse_proxy control-api:8000 {
+			# Strip first, then only Caddy supplies the verified TLS metadata.
+			header_up -X-DGX-Agent-*
+			header_up X-DGX-Agent-Node {dgx_agent_node}
+			header_up X-DGX-Agent-Serial {tls_client_serial}
+			header_up X-DGX-Agent-Fingerprint {tls_client_fingerprint}
+			header_up X-DGX-Agent-Verified "1"
+			header_up X-DGX-Agent-Proxy-Auth "{$DGX_AGENT_PROXY_AUTH}"
+		}
+	}
+	respond 404
 }
