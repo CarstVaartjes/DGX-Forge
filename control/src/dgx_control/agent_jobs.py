@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session, sessionmaker
 from .logging import redact_text
 from .models import AgentCertificate, AgentNode, AgentOperation as StoredOperation, AgentOperationAttempt, Job
 
+AgentFence = str | AgentClaim | AgentProgress | AgentResult
+
 
 class StaleAgentAttempt(RuntimeError):
     """An agent attempted to update an operation it no longer owns."""
@@ -39,8 +41,8 @@ class AgentJobService:
     ) -> None:
         self._sessions = sessions
         self._clock = clock
-        # SQLite ignores FOR UPDATE; this preserves the same claim invariant in
-        # the local test deployment while PostgreSQL uses SKIP LOCKED.
+        # SQLite ignores row locks. This only prevents same-service test races;
+        # PostgreSQL correctness is provided by the database locks below.
         self._claim_lock = threading.RLock()
 
     def enqueue(
@@ -99,28 +101,26 @@ class AgentJobService:
         with self._claim_lock, self._sessions.begin() as session:
             if self._active_certificate(session, node_id, certificate_serial, now) is None:
                 return None
+            reclaimable = select(AgentOperationAttempt.id).where(
+                AgentOperationAttempt.operation_id == StoredOperation.id,
+                AgentOperationAttempt.attempt == StoredOperation.current_attempt,
+                AgentOperationAttempt.state == "running",
+                AgentOperationAttempt.lease_deadline <= now,
+            ).exists()
             statement = (
                 select(StoredOperation)
-                .outerjoin(
-                    AgentOperationAttempt,
-                    and_(
-                        AgentOperationAttempt.operation_id == StoredOperation.id,
-                        AgentOperationAttempt.attempt == StoredOperation.current_attempt,
-                    ),
-                )
                 .where(
                     StoredOperation.node_id == node_id,
                     or_(
                         StoredOperation.state == "queued",
                         and_(
                             StoredOperation.state == "running",
-                            AgentOperationAttempt.state == "running",
-                            AgentOperationAttempt.lease_deadline < now,
+                            reclaimable,
                         ),
                     ),
                 )
                 .order_by(StoredOperation.created_at, StoredOperation.id)
-                .with_for_update(skip_locked=True)
+                .with_for_update(of=StoredOperation, skip_locked=True)
                 .limit(1)
             )
             operation = session.scalars(statement).first()
@@ -131,7 +131,7 @@ class AgentJobService:
                     select(AgentOperationAttempt).where(
                         AgentOperationAttempt.operation_id == operation.id,
                         AgentOperationAttempt.attempt == operation.current_attempt,
-                    )
+                    ).with_for_update(of=AgentOperationAttempt)
                 )
                 if previous is not None:
                     previous.state = "expired"
@@ -164,7 +164,7 @@ class AgentJobService:
 
     def heartbeat(
         self,
-        fence: AgentClaim | AgentProgress | AgentResult,
+        fence: AgentFence,
         progress: Mapping[str, object],
         lease_seconds: int,
     ) -> AgentProgress:
@@ -188,18 +188,18 @@ class AgentJobService:
             operation.updated_at = self._clock()
             return message
 
-    def succeed(self, fence: AgentClaim | AgentProgress | AgentResult, result: Mapping[str, object]) -> None:
+    def succeed(self, fence: AgentFence, result: Mapping[str, object]) -> None:
         self._finish(fence, "succeeded", result=result, reason=None)
 
-    def fail(self, fence: AgentClaim | AgentProgress | AgentResult, reason: str) -> None:
+    def fail(self, fence: AgentFence, reason: str) -> None:
         self._finish(fence, "failed", result=None, reason=reason)
 
-    def wait_for_operator(self, fence: AgentClaim | AgentProgress | AgentResult, reason: str) -> None:
+    def wait_for_operator(self, fence: AgentFence, reason: str) -> None:
         self._finish(fence, "waiting-for-operator", result=None, reason=reason)
 
     def _finish(
         self,
-        fence: AgentClaim | AgentProgress | AgentResult,
+        fence: AgentFence,
         state: str,
         *,
         result: Mapping[str, object] | None,
@@ -231,17 +231,33 @@ class AgentJobService:
     def _active(
         self,
         session: Session,
-        fence: AgentClaim | AgentProgress | AgentResult,
+        fence: AgentFence,
     ) -> tuple[StoredOperation, AgentOperationAttempt]:
-        operation = session.get(StoredOperation, fence.operation_id)
-        attempt = session.scalar(select(AgentOperationAttempt).where(AgentOperationAttempt.fence == fence.fence))
+        token = self._fence_token(fence)
+        operation_id = select(AgentOperationAttempt.operation_id).where(
+            AgentOperationAttempt.fence == token,
+        ).scalar_subquery()
+        operation = session.scalar(
+            select(StoredOperation)
+            .where(StoredOperation.id == operation_id)
+            .with_for_update(of=StoredOperation)
+        )
+        if operation is None:
+            raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
+        attempt = session.scalar(
+            select(AgentOperationAttempt)
+            .where(
+                AgentOperationAttempt.fence == token,
+                AgentOperationAttempt.operation_id == operation.id,
+            )
+            .with_for_update(of=AgentOperationAttempt)
+        )
         now = self._clock()
         if (
-            operation is None
-            or attempt is None
-            or operation.parent_job_id != fence.job_id
-            or operation.node_id != fence.node_id
-            or operation.current_attempt != fence.attempt
+            attempt is None
+            or (not isinstance(fence, str) and operation.parent_job_id != fence.job_id)
+            or (not isinstance(fence, str) and operation.node_id != fence.node_id)
+            or (not isinstance(fence, str) and operation.current_attempt != fence.attempt)
             or attempt.operation_id != operation.id
             or attempt.state != "running"
             or _aware(attempt.lease_deadline) <= _aware(now)
@@ -249,6 +265,14 @@ class AgentJobService:
         ):
             raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
         return operation, attempt
+
+    @staticmethod
+    def _fence_token(fence: AgentFence) -> str:
+        if isinstance(fence, str):
+            return fence
+        if isinstance(fence, (AgentClaim, AgentProgress, AgentResult)):
+            return fence.fence
+        raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
 
     @staticmethod
     def _reason(reason: str | None) -> str:
@@ -278,6 +302,11 @@ class AgentJobService:
         )
 
     def _aggregate_parent(self, session: Session, parent_job_id: str) -> None:
+        job = session.scalar(
+            select(Job).where(Job.id == parent_job_id).with_for_update(of=Job)
+        )
+        if job is None:
+            raise KeyError(parent_job_id)
         operations = list(session.scalars(
             select(StoredOperation)
             .where(StoredOperation.parent_job_id == parent_job_id)
@@ -286,9 +315,6 @@ class AgentJobService:
         terminal = {"succeeded", "failed", "waiting-for-operator"}
         if not operations or any(operation.state not in terminal for operation in operations):
             return
-        job = session.get(Job, parent_job_id)
-        if job is None:
-            raise KeyError(parent_job_id)
         states = {operation.state for operation in operations}
         if "failed" in states:
             state = "failed"

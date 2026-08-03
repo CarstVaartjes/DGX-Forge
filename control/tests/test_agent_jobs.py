@@ -156,6 +156,32 @@ def test_heartbeat_persists_canonical_progress_and_renews_lease(service) -> None
     assert dict(progress.progress) == {"phase": "checking"}
 
 
+def test_public_fence_string_interface_renews_and_completes(service) -> None:
+    jobs, sessions, clock = service
+    jobs.enqueue(parent(sessions, clock).id, NODE_A, "node.probe", COMMIT, {})
+    claim = jobs.claim(NODE_A, "serial-a", 30)
+    assert claim is not None
+
+    progress = jobs.heartbeat(claim.fence, {"phase": "checking"}, 60)
+    jobs.succeed(progress.fence, {"healthy": True})
+
+    with pytest.raises(StaleAgentAttempt):
+        jobs.fail(str(uuid.uuid4()), "unknown fence")
+
+
+def test_attempt_expiring_exactly_at_claim_time_is_reclaimable(service) -> None:
+    jobs, sessions, clock = service
+    jobs.enqueue(parent(sessions, clock).id, NODE_A, "node.probe", COMMIT, {})
+    first = jobs.claim(NODE_A, "serial-a", 30)
+    assert first is not None
+
+    clock.advance(seconds=30)
+    second = jobs.claim(NODE_A, "serial-a", 30)
+
+    assert second is not None
+    assert second.fence != first.fence
+
+
 def test_parent_job_becomes_succeeded_only_after_every_operation_succeeds(service) -> None:
     jobs, sessions, clock = service
     parent_job = parent(sessions, clock)
