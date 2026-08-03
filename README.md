@@ -62,6 +62,9 @@ running mutating commands such as `prepare` or `switch`.
 - [Architecture overview](docs/architecture-overview.md)
 - [`sparkctl` runbook](docs/runbooks/sparkctl.md)
 - [Inventory runbook](docs/runbooks/inventory.md)
+- [Generic fleet migration](docs/runbooks/fleet-migration.md) — generated node
+  identities and compatibility with the current inventory, with no fixed node
+  count
 - [Direct-fabric runbook](docs/runbooks/fabric.md)
 - [Runtime release runbook](docs/runbooks/runtime-release.md)
 
