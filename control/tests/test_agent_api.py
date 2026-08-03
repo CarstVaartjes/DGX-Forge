@@ -252,6 +252,17 @@ def test_artifact_snapshot_is_immutable_after_source_overwrite(tmp_path) -> None
         snapshot.close()
 
 
+def test_snapshot_allocation_failure_closes_source_descriptor(tmp_path, monkeypatch) -> None:
+    source = tmp_path / "artifact"
+    source.write_bytes(b"original")
+    descriptor = os.open(source, os.O_RDONLY)
+    monkeypatch.setattr("dgx_control.agent_api.tempfile.TemporaryFile", lambda **_kwargs: (_ for _ in ()).throw(OSError("full")))
+    with pytest.raises(OSError, match="full"):
+        _sealed_snapshot(descriptor, 8, 1024, hashlib.sha256(b"original").hexdigest())
+    with pytest.raises(OSError):
+        os.fstat(descriptor)
+
+
 def test_protected_agent_routes_gate_untrusted_invalid_bodies_before_parsing(agent_system) -> None:
     client, _, _, _ = agent_system
     for path in ("/agent/v1/claim", "/agent/v1/heartbeat", "/agent/v1/result", "/agent/v1/renew"):

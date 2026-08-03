@@ -167,37 +167,45 @@ def _body_node_matches(value: str | None, identity: AgentIdentity) -> None:
         raise HTTPException(status_code=403, detail="authenticated node identity cannot be overridden")
 
 
-_ENROLLMENT_TOKEN = re.compile(rb'"grant_token"\s*:\s*"([A-Za-z0-9_-]{43})"')
+_ENROLLMENT_TOKEN = re.compile(rb'"((?:[^"\\]|\\.)*)"\s*:\s*"([A-Za-z0-9_-]{43})"')
 
 
-def _enrollment_token(value: bytes) -> str | None:
-    match = _ENROLLMENT_TOKEN.search(value)
-    return match.group(1).decode("ascii") if match else None
+def _enrollment_tokens(value: bytes) -> tuple[str, ...]:
+    values: set[str] = set()
+    for match in _ENROLLMENT_TOKEN.finditer(value):
+        try:
+            key = json.loads(b'"' + match.group(1) + b'"')
+        except (UnicodeDecodeError, ValueError):
+            continue
+        if key == "grant_token":
+            values.add(match.group(2).decode("ascii"))
+    return tuple(values)
 
 
-def _consume_enrollment_denial(services: AgentApiServices, token: str | None) -> None:
-    if token is None:
-        return
-    try:
-        services.enrollment.submit(token, b"", {})
-    except EnrollmentDenied:
-        pass
+def _consume_enrollment_denial(services: AgentApiServices, tokens: tuple[str, ...]) -> None:
+    for token in tokens:
+        try:
+            services.enrollment.submit(token, b"", {})
+        except EnrollmentDenied:
+            pass
 
 
 async def _bounded_enrollment_body(request: Request, services: AgentApiServices) -> bytes:
     buffered = bytearray()
     token_prefix = bytearray()
-    oversized = False
     async for chunk in request.stream():
+        remaining = _MAX_ENROLLMENT_BODY_BYTES + 1 - len(buffered)
+        if remaining <= 0 or len(chunk) > remaining:
+            if len(token_prefix) < 2048:
+                token_prefix.extend((bytes(buffered) + chunk)[:2048 - len(token_prefix)])
+            _consume_enrollment_denial(services, _enrollment_tokens(bytes(token_prefix)))
+            raise HTTPException(status_code=413, detail="enrollment request is too large")
+        buffered.extend(chunk)
         if len(token_prefix) < 2048:
             token_prefix.extend(chunk[:2048 - len(token_prefix)])
-        if len(buffered) + len(chunk) <= _MAX_ENROLLMENT_BODY_BYTES:
-            buffered.extend(chunk)
-        else:
-            oversized = True
-    if oversized:
-        _consume_enrollment_denial(services, _enrollment_token(bytes(token_prefix)))
-        raise HTTPException(status_code=413, detail="enrollment request is too large")
+        if len(buffered) > _MAX_ENROLLMENT_BODY_BYTES:
+            _consume_enrollment_denial(services, _enrollment_tokens(bytes(token_prefix)))
+            raise HTTPException(status_code=413, detail="enrollment request is too large")
     return bytes(buffered)
 
 
@@ -294,10 +302,11 @@ def _read_chunks(descriptor: int, start: int, length: int):
 
 
 def _sealed_snapshot(descriptor: int, size: int, maximum: int, digest: str):
-    snapshot = tempfile.TemporaryFile(mode="w+b")
-    copied = 0
-    content_hash = hashlib.sha256()
+    snapshot = None
     try:
+        snapshot = tempfile.TemporaryFile(mode="w+b")
+        copied = 0
+        content_hash = hashlib.sha256()
         while copied < size:
             chunk = os.read(descriptor, min(64 * 1024, size - copied))
             if not chunk:
@@ -315,7 +324,8 @@ def _sealed_snapshot(descriptor: int, size: int, maximum: int, digest: str):
         snapshot.seek(0)
         return snapshot
     except Exception:
-        snapshot.close()
+        if snapshot is not None:
+            snapshot.close()
         raise
     finally:
         os.close(descriptor)
@@ -433,21 +443,34 @@ def install_agent_routes(
     async def enroll(request: Request) -> dict[str, object]:
         required = _require_services(services)
         raw = await _bounded_enrollment_body(request, required)
-        token = _enrollment_token(raw)
+        tokens = _enrollment_tokens(raw)
         content_type = request.headers.get("content-type", "")
         if re.fullmatch(r"application/json(?:\s*;\s*charset=(?:utf-8|utf8))?", content_type, re.IGNORECASE) is None:
-            _consume_enrollment_denial(required, token)
+            _consume_enrollment_denial(required, tokens)
             raise HTTPException(status_code=415, detail="enrollment content type must be application/json")
         try:
             body = json.loads(raw.decode("utf-8"))
         except (TypeError, UnicodeDecodeError, ValueError, RecursionError):
-            _consume_enrollment_denial(required, token)
+            _consume_enrollment_denial(required, tokens)
             raise HTTPException(status_code=422, detail="enrollment request must be JSON") from None
+        try:
+            pairs = json.loads(raw.decode("utf-8"), object_pairs_hook=lambda pairs: pairs)
+        except (TypeError, UnicodeDecodeError, ValueError, RecursionError):
+            _consume_enrollment_denial(required, tokens)
+            raise HTTPException(status_code=422, detail="enrollment request must be JSON") from None
+        duplicate = isinstance(pairs, list) and sum(key == "grant_token" for key, _ in pairs) != 1
+        if duplicate:
+            _consume_enrollment_denial(required, tokens)
+            raise HTTPException(status_code=422, detail="enrollment grant is ambiguous")
         if not isinstance(body, dict) or not isinstance(body.get("grant_token"), str):
             raise HTTPException(status_code=422, detail="enrollment grant is required")
         csr = body.get("csr")
         evidence = body.get("evidence")
-        csr_bytes = csr.encode("ascii", "replace") if isinstance(csr, str) else b""
+        try:
+            csr_bytes = csr.encode("ascii") if isinstance(csr, str) else b""
+        except UnicodeEncodeError:
+            _consume_enrollment_denial(required, tokens)
+            raise HTTPException(status_code=422, detail="CSR must be ASCII PEM") from None
         service_evidence = (
             evidence
             if isinstance(evidence, Mapping) and set(body) == {"grant_token", "csr", "evidence"}
