@@ -4,6 +4,8 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/verify-supply-chain"
@@ -135,6 +137,26 @@ def test_verifier_rejects_a_dockerfile_that_copies_but_does_not_install_the_prot
     dockerfile = repository / "control/Dockerfile"
     wheel = "/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
     dockerfile.write_text(dockerfile.read_text().replace(f"    {wheel} .", "    ."))
+
+    result = subprocess.run([SCRIPT, "--root", repository, "--generate"], capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "install" in result.stderr
+
+
+@pytest.mark.parametrize("operator", ("&&", ";", "||", "|"))
+def test_verifier_rejects_a_protocol_wheel_mentioned_only_after_a_shell_operator(
+    tmp_path: Path, operator: str
+) -> None:
+    repository = _copy(tmp_path)
+    dockerfile = repository / "control/Dockerfile"
+    wheel = "/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
+    dockerfile.write_text(
+        dockerfile.read_text().replace(
+            f"    {wheel} .",
+            f"    . {operator} test -f {wheel}",
+        )
+    )
 
     result = subprocess.run([SCRIPT, "--root", repository, "--generate"], capture_output=True, text=True)
 

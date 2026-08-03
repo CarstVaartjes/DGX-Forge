@@ -229,7 +229,13 @@ def docker_installs_protocol_wheel(dockerfile: str) -> bool:
         stripped = line.strip()
         if not stripped.startswith("RUN "):
             continue
-        tokens = shlex.split(stripped.removeprefix("RUN "))
+        lexer = shlex.shlex(
+            stripped.removeprefix("RUN "),
+            posix=True,
+            punctuation_chars=";&|",
+        )
+        lexer.whitespace_split = True
+        tokens = list(lexer)
         try:
             pip_index = next(
                 index for index in range(len(tokens) - 3)
@@ -237,7 +243,15 @@ def docker_installs_protocol_wheel(dockerfile: str) -> bool:
             )
         except StopIteration:
             continue
-        installed = tokens[pip_index + 4:]
+        try:
+            command_end = next(
+                index
+                for index in range(pip_index + 4, len(tokens))
+                if set(tokens[index]) <= {";", "&", "|"}
+            )
+        except StopIteration:
+            command_end = len(tokens)
+        installed = tokens[pip_index + 4:command_end]
         if wheel in installed and "." in installed:
             return True
     return False
