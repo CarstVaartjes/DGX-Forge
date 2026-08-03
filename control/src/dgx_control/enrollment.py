@@ -36,6 +36,15 @@ _EVIDENCE_FIELDS = (
     "agent_digest",
     "boot_id",
 )
+_EVIDENCE_LIMITS = {
+    "node_id": 36,
+    "csr_public_key_fingerprint": 64,
+    "host_key_fingerprint": 512,
+    "hardware_fingerprint": 512,
+    "agent_digest": 128,
+    "boot_id": 128,
+}
+_HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class EnrollmentDenied(RuntimeError):
@@ -346,7 +355,7 @@ def _pending(enrollment: AgentEnrollment) -> PendingEnrollment:
 def _load_csr(csr: bytes) -> tuple[bytes, str]:
     try:
         request = x509.load_pem_x509_csr(csr)
-    except ValueError as error:
+    except (TypeError, ValueError) as error:
         raise EnrollmentDenied("CSR must be valid PEM") from error
     if not request.is_signature_valid:
         raise EnrollmentDenied("CSR signature is invalid")
@@ -362,15 +371,21 @@ def _validate_evidence(
     evidence: Mapping[str, object], node_id: str, public_key_fingerprint: str
 ) -> tuple[dict[str, str], str | None]:
     values: dict[str, str] = {}
+    if set(evidence) != set(_EVIDENCE_FIELDS):
+        return values, "evidence fields are invalid"
     for field in _EVIDENCE_FIELDS:
         value = evidence.get(field)
-        if not isinstance(value, str) or not value.strip():
+        if not isinstance(value, str) or not value.strip() or len(value) > _EVIDENCE_LIMITS[field]:
             return values, f"evidence {field} is required"
         values[field] = value
     if values["node_id"] != node_id:
         return values, "evidence node ID does not match enrollment grant"
     if values["csr_public_key_fingerprint"] != public_key_fingerprint:
         return values, "evidence CSR public-key fingerprint does not match CSR"
+    if _HEX_64.fullmatch(values["csr_public_key_fingerprint"]) is None:
+        return values, "evidence CSR public-key fingerprint is invalid"
+    if _HEX_64.fullmatch(values["agent_digest"]) is None:
+        return values, "evidence agent digest is invalid"
     return values, None
 
 

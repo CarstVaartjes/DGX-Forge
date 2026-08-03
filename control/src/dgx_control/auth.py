@@ -10,6 +10,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from starlette.responses import Response
+
 _ROLES = frozenset({"viewer", "operator", "administrator"})
 _AGENT_NODE_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
 _AGENT_IDENTITY_SCOPE_KEY = "dgx.agent_identity"
@@ -113,6 +115,15 @@ class TrustedProxyAgentIdentityMiddleware:
                 )
             except (AuthError, KeyError):
                 pass
+        path = safe_scope.get("path")
+        if (
+            isinstance(path, str)
+            and path.startswith("/agent/v1/")
+            and path != "/agent/v1/enroll"
+            and agent_identity_from_scope(safe_scope) is None
+        ):
+            await Response(status_code=401)(safe_scope, receive, send)
+            return
         await self.app(safe_scope, receive, send)
 
 

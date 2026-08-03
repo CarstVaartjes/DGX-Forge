@@ -190,6 +190,21 @@ def test_public_fence_string_interface_renews_and_completes(service) -> None:
         jobs.fail(str(uuid.uuid4()), "unknown fence")
 
 
+def test_structured_fence_cannot_update_a_different_operation(service) -> None:
+    jobs, sessions, clock = service
+    first_operation = jobs.enqueue(parent(sessions, clock).id, NODE_A, "node.probe", COMMIT, {})
+    second_operation = jobs.enqueue(parent(sessions, clock).id, NODE_A, "node.probe", COMMIT, {})
+    first = jobs.claim(NODE_A, "serial-a", 30)
+    assert first is not None
+    other_operation = second_operation if first.operation_id == first_operation.id else first_operation
+    forged = type(first)(**{**first.__dict__, "operation_id": other_operation.id})
+    with pytest.raises(StaleAgentAttempt):
+        jobs.heartbeat(forged, {"phase": "forged"}, 30)
+    with pytest.raises(StaleAgentAttempt):
+        jobs.succeed(forged, {"healthy": True})
+    assert first.operation_id != other_operation.id
+
+
 def test_attempt_expiring_exactly_at_claim_time_is_reclaimable(service) -> None:
     jobs, sessions, clock = service
     jobs.enqueue(parent(sessions, clock).id, NODE_A, "node.probe", COMMIT, {})

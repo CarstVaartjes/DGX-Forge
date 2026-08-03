@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 import os
 import re
@@ -15,7 +17,7 @@ from typing import Any, Protocol
 from dgx_agent_protocol import AgentProgress, AgentProtocolError, AgentResult, canonical_message
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.responses import JSONResponse, StreamingResponse
 
@@ -29,6 +31,7 @@ _LIVE_OPERATION_STATES = frozenset({"queued", "running"})
 _MAX_CSR_BYTES = 16 * 1024
 _MAX_EVIDENCE_FIELDS = 8
 _MAX_EVIDENCE_BYTES = 8 * 1024
+_MAX_ENROLLMENT_BODY_BYTES = 64 * 1024
 _MAX_ARTIFACT_BYTES = 256 * 1024 * 1024
 _MAX_RANGE_BYTES = 8 * 1024 * 1024
 
@@ -212,6 +215,12 @@ def _open_owned_artifact(services: AgentApiServices, identity: AgentIdentity, di
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > services.max_artifact_bytes:
             raise HTTPException(status_code=404 if not stat.S_ISREG(metadata.st_mode) else 413, detail="artifact not available")
+        content_hash = hashlib.sha256()
+        while chunk := os.read(descriptor, 64 * 1024):
+            content_hash.update(chunk)
+        if not hmac.compare_digest(content_hash.hexdigest(), digest):
+            raise HTTPException(status_code=404, detail="artifact not found")
+        os.lseek(descriptor, 0, os.SEEK_SET)
         return descriptor, metadata.st_size
     except Exception:
         os.close(descriptor)
@@ -224,7 +233,12 @@ def _range(value: str | None, total: int, maximum: int) -> tuple[int, int] | Non
     match = re.fullmatch(r"bytes=(\d+)-(\d+)", value)
     if match is None:
         raise HTTPException(status_code=416, detail="range is invalid")
-    start, end = (int(part) for part in match.groups())
+    if any(len(part) > 19 for part in match.groups()):
+        raise HTTPException(status_code=416, detail="range is invalid")
+    try:
+        start, end = (int(part) for part in match.groups())
+    except ValueError:
+        raise HTTPException(status_code=416, detail="range is invalid") from None
     if start > end or start >= total or end >= total or end - start + 1 > maximum:
         raise HTTPException(status_code=416, detail="range is invalid")
     return start, end
@@ -264,14 +278,36 @@ def install_agent_routes(
         return {"id": grant.id, "node_id": grant.node_id, "expires_at": _now(grant.expires_at).isoformat(), "token": grant.token}
 
     @human.get("/enrollments")
-    def list_enrollments(authenticated: Actor = Depends(actor_dependency)) -> dict[str, object]:
+    def list_enrollments(
+        cursor: str | None = None,
+        state: str | None = None,
+        limit: int = 100,
+        authenticated: Actor = Depends(actor_dependency),
+    ) -> dict[str, object]:
         _require_administrator(authenticated, "/api/v1/agents/enrollments")
         required = _require_services(services)
+        if not 1 <= limit <= 100:
+            raise HTTPException(status_code=422, detail="limit must be between one and 100")
         with required.sessions() as session:
-            records = list(session.scalars(select(AgentEnrollment).order_by(AgentEnrollment.created_at.desc()).limit(100)))
+            statement = select(AgentEnrollment)
+            if state is not None:
+                statement = statement.where(AgentEnrollment.state == state)
+            if cursor is not None:
+                cursor_record = session.get(AgentEnrollment, cursor)
+                if cursor_record is None:
+                    raise HTTPException(status_code=422, detail="cursor is invalid")
+                statement = statement.where(or_(
+                    AgentEnrollment.created_at < cursor_record.created_at,
+                    and_(AgentEnrollment.created_at == cursor_record.created_at, AgentEnrollment.id < cursor_record.id),
+                ))
+            records = list(session.scalars(statement.order_by(AgentEnrollment.created_at.desc(), AgentEnrollment.id.desc()).limit(limit + 1)))
         # In particular, an uncertain `issuing` record remains visible here;
         # this endpoint intentionally never retries or clears it.
-        return {"enrollments": [_enrollment_view(record) for record in records]}
+        page = records[:limit]
+        return {
+            "enrollments": [_enrollment_view(record) for record in page],
+            "next_cursor": page[-1].id if len(records) > limit and page else None,
+        }
 
     @human.post("/enrollments/{enrollment_id}/approve")
     def approve(enrollment_id: str, authenticated: Actor = Depends(actor_dependency)) -> dict[str, object]:
@@ -309,12 +345,23 @@ def install_agent_routes(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @agent.post("/enroll", status_code=status.HTTP_202_ACCEPTED)
-    def enroll(body: EnrollmentSubmitRequest) -> dict[str, object]:
+    async def enroll(request: Request) -> dict[str, object]:
         required = _require_services(services)
+        raw = await request.body()
+        if len(raw) > _MAX_ENROLLMENT_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="enrollment request is too large")
         try:
-            pending = required.enrollment.submit(body.grant_token, body.csr.encode("ascii"), body.evidence)
-        except UnicodeEncodeError:
-            raise HTTPException(status_code=422, detail="CSR must be ASCII PEM") from None
+            body = json.loads(raw)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=422, detail="enrollment request must be JSON") from None
+        if not isinstance(body, dict) or not isinstance(body.get("grant_token"), str):
+            raise HTTPException(status_code=422, detail="enrollment grant is required")
+        csr = body.get("csr")
+        evidence = body.get("evidence")
+        csr_bytes = csr.encode("ascii", "replace") if isinstance(csr, str) else b""
+        service_evidence = evidence if isinstance(evidence, Mapping) else {}
+        try:
+            pending = required.enrollment.submit(body["grant_token"], csr_bytes, service_evidence)
         except EnrollmentDenied as error:
             raise HTTPException(status_code=403, detail=str(error)) from None
         return {"id": pending.id, "node_id": pending.node_id, "state": pending.state}
@@ -387,7 +434,11 @@ def install_agent_routes(
         required = _require_services(services)
         identity = _authenticated_identity(request, required)
         descriptor, size = _open_owned_artifact(required, identity, sha256)
-        requested = _range(request.headers.get("range"), size, required.max_range_bytes)
+        try:
+            requested = _range(request.headers.get("range"), size, required.max_range_bytes)
+        except Exception:
+            os.close(descriptor)
+            raise
         if requested is None:
             start, end, code = 0, size - 1, status.HTTP_200_OK
         else:

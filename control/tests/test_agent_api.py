@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import hashlib
+import os
 import uuid
 
 from fastapi.testclient import TestClient
@@ -12,13 +13,13 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from dgx_control.agent_api import AgentApiServices
+from dgx_control.agent_api import AgentApiServices, _read_chunks
 from dgx_control.agent_jobs import AgentJobService
 from dgx_control.api import create_app
 from dgx_control.audit import MemoryAuditStore
 from dgx_control.auth import Actor, TokenCodec
 from dgx_control.enrollment import EnrollmentService
-from dgx_control.models import AgentCertificate, AgentNode, Base, Job
+from dgx_control.models import AgentCertificate, AgentEnrollment, AgentEnrollmentGrant, AgentNode, Base, Job
 from dgx_control.pki import CertificateAuthority, IssuedCertificate
 
 
@@ -186,7 +187,7 @@ def test_enrollment_evidence_has_a_fixed_bounded_schema(agent_system) -> None:
             "agent_digest": "a" * 64, "boot_id": "boot", "unexpected": "x",
         },
     })
-    assert response.status_code == 422
+    assert response.status_code == 403
 
 
 def test_artifact_access_is_owned_content_addressed_and_range_bounded(agent_system) -> None:
@@ -207,3 +208,66 @@ def test_artifact_symlink_is_never_served(agent_system, tmp_path) -> None:
     (services.artifact_root / digest).symlink_to(tmp_path / "outside")
     services.operations.enqueue(parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {"artifact_digest": digest})
     assert client.get(f"/agent/v1/artifacts/{digest}", headers=agent_headers(NODE_A, "serial-a")).status_code == 404
+
+
+def test_artifact_digest_is_verified_from_open_descriptor(agent_system) -> None:
+    client, services, _, clock = agent_system
+    digest = hashlib.sha256(b"expected").hexdigest()
+    (services.artifact_root / digest).write_bytes(b"tampered")
+    services.operations.enqueue(parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {"artifact_digest": digest})
+    assert client.get(f"/agent/v1/artifacts/{digest}", headers=agent_headers(NODE_A, "serial-a")).status_code == 404
+
+
+def test_invalid_ranges_do_not_leak_artifact_descriptors(agent_system) -> None:
+    client, services, _, clock = agent_system
+    digest = hashlib.sha256(b"artifact").hexdigest()
+    (services.artifact_root / digest).write_bytes(b"artifact")
+    services.operations.enqueue(parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {"artifact_digest": digest})
+    before = len(os.listdir("/proc/self/fd"))
+    for _ in range(25):
+        assert client.get(f"/agent/v1/artifacts/{digest}", headers={**agent_headers(NODE_A, "serial-a"), "Range": "bytes=" + "9" * 5000 + "-1"}).status_code == 416
+    assert len(os.listdir("/proc/self/fd")) <= before + 1
+
+
+def test_artifact_stream_close_releases_its_descriptor(tmp_path) -> None:
+    artifact = tmp_path / "artifact"
+    artifact.write_bytes(b"artifact")
+    descriptor = os.open(artifact, os.O_RDONLY)
+    stream = _read_chunks(descriptor, 0, 8)
+    assert next(stream) == b"artifact"
+    stream.close()
+    with pytest.raises(OSError):
+        os.fstat(descriptor)
+
+
+def test_protected_agent_routes_gate_untrusted_invalid_bodies_before_parsing(agent_system) -> None:
+    client, _, _, _ = agent_system
+    for path in ("/agent/v1/claim", "/agent/v1/heartbeat", "/agent/v1/result", "/agent/v1/renew"):
+        assert client.post(path, content=b"{not-json", headers={"content-type": "application/json"}).status_code == 401
+
+
+def test_enrollment_overflow_burns_valid_grant_before_rejection(agent_system) -> None:
+    client, _, codec, _ = agent_system
+    grant = client.post("/api/v1/agents/enrollments/grants", headers=admin_headers(codec), json={"node_id": NODE_A, "ttl_seconds": 60}).json()
+    key = ed25519.Ed25519PrivateKey.generate()
+    csr = x509.CertificateSigningRequestBuilder().subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "node")])).sign(key, algorithm=None).public_bytes(serialization.Encoding.PEM)
+    public = x509.load_pem_x509_csr(csr).public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    body = {"grant_token": grant["token"], "csr": csr.decode(), "evidence": {"node_id": NODE_A, "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(), "host_key_fingerprint": "x" * 513, "hardware_fingerprint": "hardware", "agent_digest": "a" * 64, "boot_id": "boot"}}
+    assert client.post("/agent/v1/enroll", json=body).status_code == 403
+    assert client.post("/agent/v1/enroll", json=body).status_code == 403
+
+
+def test_enrollment_listing_paginates_stably_and_can_filter_issuing(agent_system) -> None:
+    client, services, codec, clock = agent_system
+    with services.sessions.begin() as session:
+        for index in range(101):
+            grant_id = str(uuid.uuid4())
+            session.add(AgentEnrollmentGrant(id=grant_id, node_id=NODE_A, token_digest=hashlib.sha256(str(index).encode()).hexdigest(), created_by="admin", created_at=clock.now, expires_at=clock.now + timedelta(seconds=60)))
+            session.add(AgentEnrollment(id=str(uuid.uuid4()), grant_id=grant_id, node_id=NODE_A, state="issuing" if index == 0 else "rejected", csr_public_key_pem="pem", csr_public_key_fingerprint="a" * 64, host_key_fingerprint="host", hardware_fingerprint="hardware", agent_digest="a" * 64, boot_id="boot", created_at=clock.now))
+    first = client.get("/api/v1/agents/enrollments?limit=100", headers=admin_headers(codec)).json()
+    assert len(first["enrollments"]) == 100
+    assert first["next_cursor"]
+    second = client.get(f"/api/v1/agents/enrollments?limit=100&cursor={first['next_cursor']}", headers=admin_headers(codec)).json()
+    assert len(second["enrollments"]) == 1
+    issuing = client.get("/api/v1/agents/enrollments?state=issuing", headers=admin_headers(codec)).json()
+    assert [item["state"] for item in issuing["enrollments"]] == ["issuing"]

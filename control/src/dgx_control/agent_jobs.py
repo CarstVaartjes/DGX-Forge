@@ -287,6 +287,7 @@ class AgentJobService:
         if (
             attempt is None
             or (not isinstance(fence, str) and operation.parent_job_id != fence.job_id)
+            or (not isinstance(fence, str) and operation.id != fence.operation_id)
             or (not isinstance(fence, str) and operation.node_id != fence.node_id)
             or (not isinstance(fence, str) and operation.current_attempt != fence.attempt)
             or attempt.operation_id != operation.id
