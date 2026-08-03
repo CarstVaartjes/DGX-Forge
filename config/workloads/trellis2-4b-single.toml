@@ -31,13 +31,13 @@ host = "127.0.0.1"
 port = 9105
 
 [commands]
-prepare = ["/opt/spark/model-adapters/creative/spark-model-adapter", "prepare", "trellis2-4b-single"]
-verify = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify", "trellis2-4b-single"]
-start = ["/opt/spark/model-adapters/creative/spark-model-adapter", "start", "trellis2-4b-single"]
-health = ["/opt/spark/model-adapters/creative/spark-model-adapter", "health", "trellis2-4b-single"]
-infer = ["/opt/spark/model-adapters/creative/spark-model-adapter", "infer", "trellis2-4b-single"]
-stop = ["/opt/spark/model-adapters/creative/spark-model-adapter", "stop", "trellis2-4b-single"]
-verify-release = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify-release", "trellis2-4b-single"]
+prepare = ["/opt/spark/model-adapters/trellis2-4b-single/bin/trellis2-4b-single", "prepare"]
+verify = ["/opt/spark/model-adapters/trellis2-4b-single/bin/trellis2-4b-single", "verify"]
+start = ["/opt/spark/model-adapters/trellis2-4b-single/bin/trellis2-4b-single", "start"]
+health = ["/opt/spark/model-adapters/trellis2-4b-single/bin/trellis2-4b-single", "health"]
+infer = ["/opt/spark/model-adapters/trellis2-4b-single/bin/trellis2-4b-single", "infer"]
+stop = ["/opt/spark/model-adapters/trellis2-4b-single/bin/trellis2-4b-single", "stop"]
+verify-release = ["/opt/spark/model-adapters/trellis2-4b-single/bin/trellis2-4b-single", "verify-release"]
 
 [deadlines]
 prepare = 86400
@@ -52,4 +52,3 @@ verify-release = 300
 minimum_free_memory_bytes = 12000000000
 minimum_free_disk_bytes = 100000000000
 stop_memory_tolerance_bytes = 1073741824
-

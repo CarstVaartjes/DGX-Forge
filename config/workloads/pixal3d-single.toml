@@ -31,13 +31,13 @@ host = "127.0.0.1"
 port = 9104
 
 [commands]
-prepare = ["/opt/spark/model-adapters/creative/spark-model-adapter", "prepare", "pixal3d-single"]
-verify = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify", "pixal3d-single"]
-start = ["/opt/spark/model-adapters/creative/spark-model-adapter", "start", "pixal3d-single"]
-health = ["/opt/spark/model-adapters/creative/spark-model-adapter", "health", "pixal3d-single"]
-infer = ["/opt/spark/model-adapters/creative/spark-model-adapter", "infer", "pixal3d-single"]
-stop = ["/opt/spark/model-adapters/creative/spark-model-adapter", "stop", "pixal3d-single"]
-verify-release = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify-release", "pixal3d-single"]
+prepare = ["/opt/spark/model-adapters/pixal3d-single/bin/pixal3d-single", "prepare"]
+verify = ["/opt/spark/model-adapters/pixal3d-single/bin/pixal3d-single", "verify"]
+start = ["/opt/spark/model-adapters/pixal3d-single/bin/pixal3d-single", "start"]
+health = ["/opt/spark/model-adapters/pixal3d-single/bin/pixal3d-single", "health"]
+infer = ["/opt/spark/model-adapters/pixal3d-single/bin/pixal3d-single", "infer"]
+stop = ["/opt/spark/model-adapters/pixal3d-single/bin/pixal3d-single", "stop"]
+verify-release = ["/opt/spark/model-adapters/pixal3d-single/bin/pixal3d-single", "verify-release"]
 
 [deadlines]
 prepare = 86400
@@ -52,4 +52,3 @@ verify-release = 300
 minimum_free_memory_bytes = 12000000000
 minimum_free_disk_bytes = 100000000000
 stop_memory_tolerance_bytes = 1073741824
-

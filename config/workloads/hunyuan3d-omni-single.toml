@@ -31,13 +31,13 @@ host = "127.0.0.1"
 port = 9110
 
 [commands]
-prepare = ["/opt/spark/model-adapters/creative/spark-model-adapter", "prepare", "hunyuan3d-omni-single"]
-verify = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify", "hunyuan3d-omni-single"]
-start = ["/opt/spark/model-adapters/creative/spark-model-adapter", "start", "hunyuan3d-omni-single"]
-health = ["/opt/spark/model-adapters/creative/spark-model-adapter", "health", "hunyuan3d-omni-single"]
-infer = ["/opt/spark/model-adapters/creative/spark-model-adapter", "infer", "hunyuan3d-omni-single"]
-stop = ["/opt/spark/model-adapters/creative/spark-model-adapter", "stop", "hunyuan3d-omni-single"]
-verify-release = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify-release", "hunyuan3d-omni-single"]
+prepare = ["/opt/spark/model-adapters/hunyuan3d-omni-single/bin/hunyuan3d-omni-single", "prepare"]
+verify = ["/opt/spark/model-adapters/hunyuan3d-omni-single/bin/hunyuan3d-omni-single", "verify"]
+start = ["/opt/spark/model-adapters/hunyuan3d-omni-single/bin/hunyuan3d-omni-single", "start"]
+health = ["/opt/spark/model-adapters/hunyuan3d-omni-single/bin/hunyuan3d-omni-single", "health"]
+infer = ["/opt/spark/model-adapters/hunyuan3d-omni-single/bin/hunyuan3d-omni-single", "infer"]
+stop = ["/opt/spark/model-adapters/hunyuan3d-omni-single/bin/hunyuan3d-omni-single", "stop"]
+verify-release = ["/opt/spark/model-adapters/hunyuan3d-omni-single/bin/hunyuan3d-omni-single", "verify-release"]
 
 [deadlines]
 prepare = 86400
@@ -52,4 +52,3 @@ verify-release = 300
 minimum_free_memory_bytes = 12000000000
 minimum_free_disk_bytes = 100000000000
 stop_memory_tolerance_bytes = 1073741824
-

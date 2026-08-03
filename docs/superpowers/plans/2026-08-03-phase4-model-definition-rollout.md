@@ -15,7 +15,9 @@ the fail-closed adapter and are not advertised as endpoints.
 
 The source repositories and checkpoint revisions were resolved on 2026-08-03
 from their public upstreams. The approved design remains the authority for
-loader selection and acceptance thresholds. TripoSG qualification evidence is
+loader selection and acceptance thresholds. Every definition owns a distinct
+adapter directory and command path; its `paths.scratch` is reserved for that
+model's venv and runtime cache, with no shared generic adapter. TripoSG qualification evidence is
 in `docs/audits/2026-08-03-triposg-runtime-qualification.json`; its runtime
 uses its own source, weights, cache/venv, inputs, outputs, logs, PID, and
 endpoint namespace. TokenRig/SkinTokens now has the same isolated adapter

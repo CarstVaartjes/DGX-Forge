@@ -31,13 +31,13 @@ host = "127.0.0.1"
 port = 9103
 
 [commands]
-prepare = ["/opt/spark/model-adapters/creative/spark-model-adapter", "prepare", "qwen-image-edit-2511-single"]
-verify = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify", "qwen-image-edit-2511-single"]
-start = ["/opt/spark/model-adapters/creative/spark-model-adapter", "start", "qwen-image-edit-2511-single"]
-health = ["/opt/spark/model-adapters/creative/spark-model-adapter", "health", "qwen-image-edit-2511-single"]
-infer = ["/opt/spark/model-adapters/creative/spark-model-adapter", "infer", "qwen-image-edit-2511-single"]
-stop = ["/opt/spark/model-adapters/creative/spark-model-adapter", "stop", "qwen-image-edit-2511-single"]
-verify-release = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify-release", "qwen-image-edit-2511-single"]
+prepare = ["/opt/spark/model-adapters/qwen-image-edit-2511-single/bin/qwen-image-edit-2511-single", "prepare"]
+verify = ["/opt/spark/model-adapters/qwen-image-edit-2511-single/bin/qwen-image-edit-2511-single", "verify"]
+start = ["/opt/spark/model-adapters/qwen-image-edit-2511-single/bin/qwen-image-edit-2511-single", "start"]
+health = ["/opt/spark/model-adapters/qwen-image-edit-2511-single/bin/qwen-image-edit-2511-single", "health"]
+infer = ["/opt/spark/model-adapters/qwen-image-edit-2511-single/bin/qwen-image-edit-2511-single", "infer"]
+stop = ["/opt/spark/model-adapters/qwen-image-edit-2511-single/bin/qwen-image-edit-2511-single", "stop"]
+verify-release = ["/opt/spark/model-adapters/qwen-image-edit-2511-single/bin/qwen-image-edit-2511-single", "verify-release"]
 
 [deadlines]
 prepare = 86400
@@ -52,4 +52,3 @@ verify-release = 300
 minimum_free_memory_bytes = 12000000000
 minimum_free_disk_bytes = 100000000000
 stop_memory_tolerance_bytes = 1073741824
-

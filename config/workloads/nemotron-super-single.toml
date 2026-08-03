@@ -31,13 +31,13 @@ host = "127.0.0.1"
 port = 9100
 
 [commands]
-prepare = ["/opt/spark/model-adapters/creative/spark-model-adapter", "prepare", "nemotron-super-single"]
-verify = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify", "nemotron-super-single"]
-start = ["/opt/spark/model-adapters/creative/spark-model-adapter", "start", "nemotron-super-single"]
-health = ["/opt/spark/model-adapters/creative/spark-model-adapter", "health", "nemotron-super-single"]
-infer = ["/opt/spark/model-adapters/creative/spark-model-adapter", "infer", "nemotron-super-single"]
-stop = ["/opt/spark/model-adapters/creative/spark-model-adapter", "stop", "nemotron-super-single"]
-verify-release = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify-release", "nemotron-super-single"]
+prepare = ["/opt/spark/model-adapters/nemotron-super-single/bin/nemotron-super-single", "prepare"]
+verify = ["/opt/spark/model-adapters/nemotron-super-single/bin/nemotron-super-single", "verify"]
+start = ["/opt/spark/model-adapters/nemotron-super-single/bin/nemotron-super-single", "start"]
+health = ["/opt/spark/model-adapters/nemotron-super-single/bin/nemotron-super-single", "health"]
+infer = ["/opt/spark/model-adapters/nemotron-super-single/bin/nemotron-super-single", "infer"]
+stop = ["/opt/spark/model-adapters/nemotron-super-single/bin/nemotron-super-single", "stop"]
+verify-release = ["/opt/spark/model-adapters/nemotron-super-single/bin/nemotron-super-single", "verify-release"]
 
 [deadlines]
 prepare = 86400
@@ -52,4 +52,3 @@ verify-release = 300
 minimum_free_memory_bytes = 12000000000
 minimum_free_disk_bytes = 100000000000
 stop_memory_tolerance_bytes = 1073741824
-

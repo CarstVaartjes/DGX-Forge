@@ -54,6 +54,17 @@ def test_default_selector_resolves_to_canonical_home(catalog_root: Path) -> None
     assert catalog.resolve_profile("default").id == "agent-full-dual"
 
 
+def test_each_model_definition_has_its_own_adapter_command_path() -> None:
+    catalog = Catalog.load(REPOSITORY_ROOT)
+    prepare_paths = {
+        definition.id: definition.commands.prepare[0]
+        for definition in catalog.definitions.values()
+    }
+
+    assert len(set(prepare_paths.values())) == len(prepare_paths)
+    assert all("spark-model-adapter" not in path for path in prepare_paths.values())
+
+
 def test_ds4_single_definition_is_locked_planned_and_spark1_only(
     catalog_root: Path,
 ) -> None:

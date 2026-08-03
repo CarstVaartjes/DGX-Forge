@@ -31,13 +31,13 @@ host = "127.0.0.1"
 port = 9101
 
 [commands]
-prepare = ["/opt/spark/model-adapters/creative/spark-model-adapter", "prepare", "nemotron-nano-omni-single"]
-verify = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify", "nemotron-nano-omni-single"]
-start = ["/opt/spark/model-adapters/creative/spark-model-adapter", "start", "nemotron-nano-omni-single"]
-health = ["/opt/spark/model-adapters/creative/spark-model-adapter", "health", "nemotron-nano-omni-single"]
-infer = ["/opt/spark/model-adapters/creative/spark-model-adapter", "infer", "nemotron-nano-omni-single"]
-stop = ["/opt/spark/model-adapters/creative/spark-model-adapter", "stop", "nemotron-nano-omni-single"]
-verify-release = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify-release", "nemotron-nano-omni-single"]
+prepare = ["/opt/spark/model-adapters/nemotron-nano-omni-single/bin/nemotron-nano-omni-single", "prepare"]
+verify = ["/opt/spark/model-adapters/nemotron-nano-omni-single/bin/nemotron-nano-omni-single", "verify"]
+start = ["/opt/spark/model-adapters/nemotron-nano-omni-single/bin/nemotron-nano-omni-single", "start"]
+health = ["/opt/spark/model-adapters/nemotron-nano-omni-single/bin/nemotron-nano-omni-single", "health"]
+infer = ["/opt/spark/model-adapters/nemotron-nano-omni-single/bin/nemotron-nano-omni-single", "infer"]
+stop = ["/opt/spark/model-adapters/nemotron-nano-omni-single/bin/nemotron-nano-omni-single", "stop"]
+verify-release = ["/opt/spark/model-adapters/nemotron-nano-omni-single/bin/nemotron-nano-omni-single", "verify-release"]
 
 [deadlines]
 prepare = 86400
@@ -52,4 +52,3 @@ verify-release = 300
 minimum_free_memory_bytes = 12000000000
 minimum_free_disk_bytes = 100000000000
 stop_memory_tolerance_bytes = 1073741824
-

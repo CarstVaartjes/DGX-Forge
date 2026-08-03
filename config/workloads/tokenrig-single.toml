@@ -31,13 +31,13 @@ host = "127.0.0.1"
 port = 9107
 
 [commands]
-prepare = ["/opt/spark/model-adapters/creative/spark-model-adapter", "prepare", "tokenrig-single"]
-verify = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify", "tokenrig-single"]
-start = ["/opt/spark/model-adapters/creative/spark-model-adapter", "start", "tokenrig-single"]
-health = ["/opt/spark/model-adapters/creative/spark-model-adapter", "health", "tokenrig-single"]
-infer = ["/opt/spark/model-adapters/creative/spark-model-adapter", "infer", "tokenrig-single"]
-stop = ["/opt/spark/model-adapters/creative/spark-model-adapter", "stop", "tokenrig-single"]
-verify-release = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify-release", "tokenrig-single"]
+prepare = ["/opt/spark/model-adapters/tokenrig/bin/tokenrig", "prepare"]
+verify = ["/opt/spark/model-adapters/tokenrig/bin/tokenrig", "verify"]
+start = ["/opt/spark/model-adapters/tokenrig/bin/tokenrig", "start"]
+health = ["/opt/spark/model-adapters/tokenrig/bin/tokenrig", "health"]
+infer = ["/opt/spark/model-adapters/tokenrig/bin/tokenrig", "infer"]
+stop = ["/opt/spark/model-adapters/tokenrig/bin/tokenrig", "stop"]
+verify-release = ["/opt/spark/model-adapters/tokenrig/bin/tokenrig", "verify-release"]
 
 [deadlines]
 prepare = 86400

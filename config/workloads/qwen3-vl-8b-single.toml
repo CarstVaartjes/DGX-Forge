@@ -31,13 +31,13 @@ host = "127.0.0.1"
 port = 9106
 
 [commands]
-prepare = ["/opt/spark/model-adapters/creative/spark-model-adapter", "prepare", "qwen3-vl-8b-single"]
-verify = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify", "qwen3-vl-8b-single"]
-start = ["/opt/spark/model-adapters/creative/spark-model-adapter", "start", "qwen3-vl-8b-single"]
-health = ["/opt/spark/model-adapters/creative/spark-model-adapter", "health", "qwen3-vl-8b-single"]
-infer = ["/opt/spark/model-adapters/creative/spark-model-adapter", "infer", "qwen3-vl-8b-single"]
-stop = ["/opt/spark/model-adapters/creative/spark-model-adapter", "stop", "qwen3-vl-8b-single"]
-verify-release = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify-release", "qwen3-vl-8b-single"]
+prepare = ["/opt/spark/model-adapters/qwen3-vl-8b-single/bin/qwen3-vl-8b-single", "prepare"]
+verify = ["/opt/spark/model-adapters/qwen3-vl-8b-single/bin/qwen3-vl-8b-single", "verify"]
+start = ["/opt/spark/model-adapters/qwen3-vl-8b-single/bin/qwen3-vl-8b-single", "start"]
+health = ["/opt/spark/model-adapters/qwen3-vl-8b-single/bin/qwen3-vl-8b-single", "health"]
+infer = ["/opt/spark/model-adapters/qwen3-vl-8b-single/bin/qwen3-vl-8b-single", "infer"]
+stop = ["/opt/spark/model-adapters/qwen3-vl-8b-single/bin/qwen3-vl-8b-single", "stop"]
+verify-release = ["/opt/spark/model-adapters/qwen3-vl-8b-single/bin/qwen3-vl-8b-single", "verify-release"]
 
 [deadlines]
 prepare = 86400
@@ -52,4 +52,3 @@ verify-release = 300
 minimum_free_memory_bytes = 12000000000
 minimum_free_disk_bytes = 100000000000
 stop_memory_tolerance_bytes = 1073741824
-
