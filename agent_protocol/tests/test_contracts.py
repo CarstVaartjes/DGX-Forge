@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+from datetime import UTC, datetime
 import hashlib
 import importlib.resources
 import json
 from pathlib import Path
-from datetime import UTC, datetime
 
 import pytest
 from jsonschema import Draft202012Validator
@@ -57,6 +58,51 @@ def claim_with_payload(payload: dict[str, str]) -> dict[str, object]:
         "payload": payload,
         "payload_digest": hashlib.sha256(canonical_message(payload)).hexdigest(),
     }
+
+
+PATH_KEY_TOKENS = ("path", "file", "filename", "directory", "filesystem", "mount")
+FORBIDDEN_PATH_KEY_FORMS = (
+    "{token}",
+    "{token}_value",
+    "{token}-value",
+    "{token}Value",
+    "{upper}",
+    "{upper}_value",
+    "{upper}-value",
+    "{upper}Value",
+    "artifact_{token}",
+    "artifact_{token}_value",
+    "artifact-{token}",
+    "artifact-{token}-value",
+    "artifact{title}",
+    "artifact{title}_value",
+    "artifact{title}-value",
+    "artifact{title}Value",
+    "artifact{upper}",
+    "artifact{upper}_value",
+    "artifact{upper}-value",
+    "artifact{upper}Value",
+)
+SAFE_PATH_KEY_COLLISIONS = (
+    "profile",
+    "pathology",
+    "Pathology",
+    "filetype",
+    "FILEtype",
+    "filenameish",
+    "directoryish",
+    "filesystematic",
+    "mountain",
+    "artifactPathology",
+    "artifactFiletype",
+    "artifactFilenameish",
+    "someDirectoryish",
+    "artifactFilesystematic",
+    "artifactPATHology",
+    "artifactFILEtype",
+    "someDIRECTORYish",
+    "mountainView",
+)
 
 
 def test_claim_is_node_scoped_and_canonical() -> None:
@@ -156,27 +202,31 @@ def test_protocol_rejects_client_selected_filesystem_paths(payload: dict[str, st
         AgentClaim.parse(valid_claim() | {"payload": payload})
 
 
-def test_protocol_allows_benign_profile_key() -> None:
-    payload = {"profile": "production"}
-    raw = claim_with_payload(payload)
-
-    assert AgentClaim.parse(raw).payload == payload
-    assert validate_schema_message("agent-job.schema.json", raw).payload == payload
-
-
-@pytest.mark.parametrize("field", ["artifactPathX", "artifactFileY", "someDirectoryZ"])
-@pytest.mark.parametrize("name", ["agent-job.schema.json", "agent-result.schema.json"])
-def test_path_key_continuations_are_rejected_by_runtime_and_schema(
+def protocol_message_with_document(
     name: str,
-    field: str,
-) -> None:
-    document = {field: "release"}
+    document: dict[str, str],
+) -> tuple[dict[str, object], Callable[[object], AgentClaim | AgentResult]]:
     if name == "agent-job.schema.json":
-        raw = claim_with_payload(document)
-        parser = AgentClaim.parse
-    else:
-        raw = valid_attempt() | {"state": "succeeded", "result": document}
-        parser = AgentResult.parse
+        return claim_with_payload(document), AgentClaim.parse
+    return (
+        valid_attempt() | {"state": "succeeded", "result": document},
+        AgentResult.parse,
+    )
+
+
+@pytest.mark.parametrize("name", ["agent-job.schema.json", "agent-result.schema.json"])
+@pytest.mark.parametrize("token", PATH_KEY_TOKENS)
+@pytest.mark.parametrize("form", FORBIDDEN_PATH_KEY_FORMS)
+def test_complete_path_key_segments_are_rejected_by_runtime_and_schemas(
+    name: str,
+    token: str,
+    form: str,
+) -> None:
+    # A token starts at the key edge, after '_'/'-', or uppercase after
+    # lowercase/digit. It ends at the key edge, before '_'/'-', or before an
+    # uppercase continuation. A lowercase continuation remains safe.
+    field = form.format(token=token, title=token.title(), upper=token.upper())
+    raw, parser = protocol_message_with_document(name, {field: "release"})
 
     with pytest.raises(AgentProtocolError, match="path"):
         parser(raw)
@@ -185,22 +235,13 @@ def test_path_key_continuations_are_rejected_by_runtime_and_schema(
         validate_schema_message(name, raw)
 
 
-@pytest.mark.parametrize(
-    "field",
-    ["profile", "artifactPathology", "artifactFiletype", "someDirectoryish"],
-)
 @pytest.mark.parametrize("name", ["agent-job.schema.json", "agent-result.schema.json"])
-def test_neighboring_non_path_keys_are_accepted_by_runtime_and_schema(
+@pytest.mark.parametrize("field", SAFE_PATH_KEY_COLLISIONS)
+def test_path_token_collisions_are_accepted_by_runtime_and_schemas(
     name: str,
     field: str,
 ) -> None:
-    document = {field: "release"}
-    if name == "agent-job.schema.json":
-        raw = claim_with_payload(document)
-        parser = AgentClaim.parse
-    else:
-        raw = valid_attempt() | {"state": "succeeded", "result": document}
-        parser = AgentResult.parse
+    raw, parser = protocol_message_with_document(name, {field: "release"})
 
     assert parser(raw)
     assert schema(name).is_valid(raw)

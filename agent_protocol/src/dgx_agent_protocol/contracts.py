@@ -22,9 +22,29 @@ UNSAFE_KEY = re.compile(
     r"password|secret|token|authorization|private.?key|command|shell|environment",
     re.IGNORECASE,
 )
+
+
+def _ascii_case_pattern(token: str, *, initial_upper: bool = False) -> str:
+    prefix = (
+        token[0].upper()
+        if initial_upper
+        else f"[{token[0].upper()}{token[0]}]"
+    )
+    return prefix + "".join(f"[{character.upper()}{character}]" for character in token[1:])
+
+
+PATH_KEY_TOKENS = ("path", "file", "filename", "directory", "filesystem", "mount")
+PATH_KEY_ANY_CASE = "|".join(_ascii_case_pattern(token) for token in PATH_KEY_TOKENS)
+PATH_KEY_CAMEL_CASE = "|".join(
+    _ascii_case_pattern(token, initial_upper=True) for token in PATH_KEY_TOKENS
+)
+# A forbidden term starts at the key edge, after '_'/'-', or as an uppercase
+# term after lowercase/digit. It ends at the key edge, before '_'/'-', or
+# before an uppercase continuation. Matching inside each term is ASCII
+# case-insensitive; a lowercase continuation such as "pathology" remains safe.
 PATH_KEY = re.compile(
-    r"(?:^|[_-])(?:path|file|filename|directory|filesystem|mount)(?:$|[_-])",
-    re.IGNORECASE,
+    rf"(?:^|[_-])(?:{PATH_KEY_ANY_CASE})(?:$|[_-]|[A-Z])"
+    rf"|[a-z0-9](?:{PATH_KEY_CAMEL_CASE})(?:$|[_-]|[A-Z])"
 )
 
 
@@ -120,8 +140,7 @@ def _validate_safe_keys(value: Any) -> None:
 
 
 def _is_path_key(key: str) -> bool:
-    segmented = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key)
-    return bool(PATH_KEY.search(segmented))
+    return bool(PATH_KEY.search(key))
 
 
 def _validate_bounded_document(value: Any, *, name: str) -> Any:
