@@ -17,7 +17,7 @@ meminfo_path=${DS4_MEMINFO_PATH:-/proc/meminfo}
 boot_id_path=${DS4_BOOT_ID_PATH:-/proc/sys/kernel/random/boot_id}
 
 expected_hostname=spark-3542
-image_reference=ghcr.io/carstvaartjes/spark-ds4@sha256:61f15782e9f771591b1fda321be2ae39f9388b8fd57e03c76dda8e207d6e7ac9
+image_reference=ghcr.io/carstvaartjes/spark-ds4@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615
 checkpoint_manifest_sha256=1f6f88d7f968e51e76a118af83f0f7cae7f5df5b915a6cf30db5265228f70c99
 minimum_free_memory_bytes=120000000000
 minimum_free_disk_bytes=120000000000
@@ -88,7 +88,14 @@ lifecycle_root() {
 }
 
 compose() {
+  local DS4_MODELS_GID
+  DS4_MODELS_GID=$(stat -c %g "$models_root")
+  if [[ ! $DS4_MODELS_GID =~ ^[0-9]+$ ]]; then
+    echo "invalid models directory group ID" >&2
+    return 1
+  fi
   DS4_IMAGE="$image_reference" \
+  DS4_MODELS_GID="$DS4_MODELS_GID" \
   DS4_SNAPSHOT_DIR="$snapshot" \
   DS4_DERIVED_DIR="$scratch/derived" \
   DS4_KV_DIR="$scratch/kv" \
@@ -435,7 +442,7 @@ if record != expected:
         --data "$payload" http://127.0.0.1:8888/v1/chat/completions
     }
     request completion '{"model":"deepseek","messages":[{"role":"user","content":"Reply with the number 4."}],"max_tokens":32}'
-    request reasoning_off '{"model":"deepseek","messages":[{"role":"user","content":"Reply with OFF_OK."}],"chat_template_kwargs":{"thinking":false},"max_tokens":32}'
+    request reasoning_off '{"model":"deepseek","messages":[{"role":"user","content":"Reply with OFF_OK."}],"thinking":false,"max_tokens":32}'
     request reasoning_low '{"model":"deepseek","messages":[{"role":"user","content":"What is 2+2?"}],"reasoning_effort":"low","max_tokens":64}'
     request reasoning_high '{"model":"deepseek","messages":[{"role":"user","content":"What is 3+4?"}],"reasoning_effort":"high","max_tokens":128}'
     request reasoning_max '{"model":"deepseek","messages":[{"role":"user","content":"What is 5+6?"}],"reasoning_effort":"max","max_tokens":256}'

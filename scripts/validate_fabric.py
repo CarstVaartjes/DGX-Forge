@@ -24,6 +24,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+repository_src = Path(__file__).resolve().parents[1] / "src"
+if str(repository_src) not in sys.path:
+    sys.path.insert(0, str(repository_src))
+
+from spark_profiles.ssh_transport import select_transport_binary
+
 NCCL_VERSION = "v2.30.7-1"
 NCCL_COMMIT = "73cf112295c33aee2b895f329f592f2a9b4b0f97"
 NCCL_TESTS_COMMIT = "a0b82b2260cf5152b9f8c061bbf7eaf0ba096432"
@@ -314,6 +320,7 @@ class Runner:
         self.head = head
         self.worker = worker
         self.evidence = evidence
+        self.ssh_bin = select_transport_binary("ssh")
 
     def local(
         self, command: list[str], *, check: bool = True, input_text: str | None = None
@@ -327,7 +334,7 @@ class Runner:
     def remote(self, host: str, shell_command: str, *, check: bool = True) -> subprocess.CompletedProcess[str]:
         # Supplying the body on stdin avoids OpenSSH's lossy joining of remote
         # argv and makes multi-line safety checks unambiguous.
-        return self.local(["ssh", *SSH_OPTIONS, host, "bash", "-s"], check=check, input_text=shell_command)
+        return self.local([self.ssh_bin, *SSH_OPTIONS, host, "bash", "-s"], check=check, input_text=shell_command)
 
     def worker_via_fabric(self, shell_command: str, *, check: bool = True) -> subprocess.CompletedProcess[str]:
         nested = "printf %s " + shlex.quote(shell_command) + " | ssh "

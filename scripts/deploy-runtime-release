@@ -6,15 +6,21 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import secrets
 import shlex
 import stat
 import subprocess
+import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+
+repository_src = Path(__file__).resolve().parents[1] / "src"
+if str(repository_src) not in sys.path:
+    sys.path.insert(0, str(repository_src))
+
+from spark_profiles.ssh_transport import select_transport_binary
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._/-]+$")
@@ -157,6 +163,50 @@ for directory in "$@"; do
   install -d -m 0755 -- "$temporary/$directory"
 done
 """
+)
+
+_MODE_SCRIPT = (
+    "# deploy-runtime-release: mode\n"
+    "set -euo pipefail\n"
+    + _REMOTE_PATH_FUNCTIONS
+    + r'''
+trusted_root=$1
+temporary=$2
+relative=$3
+expected_mode=$4
+if [[ "$temporary" != "$trusted_root"/*/releases/.*.tmp-* ]]; then
+  printf 'unsafe temporary release path: %s\n' "$temporary" >&2
+  exit 1
+fi
+require_safe_parent "$trusted_root" "$temporary"
+require_real_directory "$temporary"
+[[ "$relative" =~ ^[A-Za-z0-9._/-]+$ ]] || {
+  printf 'unsafe release file path: %s\n' "$relative" >&2
+  exit 1
+}
+IFS='/' read -r -a components <<<"$relative"
+for component in "${components[@]}"; do
+  [[ -n "$component" && "$component" != . && "$component" != .. ]] || {
+    printf 'unsafe release file path: %s\n' "$relative" >&2
+    exit 1
+  }
+done
+case "$relative" in
+  bin/*) required_mode=0755 ;;
+  *) required_mode=0644 ;;
+esac
+[[ "$expected_mode" == "$required_mode" ]] || {
+  printf 'invalid release file mode: %s %s\n' "$relative" "$expected_mode" >&2
+  exit 1
+}
+path="$temporary/$relative"
+require_safe_parent "$temporary" "$path"
+[[ -f "$path" && ! -L "$path" ]] || {
+  printf 'release file is missing or unsafe: %s\n' "$relative" >&2
+  exit 1
+}
+chmod -- "$expected_mode" "$path"
+'''
 )
 
 _FINALIZE_SCRIPT = (
@@ -401,6 +451,27 @@ def _require_remote_success(
         raise DeployError(f"{context}: {detail}")
 
 
+def _scp_source_argument(source: Path, scp_bin: str) -> str:
+    """Translate WSL paths before handing them to native Windows scp.exe."""
+    if Path(scp_bin).name.casefold() != "scp.exe":
+        return str(source)
+    try:
+        converted = subprocess.run(
+            ("wslpath", "-w", str(source)),
+            check=False,
+            capture_output=True,
+            text=True,
+            shell=False,
+        )
+    except OSError as error:
+        raise DeployError(f"cannot translate WSL release path: {error}") from error
+    translated = converted.stdout.strip()
+    if converted.returncode != 0 or not translated:
+        detail = converted.stderr.strip() or f"exit {converted.returncode}"
+        raise DeployError(f"cannot translate WSL release path: {detail}")
+    return translated
+
+
 def _deploy_host(
     release: Release,
     alias: str,
@@ -439,8 +510,9 @@ def _deploy_host(
 
     for installed, source, _ in release.files:
         destination = f"{alias}:{temporary}/{installed}"
+        source_argument = _scp_source_argument(source, scp_bin)
         copied = subprocess.run(
-            (scp_bin, *_SSH_OPTIONS, "-p", "--", str(source), destination),
+            (scp_bin, *_SSH_OPTIONS, "-p", "--", source_argument, destination),
             check=False,
             capture_output=True,
             text=True,
@@ -449,6 +521,22 @@ def _deploy_host(
         if copied.returncode != 0:
             detail = copied.stderr.strip() or f"exit {copied.returncode}"
             raise DeployError(f"release transfer failed on {alias}: {detail}")
+        expected_mode = "0755" if installed.parts[0] == "bin" else "0644"
+        mode_applied = _ssh(
+            alias,
+            _MODE_SCRIPT,
+            (
+                _REMOTE_RELEASE_ROOT,
+                temporary,
+                str(installed),
+                expected_mode,
+            ),
+            ssh_bin=ssh_bin,
+        )
+        _require_remote_success(
+            mode_applied,
+            f"release mode application failed on {alias}",
+        )
 
     finalized = _ssh(
         alias,
@@ -466,8 +554,8 @@ def _deploy_host(
 
 
 def _deploy(release: Release) -> None:
-    ssh_bin = os.environ.get("SPARK_SSH_BIN", "ssh")
-    scp_bin = os.environ.get("SPARK_SCP_BIN", "scp")
+    ssh_bin = select_transport_binary("ssh")
+    scp_bin = select_transport_binary("scp")
     for alias in release.aliases:
         result = _deploy_host(
             release,

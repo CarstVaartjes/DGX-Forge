@@ -10,6 +10,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
+from spark_profiles.ssh_transport import select_transport_binary
+
 _DEFAULT_ALIASES = {"spark1": "dgx-spark-1", "spark2": "dgx-spark-2"}
 
 
@@ -190,6 +192,7 @@ class SshBackend:
         self._aliases = dict(node_aliases or _DEFAULT_ALIASES)
         self._connect_timeout = connect_timeout_seconds
         self._output_limit = output_limit_bytes
+        self._ssh_bin = select_transport_binary("ssh")
 
     def run(
         self, node: str, argv: tuple[str, ...], timeout: float
@@ -234,7 +237,7 @@ class SshBackend:
         remote_command = shlex.join(remote_argv)
         connect_timeout = min(self._connect_timeout, max(1, math.ceil(timeout)))
         command = (
-            "ssh",
+            self._ssh_bin,
             "-o",
             "BatchMode=yes",
             "-o",

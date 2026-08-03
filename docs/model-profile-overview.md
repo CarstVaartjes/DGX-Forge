@@ -78,7 +78,7 @@ flowchart TB
 | `geometry-triposg` | `deepseek-agent-single` | `triposg-single` | `deepseek`, `triposg` | Design intent; not cataloged |
 | `geometry-hunyuan3d-omni` | `deepseek-agent-single` | `hunyuan3d-omni-single` | `deepseek`, `hunyuan3d-omni` | Design intent; not cataloged |
 
-“Verified” means the immutable artifacts and both-node prerequisites passed;
+“Verified” means the immutable artifacts and every definition-required node prerequisite passed;
 it does not imply final acceptance or `sparkctl` admission. “Design intent” rows are visual
 roadmap entries only: `sparkctl` cannot resolve or activate them. An accepted
 profile needs accepted fingerprints for every referenced Model Definition plus
@@ -90,7 +90,7 @@ accepted evidence for the exact placement and combination.
 | --- | --- | --- | --- | --- |
 | Default agent | `deepseek-agent-dual` | Mia/vLLM TP=2, 1M-capable runtime pinned to `b131b2a` | Both Sparks, exclusive | Verified and operational; final acceptance deferred |
 | Long-context agent | `deepseek-long-dual` | Mia/vLLM long-context candidate with explicit concurrency limits | Both Sparks, exclusive | Design intent; not cataloged |
-| Resident agent | `deepseek-agent-single` | Audited DS4 v0.5.3 Q2-imatrix + DSpark GGUF pair | One Spark, exclusive initially | Audited artifacts; runtime admission pending |
+| Resident agent | `deepseek-agent-single` | Audited DS4 v0.5.3 Q2-imatrix + DSpark GGUF pair | One Spark, exclusive initially | Verified and operational; final acceptance and profile admission deferred |
 | Alternative agent | `nemotron-super-single` | NVIDIA Nemotron 3 Super NVFP4 Spark candidate | One Spark, exclusive | Design intent; not cataloged |
 | Multimodal agent | `nemotron-nano-omni-single` | NVIDIA Nano Omni NVFP4 Spark candidate | One Spark, co-residency candidate | Design intent; not cataloged |
 | Image generation | `qwen-image-single` | ModelOpt NVFP4 candidate through a GB10-native SGLang Diffusion build | One Spark, exclusive initially | Design intent; not cataloged |
@@ -116,6 +116,7 @@ user-selectable merely because it starts successfully.
 | Model Definition and Cluster Profile schemas | Implemented |
 | Framework catalog, admission, switching, CLI, and local state | Implemented |
 | `deepseek-agent-dual` Model Definition | Immutable Mia release `92f5…0575e` is installed on both nodes, structurally verified, healthy, and passes all 11 live quality gates; final performance, thermal, lifecycle and reboot acceptance is deferred |
+| `deepseek-agent-single` Model Definition | Immutable DS4 release `ca69…82b2` is installed on Spark 1, verified at 32,768 context, and passes all 12 live quality and cache gates; final performance, thermal, lifecycle, reboot and exact-profile acceptance is deferred |
 | Canonical `agent-full-dual` profile | Cataloged with `default` and `agent` selectors; not admitted while its definition remains verified rather than accepted |
 | Remaining Model Definitions and profiles | Design intent; configuration and acceptance evidence do not exist yet |
 | Model activation | The verified runtime is currently running through the direct adapter; `sparkctl` activation remains blocked until exact acceptance evidence exists |
@@ -147,8 +148,9 @@ fingerprint and invalidates old acceptance evidence.
 - [Multi-runtime model profile design](superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md)
   — normative definitions, loader rules, placement, admission, and acceptance.
 - `config/workloads/` and `config/cluster-profiles/` — executable catalog;
-  currently contains only `deepseek-agent-dual` and `agent-full-dual`.
+  currently contains both DeepSeek Model Definitions and the `agent-full-dual`
+  profile.
 - `inventory/reports/model-definitions.json` — current maturity fingerprints;
-  today it records `deepseek-agent-dual` as verified.
+  today it records both DeepSeek definitions as verified.
 - `inventory/reports/accepted-cluster-profiles.json` — accepted exact-profile
   evidence; currently empty.

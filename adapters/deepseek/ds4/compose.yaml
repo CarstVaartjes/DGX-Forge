@@ -8,6 +8,8 @@ services:
     restart: "no"
     network_mode: host
     gpus: all
+    group_add:
+      - "${DS4_MODELS_GID:?DS4_MODELS_GID is required}"
     read_only: true
     tmpfs:
       - /tmp:rw,noexec,nosuid,size=1024m
