@@ -1,0 +1,32 @@
+"""Durable job worker entry point and bounded handler registry."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping
+
+from .jobs import JobService
+
+Handler = Callable[[Mapping[str, object]], Mapping[str, object]]
+
+
+class Worker:
+    def __init__(self, jobs: JobService, worker_id: str, handlers: Mapping[str, Handler]) -> None:
+        self._jobs = jobs
+        self._worker_id = worker_id
+        self._handlers = dict(handlers)
+
+    def run_once(self) -> bool:
+        attempt = self._jobs.claim(self._worker_id, 30)
+        if attempt is None:
+            return False
+        handler = self._handlers.get(attempt.kind)
+        if handler is None:
+            self._jobs.fail(attempt, f"unsupported job kind: {attempt.kind}")
+            return True
+        try:
+            result = handler(attempt.payload)
+        except Exception as error:
+            self._jobs.fail(attempt, f"{type(error).__name__}: {error}")
+        else:
+            self._jobs.succeed(attempt, result)
+        return True

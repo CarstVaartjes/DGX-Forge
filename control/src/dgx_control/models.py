@@ -5,7 +5,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -23,12 +23,17 @@ class Job(Base):
     base_commit: Mapped[str] = mapped_column(String(128), nullable=False)
     targets: Mapped[list[str]] = mapped_column(JSON, nullable=False)
     payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    result: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    status_reason: Mapped[str | None] = mapped_column(Text)
+    current_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class JobAttempt(Base):
     __tablename__ = "job_attempts"
+    __table_args__ = (UniqueConstraint("job_id", "attempt"),)
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
     attempt: Mapped[int] = mapped_column(Integer, nullable=False)
