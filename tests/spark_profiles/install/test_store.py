@@ -64,9 +64,41 @@ def test_store_rejects_stale_revision(tmp_path: Path) -> None:
         at=NOW + timedelta(seconds=1),
     )
 
+    assert store.load_versioned(journal.request.node_id) == (journal, 0)
     assert store.save(changed, expected_revision=0) == 1
+    assert store.load_versioned(journal.request.node_id) == (changed, 1)
     with pytest.raises(InstallConflict, match="expected revision 0.*current is 1"):
         store.save(journal, expected_revision=0)
+
+
+def test_store_round_trips_waiting_operator_state(tmp_path: Path) -> None:
+    store = InstallStore(tmp_path / "state", clock=lambda: NOW)
+    journal = store.create(_request()).wait(
+        reason="verify physical console",
+        at=NOW + timedelta(seconds=1),
+    )
+
+    store.save(journal, expected_revision=0)
+
+    loaded = store.load(journal.request.node_id)
+    assert loaded.waiting_reason == "verify physical console"
+    assert loaded.state == "discovered"
+    assert loaded.updated_at == NOW + timedelta(seconds=1)
+
+
+def test_store_round_trips_explicit_retry_state(tmp_path: Path) -> None:
+    store = InstallStore(tmp_path / "state", clock=lambda: NOW)
+    journal = store.create(_request()).fail(
+        reason="temporary failure",
+        at=NOW + timedelta(seconds=1),
+    )
+    store.save(journal, expected_revision=0)
+    retried = journal.retry(at=NOW + timedelta(seconds=2))
+    store.save(retried, expected_revision=1)
+
+    loaded = store.load(retried.request.node_id)
+    assert loaded == retried
+    assert loaded.retry_count == 1
 
 
 def test_store_rejects_duplicate_create_and_missing_load(tmp_path: Path) -> None:

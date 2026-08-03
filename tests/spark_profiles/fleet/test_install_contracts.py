@@ -51,6 +51,7 @@ def test_installation_follows_explicit_gated_sequence(
         "key-installed",
         "hardened",
         "policy-applied",
+        "post-inventoried",
         "accepted",
     ]
 
@@ -63,7 +64,35 @@ def test_installation_follows_explicit_gated_sequence(
 
     assert journal.state == "accepted"
     assert tuple(step.state for step in journal.steps) == tuple(states)
-    assert journal.steps[-1].evidence_digest == "6" * 64
+    assert journal.steps[-1].evidence_digest == "7" * 64
+
+
+def test_waiting_for_operator_is_durable_redacted_and_requires_resume(
+    install_request: InstallationRequest,
+) -> None:
+    journal = InstallationJournal.start(install_request, at=NOW).wait(
+        reason="console verification token=very-secret",
+        at=NOW + timedelta(seconds=1),
+    )
+
+    assert journal.state == "discovered"
+    assert journal.waiting_reason == "console verification token=[REDACTED]"
+    with pytest.raises(InvalidInstallationTransition, match="waiting"):
+        journal.advance(
+            "identity-gated",
+            evidence_digest="a" * 64,
+            at=NOW + timedelta(seconds=2),
+        )
+
+    resumed = journal.resume(at=NOW + timedelta(seconds=2))
+    advanced = resumed.advance(
+        "identity-gated",
+        evidence_digest="a" * 64,
+        at=NOW + timedelta(seconds=3),
+    )
+    assert advanced.waiting_reason is None
+    assert advanced.resume_count == 1
+    assert advanced.state == "identity-gated"
 
 
 def test_installation_rejects_invalid_or_missing_evidence_digest(
@@ -89,6 +118,26 @@ def test_failed_installation_is_terminal_and_redacts_reason(
     assert "[REDACTED]" in journal.failure_reason
     with pytest.raises(InvalidInstallationTransition):
         journal.advance("identity-gated", evidence_digest="a" * 64, at=NOW)
+
+
+def test_failed_installation_can_be_explicitly_retried_from_last_gate(
+    install_request: InstallationRequest,
+) -> None:
+    journal = InstallationJournal.start(install_request, at=NOW).advance(
+        "identity-gated",
+        evidence_digest="a" * 64,
+        at=NOW + timedelta(seconds=1),
+    ).fail(
+        reason="temporary transport failure",
+        at=NOW + timedelta(seconds=2),
+    )
+
+    retried = journal.retry(at=NOW + timedelta(seconds=3))
+
+    assert retried.state == "identity-gated"
+    assert retried.failure_reason is None
+    assert len(retried.steps) == 1
+    assert retried.retry_count == 1
 
 
 def test_serialized_request_uses_credential_reference_only(

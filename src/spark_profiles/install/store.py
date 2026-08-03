@@ -8,6 +8,7 @@ import tempfile
 import fcntl
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, cast
@@ -100,6 +101,9 @@ class InstallStore:
             "created_at": journal.created_at.isoformat(),
             "updated_at": journal.updated_at.isoformat(),
             "failure_reason": journal.failure_reason,
+            "waiting_reason": journal.waiting_reason,
+            "retry_count": journal.retry_count,
+            "resume_count": journal.resume_count,
         }
 
     @staticmethod
@@ -213,6 +217,9 @@ class InstallStore:
             "created_at",
             "updated_at",
             "failure_reason",
+            "waiting_reason",
+            "retry_count",
+            "resume_count",
         }:
             raise ValueError("unknown journal fields")
         raw_request = InstallStore._object(raw_journal["request"])
@@ -255,23 +262,60 @@ class InstallStore:
                 at=datetime.fromisoformat(raw_step["completed_at"]),
             )
         serialized_state = raw_journal["state"]
+        retry_count = raw_journal["retry_count"]
+        if (
+            not isinstance(retry_count, int)
+            or isinstance(retry_count, bool)
+            or retry_count < 0
+        ):
+            raise ValueError("journal retry count is invalid")
+        resume_count = raw_journal["resume_count"]
+        if (
+            not isinstance(resume_count, int)
+            or isinstance(resume_count, bool)
+            or resume_count < 0
+        ):
+            raise ValueError("journal resume count is invalid")
+        serialized_updated_at = datetime.fromisoformat(raw_journal["updated_at"])
         if serialized_state == "failed":
             reason = raw_journal["failure_reason"]
             if not isinstance(reason, str):
                 raise TypeError("failed journal requires failure reason")
             journal = journal.fail(
                 reason=reason,
-                at=datetime.fromisoformat(raw_journal["updated_at"]),
+                at=serialized_updated_at,
             )
         elif journal.state != serialized_state or raw_journal["failure_reason"] is not None:
             raise ValueError("journal state does not match its steps")
-        if journal.updated_at != datetime.fromisoformat(raw_journal["updated_at"]):
+        waiting_reason = raw_journal["waiting_reason"]
+        if waiting_reason is not None:
+            if not isinstance(waiting_reason, str) or serialized_state == "failed":
+                raise TypeError("journal waiting reason is invalid")
+            journal = journal.wait(
+                reason=waiting_reason,
+                at=serialized_updated_at,
+            )
+        elif retry_count > 0 or resume_count > 0:
+            if serialized_updated_at < journal.updated_at:
+                raise ValueError("journal retry timestamp predates its steps")
+            journal = replace(journal, updated_at=serialized_updated_at)
+        if journal.updated_at != serialized_updated_at:
             raise ValueError("journal update timestamp does not match its steps")
+        journal = replace(
+            journal,
+            retry_count=retry_count,
+            resume_count=resume_count,
+        )
         return journal, revision
 
     def load(self, node_id: NodeId) -> InstallationJournal:
         journal, _ = self._load_envelope(node_id)
         return journal
+
+    def load_versioned(self, node_id: NodeId) -> tuple[InstallationJournal, int]:
+        """Return the journal and optimistic-lock revision as one snapshot."""
+
+        return self._load_envelope(node_id)
 
     def save(
         self,

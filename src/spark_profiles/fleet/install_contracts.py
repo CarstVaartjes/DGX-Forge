@@ -19,6 +19,7 @@ InstallationState = Literal[
     "key-installed",
     "hardened",
     "policy-applied",
+    "post-inventoried",
     "accepted",
     "failed",
 ]
@@ -29,7 +30,8 @@ _NEXT_STATE: dict[InstallationState, InstallationState] = {
     "inventoried": "key-installed",
     "key-installed": "hardened",
     "hardened": "policy-applied",
-    "policy-applied": "accepted",
+    "policy-applied": "post-inventoried",
+    "post-inventoried": "accepted",
 }
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
@@ -88,6 +90,9 @@ class InstallationJournal:
     created_at: datetime
     updated_at: datetime
     failure_reason: str | None = None
+    waiting_reason: str | None = None
+    retry_count: int = 0
+    resume_count: int = 0
 
     @classmethod
     def start(
@@ -113,6 +118,10 @@ class InstallationJournal:
         at: datetime,
     ) -> InstallationJournal:
         _aware(at)
+        if self.waiting_reason is not None:
+            raise InvalidInstallationTransition(
+                "cannot advance installation while waiting for operator"
+            )
         if _SHA256.fullmatch(evidence_digest) is None:
             raise ValueError("installation evidence digest must be lowercase SHA-256")
         expected = _NEXT_STATE.get(self.state)
@@ -134,6 +143,35 @@ class InstallationJournal:
             updated_at=at,
         )
 
+    def wait(self, *, reason: str, at: datetime) -> InstallationJournal:
+        _aware(at)
+        if self.state in {"accepted", "failed"}:
+            raise InvalidInstallationTransition(
+                f"cannot wait from terminal installation state {self.state}"
+            )
+        if not reason.strip():
+            raise ValueError("operator wait reason must not be blank")
+        if at < self.updated_at:
+            raise ValueError("installation timestamp cannot move backwards")
+        return replace(
+            self,
+            updated_at=at,
+            waiting_reason=redact_message(reason)[:1024],
+        )
+
+    def resume(self, *, at: datetime) -> InstallationJournal:
+        _aware(at)
+        if self.waiting_reason is None:
+            raise InvalidInstallationTransition("installation is not waiting")
+        if at < self.updated_at:
+            raise ValueError("installation timestamp cannot move backwards")
+        return replace(
+            self,
+            updated_at=at,
+            waiting_reason=None,
+            resume_count=self.resume_count + 1,
+        )
+
     def fail(self, *, reason: str, at: datetime) -> InstallationJournal:
         _aware(at)
         if self.state in {"accepted", "failed"}:
@@ -147,4 +185,24 @@ class InstallationJournal:
             state="failed",
             updated_at=at,
             failure_reason=redact_message(reason)[:1024],
+            waiting_reason=None,
+        )
+
+    def retry(self, *, at: datetime) -> InstallationJournal:
+        _aware(at)
+        if self.state != "failed":
+            raise InvalidInstallationTransition(
+                f"cannot retry installation from state {self.state}"
+            )
+        if at < self.updated_at:
+            raise ValueError("installation timestamp cannot move backwards")
+        resumed_state: InstallationState = (
+            self.steps[-1].state if self.steps else "discovered"
+        )
+        return replace(
+            self,
+            state=resumed_state,
+            updated_at=at,
+            failure_reason=None,
+            retry_count=self.retry_count + 1,
         )
