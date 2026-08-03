@@ -17,6 +17,13 @@ from .logging import redact_text
 from .models import AgentCertificate, AgentNode, AgentOperation as StoredOperation, AgentOperationAttempt, Job
 
 AgentFence = str | AgentClaim | AgentProgress | AgentResult
+_SAFE_AUTOMATIC_RECLAIM = frozenset({
+    AgentOperation.NODE_PROBE.value,
+    AgentOperation.WORKLOAD_HEALTH.value,
+    AgentOperation.WORKLOAD_VERIFY.value,
+})
+_TERMINAL_PARENT_STATES = frozenset({"succeeded", "failed", "waiting-for-operator", "expired"})
+_RETRY_DISPOSITION = "retry"
 
 
 class StaleAgentAttempt(RuntimeError):
@@ -82,8 +89,17 @@ class AgentJobService:
             updated_at=now,
         )
         with self._sessions.begin() as session:
-            if session.get(Job, parent_job_id) is None:
+            parent = session.scalar(
+                select(Job).where(Job.id == parent_job_id).with_for_update(of=Job)
+            )
+            if parent is None:
                 raise KeyError(parent_job_id)
+            if parent.state in _TERMINAL_PARENT_STATES:
+                raise ValueError("cannot enqueue an agent operation beneath a terminal parent")
+            if parent.base_commit != base_commit:
+                raise ValueError("agent operation base commit must match its parent")
+            if node_id not in parent.targets:
+                raise ValueError("agent operation node must be a parent target")
             if session.get(AgentNode, node_id) is None:
                 raise KeyError(node_id)
             session.add(stored)
@@ -101,7 +117,7 @@ class AgentJobService:
         with self._claim_lock, self._sessions.begin() as session:
             if self._active_certificate(session, node_id, certificate_serial, now) is None:
                 return None
-            reclaimable = select(AgentOperationAttempt.id).where(
+            expired_attempt = select(AgentOperationAttempt.id).where(
                 AgentOperationAttempt.operation_id == StoredOperation.id,
                 AgentOperationAttempt.attempt == StoredOperation.current_attempt,
                 AgentOperationAttempt.state == "running",
@@ -112,10 +128,18 @@ class AgentJobService:
                 .where(
                     StoredOperation.node_id == node_id,
                     or_(
-                        StoredOperation.state == "queued",
+                        and_(
+                            StoredOperation.state == "queued",
+                            StoredOperation.current_attempt == 0,
+                        ),
                         and_(
                             StoredOperation.state == "running",
-                            reclaimable,
+                            expired_attempt,
+                        ),
+                        and_(
+                            StoredOperation.state == "waiting-for-operator",
+                            StoredOperation.retry_disposition == _RETRY_DISPOSITION,
+                            StoredOperation.retry_disposition_attempt == StoredOperation.current_attempt,
                         ),
                     ),
                 )
@@ -135,6 +159,13 @@ class AgentJobService:
                 )
                 if previous is not None:
                     previous.state = "expired"
+            if operation.state == "running" and operation.kind not in _SAFE_AUTOMATIC_RECLAIM:
+                operation.state = "waiting-for-operator"
+                operation.retry_disposition = None
+                operation.retry_disposition_attempt = None
+                operation.updated_at = now
+                self._aggregate_parent(session, operation.parent_job_id)
+                return None
             operation.current_attempt += 1
             operation.state = "running"
             operation.updated_at = now

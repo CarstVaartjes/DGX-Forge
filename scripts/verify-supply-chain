@@ -236,24 +236,20 @@ def docker_installs_protocol_wheel(dockerfile: str) -> bool:
         )
         lexer.whitespace_split = True
         tokens = list(lexer)
-        try:
-            pip_index = next(
-                index for index in range(len(tokens) - 3)
-                if tokens[index:index + 4] == ["python", "-m", "pip", "install"]
-            )
-        except StopIteration:
-            continue
-        try:
-            command_end = next(
-                index
-                for index in range(pip_index + 4, len(tokens))
-                if set(tokens[index]) <= {";", "&", "|"}
-            )
-        except StopIteration:
-            command_end = len(tokens)
-        installed = tokens[pip_index + 4:command_end]
-        if wheel in installed and "." in installed:
-            return True
+        for pip_index in range(len(tokens) - 3):
+            if tokens[pip_index:pip_index + 4] != ["python", "-m", "pip", "install"]:
+                continue
+            try:
+                command_end = next(
+                    index
+                    for index in range(pip_index + 4, len(tokens))
+                    if set(tokens[index]) <= {";", "&", "|"}
+                )
+            except StopIteration:
+                command_end = len(tokens)
+            installed = tokens[pip_index + 4:command_end]
+            if wheel in installed and "." in installed:
+                return True
     return False
 
 

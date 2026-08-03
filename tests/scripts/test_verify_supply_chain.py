@@ -144,6 +144,22 @@ def test_verifier_rejects_a_dockerfile_that_copies_but_does_not_install_the_prot
     assert "install" in result.stderr
 
 
+def test_verifier_accepts_exact_wheel_in_second_pip_install_command(tmp_path: Path) -> None:
+    repository = _copy(tmp_path)
+    dockerfile = repository / "control/Dockerfile"
+    dockerfile.write_text(
+        dockerfile.read_text().replace(
+            "RUN python -m pip install --no-cache-dir --prefix=/install \\\n",
+            "RUN python -m pip install --disable-pip-version-check setuptools && \\\n"
+            "    python -m pip install --no-cache-dir --prefix=/install \\\n",
+        )
+    )
+
+    result = subprocess.run([SCRIPT, "--root", repository, "--generate"], capture_output=True, text=True)
+
+    assert result.returncode == 0, result.stderr
+
+
 @pytest.mark.parametrize("operator", ("&&", ";", "||", "|"))
 def test_verifier_rejects_a_protocol_wheel_mentioned_only_after_a_shell_operator(
     tmp_path: Path, operator: str

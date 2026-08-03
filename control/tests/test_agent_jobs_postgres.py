@@ -10,12 +10,19 @@ import time
 import uuid
 
 import pytest
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import sessionmaker
 
 from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
-from dgx_control.models import AgentCertificate, AgentNode, Base, Job
+from dgx_control.models import (
+    AgentCertificate,
+    AgentNode,
+    AgentOperation,
+    AgentOperationAttempt,
+    Base,
+    Job,
+)
 
 
 NODE_A = "spk_" + "a" * 32
@@ -142,6 +149,159 @@ def test_postgres_separate_services_cannot_claim_the_same_operation(service) -> 
     claimed = [claim for claim in claims if claim is not None]
     assert len(claimed) == 1
     assert claimed[0].operation_id == operation.id
+
+
+@pytest.mark.parametrize("operation_kind", ("node.probe", "workload.health", "workload.verify"))
+def test_postgres_expired_safe_operation_is_automatically_reclaimed(service, operation_kind: str) -> None:
+    sessions, clock = service
+    jobs = AgentJobService(sessions, clock=clock)
+    jobs.enqueue(parent(sessions, clock).id, NODE_A, operation_kind, COMMIT, {})
+    first = jobs.claim(NODE_A, "serial-a", 30)
+    assert first is not None
+
+    clock.advance(seconds=30)
+    second = jobs.claim(NODE_A, "serial-a", 30)
+
+    assert second is not None
+    assert second.operation_id == first.operation_id
+    assert second.attempt == 2
+
+
+@pytest.mark.parametrize("operation_kind", ("release.install", "workload.start", "agent.update"))
+def test_postgres_expired_mutating_operation_requires_persisted_retry_disposition(
+    service, operation_kind: str
+) -> None:
+    sessions, clock = service
+    jobs = AgentJobService(sessions, clock=clock)
+    parent_job = parent(sessions, clock)
+    operation = jobs.enqueue(parent_job.id, NODE_A, operation_kind, COMMIT, {})
+    first = jobs.claim(NODE_A, "serial-a", 30)
+    assert first is not None
+
+    clock.advance(seconds=30)
+    assert jobs.claim(NODE_A, "serial-a", 30) is None
+    with sessions() as session:
+        gated = session.get(AgentOperation, operation.id)
+        assert gated is not None
+        assert gated.state == "waiting-for-operator"
+        assert gated.retry_disposition is None
+        assert gated.retry_disposition_attempt is None
+        attempt = session.scalar(select(AgentOperationAttempt).where(
+            AgentOperationAttempt.operation_id == operation.id,
+            AgentOperationAttempt.attempt == 1,
+        ))
+        assert attempt is not None and attempt.state == "expired"
+        assert session.get(Job, parent_job.id).state == "waiting-for-operator"  # type: ignore[union-attr]
+
+    with sessions.begin() as session:
+        gated = session.get(AgentOperation, operation.id)
+        assert gated is not None
+        gated.retry_disposition = "retry"
+        gated.retry_disposition_attempt = 1
+
+    second = jobs.claim(NODE_A, "serial-a", 30)
+    assert second is not None
+    assert second.operation_id == first.operation_id
+    assert second.attempt == 2
+
+    clock.advance(seconds=30)
+    assert jobs.claim(NODE_A, "serial-a", 30) is None
+
+
+@pytest.mark.parametrize("terminal_state", ("succeeded", "failed", "waiting-for-operator", "expired"))
+def test_postgres_enqueue_rejects_terminal_parent(service, terminal_state: str) -> None:
+    sessions, clock = service
+    jobs = AgentJobService(sessions, clock=clock)
+    parent_job = parent(sessions, clock)
+    with sessions.begin() as session:
+        session.get(Job, parent_job.id).state = terminal_state  # type: ignore[union-attr]
+
+    with pytest.raises(ValueError, match="terminal"):
+        jobs.enqueue(parent_job.id, NODE_A, "node.probe", COMMIT, {})
+
+
+def test_postgres_enqueue_rejects_parent_commit_mismatch(service) -> None:
+    sessions, clock = service
+    jobs = AgentJobService(sessions, clock=clock)
+    parent_job = parent(sessions, clock)
+
+    with pytest.raises(ValueError, match="base commit"):
+        jobs.enqueue(parent_job.id, NODE_A, "node.probe", "b" * 40, {})
+
+
+def test_postgres_enqueue_rejects_node_outside_parent_targets(service) -> None:
+    sessions, clock = service
+    jobs = AgentJobService(sessions, clock=clock)
+    parent_job = parent(sessions, clock)
+    with sessions.begin() as session:
+        session.get(Job, parent_job.id).targets = [NODE_A]  # type: ignore[union-attr]
+
+    with pytest.raises(ValueError, match="target"):
+        jobs.enqueue(parent_job.id, NODE_B, "node.probe", COMMIT, {})
+
+
+def test_postgres_enqueue_cannot_race_parent_finalization(service, postgres_engine) -> None:
+    sessions, clock = service
+    finishing = AgentJobService(sessions, clock=clock)
+    enqueueing = AgentJobService(sessions, clock=clock)
+    parent_job = parent(sessions, clock)
+    finishing.enqueue(parent_job.id, NODE_A, "node.probe", COMMIT, {})
+    claim = finishing.claim(NODE_A, "serial-a", 30)
+    assert claim is not None
+    aggregation_read = threading.Event()
+    release = threading.Event()
+
+    def pause_after_aggregation_read(_conn, _cursor, statement, _parameters, _context, _many) -> None:
+        if (
+            threading.current_thread().name == "finisher"
+            and "FROM agent_operations" in statement
+            and "parent_job_id" in statement
+            and "ORDER BY" in statement
+        ):
+            aggregation_read.set()
+            assert release.wait(timeout=5)
+
+    finish_errors: list[Exception] = []
+    enqueue_errors: list[Exception] = []
+
+    def finish() -> None:
+        try:
+            finishing.succeed(claim.fence, {"healthy": True})
+        except Exception as error:
+            finish_errors.append(error)
+
+    def enqueue() -> None:
+        try:
+            enqueueing.enqueue(parent_job.id, NODE_B, "node.probe", COMMIT, {})
+        except Exception as error:
+            enqueue_errors.append(error)
+
+    event.listen(postgres_engine, "after_cursor_execute", pause_after_aggregation_read)
+    try:
+        finisher = threading.Thread(target=finish, name="finisher")
+        enqueuer = threading.Thread(target=enqueue, name="enqueuer")
+        finisher.start()
+        assert aggregation_read.wait(timeout=5)
+        enqueuer.start()
+        time.sleep(0.25)
+        assert enqueuer.is_alive(), "enqueue must wait for the parent row lock"
+        release.set()
+        finisher.join(timeout=5)
+        enqueuer.join(timeout=5)
+    finally:
+        release.set()
+        event.remove(postgres_engine, "after_cursor_execute", pause_after_aggregation_read)
+
+    assert not finish_errors
+    assert len(enqueue_errors) == 1
+    assert isinstance(enqueue_errors[0], ValueError)
+    assert "terminal" in str(enqueue_errors[0])
+    assert state(sessions, parent_job.id) == "succeeded"
+    with sessions() as session:
+        child_count = session.scalar(select(func.count()).select_from(AgentOperation).where(
+            AgentOperation.parent_job_id == parent_job.id,
+        ))
+    assert child_count == 1
 
 
 def test_postgres_complete_holds_operation_lock_against_expired_reclaim(service, postgres_engine) -> None:

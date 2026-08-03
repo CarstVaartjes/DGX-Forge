@@ -144,6 +144,27 @@ def test_enqueue_rejects_noncanonical_protocol_payload(service) -> None:
         jobs.enqueue(parent(sessions, clock).id, NODE_A, "node.probe", COMMIT, {"value": "x" * 70_000})
 
 
+@pytest.mark.parametrize("terminal_state", ("succeeded", "failed", "waiting-for-operator", "expired"))
+def test_sqlite_enqueue_rejects_terminal_parent(service, terminal_state: str) -> None:
+    jobs, sessions, clock = service
+    parent_job = parent(sessions, clock)
+    with sessions.begin() as session:
+        session.get(Job, parent_job.id).state = terminal_state  # type: ignore[union-attr]
+
+    with pytest.raises(ValueError, match="terminal"):
+        jobs.enqueue(parent_job.id, NODE_A, "node.probe", COMMIT, {})
+
+
+def test_sqlite_enqueue_enforces_parent_commit_and_target(service) -> None:
+    jobs, sessions, clock = service
+    parent_job = parent(sessions, clock)
+
+    with pytest.raises(ValueError, match="base commit"):
+        jobs.enqueue(parent_job.id, NODE_A, "node.probe", "b" * 40, {})
+    with pytest.raises(ValueError, match="target"):
+        jobs.enqueue(parent_job.id, "spk_" + "c" * 32, "node.probe", COMMIT, {})
+
+
 def test_heartbeat_persists_canonical_progress_and_renews_lease(service) -> None:
     jobs, sessions, clock = service
     jobs.enqueue(parent(sessions, clock).id, NODE_A, "node.probe", COMMIT, {})

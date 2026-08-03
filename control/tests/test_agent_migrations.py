@@ -76,8 +76,24 @@ def test_agent_models_capture_fenced_operation_state() -> None:
     assert "private_key" not in AgentCertificate.__table__.c
     assert AgentOperation.__table__.c.parent_job_id.foreign_keys
     assert AgentOperation.__table__.c.node_id.foreign_keys
+    assert AgentOperation.__table__.c.retry_disposition.nullable
+    assert AgentOperation.__table__.c.retry_disposition_attempt.nullable
     assert AgentOperationAttempt.__table__.c.fence.unique
     assert any(
         constraint.columns.keys() == ["operation_id", "attempt"]
         for constraint in AgentOperationAttempt.__table__.constraints
     )
+
+
+def test_retry_disposition_migration_is_reversible(tmp_path: Path) -> None:
+    database = f"sqlite:///{tmp_path / 'control.sqlite'}"
+    upgrade_to("0002_agent_operations", database)
+    before = {column["name"] for column in inspect(create_engine(database)).get_columns("agent_operations")}
+
+    upgrade_to("0003_retry_disposition", database)
+    after = {column["name"] for column in inspect(create_engine(database)).get_columns("agent_operations")}
+    assert after == before | {"retry_disposition", "retry_disposition_attempt"}
+
+    downgrade_to("0002_agent_operations", database)
+    downgraded = {column["name"] for column in inspect(create_engine(database)).get_columns("agent_operations")}
+    assert downgraded == before
