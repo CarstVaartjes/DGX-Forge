@@ -122,17 +122,24 @@ def production_app() -> FastAPI:
     from .audit import SqlAuditStore
     from .db import build_engine, session_factory
     from .jobs import JobService
+    from .offline import OnlineLock
     from .settings import Settings
 
     settings = Settings.from_env_and_secrets()
     sessions = session_factory(build_engine(settings.database_url))
     clock = lambda: datetime.now(UTC)
-    return create_app(
+    online_lock = OnlineLock(settings.state_path / "offline.lock")
+    online_lock.__enter__()
+    app = create_app(
         jobs=JobService(sessions, clock=clock),
         tokens=TokenCodec(settings.token_signing_key),
         audits=SqlAuditStore(sessions, clock),
         fleet=lambda: {"repository_path": str(settings.repository_path), "nodes": []},
     )
+    @app.on_event("shutdown")
+    def release_online_lock() -> None:
+        online_lock.__exit__()
+    return app
 
 
 if __name__ == "__main__":

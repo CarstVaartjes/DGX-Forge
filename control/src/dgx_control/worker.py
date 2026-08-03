@@ -39,10 +39,12 @@ if __name__ == "__main__":
 
     from .db import build_engine, session_factory
     from .settings import Settings
+    from .offline import OnlineLock
 
     settings = Settings.from_env_and_secrets()
     jobs = JobService(session_factory(build_engine(settings.database_url)), clock=lambda: datetime.now(UTC))
     worker = Worker(jobs, os.environ.get("HOSTNAME", "control-worker"), {})
-    while True:
-        if not worker.run_once():
-            time.sleep(1)
+    with OnlineLock(settings.state_path / "offline.lock"):
+        while True:
+            if not worker.run_once():
+                time.sleep(1)

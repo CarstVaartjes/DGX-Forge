@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    printf 'Usage: %s BACKUP DECRYPT_COMMAND --apply\n' "$0" >&2
+    exit 2
+}
+
+(( $# == 3 )) || usage
+[[ $3 == --apply ]] || usage
+backup=$1
+decrypt_command=$2
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo_root=$(cd -- "$script_dir/../../.." && pwd)
+state_path=${DGX_STATE_PATH:-/srv/dgx-forge/state}
+temporary=$(mktemp -d)
+cleanup() { rm -r -- "$temporary"; }
+trap cleanup EXIT
+
+docker compose -f "$repo_root/deploy/compose/compose.yaml" stop control-api control-worker
+mkdir -p -- "$state_path"
+exec 9>"$state_path/offline.lock"
+if ! flock -n 9; then
+    printf 'restore: an API, worker, or maintenance operation still holds the state lock\n' >&2
+    exit 3
+fi
+
+uv run --project "$repo_root/control" python -m dgx_control.offline \
+    --state-path "$state_path" extract-backup "$backup" "$temporary/verified" \
+    --decrypt-command "$decrypt_command"
+
+docker compose -f "$repo_root/deploy/compose/compose.yaml" exec -T postgres \
+    pg_restore --clean --if-exists -U control -d control \
+    <"$temporary/verified/database.dump"
