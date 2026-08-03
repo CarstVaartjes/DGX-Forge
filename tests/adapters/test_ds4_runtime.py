@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import hashlib
+import os
+import shutil
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 DOCKERFILE = ROOT / "adapters/deepseek/ds4/Dockerfile"
@@ -22,7 +28,7 @@ RUNTIME_BASE = (
 
 
 def _runtime_fixture_source() -> str:
-    return "\n" * 913 + """\
+    return "\n" * 905 + """\\
 #include <ctype.h>
 #include <stdbool.h>
 #include <stdio.h>
@@ -30,6 +36,13 @@ def _runtime_fixture_source() -> str:
 #include <string.h>
 
 typedef struct { int model_id; } ds4_engine;
+typedef struct { int unused; } server_config;
+
+static server_config parse_options(int argc, char **argv) {
+    (void)argc;
+    (void)argv;
+    return (server_config){0};
+}
 
 static int ds4_engine_model_id(ds4_engine *engine) {
     return engine->model_id;
@@ -55,12 +68,13 @@ static bool server_model_alias_known(const char *id) {
 }
 
 static void emit_models(ds4_engine *engine) {
-    printf(\"models=%s default=%s detail=%d\\n\",
+    printf(\"models=%s default=%s detail=%d wrong_detail=%d\\n\",
            server_model_id_from_engine(engine),
            server_model_id_from_engine(engine),
-           server_model_alias_known(engine, \"deepseek\"));
+           server_model_alias_known(engine, server_model_id_from_engine(engine)),
+           server_model_alias_known(engine, \"deepseek-v4-pro\"));
 }
-""" + "\n" * 12726 + """\
+""" + "\n" * 12726 + """\\
 #if 0
 static void v053_model_detail_route(http_request hr, server *s) {
     const char *model_path_prefix = \"/v1/models/\";
@@ -73,34 +87,76 @@ static void v053_model_detail_route(http_request hr, server *s) {
     }
 }
 #endif
-
-int main(void) {
+""" + "\n" * 878 + """\\
+int main(int argc, char **argv) {
+    server_config cfg = parse_options(argc, argv);
     ds4_engine engine = {0};
+    (void)cfg;
     emit_models(&engine);
     return 0;
 }
 """
 
 
-def _apply_served_name_patch(tmp_path: Path) -> str:
+def _apply_served_name_patch(tmp_path: Path) -> Path:
     source = tmp_path / "ds4_server.c"
     source.write_text(_runtime_fixture_source(), encoding="utf-8")
     subprocess.run(
         ["patch", "-p1", "-i", str(PATCH)], cwd=tmp_path, check=True, capture_output=True
     )
-    return source.read_text(encoding="utf-8")
+    return source
+
+
+def _compile_runtime_fixture(tmp_path: Path) -> Path:
+    compiler = os.environ.get("CC", "cc")
+    if shutil.which(compiler) is None:
+        if sys.platform == "darwin":
+            pytest.skip("native C compiler unavailable on macOS; Spark ARM64 harness is run separately")
+        pytest.fail(f"C compiler required for behavioral harness is unavailable: {compiler}")
+
+    source = _apply_served_name_patch(tmp_path)
+    binary = tmp_path / "ds4-runtime-fixture"
+    completed = subprocess.run(
+        [compiler, "-std=c99", "-Werror", "-o", str(binary), str(source)],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        if sys.platform == "darwin":
+            pytest.skip(
+                "native C compiler unavailable on macOS; Spark ARM64 harness is run separately: "
+                + completed.stderr.strip()
+            )
+        pytest.fail(f"behavioral harness compilation failed:\\n{completed.stderr}")
+    return binary
+
+
+def _run_fixture(binary: Path, served_model_name: str | None) -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    if served_model_name is None:
+        env.pop("DS4_SERVED_MODEL_NAME", None)
+    else:
+        env["DS4_SERVED_MODEL_NAME"] = served_model_name
+    return subprocess.run([str(binary)], check=False, capture_output=True, text=True, env=env)
 
 
 def test_runtime_recipe_uses_the_pinned_cuda_sources_and_safe_runtime_contract() -> None:
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
     compose = COMPOSE.read_text(encoding="utf-8")
     runtime_env = RUNTIME_ENV.read_text(encoding="utf-8")
+    patch_sha256 = hashlib.sha256(PATCH.read_bytes()).hexdigest()
 
     assert f"FROM {BUILD_BASE}" in dockerfile
     assert f"FROM {RUNTIME_BASE}" in dockerfile
     assert f"https://github.com/Entrpi/ds4/archive/{SOURCE_COMMIT}.tar.gz" in dockerfile
     assert SOURCE_ARCHIVE_SHA256 in dockerfile
+    assert f"ARG DS4_PATCH_SHA256={patch_sha256}" in dockerfile
+    assert dockerfile.count(f"ARG DS4_PATCH_SHA256={patch_sha256}") == 2
     assert dockerfile.index("sha256sum -c") < dockerfile.index("tar -xzf")
+    assert dockerfile.index('echo "${DS4_PATCH_SHA256}  /tmp/served-model-name.patch"') < dockerfile.index(
+        "patch -p1 --input /tmp/served-model-name.patch"
+    )
     assert "make cuda-spark" in dockerfile
     assert "DS4_CUDA_SPARK_HBM_CACHE=1" in dockerfile
     assert "compute_121a" in dockerfile
@@ -117,7 +173,7 @@ def test_runtime_recipe_uses_the_pinned_cuda_sources_and_safe_runtime_contract()
     assert "--host" in compose and "127.0.0.1" in compose
     assert "--port" in compose and "8888" in compose
     assert "--kv-disk-dir" in compose and "--kv-disk-space-mb" in compose
-    assert "restart: \"no\"" in compose
+    assert 'restart: "no"' in compose
     assert "network_mode: host" in compose
     assert "read_only: true" in compose
     assert "ports:" not in compose
@@ -140,28 +196,27 @@ def test_compose_renders_a_loopback_only_nonrestarting_service() -> None:
         text=True,
     )
 
-    assert "restart: \"no\"" in completed.stdout
+    assert 'restart: "no"' in completed.stdout
     assert "network_mode: host" in completed.stdout
     assert "published:" not in completed.stdout
     assert "127.0.0.1" in completed.stdout
 
 
-def test_served_model_patch_advertises_only_the_configured_name(tmp_path: Path) -> None:
-    patched = _apply_served_name_patch(tmp_path)
+def test_served_model_patch_behaves_as_a_single_runtime_identity(tmp_path: Path) -> None:
+    binary = _compile_runtime_fixture(tmp_path)
 
-    assert 'getenv("DS4_SERVED_MODEL_NAME")' in patched
-    assert "if (server_model_id_is_valid(configured)) return configured;" in patched
-    assert "server_model_alias_known(ds4_engine *engine, const char *id)" in patched
-    assert "return id && !strcmp(id, server_model_id_from_engine(engine));" in patched
-    assert "server_model_alias_known(s->engine, hr.path + model_path_prefix_len)" in patched
-    assert "models=%s default=%s detail=%d\\n" in patched
-    assert "server_model_id_from_engine(engine),\n           server_model_id_from_engine(engine)" in patched
+    upstream = _run_fixture(binary, None)
+    assert upstream.returncode == 0
+    assert upstream.stdout == (
+        "models=deepseek-v4-flash default=deepseek-v4-flash detail=1 wrong_detail=0\\n"
+    )
 
+    configured = _run_fixture(binary, "deepseek")
+    assert configured.returncode == 0
+    assert configured.stdout == "models=deepseek default=deepseek detail=1 wrong_detail=0\\n"
 
-def test_served_model_patch_rejects_empty_and_control_character_names(tmp_path: Path) -> None:
-    patched = _apply_served_name_patch(tmp_path)
-
-    assert "if (!id || !id[0]) return false;" in patched
-    assert "for (const unsigned char *p = (const unsigned char *)id; *p; p++)" in patched
-    assert "if (iscntrl(*p)) return false;" in patched
-    assert '"deepseek-v4-pro" : "deepseek-v4-flash"' in patched
+    for invalid_name in ("", "deepseek\\ninternal"):
+        invalid = _run_fixture(binary, invalid_name)
+        assert invalid.returncode == 2
+        assert invalid.stdout == ""
+        assert "DS4_SERVED_MODEL_NAME must be non-empty and contain no control characters" in invalid.stderr
