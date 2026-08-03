@@ -1,0 +1,256 @@
+# Agent PKI and Enrollment Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Enroll immutable Spark identities with single-use grants and issue, rotate, and revoke short-lived mTLS certificates through a replaceable CA provider.
+
+**Architecture:** A provider interface isolates PKI implementation. The built-in provider signs from a protected intermediate while the root stays offline; Caddy authenticates established agents and forwards a stripped, verified identity to private API routes.
+
+**Tech Stack:** Python 3.12, cryptography, FastAPI, PostgreSQL, Caddy 2, Docker Compose, pytest
+
+## Global Constraints
+
+- The root CA private key is never mounted into a running service.
+- The intermediate signing key and enrollment grants are secret-file or hashed database material, never Git content or job payloads.
+- Grants are single-use, short-lived, node-bound, and stored only as SHA-256 digests.
+- Agent certificates are short-lived, identify exactly one canonical node ID, and are denied immediately after revocation/retirement.
+- Headers representing mTLS identity are accepted only from the private Caddy ingress and are stripped from untrusted requests.
+
+---
+
+### Task 1: CA provider and built-in issuer
+
+**Files:**
+- Create: `control/src/dgx_control/pki.py`
+- Modify: `control/pyproject.toml`
+- Modify: `control/uv.lock`
+- Test: `control/tests/test_pki.py`
+
+**Interfaces:**
+- Produces `CertificateAuthority.issue_node(node_id, public_key_pem, now) -> IssuedCertificate`, `renew_node(...)`, `revocation_bundle(now) -> bytes`.
+- `IssuedCertificate` contains certificate PEM, chain PEM, serial, fingerprint, not-before, and not-after; never a private key.
+
+- [ ] **Step 1: Write failing issuance tests**
+
+```python
+def test_issued_certificate_is_short_lived_and_node_bound(authority, public_key, now) -> None:
+    issued = authority.issue_node(NODE_ID, public_key, now)
+    certificate = x509.load_pem_x509_certificate(issued.certificate_pem)
+    assert certificate.subject.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == NODE_ID
+    assert certificate.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value == x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH])
+    assert certificate.not_valid_after_utc - now == timedelta(hours=24)
+```
+
+- [ ] **Step 2: Run and observe missing provider**
+
+Run: `uv run --project control pytest control/tests/test_pki.py -v`
+Expected: FAIL importing `dgx_control.pki`.
+
+- [ ] **Step 3: Implement provider and strict built-in issuer**
+
+Pin `cryptography`. Require Ed25519 intermediate key/certificate files to be
+regular non-symlinks with matching public keys, `CA=true`, path length zero,
+and at least seven days remaining. Issue 24-hour client-auth-only certificates
+whose SAN URI is `spiffe://dgx-forge.local/node/<node_id>`. Reject caller-supplied
+subjects/SANs and public keys other than Ed25519.
+
+- [ ] **Step 4: Run PKI tests and static import smoke**
+
+Run: `uv run --project control pytest control/tests/test_pki.py -v && uv run --project control python -c 'from dgx_control.pki import BuiltinCertificateAuthority'`
+Expected: PASS.
+
+- [ ] **Step 5: Commit provider**
+
+```bash
+git add control/pyproject.toml control/uv.lock control/src/dgx_control/pki.py control/tests/test_pki.py
+git commit -m "feat: issue short-lived Spark agent certificates"
+```
+
+### Task 2: Enrollment grant service
+
+**Files:**
+- Modify: `control/src/dgx_control/models.py`
+- Create: `control/migrations/versions/0003_agent_enrollment.py`
+- Create: `control/src/dgx_control/enrollment.py`
+- Test: `control/tests/test_enrollment.py`
+
+**Interfaces:**
+- Produces `EnrollmentService.create(node_id, actor, ttl_seconds) -> EnrollmentGrant`, `submit(token, csr, evidence) -> PendingEnrollment`, `approve(enrollment_id, actor) -> IssuedCertificate`, `reject(...)`, `renew(node_id, serial, csr)`.
+
+- [ ] **Step 1: Write failing replay and approval tests**
+
+```python
+def test_grant_is_single_use_and_requires_approval(service) -> None:
+    grant = service.create(NODE_ID, "admin", 600)
+    pending = service.submit(grant.token, csr(), evidence())
+    assert pending.state == "pending-approval"
+    with pytest.raises(EnrollmentDenied, match="consumed"):
+        service.submit(grant.token, csr(), evidence())
+    issued = service.approve(pending.id, "admin")
+    assert issued.node_id == NODE_ID
+```
+
+- [ ] **Step 2: Run and observe missing service/migration**
+
+Run: `uv run --project control pytest control/tests/test_enrollment.py -v`
+Expected: FAIL importing the service.
+
+- [ ] **Step 3: Implement hashed grants and evidence-bound approval**
+
+Add `agent_enrollment_grants` and `agent_enrollments`. Generate 32 random bytes,
+return base64url once, persist SHA-256 only, and atomically consume on submit.
+Bound evidence to node ID, CSR public-key fingerprint, host-key fingerprint,
+hardware fingerprint, agent digest, and boot ID. Require administrator approval,
+write certificate metadata, and make approval/rejection idempotent.
+
+- [ ] **Step 4: Test expiry, concurrency, revocation, and renewal**
+
+Run: `uv run --project control pytest control/tests/test_enrollment.py control/tests/test_pki.py -v`
+Expected: PASS including simultaneous replay where exactly one submit succeeds.
+
+- [ ] **Step 5: Commit enrollment service**
+
+```bash
+git add control/src/dgx_control/models.py control/migrations/versions/0003_agent_enrollment.py control/src/dgx_control/enrollment.py control/tests/test_enrollment.py
+git commit -m "feat: enroll immutable Spark agent identities"
+```
+
+### Task 3: Enrollment and agent-authenticated API routes
+
+**Files:**
+- Create: `control/src/dgx_control/agent_api.py`
+- Modify: `control/src/dgx_control/api.py`
+- Modify: `control/src/dgx_control/auth.py`
+- Test: `control/tests/test_agent_api.py`
+- Test: `control/tests/security/test_agent_identity.py`
+
+**Interfaces:**
+- Produces operator endpoints `/api/v1/agents/enrollments*` and agent endpoints `/agent/v1/enroll`, `/agent/v1/claim`, `/agent/v1/heartbeat`, `/agent/v1/result`, `/agent/v1/renew`, and `/agent/v1/artifacts/{sha256}`.
+- Consumes verified node identity via ASGI scope populated only by trusted proxy middleware.
+
+- [ ] **Step 1: Write failing authorization tests**
+
+```python
+def test_spoofed_agent_header_is_rejected(client) -> None:
+    response = client.post("/agent/v1/claim", headers={"x-dgx-agent-node": NODE_ID})
+    assert response.status_code == 401
+
+def test_verified_identity_cannot_claim_other_node(agent_client) -> None:
+    response = agent_client(NODE_A).post("/agent/v1/claim", json={"node_id": NODE_B})
+    assert response.status_code == 403
+```
+
+- [ ] **Step 2: Run and observe missing routes**
+
+Run: `uv run --project control pytest control/tests/test_agent_api.py control/tests/security/test_agent_identity.py -v`
+Expected: FAIL with 404 responses.
+
+- [ ] **Step 3: Implement separate human and agent authentication dependencies**
+
+Human routes keep token/session RBAC. Agent routes require a private middleware
+injected identity object containing node ID, serial, verification marker, and
+certificate fingerprint. Enrollment accepts only grant + CSR + bounded evidence.
+Claim/result bodies cannot override authenticated node identity. Add mutation
+RBAC for administrator enrollment approval/revocation. Artifact retrieval is
+mTLS-only, requires the authenticated node to own a live operation referencing
+that exact digest, resolves only a regular content-addressed file beneath the
+configured artifact root, supports bounded range requests, and never accepts a
+caller-selected path or upstream URL.
+
+- [ ] **Step 4: Run API and existing authorization suites**
+
+Run: `uv run --project control pytest control/tests/test_agent_api.py control/tests/security/test_agent_identity.py control/tests/security/test_authorization_matrix.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit APIs**
+
+```bash
+git add control/src/dgx_control/agent_api.py control/src/dgx_control/api.py control/src/dgx_control/auth.py control/tests/test_agent_api.py control/tests/security/test_agent_identity.py
+git commit -m "feat: expose authenticated Spark agent API"
+```
+
+### Task 4: Caddy mTLS boundary and Compose secrets
+
+**Files:**
+- Modify: `deploy/compose/Caddyfile`
+- Modify: `deploy/compose/compose.yaml`
+- Modify: `deploy/compose/.env.example`
+- Modify: `control/src/dgx_control/settings.py`
+- Test: `deploy/compose/tests/test_agent_ingress.py`
+- Test: `control/tests/test_settings.py`
+
+**Interfaces:**
+- Agent ingress uses a separately configured listener/hostname and client CA.
+- Caddy strips all incoming `X-DGX-Agent-*` headers and supplies verified identity metadata to the API.
+
+- [ ] **Step 1: Write failing rendered-boundary tests**
+
+Assert agent routes are not reachable through ordinary browser ingress,
+client-auth is mandatory except `/agent/v1/enroll`, Caddy is the only published
+port, CA/intermediate files are secrets, and control-api trusts proxy identity
+only on the private ingress network.
+
+- [ ] **Step 2: Run and observe absent agent listener**
+
+Run: `uv run pytest deploy/compose/tests/test_agent_ingress.py -v`
+Expected: FAIL because no mTLS agent route exists.
+
+- [ ] **Step 3: Implement segmented listener and settings**
+
+Add secret files `agent-client-ca`, `agent-intermediate-certificate`, and
+`agent-intermediate-key`; add `DGX_AGENT_*_FILE` settings. Configure Caddy
+client authentication and identity forwarding using Caddy placeholders proven
+by `caddy validate`. Keep enrollment server-authenticated and rate-limited;
+keep claim/result mTLS-only.
+
+- [ ] **Step 4: Validate Caddy and Compose**
+
+Run: `uv run pytest deploy/compose/tests/test_agent_ingress.py deploy/compose/tests/test_networking.py -v && docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml config --quiet`
+Expected: PASS.
+
+- [ ] **Step 5: Commit ingress**
+
+```bash
+git add deploy/compose/Caddyfile deploy/compose/compose.yaml deploy/compose/.env.example control/src/dgx_control/settings.py deploy/compose/tests/test_agent_ingress.py control/tests/test_settings.py
+git commit -m "feat: authenticate outbound agents through Caddy"
+```
+
+### Task 5: PKI recovery and verification
+
+**Files:**
+- Create: `docs/runbooks/agent-pki.md`
+- Modify: `docs/security/threat-model.md`
+- Test: `tests/runbooks/test_agent_pki.py`
+
+**Interfaces:**
+- Documents offline root creation, intermediate rotation, certificate revocation, expiry recovery, and Smallstep provider boundary.
+
+- [ ] **Step 1: Write failing runbook behavior checks**
+
+Parse commands from disposable fixtures and assert no command copies the root
+private key into Compose, renewal uses the existing mTLS identity, and recovery
+requires an explicit new enrollment grant.
+
+- [ ] **Step 2: Run and observe missing runbook**
+
+Run: `uv run pytest tests/runbooks/test_agent_pki.py -v`
+Expected: FAIL because `agent-pki.md` is absent.
+
+- [ ] **Step 3: Write operational PKI and recovery procedure**
+
+Include restrictive file modes, offline root storage, intermediate lifetime
+and rotation overlap, revocation/retirement, clock-skew checks, backup scope,
+and provider migration. Explicitly state that certificate loss does not permit
+copying another node's identity.
+
+- [ ] **Step 4: Run Phase 2 verification**
+
+Run: `uv run --project control pytest control/tests/test_pki.py control/tests/test_enrollment.py control/tests/test_agent_api.py control/tests/security/test_agent_identity.py -q && uv run pytest deploy/compose/tests/test_agent_ingress.py tests/runbooks/test_agent_pki.py -q && git diff --check`
+Expected: all pass.
+
+- [ ] **Step 5: Commit recovery documentation**
+
+```bash
+git add docs/runbooks/agent-pki.md docs/security/threat-model.md tests/runbooks/test_agent_pki.py
+git commit -m "docs: define Spark agent PKI recovery"
+```

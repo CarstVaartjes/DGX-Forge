@@ -1,0 +1,290 @@
+# Spark Agent Runtime Implementation Plan
+
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+
+**Goal:** Build the non-root Spark agent, persistent fenced executor, outbound mTLS client, and stable A/B supervisor.
+
+**Architecture:** A small Python package separates transport, persistent state, and a closed operation registry. A minimal supervisor owns slot selection and rollback; the replaceable agent never overwrites the active executable.
+
+**Tech Stack:** Python 3.12 standard library, systemd, SQLite, POSIX filesystem primitives, pytest
+
+## Global Constraints
+
+- The agent initiates all routine connections and opens no listening socket.
+- The network protocol cannot invoke shell, arbitrary commands, paths, environment variables, or uninstalled adapters.
+- Agent state and private keys use restrictive ownership, no symlink traversal, atomic writes, and bounded files.
+- Operations are idempotent or define explicit inspect/compensate behavior before retry.
+- Agent installation supports ARM64 DGX OS and does not depend on Docker membership or root during normal execution.
+
+---
+
+### Task 1: Agent configuration, identity, and persistent state
+
+**Files:**
+- Create: `agent/pyproject.toml`
+- Create: `agent/src/dgx_agent/config.py`
+- Create: `agent/src/dgx_agent/state.py`
+- Test: `agent/tests/test_config.py`
+- Test: `agent/tests/test_state.py`
+
+**Interfaces:**
+- Produces `AgentConfig.load(path)`, `AgentStateStore.begin(claim)`, `heartbeat`, `finish`, `recover_active`.
+- State root defaults to `/var/lib/dgx-forge-agent`; configuration defaults to `/etc/dgx-forge-agent/config.json`.
+
+- [ ] **Step 1: Write failing path and restart tests**
+
+```python
+def test_state_survives_restart_and_rejects_new_fence(tmp_path) -> None:
+    first = AgentStateStore(tmp_path).begin(claim(fence="fence-a"))
+    reopened = AgentStateStore(tmp_path)
+    assert reopened.recover_active().fence == "fence-a"
+    with pytest.raises(AgentStateConflict):
+        reopened.begin(claim(fence="fence-b"))
+```
+
+- [ ] **Step 2: Run and observe missing package**
+
+Run: `uv run --project agent pytest agent/tests/test_config.py agent/tests/test_state.py -v`
+Expected: FAIL because `agent/pyproject.toml` and package are absent.
+
+- [ ] **Step 3: Implement strict configuration and SQLite state**
+
+Configuration accepts only control URL, node ID, certificate/key/CA paths,
+poll bounds, state root, and installed-policy path. Require absolute regular
+non-symlink credential paths and HTTPS. SQLite uses WAL, restrictive mode,
+transactions, one active attempt, canonical claim/result bytes, and monotonic
+progress sequence numbers. Never persist enrollment token after success.
+
+- [ ] **Step 4: Run state tests under interruption simulation**
+
+Run: `uv run --project agent pytest agent/tests/test_config.py agent/tests/test_state.py -v`
+Expected: PASS including reopen after an interrupted transaction.
+
+- [ ] **Step 5: Commit state foundation**
+
+```bash
+git add agent/pyproject.toml agent/src/dgx_agent/config.py agent/src/dgx_agent/state.py agent/tests/test_config.py agent/tests/test_state.py
+git commit -m "feat: persist fenced Spark agent state"
+```
+
+### Task 2: Closed operation registry and node probes
+
+**Files:**
+- Create: `agent/src/dgx_agent/operations.py`
+- Create: `agent/src/dgx_agent/probe.py`
+- Modify: `nodes/bin/collect-health`
+- Test: `agent/tests/test_operations.py`
+- Test: `agent/tests/test_probe.py`
+
+**Interfaces:**
+- Produces `OperationRegistry.execute(claim, context) -> Mapping`, `inspect(claim, context) -> OperationInspection`.
+- `OperationContext` exposes fixed installed roots and typed adapter interfaces, not subprocess or shell callbacks.
+
+- [ ] **Step 1: Write failing closed-registry tests**
+
+```python
+def test_unknown_or_command_payload_never_reaches_executor(registry) -> None:
+    with pytest.raises(UnsupportedOperation):
+        registry.execute(claim(operation="system.exec"), context())
+    with pytest.raises(AgentProtocolError):
+        registry.execute(claim(payload={"command": ["id"]}), context())
+```
+
+- [ ] **Step 2: Run and observe missing registry**
+
+Run: `uv run --project agent pytest agent/tests/test_operations.py agent/tests/test_probe.py -v`
+Expected: FAIL importing operations.
+
+- [ ] **Step 3: Implement typed registry and in-process bounded probe**
+
+Map enum members to concrete handler objects. `node.probe` collects existing
+health evidence through a fixed installed collector with no payload arguments,
+a 15-second deadline, 256-KiB output limit, fixed environment, and no shell.
+Normalize/redact before returning. Implement inspection so a completed probe
+can be replayed without rerunning mutation.
+
+- [ ] **Step 4: Run operation tests and existing health collector tests**
+
+Run: `uv run --project agent pytest agent/tests/test_operations.py agent/tests/test_probe.py -v && uv run pytest tests/nodes/test_collect_health.py -q`
+Expected: PASS.
+
+- [ ] **Step 5: Commit registry**
+
+```bash
+git add agent/src/dgx_agent/operations.py agent/src/dgx_agent/probe.py agent/tests/test_operations.py agent/tests/test_probe.py
+git commit -m "feat: execute typed Spark agent operations"
+```
+
+### Task 3: Content-addressed release and workload handlers
+
+**Files:**
+- Create: `agent/src/dgx_agent/releases.py`
+- Create: `agent/src/dgx_agent/workloads.py`
+- Test: `agent/tests/test_releases.py`
+- Test: `agent/tests/test_workloads.py`
+
+**Interfaces:**
+- `ReleaseInstaller.install(ReleaseRequest) -> ReleaseEvidence` accepts digest, signature/provenance digests, adapter ID, and the fixed control artifact endpoint derived from that digest.
+- `WorkloadOperations` accepts adapter ID, release digest, operation-specific typed fields, and deadline.
+
+- [ ] **Step 1: Write failing digest/path/policy tests**
+
+Test wrong digest, invalid signature, archive traversal, symlink entries,
+unexpected file modes, unapproved adapter, release mismatch, and attempts to
+supply command/path/environment fields.
+
+- [ ] **Step 2: Run and observe missing handlers**
+
+Run: `uv run --project agent pytest agent/tests/test_releases.py agent/tests/test_workloads.py -v`
+Expected: FAIL importing modules.
+
+- [ ] **Step 3: Implement immutable installation and fixed adapter dispatch**
+
+Download only from `/agent/v1/artifacts/<sha256>` on the configured control
+origin with mTLS and bounded size into the state filesystem; verify
+SHA-256, signed manifest, complete member allowlist, modes, and ownership;
+install atomically beneath `/opt/dgx-forge/releases/<digest>`. Resolve workload
+operations only through the installed adapter manifest and compiled adapter
+runner. Never accept a repository command array over the network.
+
+- [ ] **Step 4: Verify idempotency and interrupted installs**
+
+Run: `uv run --project agent pytest agent/tests/test_releases.py agent/tests/test_workloads.py -v`
+Expected: PASS; identical release is a no-op and partial temp trees never become active.
+
+- [ ] **Step 5: Commit handlers**
+
+```bash
+git add agent/src/dgx_agent/releases.py agent/src/dgx_agent/workloads.py agent/tests/test_releases.py agent/tests/test_workloads.py
+git commit -m "feat: install and operate signed Spark releases"
+```
+
+### Task 4: Outbound enrollment and long-poll client
+
+**Files:**
+- Create: `agent/src/dgx_agent/client.py`
+- Create: `agent/src/dgx_agent/main.py`
+- Test: `agent/tests/test_client.py`
+- Test: `agent/tests/test_lifecycle.py`
+
+**Interfaces:**
+- Produces `AgentClient.enroll`, `claim`, `heartbeat`, `result`, `renew`; `Agent.run_once()` and `run_forever()`.
+- Uses protocol contracts from Phase 1 and persistent executor from Tasks 1-3.
+
+- [ ] **Step 1: Write failing end-to-end fake-server test**
+
+```python
+def test_agent_claims_executes_and_reports_with_same_fence(fake_control, agent) -> None:
+    fake_control.queue(probe_claim())
+    agent.run_once()
+    assert fake_control.results[0]["fence"] == probe_claim()["fence"]
+    assert fake_control.results[0]["state"] == "succeeded"
+```
+
+- [ ] **Step 2: Run and observe missing client**
+
+Run: `uv run --project agent pytest agent/tests/test_client.py agent/tests/test_lifecycle.py -v`
+Expected: FAIL importing client.
+
+- [ ] **Step 3: Implement mTLS requests and resilient loop**
+
+Use `http.client.HTTPSConnection` with an `ssl.SSLContext` loading the private
+CA and node certificate/key. Bound connect/read timeouts and bodies. Verify
+content type and canonical JSON. Back off with bounded jitter on transport
+failure, but never retry terminal submission under a different fence. Renew at
+one-third remaining lifetime. On restart, inspect persisted active work before
+claiming anything new.
+
+- [ ] **Step 4: Run lifecycle, disconnect, and renewal tests**
+
+Run: `uv run --project agent pytest agent/tests/test_client.py agent/tests/test_lifecycle.py -v`
+Expected: PASS including server restart, expired grant, revoked cert, and stale result responses.
+
+- [ ] **Step 5: Commit client**
+
+```bash
+git add agent/src/dgx_agent/client.py agent/src/dgx_agent/main.py agent/tests/test_client.py agent/tests/test_lifecycle.py
+git commit -m "feat: poll control plane from Spark agent"
+```
+
+### Task 5: Stable A/B supervisor and systemd packaging
+
+**Files:**
+- Create: `agent/supervisor/dgx-agent-supervisor`
+- Create: `agent/systemd/dgx-forge-agent.service`
+- Create: `agent/systemd/dgx-forge-agent-supervisor.service`
+- Create: `nodes/bin/install-dgx-agent`
+- Test: `agent/tests/test_supervisor.py`
+- Test: `tests/nodes/test_install_dgx_agent.py`
+
+**Interfaces:**
+- Supervisor state contains `active_slot`, `previous_slot`, expected digest, activation deadline, and boot attempts.
+- Installer consumes explicit pinned bundle, config, CA, node ID, and one-time enrollment token paths.
+
+- [ ] **Step 1: Write failing activation/rollback tests**
+
+Test successful A->B activation, missing executable, digest mismatch, process
+exit, missed reconnect marker, rollback to A, both slots invalid, and symlink
+targets. Test installer idempotency and no private admin key copy.
+
+- [ ] **Step 2: Run and observe missing supervisor/installer**
+
+Run: `uv run --project agent pytest agent/tests/test_supervisor.py -v && uv run pytest tests/nodes/test_install_dgx_agent.py -v`
+Expected: FAIL because artifacts are absent.
+
+- [ ] **Step 3: Implement slot state machine and restrictive units**
+
+Use atomic JSON state, SHA-256 verification, `renameat2`/no-replace semantics,
+and a fixed slot root. Supervisor runs as root only to select/launch slots; the
+agent service runs dedicated user `dgx-agent` with `NoNewPrivileges`, strict
+filesystem protections, bounded restart, no Docker socket, and explicit
+writable state paths. Roll back when the new slot misses its readiness marker.
+
+- [ ] **Step 4: Run packaging and systemd security checks**
+
+Run: `uv run --project agent pytest agent/tests -q && uv run pytest tests/nodes/test_install_dgx_agent.py -q && systemd-analyze security agent/systemd/dgx-forge-agent.service`
+Expected: tests pass; review and record any unavailable sandbox directive on target DGX OS.
+
+- [ ] **Step 5: Commit supervisor/install**
+
+```bash
+git add agent/supervisor agent/systemd nodes/bin/install-dgx-agent agent/tests/test_supervisor.py tests/nodes/test_install_dgx_agent.py
+git commit -m "feat: supervise Spark agents with A/B rollback"
+```
+
+### Task 6: Agent simulator and phase acceptance
+
+**Files:**
+- Create: `agent/src/dgx_agent/simulator.py`
+- Create: `tests/agent/test_failure_matrix.py`
+- Create: `scripts/accept-agent-lifecycle`
+
+**Interfaces:**
+- Simulator injects disconnect, crash, stale fence, bad artifact, bad certificate, and failed activation without shelling into a Spark.
+
+- [ ] **Step 1: Write parameterized failure test**
+
+Cover one and sixteen agents; assert no duplicate mutation, no cross-node
+claim, stale result rejection, reconnect recovery, and bad update rollback.
+
+- [ ] **Step 2: Run and observe missing simulator**
+
+Run: `uv run pytest tests/agent/test_failure_matrix.py -v`
+Expected: FAIL importing simulator.
+
+- [ ] **Step 3: Implement deterministic simulator and acceptance script**
+
+Use seeded clocks and in-memory transport around real state/operation classes.
+The script emits canonical JSON and labels all simulated evidence explicitly.
+
+- [ ] **Step 4: Run Phase 3 verification**
+
+Run: `uv run --project agent pytest agent/tests -q && uv run pytest tests/agent/test_failure_matrix.py tests/nodes/test_install_dgx_agent.py -q && scripts/accept-agent-lifecycle --nodes 16 --json && git diff --check`
+Expected: all pass.
+
+- [ ] **Step 5: Commit acceptance**
+
+```bash
+git add agent/src/dgx_agent/simulator.py tests/agent/test_failure_matrix.py scripts/accept-agent-lifecycle
+git commit -m "test: accept outbound Spark agent lifecycle"
+```
