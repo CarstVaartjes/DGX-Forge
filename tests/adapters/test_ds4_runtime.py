@@ -208,14 +208,14 @@ def test_served_model_patch_behaves_as_a_single_runtime_identity(tmp_path: Path)
     upstream = _run_fixture(binary, None)
     assert upstream.returncode == 0
     assert upstream.stdout == (
-        "models=deepseek-v4-flash default=deepseek-v4-flash detail=1 wrong_detail=0\\n"
+        "models=deepseek-v4-flash default=deepseek-v4-flash detail=1 wrong_detail=0\n"
     )
 
     configured = _run_fixture(binary, "deepseek")
     assert configured.returncode == 0
-    assert configured.stdout == "models=deepseek default=deepseek detail=1 wrong_detail=0\\n"
+    assert configured.stdout == "models=deepseek default=deepseek detail=1 wrong_detail=0\n"
 
-    for invalid_name in ("", "deepseek\\ninternal"):
+    for invalid_name in ("", "deepseek\ninternal"):
         invalid = _run_fixture(binary, invalid_name)
         assert invalid.returncode == 2
         assert invalid.stdout == ""
