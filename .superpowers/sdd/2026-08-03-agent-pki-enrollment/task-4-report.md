@@ -139,3 +139,74 @@ docker-content-digest: sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e
   memory. If control-api is horizontally scaled later, Task 5/deployment work
   must replace it with a bounded shared limiter while retaining the
   pre-body-read property.
+
+## Review round 1 fixes
+
+- Built-in issuer serial metadata is now persisted as the decimal X.509 serial
+  representation forwarded by Caddy 2.10.2, rather than lowercase hex. A real
+  certificate issued by `BuiltinCertificateAuthority` is passed through the
+  proxy middleware using Caddy's decimal serial and SHA-256 fingerprint; its
+  validator receives exactly the persisted values and raw headers remain
+  stripped.
+- Production still fails closed when `DGX_AGENT_CA_PROVIDER` is absent. It
+  accepts `step-ca`, or `builtin` only with the explicit
+  `DGX_AGENT_BUILTIN_CA_BOOTSTRAP=1` guard. The built-in setting retains only
+  a regular non-symlink `agent_intermediate_key_path`; it never reads the key
+  into `Settings`. The Compose override supplies both the guard and key mount.
+  Control-worker explicitly declares `step-ca` with
+  `DGX_AGENT_RUNTIME=disabled`, so it satisfies the production provider guard
+  without receiving agent secrets.
+- Control-api now joins the internal `ca` network; step-ca remains unexposed.
+- Adapted Caddy JSON tests now associate `require_and_verify` specifically
+  with agent SNI, prove enrollment SNI exposes only `/agent/v1/enroll`, prove
+  ordinary `/agent/v1/*` denial precedes the fallback, and check exact request
+  header deletion/replacement placeholders.
+- A middleware regression sends all identity headers from an arbitrary network
+  peer with a wrong proxy secret and proves it cannot populate ASGI identity
+  scope. This intentionally preserves the no-IP/CIDR/hostname trust design:
+  Caddy/control-api are the only members of the internal `agent-proxy` network,
+  and the constant-time high-entropy secret is mounted only into those two
+  services.
+- Task 5's plan now explicitly owns production `AgentApiServices` creation,
+  selected CA-provider wiring, step-ca provisioner/configuration and
+  authenticated issuance, CA network reachability, and host-side secret
+  permission/init instructions. It still does not instantiate the future
+  `StepCertificateAuthority` in Task 4.
+
+### Review RED
+
+```sh
+uv run --project control pytest tests/test_pki.py::test_issued_certificate_is_short_lived_and_node_bound tests/test_pki.py::test_caddy_serial_and_fingerprint_of_a_real_issued_certificate_reach_the_proxy_validator tests/test_settings.py::test_production_builtin_bootstrap_requires_and_loads_the_mounted_intermediate_key -v
+```
+
+Observed: 3 failed. The issuer returned hexadecimal serial metadata while the
+real certificate/Caddy path used decimal; the middleware rejected that real
+identity with 401; and production rejected the builtin override before its
+guard/key could be validated.
+
+```sh
+uv run --project control pytest tests/test_settings.py::test_production_worker_settings_can_explicitly_disable_agent_runtime -v
+```
+
+Observed: 1 failed because a provider-less production worker was allowed by an
+intermediate draft. The final design instead requires `step-ca` plus an
+explicit disabled runtime role.
+
+### Review GREEN / final verification
+
+```sh
+uv run --project control pytest -q
+```
+
+Output: `223 passed in 25.82s`.
+
+```sh
+uv run pytest deploy/compose/tests/test_agent_ingress.py deploy/compose/tests/test_networking.py deploy/compose/tests/test_observability.py -v \
+  && docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml config --quiet \
+  && docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml -f deploy/compose/compose.builtin-ca.yaml config --quiet
+```
+
+Output: `10 passed in 0.99s`; both Compose renderings exited 0.
+
+The pinned Caddy container validation was re-run with a temporary valid CA and
+reported `Valid configuration`; `git diff --check` exited 0.

@@ -45,6 +45,7 @@ services:
     environment:
       <<: *control-environment
       DGX_AGENT_CA_PROVIDER: step-ca
+      DGX_AGENT_RUNTIME: enabled
       DGX_AGENT_CLIENT_CA_FILE: /run/secrets/agent-client-ca
       DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE: /run/secrets/agent-intermediate-certificate
       DGX_AGENT_CA_CREDENTIAL_FILE: /run/secrets/agent-ca-credential
@@ -54,7 +55,7 @@ services:
       - ${REPOSITORY_PATH:?set repository path}:/repository
       - control-state:/state
     tmpfs: [/tmp]
-    networks: [application, data, agent-proxy]
+    networks: [application, data, agent-proxy, ca]
     depends_on:
       postgres: {condition: service_healthy}
     healthcheck:
@@ -70,7 +71,10 @@ services:
     command: [python, -m, dgx_control.worker]
     read_only: true
     user: "10001:10001"
-    environment: *control-environment
+    environment:
+      <<: *control-environment
+      DGX_AGENT_CA_PROVIDER: step-ca
+      DGX_AGENT_RUNTIME: disabled
     secrets: [database-url, token-signing-key, metrics-token, git-signing-key]
     volumes:
       - ${REPOSITORY_PATH:?set repository path}:/repository

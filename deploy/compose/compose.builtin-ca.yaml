@@ -2,6 +2,7 @@ services:
   control-api:
     environment:
       DGX_AGENT_CA_PROVIDER: builtin
+      DGX_AGENT_BUILTIN_CA_BOOTSTRAP: "1"
       DGX_AGENT_INTERMEDIATE_KEY_FILE: /run/secrets/agent-intermediate-key
     secrets:
       - agent-intermediate-key

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 # This import is deliberately first: the initial TDD run must prove the provider
 # does not exist yet, rather than fail because its new dependency is unavailable.
 from dgx_control.pki import BuiltinCertificateAuthority, CertificateAuthority, IssuedCertificate
+from dgx_control.auth import TrustedProxyAgentIdentityMiddleware, agent_identity_from_scope
 
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -120,11 +122,49 @@ def test_issued_certificate_is_short_lived_and_node_bound(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw
     )
     assert issued.certificate_pem not in issued.chain_pem
-    assert issued.serial == format(certificate.serial_number, "x")
+    assert issued.serial == str(certificate.serial_number)
     assert issued.fingerprint == certificate.fingerprint(hashes.SHA256()).hex()
     assert issued.node_id == NODE_ID
     assert issued.not_before == now
     assert issued.not_after == now + timedelta(hours=24)
+
+
+def test_caddy_serial_and_fingerprint_of_a_real_issued_certificate_reach_the_proxy_validator(
+    authority: CertificateAuthority, public_key: bytes, now: datetime
+) -> None:
+    issued = authority.issue_node(NODE_ID, public_key, now)
+    certificate = x509.load_pem_x509_certificate(issued.certificate_pem)
+    received = []
+
+    async def app(scope, receive, send) -> None:
+        received.append(scope)
+
+    middleware = TrustedProxyAgentIdentityMiddleware(
+        app,
+        trusted_proxy_auth=b"p" * 32,
+        agent_identity_validator=lambda identity: (
+            identity.certificate_serial == issued.serial
+            and identity.certificate_fingerprint == issued.fingerprint
+        ),
+    )
+    scope = {
+        "type": "http", "path": "/agent/v1/claim", "headers": (
+            (b"x-dgx-agent-node", NODE_ID.encode()),
+            # Caddy 2.10.2's tls_client_serial is the certificate's decimal integer.
+            (b"x-dgx-agent-serial", str(certificate.serial_number).encode()),
+            (b"x-dgx-agent-fingerprint", certificate.fingerprint(hashes.SHA256()).hex().encode()),
+            (b"x-dgx-agent-verified", b"1"),
+            (b"x-dgx-agent-proxy-auth", b"p" * 32),
+        ),
+    }
+
+    asyncio.run(middleware(scope, lambda: None, lambda _: None))
+
+    identity = agent_identity_from_scope(received[0])
+    assert identity is not None
+    assert identity.certificate_serial == issued.serial
+    assert identity.certificate_fingerprint == issued.fingerprint
+    assert all(not key.lower().startswith(b"x-dgx-agent-") for key, _ in received[0]["headers"])
 
 
 def test_issued_certificate_metadata_matches_second_precision_x509_validity(

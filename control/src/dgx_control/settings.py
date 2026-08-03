@@ -30,6 +30,16 @@ def _secret(name: str, *, production: bool) -> str:
     return value
 
 
+def _secret_path(name: str) -> Path:
+    source = os.environ.get(name)
+    if not source:
+        raise SettingsError(f"{name} is required")
+    path = Path(source)
+    if path.is_symlink() or not path.is_file():
+        raise SettingsError(f"{name} must name a regular non-symlink file")
+    return path
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str
@@ -42,8 +52,10 @@ class Settings:
     deployment_branch: str
     required_checks: tuple[str, ...]
     agent_ca_provider: str
+    agent_runtime: str
     agent_client_ca: bytes
     agent_intermediate_certificate: bytes
+    agent_intermediate_key_path: Path | None
     agent_ca_credential: bytes
     agent_proxy_auth: bytes
 
@@ -57,9 +69,19 @@ class Settings:
         if mode not in {"development", "test", "production"}:
             raise SettingsError("DGX_DEPLOYMENT_MODE is invalid")
         agent_ca_provider = os.environ.get("DGX_AGENT_CA_PROVIDER", "")
-        if mode == "production" and agent_ca_provider != "step-ca":
-            raise SettingsError("DGX_AGENT_CA_PROVIDER must be step-ca in production")
-        if agent_ca_provider and agent_ca_provider not in {"builtin", "step-ca"}:
+        agent_runtime = os.environ.get("DGX_AGENT_RUNTIME", "enabled")
+        if agent_runtime not in {"enabled", "disabled"}:
+            raise SettingsError("DGX_AGENT_RUNTIME is invalid")
+        builtin_bootstrap = os.environ.get("DGX_AGENT_BUILTIN_CA_BOOTSTRAP", "")
+        if builtin_bootstrap not in {"", "1"}:
+            raise SettingsError("DGX_AGENT_BUILTIN_CA_BOOTSTRAP is invalid")
+        if agent_ca_provider == "builtin" and builtin_bootstrap != "1":
+            raise SettingsError("built-in CA requires explicit bootstrap selection")
+        if agent_ca_provider != "builtin" and builtin_bootstrap:
+            raise SettingsError("built-in CA bootstrap requires the builtin provider")
+        if mode == "production" and not agent_ca_provider:
+            raise SettingsError("DGX_AGENT_CA_PROVIDER is required in production")
+        if agent_ca_provider and agent_ca_provider not in {"step-ca", "builtin"}:
             raise SettingsError("DGX_AGENT_CA_PROVIDER is invalid")
         database_url = _secret("DGX_DATABASE_URL_FILE", production=mode == "production")
         if urlsplit(database_url).scheme not in {"postgresql", "postgresql+psycopg"}:
@@ -105,13 +127,21 @@ class Settings:
         )
         if len(required_checks) != len(set(required_checks)):
             raise SettingsError("required checks must be unique")
-        agent_client_ca = _secret("DGX_AGENT_CLIENT_CA_FILE", production=True).encode() if mode == "production" else b""
+        agent_enabled = mode == "production" and agent_runtime == "enabled"
+        agent_client_ca = _secret("DGX_AGENT_CLIENT_CA_FILE", production=True).encode() if agent_enabled else b""
         agent_intermediate_certificate = (
             _secret("DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE", production=True).encode()
-            if mode == "production" else b""
+            if agent_enabled else b""
         )
-        agent_ca_credential = _secret("DGX_AGENT_CA_CREDENTIAL_FILE", production=True).encode() if mode == "production" else b""
-        agent_proxy_auth = _secret("DGX_AGENT_PROXY_AUTH_FILE", production=True).encode() if mode == "production" else b""
+        agent_intermediate_key_path = (
+            _secret_path("DGX_AGENT_INTERMEDIATE_KEY_FILE")
+            if mode == "production" and agent_ca_provider == "builtin" else None
+        )
+        agent_ca_credential = (
+            _secret("DGX_AGENT_CA_CREDENTIAL_FILE", production=True).encode()
+            if agent_enabled and agent_ca_provider == "step-ca" else b""
+        )
+        agent_proxy_auth = _secret("DGX_AGENT_PROXY_AUTH_FILE", production=True).encode() if agent_enabled else b""
         if agent_proxy_auth and len(agent_proxy_auth) < 32:
             raise SettingsError("DGX_AGENT_PROXY_AUTH_FILE must contain at least 32 bytes")
         return cls(
@@ -125,8 +155,10 @@ class Settings:
             deployment_branch=deployment_branch,
             required_checks=required_checks,
             agent_ca_provider=agent_ca_provider,
+            agent_runtime=agent_runtime,
             agent_client_ca=agent_client_ca,
             agent_intermediate_certificate=agent_intermediate_certificate,
+            agent_intermediate_key_path=agent_intermediate_key_path,
             agent_ca_credential=agent_ca_credential,
             agent_proxy_auth=agent_proxy_auth,
         )

@@ -71,17 +71,13 @@ def _adapted_caddy() -> dict:
 
 def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents() -> None:
     adapted = _adapted_caddy()
-    routes = json.dumps(adapted, sort_keys=True)
-    assert "control.test.example" in routes
-    assert "enroll.test.example" in routes
-    assert "agents.test.example" in routes
-    assert "require_and_verify" in routes
-    assert "/agent/v1/enroll" in routes
-    assert "http.request.tls.client.serial" in routes
-    assert "x-dgx-agent-proxy-auth" in routes.lower()
+    server = adapted["apps"]["http"]["servers"]["srv0"]
+
+    def site(host: str) -> dict:
+        return next(route for route in server["routes"] if route.get("match") == [{"host": [host]}])
+
     control_site = next(
-        route for route in adapted["apps"]["http"]["servers"]["srv0"]["routes"]
-        if route.get("match") == [{"host": ["control.test.example"]}]
+        route for route in server["routes"] if route.get("match") == [{"host": ["control.test.example"]}]
     )
     control_routes = control_site["handle"][0]["routes"]
     denied = next(
@@ -94,13 +90,39 @@ def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents(
     )
     assert denied < fallback
 
+    enrollment_routes = site("enroll.test.example")["handle"][0]["routes"]
+    enrollment_proxy = next(route for route in enrollment_routes if "control-api:8000" in json.dumps(route, sort_keys=True))
+    assert enrollment_proxy["match"] == [{"path": ["/agent/v1/enroll"]}]
+    assert any(route.get("match") == [{"not": [{"path": ["/agent/v1/enroll"]}]}] for route in enrollment_routes)
+
+    agent_site = site("agents.test.example")
+    client_auth = next(
+        policy["client_authentication"]
+        for policy in server["tls_connection_policies"]
+        if policy.get("match") == {"sni": ["agents.test.example"]}
+    )
+    assert client_auth["mode"] == "require_and_verify"
+    agent_routes = agent_site["handle"][0]["routes"]
+    agent_proxy = next(route for route in agent_routes if "control-api:8000" in json.dumps(route, sort_keys=True))
+    request_headers = agent_proxy["handle"][0]["routes"][0]["handle"][0]["headers"]["request"]
+    assert request_headers["delete"] == ["X-DGX-Agent-*"]
+    replacements = {key.lower(): value for key, value in request_headers["set"].items()}
+    assert replacements == {
+        "x-dgx-agent-node": ["{dgx_agent_node}"],
+        "x-dgx-agent-serial": ["{http.request.tls.client.serial}"],
+        "x-dgx-agent-fingerprint": ["{http.request.tls.client.fingerprint}"],
+        "x-dgx-agent-verified": ["1"],
+        "x-dgx-agent-proxy-auth": ["test-proxy-secret"],
+    }
+    assert any(route.get("match") == [{"not": [{"path": ["/agent/v1/enroll"]}], "path": ["/agent/v1/*"]}] for route in agent_routes)
+
 
 def test_rendered_production_boundary_has_only_caddy_public_and_step_ca_private() -> None:
     rendered = _rendered()
     services = rendered["services"]
     assert {name for name, service in services.items() if service.get("ports")} == {"caddy"}
     assert set(services["caddy"]["networks"]) == {"agent-proxy", "ingress"}
-    assert set(services["control-api"]["networks"]) == {"agent-proxy", "application", "data"}
+    assert set(services["control-api"]["networks"]) == {"agent-proxy", "application", "ca", "data"}
     assert rendered["networks"]["agent-proxy"]["internal"] is True
     assert "step-ca" in services
     assert not services["step-ca"].get("ports")
@@ -120,3 +142,4 @@ def test_builtin_ca_override_is_explicit_and_only_it_mounts_the_builtin_signing_
     assert "agent-intermediate-key" not in production_secrets
     assert "agent-intermediate-key" in builtin_secrets
     assert builtin["services"]["control-api"]["environment"]["DGX_AGENT_CA_PROVIDER"] == "builtin"
+    assert builtin["services"]["control-api"]["environment"]["DGX_AGENT_BUILTIN_CA_BOOTSTRAP"] == "1"

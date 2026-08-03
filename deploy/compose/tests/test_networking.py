@@ -51,7 +51,7 @@ def test_database_has_only_data_network_and_ingress_is_segmented() -> None:
     assert set(services["postgres"]["networks"]) == {"data"}
     assert set(services["caddy"]["networks"]) == {"agent-proxy", "ingress"}
     assert set(services["control-worker"]["networks"]) == {"application", "cluster-egress", "data"}
-    assert set(services["control-api"]["networks"]) == {"agent-proxy", "application", "data"}
+    assert set(services["control-api"]["networks"]) == {"agent-proxy", "application", "ca", "data"}
     assert set(services["litellm"]["networks"]) == {"cluster-egress", "data", "ingress"}
     assert set(services["prometheus"]["networks"]) == {"application"}
 

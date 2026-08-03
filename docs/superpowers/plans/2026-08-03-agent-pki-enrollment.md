@@ -226,20 +226,31 @@ git commit -m "feat: authenticate outbound agents through Caddy"
 **Files:**
 - Create: `control/src/dgx_control/step_ca.py`
 - Test: `control/tests/test_step_ca.py`
+- Modify: `control/src/dgx_control/api.py`
+- Modify: `control/src/dgx_control/settings.py`
+- Modify: `deploy/compose/compose.yaml`
+- Modify: `deploy/compose/step-ca/ca.json`
 - Create: `docs/runbooks/agent-pki.md`
 - Modify: `docs/security/threat-model.md`
 - Test: `tests/runbooks/test_agent_pki.py`
 
 **Interfaces:**
-- Produces `StepCertificateAuthority` behind the Task 1 provider contract and documents offline root creation, intermediate rotation, certificate revocation, expiry recovery, provider selection, and migration.
+- Produces `StepCertificateAuthority` behind the Task 1 provider contract,
+  constructs the production `AgentApiServices` bundle with the selected CA
+  provider and artifact root, and documents offline root creation,
+  intermediate rotation, certificate revocation, expiry recovery, provider
+  selection, and migration.
 
 - [ ] **Step 1: Write failing runbook behavior checks**
 
 Use a fake `step-ca` HTTP boundary to assert node/SAN/lifetime policy, bounded
-responses, renewal/revocation, TLS verification, and secret redaction. Parse
-commands from disposable fixtures and assert no command copies the root
-private key into Compose, renewal uses the existing mTLS identity, and recovery
-requires an explicit new enrollment grant.
+responses, renewal/revocation, TLS verification, authenticated provisioner
+issuance, and secret redaction. Add production startup tests that construct the
+selected `AgentApiServices` bundle only for an explicitly configured provider,
+that require CA network reachability for `step-ca`, and that reject unavailable
+provider credentials. Parse commands from disposable fixtures and assert no
+command copies the root private key into Compose, renewal uses the existing
+mTLS identity, and recovery requires an explicit new enrollment grant.
 
 - [ ] **Step 2: Run and observe missing runbook**
 
@@ -250,11 +261,17 @@ Expected: FAIL because `agent-pki.md` is absent.
 
 Implement the provider with fixed Smallstep sign/renew/revoke requests and a
 narrowly scoped provisioner credential loaded from a secret file; never accept
-a caller-selected CA URL or certificate subject. Include restrictive file
-modes, offline root storage, intermediate lifetime
-and rotation overlap, revocation/retirement, clock-skew checks, backup scope,
-and built-in-to-Smallstep provider migration. Explicitly state that certificate loss does not permit
-copying another node's identity.
+a caller-selected CA URL or certificate subject. Construct and pass the
+production `AgentApiServices` bundle in `production_app`, selecting exactly
+the configured built-in bootstrap or `StepCertificateAuthority` provider and
+its artifact root. Configure the step-ca provisioner and encrypted provider
+material through deployment secrets, authenticate every issuance request, and
+keep control-api on the private CA network. Include restrictive host secret
+permissions and initialization/runbook instructions (Compose bind-backed
+secret uid/gid/mode is not portable), offline root storage, intermediate
+lifetime and rotation overlap, revocation/retirement, clock-skew checks,
+backup scope, and built-in-to-Smallstep provider migration. Explicitly state
+that certificate loss does not permit copying another node's identity.
 
 - [ ] **Step 4: Run Phase 2 verification**
 

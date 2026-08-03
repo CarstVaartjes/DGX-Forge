@@ -120,7 +120,7 @@ class BuiltinCertificateAuthority(CertificateAuthority):
             node_id=node_id,
             certificate_pem=certificate.public_bytes(serialization.Encoding.PEM),
             chain_pem=self._certificate.public_bytes(serialization.Encoding.PEM),
-            serial=format(certificate.serial_number, "x"),
+            serial=str(certificate.serial_number),
             fingerprint=certificate.fingerprint(hashes.SHA256()).hex(),
             not_before=timestamp,
             not_after=not_after,
