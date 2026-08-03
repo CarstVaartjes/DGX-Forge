@@ -16,6 +16,10 @@ class IrreversiblePolicyError(RuntimeError):
     pass
 
 
+class ReleaseGateError(RuntimeError):
+    pass
+
+
 class PolicyStore:
     def __init__(self, root: Path) -> None:
         if root.is_symlink():
@@ -30,10 +34,12 @@ class PolicyStore:
     def mode(self) -> str:
         return "release-pr-only" if self._marker.is_file() else "development-direct"
 
-    def enable_release_pr_only(self, *, actor: str) -> None:
+    def enable_release_pr_only(self, *, actor: str, release_digest: str, release_status: str) -> None:
         if not actor.strip():
             raise ValueError("release policy transition requires an actor")
-        content = (json.dumps({"mode": "release-pr-only", "actor": actor}, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        if release_status != "passed" or re.fullmatch(r"[0-9a-f]{64}", release_digest) is None:
+            raise ReleaseGateError("PR-only transition requires passed content-addressed release evidence")
+        content = (json.dumps({"mode": "release-pr-only", "actor": actor, "release_digest": release_digest}, sort_keys=True, separators=(",", ":")) + "\n").encode()
         try:
             descriptor = os.open(self._marker, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
         except FileExistsError:

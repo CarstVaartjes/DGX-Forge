@@ -1,0 +1,15 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dgx-forge.invalid/schemas/platform-release-evidence.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "candidate", "status", "evidence_sha256", "missing_gates", "digest"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "candidate": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"},
+    "status": {"enum": ["passed", "blocked"]},
+    "evidence_sha256": {"type": "object", "additionalProperties": {"type": "string", "pattern": "^[0-9a-f]{64}$"}},
+    "missing_gates": {"type": "array", "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+  }
+}

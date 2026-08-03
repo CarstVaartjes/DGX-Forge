@@ -1,5 +1,17 @@
 # DGX-Forge
 
+The generic Spark platform design and phased implementation plans live in
+[`docs/superpowers/specs/2026-08-03-scalable-spark-platform-control-plane-design.md`](docs/superpowers/specs/2026-08-03-scalable-spark-platform-control-plane-design.md).
+Each Spark is onboarded independently; the Docker-capable service host runs
+separate Caddy, API/worker, PostgreSQL, LiteLLM, Prometheus, and Grafana
+services. Administration is available through both `sparkctl admin` and the
+web UX, with Git-backed fleet, model, and profile definitions.
+
+Before a real release, run `scripts/verify-platform-release --candidate X.Y.Z
+--json`. A blocked result is expected until external hardware, recovery, and
+protected-code-host evidence exists. PR-only repository mutation is a one-way
+transition and must not be enabled from simulator evidence.
+
 DGX-Forge is a collection of contracts, controllers, runtime adapters, and
 operational tooling for defining, validating, deploying, and operating
 model-serving profiles across NVIDIA DGX Spark systems. The repository keeps

@@ -1,0 +1,80 @@
+#!/usr/bin/env python3
+"""Aggregate release evidence without inventing external acceptance."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import re
+import subprocess
+from pathlib import Path
+
+REPORTS = ("control-plane-recovery", "control-plane-scale", "platform-lifecycle")
+
+
+def canonical(value: object) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def verify(root: Path, candidate: str) -> tuple[dict[str, object], list[str]]:
+    missing: list[str] = []
+    digests: dict[str, str] = {}
+    if re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?", candidate) is None:
+        missing.append("candidate-semver")
+    for name in REPORTS:
+        path = root / f"inventory/reports/{name}.json"
+        if not path.is_file():
+            missing.append(name)
+            continue
+        content = path.read_bytes()
+        digests[name] = hashlib.sha256(content).hexdigest()
+        try:
+            report = json.loads(content)
+        except json.JSONDecodeError:
+            missing.append(f"{name}:valid-json")
+            continue
+        if report.get("status") != "passed":
+            missing.append(f"{name}:passed")
+        for gate in report.get("remaining_release_gates", []):
+            missing.append(str(gate))
+    protection = root / "inventory/reports/code-host-protection.json"
+    if not protection.is_file():
+        missing.append("protected-code-host")
+    else:
+        raw = protection.read_bytes()
+        digests["code-host-protection"] = hashlib.sha256(raw).hexdigest()
+        try:
+            assertion = json.loads(raw)
+            if assertion.get("status") != "passed" or not assertion.get("protected_branch") or not assertion.get("required_checks"):
+                missing.append("protected-code-host")
+        except json.JSONDecodeError:
+            missing.append("protected-code-host")
+    supply = subprocess.run([root / "scripts/verify-supply-chain", "--root", root, "--json"], capture_output=True, text=True, check=False)
+    if supply.returncode != 0:
+        missing.append("supply-chain")
+    report = {"schema_version": 1, "candidate": candidate, "status": "passed" if not missing else "blocked", "evidence_sha256": dict(sorted(digests.items())), "missing_gates": sorted(set(missing))}
+    report["digest"] = hashlib.sha256(canonical(report)).hexdigest()
+    return report, missing
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--candidate", required=True)
+    parser.add_argument("--root", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+    report, missing = verify(args.root.resolve(), args.candidate)
+    content = canonical(report)
+    if args.output:
+        target = args.output if args.output.is_absolute() else args.root / args.output
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+    if args.json or not args.output:
+        print(content.decode(), end="")
+    return 2 if missing else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
