@@ -347,16 +347,24 @@ def test_workload_name_cannot_escape_the_release_namespace(tmp_path: Path) -> No
     assert "unsafe workload name" in completed.stderr
 
 
-def test_release_modes_are_validated_before_any_remote_command(tmp_path: Path) -> None:
-    root, _ = _release_root(tmp_path)
+def test_release_modes_follow_manifest_policy_on_non_posix_checkouts(tmp_path: Path) -> None:
+    root, digest = _release_root(tmp_path, nodes=("spark1",))
     adapter = root / "adapters/example/bin/adapter"
-    adapter.chmod(0o644)
+    config = root / "adapters/example/config/common.env"
+    adapter.chmod(0o777)
+    config.chmod(0o666)
+    environment, remote_root = _filesystem_remote_environment(tmp_path)
 
-    completed = _run(root, "example")
+    completed = _run(root, "--apply", "example", env=environment)
 
-    assert completed.returncode != 0
-    assert "payload mode mismatch" in completed.stderr
-    assert "expected 0755 received 0644" in completed.stderr
+    assert completed.returncode == 0, completed.stderr
+    installed = (
+        remote_root
+        / "dgx-spark-1/opt/spark/model-adapters/example/releases"
+        / digest
+    )
+    assert (installed / "bin/adapter").stat().st_mode & 0o777 == 0o755
+    assert (installed / "config/common.env").stat().st_mode & 0o777 == 0o644
 
 
 def test_remote_install_refuses_broken_symlink_targets() -> None:
@@ -429,19 +437,19 @@ def test_apply_targets_only_the_workload_declared_node(tmp_path: Path) -> None:
     )
 
 
-def test_windows_scp_receives_a_windows_local_source_path(tmp_path: Path) -> None:
+def test_windows_style_scp_wrapper_receives_a_windows_local_source_path(
+    tmp_path: Path,
+) -> None:
     root, _ = _release_root(tmp_path, nodes=("spark1",))
     env, _, scp_log = _fake_remote_environment(tmp_path)
     scp = Path(env["SPARK_SCP_BIN"])
-    windows_scp = scp.with_suffix(".exe")
-    scp.rename(windows_scp)
     wslpath = scp.parent / "wslpath"
     wslpath.write_text(
         "#!/bin/sh\nprintf 'WINDOWS_PATH:%s\\n' \"$2\"\n",
         encoding="utf-8",
     )
     wslpath.chmod(0o755)
-    env["SPARK_SCP_BIN"] = str(windows_scp)
+    env["SPARK_SCP_PATH_STYLE"] = "windows"
     env["PATH"] = f"{scp.parent}:{env['PATH']}"
 
     completed = _run(root, "--apply", "example", env=env)
@@ -451,6 +459,39 @@ def test_windows_scp_receives_a_windows_local_source_path(tmp_path: Path) -> Non
         call["argv"][-2].startswith("WINDOWS_PATH:")
         for call in _json_lines(scp_log)
     )
+
+
+def test_posix_style_scp_wrapper_named_exe_keeps_a_posix_source_path(
+    tmp_path: Path,
+) -> None:
+    root, _ = _release_root(tmp_path, nodes=("spark1",))
+    env, _, scp_log = _fake_remote_environment(tmp_path)
+    scp = Path(env["SPARK_SCP_BIN"])
+    misleading_name = scp.with_suffix(".exe")
+    scp.rename(misleading_name)
+    env["SPARK_SCP_BIN"] = str(misleading_name)
+    env["SPARK_SCP_PATH_STYLE"] = "posix"
+
+    completed = _run(root, "--apply", "example", env=env)
+
+    assert completed.returncode == 0, completed.stderr
+    assert all(
+        call["argv"][-2].startswith(str(root))
+        for call in _json_lines(scp_log)
+    )
+
+
+def test_invalid_scp_path_style_fails_before_remote_commands(tmp_path: Path) -> None:
+    root, _ = _release_root(tmp_path, nodes=("spark1",))
+    env, ssh_log, scp_log = _fake_remote_environment(tmp_path)
+    env["SPARK_SCP_PATH_STYLE"] = "windows; unsafe"
+
+    completed = _run(root, "--apply", "example", env=env)
+
+    assert completed.returncode == 2
+    assert "SPARK_SCP_PATH_STYLE must be posix or windows" in completed.stderr
+    assert _json_lines(ssh_log) == []
+    assert _json_lines(scp_log) == []
 
 
 def test_apply_is_idempotent_when_both_installed_releases_are_identical(

@@ -1,9 +1,10 @@
 # Runtime release deployment
 
 Use `scripts/deploy-runtime-release` from the developer machine to install the
-checked Mia adapter release on both DGX Sparks. This operation deploys only the
-small, immutable runtime adapter. It does not download model artifacts, pull
-container images, start containers, or change the active Cluster Profile.
+selected workload's checked adapter release on exactly its declared Spark
+nodes. This operation deploys only the small, immutable runtime adapter. It
+does not download model artifacts, pull container images, start containers, or
+change the active Cluster Profile.
 
 ## Preconditions
 
@@ -11,22 +12,26 @@ container images, start containers, or change the active Cluster Profile.
 - Its manifest is a repository-relative regular file.
 - Every manifest entry is a regular file below the manifest's parent directory
   and matches its recorded SHA-256.
-- Payloads below `bin/` have mode `0755`; all other payloads have mode `0644`.
-- `inventory/cluster.toml` contains the hardened SSH aliases for `spark1` and
-  `spark2`.
+- Manifest-listed payloads below `bin/` are installed with mode `0755`; all
+  other manifest-listed payloads are installed with mode `0644`. These intended
+  release modes come from repository/manifest policy, not the checkout's local
+  mode bits, which may appear as `0777`/`0666` on `/mnt/c`.
+- `inventory/cluster.toml` contains hardened SSH aliases for every node declared
+  by the workload.
 - Host keys have already been accepted through the SSH bootstrap runbook.
-- `/opt/spark/model-adapters` exists on both nodes and is writable by the
-  controller SSH user. Bootstrap it once with:
+- `/opt/spark/model-adapters` exists on every target node and is writable by
+  the controller SSH user. Bootstrap each target once with:
 
   ```bash
   sudo install -d -o root -g root -m 0755 /opt/spark
   sudo install -d -o carst -g carst -m 0755 /opt/spark/model-adapters
   ```
 
-The current release manifest is
-`adapters/deepseek/mia-vllm/runtime-manifest.json`. Repository paths such as
+Current examples are `adapters/deepseek/mia-vllm/runtime-manifest.json` for the
+two-node Mia workload and `adapters/deepseek/ds4/runtime-manifest.json` for the
+Spark-1-only DS4 workload. Repository paths such as
 `adapters/deepseek/mia-vllm/bin/mia-deepseek-dual` are installed with their
-common `adapters/deepseek/mia-vllm/` prefix removed.
+manifest-parent prefix removed.
 
 ## Review the dry run
 
@@ -36,8 +41,8 @@ Dry run is the default and executes no SSH or transfer command:
 scripts/deploy-runtime-release deepseek-agent-dual
 ```
 
-The JSON plan identifies the exact manifest digest, both SSH aliases, stripped
-release paths, and the immutable destination:
+The JSON plan identifies the exact manifest digest, workload-declared SSH
+aliases, stripped release paths, and the immutable destination:
 
 ```text
 /opt/spark/model-adapters/deepseek-agent-dual/releases/<manifest-sha256>/
@@ -47,7 +52,7 @@ Resolve every local manifest or payload error before applying. Do not bypass a
 digest mismatch by editing only the workload pin; regenerate and review the
 release manifest after all release files are final.
 
-## Apply to both Sparks
+## Apply to the workload-declared nodes
 
 Writing requires the explicit flag:
 
@@ -72,6 +77,16 @@ SSH uses batch mode, disables forwarding, requires the configured identity and
 strict host-key checking, and never evaluates repository-provided shell text.
 The remote scripts receive only locally validated paths and digests as quoted
 arguments.
+
+The controller selects native `ssh`/`scp` by default and auto-selects
+`ssh.exe`/`scp.exe` on WSL when they are discoverable. Custom commands use
+`SPARK_SSH_BIN` and `SPARK_SCP_BIN`. A custom SCP wrapper must also set
+`SPARK_SCP_PATH_STYLE=posix` or `SPARK_SCP_PATH_STYLE=windows` when its input
+path syntax differs from the default POSIX wrapper contract; only those two
+exact values are accepted. Auto-selected WSL `scp.exe` uses Windows paths and
+native SCP uses POSIX paths regardless of executable basename. After every
+copy, the remote mode gate applies repository policy and the final verifier
+rechecks the exact mode and SHA-256 before installation.
 
 ## Failure handling
 

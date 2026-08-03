@@ -232,8 +232,10 @@ optimization phase. Exact evidence and deferred gates are in
 On 2026-08-03, Spark 1 received immutable DS4 release
 `ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2`.
 It pins Entrpi DS4 commit `4ad370b4a338efe9723a386673c0e04f6e214108`,
-the Q2-imatrix base plus DSpark drafter checkpoint pair at revision
-`1cd7b564460821938add0475a60b942c409295e0`, and the ARM64 image
+the Q2-imatrix base from `antirez/deepseek-v4-gguf` revision
+`1cd7b564460821938add0475a60b942c409295e0`, the DSpark drafter from
+`bleysg/DeepSeek-V4-Flash-DSpark-drafter-GGUF` revision
+`81c6fdd38f9582da45ba27f0ed7b63bcd3ea3b62`, and the ARM64 image
 `ghcr.io/carstvaartjes/spark-ds4@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615`.
 Both GGUFs were rehashed inside a read-only, network-disabled container before
 the live runtime was started.
