@@ -1,0 +1,7 @@
+{
+	admin off
+}
+
+:443 {
+	reverse_proxy control-api:8000
+}
