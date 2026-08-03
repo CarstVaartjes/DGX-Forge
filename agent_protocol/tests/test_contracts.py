@@ -135,7 +135,14 @@ def test_direct_progress_construction_enforces_protocol_boundary() -> None:
 
 @pytest.mark.parametrize(
     "payload",
-    [{"artifact_path": "release"}, {"artifactPath": "release"}, {"evidence": "../private"}],
+    [
+        {"artifact_path": "release"},
+        {"artifactPath": "release"},
+        {"artifactPATH": "release"},
+        {"artifactFILE": "release"},
+        {"someDIRECTORY": "release"},
+        {"evidence": "../private"},
+    ],
 )
 def test_protocol_rejects_client_selected_filesystem_paths(payload: dict[str, str]) -> None:
     with pytest.raises(AgentProtocolError, match="path"):
@@ -193,6 +200,9 @@ def schema(name: str) -> Draft202012Validator:
         ("agent-job.schema.json", valid_claim() | {"payload": {"nested": {"apiToken": "unsafe"}}}),
         ("agent-job.schema.json", valid_claim() | {"payload": {"artifact_path": "release"}}),
         ("agent-job.schema.json", valid_claim() | {"payload": {"artifactPath": "release"}}),
+        ("agent-job.schema.json", valid_claim() | {"payload": {"artifactPATH": "release"}}),
+        ("agent-job.schema.json", valid_claim() | {"payload": {"artifactFILE": "release"}}),
+        ("agent-job.schema.json", valid_claim() | {"payload": {"someDIRECTORY": "release"}}),
         ("agent-job.schema.json", valid_claim() | {"deadline": "2026-08-03T12:00:00+02:00"}),
         ("agent-job.schema.json", valid_claim() | {"deadline": "2026-99-99T12:00:00+00:00"}),
         ("agent-result.schema.json", valid_attempt() | {"state": "succeeded", "result": {"log_path": "/tmp/log"}}),

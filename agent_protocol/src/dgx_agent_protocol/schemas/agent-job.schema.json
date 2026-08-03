@@ -20,7 +20,7 @@
   "$defs": {
     "safe-object": {
       "type": "object",
-      "propertyNames": {"not": {"pattern": "[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].?[Kk][Ee][Yy]|[Cc][Oo][Mm][Mm][Aa][Nn][Dd]|[Ss][Hh][Ee][Ll][Ll]|[Ee][Nn][Vv][Ii][Rr][Oo][Nn][Mm][Ee][Nn][Tt]|(?:^|[_-])(?:[Pp][Aa][Tt][Hh]|[Ff][Ii][Ll][Ee]|[Ff][Ii][Ll][Ee][Nn][Aa][Mm][Ee]|[Dd][Ii][Rr][Ee][Cc][Tt][Oo][Rr][Yy]|[Ff][Ii][Ll][Ee][Ss][Yy][Ss][Tt][Ee][Mm]|[Mm][Oo][Uu][Nn][Tt])(?:$|[_-])|[a-z0-9](?:Path|File|Filename|Directory|Filesystem|Mount)(?:$|[A-Z])"}},
+      "propertyNames": {"not": {"pattern": "[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].?[Kk][Ee][Yy]|[Cc][Oo][Mm][Mm][Aa][Nn][Dd]|[Ss][Hh][Ee][Ll][Ll]|[Ee][Nn][Vv][Ii][Rr][Oo][Nn][Mm][Ee][Nn][Tt]|(?:^|[_-])(?:[Pp][Aa][Tt][Hh]|[Ff][Ii][Ll][Ee]|[Ff][Ii][Ll][Ee][Nn][Aa][Mm][Ee]|[Dd][Ii][Rr][Ee][Cc][Tt][Oo][Rr][Yy]|[Ff][Ii][Ll][Ee][Ss][Yy][Ss][Tt][Ee][Mm]|[Mm][Oo][Uu][Nn][Tt])(?:$|[_-])|[a-z0-9](?:P[Aa][Tt][Hh]|F[Ii][Ll][Ee]|F[Ii][Ll][Ee][Nn][Aa][Mm][Ee]|D[Ii][Rr][Ee][Cc][Tt][Oo][Rr][Yy]|F[Ii][Ll][Ee][Ss][Yy][Ss][Tt][Ee][Mm]|M[Oo][Uu][Nn][Tt])$"}},
       "additionalProperties": {"$ref": "#/$defs/safe-value"}
     },
     "safe-value": {
