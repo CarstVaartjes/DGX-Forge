@@ -6,4 +6,4 @@ requires-python = ">=3.12"
 dependencies = ["dgx-agent-protocol==1.0.0"]
 
 [tool.uv.sources]
-dgx-agent-protocol = { path = "../agent_protocol" }
+dgx-agent-protocol = { path = "../inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl" }

@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 import hashlib
+import json
 from pathlib import Path
+import shutil
+import subprocess
 import tomllib
 import uuid
 
@@ -19,6 +22,8 @@ ROOT = Path(__file__).resolve().parents[3]
 NODE_A = "spk_" + "a" * 32
 NODE_B = "spk_" + "b" * 32
 COMMIT = "a" * 40
+PROTOCOL_WHEEL = ROOT / "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
+PROTOCOL_WHEEL_HASH = hashlib.sha256(PROTOCOL_WHEEL.read_bytes()).hexdigest()
 
 
 class Clock:
@@ -148,7 +153,7 @@ def test_release_artifacts_install_the_exact_protocol_wheel() -> None:
     control_project = (ROOT / "control/pyproject.toml").read_text()
     agent_project_path = ROOT / "agent/pyproject.toml"
     agent_lock_path = ROOT / "agent/uv.lock"
-    protocol_wheel_path = ROOT / "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
+    protocol_wheel_path = PROTOCOL_WHEEL
     dockerignore_path = ROOT / ".dockerignore"
     dockerfile = (ROOT / "control/Dockerfile").read_text()
 
@@ -159,20 +164,84 @@ def test_release_artifacts_install_the_exact_protocol_wheel() -> None:
     agent_project = agent_project_path.read_text()
     agent_lock = tomllib.loads(agent_lock_path.read_text())
     control_lock = tomllib.loads((ROOT / "control/uv.lock").read_text())
-    resolved_versions = {
-        package["version"]
+    protocol_sources = [
+        package["source"]
         for lock in (agent_lock, control_lock)
         for package in lock["package"]
         if package["name"] == "dgx-agent-protocol"
-    }
+    ]
 
     assert '"dgx-agent-protocol==1.0.0"' in control_project
     assert '"dgx-agent-protocol==1.0.0"' in agent_project
-    assert resolved_versions == {"1.0.0"}
+    assert protocol_sources == [
+        {"path": "../inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"},
+        {"path": "../inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"},
+    ]
     assert "COPY control/pyproject.toml ./" in dockerfile
     assert "COPY control/src ./src" in dockerfile
     assert "COPY inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl /wheels/" in dockerfile
     assert "/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl" in dockerfile
     dockerignore = set(dockerignore_path.read_text().splitlines())
     assert "*" in dockerignore
+    lines = dockerignore_path.read_text().splitlines()
+    last_include = max(index for index, line in enumerate(lines) if line.startswith("!"))
     assert {"!control/src/**", "!control/web/**", "control/.venv", "!inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"} <= dockerignore
+    assert {
+        "**/__pycache__/**", "**/*.py[cod]", "**/.env", "**/.env.*", "**/*.pem",
+        "**/*.key", "**/*.p12", "**/*.pfx", "**/.pytest_cache/**", "**/.coverage*",
+        "**/coverage/**", "**/htmlcov/**", "**/build/**", "**/dist/**",
+    } <= set(lines[last_include + 1:])
+    assert all(not line.startswith("!") for line in lines[last_include + 1:])
+
+
+def test_agent_environment_installs_the_verified_protocol_wheel() -> None:
+    result = subprocess.run(
+        [
+            "uv", "run", "--project", "agent", "python", "-c",
+            "import importlib.metadata, json; d = importlib.metadata.distribution('dgx-agent-protocol'); print((d._path / 'direct_url.json').read_text())",
+        ],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    direct_url = json.loads(result.stdout)
+    agent_lock = tomllib.loads((ROOT / "agent/uv.lock").read_text())
+    package = next(package for package in agent_lock["package"] if package["name"] == "dgx-agent-protocol")
+
+    assert direct_url["url"].endswith("/inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl")
+    assert package["wheels"] == [{"filename": "dgx_agent_protocol-1.0.0-py3-none-any.whl", "hash": f"sha256:{PROTOCOL_WHEEL_HASH}"}]
+
+
+def test_root_context_image_installs_the_verified_protocol_wheel() -> None:
+    if shutil.which("docker") is None:
+        pytest.skip("Docker CLI is unavailable")
+    if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
+        pytest.skip("Docker daemon is unavailable")
+    image = "dgx-control:test-protocol-wheel"
+    build = subprocess.run(
+        [
+            "docker", "build", "--file", "control/Dockerfile",
+            "--build-arg", "NODE_IMAGE=node:24-bookworm-slim@sha256:235600a8101ab264e117b1768e925532262668dc9b581ef1dd7d96ced463b8e7",
+            "--build-arg", "PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b",
+            "--tag", image, ".",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+    )
+    assert build.returncode == 0, build.stderr
+    result = subprocess.run(
+        [
+            "docker", "run", "--rm", "--entrypoint", "python", image, "-c",
+            "import importlib.metadata, json; d = importlib.metadata.distribution('dgx-agent-protocol'); print(json.dumps({'version': d.version, 'direct_url': json.loads((d._path / 'direct_url.json').read_text())}))",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    installed = json.loads(result.stdout)
+
+    assert installed["version"] == "1.0.0"
+    assert installed["direct_url"]["url"] == "file:///wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
+    assert installed["direct_url"]["archive_info"]["hash"] == f"sha256={PROTOCOL_WHEEL_HASH}"

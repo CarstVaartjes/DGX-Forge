@@ -66,22 +66,47 @@ def protocol_version(lock: bytes) -> str:
         package for package in raw.get("package", [])
         if package.get("name") == "dgx-agent-protocol"
     ]
-    if len(packages) != 1 or packages[0].get("source") != {"directory": "../agent_protocol"}:
-        raise ValueError("protocol must resolve from the exact local workspace source")
+    if len(packages) != 1 or packages[0].get("source") != {"path": "../inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"}:
+        raise ValueError("control and agent must resolve the verified protocol wheel")
     version = packages[0].get("version")
     if not isinstance(version, str):
         raise ValueError("protocol lock has no version")
     return version
 
 
-def spdx(name: str, lock: bytes, packages: list[tuple[str, str]]) -> bytes:
+def protocol_wheel_hash(lock: bytes) -> str:
+    raw = tomllib.loads(lock.decode())
+    package = next(
+        package for package in raw.get("package", [])
+        if package.get("name") == "dgx-agent-protocol"
+    )
+    wheels = package.get("wheels")
+    if (
+        not isinstance(wheels, list)
+        or len(wheels) != 1
+        or wheels[0].get("filename") != Path(PROTOCOL_WHEEL).name
+    ):
+        raise ValueError("protocol lock must contain the verified wheel")
+    value = wheels[0].get("hash")
+    if not isinstance(value, str) or not value.startswith("sha256:"):
+        raise ValueError("protocol lock wheel hash is invalid")
+    return value.removeprefix("sha256:")
+
+
+def spdx(
+    name: str,
+    lock: bytes,
+    packages: list[tuple[str, str]],
+    *,
+    protocol_wheel_sha256: str | None = None,
+) -> bytes:
     lock_digest = digest(lock)
     described = []
     relationships = []
     for package_name, version in packages:
         identity = hashlib.sha256(f"{package_name}\0{version}".encode()).hexdigest()[:16]
         spdx_id = f"SPDXRef-Package-{identity}"
-        described.append({
+        package = {
             "SPDXID": spdx_id,
             "name": package_name,
             "versionInfo": version,
@@ -90,9 +115,12 @@ def spdx(name: str, lock: bytes, packages: list[tuple[str, str]]) -> bytes:
             "licenseConcluded": "NOASSERTION",
             "licenseDeclared": "NOASSERTION",
             "supplier": "NOASSERTION",
-        })
+        }
+        if package_name == "dgx-agent-protocol" and protocol_wheel_sha256 is not None:
+            package["checksums"] = [{"algorithm": "SHA256", "checksumValue": protocol_wheel_sha256}]
+        described.append(package)
         relationships.append({"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES", "relatedSpdxElement": spdx_id})
-    return canonical({
+    document = {
         "spdxVersion": "SPDX-2.3",
         "dataLicense": "CC0-1.0",
         "SPDXID": "SPDXRef-DOCUMENT",
@@ -101,7 +129,27 @@ def spdx(name: str, lock: bytes, packages: list[tuple[str, str]]) -> bytes:
         "creationInfo": {"created": "1970-01-01T00:00:00Z", "creators": ["Tool: DGX-Forge verify-supply-chain"]},
         "packages": described,
         "relationships": relationships,
-    })
+    }
+    if protocol_wheel_sha256 is not None:
+        wheel_id = "SPDXRef-File-AgentProtocolWheel"
+        document["files"] = [{
+            "SPDXID": wheel_id,
+            "fileName": PROTOCOL_WHEEL,
+            "checksums": [{"algorithm": "SHA256", "checksumValue": protocol_wheel_sha256}],
+            "fileTypes": ["BINARY"],
+            "licenseConcluded": "NOASSERTION",
+            "copyrightText": "NOASSERTION",
+        }]
+        protocol_id = next(
+            package["SPDXID"] for package in described
+            if package["name"] == "dgx-agent-protocol"
+        )
+        relationships.append({
+            "spdxElementId": protocol_id,
+            "relationshipType": "GENERATED_FROM",
+            "relatedSpdxElement": wheel_id,
+        })
+    return canonical(document)
 
 
 def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
@@ -116,16 +164,19 @@ def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
     ):
         raise ValueError("control and agent must resolve the exact protocol version")
     wheel = protocol_wheel(root)
+    wheel_sha256 = digest(wheel)
+    if any(protocol_wheel_hash(lock) != wheel_sha256 for lock in (python_lock, agent_lock)):
+        raise ValueError("control and agent lock hashes must match the verified protocol wheel")
     sboms = {
-        "inventory/sbom/control-python.spdx.json": spdx("control-python", python_lock, packages_python(python_lock)),
-        "inventory/sbom/agent-python.spdx.json": spdx("agent-python", agent_lock, packages_python(agent_lock)),
-        "inventory/sbom/agent-protocol.spdx.json": spdx("agent-protocol", protocol_lock, packages_python(protocol_lock)),
+        "inventory/sbom/control-python.spdx.json": spdx("control-python", python_lock, packages_python(python_lock), protocol_wheel_sha256=wheel_sha256),
+        "inventory/sbom/agent-python.spdx.json": spdx("agent-python", agent_lock, packages_python(agent_lock), protocol_wheel_sha256=wheel_sha256),
+        "inventory/sbom/agent-protocol.spdx.json": spdx("agent-protocol", protocol_lock, packages_python(protocol_lock), protocol_wheel_sha256=wheel_sha256),
         "inventory/sbom/control-web.spdx.json": spdx("control-web", web_lock, packages_web(web_lock)),
     }
     input_paths = (
         "agent/pyproject.toml", "agent/uv.lock", "agent_protocol/pyproject.toml",
         "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
-        "control/web/package-lock.json", "control/Dockerfile",
+        ".dockerignore", "control/web/package-lock.json", "control/Dockerfile",
         "deploy/compose/compose.yaml", "deploy/compose/images.lock.json",
         "deploy/compose/trust/litellm-cosign.pub",
     )
@@ -133,7 +184,7 @@ def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
         "schema_version": 2,
         "inputs": {path: digest((root / path).read_bytes()) for path in input_paths},
         "sboms": {path: digest(content) for path, content in sboms.items()},
-        "protocol_wheel_sha256": digest(wheel),
+        "protocol_wheel_sha256": wheel_sha256,
         "image_lock_sha256": digest((root / "deploy/compose/images.lock.json").read_bytes()),
         "signature_key_sha256": digest((root / "deploy/compose/trust/litellm-cosign.pub").read_bytes()),
     }
@@ -173,7 +224,7 @@ def verify(root: Path, generate: bool) -> tuple[list[str], dict[str, object]]:
     try:
         sboms, wheel, manifest = expected(root)
     except (OSError, ValueError, KeyError, json.JSONDecodeError, subprocess.CalledProcessError, tomllib.TOMLDecodeError) as error:
-        return [*errors, f"could not generate expected supply-chain evidence: {type(error).__name__}"], {}
+        return [*errors, f"could not generate expected supply-chain evidence: {type(error).__name__}: {error}"], {}
     manifest_path = root / "inventory/sbom/manifest.json"
     if generate:
         for path, content in sboms.items():

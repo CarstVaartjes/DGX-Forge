@@ -1,3 +1,5 @@
+import hashlib
+import json
 import shutil
 import subprocess
 from pathlib import Path
@@ -11,7 +13,7 @@ def _copy(tmp_path: Path) -> Path:
     target = tmp_path / "repo"
     for path in (
         "agent/pyproject.toml", "agent/uv.lock", "agent_protocol/pyproject.toml",
-        "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
+        ".dockerignore", "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
         "control/web/package-lock.json", "control/Dockerfile",
         "deploy/compose/compose.yaml", "deploy/compose/images.lock.json",
         "deploy/compose/trust/litellm-cosign.pub",
@@ -63,7 +65,7 @@ def test_verifier_rejects_protocol_wheel_or_lock_drift(tmp_path: Path) -> None:
     result = subprocess.run([SCRIPT, "--root", repository], capture_output=True, text=True)
 
     assert result.returncode != 0
-    assert "manifest" in result.stderr
+    assert "wheel" in result.stderr
 
 
 def test_verifier_rejects_a_missing_protocol_wheel_artifact(tmp_path: Path) -> None:
@@ -73,6 +75,56 @@ def test_verifier_rejects_a_missing_protocol_wheel_artifact(tmp_path: Path) -> N
     wheel.unlink()
 
     result = subprocess.run([SCRIPT, "--root", repository], capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "wheel" in result.stderr
+
+
+def test_verifier_rejects_a_byte_different_protocol_wheel_with_the_same_name_and_version(tmp_path: Path) -> None:
+    repository = _copy(tmp_path)
+    wheel = repository / "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
+    wheel.write_bytes(wheel.read_bytes() + b"different bytes")
+
+    result = subprocess.run([SCRIPT, "--root", repository], capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "wheel" in result.stderr
+
+
+def test_protocol_spdx_records_the_verified_wheel_checksum(tmp_path: Path) -> None:
+    repository = _copy(tmp_path)
+    wheel = repository / "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
+    document = json.loads((repository / "inventory/sbom/agent-protocol.spdx.json").read_text())
+    protocol = next(package for package in document["packages"] if package["name"] == "dgx-agent-protocol")
+
+    checksum = hashlib.sha256(wheel.read_bytes()).hexdigest()
+    assert protocol["checksums"] == [{"algorithm": "SHA256", "checksumValue": checksum}]
+    wheel_file = next(file for file in document["files"] if file["fileName"] == "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl")
+    assert wheel_file["checksums"] == [{"algorithm": "SHA256", "checksumValue": checksum}]
+    assert {
+        "spdxElementId": protocol["SPDXID"],
+        "relationshipType": "GENERATED_FROM",
+        "relatedSpdxElement": wheel_file["SPDXID"],
+    } in document["relationships"]
+
+
+def test_verifier_rejects_a_root_dockerignore_change(tmp_path: Path) -> None:
+    repository = _copy(tmp_path)
+    dockerignore = repository / ".dockerignore"
+    dockerignore.write_text(dockerignore.read_text() + "\n!control/src/.env\n")
+
+    result = subprocess.run([SCRIPT, "--root", repository], capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "manifest" in result.stderr
+
+
+def test_verifier_rejects_a_protocol_lock_hash_that_does_not_match_the_wheel(tmp_path: Path) -> None:
+    repository = _copy(tmp_path)
+    lock = repository / "agent/uv.lock"
+    lock.write_text(lock.read_text().replace("10906428efdc60b9f55e9e78ef876e72310353207068cead4383e5a7250c5513", "0" * 64))
+
+    result = subprocess.run([SCRIPT, "--root", repository, "--generate"], capture_output=True, text=True)
 
     assert result.returncode != 0
     assert "wheel" in result.stderr

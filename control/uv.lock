@@ -80,16 +80,16 @@ wheels = [
 [[package]]
 name = "dgx-agent-protocol"
 version = "1.0.0"
-source = { directory = "../agent_protocol" }
+source = { path = "../inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl" }
 dependencies = [
     { name = "jsonschema" },
+]
+wheels = [
+    { filename = "dgx_agent_protocol-1.0.0-py3-none-any.whl", hash = "sha256:10906428efdc60b9f55e9e78ef876e72310353207068cead4383e5a7250c5513" },
 ]
 
 [package.metadata]
 requires-dist = [{ name = "jsonschema", specifier = "==4.25.1" }]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = "==9.1.1" }]
 
 [[package]]
 name = "dgx-control"
@@ -115,7 +115,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "alembic", specifier = "==1.16.4" },
-    { name = "dgx-agent-protocol", directory = "../agent_protocol" },
+    { name = "dgx-agent-protocol", path = "../inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl" },
     { name = "fastapi", specifier = "==0.116.1" },
     { name = "jsonschema", specifier = "==4.25.1" },
     { name = "psycopg", extras = ["binary"], specifier = "==3.2.9" },
