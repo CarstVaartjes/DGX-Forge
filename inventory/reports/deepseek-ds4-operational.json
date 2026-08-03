@@ -105,6 +105,7 @@
     "reboot_no_autostart_acceptance": false
   },
   "deferred_acceptance": [
+    "The canonical performance attempt on 2026-08-03 measured 15.1 tok/s at concurrency 1 and 9.6-13.4 tok/s at concurrency 3 against the 35 tok/s single-decode floor; this pinned Q2-imatrix lane remains verified and unaccepted.",
     "Stable fixed-output performance thresholds remain deferred to the final cross-model optimization phase.",
     "The 15-minute thermal-stability gate has not been run.",
     "Three complete start-stop-memory-recovery cycles have not been accepted for this release.",
