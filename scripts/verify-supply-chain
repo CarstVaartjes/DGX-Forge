@@ -14,6 +14,7 @@ import tomllib
 from pathlib import Path
 
 IMAGE = re.compile(r"^[^\s@]+(?::[^\s@]+)?@sha256:[0-9a-f]{64}$")
+PROTOCOL_WHEEL = "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
 
 
 def canonical(value: object) -> bytes:
@@ -103,7 +104,7 @@ def spdx(name: str, lock: bytes, packages: list[tuple[str, str]]) -> bytes:
     })
 
 
-def expected(root: Path) -> tuple[dict[str, bytes], dict[str, object]]:
+def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
     python_lock = (root / "control/uv.lock").read_bytes()
     agent_lock = (root / "agent/uv.lock").read_bytes()
     protocol_lock = (root / "agent_protocol/uv.lock").read_bytes()
@@ -136,7 +137,7 @@ def expected(root: Path) -> tuple[dict[str, bytes], dict[str, object]]:
         "image_lock_sha256": digest((root / "deploy/compose/images.lock.json").read_bytes()),
         "signature_key_sha256": digest((root / "deploy/compose/trust/litellm-cosign.pub").read_bytes()),
     }
-    return sboms, manifest
+    return sboms, wheel, manifest
 
 
 def image_errors(root: Path) -> list[str]:
@@ -160,9 +161,8 @@ def image_errors(root: Path) -> list[str]:
     if "ARG NODE_IMAGE" not in dockerfile or "ARG PYTHON_IMAGE" not in dockerfile:
         errors.append("control build bases are not explicit locked arguments")
     if (
-        "COPY agent_protocol/pyproject.toml ./" not in dockerfile
-        or "COPY control/pyproject.toml ./" not in dockerfile
-        or "/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl" not in dockerfile
+        "COPY control/pyproject.toml ./" not in dockerfile
+        or f"COPY {PROTOCOL_WHEEL} /wheels/" not in dockerfile
     ):
         errors.append("control image does not install the standalone protocol wheel from root context")
     return errors
@@ -171,7 +171,7 @@ def image_errors(root: Path) -> list[str]:
 def verify(root: Path, generate: bool) -> tuple[list[str], dict[str, object]]:
     errors = image_errors(root)
     try:
-        sboms, manifest = expected(root)
+        sboms, wheel, manifest = expected(root)
     except (OSError, ValueError, KeyError, json.JSONDecodeError, subprocess.CalledProcessError, tomllib.TOMLDecodeError) as error:
         return [*errors, f"could not generate expected supply-chain evidence: {type(error).__name__}"], {}
     manifest_path = root / "inventory/sbom/manifest.json"
@@ -180,12 +180,18 @@ def verify(root: Path, generate: bool) -> tuple[list[str], dict[str, object]]:
             target = root / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(content)
+        wheel_path = root / PROTOCOL_WHEEL
+        wheel_path.parent.mkdir(parents=True, exist_ok=True)
+        wheel_path.write_bytes(wheel)
         manifest_path.write_bytes(canonical(manifest))
     else:
         for path, content in sboms.items():
             target = root / path
             if not target.is_file() or target.read_bytes() != content:
                 errors.append(f"SBOM is missing or stale: {path}")
+        wheel_path = root / PROTOCOL_WHEEL
+        if not wheel_path.is_file() or wheel_path.read_bytes() != wheel:
+            errors.append("protocol wheel is missing or stale")
         if not manifest_path.is_file() or manifest_path.read_bytes() != canonical(manifest):
             errors.append("supply-chain manifest is missing or stale")
     result = {"ok": not errors, "images": len(json.loads((root / "deploy/compose/images.lock.json").read_bytes()).get("images", {})), "sboms": sorted(sboms), "manifest_sha256": digest(canonical(manifest))}

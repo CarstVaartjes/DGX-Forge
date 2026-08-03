@@ -64,3 +64,15 @@ def test_verifier_rejects_protocol_wheel_or_lock_drift(tmp_path: Path) -> None:
 
     assert result.returncode != 0
     assert "manifest" in result.stderr
+
+
+def test_verifier_rejects_a_missing_protocol_wheel_artifact(tmp_path: Path) -> None:
+    repository = _copy(tmp_path)
+    wheel = repository / "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
+    assert wheel.is_file()
+    wheel.unlink()
+
+    result = subprocess.run([SCRIPT, "--root", repository], capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "wheel" in result.stderr

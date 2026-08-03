@@ -148,10 +148,14 @@ def test_release_artifacts_install_the_exact_protocol_wheel() -> None:
     control_project = (ROOT / "control/pyproject.toml").read_text()
     agent_project_path = ROOT / "agent/pyproject.toml"
     agent_lock_path = ROOT / "agent/uv.lock"
+    protocol_wheel_path = ROOT / "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
+    dockerignore_path = ROOT / ".dockerignore"
     dockerfile = (ROOT / "control/Dockerfile").read_text()
 
     assert agent_project_path.is_file()
     assert agent_lock_path.is_file()
+    assert protocol_wheel_path.is_file()
+    assert dockerignore_path.is_file()
     agent_project = agent_project_path.read_text()
     agent_lock = tomllib.loads(agent_lock_path.read_text())
     control_lock = tomllib.loads((ROOT / "control/uv.lock").read_text())
@@ -167,5 +171,8 @@ def test_release_artifacts_install_the_exact_protocol_wheel() -> None:
     assert resolved_versions == {"1.0.0"}
     assert "COPY control/pyproject.toml ./" in dockerfile
     assert "COPY control/src ./src" in dockerfile
-    assert "COPY agent_protocol/" in dockerfile
-    assert "dgx_agent_protocol-1.0.0-py3-none-any.whl" in dockerfile
+    assert "COPY inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl /wheels/" in dockerfile
+    assert "/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl" in dockerfile
+    dockerignore = set(dockerignore_path.read_text().splitlines())
+    assert "*" in dockerignore
+    assert {"!control/src/**", "!control/web/**", "control/.venv", "!inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"} <= dockerignore
