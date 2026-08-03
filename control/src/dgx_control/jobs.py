@@ -15,6 +15,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import Job, JobAttempt
+from .logging import redact_text
 
 _SENSITIVE = re.compile(r"(?i)(password|secret|token|private.?key|authorization)")
 _MAX_PAYLOAD = 65_536
@@ -200,7 +201,7 @@ class JobService:
             attempt.state = state
             job.state = state
             job.result = dict(result) if result is not None else None
-            job.status_reason = reason[:1024] if reason else None
+            job.status_reason = redact_text(reason)[:1024] if reason else None
             job.updated_at = self._clock()
 
     def succeed(self, fence: AttemptFence, result: Mapping[str, object]) -> None:

@@ -1,9 +1,16 @@
 name: dgx-forge-control
 
+x-bounded-logging: &bounded-logging
+  driver: local
+  options:
+    max-size: 10m
+    max-file: "5"
+
 services:
   postgres:
     image: ${POSTGRES_IMAGE:?set a digest-pinned PostgreSQL image}
     restart: unless-stopped
+    logging: *bounded-logging
     environment:
       POSTGRES_DB: control
       POSTGRES_USER: control
@@ -20,6 +27,7 @@ services:
   control-api:
     image: ${CONTROL_IMAGE:?set a digest-pinned control image}
     restart: unless-stopped
+    logging: *bounded-logging
     command: [python, -m, dgx_control.api]
     read_only: true
     user: "10001:10001"
@@ -47,6 +55,7 @@ services:
   control-worker:
     image: ${CONTROL_IMAGE:?set a digest-pinned control image}
     restart: unless-stopped
+    logging: *bounded-logging
     command: [python, -m, dgx_control.worker]
     read_only: true
     user: "10001:10001"
@@ -63,6 +72,7 @@ services:
   litellm:
     image: ${LITELLM_IMAGE:?set a digest-pinned LiteLLM image}
     restart: unless-stopped
+    logging: *bounded-logging
     entrypoint: [/app/dgx-entrypoint]
     read_only: true
     secrets: [litellm-master-key, litellm-upstream-key, litellm-database-url]
@@ -82,6 +92,7 @@ services:
   prometheus:
     image: ${PROMETHEUS_IMAGE:?set a digest-pinned Prometheus image}
     restart: unless-stopped
+    logging: *bounded-logging
     command:
       - --config.file=/etc/prometheus/prometheus.yml
       - --storage.tsdb.path=/prometheus
@@ -103,6 +114,7 @@ services:
   grafana:
     image: ${GRAFANA_IMAGE:?set a digest-pinned Grafana image}
     restart: unless-stopped
+    logging: *bounded-logging
     read_only: true
     user: "472:472"
     environment:
@@ -124,6 +136,7 @@ services:
   caddy:
     image: ${CADDY_IMAGE:?set a digest-pinned Caddy image}
     restart: unless-stopped
+    logging: *bounded-logging
     read_only: true
     ports:
       - ${HTTPS_BIND:-0.0.0.0:443}:443

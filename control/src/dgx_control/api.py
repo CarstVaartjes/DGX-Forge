@@ -103,6 +103,7 @@ def create_app(
     metrics: MetricsRegistry | None = None,
     metrics_token: str | None = None,
     metrics_refresh: Callable[[], None] | None = None,
+    job_logs=None,
 ) -> FastAPI:
     app = FastAPI(title="DGX Forge Control", version="1.0", docs_url=None, redoc_url=None)
 
@@ -273,6 +274,30 @@ def create_app(
             raise HTTPException(status_code=404, detail="job not found") from None
         return JobResponse(id=str(job.id), state=str(job.state))
 
+    @app.get("/api/v1/jobs/{job_id}/logs")
+    def job_log_list(job_id: str, authenticated: Actor = Depends(actor)) -> dict[str, object]:
+        if authenticated.role not in {"operator", "administrator"}:
+            raise HTTPException(status_code=403, detail="insufficient role")
+        if job_logs is None:
+            raise HTTPException(status_code=503, detail="job logs unavailable")
+        try:
+            jobs.get(job_id)
+            return {"job_id": job_id, "digests": list(job_logs.list(job_id))}
+        except (KeyError, ValueError):
+            raise HTTPException(status_code=404, detail="job not found") from None
+
+    @app.get("/api/v1/jobs/{job_id}/logs/{digest}")
+    def job_log_content(job_id: str, digest: str, authenticated: Actor = Depends(actor)) -> Response:
+        if authenticated.role not in {"operator", "administrator"}:
+            raise HTTPException(status_code=403, detail="insufficient role")
+        if job_logs is None:
+            raise HTTPException(status_code=503, detail="job logs unavailable")
+        try:
+            jobs.get(job_id)
+            return Response(job_logs.read(job_id, digest), media_type="text/plain; charset=utf-8")
+        except (KeyError, ValueError):
+            raise HTTPException(status_code=404, detail="job log not found") from None
+
     return app
 
 
@@ -289,6 +314,7 @@ def production_app() -> FastAPI:
     from .dashboard import DashboardService
     from .metrics import MetricsRegistry
     from .models import Job
+    from .logging import JobLogStore
     from sqlalchemy import func, select
 
     settings = Settings.from_env_and_secrets()
@@ -329,6 +355,7 @@ def production_app() -> FastAPI:
         metrics=metrics,
         metrics_token=settings.metrics_token,
         metrics_refresh=refresh_metrics,
+        job_logs=JobLogStore(settings.state_path / "job-logs"),
     )
     web_root = Path(__file__).resolve().parent / "web"
     if web_root.is_dir():
