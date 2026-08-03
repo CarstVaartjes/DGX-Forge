@@ -21,6 +21,8 @@ if str(repository_src) not in sys.path:
     sys.path.insert(0, str(repository_src))
 
 from spark_profiles.ssh_transport import select_transport
+from spark_profiles.fleet import NodeId
+from spark_profiles.fleet.loaders import FleetLoadError, load_fleet
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._/-]+$")
@@ -251,13 +253,25 @@ class DeployError(RuntimeError):
 
 
 @dataclass(frozen=True)
+class Target:
+    node_id: str
+    address: str
+    port: int
+
+
+@dataclass(frozen=True)
 class Release:
     workload: str
     digest: str
     manifest: Path
     prefix: PurePosixPath
     files: tuple[tuple[PurePosixPath, Path, str], ...]
-    aliases: tuple[str, ...]
+    targets: tuple[Target, ...]
+
+    @property
+    def aliases(self) -> tuple[str, ...]:
+        """Compatibility projection for existing dry-run consumers."""
+        return tuple(target.address for target in self.targets)
 
     @property
     def destination(self) -> str:
@@ -314,14 +328,6 @@ def _load_release(root: Path, workload_name: str) -> Release:
     if workload.get("id") != workload_name:
         raise DeployError("workload id does not match requested release")
     nodes = workload.get("nodes")
-    if (
-        not isinstance(nodes, list)
-        or not nodes
-        or any(not isinstance(node, str) for node in nodes)
-        or len(nodes) != len(set(nodes))
-        or not set(nodes).issubset({"spark1", "spark2"})
-    ):
-        raise DeployError("workload nodes must be a non-empty unique Spark node subset")
     runtime = workload.get("runtime_release")
     if not isinstance(runtime, dict):
         raise DeployError("workload has no runtime_release")
@@ -364,31 +370,83 @@ def _load_release(root: Path, workload_name: str) -> Release:
             raise DeployError(f"runtime payload digest mismatch: {reference}")
         validated.append((installed, source, expected))
 
-    try:
-        inventory_path = _regular_file(
-            root, PurePosixPath("inventory/cluster.toml"), "inventory"
-        )
-        with inventory_path.open("rb") as source:
-            inventory = tomllib.load(source)
-        aliases = tuple(
-            inventory["hosts"][node]["ssh_alias"] for node in nodes
-        )
-    except (FileNotFoundError, KeyError, TypeError, tomllib.TOMLDecodeError) as error:
-        raise DeployError("inventory must declare SSH aliases for workload nodes") from error
-    if any(
-        not isinstance(alias, str)
-        or not re.fullmatch(r"[A-Za-z0-9._-]+", alias)
-        for alias in aliases
-    ):
-        raise DeployError("inventory contains an unsafe SSH alias")
+    fleet_path = root / "inventory/fleet.toml"
+    if fleet_path.is_file() and not fleet_path.is_symlink():
+        targets = _generic_targets(root, workload_name, workload_path, fleet_path)
+    else:
+        if (
+            not isinstance(nodes, list)
+            or not nodes
+            or any(not isinstance(node, str) for node in nodes)
+            or len(nodes) != len(set(nodes))
+            or not set(nodes).issubset({"spark1", "spark2"})
+        ):
+            raise DeployError("workload nodes must be a non-empty unique Spark node subset")
+        try:
+            inventory_path = _regular_file(
+                root, PurePosixPath("inventory/cluster.toml"), "inventory"
+            )
+            with inventory_path.open("rb") as source:
+                inventory = tomllib.load(source)
+            aliases = tuple(inventory["hosts"][node]["ssh_alias"] for node in nodes)
+        except (FileNotFoundError, KeyError, TypeError, tomllib.TOMLDecodeError) as error:
+            raise DeployError("inventory must declare SSH aliases for workload nodes") from error
+        if any(not isinstance(alias, str) or not re.fullmatch(r"[A-Za-z0-9._-]+", alias) for alias in aliases):
+            raise DeployError("inventory contains an unsafe SSH alias")
+        targets = tuple(Target(node, alias, 22) for node, alias in zip(nodes, aliases, strict=True))
     return Release(
         workload_name,
         digest,
         manifest_path,
         prefix,
         tuple(validated),
-        aliases,
+        targets,
     )
+
+
+def _generic_targets(
+    root: Path, workload_name: str, workload_path: Path, fleet_path: Path
+) -> tuple[Target, ...]:
+    placement_reference = PurePosixPath("inventory/placements") / f"{workload_name}.json"
+    placement_path = _regular_file(root, placement_reference, "placement plan")
+    try:
+        placement = json.loads(placement_path.read_text(encoding="utf-8"))
+        fleet = load_fleet(fleet_path)
+    except (UnicodeDecodeError, json.JSONDecodeError, FleetLoadError) as error:
+        raise DeployError("generic fleet or placement plan is invalid") from error
+    if not isinstance(placement, dict) or set(placement) != {
+        "schema_version", "workload", "workload_sha256", "input_digest", "nodes"
+    }:
+        raise DeployError("placement plan has invalid fields")
+    raw_nodes = placement["nodes"]
+    if (
+        placement["schema_version"] != 1
+        or placement["workload"] != workload_name
+        or placement["workload_sha256"] != _sha256(workload_path)
+        or not isinstance(placement["input_digest"], str)
+        or _SHA256.fullmatch(placement["input_digest"]) is None
+        or not isinstance(raw_nodes, list) or not raw_nodes
+        or len(raw_nodes) != len(set(raw_nodes))
+    ):
+        raise DeployError("placement plan does not match the workload")
+    targets = []
+    for text in raw_nodes:
+        try:
+            node_id = NodeId.parse(text)
+            record = fleet.nodes[node_id]
+        except (TypeError, ValueError, KeyError):
+            raise DeployError("placement plan references an unknown fleet node") from None
+        if record.lifecycle != "ready":
+            raise DeployError(f"placement target is not ready: {node_id.value}")
+        endpoint = record.management
+        if (
+            re.fullmatch(r"[A-Za-z0-9._-]+", endpoint.user) is None
+            or re.fullmatch(r"[A-Za-z0-9._:-]+", endpoint.host) is None
+        ):
+            raise DeployError("fleet contains an unsafe management endpoint")
+        host = f"[{endpoint.host}]" if ":" in endpoint.host else endpoint.host
+        targets.append(Target(node_id.value, f"{endpoint.user}@{host}", endpoint.port))
+    return tuple(targets)
 
 
 def _tree_arguments(release: Release) -> tuple[str, ...]:
@@ -420,14 +478,14 @@ def _remote_command(arguments: tuple[str, ...]) -> str:
 
 
 def _ssh(
-    alias: str,
+    target: Target,
     script: str,
     arguments: tuple[str, ...],
     *,
     ssh_bin: str,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        (ssh_bin, *_SSH_OPTIONS, alias, _remote_command(arguments)),
+        (ssh_bin, *_SSH_OPTIONS, "-p", str(target.port), target.address, _remote_command(arguments)),
         input=script,
         check=False,
         capture_output=True,
@@ -469,7 +527,7 @@ def _scp_source_argument(source: Path, path_style: str) -> str:
 
 def _deploy_host(
     release: Release,
-    alias: str,
+    target: Target,
     *,
     ssh_bin: str,
     scp_bin: str,
@@ -477,19 +535,19 @@ def _deploy_host(
 ) -> str:
     tree_arguments = _tree_arguments(release)
     probe = _ssh(
-        alias,
+        target,
         _PROBE_SCRIPT,
         (_REMOTE_RELEASE_ROOT, release.destination, *tree_arguments),
         ssh_bin=ssh_bin,
     )
     state = probe.stdout.strip()
     if probe.returncode == 43:
-        raise DeployError(f"refusing to replace different release on {alias}")
-    _require_remote_success(probe, f"release probe failed on {alias}")
+        raise DeployError(f"refusing to replace different release on {target.node_id}")
+    _require_remote_success(probe, f"release probe failed on {target.node_id}")
     if state == "identical":
         return "already installed"
     if state != "absent":
-        raise DeployError(f"release probe returned an invalid state on {alias}")
+        raise DeployError(f"release probe returned an invalid state on {target.node_id}")
 
     temporary = (
         f"{release.destination.rsplit('/', 1)[0]}/.{release.digest}.tmp-"
@@ -497,18 +555,18 @@ def _deploy_host(
     )
     directories = tree_arguments[2 : 2 + int(tree_arguments[1])]
     prepared = _ssh(
-        alias,
+        target,
         _PREPARE_SCRIPT,
         (_REMOTE_RELEASE_ROOT, temporary, *directories),
         ssh_bin=ssh_bin,
     )
-    _require_remote_success(prepared, f"temporary release creation failed on {alias}")
+    _require_remote_success(prepared, f"temporary release creation failed on {target.node_id}")
 
     for installed, source, _ in release.files:
-        destination = f"{alias}:{temporary}/{installed}"
+        destination = f"{target.address}:{temporary}/{installed}"
         source_argument = _scp_source_argument(source, scp_path_style)
         copied = subprocess.run(
-            (scp_bin, *_SSH_OPTIONS, "-p", "--", source_argument, destination),
+            (scp_bin, *_SSH_OPTIONS, "-P", str(target.port), "-p", "--", source_argument, destination),
             check=False,
             capture_output=True,
             text=True,
@@ -516,10 +574,10 @@ def _deploy_host(
         )
         if copied.returncode != 0:
             detail = copied.stderr.strip() or f"exit {copied.returncode}"
-            raise DeployError(f"release transfer failed on {alias}: {detail}")
+            raise DeployError(f"release transfer failed on {target.node_id}: {detail}")
         expected_mode = "0755" if installed.parts[0] == "bin" else "0644"
         mode_applied = _ssh(
-            alias,
+            target,
             _MODE_SCRIPT,
             (
                 _REMOTE_RELEASE_ROOT,
@@ -531,11 +589,11 @@ def _deploy_host(
         )
         _require_remote_success(
             mode_applied,
-            f"release mode application failed on {alias}",
+            f"release mode application failed on {target.node_id}",
         )
 
     finalized = _ssh(
-        alias,
+        target,
         _FINALIZE_SCRIPT,
         (
             _REMOTE_RELEASE_ROOT,
@@ -545,7 +603,7 @@ def _deploy_host(
         ),
         ssh_bin=ssh_bin,
     )
-    _require_remote_success(finalized, f"release verification failed on {alias}")
+    _require_remote_success(finalized, f"release verification failed on {target.node_id}")
     return "installed"
 
 
@@ -555,15 +613,15 @@ def _deploy(release: Release) -> None:
         scp_transport = select_transport("scp")
     except ValueError as error:
         raise DeployError(str(error)) from error
-    for alias in release.aliases:
+    for target in release.targets:
         result = _deploy_host(
             release,
-            alias,
+            target,
             ssh_bin=ssh_transport.binary,
             scp_bin=scp_transport.binary,
             scp_path_style=scp_transport.path_style,
         )
-        print(f"{alias}: {result} {release.destination}")
+        print(f"{target.node_id}: {result} {release.destination}")
 
 
 def _main() -> int:
@@ -585,6 +643,7 @@ def _main() -> int:
                         "manifest_sha256": release.digest,
                         "destination": release.destination,
                         "hosts": release.aliases,
+                        "node_ids": [target.node_id for target in release.targets],
                         "files": [str(path) for path, _, _ in release.files],
                     },
                     sort_keys=True,

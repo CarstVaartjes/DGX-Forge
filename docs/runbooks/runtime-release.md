@@ -1,8 +1,11 @@
 # Runtime release deployment
 
 Use `scripts/deploy-runtime-release` from the developer machine to install the
-selected workload's checked adapter release on exactly its declared Spark
-nodes. This operation deploys only the small, immutable runtime adapter. It
+selected workload's checked adapter release on exactly its resolved Spark
+nodes. For V2 repositories, targets come from `inventory/fleet.toml` and the
+content-addressed `inventory/placements/<workload>.json` plan. Legacy workload
+`nodes` and `inventory/cluster.toml` aliases remain a compatibility read path.
+This operation deploys only the small, immutable runtime adapter. It
 does not download model artifacts, pull container images, start containers, or
 change the active Cluster Profile.
 
@@ -16,8 +19,11 @@ change the active Cluster Profile.
   other manifest-listed payloads are installed with mode `0644`. These intended
   release modes come from repository/manifest policy, not the checkout's local
   mode bits, which may appear as `0777`/`0666` on `/mnt/c`.
-- `inventory/cluster.toml` contains hardened SSH aliases for every node declared
-  by the workload.
+- V2 placement nodes are unique canonical `spk_…` IDs, exist in the fleet, are
+  `ready`, and the plan pins both the workload-file SHA-256 and placement input
+  digest. The fleet supplies user, host, and port without embedding credentials.
+- On the legacy path, `inventory/cluster.toml` contains hardened SSH aliases for
+  every node declared by the workload.
 - Host keys have already been accepted through the SSH bootstrap runbook.
 - `/opt/spark/model-adapters` exists on every target node and is writable by
   the controller SSH user. Bootstrap each target once with:
@@ -41,8 +47,8 @@ Dry run is the default and executes no SSH or transfer command:
 scripts/deploy-runtime-release deepseek-agent-dual
 ```
 
-The JSON plan identifies the exact manifest digest, workload-declared SSH
-aliases, stripped release paths, and the immutable destination:
+The JSON plan identifies the exact manifest digest, canonical node IDs,
+resolved management targets, stripped release paths, and immutable destination:
 
 ```text
 /opt/spark/model-adapters/deepseek-agent-dual/releases/<manifest-sha256>/
@@ -60,7 +66,7 @@ Writing requires the explicit flag:
 scripts/deploy-runtime-release --apply deepseek-agent-dual
 ```
 
-For each node, the deployment performs these gates in order:
+For each resolved node, the deployment performs these gates in order:
 
 1. Probe the digest-qualified final directory. An exact existing tree is an
    idempotent success; any differing file, directory, symlink, or hash is
