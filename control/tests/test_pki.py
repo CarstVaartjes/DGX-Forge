@@ -11,7 +11,7 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
-from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+from cryptography.x509.oid import ExtendedKeyUsageOID, ExtensionOID, NameOID
 
 
 NODE_ID = "spk_0123456789abcdef0123456789abcdef"
@@ -122,8 +122,59 @@ def test_issued_certificate_is_short_lived_and_node_bound(
     assert issued.certificate_pem not in issued.chain_pem
     assert issued.serial == format(certificate.serial_number, "x")
     assert issued.fingerprint == certificate.fingerprint(hashes.SHA256()).hex()
+    assert issued.node_id == NODE_ID
     assert issued.not_before == now
     assert issued.not_after == now + timedelta(hours=24)
+
+
+def test_issued_certificate_metadata_matches_second_precision_x509_validity(
+    authority: CertificateAuthority, public_key: bytes, now: datetime
+) -> None:
+    requested_now = now.replace(microsecond=789123)
+    issued = authority.issue_node(NODE_ID, public_key, requested_now)
+    certificate = x509.load_pem_x509_certificate(issued.certificate_pem)
+
+    assert issued.not_before == certificate.not_valid_before_utc
+    assert issued.not_after == certificate.not_valid_after_utc
+    assert issued.not_after - issued.not_before == timedelta(hours=24)
+
+
+def test_issued_certificate_has_exact_signed_client_auth_profile(
+    authority: CertificateAuthority, public_key: bytes, now: datetime
+) -> None:
+    issued = authority.issue_node(NODE_ID, public_key, now)
+    certificate = x509.load_pem_x509_certificate(issued.certificate_pem)
+    intermediate = x509.load_pem_x509_certificate(issued.chain_pem)
+
+    assert certificate.subject == x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, NODE_ID)])
+    assert certificate.issuer == intermediate.subject
+    assert [(extension.oid, extension.critical) for extension in certificate.extensions] == [
+        (ExtensionOID.BASIC_CONSTRAINTS, True),
+        (ExtensionOID.KEY_USAGE, True),
+        (ExtensionOID.EXTENDED_KEY_USAGE, True),
+        (ExtensionOID.SUBJECT_ALTERNATIVE_NAME, False),
+    ]
+    assert certificate.extensions.get_extension_for_oid(ExtensionOID.BASIC_CONSTRAINTS).value == x509.BasicConstraints(
+        ca=False, path_length=None
+    )
+    assert certificate.extensions.get_extension_for_oid(ExtensionOID.KEY_USAGE).value == x509.KeyUsage(
+        digital_signature=True,
+        content_commitment=False,
+        key_encipherment=False,
+        data_encipherment=False,
+        key_agreement=False,
+        key_cert_sign=False,
+        crl_sign=False,
+        encipher_only=False,
+        decipher_only=False,
+    )
+    assert certificate.extensions.get_extension_for_oid(ExtensionOID.EXTENDED_KEY_USAGE).value == x509.ExtendedKeyUsage(
+        [ExtendedKeyUsageOID.CLIENT_AUTH]
+    )
+    assert certificate.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME).value == x509.SubjectAlternativeName(
+        [x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_ID}")]
+    )
+    intermediate.public_key().verify(certificate.signature, certificate.tbs_certificate_bytes)
 
 
 def test_issued_certificate_contains_no_private_key(
@@ -143,20 +194,26 @@ def test_renewal_issues_a_fresh_short_lived_certificate(
     renewed = authority.renew_node(NODE_ID, public_key, now + timedelta(hours=12))
 
     assert renewed.serial != original.serial
+    assert original.node_id == NODE_ID
+    assert renewed.node_id == NODE_ID
     assert renewed.not_before == now + timedelta(hours=12)
     assert renewed.not_after - renewed.not_before == timedelta(hours=24)
 
 
 def test_revocation_bundle_is_a_signed_empty_crl(
-    authority: CertificateAuthority, now: datetime
+    authority: CertificateAuthority, public_key: bytes, now: datetime
 ) -> None:
     bundle = authority.revocation_bundle(now)
+    issued = authority.issue_node(NODE_ID, public_key, now)
 
     crl = x509.load_pem_x509_crl(bundle)
+    intermediate = x509.load_pem_x509_certificate(issued.chain_pem)
     assert crl.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == "DGX Forge Agent Intermediate"
+    assert crl.issuer == intermediate.subject
     assert crl.last_update_utc == now
     assert crl.next_update_utc == now + timedelta(hours=24)
     assert list(crl) == []
+    intermediate.public_key().verify(crl.signature, crl.tbs_certlist_bytes)
 
 
 @pytest.mark.parametrize("kind", ("key", "certificate"))

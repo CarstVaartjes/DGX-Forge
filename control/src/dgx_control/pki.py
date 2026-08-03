@@ -31,6 +31,7 @@ _MINIMUM_INTERMEDIATE_LIFETIME = timedelta(days=7)
 class IssuedCertificate:
     """Public certificate material returned to a node after issuance."""
 
+    node_id: str
     certificate_pem: bytes
     chain_pem: bytes
     serial: str
@@ -116,6 +117,7 @@ class BuiltinCertificateAuthority(CertificateAuthority):
             .sign(self._key, algorithm=None)
         )
         return IssuedCertificate(
+            node_id=node_id,
             certificate_pem=certificate.public_bytes(serialization.Encoding.PEM),
             chain_pem=self._certificate.public_bytes(serialization.Encoding.PEM),
             serial=format(certificate.serial_number, "x"),
@@ -195,4 +197,4 @@ def _load_node_public_key(public_key_pem: bytes) -> ed25519.Ed25519PublicKey:
 def _utc_timestamp(value: datetime) -> datetime:
     if value.tzinfo is None or value.utcoffset() is None:
         raise ValueError("timestamp must be timezone-aware")
-    return value.astimezone(UTC)
+    return value.astimezone(UTC).replace(microsecond=0)
