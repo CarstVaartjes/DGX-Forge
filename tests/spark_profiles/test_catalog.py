@@ -92,6 +92,25 @@ def test_definition_change_invalidates_lock(catalog_root: Path) -> None:
         Catalog.load(catalog_root)
 
 
+def test_model_owned_storage_paths_must_not_collide(catalog_root: Path) -> None:
+    second = catalog_root / "config/workloads/qwen3-vl-8b-single.toml"
+    second.write_text(
+        second.read_text(encoding="utf-8").replace(
+            "/srv/models/runtime-cache/qwen3-vl-8b-single",
+            "/srv/models/runtime-cache/tokenrig-single",
+        ),
+        encoding="utf-8",
+    )
+    _refresh_definition_fingerprint(catalog_root)
+    maturity = _read_report(catalog_root, "model-definitions.json")
+    changed = load_workload(second)
+    next(record for record in maturity["definitions"] if record["id"] == changed.id)["sha256"] = fingerprint(changed)
+    _write_report(catalog_root, "model-definitions.json", maturity)
+
+    with pytest.raises(CatalogError, match="model-owned storage path collision"):
+        Catalog.load(catalog_root)
+
+
 def test_toml_comments_do_not_change_definition_fingerprint(catalog_root: Path) -> None:
     catalog = Catalog.load(catalog_root)
     fingerprint = catalog.definition_fingerprints["deepseek-agent-dual"]
@@ -276,7 +295,10 @@ def _add_single_definition(catalog_root: Path) -> tuple[str, str, str]:
         .replace('placement_class = "dual-exclusive"', 'placement_class = "single-exclusive"')
         .replace('nodes = ["spark1", "spark2"]', 'nodes = ["spark1"]')
         .replace('start_order = ["spark2", "spark1"]', 'start_order = ["spark1"]')
-        .replace('stop_order = ["spark1", "spark2"]', 'stop_order = ["spark1"]'),
+        .replace('stop_order = ["spark1", "spark2"]', 'stop_order = ["spark1"]')
+        .replace('/srv/models/snapshots/deepseek-v4-flash-0731', '/srv/models/snapshots/single')
+        .replace('/srv/models/runtime-cache/deepseek-agent-dual', '/srv/models/runtime-cache/single')
+        .replace('/srv/models/outputs/deepseek-agent-dual', '/srv/models/outputs/single'),
         encoding="utf-8",
     )
     definition = load_workload(catalog_root / "config/workloads/single.toml")

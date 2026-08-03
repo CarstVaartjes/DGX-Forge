@@ -217,6 +217,24 @@ def _validate_runtime_release(root: Path, definition: WorkloadDefinition) -> Non
             raise CatalogError(f"runtime release artifact digest does not match manifest: {reference}")
 
 
+def _validate_model_owned_storage_paths(
+    definitions: Mapping[str, WorkloadDefinition],
+) -> None:
+    """Reject cache/scratch/output roots shared by distinct model definitions."""
+    owners: dict[Path, tuple[str, str]] = {}
+    for definition in definitions.values():
+        for field in ("cache", "scratch", "output"):
+            path = Path(getattr(definition.paths, field)).expanduser()
+            owner = (definition.id, field)
+            previous = owners.get(path)
+            if previous is not None and previous[0] != definition.id:
+                raise CatalogError(
+                    "model-owned storage path collision: "
+                    f"{path} ({previous[0]}.{previous[1]} and {definition.id}.{field})"
+                )
+            owners[path] = owner
+
+
 def _stage_report_path(
     identifier: str, stage: str, *, correction_position: int | None = None
 ) -> str:
@@ -402,6 +420,7 @@ class Catalog:
     def load(cls, root: Path) -> Catalog:
         root = root.resolve()
         definitions = _load_definitions(root)
+        _validate_model_owned_storage_paths(definitions)
         profiles = _load_profiles(root)
         selectors = _load_selectors(root / "config/profile-selectors.toml", profiles)
         definition_fingerprints = {key: fingerprint(value) for key, value in definitions.items()}
