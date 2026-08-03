@@ -21,6 +21,7 @@ class MetricsRegistry:
         self._nodes: dict[str, tuple[bool, int, int, float]] = {}
         self._jobs: dict[tuple[str, str], int] = {}
         self._route_state = "unavailable"
+        self._backup_age: float | None = None
         self._api_counts: dict[tuple[str, str], int] = defaultdict(int)
         self._api_durations: dict[tuple[str, str], list[float]] = defaultdict(list)
 
@@ -54,6 +55,11 @@ class MetricsRegistry:
         with self._lock:
             self._route_state = state
 
+    def set_backup_age(self, age_seconds: float) -> None:
+        age = self._number(age_seconds, "backup age")
+        with self._lock:
+            self._backup_age = age
+
     def observe_api(self, method: str, status_code: int, duration_seconds: float) -> None:
         safe_method = method if method in _METHODS else "OTHER"
         status_class = f"{status_code // 100}xx" if 100 <= status_code <= 599 else "other"
@@ -67,6 +73,7 @@ class MetricsRegistry:
         with self._lock:
             nodes, jobs = dict(self._nodes), dict(self._jobs)
             route_state = self._route_state
+            backup_age = self._backup_age
             api_counts = dict(self._api_counts)
             api_durations = {key: tuple(values) for key, values in self._api_durations.items()}
         lines = [
@@ -75,6 +82,12 @@ class MetricsRegistry:
         ]
         for state in sorted(_ROUTE_STATES):
             lines.append(f'dgx_route_state{{state="{state}"}} {1 if state == route_state else 0}')
+        if backup_age is not None:
+            lines.extend((
+                "# HELP dgx_control_backup_age_seconds Age of the last successful encrypted control backup.",
+                "# TYPE dgx_control_backup_age_seconds gauge",
+                f"dgx_control_backup_age_seconds {backup_age:g}",
+            ))
         lines.extend(("# HELP dgx_node_ready Whether the stable fleet node is ready.", "# TYPE dgx_node_ready gauge"))
         for node_id, (ready, memory, disk, age) in sorted(nodes.items()):
             label = f'node_id="{node_id}"'

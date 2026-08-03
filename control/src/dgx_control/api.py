@@ -313,6 +313,13 @@ def production_app() -> FastAPI:
         with sessions() as session:
             for kind, state, count in session.execute(select(Job.kind, Job.state, func.count()).group_by(Job.kind, Job.state)):
                 metrics.set_job_count(kind, state, count)
+        backup_marker = settings.state_path / "last-successful-backup.epoch"
+        if backup_marker.is_file() and not backup_marker.is_symlink():
+            try:
+                completed_at = int(backup_marker.read_text().strip())
+                metrics.set_backup_age(max(0, int(time.time()) - completed_at))
+            except (OSError, ValueError):
+                pass
     app = create_app(
         jobs=job_service,
         tokens=TokenCodec(settings.token_signing_key),

@@ -23,3 +23,10 @@ uv run --project "$repo_root/control" python -m dgx_control.offline backup \
     --config "$repo_root/deploy/compose" \
     --output "$output" \
     --encrypt-command "$encrypt_command"
+
+state_path=${DGX_STATE_PATH:-/srv/dgx-forge/state}
+mkdir -p -- "$state_path"
+marker=$(mktemp "$state_path/.last-backup.XXXXXX")
+chmod 600 -- "$marker"
+date +%s >"$marker"
+mv -f -- "$marker" "$state_path/last-successful-backup.epoch"

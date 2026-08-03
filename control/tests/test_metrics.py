@@ -18,11 +18,13 @@ def test_metrics_do_not_contain_request_content_or_credentials() -> None:
     metrics.observe_api("POST", 202, 0.25)
     metrics.set_job_count("reconcile", "running", 1)
     metrics.set_route_state("maintenance")
+    metrics.set_backup_age(60)
     text = metrics.render()
     assert "prompt" not in text.lower()
     assert "bearer" not in text.lower()
     assert "authorization" not in text.lower()
     assert 'method="POST",status_class="2xx"' in text
+    assert "dgx_control_backup_age_seconds 60" in text
 
 
 def test_metric_labels_are_allowlisted_and_unknown_values_collapse() -> None:

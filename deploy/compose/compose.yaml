@@ -93,11 +93,33 @@ services:
     secrets: [metrics-token]
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yaml:/etc/prometheus/alerts.yaml:ro
       - prometheus-data:/prometheus
     tmpfs: [/tmp]
     networks: [application]
     depends_on:
       control-api: {condition: service_healthy}
+
+  grafana:
+    image: ${GRAFANA_IMAGE:?set a digest-pinned Grafana image}
+    restart: unless-stopped
+    read_only: true
+    user: "472:472"
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD__FILE: /run/secrets/grafana-admin-password
+      GF_SERVER_ROOT_URL: "%(protocol)s://%(domain)s/grafana/"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    secrets: [grafana-admin-password]
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    tmpfs: [/tmp]
+    networks: [application, ingress]
+    depends_on: [prometheus]
 
   caddy:
     image: ${CADDY_IMAGE:?set a digest-pinned Caddy image}
@@ -128,6 +150,8 @@ secrets:
     file: "${LITELLM_UPSTREAM_KEY_FILE:?set LiteLLM upstream key secret file}"
   litellm-database-url:
     file: "${LITELLM_DATABASE_URL_FILE:?set LiteLLM database URL secret file}"
+  grafana-admin-password:
+    file: "${GRAFANA_ADMIN_PASSWORD_FILE:?set Grafana admin password secret file}"
 
 networks:
   ingress: {}
@@ -141,3 +165,4 @@ volumes:
   caddy-data: {}
   caddy-config: {}
   prometheus-data: {}
+  grafana-data: {}

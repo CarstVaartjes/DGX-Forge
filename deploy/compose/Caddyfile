@@ -16,6 +16,9 @@
 	handle /v1/* {
 		reverse_proxy litellm:4000
 	}
+	handle /grafana/* {
+		reverse_proxy grafana:3000
+	}
 	handle {
 		reverse_proxy control-api:8000
 	}
