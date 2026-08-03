@@ -52,6 +52,18 @@ def _fake_command(tmp_path: Path, name: str, source: str) -> Path:
 def _adapter_test_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
     models_root = tmp_path / "models"
     models_root.mkdir()
+    _fake_command(
+        tmp_path,
+        "stat",
+        f"""#!{sys.executable}
+import os
+import sys
+
+if sys.argv[1:3] != ["-c", "%g"] or len(sys.argv) != 4:
+    raise SystemExit(2)
+print(os.stat(sys.argv[3]).st_gid)
+""",
+    )
     boot_id = tmp_path / "boot-id"
     boot_id.write_text("test-boot\n", encoding="utf-8")
     meminfo = tmp_path / "meminfo"
@@ -64,6 +76,7 @@ def _adapter_test_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
         "DS4_BOOT_ID_PATH": str(boot_id),
         "DS4_MEMINFO_PATH": str(meminfo),
         "DS4_RELEASE_SHA256": release,
+        "PATH": f"{tmp_path}:{os.environ['PATH']}",
     }
     return environment, models_root
 
