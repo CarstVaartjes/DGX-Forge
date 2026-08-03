@@ -157,10 +157,15 @@ services:
       - ${HTTPS_BIND:-0.0.0.0:443}:443
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/entrypoint.sh:/usr/local/bin/dgx-caddy-entrypoint:ro
       - caddy-data:/data
       - caddy-config:/config
     tmpfs: [/tmp]
-    command: [/bin/sh, -ec, 'export DGX_AGENT_PROXY_AUTH="$$(cat /run/secrets/agent-proxy-auth)"; exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile']
+    entrypoint: [/bin/sh, /usr/local/bin/dgx-caddy-entrypoint]
+    environment:
+      DGX_CONTROL_HOSTNAME: ${DGX_CONTROL_HOSTNAME:?set Caddy control hostname}
+      DGX_AGENT_ENROLL_HOSTNAME: ${DGX_AGENT_ENROLL_HOSTNAME:?set Caddy enrollment hostname}
+      DGX_AGENT_HOSTNAME: ${DGX_AGENT_HOSTNAME:?set Caddy agent hostname}
     secrets: [agent-client-ca, agent-proxy-auth]
     networks: [ingress, agent-proxy]
     depends_on: [control-api]

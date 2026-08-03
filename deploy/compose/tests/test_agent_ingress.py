@@ -41,22 +41,22 @@ def _environment() -> dict[str, str]:
     }
 
 
-def _rendered(*files: str) -> dict:
+def _rendered(*files: str, environment: dict[str, str] | None = None) -> dict:
     command = ["docker", "compose"]
     for file in files or ("compose.yaml",):
         command.extend(("-f", str(ROOT / "deploy/compose" / file)))
     command.extend(("config", "--format", "json"))
-    result = subprocess.run(command, check=True, capture_output=True, text=True, env=_environment())
+    result = subprocess.run(command, check=True, capture_output=True, text=True, env=environment or _environment())
     return json.loads(result.stdout)
 
 
-def _adapted_caddy() -> dict:
+def _adapted_caddy(environment: dict[str, str]) -> dict:
     result = subprocess.run(
         [
             "docker", "run", "--rm", "-i",
-            "-e", "DGX_CONTROL_HOSTNAME=control.test.example",
-            "-e", "DGX_AGENT_ENROLL_HOSTNAME=enroll.test.example",
-            "-e", "DGX_AGENT_HOSTNAME=agents.test.example",
+            "-e", f"DGX_CONTROL_HOSTNAME={environment['DGX_CONTROL_HOSTNAME']}",
+            "-e", f"DGX_AGENT_ENROLL_HOSTNAME={environment['DGX_AGENT_ENROLL_HOSTNAME']}",
+            "-e", f"DGX_AGENT_HOSTNAME={environment['DGX_AGENT_HOSTNAME']}",
             "-e", "DGX_AGENT_PROXY_AUTH=test-proxy-secret",
             "caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb",
             "caddy", "adapt", "--config", "-", "--adapter", "caddyfile",
@@ -69,8 +69,28 @@ def _adapted_caddy() -> dict:
     return json.loads(result.stdout)
 
 
+def _entrypoint_result(environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    command = ["docker", "run", "--rm"]
+    for name, value in environment.items():
+        command.extend(("-e", f"{name}={value}"))
+    command.extend((
+        "-v", f"{ROOT / 'deploy/compose/caddy/entrypoint.sh'}:/usr/local/bin/dgx-caddy-entrypoint:ro",
+        "caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb",
+        "/bin/sh", "/usr/local/bin/dgx-caddy-entrypoint",
+    ))
+    return subprocess.run(command, capture_output=True, text=True, timeout=10)
+
+
 def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents() -> None:
-    adapted = _adapted_caddy()
+    environment = _environment()
+    rendered_caddy = _rendered()["services"]["caddy"]
+    caddy_environment = rendered_caddy["environment"]
+    assert {name: caddy_environment[name] for name in (
+        "DGX_CONTROL_HOSTNAME", "DGX_AGENT_ENROLL_HOSTNAME", "DGX_AGENT_HOSTNAME",
+    )} == {name: environment[name] for name in (
+        "DGX_CONTROL_HOSTNAME", "DGX_AGENT_ENROLL_HOSTNAME", "DGX_AGENT_HOSTNAME",
+    )}
+    adapted = _adapted_caddy(caddy_environment | {"DGX_AGENT_PROXY_AUTH": "test-proxy-secret"})
     server = adapted["apps"]["http"]["servers"]["srv0"]
 
     def site(host: str) -> dict:
@@ -102,6 +122,7 @@ def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents(
         if policy.get("match") == {"sni": ["agents.test.example"]}
     )
     assert client_auth["mode"] == "require_and_verify"
+    assert client_auth["ca"] == {"provider": "file", "pem_files": ["/run/secrets/agent-client-ca"]}
     agent_routes = agent_site["handle"][0]["routes"]
     agent_proxy = next(route for route in agent_routes if "control-api:8000" in json.dumps(route, sort_keys=True))
     request_headers = agent_proxy["handle"][0]["routes"][0]["handle"][0]["headers"]["request"]
@@ -115,6 +136,42 @@ def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents(
         "x-dgx-agent-proxy-auth": ["test-proxy-secret"],
     }
     assert any(route.get("match") == [{"not": [{"path": ["/agent/v1/enroll"]}], "path": ["/agent/v1/*"]}] for route in agent_routes)
+    mappings = []
+
+    def collect_maps(value: object) -> None:
+        if isinstance(value, dict):
+            if value.get("handler") == "map":
+                mappings.append(value)
+            for child in value.values():
+                collect_maps(child)
+        elif isinstance(value, list):
+            for child in value:
+                collect_maps(child)
+
+    collect_maps(adapted)
+    assert mappings == [{
+        "handler": "map", "source": "{http.request.tls.client.subject}",
+        "destinations": ["{dgx_agent_node}"], "defaults": [""],
+        "mappings": [{"input_regexp": "^CN=(spk_[0-9a-f]{32})$", "outputs": ["${1}"]}],
+    }]
+
+
+def test_caddy_compose_requires_distinct_sni_hostnames_before_startup() -> None:
+    missing = _environment()
+    missing.pop("DGX_AGENT_HOSTNAME")
+    command = ["docker", "compose", "-f", str(ROOT / "deploy/compose/compose.yaml"), "config", "--quiet"]
+    absent = subprocess.run(command, capture_output=True, text=True, env=missing)
+    assert absent.returncode != 0
+    assert "DGX_AGENT_HOSTNAME" in absent.stderr
+
+    for duplicate in (
+        {"DGX_CONTROL_HOSTNAME": "same.test.example", "DGX_AGENT_ENROLL_HOSTNAME": "same.test.example", "DGX_AGENT_HOSTNAME": "agents.test.example"},
+        {"DGX_CONTROL_HOSTNAME": "same.test.example", "DGX_AGENT_ENROLL_HOSTNAME": "enroll.test.example", "DGX_AGENT_HOSTNAME": "same.test.example"},
+        {"DGX_CONTROL_HOSTNAME": "control.test.example", "DGX_AGENT_ENROLL_HOSTNAME": "same.test.example", "DGX_AGENT_HOSTNAME": "same.test.example"},
+    ):
+        result = _entrypoint_result(duplicate)
+        assert result.returncode != 0
+        assert "must be distinct" in result.stderr
 
 
 def test_rendered_production_boundary_has_only_caddy_public_and_step_ca_private() -> None:
@@ -141,5 +198,7 @@ def test_builtin_ca_override_is_explicit_and_only_it_mounts_the_builtin_signing_
     builtin_secrets = {secret["source"] for secret in builtin["services"]["control-api"]["secrets"]}
     assert "agent-intermediate-key" not in production_secrets
     assert "agent-intermediate-key" in builtin_secrets
+    assert "agent-ca-credential" not in builtin_secrets
     assert builtin["services"]["control-api"]["environment"]["DGX_AGENT_CA_PROVIDER"] == "builtin"
     assert builtin["services"]["control-api"]["environment"]["DGX_AGENT_BUILTIN_CA_BOOTSTRAP"] == "1"
+    assert "DGX_AGENT_CA_CREDENTIAL_FILE" not in builtin["services"]["control-api"]["environment"]

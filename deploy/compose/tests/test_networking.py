@@ -31,6 +31,9 @@ def _rendered() -> dict:
         "STEP_CA_ROOT_CERTIFICATE_FILE": "/dev/null",
         "STEP_CA_INTERMEDIATE_KEY_FILE": "/dev/null",
         "STEP_CA_PASSWORD_FILE": "/dev/null",
+        "DGX_CONTROL_HOSTNAME": "control.test.example",
+        "DGX_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
+        "DGX_AGENT_HOSTNAME": "agents.test.example",
     }
     result = subprocess.run(
         ["docker", "compose", "-f", str(root / "deploy/compose/compose.yaml"), "config", "--format", "json"],

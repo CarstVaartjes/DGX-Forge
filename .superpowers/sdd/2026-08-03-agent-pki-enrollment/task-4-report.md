@@ -210,3 +210,52 @@ Output: `10 passed in 0.99s`; both Compose renderings exited 0.
 
 The pinned Caddy container validation was re-run with a temporary valid CA and
 reported `Valid configuration`; `git diff --check` exited 0.
+
+## Review round 2 fixes
+
+- Caddy now receives `DGX_CONTROL_HOSTNAME`, `DGX_AGENT_ENROLL_HOSTNAME`, and
+  `DGX_AGENT_HOSTNAME` directly from required Compose interpolation. A small
+  read-only mounted entrypoint rejects missing or duplicate SNI values before
+  reading the proxy secret or starting Caddy. Rendered-service coverage feeds
+  those actual Compose values into `caddy adapt`, so direct test-only `-e`
+  values cannot mask missing deployment wiring.
+- The explicit builtin override uses Compose `!reset null` to remove
+  `DGX_AGENT_CA_CREDENTIAL_FILE` and `!override` to replace the control-api
+  secret list with exactly its common/agent TLS secrets plus the builtin key.
+  This requires Docker Compose v2.24.4 or newer (verified locally with
+  v5.0.1); the rendered override test proves neither credential environment
+  nor credential secret remains.
+- Adapted Caddy JSON now asserts the exact file trust pool, canonical subject
+  map regex/output/default, SNI-specific `require_and_verify`, route ordering,
+  and complete request header delete/replacement set.
+- Task 5's commit command now includes `api.py`, `settings.py`, Compose, and
+  `ca.json`, matching the provider/runtime work it owns.
+
+### Review 2 RED
+
+```sh
+uv run pytest deploy/compose/tests/test_agent_ingress.py::test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents deploy/compose/tests/test_agent_ingress.py::test_caddy_compose_requires_distinct_sni_hostnames_before_startup deploy/compose/tests/test_agent_ingress.py::test_builtin_ca_override_is_explicit_and_only_it_mounts_the_builtin_signing_key -v
+```
+
+Observed: 3 failed. Caddy had no rendered Compose environment, a missing
+hostname still allowed `docker compose config --quiet`, and the builtin
+rendering retained `agent-ca-credential`.
+
+### Review 2 GREEN / final verification
+
+```sh
+uv run --project control pytest -q
+```
+
+Output: `223 passed in 17.54s`.
+
+```sh
+uv run pytest deploy/compose/tests/test_agent_ingress.py deploy/compose/tests/test_networking.py deploy/compose/tests/test_observability.py -v \
+  && docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml config --quiet \
+  && docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml -f deploy/compose/compose.builtin-ca.yaml config --quiet
+```
+
+Output: `11 passed in 1.50s`; both Compose configurations exited 0.
+
+The pinned Caddy `validate` command again reported `Valid configuration`; the
+final `git diff --check` exited 0.

@@ -281,6 +281,6 @@ Expected: all pass.
 - [ ] **Step 5: Commit recovery documentation**
 
 ```bash
-git add control/src/dgx_control/step_ca.py control/tests/test_step_ca.py docs/runbooks/agent-pki.md docs/security/threat-model.md tests/runbooks/test_agent_pki.py
+git add control/src/dgx_control/step_ca.py control/src/dgx_control/api.py control/src/dgx_control/settings.py control/tests/test_step_ca.py deploy/compose/compose.yaml deploy/compose/step-ca/ca.json docs/runbooks/agent-pki.md docs/security/threat-model.md tests/runbooks/test_agent_pki.py
 git commit -m "docs: define Spark agent PKI recovery"
 ```
