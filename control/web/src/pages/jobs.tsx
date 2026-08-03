@@ -1,0 +1,2 @@
+import {useEffect, useState} from "react"; import type {ControlApi, JobSummary} from "../api/types";
+export function JobsPage({api}: {api: ControlApi}) { const [jobs, setJobs] = useState<JobSummary[]>([]); useEffect(() => {api.jobs().then(result => setJobs(result.jobs));}, [api]); return <><h2>Jobs</h2><p>Onboarding, proposal, deployment, and reconciliation progress.</p><table><thead><tr><th>ID</th><th>Kind</th><th>State</th></tr></thead><tbody>{jobs.map(job => <tr key={job.id}><td><code>{job.id}</code></td><td>{job.kind}</td><td>{job.state}</td></tr>)}</tbody></table></>; }

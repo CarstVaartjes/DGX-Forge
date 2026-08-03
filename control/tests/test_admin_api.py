@@ -2,7 +2,7 @@ import base64
 
 from fastapi.testclient import TestClient
 
-from dgx_control.api import AdminServices, create_app
+from dgx_control.api import AdminServices, SpaFiles, create_app
 from dgx_control.audit import MemoryAuditStore
 from dgx_control.auth import Actor, TokenCodec
 from dgx_control.proposals import ProposalPreview
@@ -53,3 +53,15 @@ def test_repository_document_reads_require_authentication() -> None:
     app = create_app(jobs=Jobs(), tokens=codec, audits=MemoryAuditStore(), fleet=lambda: {}, admin=AdminServices(Repository(), Proposals(), None, None))
     client = TestClient(app)
     assert client.get("/api/v1/repository", params={"commit": "a" * 40}).status_code == 401
+
+
+def test_spa_falls_back_to_index_for_client_routes_but_not_assets(tmp_path) -> None:
+    from fastapi import FastAPI
+    web = tmp_path / "web"
+    web.mkdir()
+    (web / "index.html").write_text("<h1>Admin</h1>")
+    app = FastAPI()
+    app.mount("/", SpaFiles(directory=web, html=True))
+    client = TestClient(app)
+    assert client.get("/profiles").text == "<h1>Admin</h1>"
+    assert client.get("/missing.js").status_code == 404

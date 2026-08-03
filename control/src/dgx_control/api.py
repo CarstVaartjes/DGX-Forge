@@ -8,9 +8,13 @@ import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Protocol
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.staticfiles import StaticFiles
+from starlette.responses import FileResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from .audit import AuditRecord
@@ -24,6 +28,16 @@ class AdminServices:
     proposals: Any
     changes: Any | None
     reconciler: Any | None
+
+
+class SpaFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as error:
+            if error.status_code == 404 and "." not in path:
+                return FileResponse(Path(self.directory) / "index.html")
+            raise
 
 
 class JobQueue(Protocol):
@@ -231,6 +245,7 @@ def production_app() -> FastAPI:
     from .settings import Settings
     from .repository import RepositoryService
     from .proposals import ProposalService
+    from .dashboard import DashboardService
 
     settings = Settings.from_env_and_secrets()
     sessions = session_factory(build_engine(settings.database_url))
@@ -244,9 +259,12 @@ def production_app() -> FastAPI:
         jobs=job_service,
         tokens=TokenCodec(settings.token_signing_key),
         audits=SqlAuditStore(sessions, clock),
-        fleet=lambda: {"repository_path": str(settings.repository_path), "nodes": []},
+        fleet=DashboardService(repository, sessions).fleet,
         admin=AdminServices(repository, proposals, None, None),
     )
+    web_root = Path(__file__).resolve().parent / "web"
+    if web_root.is_dir():
+        app.mount("/", SpaFiles(directory=web_root, html=True), name="admin-web")
     @app.on_event("shutdown")
     def release_online_lock() -> None:
         online_lock.__exit__()
