@@ -56,6 +56,13 @@ class RepositoryService:
             "GIT_TERMINAL_PROMPT": "0",
         }
 
+    @property
+    def root(self) -> Path:
+        return self._root
+
+    def validate_path(self, path: str) -> str:
+        return self._path(path)
+
     def _run(self, arguments: tuple[str, ...], *, limit: int, action: str) -> bytes:
         command = (
             "git", "-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=never",
