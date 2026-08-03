@@ -34,6 +34,8 @@ class AttemptFence:
     lease_deadline: datetime
     kind: str
     payload: Mapping[str, object]
+    base_commit: str
+    targets: tuple[str, ...]
 
 
 def _aware(value: datetime) -> datetime:
@@ -169,7 +171,10 @@ class JobService:
                     state="running",
                 )
             )
-            return AttemptFence(job.id, job.current_attempt, fence, worker_id, deadline, job.kind, dict(job.payload))
+            return AttemptFence(
+                job.id, job.current_attempt, fence, worker_id, deadline, job.kind,
+                dict(job.payload), job.base_commit, tuple(job.targets),
+            )
 
     def _active(self, session: Session, fence: AttemptFence) -> tuple[Job, JobAttempt]:
         job = session.get(Job, fence.job_id)
@@ -193,7 +198,10 @@ class JobService:
             deadline = self._clock() + timedelta(seconds=lease_seconds)
             attempt.lease_deadline = deadline
             job.updated_at = self._clock()
-            return AttemptFence(fence.job_id, fence.attempt, fence.fence, fence.worker_id, deadline, fence.kind, fence.payload)
+            return AttemptFence(
+                fence.job_id, fence.attempt, fence.fence, fence.worker_id, deadline,
+                fence.kind, fence.payload, fence.base_commit, fence.targets,
+            )
 
     def _finish(self, fence: AttemptFence, state: str, result: Mapping[str, object] | None, reason: str | None) -> None:
         with self._sessions.begin() as session:

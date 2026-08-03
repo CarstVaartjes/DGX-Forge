@@ -316,7 +316,7 @@ def production_app() -> FastAPI:
     from .logging import JobLogStore
     from .code_host import RepositoryCodeHost
     from .git_policy import GitPolicy, PolicyStore
-    from .reconcile import ChangeService
+    from .reconcile import ChangeService, Reconciler, RepositoryDefinitions
     from sqlalchemy import func, select
 
     settings = Settings.from_env_and_secrets()
@@ -341,6 +341,9 @@ def production_app() -> FastAPI:
         required_checks=settings.required_checks,
     )
     changes = ChangeService(proposals, git_policy)
+    reconciler = Reconciler(
+        git_policy, RepositoryDefinitions(repository), jobs=job_service,
+    )
     dashboard = DashboardService(repository, sessions)
     metrics = MetricsRegistry()
     def refresh_metrics() -> None:
@@ -367,7 +370,7 @@ def production_app() -> FastAPI:
         tokens=TokenCodec(settings.token_signing_key),
         audits=SqlAuditStore(sessions, clock),
         fleet=dashboard.fleet,
-        admin=AdminServices(repository, proposals, changes, None),
+        admin=AdminServices(repository, proposals, changes, reconciler),
         metrics=metrics,
         metrics_token=settings.metrics_token,
         metrics_refresh=refresh_metrics,

@@ -40,6 +40,17 @@ def test_workers_cannot_claim_same_job(service) -> None:
     assert claimed[0].job_id == job.id
 
 
+def test_claim_carries_commit_and_targets_to_the_worker(service) -> None:
+    jobs, _ = service
+    jobs.enqueue("probe", "admin", "a" * 40, ["spk_a", "spk_b"], {})
+
+    attempt = jobs.claim("worker", 30)
+
+    assert attempt is not None
+    assert attempt.base_commit == "a" * 40
+    assert attempt.targets == ("spk_a", "spk_b")
+
+
 def test_stale_attempt_cannot_publish_success_after_lease_reclaim(service) -> None:
     jobs, clock = service
     jobs.enqueue("probe", "admin", "abc123", ["spk_1"], {})

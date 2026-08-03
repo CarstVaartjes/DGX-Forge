@@ -26,6 +26,18 @@ class IneligibleCommit(RuntimeError):
     pass
 
 
+class RepositoryDefinitions:
+    def __init__(self, repository, path: str = "inventory/reconciliation.json") -> None:
+        self._repository = repository
+        self._path = path
+
+    def __call__(self, commit: str) -> Mapping[str, object]:
+        parsed = self._repository.read_document(commit, self._path).parsed
+        if not isinstance(parsed, Mapping):
+            raise ValueError("reconciliation document must be a JSON object")
+        return parsed
+
+
 @dataclass(frozen=True)
 class ReconciliationPlan:
     commit: str
@@ -73,9 +85,9 @@ class Reconciler:
         self,
         policy,
         definitions: Callable[[str], Mapping[str, object]],
-        routes,
-        controller,
-        leases,
+        routes=None,
+        controller=None,
+        leases=None,
         *,
         jobs: JobService | None = None,
     ) -> None:
@@ -119,6 +131,8 @@ class Reconciler:
             raise ValueError("reconciliation plan content no longer matches its digest")
 
     def execute(self, plan: ReconciliationPlan) -> ReconciliationResult:
+        if self._routes is None or self._controller is None or self._leases is None:
+            raise RuntimeError("reconciliation execution is available only in the worker")
         self._verify_plan(plan)
         self._eligible(plan.commit)
         self._routes.withdraw(plan.targets)
@@ -143,7 +157,13 @@ class Reconciler:
         self._eligible(plan.commit)
         job = self._jobs.enqueue(
             "reconcile", actor, plan.commit, list(plan.targets),
-            {"plan_digest": plan.digest, "input_digests": dict(plan.input_digests)},
+            {
+                "plan_digest": plan.digest,
+                "placements": dict(plan.placements),
+                "routes": dict(plan.routes),
+                "releases": dict(plan.releases),
+                "input_digests": dict(plan.input_digests),
+            },
             request_id=request_id,
         )
         return {"job_id": job.id, "state": job.state, "base_commit": plan.commit}

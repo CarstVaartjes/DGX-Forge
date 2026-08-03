@@ -3,7 +3,7 @@ from contextlib import contextmanager
 import pytest
 
 from dgx_control.git_policy import Eligibility
-from dgx_control.reconcile import IneligibleCommit, Reconciler
+from dgx_control.reconcile import IneligibleCommit, Reconciler, RepositoryDefinitions
 
 
 class Policy:
@@ -84,4 +84,27 @@ def test_enqueue_pins_plan_commit_and_digest() -> None:
     result = reconciler.enqueue(plan.digest, "operator", "request")
     assert result == {"job_id": "job", "state": "queued", "base_commit": "a" * 40}
     assert jobs.call[0][2] == "a" * 40
-    assert jobs.call[0][4]["plan_digest"] == plan.digest
+    assert jobs.call[0][4] == {
+        "input_digests": {"fleet": "f" * 64},
+        "placements": {"entry": ["spk_a"]},
+        "plan_digest": plan.digest,
+        "releases": {"spk_a": "sha256:abc"},
+        "routes": {"spk_a": "entry"},
+    }
+
+
+def test_repository_definitions_reads_commit_pinned_document() -> None:
+    class Repository:
+        def read_document(self, commit, path):
+            assert commit == "a" * 40
+            assert path == "inventory/reconciliation.json"
+            return type("Document", (), {"parsed": definitions(commit)})()
+
+    assert RepositoryDefinitions(Repository())("a" * 40) == definitions("a" * 40)
+
+
+def test_planning_only_reconciler_cannot_execute_in_api_process() -> None:
+    reconciler = Reconciler(Policy(), definitions, jobs=Jobs())
+    plan = reconciler.plan("a" * 40)
+    with pytest.raises(RuntimeError, match="worker"):
+        reconciler.execute(plan)

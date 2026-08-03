@@ -16,6 +16,9 @@ COPY --from=web /web/dist ./src/dgx_control/web
 RUN python -m pip install --no-cache-dir --prefix=/install .
 
 FROM ${PYTHON_IMAGE}
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends git openssh-client \
+    && rm -rf /var/lib/apt/lists/*
 RUN groupadd --gid 10001 control && useradd --uid 10001 --gid 10001 --no-create-home control
 COPY --from=build /install /usr/local
 USER 10001:10001
