@@ -43,7 +43,7 @@ def _environment() -> dict[str, str]:
 
 def _rendered(*files: str, environment: dict[str, str] | None = None) -> dict:
     command = ["docker", "compose"]
-    for file in files or ("compose.yaml",):
+    for file in files or ("compose.yaml", "compose.step-ca.yaml"):
         command.extend(("-f", str(ROOT / "deploy/compose" / file)))
     command.extend(("config", "--format", "json"))
     result = subprocess.run(command, check=True, capture_output=True, text=True, env=environment or _environment())
@@ -69,12 +69,16 @@ def _adapted_caddy(environment: dict[str, str]) -> dict:
     return json.loads(result.stdout)
 
 
-def _entrypoint_result(environment: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _entrypoint_result(environment: dict[str, str], secret_source: str | None = None) -> subprocess.CompletedProcess[str]:
     command = ["docker", "run", "--rm"]
     for name, value in environment.items():
         command.extend(("-e", f"{name}={value}"))
     command.extend((
         "-v", f"{ROOT / 'deploy/compose/caddy/entrypoint.sh'}:/usr/local/bin/dgx-caddy-entrypoint:ro",
+    ))
+    if secret_source is not None:
+        command.extend(("-v", f"{secret_source}:/run/secrets/agent-proxy-auth:ro"))
+    command.extend((
         "caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb",
         "/bin/sh", "/usr/local/bin/dgx-caddy-entrypoint",
     ))
@@ -83,7 +87,7 @@ def _entrypoint_result(environment: dict[str, str]) -> subprocess.CompletedProce
 
 def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents() -> None:
     environment = _environment()
-    rendered_caddy = _rendered()["services"]["caddy"]
+    rendered_caddy = _rendered("compose.yaml")["services"]["caddy"]
     caddy_environment = rendered_caddy["environment"]
     assert {name: caddy_environment[name] for name in (
         "DGX_CONTROL_HOSTNAME", "DGX_AGENT_ENROLL_HOSTNAME", "DGX_AGENT_HOSTNAME",
@@ -156,7 +160,7 @@ def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents(
     }]
 
 
-def test_caddy_compose_requires_distinct_sni_hostnames_before_startup() -> None:
+def test_caddy_compose_requires_distinct_sni_hostnames_before_startup(tmp_path: Path) -> None:
     missing = _environment()
     missing.pop("DGX_AGENT_HOSTNAME")
     command = ["docker", "compose", "-f", str(ROOT / "deploy/compose/compose.yaml"), "config", "--quiet"]
@@ -172,6 +176,33 @@ def test_caddy_compose_requires_distinct_sni_hostnames_before_startup() -> None:
         result = _entrypoint_result(duplicate)
         assert result.returncode != 0
         assert "must be distinct" in result.stderr
+
+    for equivalent in (
+        {"DGX_CONTROL_HOSTNAME": "CONTROL.test.example", "DGX_AGENT_ENROLL_HOSTNAME": "control.test.example.", "DGX_AGENT_HOSTNAME": "agents.test.example"},
+        {"DGX_CONTROL_HOSTNAME": "control.test.example", "DGX_AGENT_ENROLL_HOSTNAME": "ENROLL.test.example", "DGX_AGENT_HOSTNAME": "enroll.test.example."},
+    ):
+        result = _entrypoint_result(equivalent)
+        assert result.returncode != 0
+        assert "must be distinct" in result.stderr
+
+    malformed = _entrypoint_result({
+        "DGX_CONTROL_HOSTNAME": "control test.example",
+        "DGX_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
+        "DGX_AGENT_HOSTNAME": "agents.test.example",
+    })
+    assert malformed.returncode != 0
+    assert "invalid" in malformed.stderr
+
+    valid = {"DGX_CONTROL_HOSTNAME": "control.test.example", "DGX_AGENT_ENROLL_HOSTNAME": "enroll.test.example", "DGX_AGENT_HOSTNAME": "agents.test.example"}
+    for result in (_entrypoint_result(valid), _entrypoint_result(valid, "/dev/null")):
+        assert result.returncode != 0
+        assert "proxy authentication secret" in result.stderr
+
+    short_secret = tmp_path / "agent-proxy-auth"
+    short_secret.write_text("short-secret")
+    result = _entrypoint_result(valid, str(short_secret))
+    assert result.returncode != 0
+    assert "at least 32 bytes" in result.stderr
 
 
 def test_rendered_production_boundary_has_only_caddy_public_and_step_ca_private() -> None:
@@ -202,3 +233,22 @@ def test_builtin_ca_override_is_explicit_and_only_it_mounts_the_builtin_signing_
     assert builtin["services"]["control-api"]["environment"]["DGX_AGENT_CA_PROVIDER"] == "builtin"
     assert builtin["services"]["control-api"]["environment"]["DGX_AGENT_BUILTIN_CA_BOOTSTRAP"] == "1"
     assert "DGX_AGENT_CA_CREDENTIAL_FILE" not in builtin["services"]["control-api"]["environment"]
+
+
+def test_provider_overlays_require_only_their_own_secrets() -> None:
+    base = _rendered("compose.yaml")
+    assert "step-ca" not in base["services"]
+    assert "DGX_AGENT_CA_PROVIDER" not in base["services"]["control-api"]["environment"]
+
+    builtin_environment = _environment()
+    for name in ("AGENT_CA_CREDENTIAL_FILE", "STEP_CA_ROOT_CERTIFICATE_FILE", "STEP_CA_INTERMEDIATE_KEY_FILE", "STEP_CA_PASSWORD_FILE"):
+        builtin_environment.pop(name)
+    builtin = _rendered("compose.yaml", "compose.builtin-ca.yaml", environment=builtin_environment)
+    assert "agent-ca-credential" not in {secret["source"] for secret in builtin["services"]["control-api"]["secrets"]}
+
+    missing_step_secret = _environment()
+    missing_step_secret.pop("STEP_CA_PASSWORD_FILE")
+    command = ["docker", "compose", "-f", str(ROOT / "deploy/compose/compose.yaml"), "-f", str(ROOT / "deploy/compose/compose.step-ca.yaml"), "config", "--quiet"]
+    result = subprocess.run(command, capture_output=True, text=True, env=missing_step_secret)
+    assert result.returncode != 0
+    assert "STEP_CA_PASSWORD_FILE" in result.stderr

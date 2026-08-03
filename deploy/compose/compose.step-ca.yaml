@@ -1,0 +1,59 @@
+x-bounded-logging: &bounded-logging
+  driver: local
+  options:
+    max-size: 10m
+    max-file: "5"
+
+services:
+  control-api:
+    environment:
+      DGX_AGENT_CA_PROVIDER: step-ca
+      DGX_AGENT_RUNTIME: enabled
+      DGX_AGENT_CLIENT_CA_FILE: /run/secrets/agent-client-ca
+      DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE: /run/secrets/agent-intermediate-certificate
+      DGX_AGENT_CA_CREDENTIAL_FILE: /run/secrets/agent-ca-credential
+      DGX_AGENT_PROXY_AUTH_FILE: /run/secrets/agent-proxy-auth
+    secrets: [agent-ca-credential]
+    networks: [ca]
+
+  step-ca:
+    image: ${STEP_CA_IMAGE:-smallstep/step-ca:0.30.2@sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270}
+    restart: unless-stopped
+    logging: *bounded-logging
+    read_only: true
+    command: [step-ca, /home/step/config/ca.json, --password-file, /run/secrets/step-ca-password]
+    secrets:
+      - source: step-ca-root-certificate
+        target: root_ca.crt
+      - source: agent-intermediate-certificate
+        target: intermediate_ca.crt
+      - source: step-ca-intermediate-key
+        target: intermediate_ca_key
+      - source: step-ca-password
+        target: step-ca-password
+    volumes:
+      - ./step-ca/ca.json:/home/step/config/ca.json:ro
+      - step-ca-data:/home/step/db
+    tmpfs: [/tmp]
+    networks: [ca]
+    healthcheck:
+      test: [CMD, step, ca, health, --ca-url, https://127.0.0.1:9000, --root, /run/secrets/root_ca.crt]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+secrets:
+  agent-ca-credential:
+    file: "${AGENT_CA_CREDENTIAL_FILE:?set agent CA provider credential secret file}"
+  step-ca-root-certificate:
+    file: "${STEP_CA_ROOT_CERTIFICATE_FILE:?set step-ca root certificate secret file}"
+  step-ca-intermediate-key:
+    file: "${STEP_CA_INTERMEDIATE_KEY_FILE:?set encrypted step-ca intermediate signing key secret file}"
+  step-ca-password:
+    file: "${STEP_CA_PASSWORD_FILE:?set step-ca password secret file}"
+
+networks:
+  ca: {internal: true}
+
+volumes:
+  step-ca-data: {}

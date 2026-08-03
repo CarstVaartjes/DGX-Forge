@@ -36,7 +36,7 @@ def _rendered() -> dict:
         "DGX_AGENT_HOSTNAME": "agents.test.example",
     }
     result = subprocess.run(
-        ["docker", "compose", "-f", str(root / "deploy/compose/compose.yaml"), "config", "--format", "json"],
+        ["docker", "compose", "-f", str(root / "deploy/compose/compose.yaml"), "-f", str(root / "deploy/compose/compose.step-ca.yaml"), "config", "--format", "json"],
         check=True, capture_output=True, text=True, env=env,
     )
     return json.loads(result.stdout)

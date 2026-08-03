@@ -174,6 +174,8 @@ git commit -m "feat: expose authenticated Spark agent API"
 **Files:**
 - Modify: `deploy/compose/Caddyfile`
 - Modify: `deploy/compose/compose.yaml`
+- Create: `deploy/compose/compose.step-ca.yaml`
+- Create: `deploy/compose/compose.builtin-ca.yaml`
 - Modify: `deploy/compose/.env.example`
 - Create: `deploy/compose/step-ca/ca.json`
 - Modify: `control/src/dgx_control/settings.py`
@@ -201,23 +203,25 @@ Expected: FAIL because no mTLS agent route exists.
 
 Add secret files `agent-client-ca`, `agent-intermediate-certificate`, and
 provider credentials; add `DGX_AGENT_*_FILE` and `DGX_AGENT_CA_PROVIDER`
-settings. Configure the production Compose profile with a pinned `step-ca`
-image, persistent CA data, health check, no public port, and a separately
-initialized offline root/intermediate. The development profile may mount the
-built-in intermediate key. Configure Caddy
+settings. Keep the generic base Compose file provider-neutral and require the
+production `compose.step-ca.yaml` overlay for the pinned `step-ca` image,
+persistent CA data, health check, no public port, and a separately initialized
+offline root/intermediate. The `compose.builtin-ca.yaml` development overlay
+may mount the built-in intermediate key without requiring Step CA secrets.
+Configure Caddy
 client authentication and identity forwarding using Caddy placeholders proven
 by `caddy validate`. Keep enrollment server-authenticated and rate-limited;
 keep claim/result mTLS-only.
 
 - [ ] **Step 4: Validate Caddy and Compose**
 
-Run: `uv run pytest deploy/compose/tests/test_agent_ingress.py deploy/compose/tests/test_networking.py -v && docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml config --quiet`
+Run: `uv run pytest deploy/compose/tests/test_agent_ingress.py deploy/compose/tests/test_networking.py -v && docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml config --quiet && docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml -f deploy/compose/compose.builtin-ca.yaml config --quiet`
 Expected: PASS.
 
 - [ ] **Step 5: Commit ingress**
 
 ```bash
-git add deploy/compose/Caddyfile deploy/compose/compose.yaml deploy/compose/.env.example control/src/dgx_control/settings.py deploy/compose/tests/test_agent_ingress.py control/tests/test_settings.py
+git add deploy/compose/Caddyfile deploy/compose/compose.yaml deploy/compose/compose.step-ca.yaml deploy/compose/compose.builtin-ca.yaml deploy/compose/.env.example control/src/dgx_control/settings.py deploy/compose/tests/test_agent_ingress.py control/tests/test_settings.py
 git commit -m "feat: authenticate outbound agents through Caddy"
 ```
 

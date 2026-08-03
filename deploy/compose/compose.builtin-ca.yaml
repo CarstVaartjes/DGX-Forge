@@ -2,22 +2,13 @@ services:
   control-api:
     environment:
       DGX_AGENT_CA_PROVIDER: builtin
+      DGX_AGENT_RUNTIME: enabled
       DGX_AGENT_BUILTIN_CA_BOOTSTRAP: "1"
+      DGX_AGENT_CLIENT_CA_FILE: /run/secrets/agent-client-ca
+      DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE: /run/secrets/agent-intermediate-certificate
       DGX_AGENT_INTERMEDIATE_KEY_FILE: /run/secrets/agent-intermediate-key
-      # Docker Compose !reset/!override requires Compose v2.24.4 or newer.
-      DGX_AGENT_CA_CREDENTIAL_FILE: !reset null
-    secrets: !override
-      - database-url
-      - token-signing-key
-      - metrics-token
-      - git-signing-key
-      - agent-client-ca
-      - agent-intermediate-certificate
-      - agent-proxy-auth
-      - agent-intermediate-key
-
-  step-ca:
-    profiles: [step-ca]
+      DGX_AGENT_PROXY_AUTH_FILE: /run/secrets/agent-proxy-auth
+    secrets: [agent-intermediate-key]
 
 secrets:
   agent-intermediate-key:

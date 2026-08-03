@@ -140,6 +140,66 @@ docker-content-digest: sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e
   must replace it with a bounded shared limiter while retaining the
   pre-body-read property.
 
+## Review round 3 fixes
+
+- Provider-specific Compose material is now split cleanly. `compose.yaml` is
+  provider-neutral and intentionally omits `DGX_AGENT_CA_PROVIDER`, so the
+  production settings guard rejects a base-only control-api startup.
+  `compose.step-ca.yaml` holds the production provider setting, credential,
+  CA network, `step-ca` service, private CA secrets, and persistent CA data.
+  `compose.builtin-ca.yaml` adds only the explicit built-in provider settings
+  and intermediate-key secret; it needs no `STEP_CA_*` or
+  `AGENT_CA_CREDENTIAL_FILE` setting. This also removes the prior
+  Compose-version-dependent `!reset`/`!override` tags.
+- Caddy host comparison now accepts the DNS case-insensitive form plus one
+  optional trailing dot, validates hostname syntax before comparing, and
+  rejects equivalent SNI names. The proxy authentication secret is separately
+  read and checked for read failure, non-empty value, and a minimum of 32 raw
+  bytes before export to Caddy.
+- The bootstrap runbook now gives the exact production command
+  (`-f compose.yaml -f compose.step-ca.yaml`) and the explicit local built-in
+  command (`-f compose.yaml -f compose.builtin-ca.yaml`). `.env.example` marks
+  the Step CA-only values accordingly.
+
+### Review round 3 RED
+
+```sh
+uv run pytest deploy/compose/tests/test_agent_ingress.py::test_caddy_compose_requires_distinct_sni_hostnames_before_startup deploy/compose/tests/test_agent_ingress.py::test_provider_overlays_require_only_their_own_secrets -v
+```
+
+Observed: `2 failed`. Case-only/trailing-dot equivalent hostnames bypassed the
+old raw comparison and reached Caddy startup, and the base Compose rendering
+still included `step-ca` and its provider configuration.
+
+### Review round 3 GREEN
+
+```sh
+uv run pytest deploy/compose/tests/test_agent_ingress.py deploy/compose/tests/test_networking.py -q
+uv run pytest deploy/compose/tests -q
+uv run --project control pytest control/tests/test_settings.py -q
+docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml config --quiet
+docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml -f deploy/compose/compose.builtin-ca.yaml config --quiet
+git diff --check
+```
+
+Observed: ingress/networking `8 passed`; all Compose tests `14 passed`; the
+targeted settings suite `13 passed`; both provider render commands and the
+whitespace check exited 0.
+
+The pinned Caddy image also validated the changed configuration against a
+temporary self-signed client CA. `caddy validate --config /etc/caddy/Caddyfile
+--adapter caddyfile` exited 0 and printed `Valid configuration`.
+
+### Full control-suite note
+
+`uv run --project control pytest -q` was attempted twice with the same result:
+the process exits 139 after progressing to 56%, immediately while starting
+the root-suite test
+`tests/spark_profiles/test_admission.py::test_verified_ds4_single_profile_requires_acceptance_and_exact_profile_evidence`.
+The Task 4 control settings suite passes independently, and this change does
+not modify root-suite application code. The failure is recorded rather than
+masked; it needs separate environment/root-suite investigation.
+
 ## Review round 1 fixes
 
 - Built-in issuer serial metadata is now persisted as the decimal X.509 serial
