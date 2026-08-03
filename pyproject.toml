@@ -20,6 +20,8 @@ dev = ["pytest==9.1.1"]
 "src/spark_profiles/schemas/accepted-cluster-profiles.schema.json" = "spark_profiles/schemas/accepted-cluster-profiles.schema.json"
 "src/spark_profiles/schemas/node-health-raw.schema.json" = "spark_profiles/schemas/node-health-raw.schema.json"
 "src/spark_profiles/schemas/node-health.schema.json" = "spark_profiles/schemas/node-health.schema.json"
+"src/spark_profiles/schemas/fleet.schema.json" = "spark_profiles/schemas/fleet.schema.json"
+"src/spark_profiles/schemas/topology.schema.json" = "spark_profiles/schemas/topology.schema.json"
 
 [tool.ruff]
 required-version = "==0.16.1"
