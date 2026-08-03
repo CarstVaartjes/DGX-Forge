@@ -12,6 +12,8 @@ from typing import Any
 
 from jsonschema import ValidationError, validate
 
+from .placement import PlacementRequirement
+
 _NODES = frozenset(("spark1", "spark2"))
 
 
@@ -122,6 +124,31 @@ class ClusterProfile:
     accepted_evidence: Path
     placements: Mapping[str, tuple[str, ...]]
     endpoints: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class LifecycleConstraints:
+    start_order: str
+    stop_order: str
+
+
+@dataclass(frozen=True)
+class GenericWorkloadDefinition:
+    id: str
+    adapter: str
+    definition_hash: str
+    conflicts: tuple[str, ...]
+    distributed_supported: bool
+
+
+@dataclass(frozen=True)
+class GenericClusterProfile:
+    id: str
+    accepted_evidence: Path
+    workloads: tuple[str, ...]
+    requirements: tuple[PlacementRequirement, ...]
+    endpoints: Mapping[str, str]
+    lifecycle: LifecycleConstraints
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -256,4 +283,40 @@ def load_cluster_profile(path: Path) -> ClusterProfile:
         accepted_evidence=Path(data["accepted_evidence"]),
         placements=MappingProxyType(placements),
         endpoints=MappingProxyType(dict(data["endpoints"])),
+    )
+
+
+def load_generic_workload(path: Path) -> GenericWorkloadDefinition:
+    """Load a V2 workload that contains capabilities, never concrete nodes."""
+    data = _read_toml(path)
+    _validate(data, "workload-v2.schema.json")
+    return GenericWorkloadDefinition(
+        id=data["id"], adapter=data["adapter"],
+        definition_hash=data["definition_hash"],
+        conflicts=tuple(data["conflicts"]),
+        distributed_supported=data["distributed_supported"],
+    )
+
+
+def load_generic_cluster_profile(path: Path) -> GenericClusterProfile:
+    """Load a V2 requirement profile with no address or concrete placement."""
+    data = _read_toml(path)
+    _validate(data, "cluster-profile-v2.schema.json")
+    requirements = tuple(
+        PlacementRequirement(
+            name=item["workload"], definition_hash=item["definition_hash"],
+            node_count=item["node_count"], required_labels=item["required_labels"],
+            min_memory_bytes=item["min_memory_bytes"], min_disk_bytes=item["min_disk_bytes"],
+            exclusive=item["exclusive"], distributed=item["node_count"] > 1,
+            model_supports_distributed=item["distributed_supported"],
+            preferred_node_ids=tuple(item.get("preferred_node_ids", ())),
+        )
+        for item in data["requirements"]
+    )
+    lifecycle = data["lifecycle"]
+    return GenericClusterProfile(
+        id=data["id"], accepted_evidence=Path(data["accepted_evidence"]),
+        workloads=tuple(data["workloads"]), requirements=requirements,
+        endpoints=MappingProxyType(dict(data["endpoints"])),
+        lifecycle=LifecycleConstraints(lifecycle["start_order"], lifecycle["stop_order"]),
     )

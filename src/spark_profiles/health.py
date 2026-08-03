@@ -1,4 +1,4 @@
-"""Concurrent, read-only health evaluation for the two DGX Spark nodes."""
+"""Concurrent, read-only health evaluation for configured DGX Spark nodes."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from typing import Any
 from jsonschema import ValidationError, validate, validators
 
 from .backend import CommandResult, SshBackend
+from .fleet import Fleet
+from .fleet.loaders import validate_topology_references
 
 _NODES = ("spark1", "spark2")
 _SWAP_WARNING_BYTES = 1024**3
@@ -147,7 +149,7 @@ class ClusterHealth:
             "schema_version": self.schema_version,
             "captured_at": self.captured_at,
             "status": self.status,
-            "nodes": {node: self.nodes[node].to_dict() for node in _NODES},
+            "nodes": {node: self.nodes[node].to_dict() for node in sorted(self.nodes)},
         }
 
 
@@ -165,8 +167,11 @@ class NodeHealthService:
         rdma_baseline: Mapping[str, Any],
         timeout_seconds: float,
         cpu_sample_milliseconds: int,
+        fleet: Fleet | None = None,
+        topology: Mapping[str, Any] | None = None,
+        max_workers: int = 8,
     ) -> None:
-        if not collector or timeout_seconds <= 0 or cpu_sample_milliseconds <= 0:
+        if not collector or timeout_seconds <= 0 or cpu_sample_milliseconds <= 0 or max_workers <= 0:
             raise LocalHealthError("invalid collector or health timing configuration")
         self.backend = backend
         self.collector = collector
@@ -176,10 +181,28 @@ class NodeHealthService:
         self.rdma_baseline = rdma_baseline
         self.timeout_seconds = timeout_seconds
         self.cpu_sample_milliseconds = cpu_sample_milliseconds
-        self._functions = self._validate_local_assets()
+        self.max_workers = max_workers
+        self._nodes = tuple(
+            node_id.value
+            for node_id, record in sorted((fleet.nodes.items() if fleet else ()))
+            if record.lifecycle != "retired"
+        ) or _NODES
+        if fleet is None:
+            self._functions = self._validate_local_assets()
+        else:
+            if topology is None:
+                raise LocalHealthError("generic fleet health requires topology")
+            self._functions = self._validate_generic_assets(fleet, topology)
 
     @classmethod
-    def from_repository(cls, root: Path, backend: SshBackend) -> NodeHealthService:
+    def from_repository(
+        cls,
+        root: Path,
+        backend: SshBackend,
+        *,
+        fleet: Fleet | None = None,
+        topology: Mapping[str, Any] | None = None,
+    ) -> NodeHealthService:
         root = root.resolve()
         try:
             with (root / "config/controller.toml").open("rb") as source:
@@ -204,6 +227,8 @@ class NodeHealthService:
                 rdma_baseline=rdma_baseline,
                 timeout_seconds=float(health["timeout_seconds"]),
                 cpu_sample_milliseconds=int(health["cpu_sample_milliseconds"]),
+                fleet=fleet,
+                topology=topology,
             )
         except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
             if isinstance(error, LocalHealthError):
@@ -319,10 +344,63 @@ class NodeHealthService:
         except (AttributeError, IndexError, KeyError, TypeError) as error:
             raise LocalHealthError(f"invalid health inventory or RDMA baseline: {error}") from error
 
+    def _validate_generic_assets(
+        self, fleet: Fleet, topology: Mapping[str, Any]
+    ) -> Mapping[str, tuple[tuple[str, str], ...]]:
+        try:
+            validators.validator_for(self.raw_schema).check_schema(self.raw_schema)
+            validators.validator_for(self.result_schema).check_schema(self.result_schema)
+            validate_topology_references(topology)
+            topology_nodes = set(topology["nodes"])
+            if topology_nodes != {node_id.value for node_id in fleet.nodes}:
+                raise TypeError("topology nodes must exactly match fleet nodes")
+            expected_hosts: dict[str, dict[str, Any]] = {
+                node_id.value: {"hostname": record.hostname, "fabric": {}}
+                for node_id, record in fleet.nodes.items()
+                if record.lifecycle != "retired"
+            }
+            functions: dict[str, list[tuple[str, str]]] = {
+                node: [] for node in self._nodes
+            }
+            counter_names = tuple(self.raw_schema["$defs"]["rdmaCounters"]["required"])
+            baseline = self.rdma_baseline["rdma_counters_after"]
+            if not isinstance(baseline, Mapping):
+                raise TypeError("generic RDMA baseline counters are required")
+            for link in topology["links"]:
+                if not link.get("accepted") or link.get("kind") not in {"direct-rdma", "switched-rdma"}:
+                    continue
+                for endpoint in link["endpoints"]:
+                    node = endpoint["node_id"]
+                    if node not in functions:
+                        continue
+                    interface, hca = endpoint.get("interface"), endpoint.get("hca")
+                    gid = endpoint.get("gid_index")
+                    mtu, rate = endpoint.get("mtu"), endpoint.get("link_rate_mbps")
+                    if (
+                        not isinstance(interface, str) or _DEVICE_NAME.fullmatch(interface) is None
+                        or not isinstance(hca, str) or _DEVICE_NAME.fullmatch(hca) is None
+                        or not isinstance(gid, int) or isinstance(gid, bool)
+                        or not isinstance(mtu, int) or isinstance(mtu, bool)
+                        or not isinstance(rate, int) or isinstance(rate, bool)
+                    ):
+                        raise TypeError("accepted topology RDMA endpoint is incomplete")
+                    functions[node].append((interface, hca))
+                    expected_hosts[node]["fabric"][(interface, hca)] = {
+                        "gid_index": gid, "mtu": mtu, "link_rate_mbps": rate,
+                    }
+                    for counter in counter_names:
+                        value = baseline.get(f"{node}/{hca}/{counter}")
+                        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                            raise TypeError(f"missing RDMA baseline for {node}/{hca}/{counter}")
+            self.inventory = {"hosts": expected_hosts}
+            return MappingProxyType({node: tuple(sorted(set(records))) for node, records in functions.items()})
+        except (AttributeError, KeyError, TypeError, ValidationError) as error:
+            raise LocalHealthError(f"invalid generic health topology or baseline: {error}") from error
+
     def collect(self) -> ClusterHealth:
         collected: dict[str, NodeHealth] = {}
-        with ThreadPoolExecutor(max_workers=2, thread_name_prefix="spark-health") as pool:
-            futures = {pool.submit(self._probe, node): node for node in ("spark2", "spark1")}
+        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(self._nodes)), thread_name_prefix="spark-health") as pool:
+            futures = {pool.submit(self._probe, node): node for node in reversed(self._nodes)}
             for future in as_completed(futures):
                 node = futures[future]
                 try:
@@ -331,7 +409,7 @@ class NodeHealthService:
                     raise
                 except (OSError, TypeError, ValueError):
                     collected[node] = self._empty_node("critical", "collector_internal_error")
-        nodes = MappingProxyType({node: collected[node] for node in _NODES})
+        nodes = MappingProxyType({node: collected[node] for node in self._nodes})
         states = {node.status for node in nodes.values()}
         status = "critical" if states & {"critical", "unreachable"} else "warning" if "warning" in states else "healthy"
         result = ClusterHealth(
@@ -445,13 +523,14 @@ class NodeHealthService:
             function = actual_functions[index]
             interface, hca = expected_function
             fabric = expected["fabric"]
+            expected_link = fabric.get((interface, hca), fabric)
             if (
                 function["interface"] != interface
                 or function["hca"] != hca
                 or function["operstate"] != "up"
                 or function["carrier"] != 1
-                or function["speed_mbps"] != fabric["link_rate_mbps"]
-                or function["mtu"] != fabric["mtu"]
+                or function["speed_mbps"] != expected_link["link_rate_mbps"]
+                or function["mtu"] != expected_link["mtu"]
                 or function["rdma_interface"] != interface
             ):
                 errors.add("fabric_mismatch")

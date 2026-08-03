@@ -10,6 +10,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Protocol
 
+from spark_profiles.fleet import Fleet, ManagementEndpoint, NodeId
 from spark_profiles.ssh_transport import select_transport_binary
 
 _DEFAULT_ALIASES = {"spark1": "dgx-spark-1", "spark2": "dgx-spark-2"}
@@ -180,7 +181,7 @@ class SshBackend:
         self,
         executor: Executor | None = None,
         *,
-        node_aliases: Mapping[str, str] | None = None,
+        node_aliases: Mapping[str, str | ManagementEndpoint] | None = None,
         connect_timeout_seconds: int = 10,
         output_limit_bytes: int = 65_536,
     ) -> None:
@@ -194,8 +195,37 @@ class SshBackend:
         self._output_limit = output_limit_bytes
         self._ssh_bin = select_transport_binary("ssh")
 
+    @classmethod
+    def from_fleet(
+        cls,
+        fleet: Fleet,
+        executor: Executor | None = None,
+        *,
+        legacy_aliases: Mapping[str, str | ManagementEndpoint] | None = None,
+        connect_timeout_seconds: int = 10,
+        output_limit_bytes: int = 65_536,
+    ) -> SshBackend:
+        """Build strict targets from configured management endpoints.
+
+        Legacy names are available only when the caller supplies an explicit
+        compatibility map; new fleet operation is canonical-ID-only.
+        """
+        targets: dict[str, str | ManagementEndpoint] = {
+            node_id.value: record.management
+            for node_id, record in fleet.nodes.items()
+            if record.lifecycle != "retired"
+        }
+        if legacy_aliases:
+            targets.update(legacy_aliases)
+        return cls(
+            executor,
+            node_aliases=targets,
+            connect_timeout_seconds=connect_timeout_seconds,
+            output_limit_bytes=output_limit_bytes,
+        )
+
     def run(
-        self, node: str, argv: tuple[str, ...], timeout: float
+        self, node: NodeId | str, argv: tuple[str, ...], timeout: float
     ) -> CommandResult:
         """Run one explicit remote command and return bounded output."""
         if not argv:
@@ -204,7 +234,7 @@ class SshBackend:
 
     def run_script(
         self,
-        node: str,
+        node: NodeId | str,
         script: bytes,
         argv: tuple[str, ...],
         timeout: float,
@@ -221,7 +251,7 @@ class SshBackend:
 
     def _execute(
         self,
-        node: str,
+        node: NodeId | str,
         remote_argv: tuple[str, ...],
         timeout: float,
         *,
@@ -230,10 +260,16 @@ class SshBackend:
         if timeout <= 0:
             raise ValueError("timeout must be positive")
         try:
-            alias = self._aliases[node]
+            target = self._aliases[node.value if isinstance(node, NodeId) else node]
         except KeyError as error:
             raise ValueError(f"unknown node: {node}") from error
-        _validate_remote_argv((alias, *remote_argv))
+        if isinstance(target, ManagementEndpoint):
+            alias = f"{target.user}@{target.host}"
+            port_options = ("-p", str(target.port))
+        else:
+            alias = target
+            port_options = ()
+        _validate_remote_argv((alias, *port_options, *remote_argv))
         remote_command = shlex.join(remote_argv)
         connect_timeout = min(self._connect_timeout, max(1, math.ceil(timeout)))
         command = (
@@ -248,6 +284,7 @@ class SshBackend:
             "StrictHostKeyChecking=yes",
             "-o",
             f"ConnectTimeout={connect_timeout}",
+            *port_options,
             alias,
             remote_command,
         )

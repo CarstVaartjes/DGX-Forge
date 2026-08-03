@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from dgx_control.offline import main
+
+raise SystemExit(main())

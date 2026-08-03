@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dgx-forge.local/schemas/cluster-profile-v2.schema.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "id", "accepted_evidence", "workloads", "requirements", "endpoints", "lifecycle"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "id": {"type": "string", "minLength": 1},
+    "accepted_evidence": {"type": "string", "minLength": 1},
+    "workloads": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "requirements": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/requirement"}},
+    "endpoints": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}},
+    "lifecycle": {
+      "type": "object", "additionalProperties": false,
+      "required": ["start_order", "stop_order"],
+      "properties": {
+        "start_order": {"enum": ["independent", "workers-before-entrypoint"]},
+        "stop_order": {"enum": ["independent", "entrypoint-before-workers"]}
+      }
+    }
+  },
+  "$defs": {
+    "requirement": {
+      "type": "object", "additionalProperties": false,
+      "required": ["workload", "definition_hash", "node_count", "required_labels", "min_memory_bytes", "min_disk_bytes", "exclusive", "distributed_supported"],
+      "properties": {
+        "workload": {"type": "string", "minLength": 1},
+        "definition_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "node_count": {"type": "integer", "minimum": 1},
+        "required_labels": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}},
+        "min_memory_bytes": {"type": "integer", "minimum": 0},
+        "min_disk_bytes": {"type": "integer", "minimum": 0},
+        "exclusive": {"type": "boolean"},
+        "distributed_supported": {"type": "boolean"},
+        "preferred_node_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string", "pattern": "^spk_[0-9a-f]{32}$"}}
+      }
+    }
+  }
+}
+

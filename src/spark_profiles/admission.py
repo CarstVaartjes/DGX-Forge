@@ -8,7 +8,9 @@ from pathlib import Path
 from typing import Any
 
 from .catalog import Catalog, fingerprint
-from .contracts import ClusterProfile, WorkloadDefinition
+from .contracts import ClusterProfile, GenericClusterProfile, WorkloadDefinition
+from .fleet import Fleet
+from .placement import NodeObservation, PlacementError, PlacementPlan, PlacementPlanner
 
 _VALID_PLACEMENT_DECLARATIONS = frozenset(
     {
@@ -233,3 +235,32 @@ def check_admission(
             errors.add(f"endpoint {endpoint} targets unhealthy workload: {identifier}")
 
     return AdmissionReport(errors=tuple(sorted(errors)))
+
+
+def check_generic_admission(
+    profile: GenericClusterProfile,
+    fleet: Fleet,
+    topology: Mapping[str, object],
+    observations: tuple[NodeObservation, ...],
+) -> tuple[AdmissionReport, tuple[PlacementPlan, ...]]:
+    """Resolve all V2 requirements or return deterministic fail-closed reasons."""
+    errors: list[str] = []
+    plans: list[PlacementPlan] = []
+    planner = PlacementPlanner()
+    current = {observation.node_id: observation for observation in observations}
+    for requirement in profile.requirements:
+        try:
+            plan = planner.plan(requirement, fleet, topology, current.values())
+            plans.append(plan)
+            for node_id in plan.nodes:
+                observation = current[node_id]
+                current[node_id] = NodeObservation(
+                    node_id=node_id,
+                    healthy=observation.healthy,
+                    memory_available_bytes=max(0, observation.memory_available_bytes - requirement.min_memory_bytes),
+                    disk_available_bytes=max(0, observation.disk_available_bytes - requirement.min_disk_bytes),
+                    occupied=observation.occupied or requirement.exclusive,
+                )
+        except PlacementError as error:
+            errors.append(f"{requirement.name}: {error}")
+    return AdmissionReport(tuple(sorted(errors))), tuple(plans)

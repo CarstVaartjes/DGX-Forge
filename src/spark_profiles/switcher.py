@@ -12,6 +12,7 @@ from .admission import AdmissionReport, check_admission
 from .backend import CommandResult, SshBackend
 from .catalog import Catalog, fingerprint
 from .contracts import ClusterProfile, WorkloadDefinition
+from .placement import PlacementPlan
 from .state import ControllerState, StateStore
 
 _MAX_ERROR_CHARS = 2_048
@@ -51,6 +52,8 @@ class SwitchReport:
     diagnostics: tuple[Diagnostic, ...] = ()
     output_provenance: Mapping[str, object] = field(default_factory=dict)
     dry_run: bool = False
+    nodes: tuple[str, ...] = ()
+    placement_digests: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(
@@ -63,6 +66,9 @@ class SwitchReport:
         )
         object.__setattr__(
             self, "output_provenance", MappingProxyType(dict(self.output_provenance))
+        )
+        object.__setattr__(
+            self, "placement_digests", MappingProxyType(dict(self.placement_digests))
         )
 
 
@@ -116,6 +122,7 @@ class ProfileSwitcher:
         inventory_provider: InventoryProvider,
         admission_checker: AdmissionChecker = check_admission,
         timeout_seconds: float = 120,
+        placement_plans: Mapping[str, PlacementPlan] | None = None,
     ) -> None:
         if timeout_seconds <= 0:
             raise ValueError("timeout must be positive")
@@ -125,6 +132,7 @@ class ProfileSwitcher:
         self.inventory_provider = inventory_provider
         self.admission_checker = admission_checker
         self.timeout_seconds = timeout_seconds
+        self.placement_plans = dict(placement_plans or {})
 
     def switch_profile(
         self,
@@ -217,7 +225,7 @@ class ProfileSwitcher:
                         node,
                         self._argv(definition, definition.commands.prepare, node),
                     )
-                    for node in definition.start_order
+                    for node in self._operation_nodes(definition, "start")
                 )
                 with ThreadPoolExecutor(
                     max_workers=len(nodes_and_commands)
@@ -425,6 +433,8 @@ class ProfileSwitcher:
                 published_endpoints={},
                 restore_profile=restore_profile,
                 dry_run=True,
+                nodes=self._profile_nodes(target),
+                placement_digests=self._placement_digests(target),
             )
 
         diagnostics: list[Diagnostic] = []
@@ -513,6 +523,7 @@ class ProfileSwitcher:
                 "profile_sha256": profile_hash,
                 "definition_sha256": dict(target_hashes),
                 "infer_outputs": outputs,
+                "placement_digests": self._placement_digests(target),
             }
             return SwitchReport(
                 target_profile=target.id,
@@ -524,6 +535,8 @@ class ProfileSwitcher:
                 retained_workloads=tuple(sorted(retained)),
                 diagnostics=tuple(diagnostics),
                 output_provenance=provenance,
+                nodes=self._profile_nodes(target),
+                placement_digests=self._placement_digests(target),
             )
         except _TransitionFailure as error:
             cleanup_ok = self._cleanup_live(
@@ -687,16 +700,18 @@ class ProfileSwitcher:
     def _profile_definitions(self, profile: ClusterProfile) -> set[str]:
         return {
             identifier
-            for node in ("spark1", "spark2")
-            for identifier in profile.placements[node]
+            for workloads in profile.placements.values()
+            for identifier in workloads
         }
 
-    @staticmethod
     def _live_boot_ids(
+        self,
         inventory: Mapping[str, object],
     ) -> tuple[dict[str, str], str | None]:
         boot_ids: dict[str, str] = {}
-        for node in ("spark1", "spark2"):
+        if not inventory:
+            return {}, "live inventory contains no nodes"
+        for node in sorted(inventory):
             measurement = inventory.get(node)
             boot_id = (
                 measurement.get("boot_id")
@@ -712,7 +727,7 @@ class ProfileSwitcher:
         self, profile: ClusterProfile, *, reverse: bool = False
     ) -> tuple[str, ...]:
         identifiers: list[str] = []
-        nodes = ("spark1", "spark2") if reverse else ("spark2", "spark1")
+        nodes = tuple(sorted(profile.placements, reverse=not reverse))
         for node in nodes:
             values = (
                 reversed(profile.placements[node])
@@ -749,12 +764,12 @@ class ProfileSwitcher:
                 continue
             current_nodes = tuple(
                 node
-                for node in ("spark1", "spark2")
+                for node in sorted(current.placements)
                 if identifier in current.placements[node]
             )
             target_nodes = tuple(
                 node
-                for node in ("spark1", "spark2")
+                for node in sorted(target.placements)
                 if identifier in target.placements[node]
             )
             if current_nodes != target_nodes:
@@ -785,7 +800,7 @@ class ProfileSwitcher:
     ) -> tuple[str, ...]:
         if definition.topology != "distributed":
             return command
-        role = "head" if node == definition.stop_order[0] else "worker"
+        role = "head" if node == self._operation_nodes(definition, "stop")[0] else "worker"
         return (*command, role)
 
     def _call(
@@ -822,7 +837,7 @@ class ProfileSwitcher:
     def _verify_definition(
         self, definition: WorkloadDefinition, diagnostics: list[Diagnostic]
     ) -> None:
-        for node in definition.start_order:
+        for node in self._operation_nodes(definition, "start"):
             self._call(
                 definition, "verify", node, definition.commands.verify, diagnostics
             )
@@ -830,7 +845,7 @@ class ProfileSwitcher:
     def _start_definition(
         self, definition: WorkloadDefinition, diagnostics: list[Diagnostic]
     ) -> None:
-        for node in definition.start_order:
+        for node in self._operation_nodes(definition, "start"):
             self._call(
                 definition, "start", node, definition.commands.start, diagnostics
             )
@@ -838,7 +853,7 @@ class ProfileSwitcher:
     def _health_definition(
         self, definition: WorkloadDefinition, diagnostics: list[Diagnostic]
     ) -> None:
-        for node in definition.start_order:
+        for node in self._operation_nodes(definition, "start"):
             self._call(
                 definition, "health", node, definition.commands.health, diagnostics
             )
@@ -846,7 +861,7 @@ class ProfileSwitcher:
     def _infer_definition(
         self, definition: WorkloadDefinition, diagnostics: list[Diagnostic]
     ) -> str:
-        node = definition.stop_order[0]
+        node = self._operation_nodes(definition, "stop")[0]
         result = self._call(
             definition, "infer", node, definition.commands.infer, diagnostics
         )
@@ -855,9 +870,9 @@ class ProfileSwitcher:
     def _stop_definition(
         self, definition: WorkloadDefinition, diagnostics: list[Diagnostic]
     ) -> None:
-        for node in definition.stop_order:
+        for node in self._operation_nodes(definition, "stop"):
             self._call(definition, "stop", node, definition.commands.stop, diagnostics)
-        for node in definition.stop_order:
+        for node in self._operation_nodes(definition, "stop"):
             self._call(
                 definition,
                 "verify-release",
@@ -885,14 +900,14 @@ class ProfileSwitcher:
             if identifier not in identifiers:
                 continue
             definition = self.catalog.definitions[identifier]
-            for node in definition.stop_order:
+            for node in self._operation_nodes(definition, "stop"):
                 try:
                     self._call(
                         definition, "stop", node, definition.commands.stop, diagnostics
                     )
                 except _TransitionFailure:
                     ok = False
-            for node in definition.stop_order:
+            for node in self._operation_nodes(definition, "stop"):
                 try:
                     self._call(
                         definition,
@@ -904,6 +919,36 @@ class ProfileSwitcher:
                 except _TransitionFailure:
                     ok = False
         return ok
+
+    def _operation_nodes(
+        self, definition: WorkloadDefinition, operation: str
+    ) -> tuple[str, ...]:
+        plan = self.placement_plans.get(definition.id)
+        if plan is None:
+            return definition.stop_order if operation in {"stop", "verify-release", "infer"} else definition.start_order
+        nodes = tuple(node.value for node in plan.nodes)
+        if not nodes:
+            raise _TransitionFailure(f"placement has no nodes for {definition.id}")
+        if definition.topology == "distributed" and operation not in {"stop", "verify-release", "infer"}:
+            return tuple(reversed(nodes))
+        return nodes
+
+    def _profile_nodes(self, profile: ClusterProfile) -> tuple[str, ...]:
+        planned = set()
+        for identifier in self._profile_definitions(profile):
+            plan = self.placement_plans.get(identifier)
+            if plan is not None:
+                planned.update(node.value for node in plan.nodes)
+        if planned:
+            return tuple(sorted(planned))
+        return tuple(sorted(node for node, workloads in profile.placements.items() if workloads))
+
+    def _placement_digests(self, profile: ClusterProfile) -> dict[str, str]:
+        return {
+            identifier: self.placement_plans[identifier].input_digest
+            for identifier in sorted(self._profile_definitions(profile))
+            if identifier in self.placement_plans
+        }
 
     def _detail(self, result: CommandResult) -> str:
         stderr = result.stderr.decode("utf-8", errors="replace").strip()

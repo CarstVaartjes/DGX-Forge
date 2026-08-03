@@ -16,6 +16,7 @@ from .admission import check_admission, check_placement_policy
 from .backend import SshBackend
 from .catalog import Catalog
 from .health import ClusterHealth, LocalHealthError, NodeHealthService
+from .fleet.loaders import load_fleet, validate_topology_references
 from .state import ControllerState, LockBusy, LockNotStale, StateError, StateStore
 from .switcher import PrepareReport, ProfileSwitcher, SwitchReport
 
@@ -85,26 +86,59 @@ def build_dependencies(
         state_directory or repository_root / configured_state,
         stale_lock_seconds=state_configuration["stale_lock_seconds"],
     )
-    backend = SshBackend(
-        node_aliases=ssh_configuration["node_aliases"],
-        connect_timeout_seconds=ssh_configuration["connect_timeout_seconds"],
-        output_limit_bytes=ssh_configuration["output_limit_bytes"],
-    )
+    fleet_path = repository_root / "inventory/fleet.toml"
+    topology_path = repository_root / "inventory/topology.json"
+    fleet = load_fleet(fleet_path) if fleet_path.is_file() else None
+    topology = None
+    if fleet is not None:
+        if not topology_path.is_file():
+            raise ValueError("generic fleet requires inventory/topology.json")
+        topology = json.loads(topology_path.read_text())
+        validate_topology_references(topology)
+        active = [record for _, record in sorted(fleet.nodes.items()) if record.lifecycle != "retired"]
+        legacy_aliases = {
+            alias: active[index].management
+            for index, alias in enumerate(("spark1", "spark2"))
+            if index < len(active)
+        }
+        backend = SshBackend.from_fleet(
+            fleet, legacy_aliases=legacy_aliases,
+            connect_timeout_seconds=ssh_configuration["connect_timeout_seconds"],
+            output_limit_bytes=ssh_configuration["output_limit_bytes"],
+        )
+    else:
+        backend = SshBackend(
+            node_aliases=ssh_configuration["node_aliases"],
+            connect_timeout_seconds=ssh_configuration["connect_timeout_seconds"],
+            output_limit_bytes=ssh_configuration["output_limit_bytes"],
+        )
     health_service = None
     if include_health:
         health_configuration = configuration["health"]
-        health_backend = SshBackend(
-            node_aliases=ssh_configuration["node_aliases"],
-            connect_timeout_seconds=ssh_configuration["connect_timeout_seconds"],
-            output_limit_bytes=health_configuration["max_output_bytes"],
+        health_backend = (
+            SshBackend.from_fleet(
+                fleet, legacy_aliases=legacy_aliases,
+                connect_timeout_seconds=ssh_configuration["connect_timeout_seconds"],
+                output_limit_bytes=health_configuration["max_output_bytes"],
+            )
+            if fleet is not None
+            else SshBackend(
+                node_aliases=ssh_configuration["node_aliases"],
+                connect_timeout_seconds=ssh_configuration["connect_timeout_seconds"],
+                output_limit_bytes=health_configuration["max_output_bytes"],
+            )
         )
         health_service = NodeHealthService.from_repository(
-            repository_root, health_backend
+            repository_root, health_backend, fleet=fleet, topology=topology
         )
     catalog = Catalog.load(repository_root)
 
     def conservative_inventory() -> Mapping[str, object]:
-        return {"spark1": {}, "spark2": {}}
+        return (
+            {node_id.value: {} for node_id in fleet.nodes}
+            if fleet is not None
+            else {"spark1": {}, "spark2": {}}
+        )
 
     def live_inventory() -> Mapping[str, object]:
         assert health_service is not None
@@ -128,7 +162,7 @@ def build_dependencies(
 def _inventory_from_health(health: ClusterHealth) -> Mapping[str, object]:
     """Project live health into the small admission/publication inventory."""
     inventory: dict[str, object] = {}
-    for node_name in ("spark1", "spark2"):
+    for node_name in sorted(health.nodes):
         node = health.nodes[node_name]
         inventory[node_name] = {
             "healthy": node.status in {"healthy", "warning"},
@@ -149,7 +183,9 @@ def _live_publication_error(
     state: ControllerState, inventory: Mapping[str, object]
 ) -> str | None:
     live_boot_ids: dict[str, str] = {}
-    for node_name in ("spark1", "spark2"):
+    if not state.boot_ids:
+        return "active state has no Spark boot IDs"
+    for node_name in sorted(state.boot_ids):
         measurement = inventory.get(node_name)
         if (
             not isinstance(measurement, Mapping)
@@ -263,6 +299,19 @@ def _parser() -> argparse.ArgumentParser:
 
     break_lock = commands.add_parser("break-stale-lock")
     break_lock.add_argument("--json", action="store_true")
+
+    admin = commands.add_parser("admin")
+    admin_commands = admin.add_subparsers(dest="admin_command", required=True, parser_class=_CliParser)
+    for name in ("fleet", "models", "profiles", "jobs", "audit"):
+        command = admin_commands.add_parser(name)
+        command.add_argument("--json", action="store_true")
+    proposal = admin_commands.add_parser("proposal")
+    proposal.add_argument("--file", type=Path, required=True)
+    proposal.add_argument("--json", action="store_true")
+    deploy = admin_commands.add_parser("deploy")
+    deploy.add_argument("--proposal-digest", required=True)
+    deploy.add_argument("--apply", action="store_true")
+    deploy.add_argument("--json", action="store_true")
     return parser
 
 
@@ -276,6 +325,8 @@ def _switch_payload(report: SwitchReport) -> dict[str, object]:
         "restore_profile": report.restore_profile,
         "errors": list(report.errors[:16]),
         "dry_run": report.dry_run,
+        "nodes": list(report.nodes),
+        "placement_digests": dict(report.placement_digests),
     }
 
 
@@ -420,7 +471,7 @@ def _health_table(result: ClusterHealth) -> str:
     )
     rows: list[tuple[str, ...]] = []
     details: list[str] = []
-    for node_name in ("spark1", "spark2"):
+    for node_name in sorted(result.nodes):
         node = result.nodes[node_name]
         cpu = node.cpu
         memory = node.memory
@@ -472,6 +523,7 @@ def main(
     *,
     dependencies: CliDependencies | None = None,
     root: Path | None = None,
+    control_client=None,
 ) -> int:
     raw_argv = tuple(argv) if argv is not None else tuple(sys.argv[1:])
     try:
@@ -493,6 +545,38 @@ def main(
             error_args,
         )
         return 2
+    if args.command == "admin":
+        from .control_client import ControlClient, ControlClientError
+
+        try:
+            client = control_client or ControlClient.from_environment()
+            if args.admin_command == "proposal":
+                path = args.file
+                if path.is_symlink() or not path.is_file() or path.stat().st_size > 1_048_576:
+                    raise ControlClientError("proposal input must be a bounded regular non-symlink file")
+                payload = json.loads(path.read_bytes())
+                if not isinstance(payload, dict):
+                    raise ControlClientError("proposal input must be a JSON object")
+                result = client.create_proposal(payload)
+            elif args.admin_command == "deploy":
+                if args.apply:
+                    result = client.submit_change(args.proposal_digest)
+                else:
+                    result = {"mode": "plan", "proposal_digest": args.proposal_digest, "apply": False}
+            else:
+                endpoint = {
+                    "fleet": "/api/v1/fleet",
+                    "models": "/api/v1/documents?kind=models",
+                    "profiles": "/api/v1/documents?kind=profiles",
+                    "jobs": "/api/v1/jobs",
+                    "audit": "/api/v1/audit",
+                }[args.admin_command]
+                result = client.get(endpoint)
+            _emit(result, args)
+            return 0
+        except (ControlClientError, OSError, ValueError, json.JSONDecodeError) as error:
+            _emit({"error": str(error), "error_type": "control_api"}, args)
+            return 2
     if dependencies is None:
         try:
             dependencies = build_dependencies(

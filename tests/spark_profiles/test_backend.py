@@ -9,6 +9,7 @@ from dataclasses import dataclass
 import pytest
 
 from spark_profiles.backend import SshBackend
+from spark_profiles.fleet import Fleet, ManagementEndpoint, NodeId, NodeRecord
 
 
 @dataclass
@@ -25,6 +26,7 @@ class FakeExec:
         self.input_bytes: bytes | None = None
         self.timeout: float | None = None
         self.shell: bool | None = None
+        self.calls: list[tuple[str, ...]] = []
 
     def __call__(
         self,
@@ -35,6 +37,7 @@ class FakeExec:
         shell: bool,
     ) -> FakeCompleted:
         self.argv = argv
+        self.calls.append(argv)
         self.input_bytes = input
         self.timeout = timeout
         self.shell = shell
@@ -69,6 +72,42 @@ def test_backend_uses_explicit_developer_transport_override(monkeypatch) -> None
     SshBackend(fake_exec).run("spark1", ("true",), 10)
 
     assert fake_exec.argv[0] == "/opt/custom/ssh-wrapper"
+
+
+def _fleet(count: int) -> Fleet:
+    records = {}
+    for index in range(count):
+        node_id = NodeId.parse(f"spk_{index:032x}")
+        records[node_id] = NodeRecord(
+            id=node_id,
+            display_name=f"node-{index}",
+            hostname=f"node-{index}.local",
+            management=ManagementEndpoint(f"10.0.0.{index + 1}", "operator", 2200 + index),
+            labels={},
+            lifecycle="ready",
+        )
+    return Fleet(2, records)
+
+
+def test_backend_targets_every_configured_node() -> None:
+    fleet = _fleet(16)
+    fake_exec = FakeExec()
+    backend = SshBackend.from_fleet(fleet, executor=fake_exec)
+
+    for node_id in fleet.nodes:
+        backend.run(node_id, ("true",), 10)
+
+    assert len(fake_exec.calls) == 16
+    for index, call in enumerate(fake_exec.calls):
+        assert ("-p", str(2200 + index)) == call[call.index("-p") : call.index("-p") + 2]
+        assert call[-2] == f"operator@10.0.0.{index + 1}"
+
+
+def test_fleet_backend_rejects_unknown_legacy_alias() -> None:
+    backend = SshBackend.from_fleet(_fleet(1), executor=FakeExec())
+
+    with pytest.raises(ValueError, match="unknown node"):
+        backend.run("spark1", ("true",), 10)
 
 
 def test_run_script_delivers_fixed_bytes_on_stdin() -> None:

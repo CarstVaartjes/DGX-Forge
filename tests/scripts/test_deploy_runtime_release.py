@@ -271,6 +271,38 @@ def test_dry_run_targets_only_the_workload_declared_node(tmp_path: Path) -> None
     assert json.loads(completed.stdout)["hosts"] == ["dgx-spark-1"]
 
 
+def test_release_targets_resolved_generic_nodes(tmp_path: Path) -> None:
+    root, _ = _release_root(tmp_path, nodes=("spark1",))
+    workload = root / "config/workloads/example.toml"
+    workload.write_text(workload.read_text().replace('nodes = ["spark1"]\n', ""))
+    node_ids = [f"spk_{index:032x}" for index in (10, 20, 30)]
+    fleet = ["schema_version = 2", ""]
+    for index, node_id in enumerate(node_ids):
+        fleet.extend([
+            f"[nodes.{node_id}]", f'display_name = "node-{index}"',
+            f'hostname = "node-{index}.local"', 'lifecycle = "ready"',
+            f"[nodes.{node_id}.management]", f'host = "10.0.0.{index + 1}"',
+            'user = "operator"', f"port = {2200 + index}",
+            f"[nodes.{node_id}.labels]", 'pool = "default"', "",
+        ])
+    (root / "inventory/fleet.toml").write_text("\n".join(fleet))
+    placements = root / "inventory/placements"
+    placements.mkdir()
+    (placements / "example.json").write_text(json.dumps({
+        "schema_version": 1, "workload": "example",
+        "workload_sha256": _sha256(workload), "input_digest": "a" * 64,
+        "nodes": node_ids,
+    }))
+
+    completed = _run(root, "example")
+
+    assert completed.returncode == 0, completed.stderr
+    document = json.loads(completed.stdout)
+    assert document["node_ids"] == node_ids
+    assert document["hosts"] == [f"operator@10.0.0.{index + 1}" for index in range(3)]
+    assert "dgx-spark" not in completed.stdout
+
+
 @pytest.mark.parametrize("nodes", ((), ("spark1", "spark1"), ("spark3",)))
 def test_dry_run_rejects_invalid_workload_nodes(
     tmp_path: Path, nodes: tuple[object, ...]

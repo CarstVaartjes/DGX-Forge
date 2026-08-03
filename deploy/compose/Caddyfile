@@ -1,0 +1,25 @@
+{
+	admin off
+}
+
+:443 {
+	request_body {
+		max_size 1MB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		-Server
+	}
+	handle /v1/* {
+		reverse_proxy litellm:4000
+	}
+	handle /grafana/* {
+		reverse_proxy grafana:3000
+	}
+	handle {
+		reverse_proxy control-api:8000
+	}
+}

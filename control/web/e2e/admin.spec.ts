@@ -1,0 +1,2 @@
+import {test, expect} from "@playwright/test";
+test("admin shell is keyboard navigable", async ({page}) => { await page.route("**/api/v1/fleet", route => route.fulfill({json: {nodes: []}})); await page.goto("/"); await expect(page.getByRole("navigation", {name: "Primary"})).toBeVisible(); await page.getByRole("link", {name: "Profiles"}).focus(); await page.keyboard.press("Enter"); await expect(page.getByRole("heading", {name: "Profiles"})).toBeVisible(); });

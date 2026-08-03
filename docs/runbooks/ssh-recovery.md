@@ -45,13 +45,15 @@ shell; use it as a recovery route only if the installed Dashboard version
 explicitly exposes a local console. Do not close the retained session until a
 fresh key-only connection succeeds.
 
-The installer is intentionally cluster-specific. It checks that the expected
-1Password public-key fingerprint is present in `carst`'s `authorized_keys`,
-refuses to overwrite an unexpected file, runs `sshd -t`, checks the effective
-configuration, reloads rather than restarts SSH, and removes the new drop-in if
-validation fails. This effective check matters because OpenSSH uses the first
-obtained value for most settings; a syntactically valid drop-in can otherwise
-lose to an earlier file.
+The installer has no compiled account, fingerprint, host, or address. Every
+invocation supplies the administrator account, already-verified public-key
+fingerprint, reviewed drop-in, and action explicitly. Mutations also require a
+short-lived root-readable recovery marker created only after a retained console
+or SSH session is confirmed. The installer refuses unexpected target files,
+runs `sshd -t`, checks effective configuration, reloads rather than restarts
+SSH, and removes a newly installed drop-in if validation fails. This effective
+check matters because OpenSSH uses the first obtained value for most settings;
+a syntactically valid drop-in can otherwise lose to an earlier file.
 
 ## Harden Spark 2
 
@@ -61,25 +63,42 @@ Spark 2's temporary directory and confirm that the remote copy matches:
 ```bash
 set -euo pipefail
 installer='nodes/bin/install-ssh-hardening'
+drop_in='nodes/etc/ssh/sshd_config.d/90-dgx-admin.conf'
 expected_sha256="$(shasum -a 256 "$installer" | awk '{ print $1 }')"
 scp "$installer" dgx-spark-2:/tmp/install-ssh-hardening
+scp "$drop_in" dgx-spark-2:/tmp/90-dgx-admin.conf
 actual_sha256="$(ssh -o BatchMode=yes dgx-spark-2 \
   'shasum -a 256 /tmp/install-ssh-hardening 2>/dev/null || sha256sum /tmp/install-ssh-hardening' \
   | awk '{ print $1 }')"
 test "$actual_sha256" = "$expected_sha256"
 ```
 
-In the retained Spark 2 session, run exactly this privileged command and enter
+In the retained Spark 2 session, set the values observed for this node and key,
+create the short-lived recovery proof, run the read-only plan, then apply. Enter
 the Linux password only at the terminal prompt:
 
 ```bash
-sudo bash /tmp/install-ssh-hardening
+admin_user='REPLACE_WITH_NODE_ADMIN_USER'
+admin_fingerprint='SHA256:REPLACE_WITH_VERIFIED_PUBLIC_KEY_FINGERPRINT'
+printf '%s\n' 'recovery-channel-verified' |
+  sudo install -m 0600 /dev/stdin /run/dgx-ssh-recovery-verified
+sudo bash /tmp/install-ssh-hardening \
+  --admin-user "$admin_user" \
+  --admin-key-fingerprint "$admin_fingerprint" \
+  --drop-in /tmp/90-dgx-admin.conf \
+  --check
+sudo bash /tmp/install-ssh-hardening \
+  --admin-user "$admin_user" \
+  --admin-key-fingerprint "$admin_fingerprint" \
+  --drop-in /tmp/90-dgx-admin.conf \
+  --recovery-marker /run/dgx-ssh-recovery-verified \
+  --apply
 ```
 
-It must print the four effective settings followed by:
+The check must return `change-required`; apply must return one JSON object with:
 
 ```text
-SSH hardening installed, validated, and reloaded successfully.
+"status":"changed"
 ```
 
 If it reports an error, do not proceed to Spark 1. Preserve the retained
@@ -132,7 +151,8 @@ Only after both checks pass, remove the temporary installer and close the old
 Spark 2 session:
 
 ```bash
-ssh -o BatchMode=yes dgx-spark-2 'rm -f /tmp/install-ssh-hardening'
+ssh -o BatchMode=yes dgx-spark-2 \
+  'sudo rm -f /run/dgx-ssh-recovery-verified; rm -f /tmp/install-ssh-hardening /tmp/90-dgx-admin.conf'
 ```
 
 ## Harden Spark 1
@@ -140,8 +160,8 @@ ssh -o BatchMode=yes dgx-spark-2 'rm -f /tmp/install-ssh-hardening'
 Repeat the upload, checksum, one-command installation, positive test, and
 authentication-advertisement test above with `dgx-spark-1`. Do not reuse a
 temporary file hosted on Spark 2. Keep Spark 1's retained session open until
-its fresh key-only test passes, then remove only
-`/tmp/install-ssh-hardening` from Spark 1.
+its fresh key-only test passes, then remove only the staged installer, reviewed
+drop-in, and short-lived recovery marker from Spark 1.
 
 ## Recovery and rollback
 
@@ -157,20 +177,18 @@ sudo sed -n '1,20p' /etc/ssh/sshd_config.d/90-dgx-admin.conf
 sudo /usr/sbin/sshd -t
 ```
 
-To restore the pre-task authentication policy, remove only this repository's
-managed drop-in, validate the remaining configuration, and reload SSH:
+To restore the pre-task authentication policy, invoke the same reviewed
+installer with `--rollback`. It removes the target only when it still matches
+the supplied managed drop-in, restores it if the remaining SSH configuration
+is invalid, and reloads SSH:
 
 ```bash
-sudo bash -c '
-set -e
-target=/etc/ssh/sshd_config.d/90-dgx-admin.conf
-test -f "$target"
-test ! -L "$target"
-rm -f -- "$target"
-/usr/sbin/sshd -t
-systemctl reload ssh
-systemctl is-active --quiet ssh
-'
+sudo bash /tmp/install-ssh-hardening \
+  --admin-user "$admin_user" \
+  --admin-key-fingerprint "$admin_fingerprint" \
+  --drop-in /tmp/90-dgx-admin.conf \
+  --recovery-marker /run/dgx-ssh-recovery-verified \
+  --rollback
 ```
 
 This rollback does not remove `authorized_keys`, rotate host keys, or change

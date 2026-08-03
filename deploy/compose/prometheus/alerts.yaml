@@ -1,0 +1,13 @@
+{
+  "groups": [{
+    "name": "dgx-forge-platform",
+    "rules": [
+      {"alert":"InferenceRoutesStuckInMaintenance","expr":"max_over_time(dgx_route_state{state=\"maintenance\"}[10m]) == 1","for":"10m","labels":{"severity":"critical"},"annotations":{"summary":"Inference routes have remained in maintenance for ten minutes","runbook_url":"https://github.com/dgx-forge/dgx-forge/blob/main/docs/runbooks/observability.md#routes-stuck-in-maintenance"}},
+      {"alert":"SparkProbeStale","expr":"dgx_node_probe_age_seconds > 120","for":"5m","labels":{"severity":"warning"},"annotations":{"summary":"A DGX Spark health probe is stale","runbook_url":"https://github.com/dgx-forge/dgx-forge/blob/main/docs/runbooks/observability.md#stale-node-probe"}},
+      {"alert":"RepeatedReconciliationFailure","expr":"dgx_jobs{kind=\"reconcile\",state=\"failed\"} >= 3","for":"5m","labels":{"severity":"critical"},"annotations":{"summary":"Three or more reconciliation jobs are failed","runbook_url":"https://github.com/dgx-forge/dgx-forge/blob/main/docs/runbooks/observability.md#reconciliation-failures"}},
+      {"alert":"ControlBackupStale","expr":"dgx_control_backup_age_seconds > 86400","for":"1h","labels":{"severity":"warning"},"annotations":{"summary":"No verified control-plane backup has completed in 24 hours","runbook_url":"https://github.com/dgx-forge/dgx-forge/blob/main/docs/runbooks/observability.md#stale-backup"}},
+      {"alert":"ControlDatabaseUnavailable","expr":"up{job=\"dgx-control\"} == 0","for":"2m","labels":{"severity":"critical"},"annotations":{"summary":"The control API or its database dependency is unavailable","runbook_url":"https://github.com/dgx-forge/dgx-forge/blob/main/docs/runbooks/observability.md#database-unavailable"}},
+      {"alert":"WorkerLeaseStarvation","expr":"dgx_jobs{state=\"queued\"} > 0 and dgx_jobs{state=\"running\"} == 0","for":"5m","labels":{"severity":"warning"},"annotations":{"summary":"Control jobs are queued but no worker lease is active","runbook_url":"https://github.com/dgx-forge/dgx-forge/blob/main/docs/runbooks/observability.md#worker-lease-starvation"}}
+    ]
+  }]
+}
