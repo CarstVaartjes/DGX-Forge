@@ -138,8 +138,23 @@ int main(int argc, char **argv) {
 def _apply_served_name_patch(tmp_path: Path) -> Path:
     source = tmp_path / "ds4_server.c"
     source.write_text(_runtime_fixture_source(), encoding="utf-8")
+
+    # GNU patch, used by the pinned Ubuntu image build, places the second of these
+    # adjacent zero-context insertion hunks at new line 952.  BSD patch rejects the
+    # adjacency, while git apply requires that resolved new-line coordinate explicitly.
+    patch_text = PATCH.read_text(encoding="utf-8")
+    adjacent_hunk = "@@ -934,0 +951,6 @@"
+    assert patch_text.count(adjacent_hunk) == 1
+    portable_patch = tmp_path / "served-model-name-portable.patch"
+    portable_patch.write_text(
+        patch_text.replace(adjacent_hunk, "@@ -934,0 +952,6 @@"),
+        encoding="utf-8",
+    )
     subprocess.run(
-        ["patch", "-p1", "-i", str(PATCH)], cwd=tmp_path, check=True, capture_output=True
+        ["git", "apply", "--unsafe-paths", "--unidiff-zero", str(portable_patch)],
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
     )
     return source
 
