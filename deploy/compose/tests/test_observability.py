@@ -36,3 +36,10 @@ def test_dashboards_are_versioned_and_query_stable_metrics() -> None:
         assert dashboard["uid"] == f"dgx-{name}"
         assert dashboard["title"] and dashboard["panels"]
         assert all(panel.get("targets") for panel in dashboard["panels"])
+
+
+def test_every_service_has_bounded_logging() -> None:
+    for service in _rendered()["services"].values():
+        assert service["logging"]["driver"] == "local"
+        assert service["logging"]["options"]["max-size"]
+        assert service["logging"]["options"]["max-file"]
