@@ -4,8 +4,10 @@ import hashlib
 import importlib.resources
 import json
 from pathlib import Path
+from datetime import UTC, datetime
 
 import pytest
+from jsonschema import Draft202012Validator
 
 from dgx_agent_protocol import (
     AgentClaim,
@@ -92,6 +94,42 @@ def test_claim_copies_canonical_payload_before_becoming_frozen() -> None:
         claim.attempt = 2  # type: ignore[misc]
 
 
+def test_direct_construction_cannot_bypass_claim_validation_or_serialization() -> None:
+    raw = valid_claim()
+
+    with pytest.raises(AgentProtocolError, match="unsafe"):
+        AgentClaim(
+            schema_version=1,
+            job_id=raw["job_id"],
+            operation_id=raw["operation_id"],
+            attempt=1,
+            fence=raw["fence"],
+            node_id=raw["node_id"],
+            operation=AgentOperation.NODE_PROBE,
+            base_commit="a" * 40,
+            payload_digest=hashlib.sha256(b'{"command":"unsafe"}').hexdigest(),
+            payload={"command": "unsafe"},
+            deadline=datetime(2026, 8, 3, 12, tzinfo=UTC),
+        )
+
+
+def test_direct_result_construction_rejects_client_filesystem_paths() -> None:
+    raw = valid_attempt()
+
+    with pytest.raises(AgentProtocolError, match="path"):
+        AgentResult(
+            **raw,
+            state="succeeded",
+            result={"evidence": "/var/lib/dgx-agent/result.json"},
+        )
+
+
+@pytest.mark.parametrize("payload", [{"artifact_path": "release"}, {"evidence": "../private"}])
+def test_protocol_rejects_client_selected_filesystem_paths(payload: dict[str, str]) -> None:
+    with pytest.raises(AgentProtocolError, match="path"):
+        AgentClaim.parse(valid_claim() | {"payload": payload})
+
+
 def test_progress_and_result_are_fenced_node_messages() -> None:
     progress = AgentProgress.parse(valid_attempt() | {"progress": {"phase": "probe"}})
     result = AgentResult.parse(
@@ -123,6 +161,27 @@ def test_operation_enum_contains_only_supported_operations() -> None:
         "agent.update",
         "agent.rollback",
     }
+
+
+def schema(name: str) -> Draft202012Validator:
+    document = json.loads(
+        (Path(__file__).parents[1] / "src" / "dgx_agent_protocol" / "schemas" / name).read_text()
+    )
+    return Draft202012Validator(document)
+
+
+@pytest.mark.parametrize(
+    ("name", "fixture"),
+    [
+        ("agent-job.schema.json", valid_claim() | {"payload": {"nested": {"apiToken": "unsafe"}}}),
+        ("agent-job.schema.json", valid_claim() | {"payload": {"artifact_path": "release"}}),
+        ("agent-job.schema.json", valid_claim() | {"deadline": "2026-08-03T12:00:00+02:00"}),
+        ("agent-result.schema.json", valid_attempt() | {"state": "succeeded", "result": {"log_path": "/tmp/log"}}),
+        ("agent-result.schema.json", valid_attempt() | {"deadline": "2026-08-03T12:00:00+02:00", "state": "succeeded", "result": {}}),
+    ],
+)
+def test_schemas_reject_protocol_boundary_violations(name: str, fixture: dict[str, object]) -> None:
+    assert not schema(name).is_valid(fixture)
 
 
 @pytest.mark.parametrize("name", ["agent-job.schema.json", "agent-result.schema.json"])

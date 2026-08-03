@@ -13,7 +13,22 @@
     "operation": {"enum": ["node.probe", "release.install", "workload.prepare", "workload.start", "workload.stop", "workload.health", "workload.verify", "agent.update", "agent.rollback"]},
     "base_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "payload_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-    "payload": {"type": "object"},
-    "deadline": {"type": "string", "format": "date-time"}
+    "payload": {"$ref": "#/$defs/safe-object"},
+    "deadline": {"type": "string", "format": "date-time", "pattern": "(?:Z|\\+00:00)$"}
+  },
+  "$defs": {
+    "safe-object": {
+      "type": "object",
+      "propertyNames": {"not": {"pattern": "[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt]|[Tt][Oo][Kk][Ee][Nn]|[Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Pp][Rr][Ii][Vv][Aa][Tt][Ee].?[Kk][Ee][Yy]|[Cc][Oo][Mm][Mm][Aa][Nn][Dd]|[Ss][Hh][Ee][Ll][Ll]|[Ee][Nn][Vv][Ii][Rr][Oo][Nn][Mm][Ee][Nn][Tt]|(?:^|[_-])(?:[Pp][Aa][Tt][Hh]|[Ff][Ii][Ll][Ee]|[Dd][Ii][Rr][Ee][Cc][Tt][Oo][Rr][Yy]|[Ff][Ii][Ll][Ee][Ss][Yy][Ss][Tt][Ee][Mm]|[Mm][Oo][Uu][Nn][Tt])(?:$|[_-])|(?:[Pp][Aa][Tt][Hh]|[Ff][Ii][Ll][Ee]|[Dd][Ii][Rr][Ee][Cc][Tt][Oo][Rr][Yy]|[Ff][Ii][Ll][Ee][Ss][Yy][Ss][Tt][Ee][Mm]|[Mm][Oo][Uu][Nn][Tt])$"}},
+      "additionalProperties": {"$ref": "#/$defs/safe-value"}
+    },
+    "safe-value": {
+      "anyOf": [
+        {"type": ["null", "boolean", "number"]},
+        {"type": "string", "not": {"pattern": "[/\\\\]"}},
+        {"type": "array", "items": {"$ref": "#/$defs/safe-value"}},
+        {"$ref": "#/$defs/safe-object"}
+      ]
+    }
   }
 }
