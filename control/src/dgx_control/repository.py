@@ -24,6 +24,7 @@ _ROOTS = (
 )
 _MAX_DOCUMENT = 1_048_576
 _MAX_TREE = 4_194_304
+_BRANCH = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}")
 
 
 class RepositoryPolicyError(ValueError):
@@ -51,6 +52,8 @@ class RepositoryService:
         if root.is_symlink() or not root.is_dir() or not (root / ".git").exists():
             raise RepositoryPolicyError("repository root is invalid")
         self._root = root.resolve()
+        if "\n" in str(self._root) or (self._root / ".git/objects").is_symlink() or not (self._root / ".git/objects").is_dir():
+            raise RepositoryPolicyError("repository object store is invalid")
         self._environment = os.environ | {
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_TERMINAL_PROMPT": "0",
@@ -60,8 +63,18 @@ class RepositoryService:
     def root(self) -> Path:
         return self._root
 
+    @property
+    def object_store(self) -> Path:
+        return self._root / ".git/objects"
+
     def validate_path(self, path: str) -> str:
         return self._path(path)
+
+    def head(self, branch: str = "HEAD") -> str:
+        if branch != "HEAD" and (_BRANCH.fullmatch(branch) is None or ".." in branch or "//" in branch):
+            raise RepositoryPolicyError("repository branch name is invalid")
+        raw = self._run(("rev-parse", "--verify", f"{branch}^{{commit}}"), limit=41, action="resolve branch head")
+        return self._commit(raw.decode().strip())
 
     def _run(self, arguments: tuple[str, ...], *, limit: int, action: str) -> bytes:
         command = (

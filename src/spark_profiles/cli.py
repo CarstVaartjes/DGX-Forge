@@ -263,6 +263,19 @@ def _parser() -> argparse.ArgumentParser:
 
     break_lock = commands.add_parser("break-stale-lock")
     break_lock.add_argument("--json", action="store_true")
+
+    admin = commands.add_parser("admin")
+    admin_commands = admin.add_subparsers(dest="admin_command", required=True, parser_class=_CliParser)
+    for name in ("fleet", "models", "profiles", "jobs", "audit"):
+        command = admin_commands.add_parser(name)
+        command.add_argument("--json", action="store_true")
+    proposal = admin_commands.add_parser("proposal")
+    proposal.add_argument("--file", type=Path, required=True)
+    proposal.add_argument("--json", action="store_true")
+    deploy = admin_commands.add_parser("deploy")
+    deploy.add_argument("--proposal-digest", required=True)
+    deploy.add_argument("--apply", action="store_true")
+    deploy.add_argument("--json", action="store_true")
     return parser
 
 
@@ -472,6 +485,7 @@ def main(
     *,
     dependencies: CliDependencies | None = None,
     root: Path | None = None,
+    control_client=None,
 ) -> int:
     raw_argv = tuple(argv) if argv is not None else tuple(sys.argv[1:])
     try:
@@ -493,6 +507,38 @@ def main(
             error_args,
         )
         return 2
+    if args.command == "admin":
+        from .control_client import ControlClient, ControlClientError
+
+        try:
+            client = control_client or ControlClient.from_environment()
+            if args.admin_command == "proposal":
+                path = args.file
+                if path.is_symlink() or not path.is_file() or path.stat().st_size > 1_048_576:
+                    raise ControlClientError("proposal input must be a bounded regular non-symlink file")
+                payload = json.loads(path.read_bytes())
+                if not isinstance(payload, dict):
+                    raise ControlClientError("proposal input must be a JSON object")
+                result = client.create_proposal(payload)
+            elif args.admin_command == "deploy":
+                if args.apply:
+                    result = client.submit_change(args.proposal_digest)
+                else:
+                    result = {"mode": "plan", "proposal_digest": args.proposal_digest, "apply": False}
+            else:
+                endpoint = {
+                    "fleet": "/api/v1/fleet",
+                    "models": "/api/v1/documents?kind=models",
+                    "profiles": "/api/v1/documents?kind=profiles",
+                    "jobs": "/api/v1/jobs",
+                    "audit": "/api/v1/audit",
+                }[args.admin_command]
+                result = client.get(endpoint)
+            _emit(result, args)
+            return 0
+        except (ControlClientError, OSError, ValueError, json.JSONDecodeError) as error:
+            _emit({"error": str(error), "error_type": "control_api"}, args)
+            return 2
     if dependencies is None:
         try:
             dependencies = build_dependencies(

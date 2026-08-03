@@ -110,6 +110,15 @@ class JobService:
             session.expunge(job)
             return job
 
+    def list(self, *, limit: int = 100) -> list[Job]:
+        if not 1 <= limit <= 500:
+            raise ValueError("job list limit is invalid")
+        with self._sessions() as session:
+            jobs = list(session.scalars(select(Job).order_by(Job.created_at.desc()).limit(limit)))
+            for job in jobs:
+                session.expunge(job)
+            return jobs
+
     def claim(self, worker_id: str, lease_seconds: int) -> AttemptFence | None:
         if not worker_id.strip() or lease_seconds <= 0:
             raise ValueError("worker and positive lease are required")

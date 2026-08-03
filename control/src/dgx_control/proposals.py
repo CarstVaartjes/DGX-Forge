@@ -84,10 +84,12 @@ class ProposalService:
         ordered_paths = tuple(sorted(normalized))
         temporary_root = Path(tempfile.mkdtemp(prefix="dgx-proposal-"))
         worktree = temporary_root / "worktree"
-        added = False
         try:
-            self._git("worktree", "add", "--detach", "--no-checkout", str(worktree), base_commit)
-            added = True
+            worktree.mkdir(mode=0o700)
+            self._git("init", "-q", cwd=worktree)
+            alternates = worktree / ".git/objects/info/alternates"
+            alternates.write_text(str(self._repository.object_store) + "\n")
+            alternates.chmod(0o600)
             self._git("checkout", "--detach", base_commit, cwd=worktree)
             for path in ordered_paths:
                 target = worktree / path
@@ -101,12 +103,6 @@ class ProposalService:
                 cwd=worktree,
             )
         finally:
-            if added:
-                subprocess.run(
-                    ("git", "-c", "core.hooksPath=/dev/null", "-C", str(self._repository.root), "worktree", "remove", "--force", str(worktree)),
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    check=False, shell=False,
-                )
             shutil.rmtree(temporary_root, ignore_errors=True)
         digest_input = json.dumps(
             {"base_commit": base_commit, "documents": ordered_paths},

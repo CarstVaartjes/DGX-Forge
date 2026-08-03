@@ -32,6 +32,9 @@ class MemoryAuditStore:
             raise KeyError(request_id)
         return matches[0]
 
+    def list(self, *, limit: int = 100) -> list[AuditRecord]:
+        return list(reversed(self._events[-limit:]))
+
 
 class SqlAuditStore:
     def __init__(self, sessions: sessionmaker[Session], clock) -> None:
@@ -48,3 +51,10 @@ class SqlAuditStore:
                 targets=list(event.targets),
                 occurred_at=self._clock(),
             ))
+
+    def list(self, *, limit: int = 100) -> list[AuditRecord]:
+        from sqlalchemy import select
+
+        with self._sessions() as session:
+            rows = session.scalars(select(AuditEvent).order_by(AuditEvent.occurred_at.desc()).limit(limit))
+            return [AuditRecord(row.request_id, row.actor, row.action, row.base_commit, tuple(row.targets)) for row in rows]
