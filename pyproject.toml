@@ -23,6 +23,7 @@ dev = ["pytest==9.1.1"]
 "src/spark_profiles/schemas/fleet.schema.json" = "spark_profiles/schemas/fleet.schema.json"
 "src/spark_profiles/schemas/topology.schema.json" = "spark_profiles/schemas/topology.schema.json"
 "src/spark_profiles/schemas/platform-release-evidence.schema.json" = "spark_profiles/schemas/platform-release-evidence.schema.json"
+"src/spark_profiles/schemas/placement-requirements.schema.json" = "spark_profiles/schemas/placement-requirements.schema.json"
 
 [tool.ruff]
 required-version = "==0.16.1"
