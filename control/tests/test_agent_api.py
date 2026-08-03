@@ -257,6 +257,17 @@ def test_enrollment_overflow_burns_valid_grant_before_rejection(agent_system) ->
     assert client.post("/agent/v1/enroll", json=body).status_code == 403
 
 
+def test_enrollment_unknown_top_level_field_burns_valid_grant(agent_system) -> None:
+    client, _, codec, _ = agent_system
+    grant = client.post("/api/v1/agents/enrollments/grants", headers=admin_headers(codec), json={"node_id": NODE_A, "ttl_seconds": 60}).json()
+    key = ed25519.Ed25519PrivateKey.generate()
+    csr = x509.CertificateSigningRequestBuilder().subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "node")])).sign(key, algorithm=None).public_bytes(serialization.Encoding.PEM)
+    public = x509.load_pem_x509_csr(csr).public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    body = {"grant_token": grant["token"], "csr": csr.decode(), "evidence": {"node_id": NODE_A, "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(), "host_key_fingerprint": "host", "hardware_fingerprint": "hardware", "agent_digest": "a" * 64, "boot_id": "boot"}, "unknown": "denied"}
+    assert client.post("/agent/v1/enroll", json=body).status_code == 403
+    assert client.post("/agent/v1/enroll", json=body).status_code == 403
+
+
 def test_enrollment_listing_paginates_stably_and_can_filter_issuing(agent_system) -> None:
     client, services, codec, clock = agent_system
     with services.sessions.begin() as session:

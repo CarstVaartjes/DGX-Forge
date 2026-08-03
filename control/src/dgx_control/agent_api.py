@@ -359,7 +359,11 @@ def install_agent_routes(
         csr = body.get("csr")
         evidence = body.get("evidence")
         csr_bytes = csr.encode("ascii", "replace") if isinstance(csr, str) else b""
-        service_evidence = evidence if isinstance(evidence, Mapping) else {}
+        service_evidence = (
+            evidence
+            if isinstance(evidence, Mapping) and set(body) == {"grant_token", "csr", "evidence"}
+            else {}
+        )
         try:
             pending = required.enrollment.submit(body["grant_token"], csr_bytes, service_evidence)
         except EnrollmentDenied as error:
