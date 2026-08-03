@@ -26,9 +26,10 @@ services:
     environment: &control-environment
       DGX_DEPLOYMENT_MODE: production
       DGX_DATABASE_URL_FILE: /run/secrets/database-url
+      DGX_TOKEN_SIGNING_KEY_FILE: /run/secrets/token-signing-key
       DGX_REPOSITORY_PATH: /repository
       DGX_STATE_PATH: /state
-    secrets: [database-url]
+    secrets: [database-url, token-signing-key]
     volumes:
       - ${REPOSITORY_PATH:?set repository path}:/repository:ro
       - control-state:/state
@@ -49,7 +50,7 @@ services:
     read_only: true
     user: "10001:10001"
     environment: *control-environment
-    secrets: [database-url]
+    secrets: [database-url, token-signing-key]
     volumes:
       - ${REPOSITORY_PATH:?set repository path}:/repository:ro
       - control-state:/state
@@ -77,6 +78,8 @@ secrets:
     file: "${DATABASE_URL_FILE:?set database URL secret file}"
   postgres-password:
     file: "${POSTGRES_PASSWORD_FILE:?set PostgreSQL password secret file}"
+  token-signing-key:
+    file: "${TOKEN_SIGNING_KEY_FILE:?set token signing key secret file}"
 
 networks:
   control-private: {internal: true}

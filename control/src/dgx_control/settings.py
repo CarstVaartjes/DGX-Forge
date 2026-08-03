@@ -36,6 +36,7 @@ class Settings:
     repository_path: Path
     state_path: Path
     deployment_mode: str
+    token_signing_key: bytes
 
     @property
     def database_host(self) -> str | None:
@@ -49,9 +50,22 @@ class Settings:
         database_url = _secret("DGX_DATABASE_URL_FILE", production=mode == "production")
         if urlsplit(database_url).scheme not in {"postgresql", "postgresql+psycopg"}:
             raise SettingsError("database URL must use PostgreSQL")
+        signing_file = os.environ.get("DGX_TOKEN_SIGNING_KEY_FILE")
+        if signing_file:
+            signing_path = Path(signing_file)
+            if signing_path.is_symlink() or not signing_path.is_file():
+                raise SettingsError("token signing key must be a regular non-symlink file")
+            signing_key = signing_path.read_bytes().strip()
+        elif mode == "production":
+            raise SettingsError("DGX_TOKEN_SIGNING_KEY_FILE is required in production")
+        else:
+            signing_key = b"development-only-signing-key-32b"
+        if len(signing_key) < 32:
+            raise SettingsError("token signing key must contain at least 32 bytes")
         return cls(
             database_url=database_url,
             repository_path=Path(os.environ.get("DGX_REPOSITORY_PATH", "/srv/dgx-forge/repository")),
             state_path=Path(os.environ.get("DGX_STATE_PATH", "/srv/dgx-forge/state")),
             deployment_mode=mode,
+            token_signing_key=signing_key,
         )

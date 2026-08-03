@@ -30,3 +30,19 @@ class Worker:
         else:
             self._jobs.succeed(attempt, result)
         return True
+
+
+if __name__ == "__main__":
+    import os
+    import time
+    from datetime import UTC, datetime
+
+    from .db import build_engine, session_factory
+    from .settings import Settings
+
+    settings = Settings.from_env_and_secrets()
+    jobs = JobService(session_factory(build_engine(settings.database_url)), clock=lambda: datetime.now(UTC))
+    worker = Worker(jobs, os.environ.get("HOSTNAME", "control-worker"), {})
+    while True:
+        if not worker.run_once():
+            time.sleep(1)
