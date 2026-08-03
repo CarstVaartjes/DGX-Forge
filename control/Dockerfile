@@ -3,17 +3,25 @@ ARG NODE_IMAGE
 ARG PYTHON_IMAGE
 FROM ${NODE_IMAGE} AS web
 WORKDIR /web
-COPY web/package.json web/package-lock.json ./
+COPY control/web/package.json control/web/package-lock.json ./
 RUN npm ci --ignore-scripts
-COPY web/ ./
+COPY control/web/ ./
 RUN npm run build
+
+FROM ${PYTHON_IMAGE} AS protocol-wheel
+WORKDIR /protocol
+COPY agent_protocol/pyproject.toml ./
+COPY agent_protocol/src ./src
+RUN python -m pip wheel --no-cache-dir --wheel-dir /wheels .
 
 FROM ${PYTHON_IMAGE} AS build
 WORKDIR /build
-COPY pyproject.toml ./
-COPY src ./src
+COPY control/pyproject.toml ./
+COPY control/src ./src
 COPY --from=web /web/dist ./src/dgx_control/web
-RUN python -m pip install --no-cache-dir --prefix=/install .
+COPY --from=protocol-wheel /wheels /wheels
+RUN python -m pip install --no-cache-dir --prefix=/install \
+    /wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl .
 
 FROM ${PYTHON_IMAGE}
 RUN apt-get update \

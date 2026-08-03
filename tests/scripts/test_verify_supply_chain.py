@@ -10,13 +10,19 @@ SCRIPT = ROOT / "scripts/verify-supply-chain"
 def _copy(tmp_path: Path) -> Path:
     target = tmp_path / "repo"
     for path in (
-        "control/uv.lock", "control/web/package-lock.json", "control/Dockerfile",
+        "agent/pyproject.toml", "agent/uv.lock", "agent_protocol/pyproject.toml",
+        "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
+        "control/web/package-lock.json", "control/Dockerfile",
         "deploy/compose/compose.yaml", "deploy/compose/images.lock.json",
         "deploy/compose/trust/litellm-cosign.pub",
     ):
         destination = target / path
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(ROOT / path, destination)
+    shutil.copytree(
+        ROOT / "agent_protocol/src",
+        target / "agent_protocol/src",
+    )
     subprocess.run([SCRIPT, "--root", target, "--generate", "--json"], check=True, capture_output=True, text=True)
     return target
 
@@ -26,6 +32,7 @@ def test_verifier_accepts_locked_offline_evidence(tmp_path: Path) -> None:
     result = subprocess.run([SCRIPT, "--root", repository, "--json"], capture_output=True, text=True)
     assert result.returncode == 0
     assert '"ok":true' in result.stdout
+    assert "inventory/sbom/agent-protocol.spdx.json" in result.stdout
 
 
 def test_verifier_rejects_floating_image(tmp_path: Path) -> None:
@@ -46,3 +53,14 @@ def test_verifier_rejects_stale_sbom_after_lock_change(tmp_path: Path) -> None:
     result = subprocess.run([SCRIPT, "--root", repository], capture_output=True, text=True)
     assert result.returncode != 0
     assert "SBOM" in result.stderr or "manifest" in result.stderr
+
+
+def test_verifier_rejects_protocol_wheel_or_lock_drift(tmp_path: Path) -> None:
+    repository = _copy(tmp_path)
+    source = repository / "agent_protocol/src/dgx_agent_protocol/contracts.py"
+    source.write_text(source.read_text() + "\n# package drift\n")
+
+    result = subprocess.run([SCRIPT, "--root", repository], capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "manifest" in result.stderr
