@@ -81,6 +81,16 @@ class ChangeRequest(BaseModel):
     proposal_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
+class ReconciliationPlanRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+
+
+class ReconciliationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    plan_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
 def create_app(
     *,
     jobs: JobQueue,
@@ -197,13 +207,26 @@ def create_app(
         audits.append(AuditRecord(request.state.request_id, authenticated.subject, "repository.change.submit", None, ()))
         return dict(result)
 
-    @app.post("/api/v1/reconciliations", status_code=status.HTTP_202_ACCEPTED)
-    def reconcile(body: ChangeRequest, request: Request, authenticated: Actor = Depends(actor)) -> dict[str, object]:
+    @app.post("/api/v1/reconciliations/plan")
+    def reconcile_plan(body: ReconciliationPlanRequest, authenticated: Actor = Depends(actor)) -> dict[str, object]:
         if authenticated.role not in {"operator", "administrator"}:
             raise HTTPException(status_code=403, detail="insufficient role")
         if admin is None or admin.reconciler is None:
             raise HTTPException(status_code=503, detail="reconciliation unavailable")
-        return dict(admin.reconciler.enqueue(body.proposal_digest, authenticated.subject, request.state.request_id))
+        plan = admin.reconciler.plan(body.commit)
+        return {
+            "commit": plan.commit, "digest": plan.digest, "targets": list(plan.targets),
+            "placements": dict(plan.placements), "routes": dict(plan.routes),
+            "releases": dict(plan.releases), "input_digests": dict(plan.input_digests),
+        }
+
+    @app.post("/api/v1/reconciliations", status_code=status.HTTP_202_ACCEPTED)
+    def reconcile(body: ReconciliationRequest, request: Request, authenticated: Actor = Depends(actor)) -> dict[str, object]:
+        if authenticated.role not in {"operator", "administrator"}:
+            raise HTTPException(status_code=403, detail="insufficient role")
+        if admin is None or admin.reconciler is None:
+            raise HTTPException(status_code=503, detail="reconciliation unavailable")
+        return dict(admin.reconciler.enqueue(body.plan_digest, authenticated.subject, request.state.request_id))
 
     @app.post("/api/v1/jobs", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
     def enqueue(body: JobRequest, request: Request, authenticated: Actor = Depends(actor)) -> JobResponse:

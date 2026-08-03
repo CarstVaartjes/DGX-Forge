@@ -16,5 +16,5 @@ export class ApiClient implements ControlApi {
   audit() { return this.request<{events: AuditSummary[]}>("/api/v1/audit"); }
   preview(input: ProposalInput) { return this.request<ProposalPreview>("/api/v1/proposals", {method: "POST", body: JSON.stringify(input)}); }
   submit(digest: string) { return this.request<Record<string, unknown>>("/api/v1/changes", {method: "POST", body: JSON.stringify({proposal_digest: digest})}); }
-  reconcile(digest: string) { return this.request<Record<string, unknown>>("/api/v1/reconciliations", {method: "POST", body: JSON.stringify({proposal_digest: digest})}); }
+  reconcile(digest: string) { return this.request<Record<string, unknown>>("/api/v1/reconciliations", {method: "POST", body: JSON.stringify({plan_digest: digest})}); }
 }
