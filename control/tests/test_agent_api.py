@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 import hashlib
+import json
 import os
 import uuid
 
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 import pytest
 from cryptography import x509
@@ -13,12 +16,17 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from dgx_control.agent_api import AgentApiServices, _read_chunks, _sealed_snapshot
+from dgx_control.agent_api import (
+    AgentApiServices,
+    _bounded_enrollment_body,
+    _read_chunks,
+    _sealed_snapshot,
+)
 from dgx_control.agent_jobs import AgentJobService
 from dgx_control.api import create_app
 from dgx_control.audit import MemoryAuditStore
 from dgx_control.auth import Actor, TokenCodec
-from dgx_control.enrollment import EnrollmentService
+from dgx_control.enrollment import EnrollmentDenied, EnrollmentService
 from dgx_control.models import AgentCertificate, AgentEnrollment, AgentEnrollmentGrant, AgentNode, Base, Job
 from dgx_control.pki import CertificateAuthority, IssuedCertificate
 
@@ -39,6 +47,34 @@ class Clock:
 
     def __call__(self) -> datetime:
         return self.now
+
+
+class ChunkedEnrollmentRequest:
+    def __init__(self, *chunks: bytes) -> None:
+        self.chunks = chunks
+        self.received = 0
+
+    async def stream(self):
+        for chunk in self.chunks:
+            self.received += 1
+            yield chunk
+
+
+class CopyBoundedChunk(bytes):
+    def __new__(cls, value: bytes):
+        instance = super().__new__(cls, value)
+        instance.largest_slice = 0
+        return instance
+
+    def __getitem__(self, key):
+        if isinstance(key, slice):
+            start = key.start or 0
+            stop = len(self) if key.stop is None else key.stop
+            self.largest_slice = max(self.largest_slice, max(0, stop - start))
+        return super().__getitem__(key)
+
+    def __radd__(self, _other):
+        raise AssertionError("an incoming ASGI chunk must never be concatenated whole")
 
 
 class Authority(CertificateAuthority):
@@ -86,6 +122,75 @@ def admin_headers(codec: TokenCodec, role: str = "administrator") -> dict[str, s
     return {"Authorization": f"Bearer {codec.issue(Actor(role, role), ttl_seconds=100, now=0)}"}
 
 
+def enrollment_grant(services: AgentApiServices) -> str:
+    return services.enrollment.create(NODE_A, "administrator", 60).token
+
+
+def assert_grant_consumed(services: AgentApiServices, token: str) -> None:
+    with pytest.raises(EnrollmentDenied, match="consumed"):
+        services.enrollment.submit(token, b"", {})
+
+
+def valid_enrollment_body(token: str) -> bytes:
+    key = ed25519.Ed25519PrivateKey.generate()
+    csr = (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "node")]))
+        .sign(key, algorithm=None)
+        .public_bytes(serialization.Encoding.PEM)
+    )
+    public = x509.load_pem_x509_csr(csr).public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return json.dumps({
+        "grant_token": token,
+        "csr": csr.decode("ascii"),
+        "evidence": {
+            "node_id": NODE_A,
+            "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(),
+            "host_key_fingerprint": "host",
+            "hardware_fingerprint": "hardware",
+            "agent_digest": "a" * 64,
+            "boot_id": "boot",
+        },
+    }).encode("utf-8")
+
+
+def asgi_post(app, path: str, body: bytes, *, content_type: str = "application/json") -> tuple[int, bytes]:
+    async def request() -> tuple[int, bytes]:
+        sent: list[dict[str, object]] = []
+        delivered = False
+
+        async def receive() -> dict[str, object]:
+            nonlocal delivered
+            if delivered:
+                return {"type": "http.disconnect"}
+            delivered = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        async def send(message: dict[str, object]) -> None:
+            sent.append(message)
+
+        scope = {
+            "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1", "method": "POST", "scheme": "http",
+            "path": path, "raw_path": path.encode("ascii"), "query_string": b"",
+            "headers": ((b"content-type", content_type.encode("ascii")),),
+            "client": ("testclient", 1234), "server": ("testserver", 80),
+            "root_path": "", "state": {},
+        }
+        await asyncio.wait_for(app(scope, receive, send), timeout=1)
+        start = next(message for message in sent if message["type"] == "http.response.start")
+        content = b"".join(
+            message.get("body", b"")  # type: ignore[arg-type]
+            for message in sent if message["type"] == "http.response.body"
+        )
+        return int(start["status"]), content
+
+    return asyncio.run(request())
+
+
 def parent(sessions, clock: Clock) -> Job:
     job = Job(
         request_id=str(uuid.uuid4()), kind="agent.operations", state="queued", actor="administrator",
@@ -106,6 +211,40 @@ def test_spoofed_agent_header_is_rejected() -> None:
     response = TestClient(app).post("/agent/v1/claim", headers={"x-dgx-agent-node": NODE_A})
 
     assert response.status_code == 401
+
+
+def test_unauthenticated_agent_gate_returns_without_reading_request_body() -> None:
+    app = create_app(
+        jobs=Jobs(), tokens=TokenCodec(b"k" * 32),
+        audits=MemoryAuditStore(), fleet=lambda: {},
+    )
+    sent: list[dict[str, object]] = []
+    body_reads = 0
+
+    async def receive() -> dict[str, object]:
+        nonlocal body_reads
+        body_reads += 1
+        return {"type": "http.request", "body": b"untrusted", "more_body": False}
+
+    async def send(message: dict[str, object]) -> None:
+        sent.append(message)
+
+    scope = {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1", "method": "POST", "scheme": "http",
+        "path": "/agent/v1/claim", "raw_path": b"/agent/v1/claim",
+        "query_string": b"", "headers": (), "client": ("untrusted", 1234),
+        "server": ("testserver", 80), "root_path": "", "state": {},
+    }
+
+    asyncio.run(asyncio.wait_for(app(scope, receive, send), timeout=0.5))
+
+    start = next(message for message in sent if message["type"] == "http.response.start")
+    headers = dict(start["headers"])  # type: ignore[arg-type]
+    assert start["status"] == 401
+    assert body_reads == 0
+    assert headers[b"x-content-type-options"] == b"nosniff"
+    uuid.UUID(headers[b"x-request-id"].decode("ascii"))
 
 
 def test_agent_routes_do_not_require_human_bearer_tokens() -> None:
@@ -175,6 +314,152 @@ def test_enrollment_routes_are_admin_only_and_replay_is_rejected(agent_system) -
     body = {"grant_token": grant["token"], "csr": csr.decode(), "evidence": {"node_id": NODE_A, "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(), "host_key_fingerprint": "host", "hardware_fingerprint": "hardware", "agent_digest": "a" * 64, "boot_id": "boot"}}
     assert client.post("/agent/v1/enroll", json=body).status_code == 202
     assert client.post("/agent/v1/enroll", json=body).status_code == 403
+
+
+def test_duplicate_enrollment_grants_consume_unicode_escaped_token_values(agent_system) -> None:
+    client, services, _, _ = agent_system
+    first = enrollment_grant(services)
+    second = enrollment_grant(services)
+    escaped_second = "".join(f"\\u{ord(character):04x}" for character in second)
+    raw = (
+        f'{{"grant_token":"{first}","gr\\u0061nt_token":"{escaped_second}"}}'
+    ).encode("ascii")
+
+    status_code, _ = asgi_post(client.app, "/agent/v1/enroll", raw)
+
+    assert status_code == 422
+    assert_grant_consumed(services, first)
+    assert_grant_consumed(services, second)
+
+
+def test_normal_enrollment_object_still_succeeds(agent_system) -> None:
+    client, services, _, _ = agent_system
+    token = enrollment_grant(services)
+
+    status_code, response = asgi_post(
+        client.app,
+        "/agent/v1/enroll",
+        valid_enrollment_body(token),
+    )
+
+    assert status_code == 202
+    assert json.loads(response)["state"] == "pending-approval"
+
+
+def test_oversized_enrollment_preserves_split_discovery_prefix(agent_system) -> None:
+    _, services, _, _ = agent_system
+    token = enrollment_grant(services)
+    first = b" " * 1000 + b'{"grant_to'
+    second = b'ken":"' + token.encode("ascii") + b'","padding":"' + b"x" * (64 * 1024)
+    request = ChunkedEnrollmentRequest(first, second, b"must-not-be-received")
+
+    with pytest.raises(HTTPException) as denied:
+        asyncio.run(_bounded_enrollment_body(request, services))  # type: ignore[arg-type]
+
+    assert denied.value.status_code == 413
+    assert request.received == 2
+    assert_grant_consumed(services, token)
+
+
+def test_one_huge_enrollment_chunk_is_only_copied_through_fixed_prefix(agent_system) -> None:
+    _, services, _, _ = agent_system
+    token = enrollment_grant(services)
+    huge = CopyBoundedChunk(
+        b'{"grant_token":"' + token.encode("ascii") + b'","padding":"' + b"x" * (1024 * 1024)
+    )
+    request = ChunkedEnrollmentRequest(huge, b"must-not-be-received")
+
+    with pytest.raises(HTTPException) as denied:
+        asyncio.run(_bounded_enrollment_body(request, services))  # type: ignore[arg-type]
+
+    assert denied.value.status_code == 413
+    assert request.received == 1
+    assert huge.largest_slice <= 2048
+    assert_grant_consumed(services, token)
+
+
+@pytest.mark.parametrize(
+    "raw",
+    (b"[1]", b"[]", b'"scalar"', b"0", b"true", b"false", b"null"),
+    ids=("array", "empty-array", "string", "number", "true", "false", "null"),
+)
+def test_enrollment_rejects_non_object_json_without_server_error(agent_system, raw: bytes) -> None:
+    client, _, _, _ = agent_system
+
+    status_code, _ = asgi_post(client.app, "/agent/v1/enroll", raw)
+
+    assert status_code == 422
+
+
+def test_non_object_enrollment_consumes_identifiable_nested_grant(agent_system) -> None:
+    client, services, _, _ = agent_system
+    token = enrollment_grant(services)
+    raw = f'[{{"grant_token":"{token}"}}]'.encode("ascii")
+
+    status_code, _ = asgi_post(client.app, "/agent/v1/enroll", raw)
+
+    assert status_code == 422
+    assert_grant_consumed(services, token)
+
+
+def test_service_denied_enrollment_consumes_every_discovered_grant(agent_system) -> None:
+    client, services, _, _ = agent_system
+    effective = enrollment_grant(services)
+    nested = enrollment_grant(services)
+    body = json.loads(valid_enrollment_body(effective))
+    body["evidence"]["extra"] = {"grant_token": nested}
+
+    status_code, _ = asgi_post(
+        client.app,
+        "/agent/v1/enroll",
+        json.dumps(body).encode("utf-8"),
+    )
+
+    assert status_code == 403
+    assert_grant_consumed(services, effective)
+    assert_grant_consumed(services, nested)
+
+
+@pytest.mark.parametrize(
+    ("prefix", "suffix"),
+    (
+        (b'{"grant_token":"', b'",]'),
+        (b'{"grant_token":"', b'","invalid-utf8":"\xff"}'),
+        (b"[" * 1500 + b'{"grant_token":"', b'"}' + b"]" * 1500),
+    ),
+    ids=("malformed-json", "invalid-utf8", "deep-nesting"),
+)
+def test_invalid_enrollment_json_consumes_identifiable_grant(
+    agent_system,
+    prefix: bytes,
+    suffix: bytes,
+) -> None:
+    client, services, _, _ = agent_system
+    token = enrollment_grant(services)
+
+    status_code, _ = asgi_post(
+        client.app,
+        "/agent/v1/enroll",
+        prefix + token.encode("ascii") + suffix,
+    )
+
+    assert status_code == 422
+    assert_grant_consumed(services, token)
+
+
+def test_wrong_enrollment_content_type_consumes_identifiable_grant(agent_system) -> None:
+    client, services, _, _ = agent_system
+    token = enrollment_grant(services)
+
+    status_code, _ = asgi_post(
+        client.app,
+        "/agent/v1/enroll",
+        f'{{"grant_token":"{token}"}}'.encode("ascii"),
+        content_type="text/plain",
+    )
+
+    assert status_code == 415
+    assert_grant_consumed(services, token)
 
 
 def test_enrollment_evidence_has_a_fixed_bounded_schema(agent_system) -> None:
