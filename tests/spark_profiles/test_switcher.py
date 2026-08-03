@@ -23,6 +23,8 @@ from spark_profiles.contracts import (
 )
 from spark_profiles.state import ControllerState, StateStore
 from spark_profiles.switcher import ProfileSwitcher
+from spark_profiles.fleet import NodeId
+from spark_profiles.placement import PlacementPlan
 
 SHA_A = "a" * 64
 BOOT_IDS = {"spark1": "1" * 32, "spark2": "2" * 32}
@@ -331,6 +333,38 @@ def test_single_spark_lifecycle_never_touches_spark2_or_appends_a_role() -> None
     ]
     assert all(event[1] != "spark2" for event in remote)
     assert all(event[2][-1] not in {"head", "worker"} for event in remote)
+
+
+def test_switcher_touches_only_concrete_planned_node() -> None:
+    definition = workload("generic-single")
+    node_ids = tuple(NodeId.parse(f"spk_{index:032x}") for index in range(3))
+    target = ClusterProfile(
+        "generic", Path("accepted.json"),
+        {node.value: (definition.id,) if index == 2 else () for index, node in enumerate(node_ids)},
+        {"model": definition.id},
+    )
+    catalog_value = catalog(target, definition=definition)
+    events: list[tuple] = []
+    backend = FakeBackend(events)
+    live = {
+        node.value: {"healthy": True, "free_memory_bytes": 100, "free_disk_bytes": 100, "boot_id": str(index + 1) * 32}
+        for index, node in enumerate(node_ids)
+    }
+    plan = PlacementPlan(definition.id, fingerprint(definition), (node_ids[2],), {node_ids[2].value: ("selected",)}, "d" * 64)
+    switcher = ProfileSwitcher(
+        catalog=catalog_value, backend=backend,
+        state_store=FakeStore(ControllerState.stopped(), events),
+        inventory_provider=lambda: live,
+        admission_checker=lambda *_: AdmissionReport(()),
+        placement_plans={definition.id: plan},
+    )
+
+    report = switcher.switch_profile("generic")
+
+    assert report.status == "active"
+    assert {call[0] for call in backend.calls} == {node_ids[2].value}
+    assert report.nodes == (node_ids[2].value,)
+    assert report.placement_digests == {definition.id: "d" * 64}
 
 
 def test_definition_deadlines_select_each_lifecycle_operation_timeout() -> None:

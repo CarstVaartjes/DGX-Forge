@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import shutil
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass, replace
@@ -939,6 +940,51 @@ def test_default_dependencies_use_local_state_and_conservative_inventory(
     assert dependencies.inventory_provider() == {"spark1": {}, "spark2": {}}
     assert dependencies.health_service is None
     assert not (tmp_path / "sparkctl").exists()
+
+
+def test_generic_dry_run_reports_generated_node_ids_and_plan_digest() -> None:
+    class GenericSwitcher(FakeSwitcher):
+        def switch_profile(self, target_id, *, restore_to=None, dry_run=False):
+            return SwitchReport(
+                target_profile=target_id, status="planned", profile_sha256="a" * 64,
+                definition_sha256={"model": "b" * 64}, published_endpoints={},
+                dry_run=True,
+                nodes=("spk_00000000000000000000000000000001",),
+                placement_digests={"model": "c" * 64},
+            )
+
+    result = invoke("switch", "default", "--dry-run", "--json", switcher=GenericSwitcher())
+    assert result.exit_code == 0
+    assert result.json["nodes"] == ["spk_00000000000000000000000000000001"]
+    assert result.json["placement_digests"] == {"model": "c" * 64}
+
+
+def test_dependencies_prefer_generic_fleet_when_repository_contains_one(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    shutil.copytree(
+        REPOSITORY_ROOT, repository,
+        ignore=shutil.ignore_patterns(".git", ".venv", ".worktrees", "node_modules", "__pycache__"),
+    )
+    node_id = "spk_0000000000000000000000000000000a"
+    (repository / "inventory/fleet.toml").write_text(f'''schema_version = 2
+
+[nodes.{node_id}]
+display_name = "portable"
+hostname = "portable.local"
+lifecycle = "ready"
+[nodes.{node_id}.management]
+host = "portable.local"
+user = "operator"
+port = 22
+[nodes.{node_id}.labels]
+pool = "default"
+''')
+    (repository / "inventory/topology.json").write_text(json.dumps({"schema_version": 1, "nodes": [node_id], "links": []}))
+
+    dependencies = build_dependencies(repository, state_directory=tmp_path / "state")
+
+    assert dependencies.inventory_provider() == {node_id: {}}
+    assert set(dependencies.switcher.backend._aliases) == {node_id, "spark1"}
 
 
 def test_node_health_dependencies_use_the_health_specific_output_cap(tmp_path: Path) -> None:

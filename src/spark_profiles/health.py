@@ -195,7 +195,14 @@ class NodeHealthService:
             self._functions = self._validate_generic_assets(fleet, topology)
 
     @classmethod
-    def from_repository(cls, root: Path, backend: SshBackend) -> NodeHealthService:
+    def from_repository(
+        cls,
+        root: Path,
+        backend: SshBackend,
+        *,
+        fleet: Fleet | None = None,
+        topology: Mapping[str, Any] | None = None,
+    ) -> NodeHealthService:
         root = root.resolve()
         try:
             with (root / "config/controller.toml").open("rb") as source:
@@ -220,6 +227,8 @@ class NodeHealthService:
                 rdma_baseline=rdma_baseline,
                 timeout_seconds=float(health["timeout_seconds"]),
                 cpu_sample_milliseconds=int(health["cpu_sample_milliseconds"]),
+                fleet=fleet,
+                topology=topology,
             )
         except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, tomllib.TOMLDecodeError) as error:
             if isinstance(error, LocalHealthError):

@@ -201,7 +201,7 @@ class SshBackend:
         fleet: Fleet,
         executor: Executor | None = None,
         *,
-        legacy_aliases: Mapping[str, str] | None = None,
+        legacy_aliases: Mapping[str, str | ManagementEndpoint] | None = None,
         connect_timeout_seconds: int = 10,
         output_limit_bytes: int = 65_536,
     ) -> SshBackend:
