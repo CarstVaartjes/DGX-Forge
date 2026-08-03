@@ -4,11 +4,14 @@ from dataclasses import dataclass, fields, is_dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 import hashlib
+import importlib.resources
 import json
 import re
 from types import MappingProxyType
 from typing import Any, Mapping
 from uuid import UUID
+
+from jsonschema import Draft202012Validator, FormatChecker
 
 
 MAX_DOCUMENT_BYTES = 64 * 1024
@@ -20,7 +23,7 @@ UNSAFE_KEY = re.compile(
     re.IGNORECASE,
 )
 PATH_KEY = re.compile(
-    r"(?:^|[_-])(?:path|file|directory|filesystem|mount)(?:$|[_-])|(?:path|file|directory|filesystem|mount)$",
+    r"(?:^|[_-])(?:path|file|filename|directory|filesystem|mount)(?:$|[_-])",
     re.IGNORECASE,
 )
 
@@ -39,6 +42,20 @@ class AgentOperation(StrEnum):
     WORKLOAD_VERIFY = "workload.verify"
     AGENT_UPDATE = "agent.update"
     AGENT_ROLLBACK = "agent.rollback"
+
+
+PROTOCOL_FORMAT_CHECKER = FormatChecker()
+
+
+@PROTOCOL_FORMAT_CHECKER.checks("date-time")
+def _is_utc_date_time(value: Any) -> bool:
+    if not isinstance(value, str):
+        return True
+    try:
+        deadline = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+    return deadline.tzinfo is not None and deadline.utcoffset() == UTC.utcoffset(deadline)
 
 
 def canonical_message(value: Any) -> bytes:
@@ -90,7 +107,7 @@ def _validate_safe_keys(value: Any) -> None:
         for key, item in value.items():
             if not isinstance(key, str):
                 raise AgentProtocolError("JSON object keys must be strings")
-            if PATH_KEY.search(key):
+            if _is_path_key(key):
                 raise AgentProtocolError(f"filesystem path key is not allowed: {key}")
             if UNSAFE_KEY.search(key):
                 raise AgentProtocolError(f"unsafe protocol key: {key}")
@@ -100,6 +117,11 @@ def _validate_safe_keys(value: Any) -> None:
             _validate_safe_keys(item)
     elif isinstance(value, str) and ("/" in value or "\\" in value):
         raise AgentProtocolError("filesystem path values are not allowed")
+
+
+def _is_path_key(key: str) -> bool:
+    segmented = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", "_", key)
+    return bool(PATH_KEY.search(segmented))
 
 
 def _validate_bounded_document(value: Any, *, name: str) -> Any:
@@ -298,3 +320,36 @@ class AgentResult:
         value = _mapping(raw)
         _fields(value, required={"schema_version", "job_id", "operation_id", "attempt", "fence", "node_id", "deadline", "state", "result"})
         return cls(**_attempt_fields(value), state=value["state"], result=value["result"])
+
+
+def schema_validator(schema_name: str) -> Draft202012Validator:
+    """Return the package-mandated Draft 2020-12 validator for a wire schema."""
+    if schema_name not in {"agent-job.schema.json", "agent-result.schema.json"}:
+        raise AgentProtocolError(f"unknown protocol schema: {schema_name}")
+    try:
+        document = json.loads(
+            (
+                importlib.resources.files("dgx_agent_protocol")
+                / "schemas"
+                / schema_name
+            ).read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as error:
+        raise AgentProtocolError("packaged protocol schema is invalid") from error
+    return Draft202012Validator(document, format_checker=PROTOCOL_FORMAT_CHECKER)
+
+
+def validate_schema_message(schema_name: str, raw: Any) -> AgentClaim | AgentResult:
+    """Apply the format-aware wire schema and its mandatory runtime limits."""
+    parsers = {
+        "agent-job.schema.json": AgentClaim.parse,
+        "agent-result.schema.json": AgentResult.parse,
+    }
+    try:
+        parser = parsers[schema_name]
+    except KeyError as error:
+        raise AgentProtocolError(f"unknown protocol schema: {schema_name}") from error
+    errors = list(schema_validator(schema_name).iter_errors(raw))
+    if errors:
+        raise AgentProtocolError(f"schema validation failed: {errors[0].message}")
+    return parser(raw)

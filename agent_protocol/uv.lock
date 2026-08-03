@@ -24,20 +24,20 @@ wheels = [
 name = "dgx-agent-protocol"
 version = "1.0.0"
 source = { editable = "." }
+dependencies = [
+    { name = "jsonschema" },
+]
 
 [package.dev-dependencies]
 dev = [
-    { name = "jsonschema" },
     { name = "pytest" },
 ]
 
 [package.metadata]
+requires-dist = [{ name = "jsonschema", specifier = "==4.25.1" }]
 
 [package.metadata.requires-dev]
-dev = [
-    { name = "jsonschema", specifier = "==4.25.1" },
-    { name = "pytest", specifier = "==9.1.1" },
-]
+dev = [{ name = "pytest", specifier = "==9.1.1" }]
 
 [[package]]
 name = "iniconfig"

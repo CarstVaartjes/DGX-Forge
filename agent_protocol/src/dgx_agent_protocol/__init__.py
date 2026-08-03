@@ -5,6 +5,8 @@ from .contracts import (
     AgentProtocolError,
     AgentResult,
     canonical_message,
+    schema_validator,
+    validate_schema_message,
 )
 
 __all__ = [
@@ -14,4 +16,6 @@ __all__ = [
     "AgentProtocolError",
     "AgentResult",
     "canonical_message",
+    "schema_validator",
+    "validate_schema_message",
 ]

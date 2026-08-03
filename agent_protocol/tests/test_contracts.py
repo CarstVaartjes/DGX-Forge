@@ -16,6 +16,8 @@ from dgx_agent_protocol import (
     AgentProtocolError,
     AgentResult,
     canonical_message,
+    schema_validator,
+    validate_schema_message,
 )
 
 
@@ -124,10 +126,28 @@ def test_direct_result_construction_rejects_client_filesystem_paths() -> None:
         )
 
 
-@pytest.mark.parametrize("payload", [{"artifact_path": "release"}, {"evidence": "../private"}])
+def test_direct_progress_construction_enforces_protocol_boundary() -> None:
+    raw = valid_attempt()
+
+    with pytest.raises(AgentProtocolError, match="unsafe"):
+        AgentProgress(**raw, progress={"authorization": "unsafe"})
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{"artifact_path": "release"}, {"artifactPath": "release"}, {"evidence": "../private"}],
+)
 def test_protocol_rejects_client_selected_filesystem_paths(payload: dict[str, str]) -> None:
     with pytest.raises(AgentProtocolError, match="path"):
         AgentClaim.parse(valid_claim() | {"payload": payload})
+
+
+def test_protocol_allows_benign_profile_key() -> None:
+    payload = {"profile": "production"}
+    raw = valid_claim() | {"payload": payload, "payload_digest": hashlib.sha256(canonical_message(payload)).hexdigest()}
+
+    assert AgentClaim.parse(raw).payload == payload
+    assert validate_schema_message("agent-job.schema.json", raw).payload == payload
 
 
 def test_progress_and_result_are_fenced_node_messages() -> None:
@@ -164,10 +184,7 @@ def test_operation_enum_contains_only_supported_operations() -> None:
 
 
 def schema(name: str) -> Draft202012Validator:
-    document = json.loads(
-        (Path(__file__).parents[1] / "src" / "dgx_agent_protocol" / "schemas" / name).read_text()
-    )
-    return Draft202012Validator(document)
+    return schema_validator(name)
 
 
 @pytest.mark.parametrize(
@@ -175,13 +192,47 @@ def schema(name: str) -> Draft202012Validator:
     [
         ("agent-job.schema.json", valid_claim() | {"payload": {"nested": {"apiToken": "unsafe"}}}),
         ("agent-job.schema.json", valid_claim() | {"payload": {"artifact_path": "release"}}),
+        ("agent-job.schema.json", valid_claim() | {"payload": {"artifactPath": "release"}}),
         ("agent-job.schema.json", valid_claim() | {"deadline": "2026-08-03T12:00:00+02:00"}),
+        ("agent-job.schema.json", valid_claim() | {"deadline": "2026-99-99T12:00:00+00:00"}),
         ("agent-result.schema.json", valid_attempt() | {"state": "succeeded", "result": {"log_path": "/tmp/log"}}),
         ("agent-result.schema.json", valid_attempt() | {"deadline": "2026-08-03T12:00:00+02:00", "state": "succeeded", "result": {}}),
     ],
 )
 def test_schemas_reject_protocol_boundary_violations(name: str, fixture: dict[str, object]) -> None:
     assert not schema(name).is_valid(fixture)
+
+
+@pytest.mark.parametrize(
+    ("name", "raw"),
+    [
+        ("agent-job.schema.json", valid_claim() | {"deadline": "2026-99-99T12:00:00+00:00"}),
+        ("agent-result.schema.json", valid_attempt() | {"deadline": "2026-99-99T12:00:00+00:00", "state": "succeeded", "result": {}}),
+    ],
+)
+def test_parse_and_shared_schema_validator_reject_bogus_utc_dates(name: str, raw: dict[str, object]) -> None:
+    parser = AgentClaim.parse if name == "agent-job.schema.json" else AgentResult.parse
+
+    with pytest.raises(AgentProtocolError):
+        parser(raw)
+    with pytest.raises(AgentProtocolError):
+        validate_schema_message(name, raw)
+
+
+@pytest.mark.parametrize("name", ["agent-job.schema.json", "agent-result.schema.json"])
+def test_shared_schema_validator_and_parser_reject_oversized_canonical_documents(name: str) -> None:
+    document = {"x": "x" * 65536}
+    if name == "agent-job.schema.json":
+        raw = valid_claim() | {"payload": document, "payload_digest": hashlib.sha256(canonical_message(document)).hexdigest()}
+        parser = AgentClaim.parse
+    else:
+        raw = valid_attempt() | {"state": "succeeded", "result": document}
+        parser = AgentResult.parse
+
+    with pytest.raises(AgentProtocolError, match="large"):
+        parser(raw)
+    with pytest.raises(AgentProtocolError, match="large"):
+        validate_schema_message(name, raw)
 
 
 @pytest.mark.parametrize("name", ["agent-job.schema.json", "agent-result.schema.json"])
