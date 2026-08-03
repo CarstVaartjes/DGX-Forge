@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "job_id", "operation_id", "attempt", "fence", "node_id", "operation", "base_commit", "payload_digest", "payload", "deadline"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "job_id": {"type": "string", "format": "uuid"},
+    "operation_id": {"type": "string", "format": "uuid"},
+    "attempt": {"type": "integer", "minimum": 1},
+    "fence": {"type": "string", "format": "uuid"},
+    "node_id": {"type": "string", "pattern": "^spk_[0-9a-f]{32}$"},
+    "operation": {"enum": ["node.probe", "release.install", "workload.prepare", "workload.start", "workload.stop", "workload.health", "workload.verify", "agent.update", "agent.rollback"]},
+    "base_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "payload_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "payload": {"type": "object"},
+    "deadline": {"type": "string", "format": "date-time"}
+  }
+}
