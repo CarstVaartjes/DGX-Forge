@@ -70,7 +70,7 @@ git commit -m "feat: issue short-lived Spark agent certificates"
 
 **Files:**
 - Modify: `control/src/dgx_control/models.py`
-- Create: `control/migrations/versions/0003_agent_enrollment.py`
+- Create: `control/migrations/versions/0004_agent_enrollment.py`
 - Create: `control/src/dgx_control/enrollment.py`
 - Test: `control/tests/test_enrollment.py`
 
@@ -111,7 +111,7 @@ Expected: PASS including simultaneous replay where exactly one submit succeeds.
 - [ ] **Step 5: Commit enrollment service**
 
 ```bash
-git add control/src/dgx_control/models.py control/migrations/versions/0003_agent_enrollment.py control/src/dgx_control/enrollment.py control/tests/test_enrollment.py
+git add control/src/dgx_control/models.py control/migrations/versions/0004_agent_enrollment.py control/src/dgx_control/enrollment.py control/tests/test_enrollment.py
 git commit -m "feat: enroll immutable Spark agent identities"
 ```
 

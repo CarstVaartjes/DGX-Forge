@@ -23,7 +23,7 @@
 **Files:**
 - Create: `control/src/dgx_control/orchestration.py`
 - Modify: `control/src/dgx_control/models.py`
-- Create: `control/migrations/versions/0004_reconciliation_graph.py`
+- Create: `control/migrations/versions/0005_reconciliation_graph.py`
 - Test: `control/tests/test_orchestration.py`
 
 **Interfaces:**
@@ -61,7 +61,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit graph**
 
 ```bash
-git add control/src/dgx_control/orchestration.py control/src/dgx_control/models.py control/migrations/versions/0004_reconciliation_graph.py control/tests/test_orchestration.py
+git add control/src/dgx_control/orchestration.py control/src/dgx_control/models.py control/migrations/versions/0005_reconciliation_graph.py control/tests/test_orchestration.py
 git commit -m "feat: persist agent reconciliation graphs"
 ```
 

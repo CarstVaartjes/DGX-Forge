@@ -157,7 +157,7 @@ git commit -m "feat: update Spark agents through A/B slots"
 **Files:**
 - Create: `control/src/dgx_control/updates.py`
 - Modify: `control/src/dgx_control/models.py`
-- Create: `control/migrations/versions/0005_update_rollouts.py`
+- Create: `control/migrations/versions/0006_update_rollouts.py`
 - Test: `control/tests/test_updates.py`
 
 **Interfaces:**
@@ -193,7 +193,7 @@ Expected: PASS; update and profile reconciliation leases cannot overlap a node.
 - [ ] **Step 5: Commit rollout orchestrator**
 
 ```bash
-git add control/src/dgx_control/updates.py control/src/dgx_control/models.py control/migrations/versions/0005_update_rollouts.py control/tests/test_updates.py
+git add control/src/dgx_control/updates.py control/src/dgx_control/models.py control/migrations/versions/0006_update_rollouts.py control/tests/test_updates.py
 git commit -m "feat: roll out Spark agent updates safely"
 ```
 
