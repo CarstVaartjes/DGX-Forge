@@ -10,10 +10,14 @@ def _rendered() -> dict:
         "POSTGRES_IMAGE": "postgres:17@sha256:" + "a" * 64,
         "CADDY_IMAGE": "caddy:2@sha256:" + "b" * 64,
         "CONTROL_IMAGE": "example/control:1@sha256:" + "c" * 64,
+        "LITELLM_IMAGE": "example/litellm:1@sha256:" + "d" * 64,
         "REPOSITORY_PATH": "/srv/dgx-forge/repository",
         "DATABASE_URL_FILE": "/dev/null",
         "POSTGRES_PASSWORD_FILE": "/dev/null",
         "TOKEN_SIGNING_KEY_FILE": "/dev/null",
+        "LITELLM_MASTER_KEY_FILE": "/dev/null",
+        "LITELLM_UPSTREAM_KEY_FILE": "/dev/null",
+        "LITELLM_DATABASE_URL_FILE": "/dev/null",
     }
     result = subprocess.run(
         ["docker", "compose", "-f", str(root / "deploy/compose/compose.yaml"), "config", "--format", "json"],
@@ -33,8 +37,9 @@ def test_database_has_only_data_network_and_ingress_is_segmented() -> None:
     services = _rendered()["services"]
     assert set(services["postgres"]["networks"]) == {"data"}
     assert set(services["caddy"]["networks"]) == {"ingress"}
-    assert set(services["control-worker"]["networks"]) == {"application", "data"}
+    assert set(services["control-worker"]["networks"]) == {"application", "cluster-egress", "data"}
     assert set(services["control-api"]["networks"]) == {"application", "data", "ingress"}
+    assert set(services["litellm"]["networks"]) == {"cluster-egress", "data", "ingress"}
 
 
 def test_caddy_disables_admin_and_sets_edge_guards() -> None:

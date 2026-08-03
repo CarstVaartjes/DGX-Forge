@@ -13,5 +13,10 @@
 		Referrer-Policy "no-referrer"
 		-Server
 	}
-	reverse_proxy control-api:8000
+	handle /v1/* {
+		reverse_proxy litellm:4000
+	}
+	handle {
+		reverse_proxy control-api:8000
+	}
 }

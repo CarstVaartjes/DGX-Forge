@@ -55,9 +55,28 @@ services:
       - ${REPOSITORY_PATH:?set repository path}:/repository:ro
       - control-state:/state
     tmpfs: [/tmp]
-    networks: [application, data]
+    networks: [application, data, cluster-egress]
     depends_on:
       postgres: {condition: service_healthy}
+
+  litellm:
+    image: ${LITELLM_IMAGE:?set a digest-pinned LiteLLM image}
+    restart: unless-stopped
+    entrypoint: [/app/dgx-entrypoint]
+    read_only: true
+    secrets: [litellm-master-key, litellm-upstream-key, litellm-database-url]
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+      - ./litellm/entrypoint.sh:/app/dgx-entrypoint:ro
+    tmpfs: [/tmp]
+    networks: [data, ingress, cluster-egress]
+    depends_on:
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
 
   caddy:
     image: ${CADDY_IMAGE:?set a digest-pinned Caddy image}
@@ -80,11 +99,18 @@ secrets:
     file: "${POSTGRES_PASSWORD_FILE:?set PostgreSQL password secret file}"
   token-signing-key:
     file: "${TOKEN_SIGNING_KEY_FILE:?set token signing key secret file}"
+  litellm-master-key:
+    file: "${LITELLM_MASTER_KEY_FILE:?set LiteLLM master key secret file}"
+  litellm-upstream-key:
+    file: "${LITELLM_UPSTREAM_KEY_FILE:?set LiteLLM upstream key secret file}"
+  litellm-database-url:
+    file: "${LITELLM_DATABASE_URL_FILE:?set LiteLLM database URL secret file}"
 
 networks:
   ingress: {}
   application: {internal: true}
   data: {internal: true}
+  cluster-egress: {}
 
 volumes:
   postgres-data: {}
