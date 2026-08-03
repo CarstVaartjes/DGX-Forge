@@ -17,6 +17,8 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from sqlalchemy import select
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import AgentCertificate, AgentEnrollment, AgentEnrollmentGrant, AgentNode
@@ -55,6 +57,12 @@ class PendingEnrollment:
     state: str
 
 
+@dataclass(frozen=True)
+class _IssuanceClaim:
+    node_id: str
+    public_key_pem: bytes
+
+
 class EnrollmentService:
     def __init__(
         self,
@@ -69,6 +77,9 @@ class EnrollmentService:
         # SQLite ignores row locks. PostgreSQL correctness comes from the
         # locked grant row; this preserves the same behavior in local tests.
         self._submit_lock = threading.RLock()
+        # PostgreSQL uses a durable advisory lock for cross-service claims.
+        # This makes SQLite's same-process behavior match that safety rule.
+        self._issuance_lock = threading.RLock()
 
     def create(self, node_id: str, actor: str, ttl_seconds: int) -> EnrollmentGrant:
         _validate_node_id(node_id)
@@ -92,7 +103,6 @@ class EnrollmentService:
 
     def submit(self, token: str, csr: bytes, evidence: Mapping[str, object]) -> PendingEnrollment:
         token_bytes = _decode_token(token)
-        public_key_pem, public_key_fingerprint = _load_csr(csr)
         now = _utc(self._clock())
         failure: str | None = None
         pending: PendingEnrollment | None = None
@@ -110,7 +120,12 @@ class EnrollmentService:
                 grant.consumed_at = now
                 failure = "enrollment grant is expired"
             else:
-                values, failure = _validate_evidence(evidence, grant.node_id, public_key_fingerprint)
+                try:
+                    public_key_pem, public_key_fingerprint = _load_csr(csr)
+                except EnrollmentDenied as error:
+                    failure = str(error)
+                else:
+                    values, failure = _validate_evidence(evidence, grant.node_id, public_key_fingerprint)
                 if failure is None:
                     enrollment = AgentEnrollment(
                         id=str(uuid.uuid4()),
@@ -140,20 +155,26 @@ class EnrollmentService:
     def approve(self, enrollment_id: str, actor: str) -> IssuedCertificate:
         _validate_actor(actor)
         now = _utc(self._clock())
-        with self._sessions.begin() as session:
-            enrollment = _locked_enrollment(session, enrollment_id)
-            if enrollment.state == "approved":
-                return _issued(enrollment)
-            if enrollment.state == "rejected":
-                raise EnrollmentDenied("enrollment was rejected")
-            if enrollment.state != "pending-approval":
-                raise EnrollmentDenied("enrollment state cannot be approved")
-            if session.get(AgentNode, enrollment.node_id) is not None:
-                raise EnrollmentDenied("node identity already exists")
-            issued = self._authority.issue_node(enrollment.node_id, enrollment.csr_public_key_pem.encode("ascii"), now)
-            if issued.node_id != enrollment.node_id:
+        with self._issuance_lock:
+            claim = self._claim_issuance(enrollment_id, actor, now)
+            if isinstance(claim, IssuedCertificate):
+                return claim
+            issued = self._authority.issue_node(claim.node_id, claim.public_key_pem, now)
+            if issued.node_id != claim.node_id:
                 raise EnrollmentDenied("certificate authority returned a mismatched node identity")
-            _persist_issued_enrollment(session, enrollment, issued, actor, now)
+            try:
+                with self._sessions.begin() as session:
+                    enrollment = _locked_enrollment(session, enrollment_id)
+                    if enrollment.state != "issuing":
+                        raise EnrollmentDenied("certificate issuance state changed; manual recovery required")
+                    if session.get(AgentNode, enrollment.node_id) is not None:
+                        raise EnrollmentDenied("node identity already exists")
+                    _persist_issued_enrollment(session, enrollment, issued, actor, now)
+            except IntegrityError as error:
+                # The durable issuing state was committed before the provider
+                # call.  Never retry automatically after an uncertain write:
+                # the provider may already have created this certificate.
+                raise EnrollmentDenied("certificate persistence failed; manual recovery required") from error
             return issued
 
     def reject(self, enrollment_id: str, actor: str, reason: str) -> PendingEnrollment:
@@ -213,6 +234,37 @@ class EnrollmentService:
             ))
             return issued
 
+    def _claim_issuance(self, enrollment_id: str, actor: str, now: datetime) -> _IssuanceClaim | IssuedCertificate:
+        with self._sessions.begin() as session:
+            enrollment = _locked_enrollment(session, enrollment_id)
+            if enrollment.state == "approved":
+                return _issued(enrollment)
+            if enrollment.state == "rejected":
+                raise EnrollmentDenied("enrollment was rejected")
+            if enrollment.state == "issuing":
+                raise EnrollmentDenied("certificate issuance is in progress; manual recovery required")
+            if enrollment.state != "pending-approval":
+                raise EnrollmentDenied("enrollment state cannot be approved")
+            _lock_node_issuance(session, enrollment.node_id)
+            if session.get(AgentNode, enrollment.node_id) is not None:
+                raise EnrollmentDenied("node identity already exists")
+            competing = session.scalar(
+                select(AgentEnrollment.id)
+                .where(
+                    AgentEnrollment.node_id == enrollment.node_id,
+                    AgentEnrollment.id != enrollment.id,
+                    AgentEnrollment.state == "issuing",
+                )
+                .with_for_update(of=AgentEnrollment)
+                .limit(1)
+            )
+            if competing is not None:
+                raise EnrollmentDenied("node enrollment issuance is in progress")
+            enrollment.state = "issuing"
+            enrollment.decision_actor = actor
+            enrollment.decided_at = now
+            return _IssuanceClaim(enrollment.node_id, enrollment.csr_public_key_pem.encode("ascii"))
+
 
 def _persist_issued_enrollment(
     session: Session,
@@ -226,7 +278,12 @@ def _persist_issued_enrollment(
         chain_pem = issued.chain_pem.decode("ascii")
     except UnicodeDecodeError as error:
         raise EnrollmentDenied("certificate authority returned non-PEM certificate material") from error
-    session.add(AgentNode(node_id=enrollment.node_id, state="active", capabilities=[]))
+    node = AgentNode(node_id=enrollment.node_id, state="active", capabilities=[])
+    session.add(node)
+    # There is no ORM relationship between these operational rows. Flush the
+    # FK parent explicitly before adding its certificate child; PostgreSQL does
+    # not infer the ordering that SQLite happened to tolerate.
+    session.flush([node])
     session.add(AgentCertificate(
         serial=issued.serial,
         node_id=enrollment.node_id,
@@ -252,6 +309,13 @@ def _locked_enrollment(session: Session, enrollment_id: str) -> AgentEnrollment:
     if enrollment is None:
         raise EnrollmentDenied("unknown enrollment")
     return enrollment
+
+
+def _lock_node_issuance(session: Session, node_id: str) -> None:
+    """Serialize claims for an absent node identity across PostgreSQL services."""
+    if session.get_bind().dialect.name == "postgresql":
+        key = int.from_bytes(hashlib.sha256(node_id.encode("ascii")).digest()[:8], "big", signed=True)
+        session.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": key})
 
 
 def _issued(enrollment: AgentEnrollment) -> IssuedCertificate:
