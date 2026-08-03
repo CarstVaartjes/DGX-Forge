@@ -89,6 +89,7 @@ start() {
   fi
   QWEN3_INPUT_ROOT="$input_root" QWEN3_OUTPUT_ROOT="$output_root" \
     CPATH="$python_headers/usr/include:$python_headers/usr/include/python3.12" \
+    PATH="$venv/bin:$PATH" \
     nohup "$venv/bin/vllm" serve "$weights_root" \
       --served-model-name "$model_name" --host 127.0.0.1 --port "$port" \
       --dtype bfloat16 --max-model-len 8192 --gpu-memory-utilization 0.80 \
