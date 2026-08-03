@@ -1,0 +1,11 @@
+{
+  "files": {
+    "adapters/deepseek/ds4/Dockerfile": "fd210a6030b1b3e314f108eb45b4b3bb4ed47b1db6911edcc683043b2e0b36c4",
+    "adapters/deepseek/ds4/bin/ds4-deepseek-single": "d6bf22343a3e096c92b5f5d1fc4a4a0e14be05ba0532c689bcd1d1f27edd65fd",
+    "adapters/deepseek/ds4/compose.yaml": "e6833f833d54d5bbbfe086b81d3f93eef617a25d12eae5d18806b3469009c64e",
+    "adapters/deepseek/ds4/config/runtime.env": "ed497f724e74a1e931b27c468df04b7e5418c996205d807e753e8754a0fe735b",
+    "adapters/deepseek/ds4/manifests/deepseek-v4-flash-0731-ds4.json": "1f6f88d7f968e51e76a118af83f0f7cae7f5df5b915a6cf30db5265228f70c99",
+    "adapters/deepseek/ds4/patches/served-model-name.patch": "10aa66c2fdd9aa373a9e4ccd6aa6582a4cf30936b7468aca221ae93324ce8a9f",
+    "adapters/deepseek/ds4/tools/artifact_manifest.py": "307c8e3ac392c2956603656afc83db427b3b025f8ef9828e5f63ba1dcf8b10d5"
+  }
+}

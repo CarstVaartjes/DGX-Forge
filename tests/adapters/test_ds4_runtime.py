@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import shutil
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -14,6 +16,19 @@ DOCKERFILE = ROOT / "adapters/deepseek/ds4/Dockerfile"
 COMPOSE = ROOT / "adapters/deepseek/ds4/compose.yaml"
 RUNTIME_ENV = ROOT / "adapters/deepseek/ds4/config/runtime.env"
 PATCH = ROOT / "adapters/deepseek/ds4/patches/served-model-name.patch"
+ADAPTER = ROOT / "adapters/deepseek/ds4/bin/ds4-deepseek-single"
+CHECKPOINT_MANIFEST = (
+    ROOT / "adapters/deepseek/ds4/manifests/deepseek-v4-flash-0731-ds4.json"
+)
+WORKLOAD = ROOT / "config/workloads/deepseek-agent-single.toml"
+
+IMAGE = (
+    "ghcr.io/carstvaartjes/spark-ds4"
+    "@sha256:61f15782e9f771591b1fda321be2ae39f9388b8fd57e03c76dda8e207d6e7ac9"
+)
+CHECKPOINT_MANIFEST_SHA256 = (
+    "1f6f88d7f968e51e76a118af83f0f7cae7f5df5b915a6cf30db5265228f70c99"
+)
 
 SOURCE_COMMIT = "4ad370b4a338efe9723a386673c0e04f6e214108"
 SOURCE_ARCHIVE_SHA256 = "7db338d0a441fed36c5e4e7af44ff670e8bfe567e88d482f00ff6a3dc0e5dbe3"
@@ -220,3 +235,104 @@ def test_served_model_patch_behaves_as_a_single_runtime_identity(tmp_path: Path)
         assert invalid.returncode == 2
         assert invalid.stdout == ""
         assert "DS4_SERVED_MODEL_NAME must be non-empty and contain no control characters" in invalid.stderr
+
+
+def test_single_adapter_is_pinned_to_spark1_and_exposes_only_controller_operations(
+    tmp_path: Path,
+) -> None:
+    completed = subprocess.run(
+        [str(ADAPTER), "verify"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={
+            **os.environ,
+            "DS4_LOCAL_HOSTNAME": "spark-9999",
+            "DS4_MODELS_ROOT": str(tmp_path / "models"),
+        },
+    )
+
+    assert completed.returncode == 2
+    assert "spark1/spark-3542" in completed.stderr
+    assert "role" not in completed.stderr.lower()
+
+    extra = subprocess.run(
+        [str(ADAPTER), "verify", "head"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "DS4_LOCAL_HOSTNAME": "spark-3542"},
+    )
+    assert extra.returncode == 2
+    assert "exactly one operation" in extra.stderr
+
+
+def test_single_adapter_contract_pins_resumable_parallel_streamed_preparation() -> None:
+    source = ADAPTER.read_text(encoding="utf-8")
+
+    assert IMAGE in source
+    assert CHECKPOINT_MANIFEST_SHA256 in source
+    assert "--continue-at -" in source
+    assert ".partial" in source
+    assert "wait \"$base_pid\"" in source
+    assert "wait \"$drafter_pid\"" in source
+    assert "sha256sum" in source
+    assert "rm " not in source
+    assert "DS4_CUDA_COPY_MODEL" in source
+    assert "DS4_MODEL_ANON_HUGE" in source
+    assert "--pull never" in source
+    assert "restart" not in source
+
+
+def test_single_adapter_covers_exact_openai_identity_and_lifecycle_evidence() -> None:
+    source = ADAPTER.read_text(encoding="utf-8")
+
+    for operation in (
+        "prepare)",
+        "verify)",
+        "start)",
+        "health)",
+        "infer)",
+        "stop)",
+        "verify-release)",
+    ):
+        assert operation in source
+    for contract in (
+        '"deepseek"',
+        '"reasoning_effort":"low"',
+        '"reasoning_effort":"high"',
+        '"reasoning_effort":"max"',
+        '"thinking":false',
+        '"type":"function"',
+        "mapped-no-copy",
+        "boot_id",
+        "container_id",
+        "release_sha256",
+        "1073741824",
+    ):
+        assert contract in source
+
+
+def test_single_workload_values_match_the_adapter_and_checkpoint_contract() -> None:
+    with WORKLOAD.open("rb") as source:
+        workload = tomllib.load(source)
+    manifest = json.loads(CHECKPOINT_MANIFEST.read_text(encoding="utf-8"))
+
+    assert workload["id"] == "deepseek-agent-single"
+    assert workload["topology"] == "single"
+    assert workload["nodes"] == ["spark1"]
+    assert workload["image"]["reference"] == IMAGE
+    assert workload["checkpoint"]["manifest_sha256"] == CHECKPOINT_MANIFEST_SHA256
+    assert manifest["total_bytes"] == 93_691_352_992
+    assert workload["endpoint"] == {"host": "127.0.0.1", "port": 8888}
+    for command in workload["commands"].values():
+        assert len(command) == 2
+        assert command[1] in {
+            "prepare",
+            "verify",
+            "start",
+            "health",
+            "infer",
+            "stop",
+            "verify-release",
+        }

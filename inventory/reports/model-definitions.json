@@ -30,6 +30,21 @@
           "rejection_reason": null
         }
       ]
+    },
+    {
+      "id": "deepseek-agent-single",
+      "sha256": "5297c99a2132c96ac6e4e1e6b755e8a5081afb200abf52ce5da98b2c41b01d46",
+      "maturity": "planned",
+      "history": [
+        {
+          "state": "planned",
+          "timestamp": "2026-08-03T07:22:15Z",
+          "evidence_refs": [
+            "docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"
+          ],
+          "rejection_reason": null
+        }
+      ]
     }
   ]
 }

@@ -25,6 +25,7 @@ def catalog_root(tmp_path: Path) -> Path:
         "config/cluster-profiles",
         "config/profile-selectors.toml",
         "adapters/deepseek/mia-vllm",
+        "adapters/deepseek/ds4",
         "locks/model-definitions.toml",
         "inventory/reports/model-definitions.json",
         "inventory/reports/accepted-cluster-profiles.json",
@@ -50,6 +51,30 @@ def test_default_selector_resolves_to_canonical_home(catalog_root: Path) -> None
     catalog = Catalog.load(catalog_root)
 
     assert catalog.resolve_profile("default").id == "agent-full-dual"
+
+
+def test_ds4_single_definition_is_locked_planned_and_spark1_only(
+    catalog_root: Path,
+) -> None:
+    catalog = Catalog.load(catalog_root)
+    definition = catalog.definitions["deepseek-agent-single"]
+    profile = catalog.profiles["agent-single"]
+
+    assert catalog.definition_fingerprints[definition.id]
+    assert catalog.maturity[definition.id] == "planned"
+    assert definition.topology == "single"
+    assert definition.placement_class == "single-exclusive"
+    assert definition.co_location == "exclusive"
+    assert definition.nodes == ("spark1",)
+    assert definition.start_order == ("spark1",)
+    assert definition.stop_order == ("spark1",)
+    assert profile.placements == {
+        "spark1": ("deepseek-agent-single",),
+        "spark2": (),
+    }
+    assert profile.endpoints == {"deepseek": "deepseek-agent-single"}
+    assert catalog.resolve_profile("default").id == "agent-full-dual"
+    assert catalog.resolve_profile("agent").id == "agent-full-dual"
 
 
 def test_definition_change_invalidates_lock(catalog_root: Path) -> None:
@@ -131,8 +156,17 @@ def _sha256(path: Path) -> str:
 def _refresh_definition_fingerprint(catalog_root: Path) -> str:
     definition = load_workload(catalog_root / "config/workloads/deepseek-agent-dual.toml")
     value = fingerprint(definition)
+    fingerprints = {
+        load_workload(path).id: fingerprint(load_workload(path))
+        for path in sorted((catalog_root / "config/workloads").glob("*.toml"))
+    }
     (catalog_root / "locks/model-definitions.toml").write_text(
-        f'[definitions]\ndeepseek-agent-dual = "{value}"\n', encoding="utf-8"
+        "[definitions]\n"
+        + "".join(
+            f'{identifier} = "{digest}"\n'
+            for identifier, digest in sorted(fingerprints.items())
+        ),
+        encoding="utf-8",
     )
     index = _read_report(catalog_root, "model-definitions.json")
     index["definitions"][0]["sha256"] = value

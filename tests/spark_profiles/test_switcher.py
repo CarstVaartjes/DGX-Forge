@@ -292,6 +292,47 @@ def test_distributed_stop_is_head_first_and_start_is_worker_first() -> None:
     ]
 
 
+def test_single_spark_lifecycle_never_touches_spark2_or_appends_a_role() -> None:
+    definition = replace(
+        workload("deepseek-agent-single"),
+        nodes=("spark1",),
+        start_order=("spark1",),
+        stop_order=("spark1",),
+        deadlines=OperationTimeouts(10, 10, 10, 10, 10, 10, 10),
+    )
+    target = profile("agent-single", definition)
+    maintenance = profile("maintenance", None)
+    catalog_value = catalog(target, maintenance, definition=definition)
+    switcher, events, _ = make_switcher(
+        catalog_value, ControllerState.stopped(boot_ids=BOOT_IDS)
+    )
+    switcher.admission_checker = lambda *_: AdmissionReport(())
+
+    prepared = switcher.prepare_profile("agent-single")
+    activated = switcher.switch_profile("agent-single")
+    stopped = switcher.switch_profile("maintenance")
+
+    assert prepared.status == "prepared"
+    assert activated.status == "active"
+    assert stopped.status == "stopped"
+    remote = [event for event in events if event[0] == "remote"]
+    assert remote == [
+        ("remote", "spark1", ("profile-prepare", "deepseek-agent-single")),
+        ("remote", "spark1", ("profile-verify", "deepseek-agent-single")),
+        ("remote", "spark1", ("profile-start", "deepseek-agent-single")),
+        ("remote", "spark1", ("profile-health", "deepseek-agent-single")),
+        ("remote", "spark1", ("profile-infer", "deepseek-agent-single")),
+        ("remote", "spark1", ("profile-stop", "deepseek-agent-single")),
+        (
+            "remote",
+            "spark1",
+            ("profile-verify-release", "deepseek-agent-single"),
+        ),
+    ]
+    assert all(event[1] != "spark2" for event in remote)
+    assert all(event[2][-1] not in {"head", "worker"} for event in remote)
+
+
 def test_definition_deadlines_select_each_lifecycle_operation_timeout() -> None:
     definition = workload(
         "generator",

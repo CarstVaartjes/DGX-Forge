@@ -355,6 +355,25 @@ def test_planned_definition_blocks_production_home(
     assert "deepseek-agent-dual maturity is planned" in report.errors
 
 
+def test_planned_ds4_single_profile_requires_maturity_and_exact_profile_evidence(
+    catalog: Catalog, healthy_inventory: dict[str, dict[str, int | bool]]
+) -> None:
+    profile = catalog.profiles["agent-single"]
+
+    planned = check_admission(profile, catalog, healthy_inventory)
+    assert "deepseek-agent-single maturity is planned" in planned.errors
+
+    catalog.maturity["deepseek-agent-single"] = "accepted"
+    catalog.maturity_fingerprints = dict(catalog.definition_fingerprints)
+    missing_exact_evidence = check_admission(
+        profile, catalog, healthy_inventory, accepted={}
+    )
+    assert missing_exact_evidence.errors == (
+        "profile has no exact accepted evidence",
+    )
+    assert profile.endpoints == {"deepseek": "deepseek-agent-single"}
+
+
 def test_accepted_definition_requires_manifest_digest(
     catalog: Catalog, healthy_inventory: dict[str, dict[str, int | bool]]
 ) -> None:
