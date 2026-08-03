@@ -60,7 +60,7 @@ def claim_with_payload(payload: dict[str, str]) -> dict[str, object]:
     }
 
 
-PATH_KEY_TOKENS = ("path", "file", "filename", "directory", "filesystem", "mount")
+PATH_KEY_TOKENS = ("path", "file", "filename", "filepath", "directory", "folder")
 FORBIDDEN_PATH_KEY_FORMS = (
     "{token}",
     "{token}_value",
@@ -90,18 +90,21 @@ SAFE_PATH_KEY_COLLISIONS = (
     "filetype",
     "FILEtype",
     "filenameish",
+    "filepathish",
     "directoryish",
-    "filesystematic",
-    "mountain",
+    "folderish",
     "artifactPathology",
     "artifactFiletype",
     "artifactFilenameish",
+    "artifactFilepathish",
     "someDirectoryish",
-    "artifactFilesystematic",
+    "someFolderish",
     "artifactPATHology",
     "artifactFILEtype",
     "someDIRECTORYish",
-    "mountainView",
+    "someFOLDERish",
+    "filesystem",
+    "mount",
 )
 
 
@@ -212,6 +215,18 @@ def protocol_message_with_document(
         valid_attempt() | {"state": "succeeded", "result": document},
         AgentResult.parse,
     )
+
+
+def test_path_key_agreement_matrix_covers_exact_required_tokens() -> None:
+    assert len(PATH_KEY_TOKENS) == 6
+    assert set(PATH_KEY_TOKENS) == {
+        "path",
+        "file",
+        "filename",
+        "filepath",
+        "directory",
+        "folder",
+    }
 
 
 @pytest.mark.parametrize("name", ["agent-job.schema.json", "agent-result.schema.json"])

@@ -33,7 +33,7 @@ def _ascii_case_pattern(token: str, *, initial_upper: bool = False) -> str:
     return prefix + "".join(f"[{character.upper()}{character}]" for character in token[1:])
 
 
-PATH_KEY_TOKENS = ("path", "file", "filename", "directory", "filesystem", "mount")
+PATH_KEY_TOKENS = ("path", "file", "filename", "filepath", "directory", "folder")
 PATH_KEY_ANY_CASE = "|".join(_ascii_case_pattern(token) for token in PATH_KEY_TOKENS)
 PATH_KEY_CAMEL_CASE = "|".join(
     _ascii_case_pattern(token, initial_upper=True) for token in PATH_KEY_TOKENS
