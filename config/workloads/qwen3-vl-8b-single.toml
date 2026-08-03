@@ -35,13 +35,13 @@ host = "127.0.0.1"
 port = 9106
 
 [commands]
-prepare = ["/opt/spark/model-adapters/qwen3-vl-8b-single/bin/qwen3-vl-8b-single", "prepare"]
-verify = ["/opt/spark/model-adapters/qwen3-vl-8b-single/bin/qwen3-vl-8b-single", "verify"]
-start = ["/opt/spark/model-adapters/qwen3-vl-8b-single/bin/qwen3-vl-8b-single", "start"]
-health = ["/opt/spark/model-adapters/qwen3-vl-8b-single/bin/qwen3-vl-8b-single", "health"]
-infer = ["/opt/spark/model-adapters/qwen3-vl-8b-single/bin/qwen3-vl-8b-single", "infer"]
-stop = ["/opt/spark/model-adapters/qwen3-vl-8b-single/bin/qwen3-vl-8b-single", "stop"]
-verify-release = ["/opt/spark/model-adapters/qwen3-vl-8b-single/bin/qwen3-vl-8b-single", "verify-release"]
+prepare = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9/bin/qwen3-vl-8b-single", "prepare"]
+verify = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9/bin/qwen3-vl-8b-single", "verify"]
+start = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9/bin/qwen3-vl-8b-single", "start"]
+health = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9/bin/qwen3-vl-8b-single", "health"]
+infer = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9/bin/qwen3-vl-8b-single", "infer"]
+stop = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9/bin/qwen3-vl-8b-single", "stop"]
+verify-release = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9/bin/qwen3-vl-8b-single", "verify-release"]
 
 [deadlines]
 prepare = 86400
