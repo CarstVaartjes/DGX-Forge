@@ -11,21 +11,21 @@ expected="$(printf '%s\n' \
   'KbdInteractiveAuthentication no' \
   'PubkeyAuthentication yes' \
   'PermitRootLogin prohibit-password')"
-actual="$(cat "$drop_in")"
-test "$actual" = "$expected"
+test "$(cat "$drop_in")" = "$expected"
+bash -n "$installer"
 
-embedded="$(awk '
-  /^cat > "\$stage" <<'\''EOF'\''$/ { capture = 1; next }
-  capture && /^EOF$/ { capture = 0; exit }
-  capture { print }
-' "$installer")"
-test "$embedded" = "$expected"
+set +e
+bash "$installer" --check > /tmp/dgx-hardening-usage.out 2>&1
+usage_rc=$?
+set -e
+test "$usage_rc" -eq 64
+grep -Fq -- '--admin-user USER' /tmp/dgx-hardening-usage.out
+grep -Fq -- '--admin-key-fingerprint SHA256:' /tmp/dgx-hardening-usage.out
+grep -Fq -- '--drop-in FILE' /tmp/dgx-hardening-usage.out
+rm -f /tmp/dgx-hardening-usage.out
 
-grep -Fq 'sshd -t' "$installer"
-grep -Fq 'sshd -T' "$installer"
-grep -Fq 'systemctl reload ssh' "$installer"
-grep -Fq 'installed_this_run' "$installer"
-grep -Fq 'Authentications that can continue: publickey' "$runbook"
-grep -Fq 'sudo bash /tmp/install-ssh-hardening' "$runbook"
+grep -Fq -- '--admin-user' "$runbook"
+grep -Fq -- '--admin-key-fingerprint' "$runbook"
+grep -Fq -- '--recovery-marker' "$runbook"
 
 printf 'SSH hardening artifacts: PASS\n'
