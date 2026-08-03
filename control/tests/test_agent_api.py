@@ -13,7 +13,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from dgx_control.agent_api import AgentApiServices, _read_chunks
+from dgx_control.agent_api import AgentApiServices, _read_chunks, _sealed_snapshot
 from dgx_control.agent_jobs import AgentJobService
 from dgx_control.api import create_app
 from dgx_control.audit import MemoryAuditStore
@@ -240,10 +240,29 @@ def test_artifact_stream_close_releases_its_descriptor(tmp_path) -> None:
         os.fstat(descriptor)
 
 
+def test_artifact_snapshot_is_immutable_after_source_overwrite(tmp_path) -> None:
+    source = tmp_path / "artifact"
+    source.write_bytes(b"original")
+    descriptor = os.open(source, os.O_RDONLY)
+    snapshot = _sealed_snapshot(descriptor, 8, 1024, hashlib.sha256(b"original").hexdigest())
+    source.write_bytes(b"replaced")
+    try:
+        assert snapshot.read() == b"original"
+    finally:
+        snapshot.close()
+
+
 def test_protected_agent_routes_gate_untrusted_invalid_bodies_before_parsing(agent_system) -> None:
     client, _, _, _ = agent_system
     for path in ("/agent/v1/claim", "/agent/v1/heartbeat", "/agent/v1/result", "/agent/v1/renew"):
         assert client.post(path, content=b"{not-json", headers={"content-type": "application/json"}).status_code == 401
+
+
+def test_revoked_identity_is_gated_before_invalid_json_is_parsed(agent_system) -> None:
+    client, services, _, clock = agent_system
+    with services.sessions.begin() as session:
+        session.get(AgentCertificate, "serial-a").revoked_at = clock.now  # type: ignore[union-attr]
+    assert client.post("/agent/v1/result", headers={**agent_headers(NODE_A, "serial-a"), "content-type": "application/json"}, content=b"{not-json").status_code == 401
 
 
 def test_enrollment_overflow_burns_valid_grant_before_rejection(agent_system) -> None:

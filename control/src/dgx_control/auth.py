@@ -8,6 +8,7 @@ import hmac
 import json
 import re
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Any
 
 from starlette.responses import Response
@@ -78,9 +79,10 @@ class TrustedProxyAgentIdentityMiddleware:
     the typed ASGI scope value, never a client supplied header.
     """
 
-    def __init__(self, app: Any, *, trusted_proxy_sources: frozenset[str] = frozenset()) -> None:
+    def __init__(self, app: Any, *, trusted_proxy_sources: frozenset[str] = frozenset(), agent_identity_validator: Callable[[AgentIdentity], bool] | None = None) -> None:
         self.app = app
         self._trusted_proxy_sources = trusted_proxy_sources
+        self._agent_identity_validator = agent_identity_validator
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
@@ -120,7 +122,11 @@ class TrustedProxyAgentIdentityMiddleware:
             isinstance(path, str)
             and path.startswith("/agent/v1/")
             and path != "/agent/v1/enroll"
-            and agent_identity_from_scope(safe_scope) is None
+            and (
+                agent_identity_from_scope(safe_scope) is None
+                or self._agent_identity_validator is None
+                or not self._agent_identity_validator(agent_identity_from_scope(safe_scope))
+            )
         ):
             await Response(status_code=401)(safe_scope, receive, send)
             return

@@ -8,6 +8,7 @@ import json
 import os
 import re
 import stat
+import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -132,8 +133,9 @@ def _scope_identity(request: Request) -> AgentIdentity:
     return identity
 
 
-def _authenticated_identity(request: Request, services: AgentApiServices) -> AgentIdentity:
-    identity = _scope_identity(request)
+def active_agent_identity(services: AgentApiServices, identity: AgentIdentity | None) -> bool:
+    if identity is None:
+        return False
     now = _now(services.clock())
     with services.sessions() as session:
         valid = session.scalar(
@@ -150,7 +152,12 @@ def _authenticated_identity(request: Request, services: AgentApiServices) -> Age
                 AgentNode.revoked_at.is_(None),
             )
         )
-    if valid is None:
+    return valid is not None
+
+
+def _authenticated_identity(request: Request, services: AgentApiServices) -> AgentIdentity:
+    identity = _scope_identity(request)
+    if not active_agent_identity(services, identity):
         raise HTTPException(status_code=401, detail="agent certificate is not active")
     return identity
 
@@ -158,6 +165,40 @@ def _authenticated_identity(request: Request, services: AgentApiServices) -> Age
 def _body_node_matches(value: str | None, identity: AgentIdentity) -> None:
     if value is not None and value != identity.node_id:
         raise HTTPException(status_code=403, detail="authenticated node identity cannot be overridden")
+
+
+_ENROLLMENT_TOKEN = re.compile(rb'"grant_token"\s*:\s*"([A-Za-z0-9_-]{43})"')
+
+
+def _enrollment_token(value: bytes) -> str | None:
+    match = _ENROLLMENT_TOKEN.search(value)
+    return match.group(1).decode("ascii") if match else None
+
+
+def _consume_enrollment_denial(services: AgentApiServices, token: str | None) -> None:
+    if token is None:
+        return
+    try:
+        services.enrollment.submit(token, b"", {})
+    except EnrollmentDenied:
+        pass
+
+
+async def _bounded_enrollment_body(request: Request, services: AgentApiServices) -> bytes:
+    buffered = bytearray()
+    token_prefix = bytearray()
+    oversized = False
+    async for chunk in request.stream():
+        if len(token_prefix) < 2048:
+            token_prefix.extend(chunk[:2048 - len(token_prefix)])
+        if len(buffered) + len(chunk) <= _MAX_ENROLLMENT_BODY_BYTES:
+            buffered.extend(chunk)
+        else:
+            oversized = True
+    if oversized:
+        _consume_enrollment_denial(services, _enrollment_token(bytes(token_prefix)))
+        raise HTTPException(status_code=413, detail="enrollment request is too large")
+    return bytes(buffered)
 
 
 def _enrollment_view(enrollment: AgentEnrollment) -> dict[str, object]:
@@ -215,12 +256,6 @@ def _open_owned_artifact(services: AgentApiServices, identity: AgentIdentity, di
         metadata = os.fstat(descriptor)
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > services.max_artifact_bytes:
             raise HTTPException(status_code=404 if not stat.S_ISREG(metadata.st_mode) else 413, detail="artifact not available")
-        content_hash = hashlib.sha256()
-        while chunk := os.read(descriptor, 64 * 1024):
-            content_hash.update(chunk)
-        if not hmac.compare_digest(content_hash.hexdigest(), digest):
-            raise HTTPException(status_code=404, detail="artifact not found")
-        os.lseek(descriptor, 0, os.SEEK_SET)
         return descriptor, metadata.st_size
     except Exception:
         os.close(descriptor)
@@ -256,6 +291,56 @@ def _read_chunks(descriptor: int, start: int, length: int):
             yield chunk
     finally:
         os.close(descriptor)
+
+
+def _sealed_snapshot(descriptor: int, size: int, maximum: int, digest: str):
+    snapshot = tempfile.TemporaryFile(mode="w+b")
+    copied = 0
+    content_hash = hashlib.sha256()
+    try:
+        while copied < size:
+            chunk = os.read(descriptor, min(64 * 1024, size - copied))
+            if not chunk:
+                raise HTTPException(status_code=404, detail="artifact changed during read")
+            copied += len(chunk)
+            if copied > maximum:
+                raise HTTPException(status_code=413, detail="artifact not available")
+            content_hash.update(chunk)
+            snapshot.write(chunk)
+        after = os.fstat(descriptor)
+        if after.st_size != size or os.read(descriptor, 1):
+            raise HTTPException(status_code=404, detail="artifact changed during read")
+        if not hmac.compare_digest(content_hash.hexdigest(), digest):
+            raise HTTPException(status_code=404, detail="artifact not found")
+        snapshot.seek(0)
+        return snapshot
+    except Exception:
+        snapshot.close()
+        raise
+    finally:
+        os.close(descriptor)
+
+
+class _SnapshotResponse(StreamingResponse):
+    def __init__(self, snapshot, start: int, length: int, **kwargs: object) -> None:
+        self._snapshot = snapshot
+        super().__init__(self._chunks(start, length), **kwargs)
+
+    def _chunks(self, start: int, length: int):
+        self._snapshot.seek(start)
+        remaining = length
+        while remaining:
+            chunk = self._snapshot.read(min(64 * 1024, remaining))
+            if not chunk:
+                raise RuntimeError("sealed artifact snapshot was truncated")
+            remaining -= len(chunk)
+            yield chunk
+
+    async def __call__(self, scope, receive, send) -> None:
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            self._snapshot.close()
 
 
 def install_agent_routes(
@@ -347,12 +432,16 @@ def install_agent_routes(
     @agent.post("/enroll", status_code=status.HTTP_202_ACCEPTED)
     async def enroll(request: Request) -> dict[str, object]:
         required = _require_services(services)
-        raw = await request.body()
-        if len(raw) > _MAX_ENROLLMENT_BODY_BYTES:
-            raise HTTPException(status_code=413, detail="enrollment request is too large")
+        raw = await _bounded_enrollment_body(request, required)
+        token = _enrollment_token(raw)
+        content_type = request.headers.get("content-type", "")
+        if re.fullmatch(r"application/json(?:\s*;\s*charset=(?:utf-8|utf8))?", content_type, re.IGNORECASE) is None:
+            _consume_enrollment_denial(required, token)
+            raise HTTPException(status_code=415, detail="enrollment content type must be application/json")
         try:
-            body = json.loads(raw)
-        except (TypeError, ValueError):
+            body = json.loads(raw.decode("utf-8"))
+        except (TypeError, UnicodeDecodeError, ValueError, RecursionError):
+            _consume_enrollment_denial(required, token)
             raise HTTPException(status_code=422, detail="enrollment request must be JSON") from None
         if not isinstance(body, dict) or not isinstance(body.get("grant_token"), str):
             raise HTTPException(status_code=422, detail="enrollment grant is required")
@@ -451,7 +540,8 @@ def install_agent_routes(
         headers = {"Accept-Ranges": "bytes", "Content-Length": str(length)}
         if code == status.HTTP_206_PARTIAL_CONTENT:
             headers["Content-Range"] = f"bytes {start}-{end}/{size}"
-        return StreamingResponse(_read_chunks(descriptor, start, length), status_code=code, headers=headers, media_type="application/octet-stream")
+        snapshot = _sealed_snapshot(descriptor, size, required.max_artifact_bytes, sha256)
+        return _SnapshotResponse(snapshot, start, length, status_code=code, headers=headers, media_type="application/octet-stream")
 
     app.include_router(human)
     app.include_router(agent)

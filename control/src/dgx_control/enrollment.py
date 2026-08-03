@@ -28,6 +28,7 @@ from .pki import CertificateAuthority, IssuedCertificate
 _NODE_ID = re.compile(r"spk_[0-9a-f]{32}")
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{43}")
 _MAX_GRANT_TTL_SECONDS = 600
+_MAX_CSR_BYTES = 16 * 1024
 _EVIDENCE_FIELDS = (
     "node_id",
     "csr_public_key_fingerprint",
@@ -130,6 +131,8 @@ class EnrollmentService:
                 failure = "enrollment grant is expired"
             else:
                 try:
+                    if not isinstance(csr, bytes) or len(csr) > _MAX_CSR_BYTES:
+                        raise EnrollmentDenied("CSR is too large")
                     public_key_pem, public_key_fingerprint = _load_csr(csr)
                 except EnrollmentDenied as error:
                     failure = str(error)

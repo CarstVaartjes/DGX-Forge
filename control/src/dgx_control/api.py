@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from .audit import AuditRecord
 from .auth import Actor, AuthError, MUTATION_ROLES, TokenCodec, TrustedProxyAgentIdentityMiddleware
-from .agent_api import AgentApiServices, install_agent_routes
+from .agent_api import AgentApiServices, active_agent_identity, install_agent_routes
 from .proposals import DocumentChange
 from .metrics import MetricsRegistry
 
@@ -112,6 +112,7 @@ def create_app(
     app.add_middleware(
         TrustedProxyAgentIdentityMiddleware,
         trusted_proxy_sources=trusted_agent_proxy_sources,
+        agent_identity_validator=(lambda identity: active_agent_identity(agent, identity)) if agent is not None else None,
     )
 
     @app.middleware("http")
@@ -124,7 +125,7 @@ def create_app(
             request_id = str(uuid.uuid4())
         request.state.request_id = request_id
         length = request.headers.get("content-length")
-        if length and int(length) > 1_048_576:
+        if length and int(length) > 1_048_576 and request.url.path != "/agent/v1/enroll":
             response = Response(status_code=413)
         else:
             response = await call_next(request)
