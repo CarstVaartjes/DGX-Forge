@@ -15,6 +15,7 @@ PHASE4_IDS = {
     "step1x-3d-single",
     "triposg-single",
     "hunyuan3d-omni-single",
+    "laguna-s21-single",
 }
 
 
@@ -24,4 +25,3 @@ def test_phase4_definitions_are_cataloged_as_planned() -> None:
     definitions = catalog.definitions
     assert PHASE4_IDS <= definitions.keys()
     assert all(definitions[identifier].nodes == ("spark2",) for identifier in PHASE4_IDS)
-

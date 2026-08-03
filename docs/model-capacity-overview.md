@@ -1,6 +1,6 @@
 # DGX Spark Model Capacity Overview
 
-Last researched: 2026-08-02
+Last researched: 2026-08-03
 
 ## At a glance
 
@@ -9,6 +9,7 @@ Last researched: 2026-08-02
 - Every other required model is expected to run on one Spark individually.
 - Fitting individually does not imply that arbitrary models may remain loaded together. Every Model Definition begins as exclusive and becomes shareable only in an exact N-way set that has passed co-residency acceptance for a named Cluster Profile.
 - The user-facing Cluster Profile always selects the best accepted Spark-optimized Model Definition. Official generic definitions remain non-serving correctness references and diagnostic fallbacks.
+- The active qualification pass is LLM-only. Image/3D rows remain cataloged design intent and are not part of the current serving pass.
 
 Each Spark is marketed as having 128 GB of unified memory shared by the
 operating system, CPU, and GPU. The cluster inventory exposes
@@ -32,6 +33,7 @@ recovered memory after shutdown.
 | Pixal3D | Official [Pixal3D](https://github.com/TencentARC/Pixal3D) provides 1536 standard and 1024 low-memory modes but no final Spark peak figure. | Audited CUDA 13/ARM64/GB10 build of the official pipeline, using the [Super-Idol-Master](https://github.com/SidneyArt/Super-Idol-Master) integration only as a Spark build reference. | One Spark | `single-exclusive` initially | Expected to fit; custom-kernel build and measured standard/low-memory peaks pending. |
 | TRELLIS.2 4B | Official [TRELLIS.2](https://github.com/microsoft/TRELLIS.2) requires at least 24 GB of GPU memory. | Audited Spark build informed by [dgx-trellis2](https://github.com/raziel2001au/dgx-trellis2) and [TRELLIS.2 DGX Spark Docker](https://github.com/dr-vij/Trellis2-DGX-Spark-Docker). | One Spark | `single-exclusive` initially | Official model fits by published requirement; community Spark builds require audit and output-parity validation. |
 | Qwen3-VL-8B-Instruct | Official [Qwen3-VL-8B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct) is an 8B multimodal model and recommends FlashAttention 2 for speed and memory savings. | GB10-native vLLM or SGLang service with optimized vision attention; no exact official 8B NVFP4 Spark artifact was found in the current survey. | One Spark | `single-exclusive`, then co-residency candidate | Capacity is comfortable; exact runtime, vision limits, KV budget, and quantized lane require measurement. |
+| Laguna S 2.1 | Official [Laguna S 2.1](https://huggingface.co/poolside/Laguna-S-2.1) is a text-to-text 118B MoE with ~8B active parameters/token, 256 routed experts, and a 1,048,576-token context window. | Start with the official [Laguna S 2.1 NVFP4](https://huggingface.co/poolside/Laguna-S-2.1-NVFP4) vLLM path; compare FP8 and other loaders only as separate definitions. | One Spark | `single-exclusive` initially | Newly cataloged as `laguna-s21-single`; Spark-native image, memory envelope, quality, and lifecycle qualification pending. |
 | SkinTokens / TokenRig | Official [SkinTokens](https://github.com/VAST-AI-Research/SkinTokens) requires at least 14 GB for inference and uses a Qwen3-0.6B backbone plus FSQ-CVAE. | Audited FP16 Spark integration or GB10-native official build; Super-Idol-Master is a build reference, not a deployment pin. | One Spark | `single-exclusive`, then co-residency candidate | Published requirement fits comfortably; ARM64 dependencies and rig-quality acceptance pending. |
 | Step1X-3D | Official [Step1X-3D](https://github.com/stepfun-ai/Step1X-3D) reports 27 GB for geometry plus texture and 29 GB for the label-conditioned variant. | GB10-native build of the official sequential geometry and texture pipelines, releasing each completed stage when parity tests permit. | One Spark | `single-exclusive` initially | Official requirement fits; no exact maintained Spark-specific optimization was found. |
 | TripoSG | Official [TripoSG](https://github.com/VAST-AI-Research/TripoSG) requires at least 8 GB. | GB10-native build of the official Diffusers pipeline with its separately verified RMBG dependency. | One Spark | `single-exclusive`, then co-residency candidate | Official requirement fits comfortably; no exact maintained Spark-specific optimization was found. |
@@ -47,7 +49,10 @@ budget on Spark 1.
 offline artifact, image, architecture, identity, mapped/no-copy, reasoning, and
 cache gates. Mia has additionally passed its sustained thermal, repeated
 lifecycle, reboot/no-autostart, and canonical performance gates and is now
-`accepted`. The remaining creative definitions are still planned candidates.
+`accepted`. The `bleysg` DSpark work is tracked as a possible merge into the
+DS4 branch; a merged release keeps the same DeepSeek model identity but gets a
+new immutable runtime fingerprint and must repeat the DS4 gates. Laguna and the
+remaining creative definitions are planned candidates.
 
 ## Placement interpretation
 

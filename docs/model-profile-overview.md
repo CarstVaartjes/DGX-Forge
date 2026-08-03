@@ -54,15 +54,16 @@ flowchart TB
     image[image-authoring<br/>design intent, not cataloged] --> image1[Spark 1<br/>DeepSeek single]
     image --> image2[Spark 2<br/>Qwen-Image + Qwen-Image-Edit]
 
-    geometry[geometry alternatives<br/>design intent, not cataloged] --> geometry1[Spark 1<br/>DeepSeek single]
+    geometry[geometry alternatives<br/>deferred from LLM scope] --> geometry1[Spark 1<br/>DeepSeek single]
     geometry --> geometry2[Spark 2<br/>selected Step1X / TripoSG / Hunyuan profile]
+    laguna[agent-laguna-s21<br/>LLM qualification] --> laguna1[Spark 2<br/>Laguna S 2.1]
 
     classDef selector fill:#eff6ff,stroke:#2563eb,color:#172554;
     classDef profile fill:#f5f3ff,stroke:#7c3aed,color:#2e1065;
     classDef compute fill:#f0fdf4,stroke:#16a34a,color:#14532d;
     class default selector;
-    class full,creative,image,geometry profile;
-    class full1,full2,creative1,creative2,image1,image2,geometry1,geometry2 compute;
+    class full,creative,image,geometry,laguna profile;
+    class full1,full2,creative1,creative2,image1,image2,geometry1,geometry2,laguna1 compute;
 ```
 
 | Cluster Profile intent | Spark 1 | Spark 2 | Stable aliases | State |
@@ -74,6 +75,7 @@ flowchart TB
 | `rigging` | `deepseek-agent-single` | `tokenrig-single` plus evaluation definitions | `deepseek`, `tokenrig` | TokenRig isolated boundary; planned pending Blender >=4.2 |
 | `agent-nemotron-super` | `nemotron-super-single` | Idle | `nemotron-super` | Design intent; not cataloged |
 | `agent-nemotron-nano-omni` | `nemotron-nano-omni-single` | Idle | `nemotron-nano-omni` | Design intent; not cataloged |
+| `agent-laguna-s21` | Idle | `laguna-s21-single` | `laguna-s21` | Cataloged planned LLM; qualification pending |
 | `geometry-step1x` | `deepseek-agent-single` | `step1x-3d-single` | `deepseek`, `step1x-3d` | Design intent; not cataloged |
 | `geometry-triposg` | `deepseek-agent-single` | `triposg-single` | `deepseek`, `triposg` | TripoSG verified on Spark 2; acceptance pending |
 | `geometry-hunyuan3d-omni` | `deepseek-agent-single` | `hunyuan3d-omni-single` | `deepseek`, `hunyuan3d-omni` | Design intent; not cataloged |
@@ -91,8 +93,10 @@ accepted evidence for the exact placement and combination.
 | Default agent | `deepseek-agent-dual` | Mia/vLLM TP=2, 1M-capable runtime pinned to `b131b2a` | Both Sparks, exclusive | Verified and operational; final acceptance deferred |
 | Long-context agent | `deepseek-long-dual` | Mia/vLLM long-context candidate with explicit concurrency limits | Both Sparks, exclusive | Design intent; not cataloged |
 | Resident agent | `deepseek-agent-single` | Audited DS4 v0.5.3 Q2-imatrix + DSpark GGUF pair | One Spark, exclusive initially | Verified and operational; final acceptance and profile admission deferred |
+| DS4 branch alternative | `deepseek-agent-single` release variant | `bleysg` DSpark work when merged into the Entrpi DS4 branch | One Spark, exclusive initially | Same model identity; merged release requires a new fingerprint and full requalification |
 | Alternative agent | `nemotron-super-single` | NVIDIA Nemotron 3 Super NVFP4 Spark candidate | One Spark, exclusive | Design intent; not cataloged |
 | Multimodal agent | `nemotron-nano-omni-single` | NVIDIA Nano Omni NVFP4 Spark candidate | One Spark, co-residency candidate | Design intent; not cataloged |
+| Agentic coding LLM | `laguna-s21-single` | Official Laguna S 2.1 NVFP4 candidate through its model-owned runtime | One Spark, exclusive initially | Planned; qualification pending |
 | Image generation | `qwen-image-single` | ModelOpt NVFP4 candidate through a GB10-native SGLang Diffusion build | One Spark, exclusive initially | Design intent; not cataloged |
 | Image editing | `qwen-image-edit-2511-single` | Nunchaku NVFP4 or ModelOpt candidate, subject to acceptance | One Spark, exclusive initially | Design intent; not cataloged |
 | Image-to-3D | `pixal3d-single` | CUDA 13, ARM64, GB10 build candidate for Pixal3D | One Spark, exclusive initially | Design intent; not cataloged |
@@ -117,7 +121,9 @@ user-selectable merely because it starts successfully.
 | Framework catalog, admission, switching, CLI, and local state | Implemented |
 | `deepseek-agent-dual` Model Definition | Immutable Mia release `92f5…0575e` is installed on both nodes, structurally verified, healthy, and passes all 11 live quality gates; final performance, thermal, lifecycle and reboot acceptance is deferred |
 | `deepseek-agent-single` Model Definition | Immutable DS4 release `ca69…82b2` is installed on Spark 1, verified at 32,768 context, and passes all 12 live quality and cache gates; final performance, thermal, lifecycle, reboot and exact-profile acceptance is deferred |
-| `triposg-single` Model Definition | Immutable TripoSG release `925d…7469` is prepared and verified on Spark 2 with an isolated Python 3.12 runtime, pinned checkpoints, healthy API, watertight GLB output, and three lifecycle cycles; reboot, extended thermal/capacity, and exact-profile acceptance remain deferred |
+| `qwen3-vl-8b-single` Model Definition | Immutable Qwen3-VL release is prepared and verified on Spark 2 with model-owned venv/cache, healthy OpenAI-compatible API, structured vision output, and three cold-start/inference/stop cycles; reboot, extended thermal/capacity, and exact-profile acceptance remain deferred |
+| `laguna-s21-single` Model Definition | Cataloged planned Laguna S 2.1 NVFP4 candidate with its own adapter directory, scratch/venv root, snapshot, output, and endpoint namespace; no serving release exists yet |
+| `triposg-single` Model Definition | Immutable TripoSG release `925d…7469` is prepared and verified on Spark 2 with an isolated Python 3.12 runtime, pinned checkpoints, healthy API, watertight GLB output, and three lifecycle cycles; creative qualification is deferred from the active LLM pass |
 | Canonical `agent-full-dual` profile | Cataloged with `default` and `agent` selectors; not admitted while its definition remains verified rather than accepted |
 | Remaining Model Definitions and profiles | Design intent; configuration and acceptance evidence do not exist yet |
 | Model activation | The verified runtime is currently running through the direct adapter; `sparkctl` activation remains blocked until exact acceptance evidence exists |

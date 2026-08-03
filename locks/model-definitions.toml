@@ -2,6 +2,7 @@
 deepseek-agent-dual = "de79fa38af556356008f8e3bfa46222d1a1aabebf47653e2e14e03abb6c971bb"
 deepseek-agent-single = "66eaeb53aaf0c14c975c1375977cce849defc647f37e5bc2cd9b56461b359c07"
 hunyuan3d-omni-single = "90ffdb69be8a1632dd427874492a9d68b05bffd8bd1773b3d43c30c54d4559be"
+laguna-s21-single = "0998f48cf3163a16de9bf24f75e015acd153cbb29e00cc39179489632bb07686"
 nemotron-nano-omni-single = "671790918343a823339717d201572300a8876dcbb9762bcbba58acd52dc382b1"
 nemotron-super-single = "3578d3cde9d64f004352acc4738c5e5d28aa22b8f5855a8384c49614f27ff17d"
 pixal3d-single = "d1df6d712adddef694b2196bea2af444975c83cf0b68b0c71641cddf8999d693"

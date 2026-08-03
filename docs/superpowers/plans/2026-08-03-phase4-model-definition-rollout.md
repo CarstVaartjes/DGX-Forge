@@ -1,11 +1,17 @@
 # Phase 4 model-definition rollout
 
-The phase-4 catalog contains one immutable, single-Spark candidate for every
-required remaining model family. Source and checkpoint revisions are pinned,
-placement and resource contracts are explicit, and all lifecycle commands route
-through a fail-closed adapter boundary. TripoSG has advanced to `verified` on
-Spark 2; the other candidates remain `planned` and cannot be activated or
-advertised as serving endpoints.
+The active qualification pass is intentionally LLM-only. It covers the
+accepted Mia service, the DS4 single-Spark definition (including a possible
+`bleysg` DSpark merge into the DS4 branch), Nemotron, Qwen3-VL, and Laguna S
+2.1. The image/3D definitions remain cataloged for the broader approved
+design, but are deferred from this pass and cannot be activated or advertised
+as serving endpoints.
+
+Each LLM candidate has one immutable, single-Spark or dual-Spark definition.
+Source and checkpoint revisions are pinned, placement and resource contracts
+are explicit, and all lifecycle commands route through a fail-closed adapter
+boundary. Laguna S 2.1 is cataloged as `laguna-s21-single` and remains
+`planned` pending a Spark-native runtime qualification.
 
 Each candidate advances independently through `prepared -> verified ->
 accepted` only after its Spark-native loader, image digest, artifact manifest,
@@ -17,10 +23,7 @@ The source repositories and checkpoint revisions were resolved on 2026-08-03
 from their public upstreams. The approved design remains the authority for
 loader selection and acceptance thresholds. Every definition owns a distinct
 adapter directory and command path; its `paths.scratch` is reserved for that
-model's venv and runtime cache, with no shared generic adapter. TripoSG qualification evidence is
-in `docs/audits/2026-08-03-triposg-runtime-qualification.json`; its runtime
-uses its own source, weights, cache/venv, inputs, outputs, logs, PID, and
-endpoint namespace. TokenRig/SkinTokens now has the same isolated adapter
-boundary, but remains `planned` because Spark2 lacks the official Blender
->=4.2 prerequisite; the gate is recorded in
-`docs/audits/2026-08-03-tokenrig-prerequisite-gate.json`.
+model's venv and runtime cache, with no shared generic adapter. The creative
+qualification records remain historical evidence: TripoSG is `verified` and
+TokenRig/SkinTokens is `planned` behind its Blender >=4.2 prerequisite, but
+neither is part of the active LLM-only pass.

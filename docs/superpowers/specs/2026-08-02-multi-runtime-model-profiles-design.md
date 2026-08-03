@@ -3,6 +3,15 @@
 Date: 2026-08-02
 Status: approved, including model-definition and cluster-profile amendments
 
+## 2026-08-03 scope amendment
+
+The active implementation and qualification pass is LLM-only: DeepSeek/Mia,
+DS4 and a possible `bleysg` merge into the Entrpi DS4 branch, Nemotron,
+Qwen3-VL, and Laguna S 2.1. The image and 3D families below remain part of
+the broader approved catalog, but are deferred from the current serving pass.
+TripoSG and TokenRig are not LLMs: they are image-to-3D and rigging systems,
+so their isolated adapters remain fail-closed and are not active LLM endpoints.
+
 ## Purpose
 
 Make every requested model runnable on the two-DGX-Spark platform without forcing incompatible model families through one inference engine. DeepSeek Flash 0731 remains the default agent model. Delivery priority controls implementation order, not delivery scope or runtime routing; every model in this document is required.
@@ -27,6 +36,7 @@ does not make a model optional and is never used to route a live request.
 | Pixal3D | Primary high-fidelity image-to-3D geometry and PBR generation | `essential` |
 | TRELLIS.2 4B | Alternative image-to-3D generation and Pixal3D foundation | `essential` |
 | Qwen3-VL-8B-Instruct | Turntable evaluation, defect detection, prompt rewriting, and candidate ranking | `recommended` |
+| Laguna S 2.1 | Agentic coding, long-horizon reasoning, and text-to-text tool use | `recommended` |
 | SkinTokens / TokenRig | Skeleton and skin-weight generation | `recommended` |
 | Step1X-3D | Independent geometry-plus-texture alternative | `secondary` |
 | TripoSG | Fast draft and high-volume image-to-geometry generation | `secondary` |
@@ -126,6 +136,7 @@ The canonical initial Model Definition IDs are:
 | `pixal3d-single` | accepted Pixal3D service on one Spark |
 | `trellis2-4b-single` | accepted TRELLIS.2 4B service on one Spark |
 | `qwen3-vl-8b-single` | accepted Qwen3-VL-8B-Instruct service on one Spark |
+| `laguna-s21-single` | accepted Laguna S 2.1 NVFP4 service on one Spark |
 | `tokenrig-single` | accepted SkinTokens/TokenRig service on one Spark |
 | `step1x-3d-single` | accepted Step1X-3D service on one Spark |
 | `triposg-single` | accepted TripoSG service on one Spark |
@@ -178,6 +189,7 @@ The controller treats adapters uniformly but does not translate one model family
 | --- | --- | --- | --- |
 | DeepSeek 0731 Mia service | Audited MiaAI-Lab/Anemll vLLM; BF16 model dtype, block-scaled FP8 E4M3 weights with UE8M0 scales, and padded `nvfp4_ds_mla` KV cache | both Sparks, TP=2 over NCCL | exclusive, persistent |
 | DeepSeek 0731 DS4 GGUF | Audited DS4 v0.5.3 GB10/Spark CUDA build with the Q2-imatrix base and DSpark drafter pair | one Spark by default; optional two-Spark TCP layer pipeline | mapped/registered no-copy |
+| DeepSeek 0731 DS4 branch variant | The same DS4 model with `bleysg` DSpark work merged into the Entrpi branch; release and drafter pins change together | one Spark initially | model-owned mapped/registered no-copy |
 | Nemotron 3 Super 120B-A12B | NVIDIA DGX Spark vLLM NVFP4 playbook; TensorRT-LLM comparison definition | either single Spark | persistent, single-exclusive initially |
 | Nemotron 3 Nano Omni 30B-A3B | NVIDIA DGX Spark vLLM playbook with BF16 correctness and FP8/NVFP4 optimized definitions | either single Spark | persistent; shareable only after combined-load tests |
 | Qwen-Image | accepted ModelOpt NVFP4 SGLang Spark path; official Diffusers as non-serving correctness oracle | either single Spark | persistent, fully resident |
@@ -185,6 +197,7 @@ The controller treats adapters uniformly but does not translate one model family
 | Pixal3D | audited Spark-native Pixal3D/TRELLIS.2 build with official fully resident or staged mode | either single Spark | fully resident; official staged mode as fallback |
 | TRELLIS.2 4B | audited CUDA 13/ARM64 DGX Spark build of the official Microsoft pipeline | either single Spark | fully resident |
 | Qwen3-VL-8B-Instruct | accepted GB10-native vLLM or SGLang build with optimized vision attention | either single Spark | persistent server with paged KV cache |
+| Laguna S 2.1 | official Laguna S 2.1 NVFP4 vLLM path; FP8 and forked loaders are separate comparison definitions | either single Spark | persistent MoE service with bounded KV cache |
 | SkinTokens / TokenRig | audited FP16 Spark integration or GB10-native TokenRig build | either single Spark | persistent Qwen3-0.6B plus FSQ-CVAE |
 | Step1X-3D | GB10-native build of the official Step1X geometry and texture pipelines | either single Spark | sequential stage residency |
 | TripoSG | GB10-native build of the official TripoSG Diffusers pipeline | either single Spark | persistent lightweight worker |
