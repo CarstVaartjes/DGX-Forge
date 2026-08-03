@@ -18,7 +18,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from .audit import AuditRecord
-from .auth import Actor, AuthError, TokenCodec
+from .auth import Actor, AuthError, MUTATION_ROLES, TokenCodec
 from .proposals import DocumentChange
 from .metrics import MetricsRegistry
 
@@ -148,6 +148,10 @@ def create_app(
                 raise HTTPException(status_code=403, detail="CSRF validation failed")
         return authenticated
 
+    def require_mutation_role(authenticated: Actor, path: str) -> None:
+        if authenticated.role not in MUTATION_ROLES[("POST", path)]:
+            raise HTTPException(status_code=403, detail="insufficient role")
+
     @app.get("/api/v1/healthz")
     def healthz() -> dict[str, str]:
         return {"status": "ok"}
@@ -199,8 +203,7 @@ def create_app(
 
     @app.post("/api/v1/proposals")
     def proposal_preview(body: ProposalRequest, authenticated: Actor = Depends(actor)) -> dict[str, object]:
-        if authenticated.role not in {"operator", "administrator"}:
-            raise HTTPException(status_code=403, detail="insufficient role")
+        require_mutation_role(authenticated, "/api/v1/proposals")
         if admin is None:
             raise HTTPException(status_code=503, detail="repository administration unavailable")
         preview = admin.proposals.preview(
@@ -218,8 +221,7 @@ def create_app(
 
     @app.post("/api/v1/changes", status_code=status.HTTP_202_ACCEPTED)
     def submit_change(body: ChangeRequest, request: Request, authenticated: Actor = Depends(actor)) -> dict[str, object]:
-        if authenticated.role != "administrator":
-            raise HTTPException(status_code=403, detail="administrator role required")
+        require_mutation_role(authenticated, "/api/v1/changes")
         if admin is None or admin.changes is None:
             raise HTTPException(status_code=503, detail="change submission unavailable")
         result = admin.changes.submit(body.proposal_digest, authenticated.subject, request.state.request_id)
@@ -228,8 +230,7 @@ def create_app(
 
     @app.post("/api/v1/reconciliations/plan")
     def reconcile_plan(body: ReconciliationPlanRequest, authenticated: Actor = Depends(actor)) -> dict[str, object]:
-        if authenticated.role not in {"operator", "administrator"}:
-            raise HTTPException(status_code=403, detail="insufficient role")
+        require_mutation_role(authenticated, "/api/v1/reconciliations/plan")
         if admin is None or admin.reconciler is None:
             raise HTTPException(status_code=503, detail="reconciliation unavailable")
         plan = admin.reconciler.plan(body.commit)
@@ -241,16 +242,14 @@ def create_app(
 
     @app.post("/api/v1/reconciliations", status_code=status.HTTP_202_ACCEPTED)
     def reconcile(body: ReconciliationRequest, request: Request, authenticated: Actor = Depends(actor)) -> dict[str, object]:
-        if authenticated.role not in {"operator", "administrator"}:
-            raise HTTPException(status_code=403, detail="insufficient role")
+        require_mutation_role(authenticated, "/api/v1/reconciliations")
         if admin is None or admin.reconciler is None:
             raise HTTPException(status_code=503, detail="reconciliation unavailable")
         return dict(admin.reconciler.enqueue(body.plan_digest, authenticated.subject, request.state.request_id))
 
     @app.post("/api/v1/jobs", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
     def enqueue(body: JobRequest, request: Request, authenticated: Actor = Depends(actor)) -> JobResponse:
-        if authenticated.role not in {"operator", "administrator"}:
-            raise HTTPException(status_code=403, detail="insufficient role")
+        require_mutation_role(authenticated, "/api/v1/jobs")
         job = jobs.enqueue(body.kind, authenticated.subject, body.base_commit, body.targets, body.payload, request_id=request.state.request_id)
         audits.append(AuditRecord(request.state.request_id, authenticated.subject, f"job.enqueue:{body.kind}", body.base_commit, tuple(body.targets)))
         return JobResponse(id=str(job.id), state=str(job.state))

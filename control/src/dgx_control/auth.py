@@ -10,6 +10,14 @@ from dataclasses import dataclass
 
 _ROLES = frozenset({"viewer", "operator", "administrator"})
 
+MUTATION_ROLES = {
+    ("POST", "/api/v1/jobs"): frozenset({"operator", "administrator"}),
+    ("POST", "/api/v1/proposals"): frozenset({"operator", "administrator"}),
+    ("POST", "/api/v1/changes"): frozenset({"administrator"}),
+    ("POST", "/api/v1/reconciliations/plan"): frozenset({"operator", "administrator"}),
+    ("POST", "/api/v1/reconciliations"): frozenset({"operator", "administrator"}),
+}
+
 
 class AuthError(ValueError):
     pass
