@@ -18,4 +18,7 @@ from their public upstreams. The approved design remains the authority for
 loader selection and acceptance thresholds. TripoSG qualification evidence is
 in `docs/audits/2026-08-03-triposg-runtime-qualification.json`; its runtime
 uses its own source, weights, cache/venv, inputs, outputs, logs, PID, and
-endpoint namespace.
+endpoint namespace. TokenRig/SkinTokens now has the same isolated adapter
+boundary, but remains `planned` because Spark2 lacks the official Blender
+>=4.2 prerequisite; the gate is recorded in
+`docs/audits/2026-08-03-tokenrig-prerequisite-gate.json`.

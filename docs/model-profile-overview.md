@@ -71,7 +71,7 @@ flowchart TB
 | `agent-long-dual` | `deepseek-long-dual` rank 0 | `deepseek-long-dual` rank 1 | `deepseek` | Design intent; not cataloged |
 | `creative-3d` | `deepseek-agent-single` | `pixal3d-single`, `trellis2-4b-single`, `qwen3-vl-8b-single` | `deepseek`, creative model aliases | Design intent; not cataloged |
 | `image-authoring` | `deepseek-agent-single` | `qwen-image-single`, `qwen-image-edit-2511-single` | `deepseek`, `qwen-image`, `qwen-image-edit` | Design intent; not cataloged |
-| `rigging` | `deepseek-agent-single` | `tokenrig-single` plus evaluation definitions | `deepseek`, `tokenrig` | Design intent; not cataloged |
+| `rigging` | `deepseek-agent-single` | `tokenrig-single` plus evaluation definitions | `deepseek`, `tokenrig` | TokenRig isolated boundary; planned pending Blender >=4.2 |
 | `agent-nemotron-super` | `nemotron-super-single` | Idle | `nemotron-super` | Design intent; not cataloged |
 | `agent-nemotron-nano-omni` | `nemotron-nano-omni-single` | Idle | `nemotron-nano-omni` | Design intent; not cataloged |
 | `geometry-step1x` | `deepseek-agent-single` | `step1x-3d-single` | `deepseek`, `step1x-3d` | Design intent; not cataloged |
@@ -98,7 +98,7 @@ accepted evidence for the exact placement and combination.
 | Image-to-3D | `pixal3d-single` | CUDA 13, ARM64, GB10 build candidate for Pixal3D | One Spark, exclusive initially | Design intent; not cataloged |
 | Image-to-3D | `trellis2-4b-single` | TRELLIS.2 Spark build candidate | One Spark, exclusive initially | Design intent; not cataloged |
 | Vision/evaluation | `qwen3-vl-8b-single` | GB10-native vLLM or SGLang service candidate | One Spark, co-residency candidate | Design intent; not cataloged |
-| Rigging | `tokenrig-single` | FP16 or GB10-native TokenRig build candidate | One Spark, co-residency candidate | Design intent; not cataloged |
+| Rigging | `tokenrig-single` | Isolated official TokenRig boundary; Blender prerequisite pending | One Spark, co-residency candidate | Planned; prerequisite gate recorded |
 | Geometry/texture | `step1x-3d-single` | GB10-native sequential geometry and texture candidate | One Spark, exclusive initially | Design intent; not cataloged |
 | Fast geometry | `triposg-single` | GB10-native official Diffusers runtime | One Spark, co-residency candidate | Verified on Spark 2; acceptance pending |
 | Controllable 3D | `hunyuan3d-omni-single` | GB10-native official runtime candidate; FlashVDM remains subject to acceptance | One Spark, co-residency candidate | Design intent; not cataloged |
