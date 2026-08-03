@@ -3,32 +3,12 @@
     {
       "id": "deepseek-agent-dual",
       "sha256": "de79fa38af556356008f8e3bfa46222d1a1aabebf47653e2e14e03abb6c971bb",
-      "maturity": "verified",
+      "maturity": "accepted",
       "history": [
-        {
-          "state": "planned",
-          "timestamp": "2026-08-02T14:50:33Z",
-          "evidence_refs": [
-            "docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"
-          ],
-          "rejection_reason": null
-        },
-        {
-          "state": "prepared",
-          "timestamp": "2026-08-02T22:50:30Z",
-          "evidence_refs": [
-            "inventory/reports/model-definitions/deepseek-agent-dual-prepared.json"
-          ],
-          "rejection_reason": null
-        },
-        {
-          "state": "verified",
-          "timestamp": "2026-08-02T22:50:31Z",
-          "evidence_refs": [
-            "inventory/reports/model-definitions/deepseek-agent-dual-verified.json"
-          ],
-          "rejection_reason": null
-        }
+        {"state": "planned", "timestamp": "2026-08-02T14:50:33Z", "evidence_refs": ["docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"], "rejection_reason": null},
+        {"state": "prepared", "timestamp": "2026-08-02T22:50:30Z", "evidence_refs": ["inventory/reports/model-definitions/deepseek-agent-dual-prepared.json"], "rejection_reason": null},
+        {"state": "verified", "timestamp": "2026-08-02T22:50:31Z", "evidence_refs": ["inventory/reports/model-definitions/deepseek-agent-dual-verified.json"], "rejection_reason": null},
+        {"state": "accepted", "timestamp": "2026-08-03T12:50:10Z", "evidence_refs": ["inventory/reports/model-definitions/deepseek-agent-dual-accepted.json"], "rejection_reason": null}
       ]
     },
     {
@@ -36,31 +16,21 @@
       "sha256": "66eaeb53aaf0c14c975c1375977cce849defc647f37e5bc2cd9b56461b359c07",
       "maturity": "verified",
       "history": [
-        {
-          "state": "planned",
-          "timestamp": "2026-08-03T07:22:15Z",
-          "evidence_refs": [
-            "docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"
-          ],
-          "rejection_reason": null
-        },
-        {
-          "state": "prepared",
-          "timestamp": "2026-08-03T09:32:43Z",
-          "evidence_refs": [
-            "inventory/reports/model-definitions/deepseek-agent-single-prepared.json"
-          ],
-          "rejection_reason": null
-        },
-        {
-          "state": "verified",
-          "timestamp": "2026-08-03T09:42:56Z",
-          "evidence_refs": [
-            "inventory/reports/model-definitions/deepseek-agent-single-verified.json"
-          ],
-          "rejection_reason": null
-        }
+        {"state": "planned", "timestamp": "2026-08-03T07:22:15Z", "evidence_refs": ["docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"], "rejection_reason": null},
+        {"state": "prepared", "timestamp": "2026-08-03T09:32:43Z", "evidence_refs": ["inventory/reports/model-definitions/deepseek-agent-single-prepared.json"], "rejection_reason": null},
+        {"state": "verified", "timestamp": "2026-08-03T09:42:56Z", "evidence_refs": ["inventory/reports/model-definitions/deepseek-agent-single-verified.json"], "rejection_reason": null}
       ]
-    }
+    },
+    {"id": "hunyuan3d-omni-single", "sha256": "fd936a03ea052fc8c5f39d96e571d7abd2184a82ffef7c61d0ebd166f5a4134f", "maturity": "planned", "history": [{"state": "planned", "timestamp": "2026-08-03T14:30:00Z", "evidence_refs": ["docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"], "rejection_reason": null}]},
+    {"id": "nemotron-nano-omni-single", "sha256": "b71e3dcddcbd630219f7b06547b1f9647123ca9f55bafba1e33b60c10f490820", "maturity": "planned", "history": [{"state": "planned", "timestamp": "2026-08-03T14:30:00Z", "evidence_refs": ["docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"], "rejection_reason": null}]},
+    {"id": "nemotron-super-single", "sha256": "fdaaf27aaf1ce9fb80b48a105aad8cbdcd3cb54341cfb634ae0f04b426720586", "maturity": "planned", "history": [{"state": "planned", "timestamp": "2026-08-03T14:30:00Z", "evidence_refs": ["docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"], "rejection_reason": null}]},
+    {"id": "pixal3d-single", "sha256": "c378cf924731608eacb13d01670592600b5f81eeac8dcd5a7656110ec9c1a31a", "maturity": "planned", "history": [{"state": "planned", "timestamp": "2026-08-03T14:30:00Z", "evidence_refs": ["docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"], "rejection_reason": null}]},
+    {"id": "qwen-image-edit-2511-single", "sha256": "7267ad24ceb0a358471ae0ba26bd68679fdda4a548a702e68f9b8837ea2a9785", "maturity": "planned", "history": [{"state": "planned", "timestamp": "2026-08-03T14:30:00Z", "evidence_refs": ["docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"], "rejection_reason": null}]},
+    {"id": "qwen-image-single", "sha256": "ba5012465a5c2166d8bc0217694a82ae2979de67e3519e5cd85edecb9c31328d", "maturity": "planned", "history": [{"state": "planned", "timestamp": "2026-08-03T14:30:00Z", "evidence_refs": ["docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"], "rejection_reason": null}]},
+    {"id": "qwen3-vl-8b-single", "sha256": "fdc992e3691fa59618cb8ed0d78b0c69b720e927394705e90a78bc2720ebb836", "maturity": "planned", "history": [{"state": "planned", "timestamp": "2026-08-03T14:30:00Z", "evidence_refs": ["docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"], "rejection_reason": null}]},
+    {"id": "step1x-3d-single", "sha256": "b2096979f9317beffdc8fc7d30cab7023a2d09817eddcf489da344ccad6ab112", "maturity": "planned", "history": [{"state": "planned", "timestamp": "2026-08-03T14:30:00Z", "evidence_refs": ["docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"], "rejection_reason": null}]},
+    {"id": "tokenrig-single", "sha256": "985dc346d1ed6db40ad6eeb9e372fc5efab60ac9f82b91dd80d92dcf8a32c822", "maturity": "planned", "history": [{"state": "planned", "timestamp": "2026-08-03T14:30:00Z", "evidence_refs": ["docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"], "rejection_reason": null}]},
+    {"id": "trellis2-4b-single", "sha256": "322d28e5c3359559edd3e1958ae39c1637979066b9064ac230737bc883cecf35", "maturity": "planned", "history": [{"state": "planned", "timestamp": "2026-08-03T14:30:00Z", "evidence_refs": ["docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"], "rejection_reason": null}]},
+    {"id": "triposg-single", "sha256": "4f9cb44119f48aefb8b8644a3c705cbe37784b4028ceeb6a2631eeb4837b302d", "maturity": "planned", "history": [{"state": "planned", "timestamp": "2026-08-03T14:30:00Z", "evidence_refs": ["docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"], "rejection_reason": null}]}
   ]
 }

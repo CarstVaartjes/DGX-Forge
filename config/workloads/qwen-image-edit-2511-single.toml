@@ -1,0 +1,55 @@
+id = "qwen-image-edit-2511-single"
+adapter = "creative-qwen-image-edit-2511"
+topology = "single"
+placement_class = "single-exclusive"
+nodes = ["spark2"]
+start_order = ["spark2"]
+stop_order = ["spark2"]
+conflicts = ["deepseek-agent-dual", "deepseek-agent-single"]
+co_location = "exclusive"
+accepted_evidence = "inventory/reports/accepted-cluster-profiles.json"
+
+[source]
+repository = "https://github.com/QwenLM/Qwen-Image"
+commit = "6b5e1f5cec987d404be5ac6657db3b9aacb56a89"
+
+[checkpoint]
+repository = "Qwen/Qwen-Image-Edit-2511"
+revision = "6f3ccc0b56e431dc6a0c2b2039706d7d26f22cb9"
+manifest = "/srv/models/manifests/qwen-image-edit-2511-single.json"
+
+[image]
+reference = "ghcr.io/dgx-forge/qwen/qwen-image-edit@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[paths]
+cache = "/srv/models/snapshots/qwen-image-edit-2511-single"
+scratch = "/srv/models/runtime-cache/qwen-image-edit-2511-single"
+output = "/srv/models/outputs/qwen-image-edit-2511-single"
+
+[endpoint]
+host = "127.0.0.1"
+port = 9103
+
+[commands]
+prepare = ["/opt/spark/model-adapters/creative/spark-model-adapter", "prepare", "qwen-image-edit-2511-single"]
+verify = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify", "qwen-image-edit-2511-single"]
+start = ["/opt/spark/model-adapters/creative/spark-model-adapter", "start", "qwen-image-edit-2511-single"]
+health = ["/opt/spark/model-adapters/creative/spark-model-adapter", "health", "qwen-image-edit-2511-single"]
+infer = ["/opt/spark/model-adapters/creative/spark-model-adapter", "infer", "qwen-image-edit-2511-single"]
+stop = ["/opt/spark/model-adapters/creative/spark-model-adapter", "stop", "qwen-image-edit-2511-single"]
+verify-release = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify-release", "qwen-image-edit-2511-single"]
+
+[deadlines]
+prepare = 86400
+verify = 600
+start = 1800
+health = 120
+infer = 1800
+stop = 300
+verify-release = 300
+
+[resources]
+minimum_free_memory_bytes = 12000000000
+minimum_free_disk_bytes = 100000000000
+stop_memory_tolerance_bytes = 1073741824
+

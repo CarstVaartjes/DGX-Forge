@@ -1,0 +1,55 @@
+id = "qwen-image-single"
+adapter = "creative-qwen-image"
+topology = "single"
+placement_class = "single-exclusive"
+nodes = ["spark2"]
+start_order = ["spark2"]
+stop_order = ["spark2"]
+conflicts = ["deepseek-agent-dual", "deepseek-agent-single"]
+co_location = "exclusive"
+accepted_evidence = "inventory/reports/accepted-cluster-profiles.json"
+
+[source]
+repository = "https://github.com/QwenLM/Qwen-Image"
+commit = "6b5e1f5cec987d404be5ac6657db3b9aacb56a89"
+
+[checkpoint]
+repository = "Qwen/Qwen-Image"
+revision = "75e0b4be04f60ec59a75f475837eced720f823b6"
+manifest = "/srv/models/manifests/qwen-image-single.json"
+
+[image]
+reference = "ghcr.io/dgx-forge/qwen/qwen-image@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[paths]
+cache = "/srv/models/snapshots/qwen-image-single"
+scratch = "/srv/models/runtime-cache/qwen-image-single"
+output = "/srv/models/outputs/qwen-image-single"
+
+[endpoint]
+host = "127.0.0.1"
+port = 9102
+
+[commands]
+prepare = ["/opt/spark/model-adapters/creative/spark-model-adapter", "prepare", "qwen-image-single"]
+verify = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify", "qwen-image-single"]
+start = ["/opt/spark/model-adapters/creative/spark-model-adapter", "start", "qwen-image-single"]
+health = ["/opt/spark/model-adapters/creative/spark-model-adapter", "health", "qwen-image-single"]
+infer = ["/opt/spark/model-adapters/creative/spark-model-adapter", "infer", "qwen-image-single"]
+stop = ["/opt/spark/model-adapters/creative/spark-model-adapter", "stop", "qwen-image-single"]
+verify-release = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify-release", "qwen-image-single"]
+
+[deadlines]
+prepare = 86400
+verify = 600
+start = 1800
+health = 120
+infer = 1800
+stop = 300
+verify-release = 300
+
+[resources]
+minimum_free_memory_bytes = 12000000000
+minimum_free_disk_bytes = 100000000000
+stop_memory_tolerance_bytes = 1073741824
+

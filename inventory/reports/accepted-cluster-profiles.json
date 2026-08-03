@@ -1,3 +1,14 @@
 {
-  "profiles": []
+  "profiles": [
+    {
+      "profile_sha256": "2de414663bbe909b2a437632978d3aa42a06c82249cf9d1b6564b225aac8627c",
+      "definition_sha256": [
+        "de79fa38af556356008f8e3bfa46222d1a1aabebf47653e2e14e03abb6c971bb"
+      ],
+      "accepted_at": "2026-08-03T12:50:10Z",
+      "evidence_refs": [
+        "docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"
+      ]
+    }
+  ]
 }

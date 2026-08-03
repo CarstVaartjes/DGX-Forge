@@ -463,14 +463,14 @@ def test_prepare_unknown_selector_and_lock_conflict_fail_closed() -> None:
     }
 
 
-def test_verified_home_is_visible_but_not_activatable() -> None:
+def test_accepted_home_is_visible_and_admitted() -> None:
     result = invoke("validate", "default", "--json")
 
     assert result.json["profile_id"] == "agent-full-dual"
     assert result.json["valid"] is True
-    assert result.json["admitted"] is False
-    assert "deepseek-agent-dual maturity is verified" in result.json["errors"]
-    assert result.exit_code == 3
+    assert result.json["admitted"] is True
+    assert result.json["errors"] == []
+    assert result.exit_code == 0
 
 
 def test_endpoint_refuses_workload_when_controller_is_stopped() -> None:
@@ -503,7 +503,7 @@ def test_status_is_a_local_stopped_snapshot() -> None:
     assert calls == 0
 
 
-def test_catalog_supports_global_json_and_shows_verified_definition() -> None:
+def test_catalog_supports_global_json_and_shows_accepted_definition() -> None:
     result = invoke("--json", "catalog")
     per_command = invoke("catalog", "--json")
 
@@ -513,7 +513,7 @@ def test_catalog_supports_global_json_and_shows_verified_definition() -> None:
     assert result.json["selectors"]["agent"] == "agent-full-dual"
     assert result.json["profiles"][0]["profile_id"] == "agent-full-dual"
     assert result.json["profiles"][0]["workloads"] == ["deepseek-agent-dual"]
-    assert result.json["definitions"][0]["maturity"] == "verified"
+    assert result.json["definitions"][0]["maturity"] == "accepted"
 
 
 def test_restore_default_is_an_explicit_ordinary_switch() -> None:
@@ -581,7 +581,7 @@ def test_endpoint_refuses_matching_but_planned_active_content() -> None:
     assert result.json == {
         "available": False,
         "endpoint": "deepseek",
-        "reason": "active profile content is not currently accepted",
+        "reason": "active state has no Spark boot IDs",
     }
 
 

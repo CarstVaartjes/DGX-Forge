@@ -1,0 +1,55 @@
+id = "qwen3-vl-8b-single"
+adapter = "creative-qwen3-vl-8b"
+topology = "single"
+placement_class = "single-exclusive"
+nodes = ["spark2"]
+start_order = ["spark2"]
+stop_order = ["spark2"]
+conflicts = ["deepseek-agent-dual", "deepseek-agent-single"]
+co_location = "exclusive"
+accepted_evidence = "inventory/reports/accepted-cluster-profiles.json"
+
+[source]
+repository = "https://github.com/QwenLM/Qwen3-VL"
+commit = "96588727e44c78b25ba03ea03b8e12f7e64fd0da"
+
+[checkpoint]
+repository = "Qwen/Qwen3-VL-8B-Instruct"
+revision = "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
+manifest = "/srv/models/manifests/qwen3-vl-8b-single.json"
+
+[image]
+reference = "ghcr.io/dgx-forge/qwen/qwen3-vl-8b@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[paths]
+cache = "/srv/models/snapshots/qwen3-vl-8b-single"
+scratch = "/srv/models/runtime-cache/qwen3-vl-8b-single"
+output = "/srv/models/outputs/qwen3-vl-8b-single"
+
+[endpoint]
+host = "127.0.0.1"
+port = 9106
+
+[commands]
+prepare = ["/opt/spark/model-adapters/creative/spark-model-adapter", "prepare", "qwen3-vl-8b-single"]
+verify = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify", "qwen3-vl-8b-single"]
+start = ["/opt/spark/model-adapters/creative/spark-model-adapter", "start", "qwen3-vl-8b-single"]
+health = ["/opt/spark/model-adapters/creative/spark-model-adapter", "health", "qwen3-vl-8b-single"]
+infer = ["/opt/spark/model-adapters/creative/spark-model-adapter", "infer", "qwen3-vl-8b-single"]
+stop = ["/opt/spark/model-adapters/creative/spark-model-adapter", "stop", "qwen3-vl-8b-single"]
+verify-release = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify-release", "qwen3-vl-8b-single"]
+
+[deadlines]
+prepare = 86400
+verify = 600
+start = 1800
+health = 120
+infer = 1800
+stop = 300
+verify-release = 300
+
+[resources]
+minimum_free_memory_bytes = 12000000000
+minimum_free_disk_bytes = 100000000000
+stop_memory_tolerance_bytes = 1073741824
+

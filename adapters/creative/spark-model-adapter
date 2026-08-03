@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Common lifecycle boundary for phase-4 creative definitions.  Each model gets
+# a separate adapter release once its Spark-native loader and immutable image
+# have passed qualification.  Until then, every operation is fail-closed and
+# cannot accidentally start an unqualified workload.
+operation=${1:?operation is required}
+definition=${2:?definition id is required}
+case "$operation" in
+  prepare|verify)
+    echo "${operation} blocked: ${definition} is planned and has no qualified release" >&2
+    exit 2
+    ;;
+  start|health|infer|stop|verify-release)
+    echo "${operation} blocked: ${definition} is not accepted" >&2
+    exit 3
+    ;;
+  *)
+    echo "unknown operation: ${operation}" >&2
+    exit 64
+    ;;
+esac

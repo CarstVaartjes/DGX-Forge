@@ -1,0 +1,55 @@
+id = "pixal3d-single"
+adapter = "creative-pixal3d"
+topology = "single"
+placement_class = "single-exclusive"
+nodes = ["spark2"]
+start_order = ["spark2"]
+stop_order = ["spark2"]
+conflicts = ["deepseek-agent-dual", "deepseek-agent-single"]
+co_location = "exclusive"
+accepted_evidence = "inventory/reports/accepted-cluster-profiles.json"
+
+[source]
+repository = "https://github.com/TencentARC/Pixal3D"
+commit = "cdbb2bbffbf4e6f298b5f2af3d1d76a8d823d2af"
+
+[checkpoint]
+repository = "TencentARC/Pixal3D"
+revision = "0b31f9160aa400719af409098bff7936a932f726"
+manifest = "/srv/models/manifests/pixal3d-single.json"
+
+[image]
+reference = "ghcr.io/dgx-forge/tencent/pixal3d@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[paths]
+cache = "/srv/models/snapshots/pixal3d-single"
+scratch = "/srv/models/runtime-cache/pixal3d-single"
+output = "/srv/models/outputs/pixal3d-single"
+
+[endpoint]
+host = "127.0.0.1"
+port = 9104
+
+[commands]
+prepare = ["/opt/spark/model-adapters/creative/spark-model-adapter", "prepare", "pixal3d-single"]
+verify = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify", "pixal3d-single"]
+start = ["/opt/spark/model-adapters/creative/spark-model-adapter", "start", "pixal3d-single"]
+health = ["/opt/spark/model-adapters/creative/spark-model-adapter", "health", "pixal3d-single"]
+infer = ["/opt/spark/model-adapters/creative/spark-model-adapter", "infer", "pixal3d-single"]
+stop = ["/opt/spark/model-adapters/creative/spark-model-adapter", "stop", "pixal3d-single"]
+verify-release = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify-release", "pixal3d-single"]
+
+[deadlines]
+prepare = 86400
+verify = 600
+start = 1800
+health = 120
+infer = 1800
+stop = 300
+verify-release = 300
+
+[resources]
+minimum_free_memory_bytes = 12000000000
+minimum_free_disk_bytes = 100000000000
+stop_memory_tolerance_bytes = 1073741824
+

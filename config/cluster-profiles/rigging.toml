@@ -1,0 +1,11 @@
+id = "rigging"
+accepted_evidence = "inventory/reports/accepted-cluster-profiles.json"
+
+[placements]
+spark1 = ["deepseek-agent-single"]
+spark2 = ["tokenrig-single"]
+
+[endpoints]
+deepseek = "deepseek-agent-single"
+tokenrig = "tokenrig-single"
+

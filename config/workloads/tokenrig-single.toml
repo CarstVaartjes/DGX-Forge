@@ -1,0 +1,54 @@
+id = "tokenrig-single"
+adapter = "creative-tokenrig"
+topology = "single"
+placement_class = "single-exclusive"
+nodes = ["spark2"]
+start_order = ["spark2"]
+stop_order = ["spark2"]
+conflicts = ["deepseek-agent-dual", "deepseek-agent-single"]
+co_location = "exclusive"
+accepted_evidence = "inventory/reports/accepted-cluster-profiles.json"
+
+[source]
+repository = "https://github.com/VAST-AI-Research/SkinTokens"
+commit = "273b691d35989d71cd17ff2895fdc735097b92d1"
+
+[checkpoint]
+repository = "VAST-AI/SkinTokens"
+revision = "79736cad0fd84de384d5eede659b4ebd24effe33"
+manifest = "/srv/models/manifests/tokenrig-single.json"
+
+[image]
+reference = "ghcr.io/dgx-forge/lllyasviel/tokenrig@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[paths]
+cache = "/srv/models/snapshots/tokenrig-single"
+scratch = "/srv/models/runtime-cache/tokenrig-single"
+output = "/srv/models/outputs/tokenrig-single"
+
+[endpoint]
+host = "127.0.0.1"
+port = 9107
+
+[commands]
+prepare = ["/opt/spark/model-adapters/creative/spark-model-adapter", "prepare", "tokenrig-single"]
+verify = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify", "tokenrig-single"]
+start = ["/opt/spark/model-adapters/creative/spark-model-adapter", "start", "tokenrig-single"]
+health = ["/opt/spark/model-adapters/creative/spark-model-adapter", "health", "tokenrig-single"]
+infer = ["/opt/spark/model-adapters/creative/spark-model-adapter", "infer", "tokenrig-single"]
+stop = ["/opt/spark/model-adapters/creative/spark-model-adapter", "stop", "tokenrig-single"]
+verify-release = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify-release", "tokenrig-single"]
+
+[deadlines]
+prepare = 86400
+verify = 600
+start = 1800
+health = 120
+infer = 1800
+stop = 300
+verify-release = 300
+
+[resources]
+minimum_free_memory_bytes = 12000000000
+minimum_free_disk_bytes = 100000000000
+stop_memory_tolerance_bytes = 1073741824

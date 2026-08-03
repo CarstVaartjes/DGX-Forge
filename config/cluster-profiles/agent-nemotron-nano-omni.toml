@@ -1,0 +1,10 @@
+id = "agent-nemotron-nano-omni"
+accepted_evidence = "inventory/reports/accepted-cluster-profiles.json"
+
+[placements]
+spark1 = ["nemotron-nano-omni-single"]
+spark2 = []
+
+[endpoints]
+nemotron-nano-omni = "nemotron-nano-omni-single"
+

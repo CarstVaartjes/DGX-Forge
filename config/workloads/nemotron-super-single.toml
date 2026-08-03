@@ -1,0 +1,55 @@
+id = "nemotron-super-single"
+adapter = "creative-nemotron-super"
+topology = "single"
+placement_class = "single-exclusive"
+nodes = ["spark2"]
+start_order = ["spark2"]
+stop_order = ["spark2"]
+conflicts = ["deepseek-agent-dual", "deepseek-agent-single"]
+co_location = "exclusive"
+accepted_evidence = "inventory/reports/accepted-cluster-profiles.json"
+
+[source]
+repository = "https://github.com/NVIDIA-NeMo/Nemotron"
+commit = "c2a21efe6059130c3c7379df9e6428b2cc97b597"
+
+[checkpoint]
+repository = "nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-Base-BF16"
+revision = "46cc6113d364942e7742b0b2afd35b5db5058b29"
+manifest = "/srv/models/manifests/nemotron-super-single.json"
+
+[image]
+reference = "ghcr.io/dgx-forge/nvidia/nemotron-3-super@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+
+[paths]
+cache = "/srv/models/snapshots/nemotron-super-single"
+scratch = "/srv/models/runtime-cache/nemotron-super-single"
+output = "/srv/models/outputs/nemotron-super-single"
+
+[endpoint]
+host = "127.0.0.1"
+port = 9100
+
+[commands]
+prepare = ["/opt/spark/model-adapters/creative/spark-model-adapter", "prepare", "nemotron-super-single"]
+verify = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify", "nemotron-super-single"]
+start = ["/opt/spark/model-adapters/creative/spark-model-adapter", "start", "nemotron-super-single"]
+health = ["/opt/spark/model-adapters/creative/spark-model-adapter", "health", "nemotron-super-single"]
+infer = ["/opt/spark/model-adapters/creative/spark-model-adapter", "infer", "nemotron-super-single"]
+stop = ["/opt/spark/model-adapters/creative/spark-model-adapter", "stop", "nemotron-super-single"]
+verify-release = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify-release", "nemotron-super-single"]
+
+[deadlines]
+prepare = 86400
+verify = 600
+start = 1800
+health = 120
+infer = 1800
+stop = 300
+verify-release = 300
+
+[resources]
+minimum_free_memory_bytes = 12000000000
+minimum_free_disk_bytes = 100000000000
+stop_memory_tolerance_bytes = 1073741824
+

@@ -692,7 +692,7 @@ def test_profile_without_exact_accepted_evidence_is_not_activated() -> None:
     assert store.saves == []
 
 
-def test_checked_in_production_home_remains_truthfully_unactivatable() -> None:
+def test_checked_in_production_home_still_requires_live_capacity() -> None:
     catalog_value = Catalog.load(REPOSITORY_ROOT)
     switcher, events, store = make_switcher(catalog_value, ControllerState.stopped())
 
@@ -700,7 +700,8 @@ def test_checked_in_production_home_remains_truthfully_unactivatable() -> None:
 
     assert report.target_profile == "agent-full-dual"
     assert report.status == "blocked"
-    assert "deepseek-agent-dual maturity is verified" in report.errors
+    assert "insufficient measured memory on spark1" in report.errors
+    assert "insufficient measured disk on spark2" in report.errors
     assert [event for event in events if event[0] == "remote"] == []
     assert store.saves == []
 
