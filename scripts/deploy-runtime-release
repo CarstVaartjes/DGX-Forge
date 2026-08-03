@@ -20,7 +20,7 @@ repository_src = Path(__file__).resolve().parents[1] / "src"
 if str(repository_src) not in sys.path:
     sys.path.insert(0, str(repository_src))
 
-from spark_profiles.ssh_transport import select_transport_binary
+from spark_profiles.ssh_transport import select_transport
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._/-]+$")
@@ -362,13 +362,6 @@ def _load_release(root: Path, workload_name: str) -> Release:
         source = _regular_file(root, reference, "runtime payload")
         if _sha256(source) != expected:
             raise DeployError(f"runtime payload digest mismatch: {reference}")
-        expected_mode = 0o755 if installed.parts[0] == "bin" else 0o644
-        actual_mode = stat.S_IMODE(source.stat().st_mode)
-        if actual_mode != expected_mode:
-            raise DeployError(
-                f"runtime payload mode mismatch: {reference} "
-                f"expected {expected_mode:04o} received {actual_mode:04o}"
-            )
         validated.append((installed, source, expected))
 
     try:
@@ -451,10 +444,12 @@ def _require_remote_success(
         raise DeployError(f"{context}: {detail}")
 
 
-def _scp_source_argument(source: Path, scp_bin: str) -> str:
-    """Translate WSL paths before handing them to native Windows scp.exe."""
-    if Path(scp_bin).name.casefold() != "scp.exe":
+def _scp_source_argument(source: Path, path_style: str) -> str:
+    """Render a local source path in the selected SCP transport's syntax."""
+    if path_style == "posix":
         return str(source)
+    if path_style != "windows":
+        raise DeployError(f"unsupported SCP path style: {path_style}")
     try:
         converted = subprocess.run(
             ("wslpath", "-w", str(source)),
@@ -478,6 +473,7 @@ def _deploy_host(
     *,
     ssh_bin: str,
     scp_bin: str,
+    scp_path_style: str,
 ) -> str:
     tree_arguments = _tree_arguments(release)
     probe = _ssh(
@@ -510,7 +506,7 @@ def _deploy_host(
 
     for installed, source, _ in release.files:
         destination = f"{alias}:{temporary}/{installed}"
-        source_argument = _scp_source_argument(source, scp_bin)
+        source_argument = _scp_source_argument(source, scp_path_style)
         copied = subprocess.run(
             (scp_bin, *_SSH_OPTIONS, "-p", "--", source_argument, destination),
             check=False,
@@ -554,14 +550,18 @@ def _deploy_host(
 
 
 def _deploy(release: Release) -> None:
-    ssh_bin = select_transport_binary("ssh")
-    scp_bin = select_transport_binary("scp")
+    try:
+        ssh_transport = select_transport("ssh")
+        scp_transport = select_transport("scp")
+    except ValueError as error:
+        raise DeployError(str(error)) from error
     for alias in release.aliases:
         result = _deploy_host(
             release,
             alias,
-            ssh_bin=ssh_bin,
-            scp_bin=scp_bin,
+            ssh_bin=ssh_transport.binary,
+            scp_bin=scp_transport.binary,
+            scp_path_style=scp_transport.path_style,
         )
         print(f"{alias}: {result} {release.destination}")
 

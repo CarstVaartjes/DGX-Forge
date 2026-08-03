@@ -42,6 +42,114 @@ RUNTIME_BASE = (
 )
 
 
+def _fake_command(tmp_path: Path, name: str, source: str) -> Path:
+    command = tmp_path / name
+    command.write_text(source, encoding="utf-8")
+    command.chmod(0o755)
+    return command
+
+
+def _adapter_test_environment(tmp_path: Path) -> tuple[dict[str, str], Path]:
+    models_root = tmp_path / "models"
+    models_root.mkdir()
+    boot_id = tmp_path / "boot-id"
+    boot_id.write_text("test-boot\n", encoding="utf-8")
+    meminfo = tmp_path / "meminfo"
+    meminfo.write_text("MemAvailable: 125000000 kB\n", encoding="utf-8")
+    release = "a" * 64
+    environment = {
+        **os.environ,
+        "DS4_LOCAL_HOSTNAME": "spark-3542",
+        "DS4_MODELS_ROOT": str(models_root),
+        "DS4_BOOT_ID_PATH": str(boot_id),
+        "DS4_MEMINFO_PATH": str(meminfo),
+        "DS4_RELEASE_SHA256": release,
+    }
+    return environment, models_root
+
+
+def _fake_ds4_docker(tmp_path: Path) -> Path:
+    return _fake_command(
+        tmp_path,
+        "docker",
+        f"""#!{sys.executable}
+import os
+import sys
+
+arguments = sys.argv[1:]
+if arguments and arguments[0] == "compose":
+    raise SystemExit(0)
+if arguments and arguments[0] == "logs":
+    print(os.environ.get("FAKE_DS4_DOCKER_LOGS", ""))
+    raise SystemExit(0)
+if arguments and arguments[0] == "inspect" and "--format" in arguments:
+    template = arguments[arguments.index("--format") + 1]
+    if template == "{{{{.State.Running}}}}":
+        print("true")
+    elif template == "{{{{.Config.Image}}}}":
+        print({IMAGE!r})
+    elif template == "{{{{.Id}}}}":
+        print("test-container")
+    elif ".Config.Env" in template:
+        print("DS4_NO_UPDATE_CHECK=1")
+    else:
+        raise SystemExit(2)
+    raise SystemExit(0)
+raise SystemExit(2)
+""",
+    )
+
+
+def _fake_ds4_curl(tmp_path: Path) -> tuple[Path, Path]:
+    log = tmp_path / "curl.jsonl"
+    command = _fake_command(
+        tmp_path,
+        "curl",
+        f"""#!{sys.executable}
+import json
+import os
+import pathlib
+import sys
+
+arguments = sys.argv[1:]
+with open(os.environ["FAKE_DS4_CURL_LOG"], "a", encoding="utf-8") as target:
+    target.write(json.dumps(arguments) + "\\n")
+url = arguments[-1]
+if url.endswith("/health"):
+    raise SystemExit(0)
+if url.endswith("/v1/models"):
+    print(json.dumps({{"data": [{{"id": "deepseek"}}]}}))
+    raise SystemExit(0)
+output = pathlib.Path(arguments[arguments.index("--output") + 1])
+request = json.loads(arguments[arguments.index("--data") + 1])
+name = output.stem
+message = {{"content": "4"}}
+finish_reason = "stop"
+if name == "reasoning_off":
+    message = {{"content": "OFF_OK"}}
+    if os.environ.get("FAKE_DS4_REASONING_LEAK") == "1":
+        message["reasoning_content"] = "private"
+elif name.startswith("reasoning_"):
+    message = {{"content": "answer", "reasoning_content": "private reasoning"}}
+elif name == "tool_call":
+    finish_reason = "tool_calls"
+    message = {{
+        "content": None,
+        "tool_calls": [{{
+            "type": "function",
+            "function": {{"name": "get_weather", "arguments": '{{"city":"Amsterdam"}}'}},
+        }}],
+    }}
+response = {{
+    "model": "deepseek",
+    "choices": [{{"finish_reason": finish_reason, "message": message}}],
+}}
+output.write_text(json.dumps(response), encoding="utf-8")
+""",
+    )
+    return command, log
+
+
 def _runtime_fixture_source() -> str:
     return "\n" * 905 + """\\
 #include <ctype.h>
@@ -382,6 +490,143 @@ def test_single_adapter_covers_exact_openai_identity_and_lifecycle_evidence() ->
     ):
         assert contract in source
     assert '"chat_template_kwargs"' not in source
+
+
+def test_health_executes_loopback_health_identity_and_no_copy_checks(
+    tmp_path: Path,
+) -> None:
+    environment, models_root = _adapter_test_environment(tmp_path)
+    docker = _fake_ds4_docker(tmp_path)
+    curl, curl_log = _fake_ds4_curl(tmp_path)
+    release = environment["DS4_RELEASE_SHA256"]
+    startup = (
+        models_root
+        / "runtime-cache/deepseek-agent-single/lifecycle"
+        / release
+        / "test-boot/startup.test-container.json"
+    )
+    startup.parent.mkdir(parents=True)
+    startup.write_text(
+        json.dumps(
+            {
+                "boot_id": "test-boot",
+                "container_id": "test-container",
+                "context": 32768,
+                "image": IMAGE,
+                "release_sha256": release,
+                "served_model": "deepseek",
+                "startup_mode": "mapped-no-copy",
+            }
+        ),
+        encoding="utf-8",
+    )
+    environment |= {
+        "DS4_DOCKER_BIN": str(docker),
+        "DS4_CURL_BIN": str(curl),
+        "FAKE_DS4_CURL_LOG": str(curl_log),
+    }
+
+    completed = subprocess.run(
+        [str(ADAPTER), "health"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout == "healthy node=spark1 model=deepseek\n"
+    calls = [json.loads(line) for line in curl_log.read_text(encoding="utf-8").splitlines()]
+    assert calls[0][-1] == "http://127.0.0.1:8888/health"
+    assert calls[1][-1] == "http://127.0.0.1:8888/v1/models"
+
+
+def test_start_records_mapped_no_copy_only_after_executable_log_evidence(
+    tmp_path: Path,
+) -> None:
+    environment, models_root = _adapter_test_environment(tmp_path)
+    docker = _fake_ds4_docker(tmp_path)
+    environment |= {
+        "DS4_DOCKER_BIN": str(docker),
+        "FAKE_DS4_DOCKER_LOGS": (
+            "CUDA registered 6.49 GiB model mapping for device access\n"
+            "mmap left unpinned; 80.76 GiB served from device artifacts"
+        ),
+    }
+
+    completed = subprocess.run(
+        [str(ADAPTER), "start"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    startup = (
+        models_root
+        / "runtime-cache/deepseek-agent-single/lifecycle"
+        / environment["DS4_RELEASE_SHA256"]
+        / "test-boot/startup.test-container.json"
+    )
+    assert json.loads(startup.read_text(encoding="utf-8"))["startup_mode"] == "mapped-no-copy"
+
+
+def test_start_rejects_executable_full_copy_log_evidence(tmp_path: Path) -> None:
+    environment, _ = _adapter_test_environment(tmp_path)
+    docker = _fake_ds4_docker(tmp_path)
+    environment |= {
+        "DS4_DOCKER_BIN": str(docker),
+        "FAKE_DS4_DOCKER_LOGS": "CUDA copying 80 GiB model to device memory",
+    }
+
+    completed = subprocess.run(
+        [str(ADAPTER), "start"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "prohibited full-copy startup mode observed" in completed.stderr
+
+
+def test_infer_executes_reasoning_contract_and_rejects_private_leakage(
+    tmp_path: Path,
+) -> None:
+    environment, _ = _adapter_test_environment(tmp_path)
+    curl, curl_log = _fake_ds4_curl(tmp_path)
+    environment |= {
+        "DS4_CURL_BIN": str(curl),
+        "FAKE_DS4_CURL_LOG": str(curl_log),
+    }
+
+    passed = subprocess.run(
+        [str(ADAPTER), "infer"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    leaked = subprocess.run(
+        [str(ADAPTER), "infer"],
+        check=False,
+        capture_output=True,
+        text=True,
+        env={**environment, "FAKE_DS4_REASONING_LEAK": "1"},
+    )
+
+    assert passed.returncode == 0, passed.stderr
+    assert passed.stdout == "inference-verified node=spark1 model=deepseek\n"
+    requests = []
+    for line in curl_log.read_text(encoding="utf-8").splitlines()[:6]:
+        arguments = json.loads(line)
+        requests.append(json.loads(arguments[arguments.index("--data") + 1]))
+    reasoning_off = next(request for request in requests if request.get("thinking") is False)
+    assert "chat_template_kwargs" not in reasoning_off
+    assert leaked.returncode != 0
+    assert "reasoning off leaked private reasoning" in leaked.stderr
 
 
 def test_single_workload_values_match_the_adapter_and_checkpoint_contract() -> None:

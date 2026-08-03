@@ -43,10 +43,12 @@ The current DeepSeek operational evidence is recorded in the
 reports. DS4 measured a 67-second cold start, 110.86 GiB of consumed available
 memory after its live gate run, a 32,768-token context, and an 8 GiB disk-KV
 budget on Spark 1.
-`verified` means the immutable runtime, checkpoint, image, architecture,
-fabric, role and Compose gates pass. It does not mean `accepted`: sustained
-thermal, repeated lifecycle, reboot and final performance gates are reserved
-for the final cross-model optimization phase.
+`verified` is definition-specific: the Mia dual-Spark definition requires its
+distributed fabric, role, image, checkpoint, and Compose gates, while the DS4
+single-Spark definition requires its offline artifact, image, architecture,
+identity, mapped/no-copy, reasoning, and cache gates. It does not mean
+`accepted`: sustained thermal, repeated lifecycle, reboot and final performance
+gates are reserved for the final cross-model optimization phase.
 
 ## Placement interpretation
 

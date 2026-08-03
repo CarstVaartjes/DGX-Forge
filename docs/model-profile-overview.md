@@ -148,8 +148,8 @@ fingerprint and invalidates old acceptance evidence.
 - [Multi-runtime model profile design](superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md)
   — normative definitions, loader rules, placement, admission, and acceptance.
 - `config/workloads/` and `config/cluster-profiles/` — executable catalog;
-  currently contains both DeepSeek Model Definitions and the `agent-full-dual`
-  profile.
+  currently contains both DeepSeek Model Definitions and the cataloged
+  `agent-full-dual` and `agent-single` profiles.
 - `inventory/reports/model-definitions.json` — current maturity fingerprints;
   today it records both DeepSeek definitions as verified.
 - `inventory/reports/accepted-cluster-profiles.json` — accepted exact-profile
