@@ -7,8 +7,9 @@ the source for exact commands, safety checks, rollback procedures, and expected
 output.
 
 The controller/profile framework and live node-health path are implemented.
-No model runtime has been installed or accepted yet; that work begins after
-the host, fabric, and controller baseline described here.
+The opening sections record the pre-runtime baseline; later sections record the
+installed Mia and DS4 runtimes. No Model Definition or Cluster Profile is
+accepted yet.
 
 ## Final baseline
 
@@ -226,6 +227,34 @@ the user chose to reserve performance fine-tuning for the final cross-model
 optimization phase. Exact evidence and deferred gates are in
 [`inventory/reports/deepseek-mia-operational.json`](../inventory/reports/deepseek-mia-operational.json).
 
+### 12. Verify the DS4 single-Spark DeepSeek runtime
+
+On 2026-08-03, Spark 1 received immutable DS4 release
+`ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2`.
+It pins Entrpi DS4 commit `4ad370b4a338efe9723a386673c0e04f6e214108`,
+the Q2-imatrix base plus DSpark drafter checkpoint pair at revision
+`1cd7b564460821938add0475a60b942c409295e0`, and the ARM64 image
+`ghcr.io/carstvaartjes/spark-ds4@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615`.
+Both GGUFs were rehashed inside a read-only, network-disabled container before
+the live runtime was started.
+
+The 32,768-token loopback API served the stable model ID `deepseek`. All 12
+single-node quality gates passed: English, script, repetition, XML, streaming,
+reasoning off/low/high/max, structured tool calling, an 8,204-token prompt, and
+a second tool-result turn that reused 2,441 cached prefix tokens while computing
+only 15. Startup used 474 in-process derived artifacts without a full host copy;
+the measured cold start was 67 seconds, peak observed temperature was 50 C, and
+the live DSpark counters accepted 193 of 246 drafts (`0.7846`).
+
+The definition is `verified`, not `accepted`. Stable performance thresholds,
+the sustained thermal run, three-cycle lifecycle acceptance, reboot/no-autostart
+acceptance, and exact co-resident profile tests remain deferred. MXFP4 is also
+deferred; this evidence covers only the Q2-imatrix lane. The operational record
+is [`inventory/reports/deepseek-ds4-operational.json`](../inventory/reports/deepseek-ds4-operational.json).
+After recording it, DS4 was stopped with memory recovery and the default Mia
+worker and head were explicitly restored worker-first; both hardened health
+checks passed and `/v1/models` again advertised only `deepseek`.
+
 ## Lessons learned
 
 | Lesson | Operational rule retained in the repository |
@@ -258,10 +287,11 @@ The installation baseline is complete when all of the following remain true:
   available and no warnings or errors.
 
 The common controller/profile framework and live-health integration are now
-implemented. The Mia DeepSeek runtime is installed, healthy and quality-
-verified on both nodes, but deliberately remains `verified` rather than
+implemented. The Mia dual-Spark and DS4 single-Spark DeepSeek runtimes are
+installed and quality-verified, but deliberately remain `verified` rather than
 `accepted` until final performance, thermal, lifecycle and reboot gates run.
-The next model-runtime phase is the remaining model catalog, beginning with the
-single-Spark optimized lanes. Caddy, LiteLLM, the browser UI, and Tailscale remain
+Mia is the restored home runtime; no accepted profile may select DS4 yet. The
+next model-runtime phase is the remaining model catalog. Caddy, LiteLLM, the
+browser UI, and Tailscale remain
 deferred until the new external container host is available; none is required
 for initial local model testing.

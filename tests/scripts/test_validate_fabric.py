@@ -1,5 +1,6 @@
 """Regression tests for the offline parsers used by ``validate-fabric``."""
 
+import subprocess
 import sys
 import threading
 from importlib.machinery import SourceFileLoader
@@ -35,6 +36,33 @@ def test_inventory_uses_two_fabric_functions_per_host(validate_module):
 
     assert [function.name for function in head.rails] == ["function100", "function101"]
     assert [function.name for function in worker.rails] == ["function100", "function101"]
+
+
+def test_local_fabric_boundary_uses_explicit_ssh_override(
+    validate_module, monkeypatch
+):
+    monkeypatch.setenv("SPARK_SSH_BIN", "/opt/custom/ssh-wrapper")
+    rail = validate_module.Rail(
+        "function100",
+        "enp1s0f1np1",
+        "rocep1s0f1",
+        3,
+        "192.168.100.10",
+        "192.168.100.11",
+    )
+    head = validate_module.Host("spark1", "dgx-spark-1", {}, (rail, rail))
+    worker = validate_module.Host("spark2", "dgx-spark-2", {}, (rail, rail))
+    runner = validate_module.Runner(head, worker, [])
+    commands = []
+
+    def local(command, *, check=True, input_text=None):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    runner.local = local
+    runner.remote(head.ssh_alias, "true\n")
+
+    assert commands[0][0] == "/opt/custom/ssh-wrapper"
 
 
 def test_rejects_tcp_fallback(parse_nccl):

@@ -19,6 +19,16 @@ for the future NAS controller. It is a persisted snapshot and deliberately
 reports no live published endpoints. `nodes status --json` performs a fresh,
 read-only SSH probe of both Sparks; it is not persisted in controller state.
 
+Developer-machine SSH selection is cross-platform. macOS and native Linux use
+`ssh` and `scp` from `PATH`. WSL uses `ssh.exe` and `scp.exe` only when WSL is
+detected and those Windows OpenSSH commands are available; otherwise it falls
+back to the POSIX commands. `SPARK_SSH_BIN` and `SPARK_SCP_BIN` explicitly
+override those defaults, including for wrappers that integrate a credential
+agent. Runtime-release deployment reapplies the manifest-required POSIX modes
+after transfer and then performs its unchanged hash-and-mode final verification,
+because Windows SCP bridges can preserve bytes without preserving executable
+bits.
+
 ## Commands
 
 ```text
@@ -78,6 +88,10 @@ it never falls back to stale local measurements. The checked-in
 `agent-full-dual` profile resolves correctly but remains unactivatable while
 `deepseek-agent-dual` has `verified` maturity. Its direct Mia runtime is
 operational, but profile admission remains fail-closed until the definition is
+`accepted`. The single-Spark `deepseek-agent-single` DS4 definition is also
+operational and `verified`, but has no accepted profile path: `sparkctl` must
+continue to reject it until performance, thermal, lifecycle, reboot, and exact
+co-residency evidence advances the definition and a complete profile to
 `accepted`.
 
 ## Durable preparation
@@ -91,16 +105,18 @@ uv run --no-project --with jsonschema -- \
 ```
 
 The adapter owns the durable node-local preparation job. For each workload, the
-controller submits Spark 2 with role `worker` and Spark 1 with role `head`
-concurrently, using the declared 86,400-second deadline independently for each
-call. It reports every workload/node result, role, timeout, return code, and
-bounded diagnostic independently, in the definition's deterministic
-`start_order` even when the calls finish in a different order. A timeout or
-failure on one Spark does not prevent the other Spark from starting or being
-collected.
+controller submits exactly the nodes declared by that definition, using the
+operation-specific deadline independently for each call. The dual-Spark Mia
+definition submits Spark 2 as `worker` and Spark 1 as `head` concurrently; the
+single-Spark DS4 definition submits only Spark 1 and has no role suffix. Results
+report every declared node's role (when applicable), timeout, return code, and
+bounded diagnostic independently in deterministic definition order, even when
+calls finish in a different order. A timeout or failure on one node does not
+prevent another declared node from being collected.
 
-Worker-first and head-first ordering applies to runtime startup and shutdown,
-not artifact preparation. Both Sparks must download and prepare in parallel.
+Worker-first and head-first ordering applies to distributed runtime startup and
+shutdown, not artifact preparation. The Mia definition prepares both Sparks in
+parallel; the DS4 definition prepares Spark 1 only.
 
 A client-side timeout returns status `in-progress`, `resumable: true`, and exit
 code `8`. It does not issue `stop`, kill the remote job, write controller

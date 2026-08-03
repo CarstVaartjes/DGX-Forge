@@ -24,7 +24,7 @@ WORKLOAD = ROOT / "config/workloads/deepseek-agent-single.toml"
 
 IMAGE = (
     "ghcr.io/carstvaartjes/spark-ds4"
-    "@sha256:61f15782e9f771591b1fda321be2ae39f9388b8fd57e03c76dda8e207d6e7ac9"
+    "@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615"
 )
 CHECKPOINT_MANIFEST_SHA256 = (
     "1f6f88d7f968e51e76a118af83f0f7cae7f5df5b915a6cf30db5265228f70c99"
@@ -92,6 +92,28 @@ static void emit_models(ds4_engine *engine) {
 """ + "\n" * 12726 + """\\
 #if 0
 static void v053_model_detail_route(http_request hr, server *s) {
+    if (!strcmp(hr.method, \"OPTIONS\")) {
+        http_response(fd, s->enable_cors, 204, NULL, \"\");
+        http_request_free(&hr);
+        goto done;
+    }
+
+    if (!strcmp(hr.method, \"GET\") && !strcmp(hr.path, \"/metrics\")) {
+        send_metrics(s, fd);
+        http_request_free(&hr);
+        goto done;
+    }
+    if (!strcmp(hr.method, \"GET\") && !strcmp(hr.path, \"/v1/stats\")) {
+        send_stats(s, fd, hr.accept_json);
+        http_request_free(&hr);
+        goto done;
+    }
+
+    if (!strcmp(hr.method, \"GET\") && !strcmp(hr.path, \"/v1/models\")) {
+        send_models(s, fd);
+        http_request_free(&hr);
+        goto done;
+    }
     const char *model_path_prefix = \"/v1/models/\";
     const size_t model_path_prefix_len = strlen(model_path_prefix);
     if (!strcmp(hr.method, \"GET\") &&
@@ -192,7 +214,7 @@ def test_runtime_recipe_uses_the_pinned_cuda_sources_and_safe_runtime_contract()
     assert "network_mode: host" in compose
     assert "read_only: true" in compose
     assert "ports:" not in compose
-    assert "DS4_IMAGE=ghcr.io/carstvaartjes/spark-ds4:ds4-v0.5.3-q2-0731" in runtime_env
+    assert "DS4_IMAGE=ghcr.io/carstvaartjes/spark-ds4:ds4-v0.5.3-q2-0731-health" in runtime_env
 
 
 def test_compose_renders_a_loopback_only_nonrestarting_service() -> None:
@@ -209,12 +231,34 @@ def test_compose_renders_a_loopback_only_nonrestarting_service() -> None:
         check=True,
         capture_output=True,
         text=True,
+        env={**os.environ, "DS4_MODELS_GID": str(os.getgid())},
     )
 
     assert 'restart: "no"' in completed.stdout
     assert "network_mode: host" in completed.stdout
     assert "published:" not in completed.stdout
     assert "127.0.0.1" in completed.stdout
+
+
+def test_compose_adds_the_host_model_group_for_nonroot_mount_access() -> None:
+    completed = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(COMPOSE),
+            "--env-file",
+            str(RUNTIME_ENV),
+            "config",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "DS4_MODELS_GID": "4321"},
+    )
+
+    assert "group_add:" in completed.stdout
+    assert '- "4321"' in completed.stdout
 
 
 def test_served_model_patch_behaves_as_a_single_runtime_identity(tmp_path: Path) -> None:
@@ -235,6 +279,16 @@ def test_served_model_patch_behaves_as_a_single_runtime_identity(tmp_path: Path)
         assert invalid.returncode == 2
         assert invalid.stdout == ""
         assert "DS4_SERVED_MODEL_NAME must be non-empty and contain no control characters" in invalid.stderr
+
+
+def test_served_model_patch_adds_a_deterministic_health_route(tmp_path: Path) -> None:
+    patched = _apply_served_name_patch(tmp_path).read_text(encoding="utf-8")
+
+    assert '!strcmp(hr.method, "GET") && !strcmp(hr.path, "/health")' in patched
+    assert (
+        'http_response(fd, s->enable_cors, 200, "application/json", '
+        '"{\\"status\\":\\"ok\\"}\\n")'
+    ) in patched
 
 
 def test_single_adapter_is_pinned_to_spark1_and_exposes_only_controller_operations(
@@ -282,6 +336,7 @@ def test_single_adapter_contract_pins_resumable_parallel_streamed_preparation() 
     assert "DS4_MODEL_ANON_HUGE" in source
     assert "--pull never" in source
     assert "restart" not in source
+    assert 'DS4_MODELS_GID=$(stat -c %g "$models_root")' in source
 
 
 def test_single_adapter_covers_exact_openai_identity_and_lifecycle_evidence() -> None:
@@ -311,6 +366,7 @@ def test_single_adapter_covers_exact_openai_identity_and_lifecycle_evidence() ->
         "1073741824",
     ):
         assert contract in source
+    assert '"chat_template_kwargs"' not in source
 
 
 def test_single_workload_values_match_the_adapter_and_checkpoint_contract() -> None:

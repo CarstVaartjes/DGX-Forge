@@ -62,6 +62,15 @@ def test_backend_never_uses_shell_and_pins_strict_ssh_options() -> None:
     assert result.stdout == b"ok\n"
 
 
+def test_backend_uses_explicit_developer_transport_override(monkeypatch) -> None:
+    monkeypatch.setenv("SPARK_SSH_BIN", "/opt/custom/ssh-wrapper")
+    fake_exec = FakeExec()
+
+    SshBackend(fake_exec).run("spark1", ("true",), 10)
+
+    assert fake_exec.argv[0] == "/opt/custom/ssh-wrapper"
+
+
 def test_run_script_delivers_fixed_bytes_on_stdin() -> None:
     fake_exec = FakeExec()
     script = b"printf '{}\\n'\n"

@@ -34,6 +34,16 @@ index 0f4834a..d0d9d5a 100644
 -            !strcmp(id, "deepseek-v4-pro"));
 +static bool server_model_alias_known(ds4_engine *engine, const char *id) {
 +    return id && !strcmp(id, server_model_id_from_engine(engine));
+@@ -13664,3 +13687,9 @@
++    if (!strcmp(hr.method, "GET") && !strcmp(hr.path, "/health")) {
++        http_response(fd, s->enable_cors, 200, "application/json", "{\"status\":\"ok\"}\n");
++        http_request_free(&hr);
++        goto done;
++    }
++
+     if (!strcmp(hr.method, "GET") && !strcmp(hr.path, "/metrics")) {
+         send_metrics(s, fd);
+         http_request_free(&hr);
 @@ -13684 +13707 @@
 -        server_model_alias_known(hr.path + model_path_prefix_len))
 +        server_model_alias_known(s->engine, hr.path + model_path_prefix_len))

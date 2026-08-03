@@ -319,7 +319,7 @@ must still run in CI and cannot be skipped.
 Create an SSH Docker context for `dgx-spark-1`, create a Buildx remote builder,
 authenticate the local client to GHCR without printing the token, then run an
 ARM64 build with `--push` and `--metadata-file`. Tag the immutable build
-`ghcr.io/carstvaartjes/spark-ds4:ds4-v0.5.3-q2-0731`; record the returned
+`ghcr.io/carstvaartjes/spark-ds4:ds4-v0.5.3-q2-0731-health`; record the returned
 manifest digest and verify its ARM64 platform and OCI labels with
 `docker buildx imagetools inspect`.
 
@@ -453,9 +453,12 @@ git push origin main
 
 - [ ] **Step 1: Deploy the immutable adapter only to Spark 1**
 
-Run `scripts/deploy-runtime-release deepseek-agent-single --dry-run`, confirm
-its only alias is `dgx-spark-1`, then apply. Run remote `verify-release` and
-record the installed release digest.
+Run `scripts/deploy-runtime-release deepseek-agent-single` in its default
+dry-run mode, confirm its only alias is `dgx-spark-1`, then apply. Verify the
+installed release digest directly from the content-addressed release directory;
+the Workload Definition uses that absolute immutable path and no mutable
+`current` symlink participates. Do not invoke the lifecycle `verify-release`
+operation while Mia still owns port 8888 and no DS4 lifecycle baseline exists.
 
 - [ ] **Step 2: Prepare the artifact cache while Mia remains live**
 
@@ -466,17 +469,20 @@ second inference runtime yet.
 
 - [ ] **Step 3: Verify offline readiness and record prepared evidence**
 
-Disable network access inside the runtime verification command, rehash both
-GGUFs, inspect the image and architecture, and run `verify`. Generate the
-canonical prepared report for Spark 1's current boot ID, advance maturity from
-`planned` to `prepared`, and verify the catalog.
+Disable network access inside the offline container check, rehash both GGUFs,
+and inspect the image and architecture while Mia remains live. Do not run the
+adapter's full exclusive-runtime `verify` yet: it requires Mia to have released
+port 8888 and the single-Spark memory budget. Generate the canonical prepared
+report for Spark 1's current boot ID, advance maturity from `planned` to
+`prepared`, and verify the catalog.
 
 - [ ] **Step 4: Stop Mia safely and start DS4**
 
 Stop the Mia head on Spark 1, then its worker on Spark 2. Require both nodes to
-recover within the Mia memory tolerance. Start DS4 on Spark 1, leaving Spark 2
-idle. If DS4 fails, stop it and leave the cluster stopped; do not automatically
-restart Mia.
+recover within the Mia memory tolerance. Run the DS4 adapter's full `verify`
+operation from the immutable release, then start DS4 on Spark 1, leaving Spark
+2 idle. If verification or DS4 fails, stop DS4 if necessary and leave the
+cluster stopped; do not automatically restart Mia.
 
 - [ ] **Step 5: Run the live DS4 quality and identity gates**
 
@@ -497,10 +503,11 @@ acceptance explicitly false.
 
 - [ ] **Step 7: Restore the default Mia home runtime explicitly**
 
-After all DS4 evidence is durably written, stop DS4 and require Spark 1 memory
-recovery. Start the Mia worker on Spark 2 first, then the Mia head on Spark 1,
-and rerun its hardened health and `deepseek` identity checks. This is an
-explicit successful-test restoration, not automatic rollback: any failure
+After all DS4 evidence is durably written, stop DS4 and invoke its unchanged
+`verify-release` operation to require container and port cleanup plus Spark 1
+memory recovery. Start the Mia worker on Spark 2 first, then the Mia head on
+Spark 1, and rerun its hardened health and `deepseek` identity checks. This is
+an explicit successful-test restoration, not automatic rollback: any failure
 leaves the cluster stopped for diagnosis.
 
 - [ ] **Step 8: Reconcile documentation**

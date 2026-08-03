@@ -130,6 +130,7 @@ def _filesystem_remote_environment(
     tmp_path: Path,
     *,
     race_destination: bool = False,
+    preserve_modes: bool = True,
 ) -> tuple[dict[str, str], Path]:
     fake_bin = tmp_path / "filesystem-fake-bin"
     fake_bin.mkdir()
@@ -179,7 +180,12 @@ from pathlib import Path
 source = Path(sys.argv[-2])
 alias, remote_path = sys.argv[-1].split(":", 1)
 destination = Path(os.environ["FAKE_REMOTE_ROOT"]) / alias / remote_path.lstrip("/")
-shutil.copy2(source, destination)
+if os.environ.get("FAKE_SCP_PRESERVE_MODES") == "1":
+    shutil.copy2(source, destination)
+else:
+    # Model the Windows OpenSSH bridge: bytes arrive intact, but POSIX modes
+    # are not preserved by scp -p across the filesystem boundary.
+    shutil.copyfile(source, destination)
 """,
         encoding="utf-8",
     )
@@ -226,6 +232,8 @@ os.execv(real, [real, *sys.argv[1:]])
     }
     if race_destination:
         environment["FAKE_RACE_DESTINATION"] = "1"
+    if preserve_modes:
+        environment["FAKE_SCP_PRESERVE_MODES"] = "1"
     return environment, remote_root
 
 
@@ -369,11 +377,11 @@ def test_apply_stages_verifies_and_atomically_installs_both_nodes(
     assert completed.returncode == 0, completed.stderr
     ssh_calls = _json_lines(ssh_log)
     scp_calls = _json_lines(scp_log)
-    assert len(ssh_calls) == 6
+    assert len(ssh_calls) == 10
     assert len(scp_calls) == 4
     for alias in ("dgx-spark-1", "dgx-spark-2"):
         calls = [call for call in ssh_calls if alias in call["argv"]]
-        assert len(calls) == 3
+        assert len(calls) == 5
         assert all("BatchMode=yes" in call["argv"] for call in calls)
         assert all("ForwardAgent=no" in call["argv"] for call in calls)
     finalizers = [
@@ -386,6 +394,11 @@ def test_apply_stages_verifies_and_atomically_installs_both_nodes(
         "rename_noreplace" in call["stdin"].lower() for call in finalizers
     )
     assert all(digest in call["argv"][-1] for call in finalizers)
+    mode_calls = [
+        call for call in ssh_calls if "deploy-runtime-release: mode" in call["stdin"]
+    ]
+    assert len(mode_calls) == 4
+    assert all("chmod --" in call["stdin"] for call in mode_calls)
     remote_destinations = [call["argv"][-1] for call in scp_calls]
     assert any(destination.endswith("/bin/adapter") for destination in remote_destinations)
     assert any(
@@ -407,11 +420,35 @@ def test_apply_targets_only_the_workload_declared_node(tmp_path: Path) -> None:
     completed = _run(root, "--apply", "example", env=env)
 
     assert completed.returncode == 0, completed.stderr
-    assert len(_json_lines(ssh_log)) == 3
+    assert len(_json_lines(ssh_log)) == 5
     assert len(_json_lines(scp_log)) == 2
     assert all("dgx-spark-1" in call["argv"] for call in _json_lines(ssh_log))
     assert all(
         call["argv"][-1].startswith("dgx-spark-1:")
+        for call in _json_lines(scp_log)
+    )
+
+
+def test_windows_scp_receives_a_windows_local_source_path(tmp_path: Path) -> None:
+    root, _ = _release_root(tmp_path, nodes=("spark1",))
+    env, _, scp_log = _fake_remote_environment(tmp_path)
+    scp = Path(env["SPARK_SCP_BIN"])
+    windows_scp = scp.with_suffix(".exe")
+    scp.rename(windows_scp)
+    wslpath = scp.parent / "wslpath"
+    wslpath.write_text(
+        "#!/bin/sh\nprintf 'WINDOWS_PATH:%s\\n' \"$2\"\n",
+        encoding="utf-8",
+    )
+    wslpath.chmod(0o755)
+    env["SPARK_SCP_BIN"] = str(windows_scp)
+    env["PATH"] = f"{scp.parent}:{env['PATH']}"
+
+    completed = _run(root, "--apply", "example", env=env)
+
+    assert completed.returncode == 0, completed.stderr
+    assert all(
+        call["argv"][-2].startswith("WINDOWS_PATH:")
         for call in _json_lines(scp_log)
     )
 
@@ -467,6 +504,26 @@ def test_filesystem_remote_executes_atomic_install_and_idempotent_probe(
         assert (installed / "bin/adapter").stat().st_mode & 0o777 == 0o755
         assert (installed / "config/common.env").stat().st_mode & 0o777 == 0o644
         assert not any(path.name.startswith(f".{digest}.tmp-") for path in installed.parent.iterdir())
+
+
+def test_filesystem_remote_repairs_modes_not_preserved_by_scp(tmp_path: Path) -> None:
+    root, digest = _release_root(tmp_path)
+    environment, remote_root = _filesystem_remote_environment(
+        tmp_path, preserve_modes=False
+    )
+
+    completed = _run(root, "--apply", "example", env=environment)
+
+    assert completed.returncode == 0, completed.stderr
+    for alias in ("dgx-spark-1", "dgx-spark-2"):
+        installed = (
+            remote_root
+            / alias
+            / "opt/spark/model-adapters/example/releases"
+            / digest
+        )
+        assert (installed / "bin/adapter").stat().st_mode & 0o777 == 0o755
+        assert (installed / "config/common.env").stat().st_mode & 0o777 == 0o644
 
 
 def test_filesystem_remote_rejects_changed_extra_and_symlinked_content(

@@ -2,7 +2,7 @@ FROM nvcr.io/nvidia/cuda:13.0.1-devel-ubuntu24.04@sha256:7d2f6a8c2071d911524f950
 
 ARG DS4_SOURCE_COMMIT=4ad370b4a338efe9723a386673c0e04f6e214108
 ARG DS4_SOURCE_ARCHIVE_SHA256=7db338d0a441fed36c5e4e7af44ff670e8bfe567e88d482f00ff6a3dc0e5dbe3
-ARG DS4_PATCH_SHA256=10aa66c2fdd9aa373a9e4ccd6aa6582a4cf30936b7468aca221ae93324ce8a9f
+ARG DS4_PATCH_SHA256=bbf9578ba17e9ddd5c080881ac1ce075590fcd47877fb8dc5cc32521b1e938e1
 
 RUN apt-get update \
     && apt-get install --no-install-recommends -y build-essential ca-certificates curl patch \
@@ -27,7 +27,7 @@ FROM nvcr.io/nvidia/cuda:13.0.1-runtime-ubuntu24.04@sha256:c3fde347d52d578c84fd6
 
 ARG DS4_SOURCE_COMMIT=4ad370b4a338efe9723a386673c0e04f6e214108
 ARG DS4_SOURCE_ARCHIVE_SHA256=7db338d0a441fed36c5e4e7af44ff670e8bfe567e88d482f00ff6a3dc0e5dbe3
-ARG DS4_PATCH_SHA256=10aa66c2fdd9aa373a9e4ccd6aa6582a4cf30936b7468aca221ae93324ce8a9f
+ARG DS4_PATCH_SHA256=bbf9578ba17e9ddd5c080881ac1ce075590fcd47877fb8dc5cc32521b1e938e1
 
 LABEL org.opencontainers.image.source="https://github.com/Entrpi/ds4.git" \
       org.opencontainers.image.revision="${DS4_SOURCE_COMMIT}" \

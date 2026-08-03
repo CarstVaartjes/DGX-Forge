@@ -1,5 +1,12 @@
 # Direct ConnectX-7 fabric
 
+The local `scripts/validate_fabric.py` SSH boundary uses the same
+developer-machine transport selection as `sparkctl`: `ssh` on macOS and native
+Linux, `ssh.exe` on WSL when available, and `SPARK_SSH_BIN` as an explicit
+override. This applies only to local-to-Spark commands. The pinned
+Spark-1-to-Spark-2 fabric SSH command remains a nested remote command and is
+not replaced by the developer-machine selector.
+
 This runbook configures a two-DGX-Spark, directly cabled ConnectX-7 fabric.
 The selected path is the official Spark-side CLI/manual fallback from
 `dgx-spark-playbooks` commit `1fb66f059ee427c5a3678b3117ef73aab042b458`.

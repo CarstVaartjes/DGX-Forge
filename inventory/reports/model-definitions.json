@@ -33,14 +33,30 @@
     },
     {
       "id": "deepseek-agent-single",
-      "sha256": "5297c99a2132c96ac6e4e1e6b755e8a5081afb200abf52ce5da98b2c41b01d46",
-      "maturity": "planned",
+      "sha256": "66eaeb53aaf0c14c975c1375977cce849defc647f37e5bc2cd9b56461b359c07",
+      "maturity": "verified",
       "history": [
         {
           "state": "planned",
           "timestamp": "2026-08-03T07:22:15Z",
           "evidence_refs": [
             "docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"
+          ],
+          "rejection_reason": null
+        },
+        {
+          "state": "prepared",
+          "timestamp": "2026-08-03T09:32:43Z",
+          "evidence_refs": [
+            "inventory/reports/model-definitions/deepseek-agent-single-prepared.json"
+          ],
+          "rejection_reason": null
+        },
+        {
+          "state": "verified",
+          "timestamp": "2026-08-03T09:42:56Z",
+          "evidence_refs": [
+            "inventory/reports/model-definitions/deepseek-agent-single-verified.json"
           ],
           "rejection_reason": null
         }

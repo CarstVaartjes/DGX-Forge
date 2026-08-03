@@ -1,0 +1,35 @@
+{
+  "stage": "verified",
+  "definition_id": "deepseek-agent-single",
+  "definition_sha256": "66eaeb53aaf0c14c975c1375977cce849defc647f37e5bc2cd9b56461b359c07",
+  "runtime_manifest_sha256": "ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2",
+  "source": {
+    "repository": "https://github.com/Entrpi/ds4",
+    "commit": "4ad370b4a338efe9723a386673c0e04f6e214108"
+  },
+  "checkpoint": {
+    "repository": "antirez/deepseek-v4-gguf",
+    "revision": "1cd7b564460821938add0475a60b942c409295e0",
+    "manifest_sha256": "1f6f88d7f968e51e76a118af83f0f7cae7f5df5b915a6cf30db5265228f70c99"
+  },
+  "image": {
+    "reference": "ghcr.io/carstvaartjes/spark-ds4@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615"
+  },
+  "recorded_at": "2026-08-03T09:42:56Z",
+  "nodes": [
+    {
+      "node": "spark1",
+      "boot_id": "276acc0c-2dc5-424d-9499-92dcd8452bcb"
+    }
+  ],
+  "predecessor": "inventory/reports/model-definitions/deepseek-agent-single-prepared.json",
+  "gates": {
+    "offline": true,
+    "release": true,
+    "image": true,
+    "architecture": true,
+    "manifest": true,
+    "mmap": true,
+    "api_identity": true
+  }
+}
