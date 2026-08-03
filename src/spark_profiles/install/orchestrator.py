@@ -156,6 +156,9 @@ class NodeInstaller:
     def start(self, request: InstallationRequest) -> InstallationJournal:
         return self._store.create(request)
 
+    def status(self, node_id: NodeId) -> InstallationJournal:
+        return self._store.load(node_id)
+
     def retry(self, node_id: NodeId) -> InstallationJournal:
         journal, revision = self._store.load_versioned(node_id)
         retried = journal.retry(at=self._clock())
