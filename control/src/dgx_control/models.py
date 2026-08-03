@@ -109,6 +109,43 @@ class AgentCertificate(Base):
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class AgentEnrollmentGrant(Base):
+    __tablename__ = "agent_enrollment_grants"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    node_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    token_digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentEnrollment(Base):
+    __tablename__ = "agent_enrollments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    grant_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_enrollment_grants.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    node_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    csr_public_key_pem: Mapped[str] = mapped_column(Text, nullable=False)
+    csr_public_key_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    host_key_fingerprint: Mapped[str] = mapped_column(String(512), nullable=False)
+    hardware_fingerprint: Mapped[str] = mapped_column(String(512), nullable=False)
+    agent_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+    boot_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    decision_actor: Mapped[str | None] = mapped_column(String(200))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+    certificate_pem: Mapped[str | None] = mapped_column(Text)
+    chain_pem: Mapped[str | None] = mapped_column(Text)
+    certificate_serial: Mapped[str | None] = mapped_column(String(128), unique=True)
+    certificate_fingerprint: Mapped[str | None] = mapped_column(String(128), unique=True)
+    certificate_not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    certificate_not_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class AgentOperation(Base):
     __tablename__ = "agent_operations"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))

@@ -97,3 +97,28 @@ def test_retry_disposition_migration_is_reversible(tmp_path: Path) -> None:
     downgrade_to("0002_agent_operations", database)
     downgraded = {column["name"] for column in inspect(create_engine(database)).get_columns("agent_operations")}
     assert downgraded == before
+
+
+def test_enrollment_migration_is_reversible_and_preserves_model_parity(tmp_path: Path) -> None:
+    database = f"sqlite:///{tmp_path / 'control.sqlite'}"
+    enrollment_tables = {"agent_enrollment_grants", "agent_enrollments"}
+
+    upgrade_to("0003_retry_disposition", database)
+    before = tables(database)
+    assert not (enrollment_tables & before)
+
+    upgrade_to("0004_agent_enrollment", database)
+    assert enrollment_tables <= tables(database)
+    grants = {column["name"] for column in inspect(create_engine(database)).get_columns("agent_enrollment_grants")}
+    assert grants == {"id", "node_id", "token_digest", "created_by", "created_at", "expires_at", "consumed_at"}
+    assert "token" not in grants
+
+    downgrade_to("0003_retry_disposition", database)
+    assert tables(database) == before
+
+    upgrade_to("head", database)
+    from dgx_control.models import Base
+
+    engine = create_engine(database)
+    with engine.connect() as connection:
+        assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
