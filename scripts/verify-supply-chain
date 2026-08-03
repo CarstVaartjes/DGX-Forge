@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 import re
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -214,9 +215,32 @@ def image_errors(root: Path) -> list[str]:
     if (
         "COPY control/pyproject.toml ./" not in dockerfile
         or f"COPY {PROTOCOL_WHEEL} /wheels/" not in dockerfile
+        or not docker_installs_protocol_wheel(dockerfile)
     ):
         errors.append("control image does not install the standalone protocol wheel from root context")
     return errors
+
+
+def docker_installs_protocol_wheel(dockerfile: str) -> bool:
+    """Require the copied protocol wheel in the control pip-install RUN command."""
+    logical_lines = re.sub(r"\\\r?\n\s*", " ", dockerfile).splitlines()
+    wheel = f"/wheels/{Path(PROTOCOL_WHEEL).name}"
+    for line in logical_lines:
+        stripped = line.strip()
+        if not stripped.startswith("RUN "):
+            continue
+        tokens = shlex.split(stripped.removeprefix("RUN "))
+        try:
+            pip_index = next(
+                index for index in range(len(tokens) - 3)
+                if tokens[index:index + 4] == ["python", "-m", "pip", "install"]
+            )
+        except StopIteration:
+            continue
+        installed = tokens[pip_index + 4:]
+        if wheel in installed and "." in installed:
+            return True
+    return False
 
 
 def verify(root: Path, generate: bool) -> tuple[list[str], dict[str, object]]:

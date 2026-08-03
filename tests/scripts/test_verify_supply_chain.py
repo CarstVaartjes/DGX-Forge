@@ -128,3 +128,15 @@ def test_verifier_rejects_a_protocol_lock_hash_that_does_not_match_the_wheel(tmp
 
     assert result.returncode != 0
     assert "wheel" in result.stderr
+
+
+def test_verifier_rejects_a_dockerfile_that_copies_but_does_not_install_the_protocol_wheel(tmp_path: Path) -> None:
+    repository = _copy(tmp_path)
+    dockerfile = repository / "control/Dockerfile"
+    wheel = "/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
+    dockerfile.write_text(dockerfile.read_text().replace(f"    {wheel} .", "    ."))
+
+    result = subprocess.run([SCRIPT, "--root", repository, "--generate"], capture_output=True, text=True)
+
+    assert result.returncode != 0
+    assert "install" in result.stderr

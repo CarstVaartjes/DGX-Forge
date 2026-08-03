@@ -190,6 +190,9 @@ def test_release_artifacts_install_the_exact_protocol_wheel() -> None:
         "**/__pycache__/**", "**/*.py[cod]", "**/.env", "**/.env.*", "**/*.pem",
         "**/*.key", "**/*.p12", "**/*.pfx", "**/.pytest_cache/**", "**/.coverage*",
         "**/coverage/**", "**/htmlcov/**", "**/build/**", "**/dist/**",
+        "**/.npmrc", "**/.netrc", "**/.pypirc", "**/.git-credentials", "**/.ssh/**",
+        "**/credentials.json", "**/credentials.yaml", "**/credentials.yml", "**/credentials.toml",
+        "**/secrets.json", "**/secrets.yaml", "**/secrets.yml", "**/secrets.toml",
     } <= set(lines[last_include + 1:])
     assert all(not line.startswith("!") for line in lines[last_include + 1:])
 
@@ -245,3 +248,38 @@ def test_root_context_image_installs_the_verified_protocol_wheel() -> None:
     assert installed["version"] == "1.0.0"
     assert installed["direct_url"]["url"] == "file:///wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
     assert installed["direct_url"]["archive_info"]["hash"] == f"sha256={PROTOCOL_WHEEL_HASH}"
+
+
+@pytest.mark.parametrize("relative_path", [
+    "control/src/.npmrc",
+    "control/src/.netrc",
+    "control/src/credentials.json",
+    "control/src/secrets.yaml",
+    "control/src/.ssh/id_ed25519",
+    "control/web/.pypirc",
+    "control/web/.git-credentials",
+    "control/web/secrets.toml",
+])
+def test_root_context_cannot_copy_reincluded_credential_artifacts(relative_path: str) -> None:
+    if shutil.which("docker") is None:
+        pytest.skip("Docker CLI is unavailable")
+    if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
+        pytest.skip("Docker daemon is unavailable")
+    artifact = ROOT / relative_path
+    artifact.parent.mkdir(parents=True, exist_ok=True)
+    artifact.write_text("credential=test\n")
+    try:
+        result = subprocess.run(
+            ["docker", "build", "--file", "-", "."],
+            cwd=ROOT,
+            input=f"FROM scratch\nCOPY {relative_path} /forbidden\n",
+            capture_output=True,
+            text=True,
+        )
+    finally:
+        artifact.unlink()
+        while artifact.parent != ROOT and not any(artifact.parent.iterdir()):
+            artifact = artifact.parent
+            artifact.rmdir()
+
+    assert result.returncode != 0
