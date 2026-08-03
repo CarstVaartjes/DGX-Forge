@@ -19,7 +19,11 @@ revision = "0c351dd01ed87e9c1b53cbc748cba10e6187ff3b"
 manifest = "/srv/models/manifests/qwen3-vl-8b-single.json"
 
 [image]
-reference = "ghcr.io/dgx-forge/qwen/qwen3-vl-8b@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+reference = "nvcr.io/nvidia/cuda:13.0.1-devel-ubuntu24.04@sha256:7d2f6a8c2071d911524f95061a0db363e24d27aa51ec831fcccf9e76eb72bc92"
+
+[runtime_release]
+manifest = "adapters/creative/qwen3-vl-8b-single/runtime-manifest.json"
+sha256 = "e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9"
 
 [paths]
 cache = "/srv/models/snapshots/qwen3-vl-8b-single"
