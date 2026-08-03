@@ -28,6 +28,7 @@ def catalog_root(tmp_path: Path) -> Path:
         "adapters/deepseek/ds4",
         "adapters/creative/triposg",
         "adapters/creative/qwen3-vl-8b-single",
+        "adapters/creative/nemotron-nano-omni-single",
         "locks/model-definitions.toml",
         "inventory/reports/model-definitions.json",
         "inventory/reports/accepted-cluster-profiles.json",

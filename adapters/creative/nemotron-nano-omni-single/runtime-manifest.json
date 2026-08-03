@@ -1,0 +1,8 @@
+{
+  "files": {
+    "adapters/creative/nemotron-nano-omni-single/__init__.py": "add3c9d299c802422d67d43222bd3e3dba72195b396fd1e0863e9b174148b232",
+    "adapters/creative/nemotron-nano-omni-single/runtime.py": "e5eeed1f2f986494e064bd46a7e3bacbdbea13843cd2859806360ba992793036",
+    "adapters/creative/nemotron-nano-omni-single/server.py": "33df816dae98129f035947f341164ed99b13b16f59752fc9115d368751702847",
+    "adapters/creative/nemotron-nano-omni-single/bin/nemotron-nano-omni-single": "215b1d5e60e15d92a15757528eb1b8be42e392f3c90f56e595a4e730dcc07762"
+  }
+}

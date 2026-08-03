@@ -1,18 +1,32 @@
 from pathlib import Path
+import importlib.util
 import subprocess
 import sys
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).parents[2] / "adapters/creative/qwen3-vl-8b-single"))
+ADAPTER_ROOT = Path(__file__).parents[2] / "adapters/creative/qwen3-vl-8b-single"
 
-from runtime import (  # noqa: E402
-    InferRequestError,
-    build_output_path,
-    health_payload,
-    parse_infer_request,
-)
-from server import build_chat_payload, parse_model_response  # noqa: E402
+
+def _load_adapter_module(name: str, filename: str):
+    spec = importlib.util.spec_from_file_location(name, ADAPTER_ROOT / filename)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+runtime = _load_adapter_module("qwen3_vl_runtime_contract_runtime", "runtime.py")
+sys.modules["runtime"] = runtime
+server = _load_adapter_module("qwen3_vl_runtime_contract_server", "server.py")
+sys.modules.pop("runtime", None)
+InferRequestError = runtime.InferRequestError
+build_output_path = runtime.build_output_path
+health_payload = runtime.health_payload
+parse_infer_request = runtime.parse_infer_request
+build_chat_payload = server.build_chat_payload
+parse_model_response = server.parse_model_response
 
 
 def test_infer_request_requires_image_and_prompt() -> None:
