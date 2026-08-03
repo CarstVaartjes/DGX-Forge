@@ -9,6 +9,7 @@ import jsonschema
 import pytest
 
 from spark_profiles.backend import CommandResult
+from spark_profiles.fleet import Fleet, ManagementEndpoint, NodeId, NodeRecord
 from spark_profiles.health import LocalHealthError, NodeHealthService
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -108,6 +109,59 @@ def service(*, barrier=None) -> tuple[NodeHealthService, FakeBackend, dict[str, 
         cpu_sample_milliseconds=250,
     )
     return result, backend, raws
+
+
+@pytest.mark.parametrize("count", [1, 3, 16])
+def test_health_collects_configured_nodes_only(count: int) -> None:
+    records = {}
+    raws = {}
+    endpoints = []
+    baseline = {"rdma_counters_after": {}}
+    for index in range(count):
+        node_id = NodeId.parse(f"spk_{index:032x}")
+        hostname = f"node-{index}.local"
+        records[node_id] = NodeRecord(
+            node_id, f"node-{index}", hostname,
+            ManagementEndpoint(hostname, "operator"), {}, "ready",
+        )
+        raw = raw_node(hostname)
+        if count == 1:
+            raw["fabric"]["functions"] = []
+        else:
+            interface, hca = f"eth{index}", f"roce{index}"
+            function = raw["fabric"]["functions"][0]
+            function["interface"] = function["rdma_interface"] = interface
+            function["hca"] = hca
+            raw["fabric"]["functions"] = [function]
+            endpoints.append({
+                "node_id": node_id.value, "interface": interface, "hca": hca,
+                "gid_index": 3, "mtu": 1500, "link_rate_mbps": 200000,
+            })
+            for counter in COUNTERS:
+                baseline["rdma_counters_after"][f"{node_id.value}/{hca}/{counter}"] = 0
+        raws[node_id.value] = raw
+    topology = {
+        "schema_version": 1,
+        "nodes": [node_id.value for node_id in records],
+        "links": [] if count == 1 else [{
+            "id": "accepted-fabric", "kind": "switched-rdma",
+            "accepted": True, "endpoints": endpoints,
+        }],
+    }
+    backend = FakeBackend(raws)
+    subject = NodeHealthService(
+        backend=backend, collector=b"collector", raw_schema=RAW_SCHEMA,
+        result_schema=json.loads((ROOT / "schemas/node-health.schema.json").read_text()),
+        inventory={}, rdma_baseline=baseline, timeout_seconds=10,
+        cpu_sample_milliseconds=250, fleet=Fleet(2, records), topology=topology,
+        max_workers=4,
+    )
+
+    result = subject.collect()
+
+    assert set(result.nodes) == {node_id.value for node_id in records}
+    assert result.status == "healthy"
+    assert {call[0] for call in backend.calls} == set(result.nodes)
 
 
 def test_node_probes_overlap_and_results_are_canonical():
