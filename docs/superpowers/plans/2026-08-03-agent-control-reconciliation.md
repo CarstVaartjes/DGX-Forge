@@ -228,6 +228,9 @@ Expected: FAIL new assertions.
 Read operational tables through aggregate queries, normalize version to
 supported/old/new/incompatible, and keep errors only in redacted job logs.
 Update fleet response with last seen, certificate expiry, and compatibility.
+Host/GPU measurements are consumed from the standard node/DCGM exporter series
+remote-written by Alloy; do not add a second custom metrics collector to the
+agent protocol.
 
 - [ ] **Step 4: Run Phase 4 verification**
 

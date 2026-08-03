@@ -4,9 +4,9 @@
 
 **Goal:** Publish only healthy accepted model endpoints through Caddy and LiteLLM and provide actionable metrics, dashboards, alerts, and bounded logs.
 
-**Architecture:** The reconciler renders desired route fragments from an eligible commit and healthy concrete placement. Caddy owns public TLS/auth/maintenance behavior; LiteLLM owns OpenAI-compatible aliases, quotas, and usage only. Prometheus and Grafana remain separate standard containers with provisioned, versioned configuration.
+**Architecture:** The reconciler renders desired route fragments from an eligible commit and healthy concrete placement. Caddy owns public TLS/auth/maintenance behavior; LiteLLM owns OpenAI-compatible aliases, keys, teams, quotas, usage, and its native gateway UI, but not model authority. Prometheus and Grafana remain separate standard containers with provisioned, versioned configuration. Each Spark runs loopback-only node/DCGM exporters and Grafana Alloy sends metrics outbound over mTLS.
 
-**Tech Stack:** Caddy 2, LiteLLM, Prometheus, Grafana, optional Alertmanager, OpenMetrics, pytest, Docker Compose integration.
+**Tech Stack:** Caddy 2, LiteLLM, Prometheus, Grafana, Grafana Alloy, Prometheus node exporter, NVIDIA DCGM exporter, optional Alertmanager, OpenMetrics, pytest, Docker Compose integration.
 
 ## Global Constraints
 
@@ -101,7 +101,11 @@ Expected: FAIL.
 
 - [ ] **Step 3: Pin LiteLLM and implement generated alias/quota configuration**
 
-Disable dynamic model administration, persist only required usage records, bind privately, require Caddy-origin authentication, validate config before reload, and keep the prior generation on failure.
+Disable dynamic model administration so Git remains authoritative, persist only
+required usage records, bind privately, require Caddy-origin authentication,
+validate config before reload, and keep the prior generation on failure. Expose
+LiteLLM's Caddy-protected native Admin UI for keys, teams, spend, logs, and
+gateway status; DGX-Forge web links to it and does not duplicate those pages.
 
 - [ ] **Step 4: Run tests and Compose validation**
 
@@ -121,11 +125,15 @@ git commit -m "feat: route accepted models through LiteLLM"
 - Create: `control/src/dgx_control/metrics.py`
 - Modify: `control/src/dgx_control/api.py`
 - Create: `control/tests/test_metrics.py`
+- Create: `deploy/agent-observability/alloy.alloy`
+- Create: `deploy/agent-observability/*.service`
+- Create: `tests/agent/test_observability_exporters.py`
 - Create: `deploy/compose/prometheus/prometheus.yml`
 - Modify: `deploy/compose/compose.yaml`
 
 **Interfaces:**
-- Private `/metrics` exports job counts/durations, reconciliation status, route health, node readiness/capacity, probe age, and API outcomes.
+- Private `/metrics` exports DGX-specific job/reconciliation/route/API state.
+- Each Spark's node exporter and DCGM exporter bind only to loopback; Alloy scrapes them and sends mTLS remote-write outbound through Caddy.
 
 - [ ] **Step 1: Write failing cardinality and secret-leak tests**
 
@@ -147,7 +155,14 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement bounded-label metrics and private Prometheus scrape**
 
-Use stable enum labels and node IDs, no job/request IDs as labels, histograms with explicit operational buckets, scrape auth on private network, retention/resource bounds, and no public Prometheus port.
+Use stable enum labels and node IDs, no job/request IDs as labels, histograms
+with explicit operational buckets, scrape auth on private network,
+retention/resource bounds, and no public Prometheus port. Do not reimplement
+host/GPU metric collection in the DGX agent: install pinned node exporter,
+NVIDIA DCGM exporter, and Alloy units; bind exporters to `127.0.0.1`; configure
+Alloy remote-write with the agent certificate/key and CA secret files; expose
+only the Caddy mTLS remote-write route. Relabel away hostnames, addresses,
+container IDs, and other unbounded labels before transmission.
 
 - [ ] **Step 4: Run tests and configuration validation**
 
@@ -157,7 +172,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit metrics**
 
 ```bash
-git add control/src/dgx_control/metrics.py control/src/dgx_control/api.py control/tests/test_metrics.py deploy/compose
+git add control/src/dgx_control/metrics.py control/src/dgx_control/api.py control/tests/test_metrics.py deploy/agent-observability tests/agent/test_observability_exporters.py deploy/compose
 git commit -m "feat: expose sanitized platform metrics"
 ```
 

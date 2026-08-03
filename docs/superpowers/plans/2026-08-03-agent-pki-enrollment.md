@@ -4,9 +4,9 @@
 
 **Goal:** Enroll immutable Spark identities with single-use grants and issue, rotate, and revoke short-lived mTLS certificates through a replaceable CA provider.
 
-**Architecture:** A provider interface isolates PKI implementation. The built-in provider signs from a protected intermediate while the root stays offline; Caddy authenticates established agents and forwards a stripped, verified identity to private API routes.
+**Architecture:** A provider interface isolates PKI implementation. The built-in provider signs from a protected intermediate for zero-dependency bootstrap/development, while a separate Smallstep `step-ca` container is the recommended production provider; both keep the root offline. Caddy authenticates established agents and forwards a stripped, verified identity to private API routes.
 
-**Tech Stack:** Python 3.12, cryptography, FastAPI, PostgreSQL, Caddy 2, Docker Compose, pytest
+**Tech Stack:** Python 3.12, cryptography, FastAPI, PostgreSQL, Smallstep `step-ca`, Caddy 2, Docker Compose, pytest
 
 ## Global Constraints
 
@@ -175,6 +175,7 @@ git commit -m "feat: expose authenticated Spark agent API"
 - Modify: `deploy/compose/Caddyfile`
 - Modify: `deploy/compose/compose.yaml`
 - Modify: `deploy/compose/.env.example`
+- Create: `deploy/compose/step-ca/ca.json`
 - Modify: `control/src/dgx_control/settings.py`
 - Test: `deploy/compose/tests/test_agent_ingress.py`
 - Test: `control/tests/test_settings.py`
@@ -182,6 +183,7 @@ git commit -m "feat: expose authenticated Spark agent API"
 **Interfaces:**
 - Agent ingress uses a separately configured listener/hostname and client CA.
 - Caddy strips all incoming `X-DGX-Agent-*` headers and supplies verified identity metadata to the API.
+- `step-ca` is a separate private-network service with no published port; built-in CA mode remains an explicit deployment profile.
 
 - [ ] **Step 1: Write failing rendered-boundary tests**
 
@@ -198,7 +200,11 @@ Expected: FAIL because no mTLS agent route exists.
 - [ ] **Step 3: Implement segmented listener and settings**
 
 Add secret files `agent-client-ca`, `agent-intermediate-certificate`, and
-`agent-intermediate-key`; add `DGX_AGENT_*_FILE` settings. Configure Caddy
+provider credentials; add `DGX_AGENT_*_FILE` and `DGX_AGENT_CA_PROVIDER`
+settings. Configure the production Compose profile with a pinned `step-ca`
+image, persistent CA data, health check, no public port, and a separately
+initialized offline root/intermediate. The development profile may mount the
+built-in intermediate key. Configure Caddy
 client authentication and identity forwarding using Caddy placeholders proven
 by `caddy validate`. Keep enrollment server-authenticated and rate-limited;
 keep claim/result mTLS-only.
@@ -218,16 +224,20 @@ git commit -m "feat: authenticate outbound agents through Caddy"
 ### Task 5: PKI recovery and verification
 
 **Files:**
+- Create: `control/src/dgx_control/step_ca.py`
+- Test: `control/tests/test_step_ca.py`
 - Create: `docs/runbooks/agent-pki.md`
 - Modify: `docs/security/threat-model.md`
 - Test: `tests/runbooks/test_agent_pki.py`
 
 **Interfaces:**
-- Documents offline root creation, intermediate rotation, certificate revocation, expiry recovery, and Smallstep provider boundary.
+- Produces `StepCertificateAuthority` behind the Task 1 provider contract and documents offline root creation, intermediate rotation, certificate revocation, expiry recovery, provider selection, and migration.
 
 - [ ] **Step 1: Write failing runbook behavior checks**
 
-Parse commands from disposable fixtures and assert no command copies the root
+Use a fake `step-ca` HTTP boundary to assert node/SAN/lifetime policy, bounded
+responses, renewal/revocation, TLS verification, and secret redaction. Parse
+commands from disposable fixtures and assert no command copies the root
 private key into Compose, renewal uses the existing mTLS identity, and recovery
 requires an explicit new enrollment grant.
 
@@ -238,19 +248,22 @@ Expected: FAIL because `agent-pki.md` is absent.
 
 - [ ] **Step 3: Write operational PKI and recovery procedure**
 
-Include restrictive file modes, offline root storage, intermediate lifetime
+Implement the provider with fixed Smallstep sign/renew/revoke requests and a
+narrowly scoped provisioner credential loaded from a secret file; never accept
+a caller-selected CA URL or certificate subject. Include restrictive file
+modes, offline root storage, intermediate lifetime
 and rotation overlap, revocation/retirement, clock-skew checks, backup scope,
-and provider migration. Explicitly state that certificate loss does not permit
+and built-in-to-Smallstep provider migration. Explicitly state that certificate loss does not permit
 copying another node's identity.
 
 - [ ] **Step 4: Run Phase 2 verification**
 
-Run: `uv run --project control pytest control/tests/test_pki.py control/tests/test_enrollment.py control/tests/test_agent_api.py control/tests/security/test_agent_identity.py -q && uv run pytest deploy/compose/tests/test_agent_ingress.py tests/runbooks/test_agent_pki.py -q && git diff --check`
+Run: `uv run --project control pytest control/tests/test_pki.py control/tests/test_step_ca.py control/tests/test_enrollment.py control/tests/test_agent_api.py control/tests/security/test_agent_identity.py -q && uv run pytest deploy/compose/tests/test_agent_ingress.py tests/runbooks/test_agent_pki.py -q && git diff --check`
 Expected: all pass.
 
 - [ ] **Step 5: Commit recovery documentation**
 
 ```bash
-git add docs/runbooks/agent-pki.md docs/security/threat-model.md tests/runbooks/test_agent_pki.py
+git add control/src/dgx_control/step_ca.py control/tests/test_step_ca.py docs/runbooks/agent-pki.md docs/security/threat-model.md tests/runbooks/test_agent_pki.py
 git commit -m "docs: define Spark agent PKI recovery"
 ```

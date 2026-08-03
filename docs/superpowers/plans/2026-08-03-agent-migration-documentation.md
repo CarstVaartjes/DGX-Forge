@@ -24,6 +24,7 @@
 - Create: `src/spark_profiles/agent_migration.py`
 - Modify: `src/spark_profiles/install/orchestrator.py`
 - Modify: `src/spark_profiles/install/cli.py`
+- Create: `deploy/ansible/roles/dgx_agent/`
 - Test: `tests/spark_profiles/install/test_agent_migration.py`
 
 **Interfaces:**
@@ -44,6 +45,10 @@ Expected: FAIL importing migration planner/CLI command.
 
 - [ ] **Step 3: Implement journaled migration gates**
 
+Express agent user, directories, systemd units, pinned ORAS/Alloy/exporter
+packages, and local policy as versioned idempotent Ansible roles. Invoke them
+locally on the Spark through a pinned Ansible Runner bundle; bootstrap SSH only
+transfers/starts that bounded bundle and does not run repository-selected shell.
 Extend existing install journal without changing immutable node ID. Each step
 records canonical evidence and expected digest; approval is an external wait
 state. Only after an authenticated agent probe succeeds does the fleet record
@@ -57,7 +62,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit migration mode**
 
 ```bash
-git add src/spark_profiles/agent_migration.py src/spark_profiles/install/orchestrator.py src/spark_profiles/install/cli.py tests/spark_profiles/install/test_agent_migration.py
+git add src/spark_profiles/agent_migration.py src/spark_profiles/install/orchestrator.py src/spark_profiles/install/cli.py deploy/ansible/roles/dgx_agent tests/spark_profiles/install/test_agent_migration.py
 git commit -m "feat: migrate Sparks to outbound agents"
 ```
 

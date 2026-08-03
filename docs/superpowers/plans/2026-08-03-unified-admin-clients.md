@@ -4,9 +4,9 @@
 
 **Goal:** Route every routine CLI and web operation through the same control API, durable jobs, and outbound agents.
 
-**Architecture:** A typed control client owns API interaction, polling, and error normalization. CLI and React pages remain thin views over identical plan/job resources; bootstrap and recovery tools are explicitly separate.
+**Architecture:** FastAPI's committed OpenAPI document generates Python and TypeScript clients; thin wrappers own polling, request-ID reuse, and domain error normalization. CLI and React pages remain views over identical plan/job resources; bootstrap and recovery tools are explicitly separate. LiteLLM and Grafana retain their native gateway/observability administration surfaces.
 
-**Tech Stack:** Python 3.12, urllib, FastAPI OpenAPI, React 19, TypeScript, Vitest, Playwright, pytest
+**Tech Stack:** Python 3.12, FastAPI OpenAPI, `openapi-python-client`, React 19, TypeScript, `openapi-typescript`, `openapi-fetch`, Vitest, Playwright, pytest
 
 ## Global Constraints
 
@@ -23,6 +23,9 @@
 **Files:**
 - Modify: `control/src/dgx_control/api.py`
 - Create: `control/src/dgx_control/operation_api.py`
+- Create: `control/openapi.json`
+- Create: `scripts/generate-control-clients`
+- Create: `tests/control/test_openapi_clients.py`
 - Test: `control/tests/test_operation_api.py`
 
 **Interfaces:**
@@ -51,6 +54,8 @@ Use strict Pydantic models with `extra="forbid"`, full commit/digest patterns,
 RBAC, request IDs, CSRF for browser mutations, and audit events. Nodes status
 uses persisted recent agent observations and reports staleness; it does not
 trigger SSH. Endpoint resolution requires currently published route state.
+Export a deterministic OpenAPI document, generate both language clients with
+pinned generators, and make CI fail when regeneration changes tracked output.
 
 - [ ] **Step 4: Run API and security suites**
 
@@ -67,6 +72,7 @@ git commit -m "feat: expose agent-backed operation APIs"
 ### Task 2: Control client polling and typed failures
 
 **Files:**
+- Create: `src/spark_profiles/generated_control/`
 - Modify: `src/spark_profiles/control_client.py`
 - Test: `tests/spark_profiles/test_control_client.py`
 
@@ -87,7 +93,8 @@ Expected: FAIL with missing attributes.
 
 - [ ] **Step 3: Implement typed methods over existing request boundary**
 
-Keep bearer token from environment/secret file, HTTPS validation, response
+Wrap the generated Python client rather than hand-maintaining request/response
+models. Keep bearer token from environment/secret file, HTTPS validation, response
 limit, and no token logging. `wait_job` polls only GET, returns structured
 terminal result, and raises typed `JobFailed`, `JobWaitingForOperator`, or
 `ControlTimeout`.
@@ -152,8 +159,8 @@ git commit -m "refactor: route sparkctl through control API"
 ### Task 4: Agent enrollment and fleet pages
 
 **Files:**
+- Create: `control/web/src/api/generated.d.ts`
 - Modify: `control/web/src/api/client.ts`
-- Modify: `control/web/src/api/types.ts`
 - Modify: `control/web/src/pages/fleet.tsx`
 - Create: `control/web/src/pages/agents.tsx`
 - Create: `control/web/src/components/enrollment-review.tsx`
@@ -176,9 +183,13 @@ Expected: FAIL importing page.
 
 - [ ] **Step 3: Implement typed page and enrollment review**
 
-Use existing client/session/CSRF behavior. Render immutable node ID, host-key
+Use `openapi-typescript` plus `openapi-fetch`; do not maintain parallel manual
+API DTOs. Use existing session/CSRF behavior. Render immutable node ID, host-key
 and hardware fingerprints, agent digest, timestamps, compatibility, and audit
 status. Require administrator typed confirmation for rejection/revocation.
+Provide clearly labelled links to the Caddy-protected LiteLLM Admin UI for
+keys/teams/spend and Grafana for dashboards. Do not reproduce either UI and do
+not allow LiteLLM dynamic model records to override Git-backed definitions.
 
 - [ ] **Step 4: Run component tests and build**
 

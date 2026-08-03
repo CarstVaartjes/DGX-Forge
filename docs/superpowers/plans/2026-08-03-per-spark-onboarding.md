@@ -4,9 +4,9 @@
 
 **Goal:** Build a resumable, idempotent installation mode that safely onboards one newly added DGX Spark without source edits or predetermined names and addresses.
 
-**Architecture:** `sparkctl install node` drives a local journal and a sequence of typed steps. Remote scripts accept configuration over validated arguments/stdin, emit JSON evidence, and never contain cluster identity constants. Git proposal output is canonical and separate from live mutation.
+**Architecture:** `sparkctl install node` drives a local journal and a sequence of typed steps. Bootstrap SSH transfers and invokes a pinned Ansible Runner project locally on the one target; versioned roles apply idempotent host policy and emit JSON evidence without cluster identity constants. Git proposal output is canonical and separate from live mutation.
 
-**Tech Stack:** Python 3.12, argparse, dataclasses, OpenSSH transport interface, Bash, JSON, pytest, ShellCheck where available.
+**Tech Stack:** Python 3.12, argparse, dataclasses, OpenSSH transport interface, Ansible Runner and roles, Bash wrappers, JSON, pytest, ansible-lint/ShellCheck where available.
 
 ## Global Constraints
 
@@ -169,6 +169,8 @@ git commit -m "security: gate Spark onboarding on trusted identity"
 ### Task 4: Parameterize and version node policy installers
 
 **Files:**
+- Create: `deploy/ansible/project/`
+- Create: `deploy/ansible/roles/dgx_spark/`
 - Create: `nodes/bin/apply-node-policy`
 - Create: `nodes/policy/default.json`
 - Modify: `nodes/bin/install-ssh-hardening`
@@ -176,7 +178,7 @@ git commit -m "security: gate Spark onboarding on trusted identity"
 - Modify: `tests/runbooks/test_ssh_hardening.sh`
 
 **Interfaces:**
-- `apply-node-policy --policy FILE --check|--apply|--verify` emits JSON and a policy SHA-256.
+- `apply-node-policy --policy FILE --check|--apply|--verify` invokes a pinned local Ansible Runner project and emits JSON plus the role/policy SHA-256.
 - `install-ssh-hardening` accepts `--admin-user USER`, `--drop-in FILE`, and `--check|--apply|--verify|--rollback`; no compiled user name.
 
 - [ ] **Step 1: Write failing parameterization and idempotency tests**
@@ -203,17 +205,24 @@ Expected: FAIL on the current fixed `carst` constant and missing policy script.
 
 - [ ] **Step 3: Implement explicit policy inputs and transactions**
 
-Validate user names with the platform account database and a conservative syntax; stage SSH drop-ins; run `sshd -t`; require a recovery marker supplied by the orchestrator before reload; retain the previous managed file for rollback; parameterize early-OOM policy; and emit changed paths and digest without secrets. Reject unknown policy keys.
+Implement the policy as focused idempotent Ansible roles with check-mode and
+handlers. Validate user names with the platform account database and a
+conservative syntax; stage SSH drop-ins; run `sshd -t`; require a recovery
+marker supplied by the orchestrator before reload; retain the previous managed
+file for rollback; parameterize early-OOM policy; and emit changed paths and
+role/policy digests without secrets. Reject unknown policy keys. The wrapper
+uses fixed Runner inputs and cannot select a repository playbook or arbitrary
+module. Do not enable periodic `ansible-pull`.
 
 - [ ] **Step 4: Run node tests**
 
-Run: `uv run pytest tests/nodes/test_apply_node_policy.py -v && bash tests/runbooks/test_ssh_hardening.sh && bash -n nodes/bin/apply-node-policy nodes/bin/install-ssh-hardening`
+Run: `uv run pytest tests/nodes/test_apply_node_policy.py -v && ansible-lint deploy/ansible && bash tests/runbooks/test_ssh_hardening.sh && bash -n nodes/bin/apply-node-policy nodes/bin/install-ssh-hardening`
 Expected: PASS.
 
 - [ ] **Step 5: Commit installers**
 
 ```bash
-git add nodes/bin nodes/policy tests/nodes/test_apply_node_policy.py tests/runbooks/test_ssh_hardening.sh
+git add deploy/ansible nodes/bin nodes/policy tests/nodes/test_apply_node_policy.py tests/runbooks/test_ssh_hardening.sh
 git commit -m "feat: parameterize idempotent Spark node policy"
 ```
 

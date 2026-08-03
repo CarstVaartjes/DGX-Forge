@@ -4,7 +4,7 @@
 
 **Goal:** Let administrators inspect and maintain repository-backed nodes, models, profiles, and desired deployments through equivalent CLI and web workflows.
 
-**Architecture:** A repository service reads typed documents at an immutable base commit, creates canonical proposals in isolated Git workspaces, and enforces either pre-release commit mode or post-release PR mode. CLI and web call the same versioned API; the browser contains no independent Git or cluster logic.
+**Architecture:** A repository service reads typed documents at an immutable base commit, creates canonical proposals in isolated Git workspaces, and enforces either pre-release commit mode or post-release PR mode. CLI and web use clients generated from the same OpenAPI document; the browser contains no independent Git or cluster logic. LiteLLM and Grafana retain their existing gateway and dashboard administration surfaces.
 
 **Tech Stack:** Python 3.12, FastAPI, Git CLI with safe argv, GitHub connector/API abstraction, React + TypeScript + Vite, OpenAPI-generated client, pytest, Vitest, Playwright.
 
@@ -220,6 +220,7 @@ git commit -m "feat: administer repository state through API and CLI"
 **Interfaces:**
 - UI uses only `/api/v1`; no shell, Git, SSH, or direct database access.
 - Editors require base commit, typed fields, validation, diff preview, and explicit submit.
+- UI links to Caddy-protected LiteLLM administration for keys/teams/spend and Grafana for dashboards; it does not duplicate them or grant LiteLLM model authority.
 
 - [ ] **Step 1: Write failing component and browser workflow tests**
 
@@ -240,7 +241,13 @@ Expected: FAIL because `package.json` is absent.
 
 - [ ] **Step 3: Implement accessible routed application and generated API client**
 
-Provide fleet health/topology, onboarding job progress, typed model/profile editors, affected-target diff, development commit versus PR status, reconciliation plan, job logs, and audit filtering. Use semantic HTML, keyboard navigation, explicit destructive confirmations, and no hidden direct mutation.
+Provide fleet health/topology, onboarding job progress, typed model/profile
+editors, affected-target diff, development commit versus PR status,
+reconciliation plan, job logs, audit filtering, and contextual links to native
+LiteLLM/Grafana pages. Generate TypeScript types with `openapi-typescript` and
+call through `openapi-fetch`; check generated output drift in CI. Use semantic
+HTML, keyboard navigation, explicit destructive confirmations, and no hidden
+direct mutation.
 
 - [ ] **Step 4: Run unit and Playwright tests against disposable API**
 
