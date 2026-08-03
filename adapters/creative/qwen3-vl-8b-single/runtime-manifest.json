@@ -3,6 +3,6 @@
     "adapters/creative/qwen3-vl-8b-single/__init__.py": "7e4c7a01b39576f8d88a99dc92a43f724ebc2c96da2acf1771d63df7fa029d53",
     "adapters/creative/qwen3-vl-8b-single/runtime.py": "2274450163b9d049cb8188a1231ba968b24ac2cf578ddee76515d8bdc036e96b",
     "adapters/creative/qwen3-vl-8b-single/server.py": "c22e8cd577671078627c95766e5b59e7d5ceccd320feee035ffb4f5930fe1c89",
-    "adapters/creative/qwen3-vl-8b-single/bin/qwen3-vl-8b-single": "56aab24f500df14fbc3c567503bd1ed91bfa04f9f8107add4b0c17c6076c3282"
+    "adapters/creative/qwen3-vl-8b-single/bin/qwen3-vl-8b-single": "25512e3b855df4ffe9948c1273c521ec7b825d4c7ff989798cae642d607acfbe"
   }
 }
