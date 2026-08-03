@@ -1,0 +1,133 @@
+#!/usr/bin/env python3
+"""Exercise the repository-to-profile lifecycle without touching hardware."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import subprocess
+import sys
+import tempfile
+from contextlib import contextmanager
+from datetime import UTC, datetime
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if os.environ.get("DGX_LIFECYCLE_LOCKED_ENV") != "1":
+    environment = dict(os.environ)
+    environment["DGX_LIFECYCLE_LOCKED_ENV"] = "1"
+    raise SystemExit(subprocess.run(["uv", "run", "--project", str(ROOT / "control"), "--with", "jsonschema==4.26.0", "python", __file__, *sys.argv[1:]], env=environment, check=False).returncode)
+sys.path[:0] = [str(ROOT / "src"), str(ROOT / "control/src")]
+
+from dgx_control.git_policy import Eligibility  # noqa: E402
+from dgx_control.litellm import LiteLlmPolicy, LiteLlmPublisher  # noqa: E402
+from dgx_control.reconcile import Reconciler  # noqa: E402
+from dgx_control.routes import RouteCandidate, RoutePublisher  # noqa: E402
+from spark_profiles.fleet import ManagementEndpoint, NodeId  # noqa: E402
+from spark_profiles.fleet.install_contracts import InstallationRequest  # noqa: E402
+from spark_profiles.install.orchestrator import FileEvidenceStore, NodeInstaller, StepResult  # noqa: E402
+from spark_profiles.install.proposal import build_node_proposal  # noqa: E402
+from spark_profiles.install.store import InstallStore  # noqa: E402
+
+STEPS = ("identity", "pre-inventory", "public-key", "ssh-hardening", "node-policy", "post-inventory", "acceptance")
+
+
+class Policy:
+    def eligible(self, commit: str) -> Eligibility:
+        return Eligibility(commit, True, ())
+
+
+class Leases:
+    @contextmanager
+    def acquire(self, _targets):
+        yield
+
+
+class Controller:
+    def __init__(self, audit: list[str]) -> None:
+        self.audit = audit
+
+    def apply(self, plan) -> None:
+        self.audit.append(f"apply:{plan.digest}")
+
+    def verify(self, plan) -> bool:
+        self.audit.append(f"verify:{plan.digest}")
+        return True
+
+
+class Routes:
+    def __init__(self, publisher: RoutePublisher, candidate: RouteCandidate, audit: list[str]) -> None:
+        self.publisher, self.candidate, self.audit = publisher, candidate, audit
+
+    def withdraw(self, targets) -> None:
+        self.publisher.maintenance(tuple(targets), "reconcile")
+        self.audit.append("routes:maintenance")
+
+    def publish_atomically(self, _routes) -> None:
+        self.publisher.publish(self.candidate)
+        self.audit.append("routes:published")
+
+
+def run(host: str, display_name: str) -> dict[str, object]:
+    node_id = NodeId.parse("spk_00000000000000000000000000000001")
+    with tempfile.TemporaryDirectory(prefix="dgx-lifecycle-") as raw:
+        workspace = Path(raw)
+        handler = lambda _request: StepResult(b"accepted", b"")
+        installer = NodeInstaller(
+            store=InstallStore(workspace / "install-state", clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)),
+            evidence_store=FileEvidenceStore(workspace / "install-evidence"),
+            handlers={step: handler for step in STEPS},
+            clock=lambda: datetime(2026, 8, 3, tzinfo=UTC),
+        )
+        request = InstallationRequest(node_id, display_name, ManagementEndpoint(host, "operator", credential_ref="secret://ssh/admin"), {"pool": "default"})
+        installer.start(request)
+        journal = installer.run(node_id)
+        proposal = build_node_proposal("0" * 40, journal, {"hostname": host})
+        commit = hashlib.sha1(proposal.content).hexdigest()
+        audit = [f"install:{journal.state}", f"proposal:{proposal.sha256}", f"merge:{commit}"]
+        upstream = "http://spark.internal:8000/v1"
+        route_publisher = RoutePublisher(workspace / "routes", allowed_upstreams={upstream}, validate=lambda _: True, apply=lambda _: None)
+        candidate = RouteCandidate(commit, "agent", "model-repository/revision", (node_id.value,), {"test-model": upstream}, datetime(2026, 8, 3, tzinfo=UTC))
+        routes = Routes(route_publisher, candidate, audit)
+        definitions = lambda _commit: {"targets": [node_id.value], "placements": {"test-model": [node_id.value]}, "routes": {node_id.value: "test-model"}, "releases": {node_id.value: "sha256:" + "b" * 64}, "input_digests": {"fleet": proposal.sha256, "profile": "c" * 64}}
+        result = Reconciler(Policy(), definitions, routes, Controller(audit), Leases()).execute(Reconciler(Policy(), definitions, routes, Controller(audit), Leases()).plan(commit))
+        snapshot = route_publisher.snapshot()
+        generation = LiteLlmPublisher(workspace / "litellm", validate=lambda _: True, apply=lambda _: None).publish(snapshot, LiteLlmPolicy({"test-model": {"requests_per_minute": 30, "tokens_per_minute": 10000}}))
+        served_status = 200 if snapshot.state == "published" and "test-model" in snapshot.aliases else 503
+        withdrawn = route_publisher.maintenance((node_id.value,), "profile withdrawn")
+        audit.append("routes:withdrawn")
+        withdrawn_status = 503 if withdrawn.state == "maintenance" else 200
+        ok = journal.state == "accepted" and result.status == "succeeded" and served_status == 200 and withdrawn_status == 503
+        return {
+            "schema_version": 1, "environment": "simulated-node-and-code-host", "status": "passed" if ok else "failed",
+            "dynamic_input": {"host": host, "display_name": display_name}, "node_id": node_id.value,
+            "installation_state": journal.state, "installation_gate_count": len(journal.steps),
+            "proposal_sha256": proposal.sha256, "eligible_commit": commit, "profile_source": "model-repository/revision",
+            "reconciliation": result.status, "route_generation": snapshot.generation, "litellm_generation": generation.generation,
+            "served_status": served_status, "withdrawn_status": withdrawn_status, "audit_events": audit,
+            "physical_spark_exercised": False, "code_host_pr_merge_exercised": False,
+            "remaining_release_gates": ["approved-physical-spark-lifecycle", "protected-code-host-pr-lifecycle"],
+        }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--host", default="new-spark.local")
+    parser.add_argument("--display-name", default="new-spark")
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+    report = run(args.host, args.display_name)
+    content = (json.dumps(report, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_bytes(content)
+    if args.json or not args.output:
+        print(content.decode(), end="")
+    return 0 if report["status"] == "passed" else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
