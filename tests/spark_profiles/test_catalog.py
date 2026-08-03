@@ -26,6 +26,7 @@ def catalog_root(tmp_path: Path) -> Path:
         "config/profile-selectors.toml",
         "adapters/deepseek/mia-vllm",
         "adapters/deepseek/ds4",
+        "adapters/creative/triposg",
         "locks/model-definitions.toml",
         "inventory/reports/model-definitions.json",
         "inventory/reports/accepted-cluster-profiles.json",

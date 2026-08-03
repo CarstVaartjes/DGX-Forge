@@ -75,7 +75,7 @@ flowchart TB
 | `agent-nemotron-super` | `nemotron-super-single` | Idle | `nemotron-super` | Design intent; not cataloged |
 | `agent-nemotron-nano-omni` | `nemotron-nano-omni-single` | Idle | `nemotron-nano-omni` | Design intent; not cataloged |
 | `geometry-step1x` | `deepseek-agent-single` | `step1x-3d-single` | `deepseek`, `step1x-3d` | Design intent; not cataloged |
-| `geometry-triposg` | `deepseek-agent-single` | `triposg-single` | `deepseek`, `triposg` | Design intent; not cataloged |
+| `geometry-triposg` | `deepseek-agent-single` | `triposg-single` | `deepseek`, `triposg` | TripoSG verified on Spark 2; acceptance pending |
 | `geometry-hunyuan3d-omni` | `deepseek-agent-single` | `hunyuan3d-omni-single` | `deepseek`, `hunyuan3d-omni` | Design intent; not cataloged |
 
 “Verified” means the immutable artifacts and every definition-required node prerequisite passed;
@@ -100,7 +100,7 @@ accepted evidence for the exact placement and combination.
 | Vision/evaluation | `qwen3-vl-8b-single` | GB10-native vLLM or SGLang service candidate | One Spark, co-residency candidate | Design intent; not cataloged |
 | Rigging | `tokenrig-single` | FP16 or GB10-native TokenRig build candidate | One Spark, co-residency candidate | Design intent; not cataloged |
 | Geometry/texture | `step1x-3d-single` | GB10-native sequential geometry and texture candidate | One Spark, exclusive initially | Design intent; not cataloged |
-| Fast geometry | `triposg-single` | GB10-native official Diffusers candidate | One Spark, co-residency candidate | Design intent; not cataloged |
+| Fast geometry | `triposg-single` | GB10-native official Diffusers runtime | One Spark, co-residency candidate | Verified on Spark 2; acceptance pending |
 | Controllable 3D | `hunyuan3d-omni-single` | GB10-native official runtime candidate; FlashVDM remains subject to acceptance | One Spark, co-residency candidate | Design intent; not cataloged |
 
 Each future optimized serving definition must retain an official generic
@@ -117,6 +117,7 @@ user-selectable merely because it starts successfully.
 | Framework catalog, admission, switching, CLI, and local state | Implemented |
 | `deepseek-agent-dual` Model Definition | Immutable Mia release `92f5…0575e` is installed on both nodes, structurally verified, healthy, and passes all 11 live quality gates; final performance, thermal, lifecycle and reboot acceptance is deferred |
 | `deepseek-agent-single` Model Definition | Immutable DS4 release `ca69…82b2` is installed on Spark 1, verified at 32,768 context, and passes all 12 live quality and cache gates; final performance, thermal, lifecycle, reboot and exact-profile acceptance is deferred |
+| `triposg-single` Model Definition | Immutable TripoSG release `925d…7469` is prepared and verified on Spark 2 with an isolated Python 3.12 runtime, pinned checkpoints, healthy API, watertight GLB output, and three lifecycle cycles; reboot, extended thermal/capacity, and exact-profile acceptance remain deferred |
 | Canonical `agent-full-dual` profile | Cataloged with `default` and `agent` selectors; not admitted while its definition remains verified rather than accepted |
 | Remaining Model Definitions and profiles | Design intent; configuration and acceptance evidence do not exist yet |
 | Model activation | The verified runtime is currently running through the direct adapter; `sparkctl` activation remains blocked until exact acceptance evidence exists |

@@ -19,25 +19,29 @@ revision = "2c1c516d22d58db486a058d98d31bb6177344e06"
 manifest = "/srv/models/manifests/triposg-single.json"
 
 [image]
-reference = "ghcr.io/dgx-forge/vast/triposg@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+reference = "nvcr.io/nvidia/pytorch:25.11-py3@sha256:4a85d8cf6fb3a943280960b8948cf4e9b6eca77b4414c68c9b2c7bb863f79b70"
+
+[runtime_release]
+manifest = "adapters/creative/triposg/runtime-manifest.json"
+sha256 = "925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469"
 
 [paths]
-cache = "/srv/models/snapshots/triposg-single"
-scratch = "/srv/models/runtime-cache/triposg-single"
-output = "/srv/models/outputs/triposg-single"
+cache = "/srv/models/snapshots/triposg"
+scratch = "/srv/models/runtime-cache/triposg"
+output = "/srv/models/outputs/triposg"
 
 [endpoint]
 host = "127.0.0.1"
 port = 9109
 
 [commands]
-prepare = ["/opt/spark/model-adapters/creative/spark-model-adapter", "prepare", "triposg-single"]
-verify = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify", "triposg-single"]
-start = ["/opt/spark/model-adapters/creative/spark-model-adapter", "start", "triposg-single"]
-health = ["/opt/spark/model-adapters/creative/spark-model-adapter", "health", "triposg-single"]
-infer = ["/opt/spark/model-adapters/creative/spark-model-adapter", "infer", "triposg-single"]
-stop = ["/opt/spark/model-adapters/creative/spark-model-adapter", "stop", "triposg-single"]
-verify-release = ["/opt/spark/model-adapters/creative/spark-model-adapter", "verify-release", "triposg-single"]
+prepare = ["/opt/spark/model-adapters/triposg/releases/925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469/bin/triposg", "prepare"]
+verify = ["/opt/spark/model-adapters/triposg/releases/925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469/bin/triposg", "verify"]
+start = ["/opt/spark/model-adapters/triposg/releases/925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469/bin/triposg", "start"]
+health = ["/opt/spark/model-adapters/triposg/releases/925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469/bin/triposg", "health"]
+infer = ["/opt/spark/model-adapters/triposg/releases/925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469/bin/triposg", "infer"]
+stop = ["/opt/spark/model-adapters/triposg/releases/925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469/bin/triposg", "stop"]
+verify-release = ["/opt/spark/model-adapters/triposg/releases/925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469/bin/triposg", "verify-release"]
 
 [deadlines]
 prepare = 86400
@@ -52,4 +56,3 @@ verify-release = 300
 minimum_free_memory_bytes = 12000000000
 minimum_free_disk_bytes = 100000000000
 stop_memory_tolerance_bytes = 1073741824
-
