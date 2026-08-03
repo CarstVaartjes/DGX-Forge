@@ -521,7 +521,7 @@ verified; keep MXFP4 deferred.
 
 ```bash
 uv run pytest -q
-uv run ruff check .
+uvx --from ruff==0.16.1 ruff check .
 git diff --check
 curl --fail --silent http://127.0.0.1:8888/v1/models
 ```
