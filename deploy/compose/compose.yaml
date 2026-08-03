@@ -38,9 +38,12 @@ services:
       DGX_METRICS_TOKEN_FILE: /run/secrets/metrics-token
       DGX_REPOSITORY_PATH: /repository
       DGX_STATE_PATH: /state
-    secrets: [database-url, token-signing-key, metrics-token]
+      DGX_GIT_SIGNING_KEY_FILE: /run/secrets/git-signing-key
+      DGX_DEPLOYMENT_BRANCH: ${DEPLOYMENT_BRANCH:-deploy}
+      DGX_REQUIRED_CHECKS: ${REQUIRED_CHECKS:-}
+    secrets: [database-url, token-signing-key, metrics-token, git-signing-key]
     volumes:
-      - ${REPOSITORY_PATH:?set repository path}:/repository:ro
+      - ${REPOSITORY_PATH:?set repository path}:/repository
       - control-state:/state
     tmpfs: [/tmp]
     networks: [application, data, ingress]
@@ -60,9 +63,9 @@ services:
     read_only: true
     user: "10001:10001"
     environment: *control-environment
-    secrets: [database-url, token-signing-key, metrics-token]
+    secrets: [database-url, token-signing-key, metrics-token, git-signing-key]
     volumes:
-      - ${REPOSITORY_PATH:?set repository path}:/repository:ro
+      - ${REPOSITORY_PATH:?set repository path}:/repository
       - control-state:/state
     tmpfs: [/tmp]
     networks: [application, data, cluster-egress]
@@ -157,6 +160,8 @@ secrets:
     file: "${TOKEN_SIGNING_KEY_FILE:?set token signing key secret file}"
   metrics-token:
     file: "${METRICS_TOKEN_FILE:?set metrics scrape token secret file}"
+  git-signing-key:
+    file: "${GIT_SIGNING_KEY_FILE:?set Git SSH signing key file}"
   litellm-master-key:
     file: "${LITELLM_MASTER_KEY_FILE:?set LiteLLM master key secret file}"
   litellm-upstream-key:

@@ -18,6 +18,7 @@ def _rendered() -> dict:
         "POSTGRES_PASSWORD_FILE": "/dev/null",
         "TOKEN_SIGNING_KEY_FILE": "/dev/null",
         "METRICS_TOKEN_FILE": "/dev/null",
+        "GIT_SIGNING_KEY_FILE": "/dev/null",
         "GRAFANA_ADMIN_PASSWORD_FILE": "/dev/null",
         "LITELLM_MASTER_KEY_FILE": "/dev/null",
         "LITELLM_UPSTREAM_KEY_FILE": "/dev/null",

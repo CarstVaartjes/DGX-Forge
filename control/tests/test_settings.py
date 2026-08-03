@@ -31,6 +31,22 @@ def test_secret_file_must_not_be_symlink(tmp_path: Path, monkeypatch) -> None:
         Settings.from_env_and_secrets()
 
 
+def test_git_policy_configuration_uses_key_reference_and_unique_checks(tmp_path: Path, monkeypatch) -> None:
+    key = tmp_path / "signing-key"
+    key.write_text("fixture")
+    monkeypatch.setenv("DGX_DATABASE_URL", "postgresql://db/control")
+    monkeypatch.setenv("DGX_GIT_SIGNING_KEY_FILE", str(key))
+    monkeypatch.setenv("DGX_DEPLOYMENT_BRANCH", "deploy")
+    monkeypatch.setenv("DGX_REQUIRED_CHECKS", "tests,security")
+    settings = Settings.from_env_and_secrets()
+    assert settings.git_signing_key_path == key
+    assert settings.required_checks == ("tests", "security")
+
+    monkeypatch.setenv("DGX_REQUIRED_CHECKS", "tests,tests")
+    with pytest.raises(SettingsError, match="unique"):
+        Settings.from_env_and_secrets()
+
+
 def test_compose_is_platform_neutral_and_only_caddy_publishes_ports() -> None:
     root = Path(__file__).resolve().parents[2]
     text = (root / "deploy/compose/compose.yaml").read_text()
