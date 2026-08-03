@@ -1,7 +1,9 @@
 from pathlib import Path
 
 from alembic import command
+from alembic.autogenerate import compare_metadata
 from alembic.config import Config
+from alembic.migration import MigrationContext
 from sqlalchemy import create_engine, inspect
 
 
@@ -27,20 +29,38 @@ def tables(database: str) -> set[str]:
 
 def test_agent_migration_is_reversible(tmp_path: Path) -> None:
     database = f"sqlite:///{tmp_path / 'control.sqlite'}"
-
-    upgrade_to("0002_agent_operations", database)
-
-    assert {
+    agent_tables = {
         "agent_nodes",
         "agent_certificates",
         "agent_operations",
         "agent_operation_attempts",
-    } <= tables(database)
+    }
+
+    upgrade_to("0001_operational_state", database)
+    original_tables = tables(database)
+    assert not (agent_tables & original_tables)
+
+    upgrade_to("0002_agent_operations", database)
+    assert agent_tables <= tables(database)
 
     downgrade_to("0001_operational_state", database)
 
-    assert "agent_nodes" not in tables(database)
-    assert "jobs" in tables(database)
+    assert tables(database) == original_tables
+
+    upgrade_to("0002_agent_operations", database)
+    assert agent_tables <= tables(database)
+
+
+def test_current_model_metadata_matches_head_schema(tmp_path: Path) -> None:
+    from dgx_control.models import Base
+
+    database = f"sqlite:///{tmp_path / 'control.sqlite'}"
+    upgrade_to("head", database)
+
+    assert set(Base.metadata.tables) == tables(database) - {"alembic_version"}
+    engine = create_engine(database)
+    with engine.connect() as connection:
+        assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
 
 
 def test_agent_models_capture_fenced_operation_state() -> None:
