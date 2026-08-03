@@ -81,7 +81,7 @@ start() {
     nohup "$venv/bin/vllm" serve "$weights_root" \
       --served-model-name "$model_name" --host 127.0.0.1 --port "$port" \
       --dtype bfloat16 --max-model-len 8192 --gpu-memory-utilization 0.80 \
-      --limit-mm-per-prompt '{"image":1}' --disable-log-requests \
+      --limit-mm-per-prompt '{"image":1}' \
       >"$log_file" 2>&1 &
   echo $! > "$pid_file"
 }

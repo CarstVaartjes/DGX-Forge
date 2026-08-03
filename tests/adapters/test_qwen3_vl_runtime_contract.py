@@ -92,3 +92,4 @@ def test_adapter_pins_official_source_and_model_owned_runtime() -> None:
     assert 'scratch_root="$models_root/runtime-cache/qwen3-vl-8b-single"' in script
     assert 'venv="$scratch_root/venv"' in script
     assert "spark-model-adapter" not in script
+    assert "--disable-log-requests" not in script

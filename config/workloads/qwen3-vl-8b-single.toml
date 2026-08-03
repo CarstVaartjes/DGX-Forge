@@ -23,7 +23,7 @@ reference = "nvcr.io/nvidia/cuda:13.0.1-devel-ubuntu24.04@sha256:7d2f6a8c2071d91
 
 [runtime_release]
 manifest = "adapters/creative/qwen3-vl-8b-single/runtime-manifest.json"
-sha256 = "e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9"
+sha256 = "f371f6aae9c131cee3f5a1dd929b5d0191484e444f2fd2e9cb50bc1e7b7517b0"
 
 [paths]
 cache = "/srv/models/snapshots/qwen3-vl-8b-single"
@@ -35,13 +35,13 @@ host = "127.0.0.1"
 port = 9106
 
 [commands]
-prepare = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9/bin/qwen3-vl-8b-single", "prepare"]
-verify = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9/bin/qwen3-vl-8b-single", "verify"]
-start = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9/bin/qwen3-vl-8b-single", "start"]
-health = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9/bin/qwen3-vl-8b-single", "health"]
-infer = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9/bin/qwen3-vl-8b-single", "infer"]
-stop = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9/bin/qwen3-vl-8b-single", "stop"]
-verify-release = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/e99ade739512976e92bf32eb6e4fa801b15f4c7177814b8295891f9189b7d5d9/bin/qwen3-vl-8b-single", "verify-release"]
+prepare = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/f371f6aae9c131cee3f5a1dd929b5d0191484e444f2fd2e9cb50bc1e7b7517b0/bin/qwen3-vl-8b-single", "prepare"]
+verify = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/f371f6aae9c131cee3f5a1dd929b5d0191484e444f2fd2e9cb50bc1e7b7517b0/bin/qwen3-vl-8b-single", "verify"]
+start = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/f371f6aae9c131cee3f5a1dd929b5d0191484e444f2fd2e9cb50bc1e7b7517b0/bin/qwen3-vl-8b-single", "start"]
+health = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/f371f6aae9c131cee3f5a1dd929b5d0191484e444f2fd2e9cb50bc1e7b7517b0/bin/qwen3-vl-8b-single", "health"]
+infer = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/f371f6aae9c131cee3f5a1dd929b5d0191484e444f2fd2e9cb50bc1e7b7517b0/bin/qwen3-vl-8b-single", "infer"]
+stop = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/f371f6aae9c131cee3f5a1dd929b5d0191484e444f2fd2e9cb50bc1e7b7517b0/bin/qwen3-vl-8b-single", "stop"]
+verify-release = ["/opt/spark/model-adapters/qwen3-vl-8b-single/releases/f371f6aae9c131cee3f5a1dd929b5d0191484e444f2fd2e9cb50bc1e7b7517b0/bin/qwen3-vl-8b-single", "verify-release"]
 
 [deadlines]
 prepare = 86400
