@@ -47,17 +47,45 @@ if [ "$control_hostname" = "$enrollment_hostname" ] \
   exit 64
 fi
 
-if ! proxy_auth_bytes=$(wc -c < /run/secrets/agent-proxy-auth); then
+if ! invalid_proxy_auth_bytes=$(LC_ALL=C tr -d 'A-Za-z0-9_\r\n-' < /run/secrets/agent-proxy-auth | wc -c); then
   echo "DGX Caddy proxy authentication secret is unavailable" >&2
   exit 1
 fi
-if ! proxy_auth=$(cat /run/secrets/agent-proxy-auth); then
+if [ "$invalid_proxy_auth_bytes" -ne 0 ]; then
+  echo "DGX Caddy proxy authentication secret must be one base64url-like token of at least 32 characters" >&2
+  exit 1
+fi
+if ! proxy_auth_raw=$(cat /run/secrets/agent-proxy-auth); then
   echo "DGX Caddy proxy authentication secret is unavailable" >&2
   exit 1
 fi
-if [ -z "$proxy_auth" ] || [ "$proxy_auth_bytes" -lt 32 ]; then
-  echo "DGX Caddy proxy authentication secret must contain at least 32 bytes" >&2
+
+# Command substitution removes final LF bytes. Remove any remaining CR/LF
+# terminators explicitly, while preserving (and therefore rejecting) them if
+# they occur within the token.
+carriage_return=$(printf '\r')
+line_feed='
+'
+while :; do
+  case "$proxy_auth_raw" in
+    *"$carriage_return") proxy_auth_raw=${proxy_auth_raw%"$carriage_return"} ;;
+    *"$line_feed") proxy_auth_raw=${proxy_auth_raw%"$line_feed"} ;;
+    *) break ;;
+  esac
+done
+proxy_auth=$proxy_auth_raw
+case "$proxy_auth" in
+  "" | *[!A-Za-z0-9_-]*)
+    echo "DGX Caddy proxy authentication secret must be one base64url-like token of at least 32 characters" >&2
+    exit 1
+    ;;
+esac
+if [ "${#proxy_auth}" -lt 32 ]; then
+  echo "DGX Caddy proxy authentication secret must be one base64url-like token of at least 32 characters" >&2
   exit 1
 fi
 export DGX_AGENT_PROXY_AUTH="$proxy_auth"
-exec caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+if [ "$#" -eq 0 ]; then
+  set -- caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+fi
+exec "$@"

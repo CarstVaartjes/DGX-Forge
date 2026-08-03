@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -10,6 +11,9 @@ from urllib.parse import urlsplit
 
 class SettingsError(ValueError):
     pass
+
+
+_AGENT_PROXY_AUTH_PATTERN = re.compile(rb"[A-Za-z0-9_-]{32,}\Z")
 
 
 def _secret(name: str, *, production: bool) -> str:
@@ -38,6 +42,25 @@ def _secret_path(name: str) -> Path:
     if path.is_symlink() or not path.is_file():
         raise SettingsError(f"{name} must name a regular non-symlink file")
     return path
+
+
+def _agent_proxy_auth_secret(name: str, *, production: bool) -> bytes:
+    raw_name = name.removesuffix("_FILE")
+    raw = os.environ.get(raw_name)
+    source = os.environ.get(name)
+    if production and raw:
+        raise SettingsError(f"{raw_name} must be supplied through a secret file")
+    if source:
+        path = Path(source)
+        if path.is_symlink() or not path.is_file():
+            raise SettingsError(f"{name} must name a regular non-symlink file")
+        value = path.read_bytes()
+    else:
+        value = (raw or "").encode("ascii", errors="strict")
+    normalized = value.rstrip(b"\r\n")
+    if _AGENT_PROXY_AUTH_PATTERN.fullmatch(normalized) is None:
+        raise SettingsError(f"{name} must contain one base64url-like token of at least 32 characters")
+    return normalized
 
 
 @dataclass(frozen=True)
@@ -75,14 +98,27 @@ class Settings:
         builtin_bootstrap = os.environ.get("DGX_AGENT_BUILTIN_CA_BOOTSTRAP", "")
         if builtin_bootstrap not in {"", "1"}:
             raise SettingsError("DGX_AGENT_BUILTIN_CA_BOOTSTRAP is invalid")
-        if agent_ca_provider == "builtin" and builtin_bootstrap != "1":
-            raise SettingsError("built-in CA requires explicit bootstrap selection")
-        if agent_ca_provider != "builtin" and builtin_bootstrap:
-            raise SettingsError("built-in CA bootstrap requires the builtin provider")
         if mode == "production" and not agent_ca_provider:
             raise SettingsError("DGX_AGENT_CA_PROVIDER is required in production")
         if agent_ca_provider and agent_ca_provider not in {"step-ca", "builtin"}:
             raise SettingsError("DGX_AGENT_CA_PROVIDER is invalid")
+        step_ca_settings_present = any(
+            os.environ.get(name)
+            for name in ("DGX_AGENT_CA_CREDENTIAL", "DGX_AGENT_CA_CREDENTIAL_FILE")
+        )
+        builtin_settings_present = bool(
+            builtin_bootstrap or os.environ.get("DGX_AGENT_INTERMEDIATE_KEY_FILE")
+        )
+        if (
+            agent_ca_provider == "builtin" and step_ca_settings_present
+        ) or (
+            agent_ca_provider == "step-ca" and builtin_settings_present
+        ):
+            raise SettingsError("agent CA provider settings cannot be combined")
+        if agent_ca_provider == "builtin" and builtin_bootstrap != "1":
+            raise SettingsError("built-in CA requires explicit bootstrap selection")
+        if agent_ca_provider != "builtin" and builtin_bootstrap:
+            raise SettingsError("built-in CA bootstrap requires the builtin provider")
         database_url = _secret("DGX_DATABASE_URL_FILE", production=mode == "production")
         if urlsplit(database_url).scheme not in {"postgresql", "postgresql+psycopg"}:
             raise SettingsError("database URL must use PostgreSQL")
@@ -141,9 +177,10 @@ class Settings:
             _secret("DGX_AGENT_CA_CREDENTIAL_FILE", production=True).encode()
             if agent_enabled and agent_ca_provider == "step-ca" else b""
         )
-        agent_proxy_auth = _secret("DGX_AGENT_PROXY_AUTH_FILE", production=True).encode() if agent_enabled else b""
-        if agent_proxy_auth and len(agent_proxy_auth) < 32:
-            raise SettingsError("DGX_AGENT_PROXY_AUTH_FILE must contain at least 32 bytes")
+        agent_proxy_auth = (
+            _agent_proxy_auth_secret("DGX_AGENT_PROXY_AUTH_FILE", production=True)
+            if agent_enabled else b""
+        )
         return cls(
             database_url=database_url,
             repository_path=Path(os.environ.get("DGX_REPOSITORY_PATH", "/srv/dgx-forge/repository")),

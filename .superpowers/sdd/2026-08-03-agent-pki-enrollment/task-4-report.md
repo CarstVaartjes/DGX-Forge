@@ -2,8 +2,9 @@
 
 ## Status
 
-Complete. The accompanying implementation commit is
-`feat: authenticate outbound agents through Caddy`.
+Implemented across the Task 4 ingress and review-fix commit series. The base
+Compose file is provider-neutral; operators must select exactly one guarded CA
+provider overlay.
 
 ## Files and behavior
 
@@ -16,23 +17,32 @@ Complete. The accompanying implementation commit is
 - The agent host strips every `X-DGX-Agent-*` request header before setting the
   TLS-derived node, serial, fingerprint, and verified headers. A strict Caddy
   `map` accepts only a subject exactly equal to `CN=spk_<32 lowercase hex>`.
+- `deploy/compose/caddy/entrypoint.sh` rejects missing, malformed, or equivalent
+  SNI hostnames and normalizes the proxy-auth file exactly once. It accepts one
+  unpadded base64url-like token of at least 32 characters plus optional trailing
+  CR/LF terminators, then exports only the normalized token to Caddy.
 - `control/src/dgx_control/auth.py` replaces address/name based proxy trust
   with a default-empty proxy-auth secret. It constant-time compares that secret
   before creating the typed identity and strips all forwarded agent headers
   before application code sees the request.
 - `control/src/dgx_control/settings.py` requires regular secret files in
   production for the client CA, intermediate certificate, CA credential, and
-  proxy authentication secret. Production requires `DGX_AGENT_CA_PROVIDER` to
-  be `step-ca`.
+  proxy authentication secret. Its proxy-token grammar and CR/LF normalization
+  match the Caddy entrypoint. Production accepts the recommended `step-ca`
+  provider or an explicitly guarded built-in bootstrap provider, and rejects
+  mixed provider settings regardless of Compose overlay order.
 - `deploy/compose/compose.yaml` adds the private `agent-proxy` network shared
   only by Caddy and control-api, mounts the high-entropy proxy secret only into
-  those services, and has no Docker IP/CIDR/name trust decision. It adds a
-  digest-pinned, unexposed `step-ca` service on a separate internal CA network,
-  mounts only root/intermediate certificates, encrypted intermediate key,
-  password, read-only config, and persistent CA DB.
+  those services, and has no Docker IP/CIDR/name trust decision. It deliberately
+  contains no CA provider selection.
+- `deploy/compose/compose.step-ca.yaml` adds the recommended digest-pinned,
+  unexposed `step-ca` service on a separate internal CA network. It mounts only
+  root/intermediate certificates, encrypted intermediate key, password,
+  read-only config, and persistent CA DB.
 - `deploy/compose/compose.builtin-ca.yaml` is the explicit development-only
-  override that adds the built-in intermediate key to control-api. The default
-  production rendering never mounts that key.
+  override that adds the built-in intermediate key to control-api. A normal
+  Step CA rendering never mounts that key, and mixed overlays are rejected by
+  application settings rather than relying on Compose merge order.
 - `deploy/compose/step-ca/ca.json` is tracked and contains no secret. Offline
   root/intermediate/provisioner initialization remains an explicit deployment
   operation; no root private key appears in Compose.
@@ -319,3 +329,68 @@ Output: `11 passed in 1.50s`; both Compose configurations exited 0.
 
 The pinned Caddy `validate` command again reported `Valid configuration`; the
 final `git diff --check` exited 0.
+
+## Review round 4 fixes
+
+- Application startup now treats the Step CA credential and the built-in
+  bootstrap flag/key as mutually exclusive provider settings. Tests render
+  both overlays in both orders, materialize their control-api secret paths,
+  and pass the resulting environment through the real `Settings` loader. Both
+  combined forms fail closed; each overlay still starts independently.
+- Caddy and Python now share one proxy-auth grammar:
+  `[A-Za-z0-9_-]{32,}` with only trailing CR/LF file terminators removed.
+  Length is checked after normalization. Spaces, internal whitespace, padding,
+  punctuation, NUL bytes, and 31-character tokens are rejected; a normal
+  CRLF-terminated secret reaches both consumers as the same byte string.
+- The Task 4 plan inventory and commit command now cover the Caddy entrypoint,
+  both provider overlays, Step CA config, every control/Compose test touched,
+  and the control-plane bootstrap runbook. The report's current architecture
+  description now reflects the provider-neutral base and guarded overlays.
+- Operator-facing configuration documents the proxy-token rule, a concrete
+  unpadded base64url generation command, and the one-overlay-only requirement.
+
+### Review round 4 RED
+
+```sh
+uv run pytest deploy/compose/tests/test_agent_ingress.py::test_caddy_proxy_auth_is_one_canonical_base64url_like_line deploy/compose/tests/test_agent_ingress.py::test_provider_overlays_are_mutually_exclusive_at_application_startup deploy/compose/tests/test_agent_ingress.py::test_each_provider_overlay_passes_application_settings_guard -v
+```
+
+Observed: the canonical-token case timed out because the entrypoint discarded
+the supplied command and launched Caddy, and the first combined-overlay case
+incorrectly exited 0 with `builtin` winning by merge order. The independent
+overlay control case passed.
+
+```sh
+uv run --project control pytest control/tests/test_settings.py::test_production_rejects_noncanonical_agent_proxy_auth control/tests/test_settings.py::test_agent_ca_provider_rejects_other_provider_settings -v
+```
+
+Observed: `9 failed`. Generic stripping accepted spaces/punctuation/internal
+newlines, and provider-specific values escaped the old single-flag guard. A
+follow-up NUL fixture also correctly failed by showing that shell command
+substitution discarded the invalid byte before validating the token.
+
+### Review round 4 GREEN and full verification
+
+```sh
+uv run --project control pytest control/tests -q
+```
+
+Output: `233 passed in 25.49s`.
+
+```sh
+uv run pytest deploy/compose/tests -q
+```
+
+Output: `17 passed in 7.15s`.
+
+Both normal provider renders exited 0:
+
+```sh
+docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml config --quiet
+docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml -f deploy/compose/compose.builtin-ca.yaml config --quiet
+```
+
+The two real-settings integration tests for both combined orders and both
+independent providers passed (`2 passed`). The pinned Caddy 2.10.2 container
+validated the Caddyfile against a temporary test CA and printed
+`Valid configuration`.

@@ -173,14 +173,25 @@ git commit -m "feat: expose authenticated Spark agent API"
 
 **Files:**
 - Modify: `deploy/compose/Caddyfile`
+- Create: `deploy/compose/caddy/entrypoint.sh`
 - Modify: `deploy/compose/compose.yaml`
 - Create: `deploy/compose/compose.step-ca.yaml`
 - Create: `deploy/compose/compose.builtin-ca.yaml`
 - Modify: `deploy/compose/.env.example`
 - Create: `deploy/compose/step-ca/ca.json`
+- Modify: `deploy/compose/tests/test.env`
 - Modify: `control/src/dgx_control/settings.py`
+- Modify: `control/src/dgx_control/auth.py`
+- Modify: `control/src/dgx_control/api.py`
+- Modify: `control/src/dgx_control/agent_api.py`
+- Modify: `control/src/dgx_control/pki.py`
 - Test: `deploy/compose/tests/test_agent_ingress.py`
+- Test: `deploy/compose/tests/test_networking.py`
 - Test: `control/tests/test_settings.py`
+- Test: `control/tests/test_agent_api.py`
+- Test: `control/tests/test_pki.py`
+- Test: `control/tests/security/test_agent_identity.py`
+- Modify: `docs/runbooks/control-plane-bootstrap.md`
 
 **Interfaces:**
 - Agent ingress uses a separately configured listener/hostname and client CA.
@@ -191,8 +202,10 @@ git commit -m "feat: expose authenticated Spark agent API"
 
 Assert agent routes are not reachable through ordinary browser ingress,
 client-auth is mandatory except `/agent/v1/enroll`, Caddy is the only published
-port, CA/intermediate files are secrets, and control-api trusts proxy identity
-only on the private ingress network.
+port, CA/intermediate files are secrets, control-api trusts proxy identity
+only on the private ingress network, provider overlays fail closed when
+combined in either order, and Caddy/Python canonicalize the proxy secret to
+the same single-line base64url-like token.
 
 - [ ] **Step 2: Run and observe absent agent listener**
 
@@ -208,6 +221,9 @@ production `compose.step-ca.yaml` overlay for the pinned `step-ca` image,
 persistent CA data, health check, no public port, and a separately initialized
 offline root/intermediate. The `compose.builtin-ca.yaml` development overlay
 may mount the built-in intermediate key without requiring Step CA secrets.
+Application settings must reject a merged Step CA/built-in environment
+regardless of overlay order. The Caddy entrypoint and Python settings loader
+must accept only the same normalized proxy-secret grammar.
 Configure Caddy
 client authentication and identity forwarding using Caddy placeholders proven
 by `caddy validate`. Keep enrollment server-authenticated and rate-limited;
@@ -221,7 +237,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit ingress**
 
 ```bash
-git add deploy/compose/Caddyfile deploy/compose/compose.yaml deploy/compose/compose.step-ca.yaml deploy/compose/compose.builtin-ca.yaml deploy/compose/.env.example control/src/dgx_control/settings.py deploy/compose/tests/test_agent_ingress.py control/tests/test_settings.py
+git add deploy/compose/Caddyfile deploy/compose/caddy/entrypoint.sh deploy/compose/compose.yaml deploy/compose/compose.step-ca.yaml deploy/compose/compose.builtin-ca.yaml deploy/compose/.env.example deploy/compose/step-ca/ca.json deploy/compose/tests/test.env deploy/compose/tests/test_agent_ingress.py deploy/compose/tests/test_networking.py control/src/dgx_control/settings.py control/src/dgx_control/auth.py control/src/dgx_control/api.py control/src/dgx_control/agent_api.py control/src/dgx_control/pki.py control/tests/test_settings.py control/tests/test_agent_api.py control/tests/test_pki.py control/tests/security/test_agent_identity.py docs/runbooks/control-plane-bootstrap.md
 git commit -m "feat: authenticate outbound agents through Caddy"
 ```
 

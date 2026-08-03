@@ -69,7 +69,11 @@ def _adapted_caddy(environment: dict[str, str]) -> dict:
     return json.loads(result.stdout)
 
 
-def _entrypoint_result(environment: dict[str, str], secret_source: str | None = None) -> subprocess.CompletedProcess[str]:
+def _entrypoint_result(
+    environment: dict[str, str],
+    secret_source: str | None = None,
+    entrypoint_arguments: tuple[str, ...] = (),
+) -> subprocess.CompletedProcess[str]:
     command = ["docker", "run", "--rm"]
     for name, value in environment.items():
         command.extend(("-e", f"{name}={value}"))
@@ -82,7 +86,51 @@ def _entrypoint_result(environment: dict[str, str], secret_source: str | None = 
         "caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb",
         "/bin/sh", "/usr/local/bin/dgx-caddy-entrypoint",
     ))
+    command.extend(entrypoint_arguments)
     return subprocess.run(command, capture_output=True, text=True, timeout=10)
+
+
+def _settings_result(rendered: dict, tmp_path: Path) -> subprocess.CompletedProcess[str]:
+    tmp_path.mkdir(parents=True, exist_ok=True)
+    environment = {
+        name: value
+        for name, value in os.environ.items()
+        if not name.startswith("DGX_")
+    }
+    control_environment = rendered["services"]["control-api"]["environment"].copy()
+    secret_values = {
+        "DGX_DATABASE_URL_FILE": "postgresql://control:pw@postgres/control\n",
+        "DGX_TOKEN_SIGNING_KEY_FILE": "t" * 32 + "\n",
+        "DGX_METRICS_TOKEN_FILE": "m" * 16 + "\n",
+        "DGX_GIT_SIGNING_KEY_FILE": "test-git-key\n",
+        "DGX_AGENT_CLIENT_CA_FILE": "test-client-ca\n",
+        "DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE": "test-intermediate-certificate\n",
+        "DGX_AGENT_CA_CREDENTIAL_FILE": "test-provider-credential\n",
+        "DGX_AGENT_INTERMEDIATE_KEY_FILE": "test-builtin-key\n",
+        "DGX_AGENT_PROXY_AUTH_FILE": "A" * 30 + "_-\r\n",
+    }
+    for name, value in tuple(control_environment.items()):
+        if name not in secret_values:
+            continue
+        secret = tmp_path / name.lower()
+        secret.write_text(secret_values[name])
+        control_environment[name] = str(secret)
+    environment.update({name: str(value) for name, value in control_environment.items()})
+    return subprocess.run(
+        [
+            "uv", "run", "--project", str(ROOT / "control"), "python", "-c",
+            (
+                "from dgx_control.settings import Settings; "
+                "settings = Settings.from_env_and_secrets(); "
+                "print(settings.agent_ca_provider); "
+                "print(settings.agent_proxy_auth.decode('ascii'))"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=30,
+    )
 
 
 def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents() -> None:
@@ -202,7 +250,39 @@ def test_caddy_compose_requires_distinct_sni_hostnames_before_startup(tmp_path: 
     short_secret.write_text("short-secret")
     result = _entrypoint_result(valid, str(short_secret))
     assert result.returncode != 0
-    assert "at least 32 bytes" in result.stderr
+    assert "base64url-like" in result.stderr
+
+
+def test_caddy_proxy_auth_is_one_canonical_base64url_like_line(tmp_path: Path) -> None:
+    environment = {
+        "DGX_CONTROL_HOSTNAME": "control.test.example",
+        "DGX_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
+        "DGX_AGENT_HOSTNAME": "agents.test.example",
+    }
+    token = "A" * 30 + "_-"
+    valid_secret = tmp_path / "valid-agent-proxy-auth"
+    valid_secret.write_bytes(token.encode("ascii") + b"\r\n")
+    result = _entrypoint_result(
+        environment,
+        str(valid_secret),
+        ("/bin/sh", "-c", 'printf "%s" "$DGX_AGENT_PROXY_AUTH"'),
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == token
+
+    invalid_values = (
+        b"a" * 31 + b"\n",
+        b"a" * 32 + b" ",
+        b"a" * 16 + b"!" + b"a" * 16,
+        b"a" * 16 + b"\n" + b"a" * 16,
+        b"a" * 16 + b"\x00" + b"a" * 16,
+    )
+    for index, value in enumerate(invalid_values):
+        invalid_secret = tmp_path / f"invalid-agent-proxy-auth-{index}"
+        invalid_secret.write_bytes(value)
+        result = _entrypoint_result(environment, str(invalid_secret))
+        assert result.returncode != 0
+        assert "base64url-like" in result.stderr
 
 
 def test_rendered_production_boundary_has_only_caddy_public_and_step_ca_private() -> None:
@@ -252,3 +332,26 @@ def test_provider_overlays_require_only_their_own_secrets() -> None:
     result = subprocess.run(command, capture_output=True, text=True, env=missing_step_secret)
     assert result.returncode != 0
     assert "STEP_CA_PASSWORD_FILE" in result.stderr
+
+
+def test_provider_overlays_are_mutually_exclusive_at_application_startup(tmp_path: Path) -> None:
+    for overlays in (
+        ("compose.step-ca.yaml", "compose.builtin-ca.yaml"),
+        ("compose.builtin-ca.yaml", "compose.step-ca.yaml"),
+    ):
+        rendered = _rendered("compose.yaml", *overlays)
+        result = _settings_result(rendered, tmp_path / overlays[0])
+        assert result.returncode != 0
+        assert "CA provider settings cannot be combined" in result.stderr
+
+
+def test_each_provider_overlay_passes_application_settings_guard(tmp_path: Path) -> None:
+    token = "A" * 30 + "_-"
+    for overlay, provider in (
+        ("compose.step-ca.yaml", "step-ca"),
+        ("compose.builtin-ca.yaml", "builtin"),
+    ):
+        rendered = _rendered("compose.yaml", overlay)
+        result = _settings_result(rendered, tmp_path / provider)
+        assert result.returncode == 0, result.stderr
+        assert result.stdout.splitlines() == [provider, token]
