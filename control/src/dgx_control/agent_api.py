@@ -1,0 +1,402 @@
+"""Strict human-enrollment and mTLS-authenticated agent API routes."""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import stat
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, Protocol
+
+from dgx_agent_protocol import AgentProgress, AgentProtocolError, AgentResult, canonical_message
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+from sqlalchemy import select
+from sqlalchemy.orm import Session, sessionmaker
+from starlette.responses import JSONResponse, StreamingResponse
+
+from .agent_jobs import AgentJobService, StaleAgentAttempt
+from .auth import AgentIdentity, Actor, agent_identity_from_scope
+from .enrollment import EnrollmentDenied, EnrollmentService
+from .models import AgentCertificate, AgentEnrollment, AgentNode, AgentOperation
+
+_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_LIVE_OPERATION_STATES = frozenset({"queued", "running"})
+_MAX_CSR_BYTES = 16 * 1024
+_MAX_EVIDENCE_FIELDS = 8
+_MAX_EVIDENCE_BYTES = 8 * 1024
+_MAX_ARTIFACT_BYTES = 256 * 1024 * 1024
+_MAX_RANGE_BYTES = 8 * 1024 * 1024
+
+
+class _ActorDependency(Protocol):
+    def __call__(self, request: Request) -> Actor: ...
+
+
+@dataclass(frozen=True)
+class AgentApiServices:
+    enrollment: EnrollmentService
+    operations: AgentJobService
+    sessions: sessionmaker[Session]
+    clock: Callable[[], datetime]
+    artifact_root: Path
+    max_artifact_bytes: int = _MAX_ARTIFACT_BYTES
+    max_range_bytes: int = _MAX_RANGE_BYTES
+
+
+class GrantRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    node_id: str = Field(pattern=r"^spk_[0-9a-f]{32}$")
+    ttl_seconds: int = Field(ge=1, le=600)
+
+
+class EnrollmentSubmitRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    grant_token: str = Field(min_length=43, max_length=64)
+    csr: str = Field(min_length=1, max_length=_MAX_CSR_BYTES)
+    evidence: dict[str, str] = Field(min_length=6, max_length=_MAX_EVIDENCE_FIELDS)
+
+    @field_validator("evidence")
+    @classmethod
+    def bounded_expected_evidence(cls, evidence: dict[str, str]) -> dict[str, str]:
+        expected = {
+            "node_id", "csr_public_key_fingerprint", "host_key_fingerprint",
+            "hardware_fingerprint", "agent_digest", "boot_id",
+        }
+        if set(evidence) != expected or any(not value.strip() for value in evidence.values()):
+            raise ValueError("evidence fields are invalid")
+        if len(canonical_message(evidence)) > _MAX_EVIDENCE_BYTES:
+            raise ValueError("evidence is too large")
+        return evidence
+
+
+class RejectRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=1, max_length=1024)
+
+
+class ClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    lease_seconds: int = Field(default=30, ge=1, le=300)
+    node_id: str | None = Field(default=None, pattern=r"^spk_[0-9a-f]{32}$")
+
+
+class RenewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    csr: str = Field(min_length=1, max_length=_MAX_CSR_BYTES)
+    node_id: str | None = Field(default=None, pattern=r"^spk_[0-9a-f]{32}$")
+
+
+def _wire(value: object) -> object:
+    return json.loads(canonical_message(value))
+
+
+def _now(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _issued_response(issued: object) -> dict[str, object]:
+    return {
+        "node_id": issued.node_id,
+        "certificate_pem": issued.certificate_pem.decode("ascii"),
+        "chain_pem": issued.chain_pem.decode("ascii"),
+        "serial": issued.serial,
+        "fingerprint": issued.fingerprint,
+        "not_before": _now(issued.not_before).isoformat(),
+        "not_after": _now(issued.not_after).isoformat(),
+    }
+
+
+def _require_services(services: AgentApiServices | None) -> AgentApiServices:
+    if services is None:
+        raise HTTPException(status_code=503, detail="agent API is unavailable")
+    return services
+
+
+def _require_administrator(actor: Actor, path: str) -> None:
+    if actor.role != "administrator":
+        raise HTTPException(status_code=403, detail="insufficient role")
+
+
+def _scope_identity(request: Request) -> AgentIdentity:
+    identity = agent_identity_from_scope(request.scope)
+    if identity is None:
+        raise HTTPException(status_code=401, detail="verified agent identity required")
+    return identity
+
+
+def _authenticated_identity(request: Request, services: AgentApiServices) -> AgentIdentity:
+    identity = _scope_identity(request)
+    now = _now(services.clock())
+    with services.sessions() as session:
+        valid = session.scalar(
+            select(AgentCertificate.serial)
+            .join(AgentNode, AgentNode.node_id == AgentCertificate.node_id)
+            .where(
+                AgentCertificate.serial == identity.certificate_serial,
+                AgentCertificate.node_id == identity.node_id,
+                AgentCertificate.fingerprint == identity.certificate_fingerprint,
+                AgentCertificate.revoked_at.is_(None),
+                AgentCertificate.not_before <= now,
+                AgentCertificate.not_after > now,
+                AgentNode.state == "active",
+                AgentNode.revoked_at.is_(None),
+            )
+        )
+    if valid is None:
+        raise HTTPException(status_code=401, detail="agent certificate is not active")
+    return identity
+
+
+def _body_node_matches(value: str | None, identity: AgentIdentity) -> None:
+    if value is not None and value != identity.node_id:
+        raise HTTPException(status_code=403, detail="authenticated node identity cannot be overridden")
+
+
+def _enrollment_view(enrollment: AgentEnrollment) -> dict[str, object]:
+    return {
+        "id": enrollment.id,
+        "node_id": enrollment.node_id,
+        "state": enrollment.state,
+        "csr_public_key_fingerprint": enrollment.csr_public_key_fingerprint,
+        "host_key_fingerprint": enrollment.host_key_fingerprint,
+        "hardware_fingerprint": enrollment.hardware_fingerprint,
+        "agent_digest": enrollment.agent_digest,
+        "boot_id": enrollment.boot_id,
+        "created_at": _now(enrollment.created_at).isoformat(),
+        "decision_actor": enrollment.decision_actor,
+        "decided_at": _now(enrollment.decided_at).isoformat() if enrollment.decided_at else None,
+        "rejection_reason": enrollment.rejection_reason,
+        "certificate_serial": enrollment.certificate_serial,
+        "certificate_fingerprint": enrollment.certificate_fingerprint,
+    }
+
+
+def _references_digest(value: object, digest: str) -> bool:
+    if isinstance(value, str):
+        return value == digest
+    if isinstance(value, Mapping):
+        return any(_references_digest(item, digest) for item in value.values())
+    if isinstance(value, list):
+        return any(_references_digest(item, digest) for item in value)
+    return False
+
+
+def _open_owned_artifact(services: AgentApiServices, identity: AgentIdentity, digest: str) -> tuple[int, int]:
+    if _DIGEST.fullmatch(digest) is None:
+        raise HTTPException(status_code=404, detail="artifact not found")
+    with services.sessions() as session:
+        operations = list(session.scalars(
+            select(AgentOperation).where(
+                AgentOperation.node_id == identity.node_id,
+                AgentOperation.state.in_(_LIVE_OPERATION_STATES),
+            )
+        ))
+    if not any(_references_digest(operation.payload, digest) for operation in operations):
+        raise HTTPException(status_code=404, detail="artifact not found")
+    root_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    file_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        root_fd = os.open(os.fspath(services.artifact_root), root_flags)
+        try:
+            descriptor = os.open(digest, file_flags, dir_fd=root_fd)
+        finally:
+            os.close(root_fd)
+    except OSError:
+        raise HTTPException(status_code=404, detail="artifact not found") from None
+    try:
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > services.max_artifact_bytes:
+            raise HTTPException(status_code=404 if not stat.S_ISREG(metadata.st_mode) else 413, detail="artifact not available")
+        return descriptor, metadata.st_size
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _range(value: str | None, total: int, maximum: int) -> tuple[int, int] | None:
+    if value is None:
+        return None
+    match = re.fullmatch(r"bytes=(\d+)-(\d+)", value)
+    if match is None:
+        raise HTTPException(status_code=416, detail="range is invalid")
+    start, end = (int(part) for part in match.groups())
+    if start > end or start >= total or end >= total or end - start + 1 > maximum:
+        raise HTTPException(status_code=416, detail="range is invalid")
+    return start, end
+
+
+def _read_chunks(descriptor: int, start: int, length: int):
+    try:
+        os.lseek(descriptor, start, os.SEEK_SET)
+        remaining = length
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
+    finally:
+        os.close(descriptor)
+
+
+def install_agent_routes(
+    app: Any,
+    *,
+    actor_dependency: _ActorDependency,
+    services: AgentApiServices | None,
+) -> None:
+    human = APIRouter(prefix="/api/v1/agents")
+    agent = APIRouter(prefix="/agent/v1")
+
+    @human.post("/enrollments/grants", status_code=status.HTTP_201_CREATED)
+    def create_grant(body: GrantRequest, authenticated: Actor = Depends(actor_dependency)) -> dict[str, object]:
+        _require_administrator(authenticated, "/api/v1/agents/enrollments/grants")
+        required = _require_services(services)
+        try:
+            grant = required.enrollment.create(body.node_id, authenticated.subject, body.ttl_seconds)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        return {"id": grant.id, "node_id": grant.node_id, "expires_at": _now(grant.expires_at).isoformat(), "token": grant.token}
+
+    @human.get("/enrollments")
+    def list_enrollments(authenticated: Actor = Depends(actor_dependency)) -> dict[str, object]:
+        _require_administrator(authenticated, "/api/v1/agents/enrollments")
+        required = _require_services(services)
+        with required.sessions() as session:
+            records = list(session.scalars(select(AgentEnrollment).order_by(AgentEnrollment.created_at.desc()).limit(100)))
+        # In particular, an uncertain `issuing` record remains visible here;
+        # this endpoint intentionally never retries or clears it.
+        return {"enrollments": [_enrollment_view(record) for record in records]}
+
+    @human.post("/enrollments/{enrollment_id}/approve")
+    def approve(enrollment_id: str, authenticated: Actor = Depends(actor_dependency)) -> dict[str, object]:
+        _require_administrator(authenticated, "/api/v1/agents/enrollments/{enrollment_id}/approve")
+        required = _require_services(services)
+        try:
+            return _issued_response(required.enrollment.approve(enrollment_id, authenticated.subject))
+        except (EnrollmentDenied, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
+
+    @human.post("/enrollments/{enrollment_id}/reject")
+    def reject(enrollment_id: str, body: RejectRequest, authenticated: Actor = Depends(actor_dependency)) -> dict[str, object]:
+        _require_administrator(authenticated, "/api/v1/agents/enrollments/{enrollment_id}/reject")
+        required = _require_services(services)
+        try:
+            record = required.enrollment.reject(enrollment_id, authenticated.subject, body.reason)
+        except (EnrollmentDenied, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
+        return {"id": record.id, "node_id": record.node_id, "state": record.state}
+
+    @human.post("/nodes/{node_id}/revoke", status_code=status.HTTP_204_NO_CONTENT)
+    def revoke(node_id: str, authenticated: Actor = Depends(actor_dependency)) -> Response:
+        _require_administrator(authenticated, "/api/v1/agents/nodes/{node_id}/revoke")
+        required = _require_services(services)
+        now = _now(required.clock())
+        with required.sessions.begin() as session:
+            node = session.get(AgentNode, node_id)
+            if node is None:
+                raise HTTPException(status_code=404, detail="node not found")
+            node.state = "retired"
+            node.revoked_at = now
+            for certificate in session.scalars(select(AgentCertificate).where(AgentCertificate.node_id == node_id)):
+                if certificate.revoked_at is None:
+                    certificate.revoked_at = now
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @agent.post("/enroll", status_code=status.HTTP_202_ACCEPTED)
+    def enroll(body: EnrollmentSubmitRequest) -> dict[str, object]:
+        required = _require_services(services)
+        try:
+            pending = required.enrollment.submit(body.grant_token, body.csr.encode("ascii"), body.evidence)
+        except UnicodeEncodeError:
+            raise HTTPException(status_code=422, detail="CSR must be ASCII PEM") from None
+        except EnrollmentDenied as error:
+            raise HTTPException(status_code=403, detail=str(error)) from None
+        return {"id": pending.id, "node_id": pending.node_id, "state": pending.state}
+
+    @agent.post("/claim")
+    def claim(request: Request, body: ClaimRequest = ClaimRequest()) -> Response:
+        _scope_identity(request)
+        required = _require_services(services)
+        identity = _authenticated_identity(request, required)
+        _body_node_matches(body.node_id, identity)
+        try:
+            result = required.operations.claim(identity.node_id, identity.certificate_serial, body.lease_seconds)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        return Response(status_code=status.HTTP_204_NO_CONTENT) if result is None else JSONResponse(_wire(result))
+
+    @agent.post("/heartbeat")
+    def heartbeat(body: dict[str, object], request: Request) -> object:
+        _scope_identity(request)
+        required = _require_services(services)
+        identity = _authenticated_identity(request, required)
+        try:
+            message = AgentProgress.parse(body)
+        except AgentProtocolError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        _body_node_matches(message.node_id, identity)
+        try:
+            return _wire(required.operations.heartbeat(message, message.progress, 30))
+        except (StaleAgentAttempt, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
+
+    @agent.post("/result", status_code=status.HTTP_204_NO_CONTENT)
+    def result(body: dict[str, object], request: Request) -> Response:
+        _scope_identity(request)
+        required = _require_services(services)
+        identity = _authenticated_identity(request, required)
+        try:
+            message = AgentResult.parse(body)
+        except AgentProtocolError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        _body_node_matches(message.node_id, identity)
+        try:
+            if message.state == "succeeded":
+                required.operations.succeed(message, message.result)
+            elif message.state == "failed":
+                required.operations.fail(message, str(message.result.get("reason", "")))
+            else:
+                required.operations.wait_for_operator(message, str(message.result.get("reason", "")))
+        except (StaleAgentAttempt, ValueError) as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @agent.post("/renew")
+    def renew(body: RenewRequest, request: Request) -> dict[str, object]:
+        _scope_identity(request)
+        required = _require_services(services)
+        identity = _authenticated_identity(request, required)
+        _body_node_matches(body.node_id, identity)
+        try:
+            issued = required.enrollment.renew(identity.node_id, identity.certificate_serial, body.csr.encode("ascii"))
+        except UnicodeEncodeError:
+            raise HTTPException(status_code=422, detail="CSR must be ASCII PEM") from None
+        except (EnrollmentDenied, ValueError) as error:
+            raise HTTPException(status_code=403, detail=str(error)) from None
+        return _issued_response(issued)
+
+    @agent.get("/artifacts/{sha256}")
+    def artifact(sha256: str, request: Request) -> Response:
+        _scope_identity(request)
+        required = _require_services(services)
+        identity = _authenticated_identity(request, required)
+        descriptor, size = _open_owned_artifact(required, identity, sha256)
+        requested = _range(request.headers.get("range"), size, required.max_range_bytes)
+        if requested is None:
+            start, end, code = 0, size - 1, status.HTTP_200_OK
+        else:
+            start, end, code = requested[0], requested[1], status.HTTP_206_PARTIAL_CONTENT
+        length = end - start + 1
+        headers = {"Accept-Ranges": "bytes", "Content-Length": str(length)}
+        if code == status.HTTP_206_PARTIAL_CONTENT:
+            headers["Content-Range"] = f"bytes {start}-{end}/{size}"
+        return StreamingResponse(_read_chunks(descriptor, start, length), status_code=code, headers=headers, media_type="application/octet-stream")
+
+    app.include_router(human)
+    app.include_router(agent)

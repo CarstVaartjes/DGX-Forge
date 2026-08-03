@@ -18,7 +18,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from .audit import AuditRecord
-from .auth import Actor, AuthError, MUTATION_ROLES, TokenCodec
+from .auth import Actor, AuthError, MUTATION_ROLES, TokenCodec, TrustedProxyAgentIdentityMiddleware
+from .agent_api import AgentApiServices, install_agent_routes
 from .proposals import DocumentChange
 from .metrics import MetricsRegistry
 
@@ -104,8 +105,14 @@ def create_app(
     metrics_token: str | None = None,
     metrics_refresh: Callable[[], None] | None = None,
     job_logs=None,
+    agent: AgentApiServices | None = None,
+    trusted_agent_proxy_sources: frozenset[str] = frozenset(),
 ) -> FastAPI:
     app = FastAPI(title="DGX Forge Control", version="1.0", docs_url=None, redoc_url=None)
+    app.add_middleware(
+        TrustedProxyAgentIdentityMiddleware,
+        trusted_proxy_sources=trusted_agent_proxy_sources,
+    )
 
     @app.middleware("http")
     async def request_boundary(request: Request, call_next):
@@ -151,6 +158,8 @@ def create_app(
     def require_mutation_role(authenticated: Actor, path: str) -> None:
         if authenticated.role not in MUTATION_ROLES[("POST", path)]:
             raise HTTPException(status_code=403, detail="insufficient role")
+
+    install_agent_routes(app, actor_dependency=actor, services=agent)
 
     @app.get("/api/v1/healthz")
     def healthz() -> dict[str, str]:

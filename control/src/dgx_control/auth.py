@@ -6,9 +6,13 @@ import base64
 import hashlib
 import hmac
 import json
+import re
 from dataclasses import dataclass
+from typing import Any
 
 _ROLES = frozenset({"viewer", "operator", "administrator"})
+_AGENT_NODE_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
+_AGENT_IDENTITY_SCOPE_KEY = "dgx.agent_identity"
 
 MUTATION_ROLES = {
     ("POST", "/api/v1/jobs"): frozenset({"operator", "administrator"}),
@@ -16,6 +20,10 @@ MUTATION_ROLES = {
     ("POST", "/api/v1/changes"): frozenset({"administrator"}),
     ("POST", "/api/v1/reconciliations/plan"): frozenset({"operator", "administrator"}),
     ("POST", "/api/v1/reconciliations"): frozenset({"operator", "administrator"}),
+    ("POST", "/api/v1/agents/enrollments/grants"): frozenset({"administrator"}),
+    ("POST", "/api/v1/agents/enrollments/{enrollment_id}/approve"): frozenset({"administrator"}),
+    ("POST", "/api/v1/agents/enrollments/{enrollment_id}/reject"): frozenset({"administrator"}),
+    ("POST", "/api/v1/agents/nodes/{node_id}/revoke"): frozenset({"administrator"}),
 }
 
 
@@ -31,6 +39,81 @@ class Actor:
     def __post_init__(self) -> None:
         if not self.subject.strip() or self.role not in _ROLES:
             raise AuthError("invalid authenticated actor")
+
+
+@dataclass(frozen=True)
+class AgentIdentity:
+    """An identity attested by the private TLS-terminating proxy."""
+
+    node_id: str
+    certificate_serial: str
+    certificate_fingerprint: str
+    verified: bool
+
+    def __post_init__(self) -> None:
+        if (
+            _AGENT_NODE_ID.fullmatch(self.node_id) is None
+            or not self.certificate_serial.strip()
+            or not self.certificate_fingerprint.strip()
+            or self.verified is not True
+        ):
+            raise AuthError("invalid verified agent identity")
+
+
+def agent_identity_from_scope(scope: dict[str, Any]) -> AgentIdentity | None:
+    """Return only a typed, verification-marked proxy identity from a scope."""
+    identity = scope.get(_AGENT_IDENTITY_SCOPE_KEY)
+    if not isinstance(identity, AgentIdentity) or identity.verified is not True:
+        return None
+    return identity
+
+
+class TrustedProxyAgentIdentityMiddleware:
+    """Convert forwarded mTLS metadata from configured private peers only.
+
+    It deliberately removes every incoming ``X-DGX-Agent-*`` header before
+    invoking the application.  Consequently downstream code can only consume
+    the typed ASGI scope value, never a client supplied header.
+    """
+
+    def __init__(self, app: Any, *, trusted_proxy_sources: frozenset[str] = frozenset()) -> None:
+        self.app = app
+        self._trusted_proxy_sources = trusted_proxy_sources
+
+    async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        raw_headers = scope.get("headers", ())
+        forwarded: dict[str, str] = {}
+        duplicate_forwarded_headers = False
+        for key, value in raw_headers:
+            if not key.lower().startswith(b"x-dgx-agent-"):
+                continue
+            name = key.decode("latin-1").lower()
+            if name in forwarded:
+                duplicate_forwarded_headers = True
+            forwarded[name] = value.decode("latin-1")
+        sanitized = tuple(
+            (key, value) for key, value in raw_headers
+            if not key.lower().startswith(b"x-dgx-agent-")
+        )
+        safe_scope = dict(scope)
+        safe_scope.pop(_AGENT_IDENTITY_SCOPE_KEY, None)
+        safe_scope["headers"] = sanitized
+        client = scope.get("client")
+        source = client[0] if isinstance(client, (tuple, list)) and client else None
+        if source in self._trusted_proxy_sources and not duplicate_forwarded_headers:
+            try:
+                safe_scope[_AGENT_IDENTITY_SCOPE_KEY] = AgentIdentity(
+                    node_id=forwarded["x-dgx-agent-node"],
+                    certificate_serial=forwarded["x-dgx-agent-serial"],
+                    certificate_fingerprint=forwarded["x-dgx-agent-fingerprint"],
+                    verified=forwarded["x-dgx-agent-verified"] == "1",
+                )
+            except (AuthError, KeyError):
+                pass
+        await self.app(safe_scope, receive, send)
 
 
 def _encode(value: bytes) -> str:
