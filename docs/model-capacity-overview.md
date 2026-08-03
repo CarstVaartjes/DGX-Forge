@@ -24,7 +24,7 @@ recovered memory after shutdown.
 
 | Required model | Official release and published capacity evidence | Preferred DGX Spark-optimized path | Placement | Initial residency | Evidence status |
 | --- | --- | --- | --- | --- | --- |
-| DeepSeek-V4-Flash-0731 | The [official checkpoint](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731) snapshot is about 155.44 GiB of weights, before KV cache and runtime workspaces. | The default is the audited [MiaAI-Lab dual-Spark recipe](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark). The verified single-Spark alternative is DS4 v0.5.3 with the Q2-imatrix base plus DSpark drafter pair (93,691,352,992 bytes). MXFP4 remains deferred. | Both Sparks for the default service; one Spark for the DS4 alternative | `dual-exclusive`; DS4 is `single-exclusive` initially | Mia and DS4 Q2 are operational and `verified`. Neither definition is accepted, and DS4 profile admission remains blocked. |
+| DeepSeek-V4-Flash-0731 | The [official checkpoint](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731) snapshot is about 155.44 GiB of weights, before KV cache and runtime workspaces. | The default is the audited [MiaAI-Lab dual-Spark recipe](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark). The verified single-Spark alternative is DS4 v0.5.3 with the Q2-imatrix base plus DSpark drafter pair (93,691,352,992 bytes). MXFP4 remains deferred. | Both Sparks for the default service; one Spark for the DS4 alternative | `dual-exclusive`; DS4 is `single-exclusive` initially | Mia is accepted after canonical throughput, 15-minute thermal, three-cycle lifecycle, and reboot/no-autostart gates. DS4 remains operational and `verified`; its profile admission remains blocked. |
 | Nemotron 3 Super 120B-A12B | 120B total/12B active; the NVFP4 repository is about 80 GB and lists one DGX Spark as the minimum. | NVIDIA's exact [Nemotron 3 Super NVFP4](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4) with the official [DGX Spark Nemotron playbook](https://build.nvidia.com/spark/nemotron); compare vLLM and TensorRT-LLM. | One Spark | `single-exclusive` | Official Spark path; cluster context, KV, MTP, and throughput acceptance pending. |
 | Nemotron 3 Nano Omni 30B-A3B | NVIDIA publishes BF16 at 62 GB, FP8 at 33 GB, and NVFP4 at 21 GB; one Spark is supported. | Official [Nano Omni NVFP4](https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-NVFP4) through NVIDIA's [Spark vLLM playbook](https://build.nvidia.com/spark/vllm/instructions); FP8 remains a measured comparison definition. | One Spark | `single-exclusive`, then co-residency candidate | Official Spark path; multimodal and exact-set acceptance pending. |
 | Qwen-Image | Official [Qwen-Image](https://github.com/QwenLM/Qwen-Image) is a 20B MMDiT model. The generic peak-memory requirement is not the Spark admission result. | [ModelOpt NVFP4 for SGLang](https://huggingface.co/lmsys/qwen-image-modelopt-nvfp4-sglang), served persistently through a GB10-native SGLang Diffusion build. | One Spark | `single-exclusive` initially | Blackwell-optimized artifact exists; DGX Spark build, output parity, and peak memory require cluster acceptance. |
@@ -43,12 +43,11 @@ The current DeepSeek operational evidence is recorded in the
 reports. DS4 measured a 67-second cold start, 110.86 GiB of consumed available
 memory after its live gate run, a 32,768-token context, and an 8 GiB disk-KV
 budget on Spark 1.
-`verified` is definition-specific: the Mia dual-Spark definition requires its
-distributed fabric, role, image, checkpoint, and Compose gates, while the DS4
-single-Spark definition requires its offline artifact, image, architecture,
-identity, mapped/no-copy, reasoning, and cache gates. It does not mean
-`accepted`: sustained thermal, repeated lifecycle, reboot and final performance
-gates are reserved for the final cross-model optimization phase.
+`verified` is definition-specific: the DS4 single-Spark definition requires its
+offline artifact, image, architecture, identity, mapped/no-copy, reasoning, and
+cache gates. Mia has additionally passed its sustained thermal, repeated
+lifecycle, reboot/no-autostart, and canonical performance gates and is now
+`accepted`. The remaining creative definitions are still planned candidates.
 
 ## Placement interpretation
 
