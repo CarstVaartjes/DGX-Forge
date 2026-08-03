@@ -59,6 +59,20 @@ def test_remote_command_pins_noninteractive_safe_options(
     assert result == RemoteResult(0, b"ok\n", b"")
 
 
+def test_install_transport_uses_shared_binary_selector(
+    monkeypatch: pytest.MonkeyPatch,
+    endpoint: ManagementEndpoint,
+) -> None:
+    monkeypatch.setenv("SPARK_SSH_BIN", "/opt/shared/ssh")
+    monkeypatch.setenv("SPARK_SCP_BIN", "/opt/shared/scp")
+    execute = RecordingExec()
+    transport = OpenSshInstallTransport(execute=execute)
+
+    transport.run(endpoint, ("true",), b"", 10)
+
+    assert execute.calls[0]["argv"][0] == "/opt/shared/ssh"
+
+
 def test_remote_command_quotes_each_remote_argument(
     endpoint: ManagementEndpoint,
 ) -> None:

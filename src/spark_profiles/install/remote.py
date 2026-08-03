@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Protocol
 
 from spark_profiles.fleet import ManagementEndpoint
+from spark_profiles.ssh_transport import select_transport_binary
 
 _SENSITIVE = re.compile(
     r"(?i)(authorization\s*:|bearer\s+|password\b|private[_-]?key\b|secret\b|token\b)"
@@ -57,8 +58,8 @@ class OpenSshInstallTransport:
         self,
         *,
         execute: _Execute = subprocess.run,
-        ssh_bin: str = "ssh",
-        scp_bin: str = "scp",
+        ssh_bin: str | None = None,
+        scp_bin: str | None = None,
         connect_timeout_seconds: int = 10,
         output_limit_bytes: int = 65536,
     ) -> None:
@@ -67,8 +68,8 @@ class OpenSshInstallTransport:
         if output_limit_bytes <= 0:
             raise ValueError("output limit must be positive")
         self._execute = execute
-        self._ssh_bin = ssh_bin
-        self._scp_bin = scp_bin
+        self._ssh_bin = ssh_bin or select_transport_binary("ssh")
+        self._scp_bin = scp_bin or select_transport_binary("scp")
         self._connect_timeout = connect_timeout_seconds
         self._output_limit = output_limit_bytes
 
