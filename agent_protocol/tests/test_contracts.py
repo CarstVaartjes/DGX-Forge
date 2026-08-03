@@ -52,6 +52,13 @@ def valid_attempt() -> dict[str, object]:
     }
 
 
+def claim_with_payload(payload: dict[str, str]) -> dict[str, object]:
+    return valid_claim() | {
+        "payload": payload,
+        "payload_digest": hashlib.sha256(canonical_message(payload)).hexdigest(),
+    }
+
+
 def test_claim_is_node_scoped_and_canonical() -> None:
     claim = AgentClaim.parse(valid_claim())
 
@@ -151,10 +158,53 @@ def test_protocol_rejects_client_selected_filesystem_paths(payload: dict[str, st
 
 def test_protocol_allows_benign_profile_key() -> None:
     payload = {"profile": "production"}
-    raw = valid_claim() | {"payload": payload, "payload_digest": hashlib.sha256(canonical_message(payload)).hexdigest()}
+    raw = claim_with_payload(payload)
 
     assert AgentClaim.parse(raw).payload == payload
     assert validate_schema_message("agent-job.schema.json", raw).payload == payload
+
+
+@pytest.mark.parametrize("field", ["artifactPathX", "artifactFileY", "someDirectoryZ"])
+@pytest.mark.parametrize("name", ["agent-job.schema.json", "agent-result.schema.json"])
+def test_path_key_continuations_are_rejected_by_runtime_and_schema(
+    name: str,
+    field: str,
+) -> None:
+    document = {field: "release"}
+    if name == "agent-job.schema.json":
+        raw = claim_with_payload(document)
+        parser = AgentClaim.parse
+    else:
+        raw = valid_attempt() | {"state": "succeeded", "result": document}
+        parser = AgentResult.parse
+
+    with pytest.raises(AgentProtocolError, match="path"):
+        parser(raw)
+    assert not schema(name).is_valid(raw)
+    with pytest.raises(AgentProtocolError):
+        validate_schema_message(name, raw)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["profile", "artifactPathology", "artifactFiletype", "someDirectoryish"],
+)
+@pytest.mark.parametrize("name", ["agent-job.schema.json", "agent-result.schema.json"])
+def test_neighboring_non_path_keys_are_accepted_by_runtime_and_schema(
+    name: str,
+    field: str,
+) -> None:
+    document = {field: "release"}
+    if name == "agent-job.schema.json":
+        raw = claim_with_payload(document)
+        parser = AgentClaim.parse
+    else:
+        raw = valid_attempt() | {"state": "succeeded", "result": document}
+        parser = AgentResult.parse
+
+    assert parser(raw)
+    assert schema(name).is_valid(raw)
+    assert validate_schema_message(name, raw)
 
 
 def test_progress_and_result_are_fenced_node_messages() -> None:
