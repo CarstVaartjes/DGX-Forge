@@ -164,3 +164,68 @@ bounded to 24 hours if that gate is unavailable. A lost success response from
 step-ca can remain remotely uncertain because a repeated passive revoke may be
 reported as already revoked; the documented procedure preserves local denial
 and requires CA DB/audit reconciliation rather than guessing.
+
+## Review fix round 1
+
+The first independent review found three real pinned-version compatibility
+issues; all were reproduced and fixed.
+
+- The tracked step-ca v0.30.2 template emits a safe leaf with no Basic
+  Constraints extension and a non-critical clientAuth EKU. The original mock
+  emitted a stricter synthetic profile, so the provider rejected real output.
+  The validator now requires the exact real profile: digitalSignature-only
+  critical KU, exact non-critical clientAuth EKU, exact non-critical node URI
+  SAN, matching subject/key/issuer/signature/lifetime, no unknown extensions,
+  and either no Basic Constraints or a critical `CA=false` constraint. A new
+  integration test builds an Ed25519 offline-root/intermediate fixture, starts
+  the exact digest-pinned step-ca image with the tracked template, verifies TLS
+  under the `step-ca` hostname, issues through the real `/1.0/sign` endpoint,
+  and inspects the returned extensions.
+- The nonexistent `step crypto jwk fingerprint` runbook command is replaced by
+  the v0.30.2-supported stdin form `step crypto jwk thumbprint < public.jwk`.
+  A test executes that command in the exact pinned image and checks its RFC 7638
+  output grammar.
+- The tracked config now explicitly enables CRLs with
+  `generateOnRevoke=true`, `cacheDuration=1h`, and `renewPeriod=30m`. The real
+  pinned integration revokes the issued serial, retrieves `/1.0/crl?pem=true`,
+  and proves the serial is present. Provider validation additionally rejects
+  CRLs with a future, stale, expired, missing, or overlong update window while
+  retaining issuer/signature and response-size checks.
+
+Review-round RED evidence:
+
+```text
+uv run --project control pytest \
+  control/tests/test_step_ca.py::test_revocation_bundle_rejects_stale_future_expired_or_unbounded_crl -q
+4 failed: stale, future, and expired CRLs were accepted; missing nextUpdate had no bounded validation path
+```
+
+The initial pinned integration reproduced the review exactly: a real issued
+leaf had no Basic Constraints and a non-critical clientAuth EKU, and the
+original provider rejected it. Before CRL configuration, the real endpoint
+returned no usable CRL.
+
+Review-round focused GREEN:
+
+```text
+uv run --project control pytest control/tests/test_step_ca.py -q
+30 passed, including real pinned issuance/revocation/CRL integration
+
+uv run pytest tests/runbooks/test_agent_pki.py -q
+7 passed, including the pinned thumbprint command
+```
+
+Review-round full regression verification:
+
+```text
+uv run --project control pytest control/tests -q
+265 passed in 18.94s
+
+uv run pytest deploy/compose/tests -q
+17 passed in 6.85s
+
+uv run pytest deploy/compose/tests/test_agent_ingress.py tests/runbooks/test_agent_pki.py -q
+15 passed in 6.93s
+```
+
+Both provider overlay render commands and `git diff --check` exited 0.

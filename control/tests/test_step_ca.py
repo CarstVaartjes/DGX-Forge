@@ -2,18 +2,23 @@ from __future__ import annotations
 
 # Keep this import first so the TDD RED proves the provider is absent before
 # any new runtime dependency is imported.
-from dgx_control.step_ca import StepCertificateAuthority, StepCAError
+from dgx_control.step_ca import StepCertificateAuthority, StepCAError, _validate_crl_freshness
 
 from datetime import UTC, datetime, timedelta
 import base64
 import json
+import os
 from pathlib import Path
+import socket
+import subprocess
+import time
 from types import SimpleNamespace
+import uuid
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
-from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+from cryptography.x509.oid import ExtendedKeyUsageOID, ExtensionOID, NameOID
 import httpx
 import jwt
 import pytest
@@ -28,6 +33,7 @@ from dgx_control.models import Base
 NODE_ID = "spk_0123456789abcdef0123456789abcdef"
 NOW = datetime(2026, 8, 4, 12, tzinfo=UTC)
 CA_URL = "https://step-ca:9000"
+STEP_CA_IMAGE = "smallstep/step-ca:0.30.2@sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270"
 
 
 def _b64(value: int) -> str:
@@ -101,9 +107,8 @@ def _leaf(csr_pem: bytes, material: dict[str, object], *, now: datetime = NOW, s
         x509.CertificateBuilder().subject_name(request.subject)
         .issuer_name(material["intermediate"].subject).public_key(request.public_key())
         .serial_number(serial).not_valid_before(now).not_valid_after(now + timedelta(hours=24))
-        .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
         .add_extension(x509.KeyUsage(True, False, False, False, False, False, False, False, False), critical=True)
-        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=True)
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False)
         .add_extension(request.extensions.get_extension_for_class(x509.SubjectAlternativeName).value, critical=False)
         .sign(material["intermediate_key"], algorithm=None)
     )
@@ -207,6 +212,56 @@ def test_revocation_is_authenticated_passive_and_idempotent_in_effect(tmp_path: 
         assert claims["aud"] == f"{CA_URL}/1.0/revoke"
         assert claims["sub"] == "5678"
     assert seen[0]["ott"] != seen[1]["ott"]
+
+
+def _crl_response(material: dict[str, object], *, last_update: datetime, next_update: datetime | None) -> httpx.Response:
+    builder = x509.CertificateRevocationListBuilder().issuer_name(material["intermediate"].subject).last_update(last_update)
+    if next_update is not None:
+        builder = builder.next_update(next_update)
+    crl = builder.sign(material["intermediate_key"], algorithm=None)
+    return httpx.Response(200, content=crl.public_bytes(serialization.Encoding.PEM), headers={"content-type": "application/x-pem-file"})
+
+
+def test_revocation_bundle_accepts_current_bounded_signed_crl(tmp_path: Path) -> None:
+    holder: dict[str, object] = {}
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return _crl_response(holder["material"], last_update=NOW - timedelta(minutes=1), next_update=NOW + timedelta(minutes=59))
+
+    provider, material = _provider(tmp_path, handler)
+    holder["material"] = material
+    bundle = provider.revocation_bundle(NOW)
+    assert x509.load_pem_x509_crl(bundle).next_update_utc == NOW + timedelta(minutes=59)
+
+
+@pytest.mark.parametrize(
+    ("last_update", "next_update"),
+    (
+        (NOW - timedelta(hours=1, minutes=1), NOW + timedelta(minutes=1)),
+        (NOW + timedelta(minutes=1), NOW + timedelta(hours=1)),
+        (NOW - timedelta(hours=1), NOW - timedelta(seconds=31)),
+        (NOW, NOW + timedelta(hours=1, minutes=1)),
+    ),
+    ids=("stale", "future", "expired", "overlong"),
+)
+def test_revocation_bundle_rejects_stale_future_expired_or_unbounded_crl(
+    tmp_path: Path, last_update: datetime, next_update: datetime | None,
+) -> None:
+    holder: dict[str, object] = {}
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        return _crl_response(holder["material"], last_update=last_update, next_update=next_update)
+
+    provider, material = _provider(tmp_path, handler)
+    holder["material"] = material
+    with pytest.raises(StepCAError, match="revocation bundle.*freshness"):
+        provider.revocation_bundle(NOW)
+
+
+def test_revocation_bundle_rejects_missing_next_update_window() -> None:
+    crl_without_window = SimpleNamespace(last_update_utc=NOW, next_update_utc=None)
+    with pytest.raises(StepCAError, match="revocation bundle.*freshness"):
+        _validate_crl_freshness(crl_without_window, NOW, timedelta(seconds=30))
 
 
 @pytest.mark.parametrize("mutation", ("key", "subject", "san", "eku", "usage", "issuer", "lifetime", "chain", "extra-chain"))
@@ -410,3 +465,115 @@ def test_tracked_step_ca_template_is_public_only_and_matches_provider_validation
     template = provisioner["options"]["x509"]["template"]
     assert "digitalSignature" in template and "clientAuth" in template
     assert "serverAuth" not in template
+    assert config["crl"] == {
+        "enabled": True, "generateOnRevoke": True,
+        "cacheDuration": "1h", "renewPeriod": "30m",
+    }
+
+
+def test_pinned_step_ca_issues_tracked_leaf_profile_and_serves_fresh_crl(tmp_path: Path, monkeypatch) -> None:
+    """Exercise the tracked public config against the exact production image."""
+    tmp_path.chmod(0o777)
+    root_password = tmp_path / "root-password"
+    intermediate_password = tmp_path / "intermediate-password"
+    root_password.write_text("fixture-root-password-with-entropy\n")
+    intermediate_password.write_text("fixture-intermediate-password-with-entropy\n")
+    user = f"{os.getuid()}:{os.getgid()}"
+
+    def step(*arguments: str, input_text: str | None = None) -> subprocess.CompletedProcess[str]:
+        return subprocess.run([
+            "docker", "run", "--rm", "--user", user,
+            "-i",
+            "-v", f"{tmp_path}:/work", "--entrypoint", "step", STEP_CA_IMAGE,
+            *arguments,
+        ], input=input_text, capture_output=True, text=True, timeout=60, check=True)
+
+    root = tmp_path / "root_ca.crt"
+    root_key = tmp_path / "root_ca.key"
+    intermediate = tmp_path / "intermediate_ca.crt"
+    intermediate_key = tmp_path / "intermediate_ca_key"
+    public_jwk = tmp_path / "agent-ca-public.jwk"
+    private_jwk = tmp_path / "agent-ca-credential"
+    step(
+        "certificate", "create", "DGX Forge Test Root", "/work/root_ca.crt", "/work/root_ca.key",
+        "--profile", "root-ca", "--kty", "OKP", "--curve", "Ed25519", "--not-after", "87600h",
+        "--password-file", "/work/root-password",
+    )
+    step(
+        "certificate", "create", "DGX Forge Test Intermediate", "/work/intermediate_ca.crt", "/work/intermediate_ca_key",
+        "--profile", "intermediate-ca", "--kty", "OKP", "--curve", "Ed25519", "--not-after", "8760h",
+        "--ca", "/work/root_ca.crt", "--ca-key", "/work/root_ca.key",
+        "--ca-password-file", "/work/root-password", "--password-file", "/work/intermediate-password",
+    )
+    step(
+        "crypto", "jwk", "create", "/work/agent-ca-public.jwk", "/work/agent-ca-credential",
+        "--kty", "EC", "--crv", "P-256", "--no-password", "--insecure",
+    )
+    public = json.loads(public_jwk.read_text())
+    kid = step("crypto", "jwk", "thumbprint", input_text=public_jwk.read_text()).stdout.strip()
+    public.update({"kid": kid, "alg": "ES256", "use": "sig"})
+    private = json.loads(private_jwk.read_text())
+    private.update({"kid": kid, "alg": "ES256", "use": "sig"})
+    public_jwk.write_text(json.dumps(public))
+    private_jwk.write_text(json.dumps(private))
+
+    config_path = Path(__file__).resolve().parents[2] / "deploy/compose/step-ca/ca.json"
+    config = json.loads(config_path.read_text())
+    config["authority"]["provisioners"][0]["key"] = public
+    generated_config = tmp_path / "ca.json"
+    generated_config.write_text(json.dumps(config))
+    database = tmp_path / "db"
+    database.mkdir(mode=0o777)
+    container = f"dgx-step-ca-test-{uuid.uuid4().hex}"
+    subprocess.run([
+        "docker", "run", "--rm", "-d", "--name", container, "-p", "127.0.0.1::9000",
+        "-v", f"{generated_config}:/home/step/config/ca.json:ro",
+        "-v", f"{root}:/run/secrets/root_ca.crt:ro",
+        "-v", f"{intermediate}:/run/secrets/intermediate_ca.crt:ro",
+        "-v", f"{intermediate_key}:/run/secrets/intermediate_ca_key:ro",
+        "-v", f"{intermediate_password}:/run/secrets/step-ca-password:ro",
+        "-v", f"{database}:/home/step/db",
+        "--entrypoint", "step-ca", STEP_CA_IMAGE,
+        "/home/step/config/ca.json", "--password-file", "/run/secrets/step-ca-password",
+    ], check=True, capture_output=True, text=True, timeout=30)
+    try:
+        port_output = subprocess.run(
+            ["docker", "port", container, "9000/tcp"], check=True,
+            capture_output=True, text=True, timeout=10,
+        ).stdout.strip()
+        port = port_output.rsplit(":", 1)[1]
+        real_getaddrinfo = socket.getaddrinfo
+        monkeypatch.setattr(
+            socket, "getaddrinfo",
+            lambda host, *args, **kwargs: real_getaddrinfo("127.0.0.1" if host == "step-ca" else host, *args, **kwargs),
+        )
+        provider = StepCertificateAuthority(
+            ca_url=f"https://step-ca:{port}", root_certificate_path=root,
+            intermediate_certificate_path=intermediate,
+            provisioner_name="dgx-forge-agent", provisioner_kid=kid,
+            credential_path=private_jwk, provisioner_public_jwk_path=public_jwk,
+            timeout_seconds=2.0,
+        )
+        deadline = time.monotonic() + 15
+        while True:
+            try:
+                provider.check_health()
+                break
+            except StepCAError:
+                if time.monotonic() >= deadline:
+                    logs = subprocess.run(["docker", "logs", container], capture_output=True, text=True).stderr
+                    pytest.fail(f"pinned step-ca did not become healthy: {logs}")
+                time.sleep(0.1)
+        now = datetime.now(UTC).replace(microsecond=0)
+        issued = provider.issue_node(NODE_ID, _csr(), now)
+        certificate = x509.load_pem_x509_certificate(issued.certificate_pem)
+        extensions = {extension.oid: extension for extension in certificate.extensions}
+        assert ExtensionOID.BASIC_CONSTRAINTS not in extensions
+        assert extensions[ExtensionOID.KEY_USAGE].critical is True
+        assert extensions[ExtensionOID.EXTENDED_KEY_USAGE].critical is False
+        assert extensions[ExtensionOID.EXTENDED_KEY_USAGE].value == x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH])
+        provider.revoke_node(issued.serial, datetime.now(UTC).replace(microsecond=0))
+        crl = x509.load_pem_x509_crl(provider.revocation_bundle(datetime.now(UTC).replace(microsecond=0)))
+        assert issued.serial in {str(record.serial_number) for record in crl}
+    finally:
+        subprocess.run(["docker", "stop", container], capture_output=True, text=True, timeout=30)

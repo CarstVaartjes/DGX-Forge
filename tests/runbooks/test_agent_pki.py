@@ -84,6 +84,24 @@ def test_public_provisioner_config_bootstrap_executes_in_disposable_fixture(tmp_
     assert stored_private["y"] == configured["y"] and "d" in stored_private
 
 
+def test_pinned_step_image_supports_documented_jwk_thumbprint_command() -> None:
+    runbook = _text()
+    assert "step crypto jwk thumbprint <" in runbook
+    assert "step crypto jwk fingerprint" not in runbook
+    public = {
+        "kty": "EC", "crv": "P-256", "use": "sig", "alg": "ES256",
+        "x": "NTgTNOnQHzF1BD0MWqZ09QpZyWoshtsnf5FgMbW7k24",
+        "y": "UXNDV6LlUGcWRsPfYaf3noyY-1FvR9fvRztaW2j_rX0",
+    }
+    result = subprocess.run([
+        "docker", "run", "--rm", "-i", "--entrypoint", "step",
+        "smallstep/step-ca:0.30.2@sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270",
+        "crypto", "jwk", "thumbprint",
+    ], input=json.dumps(public), capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert re.fullmatch(r"[A-Za-z0-9_-]{43}\n?", result.stdout)
+
+
 def test_recovery_requires_explicit_node_bound_grant_and_never_identity_copy() -> None:
     text = _text().lower()
     recovery = text[text.index("expiry and identity-loss recovery"):]

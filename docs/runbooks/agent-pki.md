@@ -73,7 +73,7 @@ generated configuration; it receives no `encryptedKey` for this provisioner.
 step crypto jwk create \
   "$PKI_SECRET_DIR/agent-ca-public.jwk" "$PKI_SECRET_DIR/agent-ca-credential" \
   --kty EC --crv P-256 --no-password --insecure
-AGENT_CA_PROVISIONER_KID="$(step crypto jwk fingerprint "$PKI_SECRET_DIR/agent-ca-public.jwk")"
+AGENT_CA_PROVISIONER_KID="$(step crypto jwk thumbprint < "$PKI_SECRET_DIR/agent-ca-public.jwk")"
 jq --arg kid "$AGENT_CA_PROVISIONER_KID" '.kid=$kid | .alg="ES256" | .use="sig"' \
   "$PKI_SECRET_DIR/agent-ca-public.jwk" > "$PKI_SECRET_DIR/agent-ca-public.with-kid.jwk"
 jq --arg kid "$AGENT_CA_PROVISIONER_KID" '.kid=$kid | .alg="ES256" | .use="sig"' \
@@ -91,6 +91,9 @@ The tracked template fixes the JWK provisioner to 24 hours, disables direct CA
 renewal and Smallstep extensions, and uses a client-auth-only template. Normal
 renewal is a new `/1.0/sign` request: DGX-Forge first authenticates the existing
 mTLS identity, then submits the new node-signed CSR under fixed policy.
+CRL generation is enabled with `generateOnRevoke`, a one-hour cache duration,
+and a 30-minute renewal period. The control provider accepts only a correctly
+signed CRL whose update window is current and bounded to that configured hour.
 
 ## Start and verify the production provider
 

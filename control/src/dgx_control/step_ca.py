@@ -27,6 +27,7 @@ _SERIAL = re.compile(r"[1-9][0-9]{0,127}\Z")
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.@-]{0,127}\Z")
 _KID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
 _LIFETIME = timedelta(hours=24)
+_MAX_CRL_WINDOW = timedelta(hours=1)
 
 
 class StepCAError(RuntimeError):
@@ -149,7 +150,7 @@ class StepCertificateAuthority(CertificateAuthority):
             raise StepCAError("step-ca returned an invalid revocation response")
 
     def revocation_bundle(self, now: datetime) -> bytes:
-        _utc_timestamp(now)
+        timestamp = _utc_timestamp(now)
         raw = self._request("GET", "/1.0/crl?pem=true", None, accept="application/x-pem-file")
         try:
             crl = x509.load_pem_x509_crl(raw)
@@ -161,6 +162,7 @@ class StepCertificateAuthority(CertificateAuthority):
             self._intermediate.public_key().verify(crl.signature, crl.tbs_certlist_bytes)
         except Exception as error:
             raise StepCAError("step-ca revocation bundle signature is invalid") from error
+        _validate_crl_freshness(crl, timestamp, self._clock_skew)
         return crl.public_bytes(serialization.Encoding.PEM)
 
     def _sign(self, node_id: str, csr_pem: bytes, now: datetime) -> IssuedCertificate:
@@ -227,12 +229,12 @@ class StepCertificateAuthority(CertificateAuthority):
         if leaf_key != request_key:
             raise StepCAError("step-ca returned a certificate for another public key")
         required_extensions = {
-            ExtensionOID.BASIC_CONSTRAINTS,
             ExtensionOID.KEY_USAGE,
             ExtensionOID.EXTENDED_KEY_USAGE,
             ExtensionOID.SUBJECT_ALTERNATIVE_NAME,
         }
         allowed_extensions = required_extensions | {
+            ExtensionOID.BASIC_CONSTRAINTS,
             ExtensionOID.SUBJECT_KEY_IDENTIFIER,
             ExtensionOID.AUTHORITY_KEY_IDENTIFIER,
         }
@@ -240,10 +242,12 @@ class StepCertificateAuthority(CertificateAuthority):
         if not required_extensions <= extension_oids or not extension_oids <= allowed_extensions:
             raise StepCAError("step-ca returned an unexpected certificate extension profile")
         criticality = {value.oid: value.critical for value in leaf.extensions}
-        if criticality[ExtensionOID.BASIC_CONSTRAINTS] is not True or criticality[ExtensionOID.KEY_USAGE] is not True or criticality[ExtensionOID.EXTENDED_KEY_USAGE] is not True or criticality[ExtensionOID.SUBJECT_ALTERNATIVE_NAME] is not False:
+        if criticality[ExtensionOID.KEY_USAGE] is not True or criticality[ExtensionOID.EXTENDED_KEY_USAGE] is not False or criticality[ExtensionOID.SUBJECT_ALTERNATIVE_NAME] is not False:
             raise StepCAError("step-ca returned invalid certificate extension criticality")
-        if leaf.extensions.get_extension_for_class(x509.BasicConstraints).value != x509.BasicConstraints(False, None):
-            raise StepCAError("step-ca returned a CA certificate")
+        if ExtensionOID.BASIC_CONSTRAINTS in extension_oids:
+            basic_constraints = leaf.extensions.get_extension_for_class(x509.BasicConstraints)
+            if basic_constraints.critical is not True or basic_constraints.value != x509.BasicConstraints(False, None):
+                raise StepCAError("step-ca returned a CA certificate")
         expected_usage = x509.KeyUsage(True, False, False, False, False, False, False, False, False)
         if leaf.extensions.get_extension_for_class(x509.KeyUsage).value != expected_usage:
             raise StepCAError("step-ca returned invalid key usage")
@@ -384,3 +388,18 @@ def _jwk_thumbprint(value: dict[str, object]) -> str:
     except (KeyError, UnicodeEncodeError) as error:
         raise ValueError("provisioner public metadata is missing thumbprint fields") from error
     return base64.urlsafe_b64encode(hashlib.sha256(canonical).digest()).rstrip(b"=").decode("ascii")
+
+
+def _validate_crl_freshness(
+    crl: x509.CertificateRevocationList, timestamp: datetime, clock_skew: timedelta,
+) -> None:
+    last_update = crl.last_update_utc
+    next_update = crl.next_update_utc
+    if (
+        next_update is None
+        or last_update > timestamp + clock_skew
+        or last_update < timestamp - _MAX_CRL_WINDOW - clock_skew
+        or next_update <= timestamp - clock_skew
+        or next_update - last_update > _MAX_CRL_WINDOW + clock_skew
+    ):
+        raise StepCAError("step-ca revocation bundle freshness window is invalid")

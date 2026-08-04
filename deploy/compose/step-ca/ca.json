@@ -7,6 +7,12 @@
   "dnsNames": ["step-ca"],
   "logger": {"format": "json"},
   "db": {"type": "badgerv2", "dataSource": "/home/step/db"},
+  "crl": {
+    "enabled": true,
+    "generateOnRevoke": true,
+    "cacheDuration": "1h",
+    "renewPeriod": "30m"
+  },
   "authority": {
     "provisioners": [
       {
