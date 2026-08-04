@@ -5,5 +5,11 @@ description = "DGX Forge outbound agent runtime scaffold"
 requires-python = ">=3.12"
 dependencies = ["dgx-agent-protocol==1.0.0"]
 
+[dependency-groups]
+dev = ["pytest==8.4.2"]
+
 [tool.uv.sources]
 dgx-agent-protocol = { path = "../inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl" }
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
