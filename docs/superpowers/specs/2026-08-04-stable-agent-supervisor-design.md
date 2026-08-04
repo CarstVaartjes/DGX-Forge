@@ -60,6 +60,12 @@ packaged process. ARM64 release production runs the same smoke on an ARM64
 builder; x86_64 CI proves the closure behavior natively and separately parses
 an ARM64 ELF fixture/policy without execution.
 
+The target kernel, ELF dynamic loader, and glibc ABI remain the separately
+validated DGX OS platform contract. The slot digest binds the full
+Python/application/native-module closure and the artifact may not resolve any
+Python package outside itself; it does not attempt to embed or replace that
+supported host ABI.
+
 ## Split supervisor model
 
 `dgx-forge-agent.service` is visibly and effectively `User=dgx-agent`. Its
