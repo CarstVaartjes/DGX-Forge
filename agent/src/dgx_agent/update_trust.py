@@ -317,7 +317,11 @@ class TUFReleaseTrust:
             custom = target_info.unrecognized_fields.get("custom")
             if not isinstance(custom, dict) or set(custom) != {"release"}:
                 raise TUFTrustError("TUF target bindings are missing")
-            signed_descriptor = ReleaseDescriptor.parse(custom["release"])
+            signed_descriptor = _interruptible_tuf_call(
+                fixed_deadline,
+                lambda: ReleaseDescriptor.parse(custom["release"]),
+            )
+            check_deadline()
             target_fd = os.memfd_create(
                 "dgx-tuf-target", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
             )
@@ -339,10 +343,18 @@ class TUFReleaseTrust:
                 )
             finally:
                 os.close(target_fd)
-            parsed = json.loads(
-                target_bytes.decode("utf-8"), object_pairs_hook=_unique_object
+            parsed = _interruptible_tuf_call(
+                fixed_deadline,
+                lambda: json.loads(
+                    target_bytes.decode("utf-8"), object_pairs_hook=_unique_object
+                ),
             )
-            target_descriptor = ReleaseDescriptor.parse(parsed)
+            check_deadline()
+            target_descriptor = _interruptible_tuf_call(
+                fixed_deadline,
+                lambda: ReleaseDescriptor.parse(parsed),
+            )
+            check_deadline()
             if target_descriptor != signed_descriptor:
                 raise TUFTrustError("TUF target bindings do not match target bytes")
             if not target_descriptor.agrees_with(request):

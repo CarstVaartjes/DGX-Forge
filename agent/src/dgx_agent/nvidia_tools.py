@@ -5,8 +5,6 @@ values and is expected to be written by the privileged Task-5 installer.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import StrEnum
 import fcntl
 import hashlib
 import io
@@ -14,13 +12,15 @@ import ipaddress
 import json
 import math
 import os
-from pathlib import Path, PurePosixPath
 import re
 import stat
-from types import MappingProxyType
-from typing import Any, Callable, Mapping
 import zipfile
-
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from enum import StrEnum
+from pathlib import Path, PurePosixPath
+from types import MappingProxyType
+from typing import Any
 
 REVIEWED_BUNDLE_VERSION = "0.1.0"
 REVIEWED_BUNDLE_SHA256 = (
@@ -168,17 +168,17 @@ class InstalledPolicy:
     _test_only_allow_unprivileged: bool = False
 
     @classmethod
-    def load(cls, path: Path) -> "InstalledPolicy":
+    def load(cls, path: Path) -> InstalledPolicy:
         return cls._load(Path(path), test_only_allow_unprivileged=False)
 
     @classmethod
-    def _load_for_test(cls, path: Path) -> "InstalledPolicy":
+    def _load_for_test(cls, path: Path) -> InstalledPolicy:
         return cls._load(Path(path), test_only_allow_unprivileged=True)
 
     @classmethod
     def _load(
         cls, path: Path, *, test_only_allow_unprivileged: bool
-    ) -> "InstalledPolicy":
+    ) -> InstalledPolicy:
         raw = _read_policy(
             path, test_only_allow_unprivileged=test_only_allow_unprivileged
         )
@@ -474,33 +474,51 @@ def _read_policy(path: Path, *, test_only_allow_unprivileged: bool) -> bytes:
 
 
 def _open_parent(
-    path: Path, *, test_only_allow_unprivileged: bool = False
+    path: Path,
+    *,
+    test_only_allow_unprivileged: bool = False,
+    check_deadline: Callable[[], None] | None = None,
 ) -> tuple[int, str]:
     if not path.is_absolute() or len(path.parts) < 2:
         raise InstalledPolicyError("path must be absolute")
+    _check(check_deadline)
     descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
+    succeeded = False
     try:
+        _check(check_deadline)
         for component in path.parts[1:-1]:
+            _check(check_deadline)
             child = os.open(
                 component,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=descriptor,
             )
+            try:
+                _check(check_deadline)
+            except BaseException:
+                os.close(child)
+                raise
             os.close(descriptor)
             descriptor = child
+            _check(check_deadline)
+            metadata = os.fstat(descriptor)
+            _check(check_deadline)
             _trusted(
-                os.fstat(descriptor),
+                metadata,
                 directory=True,
                 executable=False,
                 test_only_allow_unprivileged=test_only_allow_unprivileged,
             )
+            _check(check_deadline)
+        succeeded = True
         return descriptor, path.name
     except InstalledPolicyError:
-        os.close(descriptor)
         raise
     except OSError as error:
-        os.close(descriptor)
         raise InstalledPolicyError("path must not traverse symlinks") from error
+    finally:
+        if not succeeded:
+            os.close(descriptor)
 
 
 def _trusted(
@@ -529,7 +547,8 @@ def _verify_directory(
 ) -> bool:
     try:
         parent, leaf = _open_parent(
-            path, test_only_allow_unprivileged=test_only_allow_unprivileged
+            path,
+            test_only_allow_unprivileged=test_only_allow_unprivileged,
         )
     except InstalledPolicyError as error:
         if isinstance(error.__cause__, FileNotFoundError):
@@ -621,26 +640,35 @@ def open_verified_support_archive(
         parent, leaf = _open_parent(
             common,
             test_only_allow_unprivileged=policy._test_only_allow_unprivileged,
+            check_deadline=_check_deadline,
         )
     except InstalledPolicyError as error:
         raise InstalledToolSecurityError("reviewed support directory is unsafe") from error
     descriptor = -1
     try:
+        _check(_check_deadline)
         descriptor = os.open(
             leaf,
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=parent,
         )
+        _check(_check_deadline)
+        _check(_check_deadline)
+        metadata = os.fstat(descriptor)
+        _check(_check_deadline)
         _trusted(
-            os.fstat(descriptor),
+            metadata,
             directory=True,
             executable=False,
             test_only_allow_unprivileged=policy._test_only_allow_unprivileged,
         )
-        expected_names = {Path(item.relative_path).name for item in policy.support_files}
-        if set(os.listdir(descriptor)) != expected_names:
-            raise InstalledToolSecurityError("reviewed support directory has unexpected entries")
         _check(_check_deadline)
+        expected_names = {Path(item.relative_path).name for item in policy.support_files}
+        _check(_check_deadline)
+        installed_names = set(os.listdir(descriptor))
+        _check(_check_deadline)
+        if installed_names != expected_names:
+            raise InstalledToolSecurityError("reviewed support directory has unexpected entries")
     except InstalledPolicyError:
         raise
     except OSError as error:
@@ -698,7 +726,9 @@ def _open_verified_file(
     _check(check_deadline)
     try:
         parent, leaf = _open_parent(
-            path, test_only_allow_unprivileged=test_only_allow_unprivileged
+            path,
+            test_only_allow_unprivileged=test_only_allow_unprivileged,
+            check_deadline=check_deadline,
         )
     except InstalledPolicyError as error:
         if isinstance(error.__cause__, FileNotFoundError):
@@ -708,20 +738,25 @@ def _open_verified_file(
     snapshot = -1
     try:
         try:
+            _check(check_deadline)
             descriptor = os.open(
                 leaf,
                 os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
                 dir_fd=parent,
             )
+            _check(check_deadline)
         except FileNotFoundError:
             return None
+        _check(check_deadline)
         metadata = os.fstat(descriptor)
+        _check(check_deadline)
         _trusted(
             metadata,
             directory=False,
             executable=executable,
             test_only_allow_unprivileged=test_only_allow_unprivileged,
         )
+        _check(check_deadline)
         if not stat.S_ISREG(metadata.st_mode):
             raise InstalledToolSecurityError("installed executable is not a regular file")
         locked_size = expected_size if expected_size is not None else _REVIEWED_FILE_SIZES.get(expected_digest)
@@ -730,10 +765,13 @@ def _open_verified_file(
         if metadata.st_size > MAX_EXECUTABLE_BYTES:
             raise InstalledToolSecurityError("installed executable is too large")
         digest = hashlib.sha256()
+        _check(check_deadline)
         total = 0
+        _check(check_deadline)
         snapshot = os.memfd_create(
             "dgx-agent-verified-artifact", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
         )
+        _check(check_deadline)
         while True:
             _check(check_deadline)
             chunk = os.read(descriptor, 64 * 1024)
@@ -747,7 +785,9 @@ def _open_verified_file(
             _write_all(snapshot, chunk, check_deadline=check_deadline)
         if digest.hexdigest() != expected_digest:
             raise InstalledToolSecurityError("installed executable digest mismatch")
+        _check(check_deadline)
         after = os.fstat(descriptor)
+        _check(check_deadline)
         if (
             metadata.st_dev,
             metadata.st_ino,
@@ -789,6 +829,7 @@ def _sealed_memfd(
     _check(check_deadline)
     descriptor = os.memfd_create(name, os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
     try:
+        _check(check_deadline)
         _write_all(descriptor, content, check_deadline=check_deadline)
         _seal(descriptor)
         _check(check_deadline)

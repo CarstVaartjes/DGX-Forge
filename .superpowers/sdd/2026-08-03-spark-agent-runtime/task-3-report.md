@@ -49,6 +49,11 @@ RED/GREEN slices:
   restart recovery/crash windows, corrupt and substituted recovery state,
   recovery-aware inspection, exact-inode sidecar deletion, and empty-directory
   substitution at the final cleanup step;
+- external review round 3 produced 41 RED regressions for remaining local
+  ORAS/TUF setup work, every staging-ownership syscall boundary, public error
+  typing, missing/replaced recovery intents, regular/symlink/hardlink leaf
+  substitution, and durable complete/unsafe recovery temporary records. Repeated
+  ancestry expiry additionally proves descriptor counts remain stable;
 - ProcessRequest initially accepted duplicate and reserved auxiliary FDs;
 - compiled adapter inspection initially failed during the monotonic deadline
   change, exposing and fixing the recovery deadline/binding contract;
@@ -58,9 +63,10 @@ RED/GREEN slices:
 - Compose/Caddy tests failed until the fourth distinct registry SNI, private
   networks, anchored digest routes, and publisher validation were complete.
 
-The brief's exact release/workload command now contains 112 passing tests; the
-release/workload/operation command contains 127 tests, and the complete agent
-suite contains 345 tests.
+The release-only command now contains 135 passing tests. The brief's exact
+release/workload command contains 153 passing tests; the
+release/workload/operation command contains 168 tests, and the complete agent
+suite contains 386 tests.
 
 ## Exact typed contracts
 
@@ -160,10 +166,14 @@ and statuses/dispositions use closed operation-specific vocabularies.
   blocking step. A syscall cannot be preempted in-process, so deadline overrun
   is bounded to the one syscall already in progress; no next chunk/member starts.
   The fixed deadline callback also protects the ORAS executable snapshot loop.
-  Updater construction, refresh, target lookup, and target download execute
-  under a per-thread Python trace guard, so python-tuf validation/hash/copy work
-  is interrupted at Python line boundaries without replacing another thread's
-  trace state; each call restores the prior trace in `finally`.
+  Executable ancestry traversal, leaf open/stat, hash construction, and memfd
+  creation each check before and after their boundary. Updater construction,
+  refresh, target lookup/download, signed custom parsing, target JSON parsing,
+  and descriptor parsing execute under a per-thread Python trace guard, while
+  target memfd creation is checked on both sides. Thus python-tuf
+  validation/hash/copy/parse work is interrupted at Python line boundaries
+  without replacing another thread's trace state; each call restores the prior
+  trace in `finally`.
   After an irreversible release/marker/root-pointer rename, the one mandatory
   parent fsync completes before elapsed is reported. Recovery inspection uses a
   separate compiled local budget; an expired mutation can be inspected/completed
@@ -176,14 +186,27 @@ and statuses/dispositions use closed operation-specific vocabularies.
   same inode and pass full verification before success.
   Releases, staging, and metadata publication hold their exact parent dirfds;
   rename/replace and durability fsync are relative to those descriptors. Staging
-  ownership is recorded by a canonical `O_EXCL|O_NOFOLLOW` sidecar containing
-  its name and captured device/inode, with file and parent fsync, before the
-  first post-creation deadline check. Expired requests never recurse: a fresh
-  installer or recovery inspection reaps authenticated state under an
-  independent 100 ms budget. Incomplete intents are quarantined without
-  deleting an unproven same-UID inode, corrupt or substituted records fail
-  closed, and both sidecar deletion and the final empty-directory removal use
-  atomic quarantine plus exact-inode verification.
+  ownership begins with a canonical `O_EXCL|O_NOFOLLOW` intent sidecar and is
+  completed with the captured staging device/inode. Every intent/temp
+  open/write/fsync/stat, parent fsync, directory mkdir/open/stat, completion
+  rename, and chmod checks the claim deadline immediately before and after, so
+  only the one syscall already crossing the deadline may finish. Completion
+  first atomically quarantines and verifies the captured intent inode and uses
+  no-replace promotion, so a missing or substituted intent is never overwritten.
+  Expired requests never recurse: a fresh installer or recovery inspection
+  reaps authenticated state under an independent 100 ms budget. Complete
+  canonical `.new` records left across the intent-removal/promotion crash window
+  are matched to the exact staging inode and promoted without replacement;
+  corrupt or substituted temporaries remain fail-closed without deletion.
+  Incomplete intents quarantine but do not delete an unproven same-UID inode.
+  Sidecar deletion, leaf deletion (regular, symlink, or hardlink), and final
+  empty-directory removal all use atomic quarantine plus exact-inode/type
+  verification. Final-tree quarantine is token-bound and resumed on restart;
+  canonical recovery-record quarantines are exact-inode-removed on fresh
+  preflight, with corrupt/symlink substitutions preserved fail-closed. Leaf,
+  final-tree, legacy `.remove-*`, and any unsafe quarantine artifacts are all
+  counted with active reservations against one aggregate recovery bound rather
+  than becoming hidden after canonical sidecar removal.
 - Workload launch reauthorizes the receipt-derived release through TUF on every
   operation, requires exact signed-descriptor equality, verifies receipt/tree
   through one pinned release dirfd, then executes a write-sealed adapter memfd.
@@ -230,18 +253,21 @@ Executed on the final working tree:
 
 ```text
 uv run --project agent pytest agent/tests -q
-345 passed in 8.98s
+386 passed in 10.04s
+
+uv run --project agent pytest agent/tests/test_releases.py -q
+135 passed in 1.98s
 
 uv run --project agent pytest \
   agent/tests/test_releases.py agent/tests/test_workloads.py -v
-112 passed in 1.98s
+153 passed in 2.82s
 
 uv run --project agent pytest agent/tests/test_releases.py \
   agent/tests/test_workloads.py agent/tests/test_operations.py -v
-127 passed in 2.26s
+168 passed in 3.34s
 
 uv run pytest deploy/compose/tests -q
-21 passed in 7.38s
+21 passed in 7.72s
 
 uv run --project agent python -m compileall -q agent/src
 exit 0
@@ -250,9 +276,16 @@ uv build --project agent
 Successfully built agent/dist/dgx_agent-0.1.0.tar.gz
 Successfully built agent/dist/dgx_agent-0.1.0-py3-none-any.whl
 
-docker compose -f deploy/compose/compose.yaml \
+docker compose --env-file deploy/compose/tests/test.env \
+  -f deploy/compose/compose.yaml \
   -f deploy/compose/compose.step-ca.yaml config --quiet
 exit 0
+
+uvx --from ruff==0.16.1 ruff check \
+  agent/src/dgx_agent/nvidia_tools.py \
+  agent/src/dgx_agent/update_trust.py \
+  agent/src/dgx_agent/releases.py agent/tests/test_releases.py
+All checks passed!
 
 git diff --check
 exit 0
@@ -271,7 +304,7 @@ A fresh temporary virtual environment installed the built agent wheel together
 with the committed protocol wheel, resolved `tuf==7.0.0`, and imported all
 Task 1–3 production modules. It also parsed the exact release request and each
 of the five typed workload request shapes from the installed wheel. Output:
-`fresh-wheel-imports-and-typed-execution-ok`.
+`fresh-wheel-imports-and-typed-parsing-ok`.
 
 The earlier internal targeted re-review found the inode-publication fix Ready.
 Exact-range external review round 1 subsequently returned Not Ready with two
@@ -280,7 +313,11 @@ deadline threading) plus one canonical-receipt Minor. This follow-up addresses
 those submitted findings. External review round 2 returned Not Ready with three
 Important findings covering internal library/snapshot deadlines, expired
 staging recovery, and descriptor-bound publication. This follow-up addresses
-all three and awaits exact-range external re-review.
+all three. External review round 3 returned Not Ready with six Important
+findings and one Compose-command Minor. This follow-up addresses the submitted
+deadline, typed recovery, exact-inode completion/leaf cleanup, durable temporary
+recovery, and reproducible Compose-environment findings and awaits exact-range
+external re-review.
 
 ## Remaining physical and later-task gates
 

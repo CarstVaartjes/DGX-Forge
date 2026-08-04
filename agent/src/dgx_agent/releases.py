@@ -62,6 +62,12 @@ _VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 _STAGING_NAME = re.compile(r"\.install-[0-9a-f]{64}-([0-9a-f]{16})\Z")
 _RECOVERY_NAME = re.compile(r"\.recovery-([0-9a-f]{16})\.state\Z")
 _RECOVERY_TEMP_NAME = re.compile(r"\.recovery-([0-9a-f]{16})\.new\Z")
+_TREE_QUARANTINE_NAME = re.compile(
+    r"\.quarantine-tree-([0-9a-f]{16})-[0-9a-f]{16}\Z"
+)
+_RECOVERY_QUARANTINE_NAME = re.compile(
+    r"\.quarantine-recovery-([0-9a-f]{16})-[0-9a-f]{16}\Z"
+)
 _MAX_DEFERRED_STAGING = 16
 _RECOVERY_SECONDS = 0.1
 
@@ -297,7 +303,14 @@ class ReleaseInstaller:
                 releases_fd = -1
             raise
         try:
-            self._reap_deferred_staging(staging_root_fd)
+            try:
+                self._reap_deferred_staging(staging_root_fd)
+            except ReleaseInstallError:
+                raise
+            except (OSError, TimeoutError) as error:
+                raise ReleaseInstallError(
+                    "release staging recovery failed"
+                ) from error
             _deadline(fixed_deadline)
             lock_fd = os.open(
                 f".install-{request.target_digest}.lock",
@@ -336,43 +349,38 @@ class ReleaseInstaller:
             recovery_name = f".recovery-{staging_token}.state"
             try:
                 recovery_identity = _write_recovery_intent_fd(
-                    staging_root_fd, recovery_name, staging_name
+                    staging_root_fd,
+                    recovery_name,
+                    staging_name,
+                    check=lambda: _deadline(fixed_deadline),
                 )
-                # Creation, open and identity capture are one ownership step:
-                # deadline checks resume only after the inode is held.
+                _deadline(fixed_deadline)
                 os.mkdir(staging_name, 0o700, dir_fd=staging_root_fd)
-                try:
-                    # mkdir/open/fstat and this constant-size durable record
-                    # form one ownership transaction. There is deliberately
-                    # no claim-deadline check until recovery identity survives
-                    # a process restart.
-                    staging_fd = os.open(
-                        staging_name,
-                        os.O_RDONLY
-                        | os.O_DIRECTORY
-                        | os.O_CLOEXEC
-                        | os.O_NOFOLLOW,
-                        dir_fd=staging_root_fd,
-                    )
-                    staging_metadata = os.fstat(staging_fd)
-                    staging_identity = (
-                        staging_metadata.st_dev,
-                        staging_metadata.st_ino,
-                    )
-                    recovery_identity = _complete_recovery_record_fd(
-                        staging_root_fd,
-                        recovery_name,
-                        staging_name,
-                        staging_identity,
-                    )
-                except (OSError, ReleaseInstallError, TimeoutError):
-                    metadata = os.stat(
-                        staging_name,
-                        dir_fd=staging_root_fd,
-                        follow_symlinks=False,
-                    )
-                    staging_identity = (metadata.st_dev, metadata.st_ino)
-                    raise
+                _deadline(fixed_deadline)
+                staging_fd = os.open(
+                    staging_name,
+                    os.O_RDONLY
+                    | os.O_DIRECTORY
+                    | os.O_CLOEXEC
+                    | os.O_NOFOLLOW,
+                    dir_fd=staging_root_fd,
+                )
+                _deadline(fixed_deadline)
+                staging_metadata = os.fstat(staging_fd)
+                _deadline(fixed_deadline)
+                staging_identity = (
+                    staging_metadata.st_dev,
+                    staging_metadata.st_ino,
+                )
+                recovery_identity = _complete_recovery_record_fd(
+                    staging_root_fd,
+                    recovery_name,
+                    staging_name,
+                    staging_identity,
+                    intent_identity=recovery_identity,
+                    check=lambda: _deadline(fixed_deadline),
+                )
+                _deadline(fixed_deadline)
                 os.fchmod(staging_fd, 0o700)
                 _deadline(fixed_deadline)
                 staging = self._staging_root / staging_name
@@ -540,9 +548,7 @@ class ReleaseInstaller:
     ) -> None:
         with self._recovery_lock:
             self._active_staging -= 1
-            if deferred:
-                if name is None or identity is None:
-                    raise AssertionError("deferred release staging has no identity")
+            if deferred and name is not None and identity is not None:
                 self._deferred_staging[name] = identity
 
     def _reap_deferred_staging(self, parent_fd: int) -> bool:
@@ -553,7 +559,13 @@ class ReleaseInstaller:
                 raise TimeoutError("release staging recovery budget elapsed")
 
         with self._recovery_lock:
-            persisted = _read_recovery_records_fd(parent_fd, recovery_check)
+            if self._active_staging:
+                return False
+            persisted = _read_recovery_records_fd(
+                parent_fd,
+                recovery_check,
+                active_reservations=self._active_staging,
+            )
             recovered = bool(persisted or self._deferred_staging)
             for record_name, (name, identity, record_identity) in tuple(
                 persisted.items()
@@ -1261,6 +1273,7 @@ def _remove_bound_tree_fd(
         metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
         check()
     except FileNotFoundError:
+        _resume_quarantined_tree_fd(parent_fd, name, identity, check)
         return
     if (
         not stat.S_ISDIR(metadata.st_mode)
@@ -1268,6 +1281,47 @@ def _remove_bound_tree_fd(
     ):
         return
     _remove_directory_contents_fd(parent_fd, name, identity, check)
+
+
+def _resume_quarantined_tree_fd(
+    parent_fd: int,
+    name: str,
+    identity: tuple[int, int],
+    check: Any,
+) -> None:
+    match = _STAGING_NAME.fullmatch(name) or _TREE_QUARANTINE_NAME.fullmatch(
+        name
+    )
+    if match is None:
+        return
+    prefix = f".quarantine-tree-{match.group(1)}-"
+    check()
+    candidates = [
+        entry for entry in os.listdir(parent_fd) if entry.startswith(prefix)
+    ]
+    check()
+    if not candidates:
+        return
+    if len(candidates) != 1:
+        raise ReleaseInstallError(
+            "release staging cleanup quarantine is ambiguous"
+        )
+    quarantine_name = candidates[0]
+    check()
+    metadata = os.stat(
+        quarantine_name, dir_fd=parent_fd, follow_symlinks=False
+    )
+    check()
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or (metadata.st_dev, metadata.st_ino) != identity
+    ):
+        raise ReleaseInstallError(
+            "release staging cleanup identity changed"
+        )
+    _remove_directory_contents_fd(
+        parent_fd, quarantine_name, identity, check
+    )
 
 
 def _recovery_name_for_staging(name: str) -> str:
@@ -1293,7 +1347,10 @@ def _write_recovery_bytes_fd(
     parent_fd: int,
     record_name: str,
     data: bytes,
+    check: Any | None = None,
 ) -> tuple[int, int]:
+    check = check or (lambda: None)
+    check()
     descriptor = os.open(
         record_name,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
@@ -1301,20 +1358,29 @@ def _write_recovery_bytes_fd(
         dir_fd=parent_fd,
     )
     try:
+        check()
         offset = 0
         while offset < len(data):
+            check()
             written = os.write(descriptor, data[offset:])
+            check()
             if written <= 0:
                 raise ReleaseInstallError(
                     "release staging recovery record was incomplete"
                 )
             offset += written
+        check()
         os.fsync(descriptor)
+        check()
+        check()
         metadata = os.fstat(descriptor)
+        check()
         identity = (metadata.st_dev, metadata.st_ino)
     finally:
         os.close(descriptor)
+    check()
     os.fsync(parent_fd)
+    check()
     return identity
 
 
@@ -1322,11 +1388,15 @@ def _write_recovery_intent_fd(
     parent_fd: int,
     record_name: str,
     staging_name: str,
+    check: Any | None = None,
 ) -> tuple[int, int]:
     if record_name != _recovery_name_for_staging(staging_name):
         raise ReleaseInstallError("release staging recovery record is invalid")
     return _write_recovery_bytes_fd(
-        parent_fd, record_name, _recovery_intent_bytes(staging_name)
+        parent_fd,
+        record_name,
+        _recovery_intent_bytes(staging_name),
+        check,
     )
 
 
@@ -1335,7 +1405,11 @@ def _complete_recovery_record_fd(
     record_name: str,
     staging_name: str,
     identity: tuple[int, int],
+    *,
+    intent_identity: tuple[int, int],
+    check: Any | None = None,
 ) -> tuple[int, int]:
+    check = check or (lambda: None)
     match = _RECOVERY_NAME.fullmatch(record_name)
     if match is None or record_name != _recovery_name_for_staging(staging_name):
         raise ReleaseInstallError("release staging recovery record is invalid")
@@ -1344,15 +1418,27 @@ def _complete_recovery_record_fd(
         parent_fd,
         temporary_name,
         _recovery_record_bytes(staging_name, identity),
+        check,
     )
-    os.replace(
-        temporary_name,
+    if not _remove_recovery_record_fd(
+        parent_fd,
         record_name,
-        src_dir_fd=parent_fd,
-        dst_dir_fd=parent_fd,
-    )
+        intent_identity,
+        check,
+        missing_ok=False,
+    ):
+        raise ReleaseInstallError(
+            "release staging recovery record identity changed"
+        )
+    check()
+    _rename_noreplace(parent_fd, temporary_name, parent_fd, record_name)
+    check()
+    check()
     os.fsync(parent_fd)
+    check()
+    check()
     metadata = os.stat(record_name, dir_fd=parent_fd, follow_symlinks=False)
+    check()
     if (metadata.st_dev, metadata.st_ino) != complete_identity:
         raise ReleaseInstallError("release staging recovery record identity changed")
     return complete_identity
@@ -1363,17 +1449,23 @@ def _write_recovery_record_fd(
     record_name: str,
     staging_name: str,
     identity: tuple[int, int],
+    check: Any | None = None,
 ) -> tuple[int, int]:
     if record_name != _recovery_name_for_staging(staging_name):
         raise ReleaseInstallError("release staging recovery record is invalid")
     return _write_recovery_bytes_fd(
-        parent_fd, record_name, _recovery_record_bytes(staging_name, identity)
+        parent_fd,
+        record_name,
+        _recovery_record_bytes(staging_name, identity),
+        check,
     )
 
 
 def _read_recovery_records_fd(
     parent_fd: int,
     check: Any,
+    *,
+    active_reservations: int = 0,
 ) -> dict[str, tuple[str, tuple[int, int] | None, tuple[int, int]]]:
     check()
     entries = os.listdir(parent_fd)
@@ -1381,85 +1473,271 @@ def _read_recovery_records_fd(
     names = [
         name for name in entries if _RECOVERY_NAME.fullmatch(name) is not None
     ]
+    temporary_names = [
+        name
+        for name in entries
+        if _RECOVERY_TEMP_NAME.fullmatch(name) is not None
+    ]
     staging_names = [
         name for name in entries if _STAGING_NAME.fullmatch(name) is not None
     ]
     quarantined_names = [
         name
         for name in entries
-        if name.startswith((".quarantine-", ".unsafe-recovery-"))
-        or _RECOVERY_TEMP_NAME.fullmatch(name) is not None
+        if name.startswith(
+            (".quarantine-", ".unsafe-recovery-", ".remove-")
+        )
+        or (
+            name.startswith(".recovery-")
+            and ".state.remove-" in name
+        )
     ]
-    if (
-        len(names) > _MAX_DEFERRED_STAGING
-        or len(staging_names) > _MAX_DEFERRED_STAGING
-        or len(quarantined_names) > _MAX_DEFERRED_STAGING
-    ):
+    artifact_count = (
+        len(names)
+        + len(temporary_names)
+        + len(staging_names)
+        + len(quarantined_names)
+    )
+    if artifact_count + active_reservations > _MAX_DEFERRED_STAGING:
         raise ReleaseInstallError("release staging recovery backlog is full")
+    recovery_quarantines = [
+        name
+        for name in quarantined_names
+        if _RECOVERY_QUARANTINE_NAME.fullmatch(name) is not None
+    ]
+    seen_quarantine_tokens: set[str] = set()
+    for quarantine_name in recovery_quarantines:
+        match = _RECOVERY_QUARANTINE_NAME.fullmatch(quarantine_name)
+        if match is None or match.group(1) in seen_quarantine_tokens:
+            raise ReleaseInstallError(
+                "release staging recovery quarantine is ambiguous"
+            )
+        seen_quarantine_tokens.add(match.group(1))
+        _, _, quarantine_identity = _read_recovery_record_fd(
+            parent_fd, quarantine_name, check, quarantine=True
+        )
+        if not _remove_recovery_quarantine_fd(
+            parent_fd, quarantine_name, quarantine_identity, check
+        ):
+            raise ReleaseInstallError(
+                "release staging recovery quarantine identity changed"
+            )
     records: dict[
         str, tuple[str, tuple[int, int] | None, tuple[int, int]]
     ] = {}
     for record_name in names:
-        check()
-        try:
-            descriptor = os.open(
-                record_name,
-                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
-                dir_fd=parent_fd,
+        records[record_name] = _read_recovery_record_fd(
+            parent_fd, record_name, check, temporary=False
+        )
+    for temporary_name in temporary_names:
+        staging_name, identity, temporary_identity = (
+            _read_recovery_record_fd(
+                parent_fd, temporary_name, check, temporary=True
             )
-        except OSError as error:
-            raise ReleaseInstallError(
-                "release staging recovery record is unsafe"
-            ) from error
-        try:
-            check()
-            metadata = os.fstat(descriptor)
-            check()
-            if (
-                not stat.S_ISREG(metadata.st_mode)
-                or metadata.st_nlink != 1
-                or metadata.st_uid != os.geteuid()
-                or metadata.st_gid != os.getegid()
-                or stat.S_IMODE(metadata.st_mode) != 0o600
-                or metadata.st_size > 512
-            ):
-                raise ReleaseInstallError(
-                    "release staging recovery record is unsafe"
-                )
-            data = os.read(descriptor, 513)
-            check()
-        finally:
-            os.close(descriptor)
-        try:
-            fields = data.decode("ascii").split("\n")
-            version = fields[0]
-            staging_name = fields[1]
-            if version == "0" and fields == ["0", staging_name, ""]:
-                identity = None
-                canonical = _recovery_intent_bytes(staging_name)
-            elif version == "1" and len(fields) == 5 and fields[-1] == "":
-                identity = (int(fields[2]), int(fields[3]))
-                canonical = _recovery_record_bytes(staging_name, identity)
-            else:
-                raise ValueError("invalid recovery fields")
-        except (UnicodeDecodeError, ValueError, IndexError) as error:
+        )
+        if identity is None:
             raise ReleaseInstallError(
                 "release staging recovery record is invalid"
-            ) from error
-        if (
-            identity is not None and any(value < 0 for value in identity)
-            or record_name != _recovery_name_for_staging(staging_name)
-            or data != canonical
+            )
+        state_name = _recovery_name_for_staging(staging_name)
+        current = records.get(state_name)
+        if current is not None and (
+            current[0] != staging_name or current[1] is not None
         ):
             raise ReleaseInstallError(
                 "release staging recovery record is invalid"
             )
-        records[record_name] = (
-            staging_name,
-            identity,
-            (metadata.st_dev, metadata.st_ino),
+        check()
+        try:
+            staging_metadata = os.stat(
+                staging_name, dir_fd=parent_fd, follow_symlinks=False
+            )
+        except OSError as error:
+            raise ReleaseInstallError(
+                "release staging recovery identity changed"
+            ) from error
+        check()
+        if (
+            not stat.S_ISDIR(staging_metadata.st_mode)
+            or (staging_metadata.st_dev, staging_metadata.st_ino) != identity
+        ):
+            raise ReleaseInstallError(
+                "release staging recovery identity changed"
+            )
+        if current is not None and not _remove_recovery_record_fd(
+            parent_fd,
+            state_name,
+            current[2],
+            check,
+            missing_ok=False,
+        ):
+            raise ReleaseInstallError(
+                "release staging recovery record identity changed"
+            )
+        check()
+        _rename_noreplace(
+            parent_fd, temporary_name, parent_fd, state_name
+        )
+        check()
+        check()
+        promoted = os.stat(
+            state_name, dir_fd=parent_fd, follow_symlinks=False
+        )
+        check()
+        if (promoted.st_dev, promoted.st_ino) != temporary_identity:
+            try:
+                _rename_noreplace(
+                    parent_fd, state_name, parent_fd, temporary_name
+                )
+            except FileExistsError as error:
+                raise ReleaseInstallError(
+                    "release staging recovery record identity changed"
+                ) from error
+            raise ReleaseInstallError(
+                "release staging recovery record identity changed"
+            )
+        check()
+        os.fsync(parent_fd)
+        check()
+        records[state_name] = (
+            staging_name, identity, temporary_identity
         )
     return records
+
+
+def _read_recovery_record_fd(
+    parent_fd: int,
+    record_name: str,
+    check: Any,
+    *,
+    temporary: bool = False,
+    quarantine: bool = False,
+) -> tuple[str, tuple[int, int] | None, tuple[int, int]]:
+    if temporary and quarantine:
+        raise ReleaseInstallError(
+            "release staging recovery record is invalid"
+        )
+    pattern = (
+        _RECOVERY_QUARANTINE_NAME
+        if quarantine
+        else (_RECOVERY_TEMP_NAME if temporary else _RECOVERY_NAME)
+    )
+    if pattern.fullmatch(record_name) is None:
+        raise ReleaseInstallError(
+            "release staging recovery record is invalid"
+        )
+    check()
+    try:
+        descriptor = os.open(
+            record_name,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=parent_fd,
+        )
+    except OSError as error:
+        raise ReleaseInstallError(
+            "release staging recovery record is unsafe"
+        ) from error
+    try:
+        check()
+        metadata = os.fstat(descriptor)
+        check()
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_gid != os.getegid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or metadata.st_size > 512
+        ):
+            raise ReleaseInstallError(
+                "release staging recovery record is unsafe"
+            )
+        check()
+        data = os.read(descriptor, 513)
+        check()
+    finally:
+        os.close(descriptor)
+    try:
+        fields = data.decode("ascii").split("\n")
+        version = fields[0]
+        staging_name = fields[1]
+        if (
+            not temporary
+            and version == "0"
+            and fields == ["0", staging_name, ""]
+        ):
+            identity = None
+            canonical = _recovery_intent_bytes(staging_name)
+        elif version == "1" and len(fields) == 5 and fields[-1] == "":
+            identity = (int(fields[2]), int(fields[3]))
+            canonical = _recovery_record_bytes(staging_name, identity)
+        else:
+            raise ValueError("invalid recovery fields")
+    except (UnicodeDecodeError, ValueError, IndexError) as error:
+        raise ReleaseInstallError(
+            "release staging recovery record is invalid"
+        ) from error
+    state_name = _recovery_name_for_staging(staging_name)
+    quarantine_match = _RECOVERY_QUARANTINE_NAME.fullmatch(record_name)
+    expected_name = state_name.replace(".state", ".new") if temporary else state_name
+    name_matches = (
+        quarantine_match is not None
+        and _RECOVERY_NAME.fullmatch(state_name).group(1)
+        == quarantine_match.group(1)
+        if quarantine
+        else record_name == expected_name
+    )
+    if (
+        identity is not None and any(value < 0 for value in identity)
+        or not name_matches
+        or data != canonical
+    ):
+        raise ReleaseInstallError(
+            "release staging recovery record is invalid"
+        )
+    return staging_name, identity, (metadata.st_dev, metadata.st_ino)
+
+
+def _remove_recovery_quarantine_fd(
+    parent_fd: int,
+    quarantine_name: str,
+    expected_identity: tuple[int, int],
+    check: Any,
+) -> bool:
+    match = _RECOVERY_QUARANTINE_NAME.fullmatch(quarantine_name)
+    if match is None:
+        raise ReleaseInstallError(
+            "release staging recovery quarantine is invalid"
+        )
+    next_name = (
+        f".quarantine-recovery-{match.group(1)}-{secrets.token_hex(8)}"
+    )
+    check()
+    try:
+        _rename_noreplace(parent_fd, quarantine_name, parent_fd, next_name)
+    except FileNotFoundError:
+        return True
+    check()
+    check()
+    metadata = os.stat(next_name, dir_fd=parent_fd, follow_symlinks=False)
+    check()
+    if (metadata.st_dev, metadata.st_ino) != expected_identity:
+        try:
+            _rename_noreplace(
+                parent_fd, next_name, parent_fd, quarantine_name
+            )
+        except FileExistsError as error:
+            raise ReleaseInstallError(
+                "release staging recovery quarantine identity changed"
+            ) from error
+        return False
+    check()
+    os.unlink(next_name, dir_fd=parent_fd)
+    check()
+    check()
+    os.fsync(parent_fd)
+    check()
+    return True
 
 
 def _quarantine_unproven_staging_fd(
@@ -1492,6 +1770,8 @@ def _remove_recovery_record_fd(
     record_name: str,
     expected_identity: tuple[int, int] | None,
     check: Any,
+    *,
+    missing_ok: bool = True,
 ) -> bool:
     if _RECOVERY_NAME.fullmatch(record_name) is None:
         raise ReleaseInstallError("release staging recovery record is invalid")
@@ -1502,7 +1782,7 @@ def _remove_recovery_record_fd(
         )
         check()
     except FileNotFoundError:
-        return True
+        return missing_ok
     if expected_identity is None:
         return False
     if (
@@ -1514,7 +1794,14 @@ def _remove_recovery_record_fd(
         or (metadata.st_dev, metadata.st_ino) != expected_identity
     ):
         return False
-    quarantine_name = f".{record_name[1:]}.remove-{secrets.token_hex(8)}"
+    match = _RECOVERY_NAME.fullmatch(record_name)
+    if match is None:
+        raise ReleaseInstallError(
+            "release staging recovery record is invalid"
+        )
+    quarantine_name = (
+        f".quarantine-recovery-{match.group(1)}-{secrets.token_hex(8)}"
+    )
     check()
     _rename_noreplace(
         parent_fd, record_name, parent_fd, quarantine_name
@@ -1574,12 +1861,58 @@ def _remove_directory_contents_fd(
                     directory_fd, child_name, child_identity, check
                 )
             else:
-                check()
-                os.unlink(child_name, dir_fd=directory_fd)
-                check()
+                if not _remove_leaf_by_identity(
+                    directory_fd,
+                    child_name,
+                    child_identity,
+                    stat.S_IFMT(child.st_mode),
+                    check,
+                ):
+                    raise ReleaseInstallError(
+                        "release staging cleanup identity changed"
+                    )
     finally:
         os.close(directory_fd)
     _remove_empty_directory_by_identity(parent_fd, name, identity, check)
+
+
+def _remove_leaf_by_identity(
+    parent_fd: int,
+    name: str,
+    identity: tuple[int, int],
+    file_type: int,
+    check: Any,
+) -> bool:
+    """Move a leaf to a private name and delete only the captured inode."""
+    quarantine_name = f".quarantine-leaf-{secrets.token_hex(8)}"
+    check()
+    try:
+        _rename_noreplace(parent_fd, name, parent_fd, quarantine_name)
+    except FileNotFoundError:
+        return True
+    check()
+    check()
+    quarantined = os.stat(
+        quarantine_name, dir_fd=parent_fd, follow_symlinks=False
+    )
+    check()
+    if (
+        (quarantined.st_dev, quarantined.st_ino) != identity
+        or stat.S_IFMT(quarantined.st_mode) != file_type
+    ):
+        check()
+        try:
+            _rename_noreplace(parent_fd, quarantine_name, parent_fd, name)
+        except FileExistsError as error:
+            raise ReleaseInstallError(
+                "release staging cleanup identity changed"
+            ) from error
+        check()
+        return False
+    check()
+    os.unlink(quarantine_name, dir_fd=parent_fd)
+    check()
+    return True
 
 
 def _remove_empty_directory_by_identity(
@@ -1588,7 +1921,14 @@ def _remove_empty_directory_by_identity(
     identity: tuple[int, int],
     check: Any,
 ) -> None:
-    quarantine_name = f".remove-{secrets.token_hex(8)}"
+    match = _STAGING_NAME.fullmatch(name) or _TREE_QUARANTINE_NAME.fullmatch(
+        name
+    )
+    quarantine_name = (
+        f".quarantine-tree-{match.group(1)}-{secrets.token_hex(8)}"
+        if match is not None
+        else f".quarantine-tree-{secrets.token_hex(8)}"
+    )
     check()
     try:
         _rename_noreplace(parent_fd, name, parent_fd, quarantine_name)

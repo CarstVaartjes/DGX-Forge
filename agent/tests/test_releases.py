@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 import dgx_agent.oci as oci_module
 import dgx_agent.releases as release_module
 import pytest
-from dgx_agent import update_trust
+from dgx_agent import nvidia_tools, update_trust
 from dgx_agent.deadlines import DeadlineBindingError, MonotonicDeadline
 from dgx_agent.oci import OCIError, ORASClient, ORASPolicy
 from dgx_agent.probe import ProcessOutcome
@@ -814,6 +814,98 @@ def test_tuf_deadline_interrupts_target_hash_before_destination_copy(
     assert destination_opens == []
 
 
+@pytest.mark.parametrize("phase", ["signed-descriptor", "target-json"])
+def test_tuf_deadline_stops_between_local_parse_phases(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    root_bytes, fetcher = _signed_repository(_descriptor())
+    trust = TUFReleaseTrust(
+        tmp_path / "metadata", tmp_path / "targets",
+        "https://control.test.example/agent/v1/tuf/metadata/",
+        "https://control.test.example/agent/v1/tuf/targets/",
+        root_bytes, fetcher,
+        "https://registry.test.example", "dgx/releases", "linux-arm64",
+    )
+    clock = [0.0]
+    target_memfds: list[str] = []
+    descriptor_parses = 0
+    original_parse = ReleaseDescriptor.parse
+    original_unique = update_trust._unique_object
+    original_memfd = update_trust.os.memfd_create
+    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+
+    def parse_then_expire(document):
+        nonlocal descriptor_parses
+        descriptor_parses += 1
+        parsed = original_parse(document)
+        if phase == "signed-descriptor" and descriptor_parses == 1:
+            clock[0] = 11.0
+        return parsed
+
+    def unique_then_expire(pairs):
+        parsed = original_unique(pairs)
+        if phase == "target-json":
+            clock[0] = 11.0
+        return parsed
+
+    def record_memfd(name, flags):
+        target_memfds.append(name)
+        return original_memfd(name, flags)
+
+    monkeypatch.setattr(ReleaseDescriptor, "parse", parse_then_expire)
+    monkeypatch.setattr(update_trust, "_unique_object", unique_then_expire)
+    monkeypatch.setattr(update_trust.os, "memfd_create", record_memfd)
+
+    with pytest.raises(TUFTrustError, match="deadline"):
+        trust.authorize(
+            ReleaseRequest.parse(VALID_RELEASE),
+            MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
+        )
+
+    if phase == "signed-descriptor":
+        assert target_memfds == []
+    else:
+        assert descriptor_parses == 1
+
+
+def test_tuf_deadline_after_target_memfd_creation_starts_no_download(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root_bytes, fetcher = _signed_repository(_descriptor())
+    trust = TUFReleaseTrust(
+        tmp_path / "metadata", tmp_path / "targets",
+        "https://control.test.example/agent/v1/tuf/metadata/",
+        "https://control.test.example/agent/v1/tuf/targets/",
+        root_bytes, fetcher,
+        "https://registry.test.example", "dgx/releases", "linux-arm64",
+    )
+    clock = [0.0]
+    downloads = 0
+    original_memfd = update_trust.os.memfd_create
+    original_download = update_trust.Updater.download_target
+    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+
+    def create_then_expire(name, flags):
+        descriptor = original_memfd(name, flags)
+        if name == "dgx-tuf-target":
+            clock[0] = 11.0
+        return descriptor
+
+    def record_download(self, *args, **kwargs):
+        nonlocal downloads
+        downloads += 1
+        return original_download(self, *args, **kwargs)
+
+    monkeypatch.setattr(update_trust.os, "memfd_create", create_then_expire)
+    monkeypatch.setattr(update_trust.Updater, "download_target", record_download)
+    with pytest.raises(TUFTrustError, match="deadline"):
+        trust.authorize(
+            ReleaseRequest.parse(VALID_RELEASE),
+            MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
+        )
+    assert downloads == 0
+
+
 def test_tuf_deadline_hook_restores_thread_trace_on_success_and_error() -> None:
     previous = sys.gettrace()
     deadline = MonotonicDeadline(
@@ -1261,6 +1353,117 @@ def test_oras_executable_snapshot_stops_after_crossing_read(
     assert reads == 1
 
 
+@pytest.mark.parametrize("phase", ["ancestry", "open", "fstat", "hash-setup"])
+def test_oras_snapshot_deadline_stops_before_next_setup_operation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    executable = tmp_path / "oras"
+    executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+    executable.chmod(0o755)
+    expected = hashlib.sha256(executable.read_bytes()).hexdigest()
+    expired = [False]
+    events: list[str] = []
+    original_parent = nvidia_tools._open_parent
+    original_open = nvidia_tools.os.open
+    original_fstat = nvidia_tools.os.fstat
+    original_sha256 = nvidia_tools.hashlib.sha256
+    original_memfd = nvidia_tools.os.memfd_create
+
+    def check() -> None:
+        if expired[0]:
+            raise DeadlineBindingError("deadline has elapsed")
+
+    def parent_then_expire(*args, **kwargs):
+        result = original_parent(*args, **kwargs)
+        events.append("ancestry")
+        if phase == "ancestry":
+            expired[0] = True
+        return result
+
+    def open_then_expire(path, flags, *args, **kwargs):
+        result = original_open(path, flags, *args, **kwargs)
+        if path == executable.name and kwargs.get("dir_fd") is not None:
+            events.append("open")
+            if phase == "open":
+                expired[0] = True
+        return result
+
+    def fstat_then_expire(fd):
+        result = original_fstat(fd)
+        try:
+            target = os.readlink(f"/proc/self/fd/{fd}")
+        except OSError:
+            target = ""
+        if target == str(executable):
+            events.append("fstat")
+            if phase == "fstat":
+                expired[0] = True
+        return result
+
+    def hash_then_expire(*args, **kwargs):
+        result = original_sha256(*args, **kwargs)
+        events.append("hash-setup")
+        if phase == "hash-setup":
+            expired[0] = True
+        return result
+
+    def record_memfd(name, flags):
+        events.append("memfd")
+        return original_memfd(name, flags)
+
+    monkeypatch.setattr(nvidia_tools, "_open_parent", parent_then_expire)
+    monkeypatch.setattr(nvidia_tools.os, "open", open_then_expire)
+    monkeypatch.setattr(nvidia_tools.os, "fstat", fstat_then_expire)
+    monkeypatch.setattr(nvidia_tools.hashlib, "sha256", hash_then_expire)
+    monkeypatch.setattr(nvidia_tools.os, "memfd_create", record_memfd)
+
+    with pytest.raises(DeadlineBindingError, match="deadline"):
+        nvidia_tools.open_verified_executable(
+            executable,
+            expected,
+            _test_only_allow_unprivileged=True,
+            _check_deadline=check,
+        )
+
+    expected_events = ["ancestry", "open", "fstat", "hash-setup", "memfd"]
+    assert events == expected_events[: expected_events.index(phase) + 1]
+
+
+def test_repeated_oras_ancestry_expiry_closes_all_open_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    executable = tmp_path / "nested" / "bin" / "oras"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"#!/bin/sh\nexit 0\n")
+    executable.chmod(0o755)
+    expected = hashlib.sha256(executable.read_bytes()).hexdigest()
+    original_open = nvidia_tools.os.open
+    expired = [False]
+
+    def expire_after_child_open(path, flags, *args, **kwargs):
+        descriptor = original_open(path, flags, *args, **kwargs)
+        if path == "nested" and kwargs.get("dir_fd") is not None:
+            expired[0] = True
+        return descriptor
+
+    def check() -> None:
+        if expired[0]:
+            raise DeadlineBindingError("deadline has elapsed")
+
+    monkeypatch.setattr(nvidia_tools.os, "open", expire_after_child_open)
+    baseline = len(tuple(Path("/proc/self/fd").iterdir()))
+    for _ in range(32):
+        expired[0] = False
+        with pytest.raises(DeadlineBindingError, match="deadline"):
+            nvidia_tools.open_verified_executable(
+                executable,
+                expected,
+                _test_only_allow_unprivileged=True,
+                _check_deadline=check,
+            )
+        assert len(tuple(Path("/proc/self/fd").iterdir())) == baseline
+
+
 def test_oras_rejects_policy_mismatch_before_launch(tmp_path: Path) -> None:
     policy, record = _oras_policy(tmp_path)
     staging = tmp_path / "staging"
@@ -1696,7 +1899,180 @@ def test_expired_staging_setup_defers_cleanup_and_next_attempt_reaps(
         request,
         MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
     ).status == "installed"
-    assert tuple(staging.iterdir()) == ()
+    assert tuple(staging.glob(".install-*")) == ()
+    assert tuple(staging.glob(".recovery-*")) == ()
+    assert len(tuple(staging.glob(".quarantine-*"))) == (
+        1 if phase in {"create", "open"} else 0
+    )
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "intent-open",
+        "intent-write",
+        "intent-fsync",
+        "intent-fstat",
+        "intent-parent-fsync",
+        "mkdir",
+        "staging-open",
+        "staging-fstat",
+        "temp-open",
+        "temp-write",
+        "temp-fsync",
+        "temp-fstat",
+        "temp-parent-fsync",
+        "replace",
+        "replace-parent-fsync",
+        "complete-stat",
+        "fchmod",
+    ],
+)
+def test_staging_ownership_transaction_stops_after_one_crossing_syscall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    class Transport:
+        called = False
+
+        def pull(self, descriptor, destination, deadline):
+            self.called = True
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    clock = [0.0]
+    events: list[str] = []
+    parent_fsyncs = 0
+    original_open = release_module.os.open
+    original_write = release_module.os.write
+    original_fsync = release_module.os.fsync
+    original_fstat = release_module.os.fstat
+    original_mkdir = release_module.os.mkdir
+    original_replace = release_module.os.replace
+    original_rename_noreplace = release_module._rename_noreplace
+    original_stat = release_module.os.stat
+    original_fchmod = release_module.os.fchmod
+    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+
+    def record(event: str) -> None:
+        events.append(event)
+        if event == phase:
+            clock[0] = 11.0
+
+    def target_for_fd(fd: int) -> str:
+        try:
+            return os.readlink(f"/proc/self/fd/{fd}")
+        except OSError:
+            return ""
+
+    def tracked_open(path, flags, *args, **kwargs):
+        result = original_open(path, flags, *args, **kwargs)
+        value = str(path)
+        if value.endswith(".state"):
+            record("intent-open")
+        elif value.endswith(".new"):
+            record("temp-open")
+        elif value.startswith(".install-") and not value.endswith(".lock"):
+            record("staging-open")
+        return result
+
+    def tracked_write(fd, data):
+        result = original_write(fd, data)
+        target = target_for_fd(fd)
+        if target.endswith(".state"):
+            record("intent-write")
+        elif target.endswith(".new"):
+            record("temp-write")
+        return result
+
+    def tracked_fsync(fd):
+        nonlocal parent_fsyncs
+        result = original_fsync(fd)
+        target = target_for_fd(fd)
+        if target.endswith(".state"):
+            record("intent-fsync")
+        elif target.endswith(".new"):
+            record("temp-fsync")
+        elif target == str(staging):
+            parent_fsyncs += 1
+            record(
+                {
+                    1: "intent-parent-fsync",
+                    2: "temp-parent-fsync",
+                    3: "replace-parent-fsync",
+                }.get(parent_fsyncs, f"parent-fsync-{parent_fsyncs}")
+            )
+        return result
+
+    def tracked_fstat(fd):
+        result = original_fstat(fd)
+        target = target_for_fd(fd)
+        if target.endswith(".state"):
+            record("intent-fstat")
+        elif target.endswith(".new"):
+            record("temp-fstat")
+        elif "/.install-" in target and not target.endswith(".lock"):
+            record("staging-fstat")
+        return result
+
+    def tracked_mkdir(path, *args, **kwargs):
+        result = original_mkdir(path, *args, **kwargs)
+        if str(path).startswith(".install-"):
+            record("mkdir")
+        return result
+
+    def tracked_replace(source, destination, *args, **kwargs):
+        result = original_replace(source, destination, *args, **kwargs)
+        if str(source).endswith(".new") and str(destination).endswith(".state"):
+            record("replace")
+        return result
+
+    def tracked_rename_noreplace(source_fd, source, destination_fd, destination):
+        result = original_rename_noreplace(
+            source_fd, source, destination_fd, destination
+        )
+        if str(source).endswith(".new") and str(destination).endswith(".state"):
+            record("replace")
+        return result
+
+    def tracked_stat(path, *args, **kwargs):
+        result = original_stat(path, *args, **kwargs)
+        if str(path).endswith(".state") and kwargs.get("dir_fd") is not None:
+            record("complete-stat")
+        return result
+
+    def tracked_fchmod(fd, mode):
+        result = original_fchmod(fd, mode)
+        if "/.install-" in target_for_fd(fd):
+            record("fchmod")
+        return result
+
+    monkeypatch.setattr(release_module.os, "open", tracked_open)
+    monkeypatch.setattr(release_module.os, "write", tracked_write)
+    monkeypatch.setattr(release_module.os, "fsync", tracked_fsync)
+    monkeypatch.setattr(release_module.os, "fstat", tracked_fstat)
+    monkeypatch.setattr(release_module.os, "mkdir", tracked_mkdir)
+    monkeypatch.setattr(release_module.os, "replace", tracked_replace)
+    monkeypatch.setattr(
+        release_module, "_rename_noreplace", tracked_rename_noreplace
+    )
+    monkeypatch.setattr(release_module.os, "stat", tracked_stat)
+    monkeypatch.setattr(release_module.os, "fchmod", tracked_fchmod)
+    transport = Transport()
+
+    with pytest.raises(ReleaseInstallError, match="deadline"):
+        ReleaseInstaller(Trust(), transport, releases, staging).install(
+            ReleaseRequest.parse(VALID_RELEASE),
+            MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
+        )
+
+    assert events[-1] == phase
+    assert not transport.called
 
 
 def test_expired_member_verification_never_recursively_cleans_staging(
@@ -1946,6 +2322,159 @@ def test_recursive_cleanup_final_remove_preserves_empty_foreign_swap(
     assert moved.stat().st_ino != owned.stat().st_ino
 
 
+def test_restart_resumes_tree_quarantined_at_final_remove(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    token = "a" * 16
+    name = f".install-{'2' * 64}-{token}"
+    owned = staging / name
+    owned.mkdir(mode=0o700)
+    metadata = owned.stat()
+    identity = (metadata.st_dev, metadata.st_ino)
+    parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    original_rename = release_module._rename_noreplace
+
+    def crash_after_quarantine(source_fd, source, destination_fd, destination):
+        original_rename(source_fd, source, destination_fd, destination)
+        if source == name:
+            raise TimeoutError("crash after final quarantine")
+
+    monkeypatch.setattr(
+        release_module, "_rename_noreplace", crash_after_quarantine
+    )
+    try:
+        with pytest.raises(TimeoutError, match="final quarantine"):
+            release_module._remove_bound_tree_fd(
+                parent_fd, name, identity, lambda: None
+            )
+        monkeypatch.setattr(
+            release_module, "_rename_noreplace", original_rename
+        )
+        release_module._remove_bound_tree_fd(
+            parent_fd, name, identity, lambda: None
+        )
+    finally:
+        os.close(parent_fd)
+
+    assert tuple(staging.iterdir()) == ()
+
+
+def test_fresh_reaper_resolves_recovery_record_quarantine_without_growth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    original_rename = release_module._rename_noreplace
+    try:
+        for index in range(3):
+            token = f"{index + 11:016x}"
+            staging_name = f".install-{'2' * 64}-{token}"
+            record_name = f".recovery-{token}.state"
+            record_identity = release_module._write_recovery_intent_fd(
+                parent_fd, record_name, staging_name
+            )
+
+            def crash_after_quarantine(
+                source_fd,
+                source,
+                destination_fd,
+                destination,
+                expected_record=record_name,
+            ):
+                original_rename(source_fd, source, destination_fd, destination)
+                if source == expected_record:
+                    raise TimeoutError("crash after record quarantine")
+
+            monkeypatch.setattr(
+                release_module, "_rename_noreplace", crash_after_quarantine
+            )
+            with pytest.raises(TimeoutError, match="record quarantine"):
+                release_module._remove_recovery_record_fd(
+                    parent_fd, record_name, record_identity, lambda: None
+                )
+            monkeypatch.setattr(
+                release_module, "_rename_noreplace", original_rename
+            )
+            ReleaseInstaller(
+                object(), object(), tmp_path / "releases", staging
+            )._reap_deferred_staging(parent_fd)
+            assert tuple(staging.iterdir()) == ()
+    finally:
+        os.close(parent_fd)
+
+
+@pytest.mark.parametrize("damage", ["corrupt", "symlink"])
+def test_reaper_preserves_unsafe_recovery_record_quarantine(
+    tmp_path: Path, damage: str
+) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    token = "c" * 16
+    staging_name = f".install-{'2' * 64}-{token}"
+    quarantine_name = f".quarantine-recovery-{token}-{'d' * 16}"
+    quarantine = staging / quarantine_name
+    if damage == "corrupt":
+        quarantine.write_bytes(b"not canonical\n")
+        quarantine.chmod(0o600)
+    else:
+        foreign = tmp_path / "foreign-quarantine"
+        foreign.write_bytes(release_module._recovery_intent_bytes(staging_name))
+        quarantine.symlink_to(foreign)
+    parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(ReleaseInstallError, match="recovery record"):
+            ReleaseInstaller(
+                object(), object(), tmp_path / "releases", staging
+            )._reap_deferred_staging(parent_fd)
+    finally:
+        os.close(parent_fd)
+    assert os.path.lexists(quarantine)
+
+
+def test_recovery_backlog_bound_is_aggregate_across_artifact_categories(
+    tmp_path: Path
+) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    for index in range(6):
+        token = f"{index + 1:016x}"
+        (staging / f".recovery-{token}.state").write_bytes(b"")
+        (staging / f".recovery-{token}.state").chmod(0o600)
+    for index in range(6, 11):
+        token = f"{index + 1:016x}"
+        (staging / f".recovery-{token}.new").write_bytes(b"")
+        (staging / f".recovery-{token}.new").chmod(0o600)
+    for index in range(11, 17):
+        token = f"{index + 1:016x}"
+        (staging / f".install-{'2' * 64}-{token}").mkdir(mode=0o700)
+    parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(ReleaseInstallError, match="backlog"):
+            release_module._read_recovery_records_fd(parent_fd, lambda: None)
+    finally:
+        os.close(parent_fd)
+
+
+def test_recovery_backlog_bound_includes_active_reservations(
+    tmp_path: Path,
+) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    for index in range(15):
+        (staging / f".unsafe-recovery-{index:016x}").write_bytes(b"held")
+    parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(ReleaseInstallError, match="backlog"):
+            release_module._read_recovery_records_fd(
+                parent_fd, lambda: None, active_reservations=2
+            )
+    finally:
+        os.close(parent_fd)
+
+
 def test_deferred_staging_backlog_is_bounded(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2071,6 +2600,299 @@ def test_restart_reaper_fails_closed_on_unsafe_recovery_sidecar(
 
     assert staging_path.is_dir()
     assert os.path.lexists(recovery)
+
+
+def test_install_wraps_recovery_budget_expiry_as_release_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    monkeypatch.setattr(
+        release_module,
+        "_read_recovery_records_fd",
+        lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("budget")),
+    )
+    with pytest.raises(ReleaseInstallError, match="recovery"):
+        ReleaseInstaller(
+            Trust(), object(), tmp_path / "releases", tmp_path / "staging"
+        ).install(
+            ReleaseRequest.parse(VALID_RELEASE),
+            datetime.now(UTC) + timedelta(seconds=2),
+        )
+
+
+def test_install_setup_failure_without_identity_is_typed_and_restart_safe(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    clock = [0.0]
+    original_open = release_module.os.open
+    original_stat = release_module.os.stat
+    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+
+    def fail_staging_open(path, flags, *args, **kwargs):
+        if (
+            str(path).startswith(".install-")
+            and not str(path).endswith(".lock")
+            and flags & os.O_DIRECTORY
+        ):
+            clock[0] = 11.0
+            raise OSError("injected staging open failure")
+        return original_open(path, flags, *args, **kwargs)
+
+    def fail_staging_stat(path, *args, **kwargs):
+        if (
+            str(path).startswith(".install-")
+            and not str(path).endswith(".lock")
+            and kwargs.get("dir_fd") is not None
+        ):
+            raise OSError("injected staging stat failure")
+        return original_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(release_module.os, "open", fail_staging_open)
+    monkeypatch.setattr(release_module.os, "stat", fail_staging_stat)
+    with pytest.raises(ReleaseInstallError, match="release installation failed"):
+        ReleaseInstaller(Trust(), object(), releases, staging).install(
+            ReleaseRequest.parse(VALID_RELEASE),
+            MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
+        )
+    assert tuple(staging.glob(".recovery-*.state"))
+    assert tuple(staging.glob(".install-*"))
+
+
+def test_recovery_completion_never_overwrites_replaced_intent(
+    tmp_path: Path
+) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    token = "d" * 16
+    staging_name = f".install-{'2' * 64}-{token}"
+    record_name = f".recovery-{token}.state"
+    staging_path = staging / staging_name
+    staging_path.mkdir(mode=0o700)
+    staging_metadata = staging_path.stat()
+    staging_identity = (staging_metadata.st_dev, staging_metadata.st_ino)
+    parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    moved = staging / ".moved-original-intent"
+    replacement = staging / record_name
+    try:
+        intent_identity = release_module._write_recovery_intent_fd(
+            parent_fd, record_name, staging_name
+        )
+        os.rename(replacement, moved)
+        replacement.write_bytes(b"foreign replacement\n")
+        replacement.chmod(0o600)
+        replacement_identity = replacement.stat().st_ino
+        with pytest.raises(ReleaseInstallError, match="identity"):
+            release_module._complete_recovery_record_fd(
+                parent_fd,
+                record_name,
+                staging_name,
+                staging_identity,
+                intent_identity=intent_identity,
+                check=lambda: None,
+            )
+    finally:
+        os.close(parent_fd)
+    assert replacement.read_bytes() == b"foreign replacement\n"
+    assert replacement.stat().st_ino == replacement_identity
+    assert moved.is_file()
+
+
+def test_recovery_completion_requires_captured_intent_to_still_exist(
+    tmp_path: Path,
+) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    token = "f" * 16
+    staging_name = f".install-{'2' * 64}-{token}"
+    record_name = f".recovery-{token}.state"
+    staging_path = staging / staging_name
+    staging_path.mkdir(mode=0o700)
+    metadata = staging_path.stat()
+    parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        intent_identity = release_module._write_recovery_intent_fd(
+            parent_fd, record_name, staging_name
+        )
+        os.unlink(record_name, dir_fd=parent_fd)
+        with pytest.raises(ReleaseInstallError, match="identity"):
+            release_module._complete_recovery_record_fd(
+                parent_fd,
+                record_name,
+                staging_name,
+                (metadata.st_dev, metadata.st_ino),
+                intent_identity=intent_identity,
+                check=lambda: None,
+            )
+    finally:
+        os.close(parent_fd)
+
+
+@pytest.mark.parametrize("kind", ["regular", "symlink", "hardlink"])
+def test_recursive_leaf_cleanup_preserves_name_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    root = tmp_path / "staging"
+    tree = root / "owned"
+    tree.mkdir(parents=True)
+    child = tree / "leaf"
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"owned")
+    if kind == "regular":
+        child.write_bytes(b"owned")
+    elif kind == "symlink":
+        child.symlink_to(outside)
+    else:
+        os.link(outside, child)
+    tree_metadata = tree.stat()
+    tree_identity = (tree_metadata.st_dev, tree_metadata.st_ino)
+    moved = tmp_path / f"moved-{kind}"
+    substituted = [False]
+    original_unlink = release_module.os.unlink
+    original_rename = release_module._rename_noreplace
+
+    def substitute() -> None:
+        if substituted[0]:
+            return
+        substituted[0] = True
+        os.rename(child, moved)
+        if kind == "symlink":
+            child.symlink_to(tmp_path / "foreign-target")
+        else:
+            child.write_bytes(b"foreign")
+
+    def unlink_after_substitution(path, *args, **kwargs):
+        if path == "leaf":
+            substitute()
+        return original_unlink(path, *args, **kwargs)
+
+    def rename_after_substitution(source_fd, source, destination_fd, destination):
+        if source == "leaf":
+            substitute()
+        return original_rename(source_fd, source, destination_fd, destination)
+
+    monkeypatch.setattr(release_module.os, "unlink", unlink_after_substitution)
+    monkeypatch.setattr(release_module, "_rename_noreplace", rename_after_substitution)
+    parent_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        try:
+            release_module._remove_bound_tree_fd(
+                parent_fd, tree.name, tree_identity, lambda: None
+            )
+        except (OSError, ReleaseInstallError):
+            pass
+    finally:
+        os.close(parent_fd)
+
+    assert moved.exists() or moved.is_symlink()
+    assert child.exists() or child.is_symlink()
+    if kind != "symlink":
+        assert child.read_bytes() == b"foreign"
+
+
+def test_restart_reaper_consumes_complete_temp_without_quarantine_accumulation(
+    tmp_path: Path
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    staging = tmp_path / "staging"
+    releases = tmp_path / "releases"
+    staging.mkdir(mode=0o700)
+    releases.mkdir(mode=0o700)
+    request = ReleaseRequest.parse(VALID_RELEASE)
+    parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for index in range(3):
+            token = f"{index + 1:016x}"
+            staging_name = f".install-{'2' * 64}-{token}"
+            state_name = f".recovery-{token}.state"
+            temp_name = f".recovery-{token}.new"
+            staging_path = staging / staging_name
+            staging_path.mkdir(mode=0o700)
+            metadata = staging_path.stat()
+            identity = (metadata.st_dev, metadata.st_ino)
+            release_module._write_recovery_intent_fd(
+                parent_fd, state_name, staging_name
+            )
+            release_module._write_recovery_bytes_fd(
+                parent_fd,
+                temp_name,
+                release_module._recovery_record_bytes(staging_name, identity),
+            )
+            inspection = ReleaseInstaller(
+                Trust(), object(), releases, staging
+            ).inspect(request, datetime.now(UTC) + timedelta(seconds=2))
+            assert inspection.disposition is ReleaseDisposition.SAFE_TO_RESUME
+            assert tuple(staging.iterdir()) == ()
+    finally:
+        os.close(parent_fd)
+
+
+@pytest.mark.parametrize("damage", ["corrupt", "symlink"])
+def test_restart_reaper_fails_closed_without_deleting_unsafe_temp(
+    tmp_path: Path, damage: str
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    staging = tmp_path / "staging"
+    releases = tmp_path / "releases"
+    staging.mkdir(mode=0o700)
+    releases.mkdir(mode=0o700)
+    token = "e" * 16
+    staging_name = f".install-{'2' * 64}-{token}"
+    state_name = f".recovery-{token}.state"
+    temp_name = f".recovery-{token}.new"
+    staging_path = staging / staging_name
+    staging_path.mkdir(mode=0o700)
+    metadata = staging_path.stat()
+    identity = (metadata.st_dev, metadata.st_ino)
+    parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        release_module._write_recovery_intent_fd(
+            parent_fd, state_name, staging_name
+        )
+        temp = staging / temp_name
+        if damage == "corrupt":
+            temp.write_bytes(b"not canonical\n")
+            temp.chmod(0o600)
+        else:
+            foreign = tmp_path / "foreign-temp"
+            foreign.write_bytes(
+                release_module._recovery_record_bytes(staging_name, identity)
+            )
+            temp.symlink_to(foreign)
+        inspection = ReleaseInstaller(
+            Trust(), object(), releases, staging
+        ).inspect(
+            ReleaseRequest.parse(VALID_RELEASE),
+            datetime.now(UTC) + timedelta(seconds=2),
+        )
+    finally:
+        os.close(parent_fd)
+
+    assert inspection.disposition is ReleaseDisposition.OPERATOR_INTERVENTION
+    assert os.path.lexists(staging / temp_name)
+    assert staging_path.is_dir()
 
 
 @pytest.mark.parametrize("branch", ["initial-existing", "rename-race", "inspect"])
