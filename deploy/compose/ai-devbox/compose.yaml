@@ -13,7 +13,7 @@ services:
         USERNAME: ai-dev
         USER_UID: ${AI_DEVBOX_UID:-1100}
         USER_GID: ${AI_DEVBOX_GID:-1100}
-    image: local/ai-devbox:latest
+    image: local/ai-devbox:managed
     container_name: ai-devbox
     hostname: ai-devbox
     restart: unless-stopped

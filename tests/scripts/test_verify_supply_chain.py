@@ -18,6 +18,11 @@ def _copy(tmp_path: Path) -> Path:
         ".dockerignore", "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
         "control/web/package-lock.json", "control/Dockerfile",
         "deploy/compose/compose.yaml", "deploy/compose/images.lock.json",
+        "deploy/compose/tailscale/compose.yaml",
+        "deploy/compose/ai-devbox/compose.yaml",
+        "deploy/compose/ai-devbox/Dockerfile",
+        "deploy/compose/ai-devbox/entrypoint.sh",
+        "deploy/compose/ai-devbox/sshd_config",
         "deploy/compose/trust/litellm-cosign.pub",
     ):
         destination = target / path
@@ -48,6 +53,26 @@ def test_verifier_rejects_floating_image(tmp_path: Path) -> None:
     result = subprocess.run([SCRIPT, "--root", repository], capture_output=True, text=True)
     assert result.returncode != 0
     assert "digest" in result.stderr or "floating" in result.stderr
+
+
+def test_verifier_rejects_floating_ai_devbox_base(tmp_path: Path) -> None:
+    repository = _copy(tmp_path)
+    dockerfile = repository / "deploy/compose/ai-devbox/Dockerfile"
+    dockerfile.write_text(
+        dockerfile.read_text().replace(
+            "ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea",
+            "ubuntu:24.04",
+        )
+    )
+
+    result = subprocess.run(
+        [SCRIPT, "--root", repository, "--generate"],
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "ai-devbox" in result.stderr and "digest" in result.stderr
 
 
 def test_verifier_rejects_stale_sbom_after_lock_change(tmp_path: Path) -> None:

@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
-ARG NODE_IMAGE
-ARG PYTHON_IMAGE
+ARG NODE_IMAGE=node:24-bookworm-slim@sha256:235600a8101ab264e117b1768e925532262668dc9b581ef1dd7d96ced463b8e7
+ARG PYTHON_IMAGE=python:3.12-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b
 FROM ${NODE_IMAGE} AS web
 WORKDIR /web
 COPY control/web/package.json control/web/package-lock.json ./

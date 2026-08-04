@@ -27,7 +27,7 @@ cleanup() {
         docker run --rm \
             -v "${test_root}:/cleanup" \
             --entrypoint /usr/bin/find \
-            local/ai-devbox:latest \
+            local/ai-devbox:managed \
             /cleanup -mindepth 1 -delete >/dev/null 2>&1 || true
         rmdir -- "${test_root}" 2>/dev/null || true
     fi

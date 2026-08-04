@@ -52,7 +52,8 @@ def test_image_contract_is_hardened_and_home_independent() -> None:
     dockerfile = (DEVBOX / "Dockerfile").read_text()
     lowered = dockerfile.lower()
 
-    assert "FROM ubuntu:24.04" in dockerfile
+    assert "ARG UBUNTU_IMAGE=ubuntu:24.04@sha256:" in dockerfile
+    assert "FROM ${UBUNTU_IMAGE}" in dockerfile
     assert "ARG USERNAME=ai-dev" in dockerfile
     assert "ARG USER_UID=1100" in dockerfile
     assert "ARG USER_GID=1100" in dockerfile
