@@ -17,7 +17,10 @@ from cryptography.x509.oid import ExtendedKeyUsageOID, ExtensionOID, NameOID
 
 
 NODE_ID = "spk_0123456789abcdef0123456789abcdef"
-NOW = datetime(2026, 8, 3, 12, tzinfo=UTC)
+# The authority validates the intermediate against the real wall clock during
+# construction. Anchor certificate fixtures to this test process so their
+# remaining-lifetime boundary does not decay as the calendar advances.
+NOW = datetime.now(UTC).replace(microsecond=0)
 
 
 def _pem_private_key(key: ed25519.Ed25519PrivateKey) -> bytes:
