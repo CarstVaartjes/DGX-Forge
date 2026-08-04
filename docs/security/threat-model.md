@@ -18,6 +18,11 @@ Git is desired-state authority. PostgreSQL is operational state only.
 | Repository content | Parsers and worker; malicious committed files | Allowlisted roots, object reads, no hooks/protocols, blob/size checks, canonical typed serializers, local-only endpoints, immutable adapter executable paths | Validation results and rejected proposal audit | `control/tests/security/test_untrusted_repository.py`, `test_boundaries.py` |
 | PostgreSQL | Jobs, sessions, audit; database attacker or accidental misuse | Private data network, file secrets, migrations, checks/fences; no model/profile authority tables | Health alert, encrypted backup, audit/count verification | migration, job, backup/recovery tests |
 | Control worker | Cluster mutation; stale/crashed worker | Transactional claims, leases, attempt fences, sorted node leases, unknown-kind failure, shared online lock | Worker-starvation alerts and job evidence; reclaim expired attempt | job/worker/reconcile tests |
+| Agent enrollment and identity | Agent impersonation, enrollment replay, stolen certificate | Caddy mTLS accepts a 24-hour client-auth-only certificate for one canonical node; enrollment grants are hashed, node-bound, single-use, and short-lived; Smallstep JWK authorization is one-use and fixed-policy | Local PostgreSQL revocation denies immediately; retry only unconfirmed Smallstep serials; certificate loss requires console-verified re-enrollment | `control/tests/test_step_ca.py`, `tests/runbooks/test_agent_pki.py` |
+| Agent CA boundary | Online issuer compromise, root theft, forged provider response | The offline root private key is never mounted; step-ca gets encrypted intermediate material and public provisioner JWK, while control-api alone gets the private JWK; fixed URL/root, bounded TLS HTTP, exact CSR/certificate/chain validation | Rotate the online intermediate/provisioner, revoke affected nodes, preserve local denial during remote uncertainty, restore CA DB and PostgreSQL from one backup generation | `control/tests/test_step_ca.py`, `deploy/compose/tests/test_agent_ingress.py` |
+| Control-to-agent operation protocol | Cross-node claim, stale fence, malicious payload | A versioned shared wheel accepts only allowlisted operations; every claim binds job, node, attempt, fence, commit, digest, and UTC deadline. Reject unknown fields, commands, filesystem paths, credentials, and documents over 64 KiB | Persist bounded progress/result evidence; reject expired or superseded fences, mark the operation for retry/operator review, and retain the prior attempt for audit | `control/tests/security/test_agent_protocol.py`, `agent_protocol/tests/test_contracts.py` |
+| Agent result channel | Result exfiltration or secret-bearing diagnostic output | Result schema applies the same recursive secret/path rejection and 64 KiB limit; control redacts failure reasons before persistence | Treat unexpected result rejection as a security event, rotate exposed credentials, revoke the certificate, and recollect only approved bounded evidence | protocol boundary and logging tests |
+| Agent credential storage | Certificate theft from an agent or control host | Store only public certificate metadata in PostgreSQL; private keys remain in protected node-local storage and are never accepted in protocol messages | Revoke the affected serial, quarantine its node, issue a replacement after console identity verification, and review all operations under the stolen serial | agent migration, protocol boundary, and recovery runbooks |
 | Spark SSH | Root policy and model runtime; hostile network/node impostor | Trusted console assertion, strict host keys, no shell interpolation, explicit endpoint, staged digest-checked scripts, recovery gate | Identity quarantine and resumable journal; console rollback | install identity/remote/steps tests |
 | LiteLLM/Caddy routes | Inference availability; shadow model/upstream | Routes only from eligible accepted snapshot, exact upstream allowlist, policy subset, atomic generation, maintenance on failure | Route-state alert and generation digests; retain prior/maintenance config | routes/LiteLLM tests |
 | Metrics and logs | Operational metadata, prompts/secrets; curious viewer | Stable bounded labels, separate scrape token, centralized redaction/truncation, role-gated content-addressed logs | Secret-leak tests, rotation, checksum verification | metrics/logging/observability tests |
@@ -43,3 +48,17 @@ prevention. Recovery depends on independent console access, off-host encrypted
 backups, pinned image/SBOM verification, and protected code-host credentials.
 Hardware acceptance is never inferred from simulation and requires explicitly
 approved targets.
+
+An agent security incident has a deliberate recovery boundary: do not reuse an
+enrollment secret or certificate after suspected impersonation, replay, theft,
+or exfiltration. Quarantine the node, revoke its certificate, invalidate any
+running fence, rotate affected credentials, inspect durable attempt evidence,
+and re-enroll only after an independent console identity check. A stale or
+rejected result is not success evidence; the parent job remains recoverable
+through an explicit retry or operator decision.
+
+Smallstep revocation is passive in v0.30.2: it prevents CA renewal but does not
+make an already-issued leaf disappear from every TLS verifier. DGX-Forge's
+database and Caddy-to-control identity validator are therefore the immediate
+revocation boundary. A control database outage fails agent authorization
+closed. The remaining exposure is bounded by the 24-hour leaf lifetime.

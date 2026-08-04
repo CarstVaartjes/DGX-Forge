@@ -1,10 +1,21 @@
-name: dgx-forge-control
+name: ${COMPOSE_PROJECT_NAME:-dgx-forge-control}
 
 x-bounded-logging: &bounded-logging
   driver: local
   options:
     max-size: 10m
     max-file: "5"
+
+x-control-environment: &control-environment
+  DGX_DEPLOYMENT_MODE: production
+  DGX_DATABASE_URL_FILE: /run/secrets/database-url
+  DGX_TOKEN_SIGNING_KEY_FILE: /run/secrets/token-signing-key
+  DGX_METRICS_TOKEN_FILE: /run/secrets/metrics-token
+  DGX_REPOSITORY_PATH: /repository
+  DGX_STATE_PATH: /state
+  DGX_GIT_SIGNING_KEY_FILE: /run/secrets/git-signing-key
+  DGX_DEPLOYMENT_BRANCH: ${DEPLOYMENT_BRANCH:-deploy}
+  DGX_REQUIRED_CHECKS: ${REQUIRED_CHECKS:-}
 
 services:
   postgres:
@@ -31,22 +42,14 @@ services:
     command: [python, -m, dgx_control.api]
     read_only: true
     user: "10001:10001"
-    environment: &control-environment
-      DGX_DEPLOYMENT_MODE: production
-      DGX_DATABASE_URL_FILE: /run/secrets/database-url
-      DGX_TOKEN_SIGNING_KEY_FILE: /run/secrets/token-signing-key
-      DGX_METRICS_TOKEN_FILE: /run/secrets/metrics-token
-      DGX_REPOSITORY_PATH: /repository
-      DGX_STATE_PATH: /state
-      DGX_GIT_SIGNING_KEY_FILE: /run/secrets/git-signing-key
-      DGX_DEPLOYMENT_BRANCH: ${DEPLOYMENT_BRANCH:-deploy}
-      DGX_REQUIRED_CHECKS: ${REQUIRED_CHECKS:-}
-    secrets: [database-url, token-signing-key, metrics-token, git-signing-key]
+    environment:
+      <<: *control-environment
+    secrets: [database-url, token-signing-key, metrics-token, git-signing-key, agent-client-ca, agent-intermediate-certificate, agent-proxy-auth]
     volumes:
       - ${REPOSITORY_PATH:?set repository path}:/repository
       - control-state:/state
     tmpfs: [/tmp]
-    networks: [application, data, ingress]
+    networks: [application, data, agent-proxy]
     depends_on:
       postgres: {condition: service_healthy}
     healthcheck:
@@ -62,7 +65,10 @@ services:
     command: [python, -m, dgx_control.worker]
     read_only: true
     user: "10001:10001"
-    environment: *control-environment
+    environment:
+      <<: *control-environment
+      DGX_AGENT_CA_PROVIDER: step-ca
+      DGX_AGENT_RUNTIME: disabled
     secrets: [database-url, token-signing-key, metrics-token, git-signing-key]
     volumes:
       - ${REPOSITORY_PATH:?set repository path}:/repository
@@ -145,11 +151,39 @@ services:
       - ${HTTPS_BIND:-0.0.0.0:443}:443
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./caddy/entrypoint.sh:/usr/local/bin/dgx-caddy-entrypoint:ro
       - caddy-data:/data
       - caddy-config:/config
     tmpfs: [/tmp]
-    networks: [ingress]
-    depends_on: [control-api]
+    entrypoint: [/bin/sh, /usr/local/bin/dgx-caddy-entrypoint]
+    environment:
+      DGX_CONTROL_HOSTNAME: ${DGX_CONTROL_HOSTNAME:?set Caddy control hostname}
+      DGX_AGENT_ENROLL_HOSTNAME: ${DGX_AGENT_ENROLL_HOSTNAME:?set Caddy enrollment hostname}
+      DGX_AGENT_HOSTNAME: ${DGX_AGENT_HOSTNAME:?set Caddy agent hostname}
+      DGX_REGISTRY_HOSTNAME: ${DGX_REGISTRY_HOSTNAME:?set Caddy registry hostname}
+    secrets: [agent-client-ca, agent-proxy-auth]
+    networks: [ingress, agent-proxy, registry-edge]
+    depends_on:
+      control-api: {condition: service_started}
+      registry: {condition: service_healthy}
+
+  registry:
+    image: ${REGISTRY_IMAGE:-registry:3.1.1@sha256:1be55279f18a2fe1a74edf2664cac61c1bea305b7b4642dab412e7affdcb3e33}
+    restart: unless-stopped
+    logging: *bounded-logging
+    read_only: true
+    environment:
+      OTEL_TRACES_EXPORTER: none
+    volumes:
+      - ./registry/config.yml:/etc/distribution/config.yml:ro
+      - registry-data:/var/lib/registry
+    tmpfs: [/tmp]
+    networks: [registry-edge, registry-publisher]
+    healthcheck:
+      test: [CMD-SHELL, "wget -q --spider http://127.0.0.1:5000/v2/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
 secrets:
   database-url:
@@ -170,12 +204,23 @@ secrets:
     file: "${LITELLM_DATABASE_URL_FILE:?set LiteLLM database URL secret file}"
   grafana-admin-password:
     file: "${GRAFANA_ADMIN_PASSWORD_FILE:?set Grafana admin password secret file}"
+  agent-client-ca:
+    file: "${AGENT_CLIENT_CA_FILE:?set agent client CA certificate secret file}"
+  agent-intermediate-certificate:
+    file: "${AGENT_INTERMEDIATE_CERTIFICATE_FILE:?set agent intermediate certificate secret file}"
+  agent-proxy-auth:
+    file: "${AGENT_PROXY_AUTH_FILE:?set agent proxy authentication secret file}"
 
 networks:
   ingress: {}
+  agent-proxy: {internal: true}
   application: {internal: true}
   data: {internal: true}
   cluster-egress: {}
+  registry-edge: {internal: true}
+  # No standing service joins this network. A Docker-daemon administrator may
+  # attach a digest-pinned one-shot ORAS publisher as documented in registry/README.md.
+  registry-publisher: {internal: true}
 
 volumes:
   postgres-data: {}
@@ -184,3 +229,4 @@ volumes:
   caddy-config: {}
   prometheus-data: {}
   grafana-data: {}
+  registry-data: {}

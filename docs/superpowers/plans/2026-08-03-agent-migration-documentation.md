@@ -15,6 +15,7 @@
 - SSH is documented only for enrollment, repair/replacement, certificate/A-B recovery, and emergency rollback.
 - Examples contain no real users, addresses, hostnames, tokens, keys, or fixed fleet-size assumptions.
 - Historical evidence remains factually unchanged and receives a visible scope label where necessary.
+- Fresh/reimaged devices follow NVIDIA's cloud-init/OEMDATA contract; already-running devices may use the one-time SSH bootstrap. Canonical Landscape and NVIDIA Sync remain optional integrations, never required authorities.
 
 ---
 
@@ -24,11 +25,15 @@
 - Create: `src/spark_profiles/agent_migration.py`
 - Modify: `src/spark_profiles/install/orchestrator.py`
 - Modify: `src/spark_profiles/install/cli.py`
+- Create: `deploy/ansible/roles/dgx_agent/`
+- Create: `src/spark_profiles/install/cloud_init.py`
 - Test: `tests/spark_profiles/install/test_agent_migration.py`
+- Test: `tests/spark_profiles/install/test_cloud_init.py`
 
 **Interfaces:**
 - Produces `AgentMigrationPlan` and resumable steps: preflight, grant, install, connect, evidence approval, certificate, probe, routine-transport acceptance, SSH-disable-for-routine marker.
 - CLI: `spark-install node enroll-agent NODE_ID [--apply] [--json]`.
+- CLI: `spark-install node prepare-media --baseos-release RELEASE --output DIR [--apply] [--json]` emits a sanitized, versioned seed overlay for NVIDIA's documented BaseOS/FastOS/OEMDATA workflow; it never writes an ISO or removable device itself.
 
 - [ ] **Step 1: Write failing resume/rollback tests**
 
@@ -36,6 +41,10 @@ Test one stable node ID at a time, unavailable control plane, grant expiry,
 installer failure, pending approval, certificate success, agent probe failure,
 resume after restart, and explicit rollback that removes only incomplete agent
 state without altering existing emergency SSH access.
+Test canonical cloud-init seed generation, no embedded name/address/secret,
+exact policy/tool digests, plan mode with no filesystem mutation, unsafe output
+targets, and a reimaged node resuming at physical identity approval rather than
+silently inheriting its old certificate.
 
 - [ ] **Step 2: Run and observe absent migration**
 
@@ -44,20 +53,31 @@ Expected: FAIL importing migration planner/CLI command.
 
 - [ ] **Step 3: Implement journaled migration gates**
 
+Express agent user, directories, systemd units, pinned ORAS/Alloy/exporter
+packages, the pinned NVIDIA lifecycle bundle, and local policy as versioned
+idempotent Ansible roles. Invoke them
+locally on the Spark through a pinned Ansible Runner bundle; bootstrap SSH only
+transfers/starts that bounded bundle and does not run repository-selected shell.
 Extend existing install journal without changing immutable node ID. Each step
 records canonical evidence and expected digest; approval is an external wait
 state. Only after an authenticated agent probe succeeds does the fleet record
 gain accepted agent protocol/version metadata. Do not delete recovery SSH.
+For fresh/reimage mode, generate only the DGX-Forge cloud-init/OEMDATA overlay
+consumed by NVIDIA's documented image tooling. Require the operator-supplied
+NVIDIA BaseOS/FastOS media outside the repository, verify its declared digest,
+and pause after first boot for the same physical identity/evidence gate. Do not
+fork NVIDIA's installer scripts, bypass license acknowledgement, or write block
+devices.
 
 - [ ] **Step 4: Run onboarding and migration suites**
 
-Run: `uv run pytest tests/spark_profiles/install/test_agent_migration.py tests/spark_profiles/install/test_install_cli.py tests/spark_profiles/install/test_orchestrator.py -v`
+Run: `uv run pytest tests/spark_profiles/install/test_agent_migration.py tests/spark_profiles/install/test_cloud_init.py tests/spark_profiles/install/test_install_cli.py tests/spark_profiles/install/test_orchestrator.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit migration mode**
 
 ```bash
-git add src/spark_profiles/agent_migration.py src/spark_profiles/install/orchestrator.py src/spark_profiles/install/cli.py tests/spark_profiles/install/test_agent_migration.py
+git add src/spark_profiles/agent_migration.py src/spark_profiles/install/orchestrator.py src/spark_profiles/install/cli.py src/spark_profiles/install/cloud_init.py deploy/ansible/roles/dgx_agent tests/spark_profiles/install/test_agent_migration.py tests/spark_profiles/install/test_cloud_init.py
 git commit -m "feat: migrate Sparks to outbound agents"
 ```
 
@@ -127,7 +147,8 @@ def test_recommended_readme_does_not_require_exactly_two_sparks() -> None:
 
 Required links include architecture, control bootstrap, Compose reference,
 node onboarding, agent PKI/enrollment, platform operations, repository admin,
-updates, observability, recovery, supply chain, and legacy scope.
+updates, observability, recovery, supply chain, NVIDIA lifecycle/cloud-init
+integration, and legacy scope.
 
 - [ ] **Step 2: Run and observe current README gaps**
 
@@ -231,7 +252,9 @@ Expected: FAIL on current `sparkctl` and control bootstrap language.
 - [ ] **Step 3: Update current workflow and label historical procedures**
 
 Describe CLI/API/agent jobs, no fallback, agent update fan-out, route failure,
-and recovery tools. Add “previous/next” links for newcomer stages. Preserve
+recovery tools, the pinned NVIDIA lifecycle-tool adapter, cloud-init versus
+existing-node bootstrap, and optional Landscape/NVIDIA Sync boundaries. Add
+“previous/next” links for newcomer stages. Preserve
 historical commands/evidence beneath visible labels instead of changing their
 recorded facts.
 
@@ -258,6 +281,7 @@ git commit -m "docs: separate generic and legacy operations"
 
 **Interfaces:**
 - Acceptance report includes simulated status plus external gates for physical enrollment, routine no-SSH operation, disconnect/restart, certificate rotation/revocation, update/rollback, replacement, and emergency repair.
+- It also records the pinned NVIDIA lifecycle bundle, one fresh/reimage cloud-init path, and one existing-node bootstrap path without treating either as proof of the other.
 
 - [ ] **Step 1: Write failing release-gate test**
 

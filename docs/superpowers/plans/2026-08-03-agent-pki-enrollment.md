@@ -4,9 +4,9 @@
 
 **Goal:** Enroll immutable Spark identities with single-use grants and issue, rotate, and revoke short-lived mTLS certificates through a replaceable CA provider.
 
-**Architecture:** A provider interface isolates PKI implementation. The built-in provider signs from a protected intermediate while the root stays offline; Caddy authenticates established agents and forwards a stripped, verified identity to private API routes.
+**Architecture:** A provider interface isolates PKI implementation. The built-in provider signs from a protected intermediate for zero-dependency bootstrap/development, while a separate Smallstep `step-ca` container is the recommended production provider; both keep the root offline. Caddy authenticates established agents and forwards a stripped, verified identity to private API routes.
 
-**Tech Stack:** Python 3.12, cryptography, FastAPI, PostgreSQL, Caddy 2, Docker Compose, pytest
+**Tech Stack:** Python 3.12, cryptography, FastAPI, PostgreSQL, Smallstep `step-ca`, Caddy 2, Docker Compose, pytest
 
 ## Global Constraints
 
@@ -70,7 +70,7 @@ git commit -m "feat: issue short-lived Spark agent certificates"
 
 **Files:**
 - Modify: `control/src/dgx_control/models.py`
-- Create: `control/migrations/versions/0003_agent_enrollment.py`
+- Create: `control/migrations/versions/0004_agent_enrollment.py`
 - Create: `control/src/dgx_control/enrollment.py`
 - Test: `control/tests/test_enrollment.py`
 
@@ -111,7 +111,7 @@ Expected: PASS including simultaneous replay where exactly one submit succeeds.
 - [ ] **Step 5: Commit enrollment service**
 
 ```bash
-git add control/src/dgx_control/models.py control/migrations/versions/0003_agent_enrollment.py control/src/dgx_control/enrollment.py control/tests/test_enrollment.py
+git add control/src/dgx_control/models.py control/migrations/versions/0004_agent_enrollment.py control/src/dgx_control/enrollment.py control/tests/test_enrollment.py
 git commit -m "feat: enroll immutable Spark agent identities"
 ```
 
@@ -173,22 +173,39 @@ git commit -m "feat: expose authenticated Spark agent API"
 
 **Files:**
 - Modify: `deploy/compose/Caddyfile`
+- Create: `deploy/compose/caddy/entrypoint.sh`
 - Modify: `deploy/compose/compose.yaml`
+- Create: `deploy/compose/compose.step-ca.yaml`
+- Create: `deploy/compose/compose.builtin-ca.yaml`
 - Modify: `deploy/compose/.env.example`
+- Create: `deploy/compose/step-ca/ca.json`
+- Modify: `deploy/compose/tests/test.env`
 - Modify: `control/src/dgx_control/settings.py`
+- Modify: `control/src/dgx_control/auth.py`
+- Modify: `control/src/dgx_control/api.py`
+- Modify: `control/src/dgx_control/agent_api.py`
+- Modify: `control/src/dgx_control/pki.py`
 - Test: `deploy/compose/tests/test_agent_ingress.py`
+- Test: `deploy/compose/tests/test_networking.py`
 - Test: `control/tests/test_settings.py`
+- Test: `control/tests/test_agent_api.py`
+- Test: `control/tests/test_pki.py`
+- Test: `control/tests/security/test_agent_identity.py`
+- Modify: `docs/runbooks/control-plane-bootstrap.md`
 
 **Interfaces:**
 - Agent ingress uses a separately configured listener/hostname and client CA.
 - Caddy strips all incoming `X-DGX-Agent-*` headers and supplies verified identity metadata to the API.
+- `step-ca` is a separate private-network service with no published port; built-in CA mode remains an explicit deployment profile.
 
 - [ ] **Step 1: Write failing rendered-boundary tests**
 
 Assert agent routes are not reachable through ordinary browser ingress,
 client-auth is mandatory except `/agent/v1/enroll`, Caddy is the only published
-port, CA/intermediate files are secrets, and control-api trusts proxy identity
-only on the private ingress network.
+port, CA/intermediate files are secrets, control-api trusts proxy identity
+only on the private ingress network, provider overlays fail closed when
+combined in either order, and Caddy/Python canonicalize the proxy secret to
+the same single-line base64url-like token.
 
 - [ ] **Step 2: Run and observe absent agent listener**
 
@@ -198,38 +215,62 @@ Expected: FAIL because no mTLS agent route exists.
 - [ ] **Step 3: Implement segmented listener and settings**
 
 Add secret files `agent-client-ca`, `agent-intermediate-certificate`, and
-`agent-intermediate-key`; add `DGX_AGENT_*_FILE` settings. Configure Caddy
+provider credentials; add `DGX_AGENT_*_FILE` and `DGX_AGENT_CA_PROVIDER`
+settings. Keep the generic base Compose file provider-neutral and require the
+production `compose.step-ca.yaml` overlay for the pinned `step-ca` image,
+persistent CA data, health check, no public port, and a separately initialized
+offline root/intermediate. The `compose.builtin-ca.yaml` development overlay
+may mount the built-in intermediate key without requiring Step CA secrets.
+Application settings must reject a merged Step CA/built-in environment
+regardless of overlay order. The Caddy entrypoint and Python settings loader
+must accept only the same normalized proxy-secret grammar.
+Configure Caddy
 client authentication and identity forwarding using Caddy placeholders proven
 by `caddy validate`. Keep enrollment server-authenticated and rate-limited;
 keep claim/result mTLS-only.
 
 - [ ] **Step 4: Validate Caddy and Compose**
 
-Run: `uv run pytest deploy/compose/tests/test_agent_ingress.py deploy/compose/tests/test_networking.py -v && docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml config --quiet`
+Run: `uv run pytest deploy/compose/tests/test_agent_ingress.py deploy/compose/tests/test_networking.py -v && docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml config --quiet && docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml -f deploy/compose/compose.builtin-ca.yaml config --quiet`
 Expected: PASS.
 
 - [ ] **Step 5: Commit ingress**
 
 ```bash
-git add deploy/compose/Caddyfile deploy/compose/compose.yaml deploy/compose/.env.example control/src/dgx_control/settings.py deploy/compose/tests/test_agent_ingress.py control/tests/test_settings.py
+git add deploy/compose/Caddyfile deploy/compose/caddy/entrypoint.sh deploy/compose/compose.yaml deploy/compose/compose.step-ca.yaml deploy/compose/compose.builtin-ca.yaml deploy/compose/.env.example deploy/compose/step-ca/ca.json deploy/compose/tests/test.env deploy/compose/tests/test_agent_ingress.py deploy/compose/tests/test_networking.py control/src/dgx_control/settings.py control/src/dgx_control/auth.py control/src/dgx_control/api.py control/src/dgx_control/agent_api.py control/src/dgx_control/pki.py control/tests/test_settings.py control/tests/test_agent_api.py control/tests/test_pki.py control/tests/security/test_agent_identity.py docs/runbooks/control-plane-bootstrap.md
 git commit -m "feat: authenticate outbound agents through Caddy"
 ```
 
 ### Task 5: PKI recovery and verification
 
 **Files:**
+- Create: `control/src/dgx_control/step_ca.py`
+- Test: `control/tests/test_step_ca.py`
+- Modify: `control/src/dgx_control/api.py`
+- Modify: `control/src/dgx_control/settings.py`
+- Modify: `deploy/compose/compose.yaml`
+- Modify: `deploy/compose/step-ca/ca.json`
 - Create: `docs/runbooks/agent-pki.md`
 - Modify: `docs/security/threat-model.md`
 - Test: `tests/runbooks/test_agent_pki.py`
 
 **Interfaces:**
-- Documents offline root creation, intermediate rotation, certificate revocation, expiry recovery, and Smallstep provider boundary.
+- Produces `StepCertificateAuthority` behind the Task 1 provider contract,
+  constructs the production `AgentApiServices` bundle with the selected CA
+  provider and artifact root, and documents offline root creation,
+  intermediate rotation, certificate revocation, expiry recovery, provider
+  selection, and migration.
 
 - [ ] **Step 1: Write failing runbook behavior checks**
 
-Parse commands from disposable fixtures and assert no command copies the root
-private key into Compose, renewal uses the existing mTLS identity, and recovery
-requires an explicit new enrollment grant.
+Use a fake `step-ca` HTTP boundary to assert node/SAN/lifetime policy, bounded
+responses, renewal/revocation, TLS verification, authenticated provisioner
+issuance, and secret redaction. Add production startup tests that construct the
+selected `AgentApiServices` bundle only for an explicitly configured provider,
+that require CA network reachability for `step-ca`, and that reject unavailable
+provider credentials. Parse commands from disposable fixtures and assert no
+command copies the root private key into Compose, renewal uses the existing
+mTLS identity, and recovery requires an explicit new enrollment grant.
 
 - [ ] **Step 2: Run and observe missing runbook**
 
@@ -238,19 +279,28 @@ Expected: FAIL because `agent-pki.md` is absent.
 
 - [ ] **Step 3: Write operational PKI and recovery procedure**
 
-Include restrictive file modes, offline root storage, intermediate lifetime
-and rotation overlap, revocation/retirement, clock-skew checks, backup scope,
-and provider migration. Explicitly state that certificate loss does not permit
-copying another node's identity.
+Implement the provider with fixed Smallstep sign/renew/revoke requests and a
+narrowly scoped provisioner credential loaded from a secret file; never accept
+a caller-selected CA URL or certificate subject. Construct and pass the
+production `AgentApiServices` bundle in `production_app`, selecting exactly
+the configured built-in bootstrap or `StepCertificateAuthority` provider and
+its artifact root. Configure the step-ca provisioner and encrypted provider
+material through deployment secrets, authenticate every issuance request, and
+keep control-api on the private CA network. Include restrictive host secret
+permissions and initialization/runbook instructions (Compose bind-backed
+secret uid/gid/mode is not portable), offline root storage, intermediate
+lifetime and rotation overlap, revocation/retirement, clock-skew checks,
+backup scope, and built-in-to-Smallstep provider migration. Explicitly state
+that certificate loss does not permit copying another node's identity.
 
 - [ ] **Step 4: Run Phase 2 verification**
 
-Run: `uv run --project control pytest control/tests/test_pki.py control/tests/test_enrollment.py control/tests/test_agent_api.py control/tests/security/test_agent_identity.py -q && uv run pytest deploy/compose/tests/test_agent_ingress.py tests/runbooks/test_agent_pki.py -q && git diff --check`
+Run: `uv run --project control pytest control/tests/test_pki.py control/tests/test_step_ca.py control/tests/test_enrollment.py control/tests/test_agent_api.py control/tests/security/test_agent_identity.py -q && uv run pytest deploy/compose/tests/test_agent_ingress.py tests/runbooks/test_agent_pki.py -q && git diff --check`
 Expected: all pass.
 
 - [ ] **Step 5: Commit recovery documentation**
 
 ```bash
-git add docs/runbooks/agent-pki.md docs/security/threat-model.md tests/runbooks/test_agent_pki.py
+git add control/src/dgx_control/step_ca.py control/src/dgx_control/api.py control/src/dgx_control/settings.py control/tests/test_step_ca.py deploy/compose/compose.yaml deploy/compose/step-ca/ca.json docs/runbooks/agent-pki.md docs/security/threat-model.md tests/runbooks/test_agent_pki.py
 git commit -m "docs: define Spark agent PKI recovery"
 ```

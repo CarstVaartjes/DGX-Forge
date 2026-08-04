@@ -87,3 +87,93 @@ class LoginSession(Base):
     digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentNode(Base):
+    __tablename__ = "agent_nodes"
+    node_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    protocol_version: Mapped[int | None] = mapped_column(Integer)
+    capabilities: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentCertificate(Base):
+    __tablename__ = "agent_certificates"
+    serial: Mapped[str] = mapped_column(String(128), primary_key=True)
+    node_id: Mapped[str] = mapped_column(ForeignKey("agent_nodes.node_id"), nullable=False, index=True)
+    not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    not_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ca_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentEnrollmentGrant(Base):
+    __tablename__ = "agent_enrollment_grants"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    node_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    token_digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentEnrollment(Base):
+    __tablename__ = "agent_enrollments"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    grant_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_enrollment_grants.id", ondelete="CASCADE"), unique=True, nullable=False
+    )
+    node_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    csr_pem: Mapped[str] = mapped_column(Text, nullable=False)
+    csr_public_key_pem: Mapped[str] = mapped_column(Text, nullable=False)
+    csr_public_key_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    host_key_fingerprint: Mapped[str] = mapped_column(String(512), nullable=False)
+    hardware_fingerprint: Mapped[str] = mapped_column(String(512), nullable=False)
+    agent_digest: Mapped[str] = mapped_column(String(128), nullable=False)
+    boot_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    decision_actor: Mapped[str | None] = mapped_column(String(200))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    rejection_reason: Mapped[str | None] = mapped_column(Text)
+    certificate_pem: Mapped[str | None] = mapped_column(Text)
+    chain_pem: Mapped[str | None] = mapped_column(Text)
+    certificate_serial: Mapped[str | None] = mapped_column(String(128), unique=True)
+    certificate_fingerprint: Mapped[str | None] = mapped_column(String(128), unique=True)
+    certificate_not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    certificate_not_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentOperation(Base):
+    __tablename__ = "agent_operations"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    parent_job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    node_id: Mapped[str] = mapped_column(ForeignKey("agent_nodes.node_id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    base_commit: Mapped[str] = mapped_column(String(128), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    current_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retry_disposition: Mapped[str | None] = mapped_column(String(32))
+    retry_disposition_attempt: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class AgentOperationAttempt(Base):
+    __tablename__ = "agent_operation_attempts"
+    __table_args__ = (UniqueConstraint("operation_id", "attempt"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    operation_id: Mapped[str] = mapped_column(ForeignKey("agent_operations.id", ondelete="CASCADE"), nullable=False, index=True)
+    attempt: Mapped[int] = mapped_column(Integer, nullable=False)
+    fence: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
+    lease_deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    agent_certificate_serial: Mapped[str] = mapped_column(ForeignKey("agent_certificates.serial"), nullable=False, index=True)
+    state: Mapped[str] = mapped_column(String(32), nullable=False)
+    progress: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    result: Mapped[dict[str, object] | None] = mapped_column(JSON)

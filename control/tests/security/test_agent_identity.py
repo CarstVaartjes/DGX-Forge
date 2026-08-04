@@ -1,0 +1,46 @@
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+from dgx_control.auth import AgentIdentity, AuthError, TrustedProxyAgentIdentityMiddleware, agent_identity_from_scope
+
+
+NODE = "spk_" + "a" * 32
+
+
+def test_agent_scope_identity_must_be_typed_and_verified() -> None:
+    assert agent_identity_from_scope({"dgx.agent_identity": {"node_id": NODE}}) is None
+    identity = AgentIdentity(NODE, "serial", "fingerprint", True)
+    assert agent_identity_from_scope({"dgx.agent_identity": identity}) == identity
+
+
+@pytest.mark.parametrize("node,verified", (("not-a-node", True), (NODE, False)))
+def test_agent_identity_rejects_noncanonical_or_unverified_values(node: str, verified: bool) -> None:
+    with pytest.raises(AuthError):
+        AgentIdentity(node, "serial", "fingerprint", verified)
+
+
+def test_non_secret_caller_on_any_network_cannot_populate_agent_scope() -> None:
+    received = []
+
+    async def app(scope, receive, send) -> None:
+        received.append(scope)
+
+    middleware = TrustedProxyAgentIdentityMiddleware(app, trusted_proxy_auth=b"p" * 32)
+    scope = {
+        "type": "http", "path": "/ordinary", "client": ("arbitrary-network-peer", 443),
+        "headers": (
+            (b"x-dgx-agent-node", NODE.encode()),
+            (b"x-dgx-agent-serial", b"123"),
+            (b"x-dgx-agent-fingerprint", b"fingerprint"),
+            (b"x-dgx-agent-verified", b"1"),
+            (b"x-dgx-agent-proxy-auth", b"wrong-secret"),
+        ),
+    }
+
+    asyncio.run(middleware(scope, lambda: None, lambda _: None))
+
+    assert agent_identity_from_scope(received[0]) is None
+    assert received[0]["headers"] == ()

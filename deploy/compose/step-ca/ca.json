@@ -1,0 +1,45 @@
+{
+  "root": "/run/secrets/root_ca.crt",
+  "crt": "/run/secrets/intermediate_ca.crt",
+  "key": "/run/secrets/intermediate_ca_key",
+  "address": ":9000",
+  "insecureAddress": "",
+  "dnsNames": ["step-ca"],
+  "logger": {"format": "json"},
+  "db": {"type": "badgerv2", "dataSource": "/home/step/db"},
+  "crl": {
+    "enabled": true,
+    "generateOnRevoke": true,
+    "cacheDuration": "1h",
+    "renewPeriod": "30m"
+  },
+  "authority": {
+    "provisioners": [
+      {
+        "type": "JWK",
+        "name": "dgx-forge-agent",
+        "key": {
+          "use": "sig",
+          "kty": "EC",
+          "kid": "REPLACE_WITH_DEPLOYMENT_KEY_ID",
+          "crv": "P-256",
+          "alg": "ES256",
+          "x": "REPLACE_WITH_DEPLOYMENT_PUBLIC_X",
+          "y": "REPLACE_WITH_DEPLOYMENT_PUBLIC_Y"
+        },
+        "claims": {
+          "minTLSCertDuration": "24h",
+          "maxTLSCertDuration": "24h",
+          "defaultTLSCertDuration": "24h",
+          "disableRenewal": true,
+          "disableSmallstepExtensions": true
+        },
+        "options": {
+          "x509": {
+            "template": "{\"subject\":{\"commonName\":{{ toJson .Subject.CommonName }}},\"sans\":{{ toJson .SANs }},\"keyUsage\":[\"digitalSignature\"],\"extKeyUsage\":[\"clientAuth\"]}"
+          }
+        }
+      }
+    ]
+  }
+}

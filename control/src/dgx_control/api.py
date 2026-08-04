@@ -18,7 +18,8 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from .audit import AuditRecord
-from .auth import Actor, AuthError, MUTATION_ROLES, TokenCodec
+from .auth import Actor, AuthError, MUTATION_ROLES, TokenCodec, TrustedProxyAgentIdentityMiddleware
+from .agent_api import AgentApiServices, EnrollmentRateLimiter, active_agent_identity, install_agent_routes
 from .proposals import DocumentChange
 from .metrics import MetricsRegistry
 
@@ -29,6 +30,51 @@ class AdminServices:
     proposals: Any
     changes: Any | None
     reconciler: Any | None
+
+
+def build_agent_services(settings: Any, sessions: Any, clock: Callable[[], Any]) -> AgentApiServices:
+    """Construct the fail-closed production agent runtime from one provider."""
+    from .agent_jobs import AgentJobService
+    from .enrollment import EnrollmentService
+    from .pki import BuiltinCertificateAuthority
+    from .step_ca import StepCertificateAuthority
+
+    if settings.agent_runtime != "enabled":
+        raise RuntimeError("agent runtime is disabled")
+    if settings.agent_intermediate_certificate_path is None:
+        raise RuntimeError("agent intermediate certificate path is unavailable")
+    if settings.agent_ca_provider == "step-ca":
+        if settings.agent_ca_root_path is None or settings.agent_ca_credential_path is None or settings.agent_ca_provisioner_public_jwk_path is None:
+            raise RuntimeError("step-ca provider files are unavailable")
+        authority = StepCertificateAuthority(
+            ca_url=settings.agent_ca_url,
+            root_certificate_path=settings.agent_ca_root_path,
+            intermediate_certificate_path=settings.agent_intermediate_certificate_path,
+            provisioner_name=settings.agent_ca_provisioner_name,
+            provisioner_kid=settings.agent_ca_provisioner_kid,
+            credential_path=settings.agent_ca_credential_path,
+            provisioner_public_jwk_path=settings.agent_ca_provisioner_public_jwk_path,
+            timeout_seconds=settings.agent_ca_timeout_seconds,
+            max_response_bytes=settings.agent_ca_max_response_bytes,
+        )
+        authority.check_health()
+    elif settings.agent_ca_provider == "builtin":
+        if settings.agent_intermediate_key_path is None:
+            raise RuntimeError("built-in intermediate key path is unavailable")
+        authority = BuiltinCertificateAuthority(
+            settings.agent_intermediate_key_path,
+            settings.agent_intermediate_certificate_path,
+        )
+    else:
+        raise RuntimeError("agent CA provider is unavailable")
+    settings.agent_artifact_root.mkdir(mode=0o750, parents=True, exist_ok=True)
+    return AgentApiServices(
+        enrollment=EnrollmentService(sessions, authority, clock=clock),
+        operations=AgentJobService(sessions, clock=clock),
+        sessions=sessions,
+        clock=clock,
+        artifact_root=settings.agent_artifact_root,
+    )
 
 
 class SpaFiles(StaticFiles):
@@ -104,8 +150,16 @@ def create_app(
     metrics_token: str | None = None,
     metrics_refresh: Callable[[], None] | None = None,
     job_logs=None,
+    agent: AgentApiServices | None = None,
+    trusted_agent_proxy_auth: bytes = b"",
+    enrollment_rate_limiter: EnrollmentRateLimiter | None = None,
 ) -> FastAPI:
     app = FastAPI(title="DGX Forge Control", version="1.0", docs_url=None, redoc_url=None)
+    app.add_middleware(
+        TrustedProxyAgentIdentityMiddleware,
+        trusted_proxy_auth=trusted_agent_proxy_auth,
+        agent_identity_validator=(lambda identity: active_agent_identity(agent, identity)) if agent is not None else None,
+    )
 
     @app.middleware("http")
     async def request_boundary(request: Request, call_next):
@@ -117,7 +171,7 @@ def create_app(
             request_id = str(uuid.uuid4())
         request.state.request_id = request_id
         length = request.headers.get("content-length")
-        if length and int(length) > 1_048_576:
+        if length and int(length) > 1_048_576 and request.url.path != "/agent/v1/enroll":
             response = Response(status_code=413)
         else:
             response = await call_next(request)
@@ -151,6 +205,13 @@ def create_app(
     def require_mutation_role(authenticated: Actor, path: str) -> None:
         if authenticated.role not in MUTATION_ROLES[("POST", path)]:
             raise HTTPException(status_code=403, detail="insufficient role")
+
+    install_agent_routes(
+        app,
+        actor_dependency=actor,
+        services=agent,
+        enrollment_rate_limiter=enrollment_rate_limiter,
+    )
 
     @app.get("/api/v1/healthz")
     def healthz() -> dict[str, str]:
@@ -346,6 +407,7 @@ def production_app() -> FastAPI:
     )
     dashboard = DashboardService(repository, sessions)
     metrics = MetricsRegistry()
+    agent_services = build_agent_services(settings, sessions, clock)
     def refresh_metrics() -> None:
         fleet_state = dashboard.fleet()
         for node in fleet_state["nodes"]:
@@ -375,6 +437,8 @@ def production_app() -> FastAPI:
         metrics_token=settings.metrics_token,
         metrics_refresh=refresh_metrics,
         job_logs=JobLogStore(settings.state_path / "job-logs"),
+        agent=agent_services,
+        trusted_agent_proxy_auth=settings.agent_proxy_auth,
     )
     web_root = Path(__file__).resolve().parent / "web"
     if web_root.is_dir():

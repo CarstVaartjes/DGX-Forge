@@ -6,7 +6,7 @@
 
 **Architecture:** A small Python package separates transport, persistent state, and a closed operation registry. A minimal supervisor owns slot selection and rollback; the replaceable agent never overwrites the active executable.
 
-**Tech Stack:** Python 3.12 standard library, systemd, SQLite, POSIX filesystem primitives, pytest
+**Tech Stack:** Python 3.12, `python-tuf`/ngclient, pinned ORAS CLI, systemd, SQLite, POSIX filesystem primitives, pytest
 
 ## Global Constraints
 
@@ -72,9 +72,11 @@ git commit -m "feat: persist fenced Spark agent state"
 **Files:**
 - Create: `agent/src/dgx_agent/operations.py`
 - Create: `agent/src/dgx_agent/probe.py`
+- Create: `agent/src/dgx_agent/nvidia_tools.py`
 - Modify: `nodes/bin/collect-health`
 - Test: `agent/tests/test_operations.py`
 - Test: `agent/tests/test_probe.py`
+- Test: `agent/tests/test_nvidia_tools.py`
 
 **Interfaces:**
 - Produces `OperationRegistry.execute(claim, context) -> Mapping`, `inspect(claim, context) -> OperationInspection`.
@@ -95,23 +97,33 @@ def test_unknown_or_command_payload_never_reaches_executor(registry) -> None:
 Run: `uv run --project agent pytest agent/tests/test_operations.py agent/tests/test_probe.py -v`
 Expected: FAIL importing operations.
 
-- [ ] **Step 3: Implement typed registry and in-process bounded probe**
+- [ ] **Step 3: Implement typed registry and pinned-tool adapter**
 
 Map enum members to concrete handler objects. `node.probe` collects existing
 health evidence through a fixed installed collector with no payload arguments,
 a 15-second deadline, 256-KiB output limit, fixed environment, and no shell.
-Normalize/redact before returning. Implement inspection so a completed probe
-can be replayed without rerunning mutation.
+Add a fixed-path adapter for the pinned NVIDIA DGX Spark Enterprise
+Manageability bundle. The installed policy fixes bundle digest/version,
+executable paths, exact argument vectors, per-tool deadlines, and output
+limits; the claim cannot select a tool or arguments. Validate the NVIDIA JSON
+envelope as untrusted input and normalize safe output from device identity,
+hardware, firmware, OS, drivers, `spark_diagctl health`, and reset reason.
+Drop process lists, raw serials, addresses, log lines, artifact paths, and
+unknown fields. Combine these platform fields with the existing
+DGX-Forge-specific fabric/runtime collector. Missing or incompatible pinned
+tools is explicit degraded/unsupported evidence, never silent execution of a
+PATH-selected alternative. Normalize/redact before returning. Implement
+inspection so a completed probe can be replayed without rerunning collection.
 
 - [ ] **Step 4: Run operation tests and existing health collector tests**
 
-Run: `uv run --project agent pytest agent/tests/test_operations.py agent/tests/test_probe.py -v && uv run pytest tests/nodes/test_collect_health.py -q`
+Run: `uv run --project agent pytest agent/tests/test_operations.py agent/tests/test_probe.py agent/tests/test_nvidia_tools.py -v && uv run pytest tests/nodes/test_collect_health.py -q`
 Expected: PASS.
 
 - [ ] **Step 5: Commit registry**
 
 ```bash
-git add agent/src/dgx_agent/operations.py agent/src/dgx_agent/probe.py agent/tests/test_operations.py agent/tests/test_probe.py
+git add agent/src/dgx_agent/operations.py agent/src/dgx_agent/probe.py agent/src/dgx_agent/nvidia_tools.py agent/tests/test_operations.py agent/tests/test_probe.py agent/tests/test_nvidia_tools.py
 git commit -m "feat: execute typed Spark agent operations"
 ```
 
@@ -120,16 +132,21 @@ git commit -m "feat: execute typed Spark agent operations"
 **Files:**
 - Create: `agent/src/dgx_agent/releases.py`
 - Create: `agent/src/dgx_agent/workloads.py`
+- Create: `agent/src/dgx_agent/oci.py`
+- Create: `agent/src/dgx_agent/update_trust.py`
+- Modify: `deploy/compose/compose.yaml`
+- Create: `deploy/compose/registry/config.yml`
 - Test: `agent/tests/test_releases.py`
 - Test: `agent/tests/test_workloads.py`
 
 **Interfaces:**
-- `ReleaseInstaller.install(ReleaseRequest) -> ReleaseEvidence` accepts digest, signature/provenance digests, adapter ID, and the fixed control artifact endpoint derived from that digest.
+- `ReleaseInstaller.install(ReleaseRequest) -> ReleaseEvidence` accepts a TUF target name, exact OCI manifest digest, target/provenance digests, and adapter ID; it verifies the target through locally persisted TUF trust before pulling content.
 - `WorkloadOperations` accepts adapter ID, release digest, operation-specific typed fields, and deadline.
 
 - [ ] **Step 1: Write failing digest/path/policy tests**
 
-Test wrong digest, invalid signature, archive traversal, symlink entries,
+Test wrong digest, expired/rollback/freeze/mix-and-match TUF metadata, invalid
+root rotation, archive traversal, symlink entries,
 unexpected file modes, unapproved adapter, release mismatch, and attempts to
 supply command/path/environment fields.
 
@@ -140,12 +157,21 @@ Expected: FAIL importing modules.
 
 - [ ] **Step 3: Implement immutable installation and fixed adapter dispatch**
 
-Download only from `/agent/v1/artifacts/<sha256>` on the configured control
-origin with mTLS and bounded size into the state filesystem; verify
-SHA-256, signed manifest, complete member allowlist, modes, and ownership;
+Deploy a pinned CNCF Distribution registry as a separate private service.
+Use the maintained TUF client against a fixed HTTPS metadata base on the
+configured control origin, seeded by a root installed with the agent. Persist
+trusted-root and highest accepted metadata versions atomically in agent state.
+The claim selects only an allowlisted target name and must agree with the
+TUF-authorized OCI manifest digest.
+Resolve no tags: invoke a pinned root-owned ORAS client through fixed argv to
+pull only the registry origin and `@sha256` manifest supplied by the control
+plane. Credentials come from an absolute restrictive file, never the payload.
+Verify the TUF-authorized target digest, complete member allowlist, modes, and ownership;
 install atomically beneath `/opt/dgx-forge/releases/<digest>`. Resolve workload
 operations only through the installed adapter manifest and compiled adapter
 runner. Never accept a repository command array over the network.
+Retain `/agent/v1/artifacts/<sha256>` only for explicitly size-bounded
+bootstrap/recovery artifacts; normal releases must not traverse that endpoint.
 
 - [ ] **Step 4: Verify idempotency and interrupted installs**
 
@@ -155,7 +181,7 @@ Expected: PASS; identical release is a no-op and partial temp trees never become
 - [ ] **Step 5: Commit handlers**
 
 ```bash
-git add agent/src/dgx_agent/releases.py agent/src/dgx_agent/workloads.py agent/tests/test_releases.py agent/tests/test_workloads.py
+git add agent/src/dgx_agent/releases.py agent/src/dgx_agent/workloads.py agent/src/dgx_agent/oci.py agent/src/dgx_agent/update_trust.py agent/tests/test_releases.py agent/tests/test_workloads.py deploy/compose/compose.yaml deploy/compose/registry/config.yml
 git commit -m "feat: install and operate signed Spark releases"
 ```
 
@@ -214,6 +240,7 @@ git commit -m "feat: poll control plane from Spark agent"
 - Create: `agent/systemd/dgx-forge-agent.service`
 - Create: `agent/systemd/dgx-forge-agent-supervisor.service`
 - Create: `nodes/bin/install-dgx-agent`
+- Create: `nodes/vendor/nvidia-manageability.lock.json`
 - Test: `agent/tests/test_supervisor.py`
 - Test: `tests/nodes/test_install_dgx_agent.py`
 
@@ -226,6 +253,8 @@ git commit -m "feat: poll control plane from Spark agent"
 Test successful A->B activation, missing executable, digest mismatch, process
 exit, missed reconnect marker, rollback to A, both slots invalid, and symlink
 targets. Test installer idempotency and no private admin key copy.
+Test the exact NVIDIA bundle digest, license/provenance retention, and fixed
+installed tool paths as part of the same installer boundary.
 
 - [ ] **Step 2: Run and observe missing supervisor/installer**
 
@@ -239,6 +268,11 @@ and a fixed slot root. Supervisor runs as root only to select/launch slots; the
 agent service runs dedicated user `dgx-agent` with `NoNewPrivileges`, strict
 filesystem protections, bounded restart, no Docker socket, and explicit
 writable state paths. Roll back when the new slot misses its readiness marker.
+Install the reviewed NVIDIA Enterprise Manageability bundle as an immutable
+TUF-authorized/OCI-transported dependency beneath a digest directory, retain
+its MIT license and source provenance, and generate the fixed installed policy
+consumed by `nvidia_tools.py`. Never fetch its mutable web ZIP during node
+installation.
 
 - [ ] **Step 4: Run packaging and systemd security checks**
 
@@ -248,7 +282,7 @@ Expected: tests pass; review and record any unavailable sandbox directive on tar
 - [ ] **Step 5: Commit supervisor/install**
 
 ```bash
-git add agent/supervisor agent/systemd nodes/bin/install-dgx-agent agent/tests/test_supervisor.py tests/nodes/test_install_dgx_agent.py
+git add agent/supervisor agent/systemd nodes/bin/install-dgx-agent nodes/vendor/nvidia-manageability.lock.json agent/tests/test_supervisor.py tests/nodes/test_install_dgx_agent.py
 git commit -m "feat: supervise Spark agents with A/B rollback"
 ```
 
