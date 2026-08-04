@@ -102,7 +102,10 @@ def test_service_map_and_configurator_are_exact_and_fail_closed() -> None:
         "services": {
             "svc:dgx-forge": {
                 "endpoints": {"tcp:443": "http://caddy:8080"},
-            }
+            },
+            "svc:ai-devbox": {
+                "endpoints": {"tcp:22": "tcp://ai-devbox:22"},
+            },
         },
     }
     script = COMPOSE / "tailscale/configure.sh"
@@ -110,6 +113,7 @@ def test_service_map_and_configurator_are_exact_and_fail_closed() -> None:
     text = script.read_text()
     assert "serve set-config --all /config/serve.json" in text
     assert "serve advertise svc:dgx-forge" in text
+    assert "serve advertise svc:ai-devbox" in text
     assert "120" in text
     assert "service-host" in text
     assert "svc:*" not in text
@@ -119,20 +123,33 @@ def test_grants_example_is_exact_service_least_privilege() -> None:
     policy = json.loads((COMPOSE / "tailscale/grants.example.hujson").read_text())
 
     assert policy["tagOwners"] == {"tag:dgx-gateway": ["autogroup:admin"]}
+    assert policy["groups"] == {
+        "group:ai-devbox-users": ["user@example.invalid"]
+    }
     assert policy["acls"] == []
     assert policy["grants"] == [
         {
             "src": ["autogroup:admin"],
             "dst": ["svc:dgx-forge"],
             "ip": ["tcp:443"],
-        }
+        },
+        {
+            "src": ["group:ai-devbox-users"],
+            "dst": ["svc:ai-devbox"],
+            "ip": ["tcp:22"],
+        },
     ]
     assert policy["autoApprovers"] == {
-        "services": {"svc:dgx-forge": ["tag:dgx-gateway"]}
+        "services": {
+            "svc:dgx-forge": ["tag:dgx-gateway"],
+            "svc:ai-devbox": ["tag:dgx-gateway"],
+        }
     }
     assert policy["tests"] == [
         {"src": "autogroup:admin", "accept": ["svc:dgx-forge:443"]},
         {"src": "autogroup:member", "deny": ["svc:dgx-forge:443"]},
+        {"src": "user@example.invalid", "accept": ["svc:ai-devbox:22"]},
+        {"src": "autogroup:member", "deny": ["svc:ai-devbox:22"]},
     ]
     assert "svc:*" not in json.dumps(policy)
     assert "github" not in json.dumps(policy).lower()

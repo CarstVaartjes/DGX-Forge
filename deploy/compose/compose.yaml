@@ -1,5 +1,6 @@
 include:
   - tailscale/compose.yaml
+  - ai-devbox/compose.yaml
 
 name: ${COMPOSE_PROJECT_NAME:-dgx-forge-control}
 

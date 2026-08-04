@@ -2,17 +2,26 @@
   "tagOwners": {
     "tag:dgx-gateway": ["autogroup:admin"]
   },
+  "groups": {
+    "group:ai-devbox-users": ["user@example.invalid"]
+  },
   "acls": [],
   "grants": [
     {
       "src": ["autogroup:admin"],
       "dst": ["svc:dgx-forge"],
       "ip": ["tcp:443"]
+    },
+    {
+      "src": ["group:ai-devbox-users"],
+      "dst": ["svc:ai-devbox"],
+      "ip": ["tcp:22"]
     }
   ],
   "autoApprovers": {
     "services": {
-      "svc:dgx-forge": ["tag:dgx-gateway"]
+      "svc:dgx-forge": ["tag:dgx-gateway"],
+      "svc:ai-devbox": ["tag:dgx-gateway"]
     }
   },
   "tests": [
@@ -23,6 +32,14 @@
     {
       "src": "autogroup:member",
       "deny": ["svc:dgx-forge:443"]
+    },
+    {
+      "src": "user@example.invalid",
+      "accept": ["svc:ai-devbox:22"]
+    },
+    {
+      "src": "autogroup:member",
+      "deny": ["svc:ai-devbox:22"]
     }
   ]
 }

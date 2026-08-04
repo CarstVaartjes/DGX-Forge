@@ -46,6 +46,10 @@ def _rendered() -> dict:
         "DGX_BACKEND_PORT": "8443",
         "TAILSCALE_OAUTH_CLIENT_ID_FILE": "/dev/null",
         "TAILSCALE_OAUTH_CLIENT_SECRET_FILE": "/dev/null",
+        "AI_DEVBOX_UID": "1100",
+        "AI_DEVBOX_GID": "1100",
+        "AI_DEVBOX_DATA_ROOT": "/srv/dgx-forge/ai-devbox",
+        "AI_DEVBOX_AUTHORIZED_KEYS_FILE": "/srv/dgx-forge/secrets/ai-devbox-authorized-keys",
     }
     result = subprocess.run(
         ["docker", "compose", "-f", str(root / "deploy/compose/compose.yaml"), "-f", str(root / "deploy/compose/compose.step-ca.yaml"), "config", "--format", "json"],
@@ -58,7 +62,10 @@ def test_only_caddy_publishes_ports_and_images_are_digest_pinned() -> None:
     rendered = _rendered()
     published = {name for name, service in rendered["services"].items() if service.get("ports")}
     assert published == {"caddy"}
-    assert all("@sha256:" in service["image"] for service in rendered["services"].values())
+    assert all(
+        "@sha256:" in service["image"] or service.get("build")
+        for service in rendered["services"].values()
+    )
 
 
 def test_caddy_publishes_only_reserved_nas_backend_listener() -> None:

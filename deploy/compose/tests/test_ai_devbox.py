@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import stat
 import subprocess
 from pathlib import Path
@@ -10,6 +11,41 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
 DEVBOX = ROOT / "deploy/compose/ai-devbox"
+COMPOSE = ROOT / "deploy/compose"
+
+
+def _compose_environment() -> dict[str, str]:
+    environment = os.environ.copy()
+    for line in (COMPOSE / "tests/test.env").read_text().splitlines():
+        if line and not line.startswith("#"):
+            key, value = line.split("=", 1)
+            environment[key] = value
+    return environment
+
+
+def _rendered() -> dict[str, object]:
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(COMPOSE / "compose.yaml"),
+            "-f",
+            str(COMPOSE / "compose.step-ca.yaml"),
+            "config",
+            "--format",
+            "json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=_compose_environment(),
+    )
+    return json.loads(result.stdout)
+
+
+def _volume_targets(service: dict[str, object]) -> dict[str, dict[str, object]]:
+    return {volume["target"]: volume for volume in service.get("volumes", [])}
 
 
 def test_image_contract_is_hardened_and_home_independent() -> None:
@@ -62,6 +98,42 @@ def test_sshd_is_key_only_and_disables_forwarding() -> None:
         "HostKey /var/lib/ai-devbox/ssh-host-keys/ssh_host_rsa_key",
     }
     assert required <= set(config.splitlines())
+
+
+def test_compose_devbox_is_unpublished_and_strongly_isolated() -> None:
+    service = _rendered()["services"]["ai-devbox"]
+
+    assert service["init"] is True
+    assert service["read_only"] is True
+    assert service["security_opt"] == ["no-new-privileges:true"]
+    assert not service.get("ports")
+    assert not service.get("devices")
+    assert not service.get("privileged")
+    assert not service.get("cap_add")
+    assert set(service["networks"]) == {"tailnet-ssh-edge", "devbox-egress"}
+    assert service["cpus"] == 4.0
+    assert int(service["mem_limit"]) == 8 * 1024**3
+    assert int(service["mem_reservation"]) == 4 * 1024**3
+    assert int(service["shm_size"]) == 2 * 1024**3
+    assert service["tmpfs"] == [
+        "/run:size=64m,mode=755",
+        "/tmp:size=2g,mode=1777",
+        "/var/tmp:size=1g,mode=1777",
+    ]
+
+    volumes = _volume_targets(service)
+    assert volumes["/home/ai-dev"]["source"] == "/srv/dgx-forge/ai-devbox/home"
+    assert volumes["/workspaces"]["source"] == "/srv/dgx-forge/ai-devbox/workspaces"
+    assert volumes["/cache"]["source"] == "/srv/dgx-forge/ai-devbox/cache"
+    assert (
+        volumes["/var/lib/ai-devbox/ssh-host-keys"]["source"]
+        == "/srv/dgx-forge/ai-devbox/ssh-host-keys"
+    )
+    authorized = volumes["/run/config/authorized_keys"]
+    assert authorized["source"] == "/srv/dgx-forge/secrets/ai-devbox-authorized-keys"
+    assert authorized["read_only"] is True
+    assert authorized["bind"]["create_host_path"] is False
+    assert "docker.sock" not in json.dumps(service)
 
 
 def _test_root(tmp_path: Path, authorized_keys: bytes | None) -> Path:

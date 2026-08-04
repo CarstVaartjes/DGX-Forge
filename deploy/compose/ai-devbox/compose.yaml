@@ -1,0 +1,58 @@
+x-ai-devbox-logging: &ai-devbox-logging
+  driver: local
+  options:
+    max-size: 10m
+    max-file: "5"
+
+services:
+  ai-devbox:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        USERNAME: ai-dev
+        USER_UID: ${AI_DEVBOX_UID:-1100}
+        USER_GID: ${AI_DEVBOX_GID:-1100}
+    image: local/ai-devbox:latest
+    container_name: ai-devbox
+    hostname: ai-devbox
+    restart: unless-stopped
+    init: true
+    logging: *ai-devbox-logging
+    read_only: true
+    working_dir: /workspaces
+    security_opt:
+      - no-new-privileges:true
+    cpus: 4
+    mem_limit: 8g
+    mem_reservation: 4g
+    shm_size: 2g
+    tmpfs:
+      - /run:size=64m,mode=755
+      - /tmp:size=2g,mode=1777
+      - /var/tmp:size=1g,mode=1777
+    volumes:
+      - type: bind
+        source: ${AI_DEVBOX_DATA_ROOT:?set AI devbox data root}/home
+        target: /home/ai-dev
+      - type: bind
+        source: ${AI_DEVBOX_DATA_ROOT:?set AI devbox data root}/workspaces
+        target: /workspaces
+      - type: bind
+        source: ${AI_DEVBOX_DATA_ROOT:?set AI devbox data root}/cache
+        target: /cache
+      - type: bind
+        source: ${AI_DEVBOX_DATA_ROOT:?set AI devbox data root}/ssh-host-keys
+        target: /var/lib/ai-devbox/ssh-host-keys
+      - type: bind
+        source: ${AI_DEVBOX_AUTHORIZED_KEYS_FILE:?set AI devbox authorized keys file}
+        target: /run/config/authorized_keys
+        read_only: true
+        bind:
+          create_host_path: false
+    networks:
+      - tailnet-ssh-edge
+      - devbox-egress
+
+networks:
+  devbox-egress: {}

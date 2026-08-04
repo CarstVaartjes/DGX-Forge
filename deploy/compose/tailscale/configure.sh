@@ -23,12 +23,17 @@ fi
 
 ts serve set-config --all /config/serve.json
 ts serve advertise svc:dgx-forge
+ts serve advertise svc:ai-devbox
 
 ts serve status --json >/tmp/tailscale-serve-status.json
 ts status --json >/tmp/tailscale-status.json
 
 if ! grep -Fq 'svc:dgx-forge' /tmp/tailscale-serve-status.json; then
     echo "ERROR: svc:dgx-forge is absent from Tailscale Serve status." >&2
+    exit 1
+fi
+if ! grep -Fq 'svc:ai-devbox' /tmp/tailscale-serve-status.json; then
+    echo "ERROR: svc:ai-devbox is absent from Tailscale Serve status." >&2
     exit 1
 fi
 if ! grep -Fq 'service-host' /tmp/tailscale-status.json; then

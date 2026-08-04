@@ -5,6 +5,11 @@
       "endpoints": {
         "tcp:443": "http://caddy:8080"
       }
+    },
+    "svc:ai-devbox": {
+      "endpoints": {
+        "tcp:22": "tcp://ai-devbox:22"
+      }
     }
   }
 }
