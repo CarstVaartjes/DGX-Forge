@@ -26,6 +26,15 @@ connection's WAL, foreign-key, `FULL` synchronous, and bounded busy-timeout
 settings. A live configured connection also showed database, WAL, and SHM files
 at mode `0600` under the `0700` state root.
 
+Review-fix GREEN: `uv run --project agent pytest agent/tests -q` completed with
+86 passing tests. The follow-up coverage adds terminal delivery acknowledgment,
+fence/attempt history, schema-corruption, canonical-origin, package-import,
+credential-swap, and live sidecar checks.
+
+Packaging was also verified with `uv build --project agent --wheel` followed by
+an isolated `uv run --no-project --with` import using that wheel and the pinned
+protocol wheel. Generated wheel artifacts were removed afterward.
+
 ## Design decisions
 
 - `AgentConfig` is a frozen dataclass with only the permitted durable fields.

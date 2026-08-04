@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import stat
+import subprocess
 
 import pytest
 
@@ -245,3 +247,78 @@ def test_configuration_errors_do_not_echo_secret_values(tmp_path: Path) -> None:
         AgentConfig.load(path)
 
     assert sentinel not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://CONTROL.example.test",
+        "HTTPS://control.example.test",
+        "https://control.example.test?",
+        "https://control.example.test#",
+        "https://control.example.test:0",
+        "https://control.example.test:65536",
+        "https://control.example.test:",
+        "https://[2001:db8::1",
+        "https://2001:db8::1",
+        "https://control.example.test\\path",
+        "https://control.example.test\n",
+        "https:///missing-host",
+    ],
+)
+def test_configuration_rejects_noncanonical_or_unusable_https_origins(tmp_path: Path, origin: str) -> None:
+    document = _valid_document(tmp_path)
+    document["control_origin"] = origin
+
+    with pytest.raises(AgentConfigError):
+        AgentConfig.load(_write_config(tmp_path, document))
+
+
+@pytest.mark.parametrize(
+    "origin",
+    ["https://control.example.test:8443", "https://192.0.2.10", "https://[2001:db8::1]:8443"],
+)
+def test_configuration_accepts_canonical_https_dns_and_ip_origins(tmp_path: Path, origin: str) -> None:
+    document = _valid_document(tmp_path)
+    document["control_origin"] = origin
+
+    assert AgentConfig.load(_write_config(tmp_path, document)).control_origin == origin
+
+
+def test_configuration_rejects_untrusted_writable_credential_path(tmp_path: Path) -> None:
+    document = _valid_document(tmp_path)
+    certificate = Path(document["certificate_path"])
+    certificate.chmod(0o666)
+
+    with pytest.raises(AgentConfigError):
+        AgentConfig.load(_write_config(tmp_path, document))
+
+
+def test_configuration_rejects_a_credential_swapped_to_symlink_during_open(tmp_path: Path, monkeypatch) -> None:
+    document = _valid_document(tmp_path)
+    certificate = Path(document["certificate_path"])
+    replacement = tmp_path / "replacement.crt"
+    _regular_file(replacement)
+    real_open = os.open
+
+    def swapping_open(path, flags, *args, **kwargs):
+        if path == certificate.name and kwargs.get("dir_fd") is not None:
+            certificate.unlink()
+            certificate.symlink_to(replacement)
+        return real_open(path, flags, *args, **kwargs)
+
+    monkeypatch.setattr("dgx_agent.config.os.open", swapping_open)
+    with pytest.raises(AgentConfigError):
+        AgentConfig.load(_write_config(tmp_path, document))
+
+
+def test_project_imports_normally_outside_the_repository(tmp_path: Path) -> None:
+    project = Path(__file__).parents[1]
+    result = subprocess.run(
+        ["uv", "run", "--project", str(project), "python", "-c", "import dgx_agent"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr

@@ -62,12 +62,12 @@ def progress(*, fence: str = FENCE_A, value: int = 1, job_id: str = JOB_ID) -> A
     )
 
 
-def result(*, fence: str = FENCE_A, value: str = "ok", job_id: str = JOB_ID) -> AgentResult:
+def result(*, fence: str = FENCE_A, value: str = "ok", job_id: str = JOB_ID, attempt: int = 1) -> AgentResult:
     return AgentResult(
         schema_version=1,
         job_id=job_id,
         operation_id=OPERATION_ID,
-        attempt=1,
+        attempt=attempt,
         fence=fence,
         node_id=NODE_ID,
         deadline=DEADLINE,
@@ -340,3 +340,90 @@ def test_state_schema_and_errors_contain_no_enrollment_token_or_secret_value(tmp
         store.begin(claim(fence=FENCE_B))
     assert "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" not in str(caught.value)
     assert "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb" not in str(caught.value)
+
+
+def test_terminal_result_is_recovered_and_blocks_new_work_until_exact_acknowledgment(tmp_path: Path) -> None:
+    root = tmp_path / "state"
+    store = AgentStateStore(root)
+    terminal = result()
+    store.begin(claim())
+    finished = store.finish(terminal)
+
+    reopened = AgentStateStore(root)
+    assert reopened.recover_active() is None
+    assert reopened.recover_pending() == finished
+    with pytest.raises(AgentStateConflict):
+        reopened.begin(
+            claim(
+                job_id="33333333-3333-4333-8333-333333333333",
+                operation_id="44444444-4444-4444-8444-444444444444",
+                fence=FENCE_B,
+            )
+        )
+    with pytest.raises(AgentStateConflict):
+        reopened.acknowledge(result(value="wrong"))
+
+    reopened.acknowledge(terminal)
+    assert AgentStateStore(root).recover_pending() is None
+    assert AgentStateStore(root).acknowledge(terminal).acknowledged_at is not None
+    assert AgentStateStore(root).begin(
+        claim(
+            job_id="33333333-3333-4333-8333-333333333333",
+            operation_id="44444444-4444-4444-8444-444444444444",
+            fence=FENCE_B,
+        )
+    ).state == "active"
+
+
+def test_fence_never_reuses_and_attempts_only_increase_after_terminal_ack(tmp_path: Path) -> None:
+    store = AgentStateStore(tmp_path / "state")
+    store.begin(claim(attempt=2))
+    store.finish(result(attempt=2))
+    store.acknowledge(result(attempt=2))
+
+    with pytest.raises(AgentStateConflict):
+        store.begin(claim(attempt=1, fence=FENCE_B))
+    with pytest.raises(AgentStateConflict):
+        store.begin(
+            claim(
+                job_id="33333333-3333-4333-8333-333333333333",
+                operation_id="44444444-4444-4444-8444-444444444444",
+                fence=FENCE_A,
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "PRAGMA user_version = 2",
+        "UPDATE attempts SET finished_at = '2030-01-01T00:00:00+00:00'",
+        "UPDATE attempts SET progress_sequence = 1, progress_json = NULL",
+        "UPDATE attempts SET created_at = 'not-a-timestamp'",
+        "UPDATE attempts SET updated_at = '2020-01-01T00:00:00+00:00'",
+    ],
+)
+def test_schema_and_record_corruption_fail_closed(tmp_path: Path, statement: str) -> None:
+    root = tmp_path / "state"
+    store = AgentStateStore(root)
+    store.begin(claim())
+    with sqlite3.connect(_database(root)) as connection:
+        connection.execute("PRAGMA ignore_check_constraints = ON")
+        connection.execute(statement)
+
+    with pytest.raises(AgentStateError):
+        AgentStateStore(root).recover_active()
+
+
+def test_state_files_are_private_while_wal_is_live(tmp_path: Path) -> None:
+    root = tmp_path / "state"
+    store = AgentStateStore(root)
+    connection = store._connection()
+    try:
+        paths = [_database(root), root / "agent-state.sqlite3-wal", root / "agent-state.sqlite3-shm"]
+        for path in paths:
+            assert path.exists()
+            assert path.stat().st_uid == os.geteuid()
+            assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    finally:
+        connection.close()
