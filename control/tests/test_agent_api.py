@@ -35,8 +35,10 @@ from dgx_control.models import (
     AgentOperationAttempt,
     Base,
     Job,
+    Observation,
 )
 from dgx_control.pki import CertificateAuthority, IssuedCertificate
+from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -127,6 +129,10 @@ def agent_system(tmp_path):
     services = AgentApiServices(
         enrollment=EnrollmentService(sessions, Authority(), clock=clock),
         operations=AgentJobService(sessions, clock=clock), sessions=sessions, clock=clock,
+        presence=AgentPresenceService(
+            sessions,
+            ManagementAddressPolicy.parse("192.168.10.0/24"),
+        ),
         artifact_root=tmp_path / "artifacts",
     )
     services.artifact_root.mkdir()
@@ -142,6 +148,7 @@ def agent_headers(node: str, serial: str) -> dict[str, str]:
         "x-dgx-agent-fingerprint": f"fingerprint-{serial}",
         "x-dgx-agent-verified": "1",
         "x-dgx-agent-proxy-auth": "p" * 32,
+        "x-dgx-agent-source": "192.168.10.42",
     }
 
 
@@ -301,6 +308,52 @@ def test_verified_identity_cannot_claim_other_node(agent_system) -> None:
     client, _, _, _ = agent_system
     response = client.post("/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a"), json={"node_id": NODE_B})
     assert response.status_code == 403
+
+
+def test_claim_requires_one_valid_proxy_observed_source_address(agent_system) -> None:
+    client, services, _, _ = agent_system
+    missing = agent_headers(NODE_A, "serial-a")
+    missing.pop("x-dgx-agent-source")
+
+    assert client.post("/agent/v1/claim", headers=missing).status_code == 422
+    assert client.post(
+        "/agent/v1/claim",
+        headers={**agent_headers(NODE_A, "serial-a"), "x-dgx-agent-source": "192.168.11.42"},
+    ).status_code == 422
+
+    duplicate = list(agent_headers(NODE_A, "serial-a").items())
+    duplicate.append(("x-dgx-agent-source", "192.168.10.43"))
+    assert client.post("/agent/v1/claim", headers=duplicate).status_code == 401
+    with services.sessions() as session:
+        assert session.query(Observation).count() == 0
+
+
+def test_authenticated_claim_records_presence_before_polling(agent_system) -> None:
+    client, services, _, clock = agent_system
+
+    response = client.post("/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a"))
+
+    assert response.status_code == 204, response.text
+    with services.sessions() as session:
+        node = session.get(AgentNode, NODE_A)
+        observations = session.query(Observation).all()
+    assert node is not None and node.last_seen_at is not None
+    assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
+    assert len(observations) == 1
+    assert observations[0].payload == {"address": "192.168.10.42"}
+
+
+def test_forged_certificate_identity_writes_no_presence(agent_system) -> None:
+    client, services, _, _ = agent_system
+
+    response = client.post(
+        "/agent/v1/claim",
+        headers=agent_headers(NODE_A, "serial-b"),
+    )
+
+    assert response.status_code == 401
+    with services.sessions() as session:
+        assert session.query(Observation).count() == 0
 
 
 @pytest.mark.parametrize("mutation", ("revoked", "retired", "expired", "fingerprint"))

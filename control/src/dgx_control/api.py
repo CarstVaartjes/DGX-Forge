@@ -56,6 +56,7 @@ def build_agent_services(settings: Any, sessions: Any, clock: Callable[[], Any])
     from .agent_jobs import AgentJobService
     from .enrollment import EnrollmentService
     from .pki import BuiltinCertificateAuthority
+    from .presence import AgentPresenceService, ManagementAddressPolicy
     from .step_ca import StepCertificateAuthority
 
     if settings.agent_runtime != "enabled":
@@ -92,6 +93,13 @@ def build_agent_services(settings: Any, sessions: Any, clock: Callable[[], Any])
         operations=AgentJobService(sessions, clock=clock),
         sessions=sessions,
         clock=clock,
+        presence=AgentPresenceService(
+            sessions,
+            ManagementAddressPolicy.parse(
+                settings.management_cidrs,
+                forbidden_cidrs=settings.direct_fabric_cidrs,
+            ),
+        ),
         artifact_root=settings.agent_artifact_root,
     )
 

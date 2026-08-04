@@ -43,6 +43,7 @@ def _environment() -> dict[str, str]:
         "DGX_AGENT_HOSTNAME": "agents.test.example",
         "DGX_REGISTRY_HOSTNAME": "registry.test.example",
         "DGX_AGENT_PROXY_AUTH": "test-proxy-secret",
+        "DGX_MANAGEMENT_CIDRS": "192.168.10.0/24",
     }
 
 
@@ -204,6 +205,7 @@ def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents(
         "x-dgx-agent-fingerprint": ["{http.request.tls.client.fingerprint}"],
         "x-dgx-agent-verified": ["1"],
         "x-dgx-agent-proxy-auth": ["test-proxy-secret"],
+        "x-dgx-agent-source": ["{http.request.remote.host}"],
     }
     assert any(route.get("match") == [{"not": [{"path": ["/agent/v1/enroll"]}], "path": ["/agent/v1/*"]}] for route in agent_routes)
     mappings = []
