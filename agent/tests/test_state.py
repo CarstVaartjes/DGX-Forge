@@ -621,7 +621,7 @@ def test_sqlite_open_is_anchored_against_path_substitution(tmp_path: Path, monke
 def test_initialization_lock_has_deterministic_bounded_deadline(monkeypatch) -> None:
     attempts: list[int] = []
     waits: list[float] = []
-    clock = iter([0.0, 1.0, 5.0])
+    clock = iter([0.0, 1.0, 2.0, 5.0])
 
     def unavailable_lock(_descriptor: int, operation: int) -> None:
         attempts.append(operation)
@@ -655,18 +655,54 @@ def test_initialization_lock_retries_interrupted_system_call(monkeypatch) -> Non
 
 
 def test_repeated_lock_interruptions_remain_deadline_bounded(monkeypatch) -> None:
-    clock = iter([0.0, 5.0])
+    attempts = 0
+    waits: list[float] = []
+    now = 0.0
+
+    def advancing_clock() -> float:
+        nonlocal now
+        current = now
+        now += 0.01
+        return current
 
     def always_interrupted(_descriptor: int, _operation: int) -> None:
+        nonlocal attempts
+        attempts += 1
         raise InterruptedError(errno.EINTR, "interrupted")
 
     monkeypatch.setattr(state_module.fcntl, "flock", always_interrupted)
+    monkeypatch.setattr(state_module, "_LOCK_TIMEOUT_SECONDS", 0.1)
+    with pytest.raises(AgentStateError):
+        state_module._acquire_initialization_lock(
+            123,
+            monotonic=advancing_clock,
+            wait=waits.append,
+        )
+
+    assert waits
+    assert attempts <= 6
+    assert all(0 < delay <= 0.05 for delay in waits)
+
+
+def test_initialization_lock_does_not_retry_after_wait_overshoots_deadline(monkeypatch) -> None:
+    attempts = 0
+    clock = iter([0.0, 1.0, 5.0])
+
+    def available_after_first_attempt(_descriptor: int, _operation: int) -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise BlockingIOError(errno.EAGAIN, "busy")
+
+    monkeypatch.setattr(state_module.fcntl, "flock", available_after_first_attempt)
     with pytest.raises(AgentStateError):
         state_module._acquire_initialization_lock(
             123,
             monotonic=lambda: next(clock),
             wait=lambda _delay: None,
         )
+
+    assert attempts == 1
 
 
 @pytest.mark.parametrize(

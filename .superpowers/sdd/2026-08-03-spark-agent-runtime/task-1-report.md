@@ -39,6 +39,14 @@ including repeated-EINTR deadline coverage.
 Four parallel repetitions of both fresh-root thread/process initialization
 tests passed after the fix.
 
+Review-fix round 4 RED collected 49 state tests and selected two expected
+failures: repeated `EINTR` retries performed no waits, and a retry could acquire
+the lock after its wait had crossed the deadline. GREEN now runs 49 state tests
+and 113 agent tests. Every retryable lock error uses bounded backoff, followed
+by a monotonic deadline check before another acquisition attempt. Four fresh
+parallel repetitions of both thread/process initialization tests again passed
+(eight focused contention cases total).
+
 Packaging was also verified with `uv build --project agent --wheel` followed by
 an isolated `uv run --no-project --with` import using that wheel and the pinned
 protocol wheel. Generated wheel artifacts were removed afterward.
@@ -52,8 +60,10 @@ protocol wheel. Generated wheel artifacts were removed afterward.
   `O_DIRECTORY|O_NOFOLLOW`; unsafe owners, writable non-sticky ancestors,
   symlinks, devices, and FIFOs fail closed.
 - SQLite opens through `/proc/self/fd/<root-fd>` while the verified `0700` root
-  descriptor remains live. A nonblocking advisory lock with an EINTR-safe,
-  monotonic five-second deadline serializes WAL/schema initialization, while
+  descriptor remains live. A nonblocking advisory lock permits one immediate
+  attempt, then applies bounded backoff and a pre-attempt monotonic deadline
+  check to every `EINTR`, `EACCES`, or `EAGAIN` retry. The five-second bound
+  serializes WAL/schema initialization without allowing a post-deadline retry;
   routine connections do not renegotiate journal mode.
 - Schema acceptance uses the exact table/index definitions plus an exact
   schema-object allowlist and
@@ -73,7 +83,7 @@ protocol wheel. Generated wheel artifacts were removed afterward.
 - `agent/src/dgx_agent/config.py`: strict immutable configuration.
 - `agent/src/dgx_agent/state.py`: durable fenced SQLite state store.
 - `agent/src/dgx_agent/__init__.py`: package marker.
-- `agent/tests/test_config.py`, `agent/tests/test_state.py`: 112 deterministic
+- `agent/tests/test_config.py`, `agent/tests/test_state.py`: 113 deterministic
   configuration, security, restart, replay, corruption, and concurrency tests.
 
 ## Self-review and remaining concerns

@@ -372,21 +372,24 @@ def _acquire_initialization_lock(
     wait: Callable[[float], None] = time.sleep,
 ) -> None:
     deadline = monotonic() + _LOCK_TIMEOUT_SECONDS
+    retry_error: OSError | None = None
+    first_attempt = True
     while True:
+        if not first_attempt:
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise AgentStateError("state initialization lock timed out") from retry_error
+            wait(min(_LOCK_RETRY_SECONDS, remaining))
+            if deadline - monotonic() <= 0:
+                raise AgentStateError("state initialization lock timed out") from retry_error
         try:
             fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return
         except OSError as error:
-            if error.errno == errno.EINTR:
-                if deadline - monotonic() <= 0:
-                    raise AgentStateError("state initialization lock timed out") from error
-                continue
-            if error.errno not in {errno.EACCES, errno.EAGAIN}:
+            if error.errno not in {errno.EINTR, errno.EACCES, errno.EAGAIN}:
                 raise AgentStateError("state initialization lock failed") from error
-        remaining = deadline - monotonic()
-        if remaining <= 0:
-            raise AgentStateError("state initialization lock timed out")
-        wait(min(_LOCK_RETRY_SECONDS, remaining))
+            retry_error = error
+            first_attempt = False
 
 
 def _open_root(root: Path, *, create: bool) -> int:
