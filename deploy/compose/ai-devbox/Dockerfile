@@ -43,7 +43,8 @@ RUN groupadd --gid "${USER_GID}" "${USERNAME}" \
         --home-dir "/home/${USERNAME}" \
         --shell /bin/bash \
         --no-log-init \
-        "${USERNAME}"
+        "${USERNAME}" \
+    && passwd -d "${USERNAME}"
 
 RUN mkdir -p \
         /cache \
@@ -72,10 +73,12 @@ RUN mkdir -p \
         > /etc/ai-devbox/skel/.tmux.conf \
     && chown "${USER_UID}:${USER_GID}" /cache /workspaces
 
-COPY --chmod=0644 sshd_config /etc/ssh/sshd_config.d/ai-devbox.conf
-COPY --chmod=0755 entrypoint.sh /usr/local/bin/start-ai-devbox
+COPY sshd_config /etc/ssh/sshd_config.d/ai-devbox.conf
+COPY entrypoint.sh /usr/local/bin/start-ai-devbox
 
-RUN ssh-keygen -q -t ed25519 -N '' \
+RUN chmod 0644 /etc/ssh/sshd_config.d/ai-devbox.conf \
+    && chmod 0755 /usr/local/bin/start-ai-devbox \
+    && ssh-keygen -q -t ed25519 -N '' \
         -f /var/lib/ai-devbox/ssh-host-keys/ssh_host_ed25519_key \
     && ssh-keygen -q -t rsa -b 4096 -N '' \
         -f /var/lib/ai-devbox/ssh-host-keys/ssh_host_rsa_key \

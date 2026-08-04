@@ -55,8 +55,12 @@ chown "${USER_OWNER}:${GROUP_OWNER}" \
     "${CACHE_DIR}" \
     "${CACHE_DIR}/uv" \
     "${CACHE_DIR}/pip" \
-    "${CACHE_DIR}/npm" \
-    "${HOST_KEY_DIR}"
+    "${CACHE_DIR}/npm"
+if [[ -n "${TEST_ROOT}" ]]; then
+    chown "${USER_OWNER}:${GROUP_OWNER}" "${HOST_KEY_DIR}"
+else
+    chown root:root "${HOST_KEY_DIR}"
+fi
 chmod 700 "${HOME_DIR}/.ssh" "${HOST_KEY_DIR}"
 
 if [[ ! -f "${SOURCE}" || -L "${SOURCE}" ]]; then

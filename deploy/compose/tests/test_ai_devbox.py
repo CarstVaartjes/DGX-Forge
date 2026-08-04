@@ -72,6 +72,8 @@ def test_image_contract_is_hardened_and_home_independent() -> None:
     assert "/etc/ai-devbox/skel" in dockerfile
     assert "useradd" in dockerfile
     assert "--no-log-init" in dockerfile
+    assert 'passwd -d "${USERNAME}"' in dockerfile
+    assert "COPY --chmod" not in dockerfile
     for forbidden in ("sudo", "docker.sock", "privileged"):
         assert forbidden not in lowered
 
@@ -98,6 +100,8 @@ def test_sshd_is_key_only_and_disables_forwarding() -> None:
         "HostKey /var/lib/ai-devbox/ssh-host-keys/ssh_host_rsa_key",
     }
     assert required <= set(config.splitlines())
+    entrypoint = (DEVBOX / "entrypoint.sh").read_text()
+    assert 'chown root:root "${HOST_KEY_DIR}"' in entrypoint
 
 
 def test_compose_devbox_is_unpublished_and_strongly_isolated() -> None:
@@ -241,3 +245,29 @@ def test_entrypoint_installs_keys_seeds_once_and_preserves_workspace_ownership(
         ).stdout
         for path in host_key_dir.glob("*.pub")
     }
+
+
+def test_runtime_harness_covers_isolation_and_persistence() -> None:
+    harness = (COMPOSE / "tests/ai-devbox-runtime.sh").read_text()
+
+    assert "StrictHostKeyChecking=yes" in harness
+    assert 'SSH_CLIENT_BIN="${SSH_CLIENT_BIN:-/usr/bin/ssh}"' in harness
+    assert "whoami" in harness
+    assert "id -u" in harness and "id -g" in harness
+    for tool in ("uv", "node", "python", "rustc"):
+        assert f"command -v {tool}" in harness
+    for negative in (
+        "root@127.0.0.1",
+        "PasswordAuthentication=yes",
+        "KbdInteractiveAuthentication=yes",
+        "AllowTcpForwarding no",
+        "SSH_AUTH_SOCK",
+        "sudo -n true",
+    ):
+        assert negative in harness
+    assert "Privileged" in harness
+    assert "CapAdd" in harness
+    assert "Devices" in harness
+    assert "docker.sock" in harness
+    assert "--force-recreate" in harness
+    assert "ssh-keygen -lf" in harness
