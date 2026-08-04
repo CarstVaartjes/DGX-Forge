@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import time
 
 import pytest
 import dgx_agent.workloads as workloads_module
@@ -20,6 +21,7 @@ from dgx_agent.workloads import (
     WorkloadValidationError,
 )
 from dgx_agent.releases import ReleaseDescriptor
+from dgx_agent.deadlines import MonotonicDeadline
 
 
 BASE = {
@@ -179,6 +181,35 @@ def test_compiled_adapter_executes_fixed_action_and_returns_redacted_evidence(tm
     ]
     assert evidence.status == "healthy"
     assert evidence.evidence_digest == "8" * 64
+
+
+def test_workload_reverification_receives_the_exact_operation_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    operations, _ = _installed_adapter(tmp_path)
+    request = WorkloadRequest.parse(WorkloadAction.HEALTH, BASE)
+    original_verify = workloads_module.verify_installed_release_fd
+    seen = []
+
+    def record_verify(root_fd, deadline=None):
+        seen.append(deadline)
+        return original_verify(root_fd)
+
+    monkeypatch.setattr(
+        workloads_module, "verify_installed_release_fd", record_verify
+    )
+    deadline = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(seconds=2), time.monotonic() + 2
+    )
+    operations.execute(
+        request, deadline,
+        "11111111-1111-4111-8111-111111111111",
+        "22222222-2222-4222-8222-222222222222",
+        1,
+        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    )
+
+    assert seen == [deadline]
 
 
 def test_mutating_adapter_inspection_is_exact_and_ambiguous_state_never_retries(tmp_path: Path) -> None:

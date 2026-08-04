@@ -32,6 +32,15 @@ RED/GREEN slices:
   branches each have deterministic substitution coverage;
 - two ORAS attacks failed before the fix: credential arguments exposed mutable
   paths, and path/same-inode mutations changed the bytes seen by ORAS;
+- external review round 1 reproduced an unusable production credential policy:
+  private service-owned `0600` auth/key metadata was rejected unless the test
+  seam was enabled; production-mode metadata and full snapshot regressions now
+  exercise direct service-UID reads below simulated root-controlled ancestry;
+- ten deterministic review regressions initially failed for non-canonical or
+  duplicate receipts, missing release/TUF traversal deadlines, missing workload
+  deadline propagation, and unbounded error persistence; two further RED cases
+  proved that naive elapsed checks skipped required parent fsync after release
+  and marker publication;
 - ProcessRequest initially accepted duplicate and reserved auxiliary FDs;
 - compiled adapter inspection initially failed during the monotonic deadline
   change, exposing and fixing the recovery deadline/binding contract;
@@ -41,9 +50,9 @@ RED/GREEN slices:
 - Compose/Caddy tests failed until the fourth distinct registry SNI, private
   networks, anchored digest routes, and publisher validation were complete.
 
-Final focused release/workload/operation coverage is 86 passing tests; the
-brief's exact release/workload command contains 74 passing tests, and the final
-complete agent suite contains 307 passing tests.
+The brief's exact release/workload command now contains 87 passing tests; the
+release/workload/operation command contains 102 tests, and the complete agent
+suite contains 320 tests.
 
 ## Exact typed contracts
 
@@ -78,7 +87,9 @@ protocol_min_version, protocol_max_version, members
 Each member has exactly `path`, `sha256`, `size`, `mode`, `uid`, and `gid`.
 Members are sorted and canonical, modes are only `0400` or `0500`, aggregate
 length equals `target_length`, and the canonical install receipt must fit the
-64 KiB re-verification bound.
+64 KiB re-verification bound. Installed receipts reject duplicate keys and
+must byte-for-byte equal the compact, sorted canonical receipt with exactly one
+trailing newline.
 
 ### Workload claims and adapter ABI
 
@@ -116,21 +127,34 @@ and statuses/dispositions use closed operation-specific vocabularies.
   expiration/freeze, rollback, snapshot mix-and-match, target hashes,
   valid/invalid root rotation, delegated lookup/thresholds, cache corruption,
   concurrency, interrupted refresh/recovery, and fsync failures.
-- Accepted metadata is hardened and fsynced even if a later refresh or target
-  stage fails. Final metadata and target roots are fsynced before authorization
-  returns.
+- Accepted metadata is hardened and fsynced after refresh and target work while
+  budget remains. Error-path persistence receives the same deadline and stops
+  before starting additional traversal once elapsed; any partial cache remains
+  fail-closed under the next cache validation. Authority-bearing marker and
+  root-pointer replacements always receive their mandatory parent fsync before
+  an elapsed error is propagated.
 - python-tuf downloads the target into a pre-opened memfd through
   `/proc/self/fd`; the descriptor is immediately write-sealed before parsing.
   The persistent target cache must remain empty, eliminating symlink/FIFO/
   hardlink overwrite targets.
-- ORAS policy pins canonical HTTPS origin/repository and version 1.3.3. The
-  executable and four auth/CA/client inputs are sealed snapshots. The child
-  receives only digest references and child-only `/proc/self/fd` paths through
-  the bounded process supervisor.
+- ORAS policy pins canonical HTTPS origin/repository and version 1.3.3. In
+  production, private auth/key inputs must be owned by the running dedicated
+  service UID with exact mode `0600`; public CA/certificate inputs remain
+  root-owned and non-writable by group/other. Every ancestor remains root-owned
+  and non-writable, and the reviewed executable remains root-owned and
+  digest-pinned. All four inputs become sealed snapshots. The child receives
+  only digest references and child-only `/proc/self/fd` paths through the
+  bounded process supervisor.
 - One monotonic deadline is bound before new state begins and is threaded
-  through trust, lock acquisition, transport, verification, fsync, rename, and
-  adapter launch. Recovery inspection uses a separate compiled local budget;
-  an expired mutation can be inspected/completed but cannot be retried.
+  through trust, cache/error persistence, chunked reads, member/deep-tree walks,
+  receipt verification, fsync, workload re-verification, transport, rename,
+  and adapter launch. Checks occur before and immediately after each potentially
+  blocking step. A syscall cannot be preempted in-process, so deadline overrun
+  is bounded to the one syscall already in progress; no next chunk/member starts.
+  After an irreversible release/marker/root-pointer rename, the one mandatory
+  parent fsync completes before elapsed is reported. Recovery inspection uses a
+  separate compiled local budget; an expired mutation can be inspected/completed
+  but cannot be retried.
 - Install uses a same-filesystem private staging directory, exact member/tree
   verification, receipt re-verification, file/directory fsync, a per-release
   bounded lock, Linux `renameat2(RENAME_NOREPLACE)`, and inode-bound cleanup.
@@ -183,14 +207,18 @@ Executed on the final working tree:
 
 ```text
 uv run --project agent pytest agent/tests -q
-307 passed in 7.33s
+320 passed in 8.88s
 
 uv run --project agent pytest \
   agent/tests/test_releases.py agent/tests/test_workloads.py -v
-74 passed in 1.42s
+87 passed in 1.67s
+
+uv run --project agent pytest agent/tests/test_releases.py \
+  agent/tests/test_workloads.py agent/tests/test_operations.py -v
+102 passed in 2.10s
 
 uv run pytest deploy/compose/tests -q
-21 passed in 7.26s
+21 passed in 7.46s
 
 uv run --project agent python -m compileall -q agent/src
 exit 0
@@ -213,17 +241,20 @@ Task 1–3 production modules. It also parsed the exact release request and each
 of the five typed workload request shapes from the installed wheel. Output:
 `fresh-wheel-imports-and-typed-execution-ok`.
 
-The internal targeted re-review found no remaining Critical or Important
-issues. Its verification included all 54 then-current release tests and the
-first deterministic destination-swap regression; verdict: Ready. The explicit
-three-branch follow-up increased that suite to 57 tests. Exact-range external
-review of the follow-up remains pending.
+The earlier internal targeted re-review found the inode-publication fix Ready.
+Exact-range external review round 1 subsequently returned Not Ready with two
+Important findings (production private-credential ownership and end-to-end
+deadline threading) plus one canonical-receipt Minor. This follow-up addresses
+those submitted findings and awaits exact-range external re-review.
 
 ## Remaining physical and later-task gates
 
-- Task 5 must install the bootstrap root, mTLS/auth files, reviewed ORAS 1.3.3
-  executable and digest, cache/release roots, service account, and systemd
-  confinement with production ownership.
+- Task 5 must create root-owned, non-group/world-writable ancestry; install the
+  reviewed ORAS 1.3.3 executable as root-owned executable content (recommended
+  `0755`) and CA/client certificate as root-owned `0644`; install registry auth
+  and client key owned by the dedicated agent service UID with exact `0600`.
+  It must also install the bootstrap root and digest, cache/release roots,
+  service account, and systemd confinement with those production identities.
 - Deployment operators must select and approve a digest-pinned ORAS publisher
   image. The wrapper command shape is tested; a live production credentialed
   publish is an environment/physical acceptance gate.

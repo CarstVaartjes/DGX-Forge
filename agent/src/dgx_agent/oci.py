@@ -212,7 +212,8 @@ def _regular_file(path: Path, *, private: bool) -> None:
     if (
         not stat.S_ISREG(metadata.st_mode)
         or metadata.st_uid not in {0, os.geteuid()}
-        or mode & (0o077 if private else 0o022)
+        or (mode != 0o600 if private else bool(mode & 0o022))
+        or mode & (stat.S_ISUID | stat.S_ISGID)
     ):
         raise OCIError("release policy file is unsafe")
 
@@ -322,15 +323,17 @@ def _trusted_policy_file(
     private: bool,
     allow_unprivileged_test_files: bool,
 ) -> None:
-    owners = {0}
-    if allow_unprivileged_test_files:
-        owners.add(os.geteuid())
+    owners = (
+        {os.geteuid()}
+        if private
+        else ({0, os.geteuid()} if allow_unprivileged_test_files else {0})
+    )
     mode = stat.S_IMODE(metadata.st_mode)
     if (
         not stat.S_ISREG(metadata.st_mode)
         or metadata.st_nlink != 1
         or metadata.st_uid not in owners
-        or mode & (0o077 if private else 0o022)
+        or (mode != 0o600 if private else bool(mode & 0o022))
         or mode & (stat.S_ISUID | stat.S_ISGID)
     ):
         raise OCIError("release policy file is unsafe")

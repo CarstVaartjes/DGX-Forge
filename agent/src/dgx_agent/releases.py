@@ -249,26 +249,36 @@ class ReleaseInstaller:
         _deadline(fixed_deadline)
         descriptor = self._trust.authorize(request, fixed_deadline)
         _deadline(fixed_deadline)
-        _secure_root(self._releases_root)
-        _secure_root(self._staging_root)
-        if self._releases_root.stat().st_dev != self._staging_root.stat().st_dev:
+        _secure_root(self._releases_root, fixed_deadline)
+        _secure_root(self._staging_root, fixed_deadline)
+        _deadline(fixed_deadline)
+        releases_metadata = self._releases_root.stat()
+        _deadline(fixed_deadline)
+        staging_root_metadata = self._staging_root.stat()
+        _deadline(fixed_deadline)
+        if releases_metadata.st_dev != staging_root_metadata.st_dev:
             raise ReleaseInstallError("release staging is not on the install filesystem")
         destination = self._releases_root / request.target_digest
+        _deadline(fixed_deadline)
         lock_fd = os.open(
             self._releases_root / f".install-{request.target_digest}.lock",
             os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
             0o600,
         )
         try:
+            _deadline(fixed_deadline)
             _acquire_lock(lock_fd, fixed_deadline)
             _deadline(fixed_deadline)
             try:
+                _deadline(fixed_deadline)
                 os.stat(destination, follow_symlinks=False)
+                _deadline(fixed_deadline)
             except FileNotFoundError:
                 pass
             else:
                 _verify_installed(
-                    self._releases_root, destination.name, descriptor
+                    self._releases_root, destination.name, descriptor,
+                    fixed_deadline,
                 )
                 return ReleaseEvidence(
                     "already-installed",
@@ -276,33 +286,47 @@ class ReleaseInstaller:
                     request.oci_manifest_digest,
                     request.adapter_id,
                 )
+            _deadline(fixed_deadline)
             staging = Path(
                 tempfile.mkdtemp(
                     prefix=f".install-{request.target_digest}-",
                     dir=self._staging_root,
                 )
             )
+            _deadline(fixed_deadline)
             os.chmod(staging, 0o700)
+            _deadline(fixed_deadline)
             staging_metadata = staging.stat()
+            _deadline(fixed_deadline)
             staging_fd = os.open(
                 staging,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
             )
             published = False
             try:
+                _deadline(fixed_deadline)
                 self._transport.pull(descriptor, staging, fixed_deadline)
                 _deadline(fixed_deadline)
-                _require_path_identity(staging, staging_metadata)
-                _verify_release_tree_fd(staging_fd, descriptor)
-                _deadline(fixed_deadline)
-                _write_receipt_fd(staging_fd, descriptor)
-                if verify_installed_release_fd(staging_fd) != descriptor:
+                _require_path_identity(staging, staging_metadata, fixed_deadline)
+                _verify_release_tree_fd(
+                    staging_fd, descriptor, deadline=fixed_deadline
+                )
+                _write_receipt_fd(staging_fd, descriptor, fixed_deadline)
+                if verify_installed_release_fd(
+                    staging_fd, fixed_deadline
+                ) != descriptor:
                     raise ReleaseInstallError("staged release receipt does not match")
-                _fsync_tree_fd(staging_fd)
-                _deadline(fixed_deadline)
-                _require_path_identity(staging, staging_metadata)
+                _fsync_tree_fd(staging_fd, fixed_deadline)
+                _require_path_identity(staging, staging_metadata, fixed_deadline)
                 try:
+                    _deadline(fixed_deadline)
                     _rename_noreplace(staging, destination)
+                    published = True
+                    _fsync_directory(
+                        self._releases_root,
+                        fixed_deadline,
+                        commit_started=True,
+                    )
                     destination_fd = os.open(
                         destination,
                         os.O_RDONLY
@@ -311,7 +335,9 @@ class ReleaseInstaller:
                         | os.O_NOFOLLOW,
                     )
                     try:
+                        _deadline(fixed_deadline)
                         installed_metadata = os.fstat(destination_fd)
+                        _deadline(fixed_deadline)
                         if (
                             installed_metadata.st_dev,
                             installed_metadata.st_ino,
@@ -321,9 +347,13 @@ class ReleaseInstaller:
                             )
                         try:
                             installed_descriptor = verify_installed_release_fd(
-                                destination_fd
+                                destination_fd, fixed_deadline
                             )
                         except Exception:
+                            # Publication is already durable. An elapsed
+                            # deadline leaves the verified staged inode in
+                            # place for idempotent re-verification on retry.
+                            _deadline(fixed_deadline)
                             _remove_bound_tree(
                                 self._releases_root,
                                 destination.name,
@@ -339,13 +369,11 @@ class ReleaseInstaller:
                             )
                     finally:
                         os.close(destination_fd)
-                    published = True
                 except FileExistsError:
                     _verify_installed(
-                        self._releases_root, destination.name, descriptor
+                        self._releases_root, destination.name, descriptor,
+                        fixed_deadline,
                     )
-                _fsync_directory(self._releases_root)
-                _deadline(fixed_deadline)
             except ReleaseInstallError:
                 raise
             except Exception as error:
@@ -380,7 +408,8 @@ class ReleaseInstaller:
             destination = self._releases_root / request.target_digest
             if destination.exists():
                 _verify_installed(
-                    self._releases_root, destination.name, descriptor
+                    self._releases_root, destination.name, descriptor,
+                    fixed_deadline,
                 )
                 return ReleaseInspection(
                     ReleaseDisposition.COMPLETED,
@@ -395,7 +424,9 @@ class ReleaseInstaller:
                 self._staging_root.glob(f".install-{request.target_digest}-*")
             )
             if len(candidates) == 1:
-                verify_release_tree(candidates[0], descriptor)
+                verify_release_tree(
+                    candidates[0], descriptor, deadline=fixed_deadline
+                )
                 return ReleaseInspection(ReleaseDisposition.SAFE_TO_RESUME)
             if not candidates:
                 return ReleaseInspection(ReleaseDisposition.OPERATOR_INTERVENTION)
@@ -405,17 +436,29 @@ class ReleaseInstaller:
 
 
 def verify_release_tree(
-    root: Path, descriptor: ReleaseDescriptor, *, _allow_receipt: bool = False
+    root: Path,
+    descriptor: ReleaseDescriptor,
+    *,
+    _allow_receipt: bool = False,
+    deadline: MonotonicDeadline | None = None,
 ) -> None:
+    _deadline_step(deadline)
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
-        _verify_release_tree_fd(root_fd, descriptor, allow_receipt=_allow_receipt)
+        _deadline_step(deadline)
+        _verify_release_tree_fd(
+            root_fd, descriptor, allow_receipt=_allow_receipt, deadline=deadline
+        )
     finally:
         os.close(root_fd)
 
 
 def _verify_release_tree_fd(
-    root_fd: int, descriptor: ReleaseDescriptor, *, allow_receipt: bool = False
+    root_fd: int,
+    descriptor: ReleaseDescriptor,
+    *,
+    allow_receipt: bool = False,
+    deadline: MonotonicDeadline | None = None,
 ) -> None:
     expected = {member.path: member for member in descriptor.members}
     expected_directories = {""}
@@ -428,10 +471,13 @@ def _verify_release_tree_fd(
     identities: set[str] = set()
     count = 0
     try:
-        _verify_directory_metadata(os.fstat(root_fd))
+        _deadline_step(deadline)
+        root_metadata = os.fstat(root_fd)
+        _deadline_step(deadline)
+        _verify_directory_metadata(root_metadata)
         def walk(directory_fd: int, prefix: str) -> None:
             nonlocal count
-            for name in os.listdir(directory_fd):
+            for name in _deadline_names(directory_fd, deadline):
                 count += 1
                 if count > 512:
                     raise ReleaseInstallError("release member count is excessive")
@@ -440,7 +486,11 @@ def _verify_release_tree_fd(
                 if identity in identities:
                     raise ReleaseInstallError("release paths collide")
                 identities.add(identity)
-                metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                _deadline_step(deadline)
+                metadata = os.stat(
+                    name, dir_fd=directory_fd, follow_symlinks=False
+                )
+                _deadline_step(deadline)
                 if relative == ".install-receipt.json" and allow_receipt:
                     if (
                         not stat.S_ISREG(metadata.st_mode)
@@ -459,6 +509,7 @@ def _verify_release_tree_fd(
                         dir_fd=directory_fd,
                     )
                     try:
+                        _deadline_step(deadline)
                         walk(child, relative)
                     finally:
                         os.close(child)
@@ -466,7 +517,7 @@ def _verify_release_tree_fd(
                 member = expected.get(relative)
                 if member is None:
                     raise ReleaseInstallError("release contains an unexpected member")
-                _verify_member(directory_fd, name, member)
+                _verify_member(directory_fd, name, member, deadline)
                 seen.add(relative)
 
         walk(root_fd, "")
@@ -476,13 +527,21 @@ def _verify_release_tree_fd(
         raise ReleaseInstallError("release member set is incomplete")
 
 
-def _verify_member(directory_fd: int, name: str, member: ReleaseMember) -> None:
+def _verify_member(
+    directory_fd: int,
+    name: str,
+    member: ReleaseMember,
+    deadline: MonotonicDeadline | None = None,
+) -> None:
+    _deadline_step(deadline)
     descriptor = os.open(
         name, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC | os.O_NOFOLLOW,
         dir_fd=directory_fd,
     )
     try:
+        _deadline_step(deadline)
         metadata = os.fstat(descriptor)
+        _deadline_step(deadline)
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_nlink != 1
@@ -495,7 +554,14 @@ def _verify_member(directory_fd: int, name: str, member: ReleaseMember) -> None:
             raise ReleaseInstallError("release member metadata is invalid")
         digest = hashlib.sha256()
         total = 0
-        while chunk := os.read(descriptor, min(64 * 1024, member.size - total + 1)):
+        while True:
+            _deadline_step(deadline)
+            chunk = os.read(
+                descriptor, min(64 * 1024, member.size - total + 1)
+            )
+            _deadline_step(deadline)
+            if not chunk:
+                break
             total += len(chunk)
             if total > member.size:
                 raise ReleaseInstallError("release member size changed")
@@ -522,6 +588,19 @@ def _receipt_bytes(descriptor: ReleaseDescriptor) -> bytes:
     return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
 
+def _unique_receipt_object(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    document: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in document:
+            raise ReleaseInstallError(
+                "installed release receipt contains duplicate fields"
+            )
+        document[key] = value
+    return document
+
+
 def _write_receipt(root: Path, descriptor: ReleaseDescriptor) -> None:
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
@@ -530,8 +609,13 @@ def _write_receipt(root: Path, descriptor: ReleaseDescriptor) -> None:
         os.close(root_fd)
 
 
-def _write_receipt_fd(root_fd: int, descriptor: ReleaseDescriptor) -> None:
+def _write_receipt_fd(
+    root_fd: int,
+    descriptor: ReleaseDescriptor,
+    deadline: MonotonicDeadline | None = None,
+) -> None:
     data = _receipt_bytes(descriptor)
+    _deadline_step(deadline)
     fd = os.open(
         ".install-receipt.json",
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
@@ -539,33 +623,51 @@ def _write_receipt_fd(root_fd: int, descriptor: ReleaseDescriptor) -> None:
         dir_fd=root_fd,
     )
     try:
-        if os.write(fd, data) != len(data):
-            raise ReleaseInstallError("release receipt write was incomplete")
+        _deadline_step(deadline)
+        offset = 0
+        while offset < len(data):
+            _deadline_step(deadline)
+            written = os.write(fd, data[offset:])
+            _deadline_step(deadline)
+            if written <= 0:
+                raise ReleaseInstallError("release receipt write was incomplete")
+            offset += written
+        _deadline_step(deadline)
         os.fsync(fd)
+        _deadline_step(deadline)
     finally:
         os.close(fd)
 
 
 def _verify_installed(
-    parent: Path, name: str, descriptor: ReleaseDescriptor
+    parent: Path,
+    name: str,
+    descriptor: ReleaseDescriptor,
+    deadline: MonotonicDeadline | None = None,
 ) -> None:
     parent_fd = -1
     root_fd = -1
     try:
+        _deadline_step(deadline)
         parent_fd = os.open(
             parent,
             os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
         )
+        _deadline_step(deadline)
         root_fd = os.open(
             name,
             os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
             dir_fd=parent_fd,
         )
+        _deadline_step(deadline)
         metadata = os.fstat(root_fd)
-        installed_descriptor = verify_installed_release_fd(root_fd)
+        _deadline_step(deadline)
+        installed_descriptor = verify_installed_release_fd(root_fd, deadline)
         if installed_descriptor != descriptor:
             raise ReleaseInstallError("installed release receipt does not match")
+        _deadline_step(deadline)
         current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        _deadline_step(deadline)
         if (
             not stat.S_ISDIR(current.st_mode)
             or (current.st_dev, current.st_ino)
@@ -596,30 +698,39 @@ def verify_installed_release(root: Path) -> ReleaseDescriptor:
             os.close(root_fd)
 
 
-def verify_installed_release_fd(root_fd: int) -> ReleaseDescriptor:
+def verify_installed_release_fd(
+    root_fd: int, deadline: MonotonicDeadline | None = None
+) -> ReleaseDescriptor:
     """Verify receipt and members through one already-open release identity."""
     try:
+        _deadline_step(deadline)
         receipt_fd = os.open(
             ".install-receipt.json",
             os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
             dir_fd=root_fd,
         )
         try:
+            _deadline_step(deadline)
             metadata = os.fstat(receipt_fd)
+            _deadline_step(deadline)
             if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > 64 * 1024:
                 raise ReleaseInstallError("installed release receipt is unsafe")
+            _deadline_step(deadline)
             raw = os.read(receipt_fd, 64 * 1024 + 1)
+            _deadline_step(deadline)
         finally:
             os.close(receipt_fd)
-        document = json.loads(raw)
+        document = json.loads(raw, object_pairs_hook=_unique_receipt_object)
         if not isinstance(document, dict) or set(document) != {"schema_version", "release"}:
             raise ReleaseInstallError("installed release receipt is invalid")
         if document["schema_version"] != 1:
             raise ReleaseInstallError("installed release receipt is invalid")
         descriptor = ReleaseDescriptor.parse(document["release"])
-        if document != {"schema_version": 1, "release": descriptor.to_mapping()}:
+        if raw != _receipt_bytes(descriptor):
             raise ReleaseInstallError("installed release receipt does not match")
-        _verify_release_tree_fd(root_fd, descriptor, allow_receipt=True)
+        _verify_release_tree_fd(
+            root_fd, descriptor, allow_receipt=True, deadline=deadline
+        )
         return descriptor
     except ReleaseInstallError:
         raise
@@ -627,11 +738,16 @@ def verify_installed_release_fd(root_fd: int) -> ReleaseDescriptor:
         raise ReleaseInstallError("installed release is invalid") from error
 
 
-def _secure_root(path: Path) -> None:
+def _secure_root(
+    path: Path, deadline: MonotonicDeadline | None = None
+) -> None:
     if not path.is_absolute():
         raise ReleaseInstallError("release root is invalid")
+    _deadline_step(deadline)
     path.mkdir(parents=True, mode=0o700, exist_ok=True)
+    _deadline_step(deadline)
     metadata = path.lstat()
+    _deadline_step(deadline)
     if (
         not stat.S_ISDIR(metadata.st_mode)
         or metadata.st_uid not in {0, os.geteuid()}
@@ -652,6 +768,29 @@ def _deadline(deadline: MonotonicDeadline) -> None:
         deadline.check()
     except DeadlineBindingError as error:
         raise ReleaseInstallError("release deadline has elapsed")
+
+
+def _deadline_step(deadline: MonotonicDeadline | None) -> None:
+    if deadline is not None:
+        _deadline(deadline)
+
+
+def _deadline_names(
+    directory_fd: int, deadline: MonotonicDeadline | None
+):
+    _deadline_step(deadline)
+    entries = os.scandir(directory_fd)
+    try:
+        while True:
+            _deadline_step(deadline)
+            try:
+                entry = next(entries)
+            except StopIteration:
+                break
+            _deadline_step(deadline)
+            yield entry.name
+    finally:
+        entries.close()
 
 
 def _acquire_lock(descriptor: int, deadline: MonotonicDeadline) -> None:
@@ -675,9 +814,12 @@ def _fsync_tree(root: Path) -> None:
         os.close(root_fd)
 
 
-def _fsync_tree_fd(directory_fd: int) -> None:
-    for name in os.listdir(directory_fd):
+def _fsync_tree_fd(
+    directory_fd: int, deadline: MonotonicDeadline | None = None
+) -> None:
+    for name in _deadline_names(directory_fd, deadline):
         metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        _deadline_step(deadline)
         descriptor = os.open(
             name,
             os.O_RDONLY
@@ -687,18 +829,33 @@ def _fsync_tree_fd(directory_fd: int) -> None:
             dir_fd=directory_fd,
         )
         try:
+            _deadline_step(deadline)
             if stat.S_ISDIR(metadata.st_mode):
-                _fsync_tree_fd(descriptor)
+                _fsync_tree_fd(descriptor, deadline)
+            _deadline_step(deadline)
             os.fsync(descriptor)
+            _deadline_step(deadline)
         finally:
             os.close(descriptor)
+    _deadline_step(deadline)
     os.fsync(directory_fd)
+    _deadline_step(deadline)
 
 
-def _fsync_directory(path: Path) -> None:
+def _fsync_directory(
+    path: Path,
+    deadline: MonotonicDeadline | None = None,
+    *,
+    commit_started: bool = False,
+) -> None:
+    if not commit_started:
+        _deadline_step(deadline)
     descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
+        if not commit_started:
+            _deadline_step(deadline)
         os.fsync(descriptor)
+        _deadline_step(deadline)
     finally:
         os.close(descriptor)
 
@@ -721,9 +878,15 @@ def _rename_noreplace(source: Path, destination: Path) -> None:
         raise OSError(value, os.strerror(value), destination)
 
 
-def _require_path_identity(path: Path, expected: os.stat_result) -> None:
+def _require_path_identity(
+    path: Path,
+    expected: os.stat_result,
+    deadline: MonotonicDeadline | None = None,
+) -> None:
     try:
+        _deadline_step(deadline)
         current = os.stat(path, follow_symlinks=False)
+        _deadline_step(deadline)
     except OSError as error:
         raise ReleaseInstallError("release staging identity changed") from error
     if (

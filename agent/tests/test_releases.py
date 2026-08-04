@@ -10,6 +10,7 @@ import threading
 import time
 import ssl
 import socket
+import stat
 from urllib.parse import urlsplit
 
 import pytest
@@ -37,11 +38,13 @@ from dgx_agent.releases import (
     ReleaseInstallError,
     ReleaseInstaller,
     ReleaseValidationError,
+    verify_installed_release,
     verify_release_tree,
 )
 from dgx_agent.update_trust import BoundedHTTPSFetcher, TUFReleaseTrust, TUFTrustError
 import dgx_agent.update_trust as update_trust
 import dgx_agent.releases as release_module
+import dgx_agent.oci as oci_module
 from dgx_agent.deadlines import DeadlineBindingError, MonotonicDeadline
 from dgx_agent.oci import OCIError, ORASClient, ORASPolicy
 from dgx_agent.probe import ProcessOutcome
@@ -588,9 +591,9 @@ def test_tuf_interrupted_refresh_fails_closed_and_same_new_version_recovers(
     persisted: list[tuple[Path, Path]] = []
     original_persist = update_trust._persist_accepted_cache
 
-    def record_persist(metadata_root, target_root):
+    def record_persist(metadata_root, target_root, deadline):
         persisted.append((metadata_root, target_root))
-        original_persist(metadata_root, target_root)
+        original_persist(metadata_root, target_root, deadline)
 
     monkeypatch.setattr(update_trust, "_persist_accepted_cache", record_persist)
     with pytest.raises(TUFTrustError):
@@ -602,6 +605,140 @@ def test_tuf_interrupted_refresh_fails_closed_and_same_new_version_recovers(
         request, datetime.now(UTC) + timedelta(seconds=2)
     )
     assert recovered.target_digest == "2" * 64
+
+
+def test_tuf_regular_read_deadline_stops_after_one_slow_chunk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "metadata.json"
+    path.write_bytes(b"x" * (3 * 64 * 1024))
+    descriptor = os.open(path, os.O_RDONLY)
+    original_read = update_trust.os.read
+    reads = 0
+
+    def slow_read(fd, size):
+        nonlocal reads
+        reads += 1
+        time.sleep(0.03)
+        return original_read(fd, size)
+
+    monkeypatch.setattr(update_trust.os, "read", slow_read)
+    deadline = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(seconds=1), time.monotonic() + 0.01
+    )
+    try:
+        with pytest.raises(TUFTrustError, match="deadline"):
+            update_trust._read_regular_fd(descriptor, 1024 * 1024, deadline)
+    finally:
+        os.close(descriptor)
+    assert reads == 1
+
+
+def test_tuf_cache_persistence_deadline_stops_remaining_tree_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    metadata = tmp_path / "metadata"
+    targets = tmp_path / "targets"
+    for root in (metadata, targets):
+        root.mkdir(mode=0o700)
+        for name in ("one.json", "two.json", "three.json"):
+            (root / name).write_bytes(b"x")
+    original_chmod = update_trust.os.chmod
+    chmods = 0
+
+    def slow_chmod(*args, **kwargs):
+        nonlocal chmods
+        chmods += 1
+        time.sleep(0.03)
+        return original_chmod(*args, **kwargs)
+
+    monkeypatch.setattr(update_trust.os, "chmod", slow_chmod)
+    deadline = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(seconds=1), time.monotonic() + 0.01
+    )
+    with pytest.raises(TUFTrustError, match="deadline"):
+        update_trust._persist_accepted_cache(metadata, targets, deadline)
+    assert chmods == 1
+
+
+def test_tuf_error_persistence_receives_same_expired_deadline_and_stops(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root_bytes, fetcher = _signed_repository(_descriptor())
+    trust = TUFReleaseTrust(
+        tmp_path / "metadata", tmp_path / "targets",
+        "https://control.test.example/agent/v1/tuf/metadata/",
+        "https://control.test.example/agent/v1/tuf/targets/",
+        root_bytes, fetcher,
+        "https://registry.test.example", "dgx/releases", "linux-arm64",
+    )
+    request = ReleaseRequest.parse(VALID_RELEASE)
+    trust.authorize(request, datetime.now(UTC) + timedelta(seconds=2))
+    original_persist = update_trust._persist_accepted_cache
+    seen: list[MonotonicDeadline] = []
+    hardens: list[Path] = []
+
+    def slow_failed_refresh(self):
+        time.sleep(0.03)
+        raise DownloadError("injected refresh failure")
+
+    def record_persist(metadata_root, target_root, deadline):
+        seen.append(deadline)
+        return original_persist(metadata_root, target_root, deadline)
+
+    monkeypatch.setattr(update_trust.Updater, "refresh", slow_failed_refresh)
+    monkeypatch.setattr(update_trust, "_persist_accepted_cache", record_persist)
+    monkeypatch.setattr(
+        update_trust, "_harden_cache",
+        lambda root, deadline: hardens.append(root),
+    )
+    deadline = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(seconds=1), time.monotonic() + 0.01
+    )
+    with pytest.raises(TUFTrustError, match="deadline"):
+        trust.authorize(request, deadline)
+    assert seen == [deadline]
+    assert hardens == []
+
+
+def test_tuf_marker_replace_is_parent_fsynced_before_elapsed_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "metadata"
+    root.mkdir(mode=0o700)
+    marker = root / ".bootstrap-established"
+    clock = [0.0]
+    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    original_replace = update_trust.os.replace
+    original_fsync = update_trust.os.fsync
+    parent_identity = (root.stat().st_dev, root.stat().st_ino)
+    parent_synced = False
+
+    def replace_then_expire(source, destination, *args, **kwargs):
+        original_replace(source, destination, *args, **kwargs)
+        clock[0] = 11.0
+
+    def record_fsync(fd):
+        nonlocal parent_synced
+        metadata = os.fstat(fd)
+        if (metadata.st_dev, metadata.st_ino) == parent_identity:
+            parent_synced = True
+        return original_fsync(fd)
+
+    monkeypatch.setattr(update_trust.os, "replace", replace_then_expire)
+    monkeypatch.setattr(update_trust.os, "fsync", record_fsync)
+    deadline = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(seconds=10), 10.0
+    )
+
+    with pytest.raises(TUFTrustError, match="deadline"):
+        update_trust._write_marker(marker, "a" * 64, deadline)
+
+    assert parent_synced
+    assert update_trust._marker_root_digest(
+        marker,
+        MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 20.0),
+    ) == "a" * 64
 
 
 def test_tuf_bootstrap_marker_and_authorization_require_successful_fsync(
@@ -619,17 +756,22 @@ def test_tuf_bootstrap_marker_and_authorization_require_successful_fsync(
     request = ReleaseRequest.parse(VALID_RELEASE)
     original = update_trust._fsync_cache
     with monkeypatch.context() as patcher:
-        patcher.setattr(update_trust, "_fsync_cache", lambda root: (_ for _ in ()).throw(OSError("injected fsync")))
+        patcher.setattr(
+            update_trust, "_fsync_cache",
+            lambda root, deadline: (_ for _ in ()).throw(
+                OSError("injected fsync")
+            ),
+        )
         with pytest.raises(TUFTrustError):
             trust.authorize(request, datetime.now(UTC) + timedelta(seconds=2))
     assert not (metadata / ".bootstrap-established").exists()
 
     calls = 0
     with monkeypatch.context() as patcher:
-        def fail_final(root):
+        def fail_final(root, deadline):
             nonlocal calls
             calls += 1
-            original(root)
+            original(root, deadline)
             if calls == 2:
                 raise OSError("injected final fsync")
 
@@ -802,6 +944,63 @@ def test_oras_uses_only_digest_reference_fixed_files_and_fixed_environment(tmp_p
     ]
 
 
+def test_production_private_oras_file_accepts_only_service_uid_exact_0600(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service_uid = 42424
+    metadata = type("Metadata", (), {
+        "st_mode": stat.S_IFREG | 0o600,
+        "st_nlink": 1,
+        "st_uid": service_uid,
+    })()
+    monkeypatch.setattr(oci_module.os, "geteuid", lambda: service_uid)
+
+    oci_module._trusted_policy_file(
+        metadata, private=True, allow_unprivileged_test_files=False
+    )
+    with pytest.raises(OCIError):
+        oci_module._trusted_policy_file(
+            metadata, private=False, allow_unprivileged_test_files=False
+        )
+    for mode in (0o400, 0o640, 0o600 | stat.S_ISUID):
+        changed = type("Metadata", (), {
+            "st_mode": stat.S_IFREG | mode,
+            "st_nlink": 1,
+            "st_uid": service_uid,
+        })()
+        with pytest.raises(OCIError):
+            oci_module._trusted_policy_file(
+                changed, private=True, allow_unprivileged_test_files=False
+            )
+
+
+def test_production_private_oras_snapshot_opens_service_file_below_root_ancestry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    auth = tmp_path / "auth.json"
+    auth.write_bytes(b'{"auths":{}}')
+    auth.chmod(0o600)
+    original_fstat = oci_module.os.fstat
+
+    def deployed_metadata(fd):
+        metadata = original_fstat(fd)
+        if stat.S_ISDIR(metadata.st_mode):
+            return type("DirectoryMetadata", (), {
+                "st_mode": stat.S_IFDIR | 0o755,
+                "st_uid": 0,
+            })()
+        return metadata
+
+    monkeypatch.setattr(oci_module.os, "fstat", deployed_metadata)
+    snapshot = oci_module._snapshot_policy_file(
+        auth, private=True, allow_unprivileged_test_files=False
+    )
+    try:
+        assert os.read(snapshot, 64) == b'{"auths":{}}'
+    finally:
+        os.close(snapshot)
+
+
 def test_oras_uses_sealed_credential_snapshots_after_path_and_inode_mutation(tmp_path: Path) -> None:
     policy, record = _oras_policy(tmp_path)
     client = ORASClient(policy)
@@ -930,9 +1129,9 @@ def test_installed_verification_rejects_destination_swap_between_receipt_and_tre
     original_loads = release_module.json.loads
     swapped = False
 
-    def loads_then_swap(raw):
+    def loads_then_swap(raw, **kwargs):
         nonlocal swapped
-        document = original_loads(raw)
+        document = original_loads(raw, **kwargs)
         if not swapped:
             swapped = True
             os.rename(destination, moved)
@@ -947,6 +1146,169 @@ def test_installed_verification_rejects_destination_swap_between_receipt_and_tre
         )
 
     assert destination.stat().st_ino != moved.stat().st_ino
+
+
+@pytest.mark.parametrize("mutation", ["reordered", "duplicate", "trailing"])
+def test_installed_receipt_requires_duplicate_free_canonical_bytes(
+    tmp_path: Path, mutation: str
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+    root = tmp_path / "installed"
+    member = root / "bin/runtime-adapter"
+    member.parent.mkdir(parents=True, mode=0o700)
+    member.write_bytes(b"x" * 17)
+    member.chmod(0o500)
+    release_module._write_receipt(root, descriptor)
+    receipt = root / ".install-receipt.json"
+    canonical = release_module._receipt_bytes(descriptor)
+    assert verify_installed_release(root) == descriptor
+
+    if mutation == "reordered":
+        raw = json.dumps(
+            {"release": descriptor.to_mapping(), "schema_version": 1},
+            indent=2,
+        ).encode() + b"\n"
+    elif mutation == "duplicate":
+        raw = (
+            b'{"schema_version":1,"schema_version":1,"release":'
+            + json.dumps(
+                descriptor.to_mapping(), sort_keys=True, separators=(",", ":")
+            ).encode()
+            + b"}\n"
+        )
+    else:
+        raw = canonical + b"\n"
+    receipt.chmod(0o600)
+    receipt.write_bytes(raw)
+    receipt.chmod(0o400)
+
+    with pytest.raises(ReleaseInstallError, match="receipt"):
+        verify_installed_release(root)
+
+
+def test_release_member_deadline_stops_after_one_blocking_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = b"x" * (3 * 64 * 1024)
+    document = _descriptor()
+    document["target_length"] = len(content)
+    document["members"][0]["size"] = len(content)
+    document["members"][0]["sha256"] = hashlib.sha256(content).hexdigest()
+    descriptor = ReleaseDescriptor.parse(document)
+    root = tmp_path / "tree"
+    member = root / "bin/runtime-adapter"
+    member.parent.mkdir(parents=True, mode=0o700)
+    member.write_bytes(content)
+    member.chmod(0o500)
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    original_read = release_module.os.read
+    reads = 0
+
+    def slow_read(fd, size):
+        nonlocal reads
+        reads += 1
+        time.sleep(0.03)
+        return original_read(fd, size)
+
+    monkeypatch.setattr(release_module.os, "read", slow_read)
+    deadline = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(seconds=1), time.monotonic() + 0.01
+    )
+    try:
+        with pytest.raises(ReleaseInstallError, match="deadline"):
+            release_module._verify_release_tree_fd(
+                root_fd, descriptor, deadline=deadline
+            )
+    finally:
+        os.close(root_fd)
+    assert reads == 1
+
+
+def test_release_recursive_fsync_deadline_stops_after_crossing_syscall(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "tree"
+    for name in ("a/one", "b/two", "c/three"):
+        path = root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x")
+    root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+    fsyncs = 0
+
+    def slow_fsync(fd):
+        nonlocal fsyncs
+        fsyncs += 1
+        time.sleep(0.03)
+
+    monkeypatch.setattr(release_module.os, "fsync", slow_fsync)
+    deadline = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(seconds=1), time.monotonic() + 0.01
+    )
+    try:
+        with pytest.raises(ReleaseInstallError, match="deadline"):
+            release_module._fsync_tree_fd(root_fd, deadline)
+    finally:
+        os.close(root_fd)
+    assert fsyncs == 1
+
+
+def test_release_rename_is_parent_fsynced_before_elapsed_is_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            member = destination / "bin/runtime-adapter"
+            member.parent.mkdir()
+            member.write_bytes(b"x" * 17)
+            member.chmod(0o500)
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    installer = ReleaseInstaller(Trust(), Transport(), releases, staging)
+    original_rename = release_module._rename_noreplace
+    original_fsync = release_module.os.fsync
+    clock = [0.0]
+    parent_synced = False
+    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+
+    def rename_then_expire(source, destination):
+        original_rename(source, destination)
+        clock[0] = 11.0
+
+    def record_fsync(fd):
+        nonlocal parent_synced
+        metadata = os.fstat(fd)
+        if releases.exists():
+            root_metadata = releases.stat()
+            if (metadata.st_dev, metadata.st_ino) == (
+                root_metadata.st_dev, root_metadata.st_ino
+            ):
+                parent_synced = True
+        return original_fsync(fd)
+
+    monkeypatch.setattr(release_module, "_rename_noreplace", rename_then_expire)
+    monkeypatch.setattr(release_module.os, "fsync", record_fsync)
+    request = ReleaseRequest.parse(VALID_RELEASE)
+    deadline = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(seconds=10), 10.0
+    )
+
+    with pytest.raises(ReleaseInstallError, match="deadline"):
+        installer.install(request, deadline)
+
+    assert parent_synced
+    assert (releases / ("2" * 64)).is_dir()
+    clock[0] = 0.0
+    assert installer.install(
+        request,
+        MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
+    ).status == "already-installed"
 
 
 @pytest.mark.parametrize("branch", ["initial-existing", "rename-race", "inspect"])
@@ -988,9 +1350,9 @@ def test_every_idempotent_branch_rejects_destination_identity_swap(
     original_loads = release_module.json.loads
     swapped = False
 
-    def loads_then_swap(raw):
+    def loads_then_swap(raw, **kwargs):
         nonlocal swapped
-        document = original_loads(raw)
+        document = original_loads(raw, **kwargs)
         if not swapped and destination.exists() and replacement.exists():
             swapped = True
             os.rename(destination, moved)

@@ -209,8 +209,9 @@ class TUFReleaseTrust:
         absolute_deadline = fixed_deadline.absolute_monotonic
         check_deadline = lambda: _check_deadline(absolute_deadline)
         check_deadline()
-        _secure_directory(self._metadata_root)
-        _secure_directory(self._target_root)
+        _secure_directory(self._metadata_root, fixed_deadline)
+        _secure_directory(self._target_root, fixed_deadline)
+        check_deadline()
         lock = os.open(
             self._metadata_root / _LOCK_NAME,
             os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
@@ -218,22 +219,34 @@ class TUFReleaseTrust:
         )
         updater_started = False
         try:
+            check_deadline()
             try:
+                check_deadline()
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                check_deadline()
             except OSError as error:
                 raise TUFTrustError("TUF metadata cache is already in use") from error
             self._fetcher.set_deadline(absolute_deadline)
             marker = self._metadata_root / _BOOTSTRAP_MARKER
-            _remove_stale_entry(marker.with_name(marker.name + ".new"))
-            _remove_stale_entry(self._metadata_root / ".root-link.new")
-            _validate_cache(self._metadata_root)
-            _validate_empty_target_cache(self._target_root)
+            _remove_stale_entry(
+                marker.with_name(marker.name + ".new"), fixed_deadline
+            )
+            _remove_stale_entry(
+                self._metadata_root / ".root-link.new", fixed_deadline
+            )
+            _validate_cache(self._metadata_root, fixed_deadline)
+            _validate_empty_target_cache(
+                self._target_root, fixed_deadline
+            )
             check_deadline()
             bootstrap = (
                 None
-                if _established_root_is_openable(self._metadata_root, marker)
+                if _established_root_is_openable(
+                    self._metadata_root, marker, fixed_deadline
+                )
                 else self._bootstrap_root
             )
+            check_deadline()
             updater = Updater(
                 str(self._metadata_root),
                 self._metadata_base_url,
@@ -252,14 +265,17 @@ class TUFReleaseTrust:
                 ),
                 bootstrap=bootstrap,
             )
+            check_deadline()
             updater_started = True
             if bootstrap is not None:
-                _harden_cache(self._metadata_root)
-                _fsync_cache(self._metadata_root)
+                _harden_cache(self._metadata_root, fixed_deadline)
+                _fsync_cache(self._metadata_root, fixed_deadline)
                 _write_marker(
                     marker, hashlib.sha256(
-                        _cached_root_bytes(self._metadata_root)
-                    ).hexdigest()
+                        _cached_root_bytes(
+                            self._metadata_root, fixed_deadline
+                        )
+                    ).hexdigest(), fixed_deadline
                 )
             check_deadline()
             updater.refresh()
@@ -281,13 +297,18 @@ class TUFReleaseTrust:
                 "dgx-tuf-target", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
             )
             try:
+                check_deadline()
                 updater.download_target(
                     target_info, f"/proc/self/fd/{target_fd}"
                 )
                 check_deadline()
-                _seal_target_fd(target_fd)
+                _seal_target_fd(target_fd, fixed_deadline)
+                check_deadline()
                 os.lseek(target_fd, 0, os.SEEK_SET)
-                target_bytes = _read_regular_fd(target_fd, _TARGET_LIMIT)
+                check_deadline()
+                target_bytes = _read_regular_fd(
+                    target_fd, _TARGET_LIMIT, fixed_deadline
+                )
             finally:
                 os.close(target_fd)
             parsed = json.loads(
@@ -314,15 +335,18 @@ class TUFReleaseTrust:
                 )
             ):
                 raise TUFTrustError("release target is incompatible with local policy")
-            _harden_cache(self._metadata_root)
-            _harden_cache(self._target_root)
-            _fsync_cache(self._metadata_root)
-            _fsync_cache(self._target_root)
+            _harden_cache(self._metadata_root, fixed_deadline)
+            _harden_cache(self._target_root, fixed_deadline)
+            _fsync_cache(self._metadata_root, fixed_deadline)
+            _fsync_cache(self._target_root, fixed_deadline)
             _write_marker(
                 marker,
                 hashlib.sha256(
-                    _cached_root_bytes(self._metadata_root)
+                    _cached_root_bytes(
+                        self._metadata_root, fixed_deadline
+                    )
                 ).hexdigest(),
+                fixed_deadline,
             )
             check_deadline()
             return target_descriptor
@@ -330,7 +354,8 @@ class TUFReleaseTrust:
             if updater_started:
                 try:
                     _persist_accepted_cache(
-                        self._metadata_root, self._target_root
+                        self._metadata_root, self._target_root,
+                        fixed_deadline,
                     )
                 except OSError as persistence_error:
                     raise TUFTrustError(
@@ -349,7 +374,8 @@ class TUFReleaseTrust:
             if updater_started:
                 try:
                     _persist_accepted_cache(
-                        self._metadata_root, self._target_root
+                        self._metadata_root, self._target_root,
+                        fixed_deadline,
                     )
                 except OSError as persistence_error:
                     raise TUFTrustError(
@@ -364,12 +390,17 @@ class TUFReleaseTrust:
             os.close(lock)
 
 
-def _secure_directory(path: Path) -> None:
+def _secure_directory(
+    path: Path, deadline: MonotonicDeadline | None = None
+) -> None:
     if not path.is_absolute():
         raise TUFTrustError("TUF cache path is invalid")
+    _tuf_deadline(deadline)
     descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
+        _tuf_deadline(deadline)
         for index, component in enumerate(path.parts[1:]):
+            _tuf_deadline(deadline)
             try:
                 child = os.open(
                     component,
@@ -377,7 +408,9 @@ def _secure_directory(path: Path) -> None:
                     dir_fd=descriptor,
                 )
             except FileNotFoundError:
+                _tuf_deadline(deadline)
                 os.mkdir(component, 0o700, dir_fd=descriptor)
+                _tuf_deadline(deadline)
                 child = os.open(
                     component,
                     os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
@@ -385,7 +418,10 @@ def _secure_directory(path: Path) -> None:
                 )
             os.close(descriptor)
             descriptor = child
+            _tuf_deadline(deadline)
+            _tuf_deadline(deadline)
             metadata = os.fstat(descriptor)
+            _tuf_deadline(deadline)
             final = index == len(path.parts[1:]) - 1
             mode = stat.S_IMODE(metadata.st_mode)
             if (
@@ -399,22 +435,34 @@ def _secure_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def _validate_cache(root: Path) -> None:
+def _validate_cache(
+    root: Path, deadline: MonotonicDeadline | None = None
+) -> None:
+    _tuf_deadline(deadline)
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
-        _validate_cache_fd(root_fd, Path())
+        _tuf_deadline(deadline)
+        _validate_cache_fd(root_fd, Path(), deadline)
     finally:
         os.close(root_fd)
 
 
-def _validate_cache_fd(directory_fd: int, prefix: Path) -> None:
-    for name in os.listdir(directory_fd):
+def _validate_cache_fd(
+    directory_fd: int,
+    prefix: Path,
+    deadline: MonotonicDeadline | None = None,
+) -> None:
+    for name in _tuf_names(directory_fd, deadline):
         relative = prefix / name
+        _tuf_deadline(deadline)
         metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        _tuf_deadline(deadline)
         if stat.S_ISLNK(metadata.st_mode):
             if relative != Path("root.json"):
                 raise TUFTrustError("TUF cache contains an unsafe link")
+            _tuf_deadline(deadline)
             target = os.readlink(name, dir_fd=directory_fd)
+            _tuf_deadline(deadline)
             parts = Path(target).parts
             if (
                 len(parts) != 2
@@ -437,91 +485,127 @@ def _validate_cache_fd(directory_fd: int, prefix: Path) -> None:
                 dir_fd=directory_fd,
             )
             try:
-                _validate_cache_fd(child, relative)
+                _tuf_deadline(deadline)
+                _validate_cache_fd(child, relative, deadline)
             finally:
                 os.close(child)
 
 
-def _write_marker(path: Path, root_digest: str) -> None:
+def _write_marker(
+    path: Path,
+    root_digest: str,
+    deadline: MonotonicDeadline | None = None,
+) -> None:
     if not re.fullmatch(r"[0-9a-f]{64}", root_digest):
         raise TUFTrustError("TUF root marker digest is invalid")
     temporary = path.with_name(path.name + ".new")
-    _remove_stale_entry(temporary)
+    _remove_stale_entry(temporary, deadline)
+    _tuf_deadline(deadline)
     descriptor = os.open(
         temporary,
         os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
         0o600,
     )
     try:
+        _tuf_deadline(deadline)
         content = f"sha256:{root_digest}\n".encode("ascii")
         offset = 0
         while offset < len(content):
+            _tuf_deadline(deadline)
             written = os.write(descriptor, content[offset:])
+            _tuf_deadline(deadline)
             if written <= 0:
                 raise TUFTrustError("TUF root marker write was incomplete")
             offset += written
+        _tuf_deadline(deadline)
         os.fsync(descriptor)
+        _tuf_deadline(deadline)
     finally:
         os.close(descriptor)
+    _tuf_deadline(deadline)
     os.replace(temporary, path)
+    # Once publication occurs, make the marker durable before reporting an
+    # elapsed deadline so a crash cannot reopen bootstrap trust.
     directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
         os.fsync(directory)
+        _tuf_deadline(deadline)
     finally:
         os.close(directory)
 
 
-def _remove_stale_entry(path: Path) -> None:
+def _remove_stale_entry(
+    path: Path, deadline: MonotonicDeadline | None = None
+) -> None:
+    _tuf_deadline(deadline)
     parent = os.open(
         path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
     )
     try:
+        _tuf_deadline(deadline)
         try:
+            _tuf_deadline(deadline)
             metadata = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+            _tuf_deadline(deadline)
         except FileNotFoundError:
             return
         if stat.S_ISDIR(metadata.st_mode):
             raise TUFTrustError("TUF temporary state is unsafe")
+        _tuf_deadline(deadline)
         os.unlink(path.name, dir_fd=parent)
+        _tuf_deadline(deadline)
         os.fsync(parent)
+        _tuf_deadline(deadline)
     finally:
         os.close(parent)
 
 
-def _established_root_is_openable(root: Path, marker: Path) -> bool:
-    digest = _marker_root_digest(marker)
+def _established_root_is_openable(
+    root: Path,
+    marker: Path,
+    deadline: MonotonicDeadline | None = None,
+) -> bool:
+    digest = _marker_root_digest(marker, deadline)
     if digest is None:
         return False
     try:
-        if hashlib.sha256(_cached_root_bytes(root)).hexdigest() == digest:
+        if hashlib.sha256(_cached_root_bytes(root, deadline)).hexdigest() == digest:
             return True
     except TUFTrustError:
         pass
     history = root / "root_history"
     history_fd = -1
     try:
+        _tuf_deadline(deadline)
         history_fd = os.open(
             history,
             os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
         )
+        _tuf_deadline(deadline)
         matches: list[tuple[int, str]] = []
-        for name in os.listdir(history_fd):
+        for name in _tuf_names(history_fd, deadline):
             match = re.fullmatch(r"([1-9][0-9]*)\.root\.json", name)
             if match is None:
                 continue
+            _tuf_deadline(deadline)
             descriptor = os.open(
                 name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
                 dir_fd=history_fd,
             )
             try:
-                content = _read_regular_fd(descriptor, 256 * 1024)
+                _tuf_deadline(deadline)
+                content = _read_regular_fd(
+                    descriptor, 256 * 1024, deadline
+                )
             finally:
                 os.close(descriptor)
             if hashlib.sha256(content).hexdigest() == digest:
                 matches.append((int(match.group(1)), name))
         if matches:
             _, name = max(matches)
-            _replace_root_pointer(root, f"root_history/{name}")
+            _replace_root_pointer(
+                root, f"root_history/{name}", deadline
+            )
             return True
     except (FileNotFoundError, OSError):
         pass
@@ -533,13 +617,18 @@ def _established_root_is_openable(root: Path, marker: Path) -> bool:
     )
 
 
-def _marker_root_digest(path: Path) -> str | None:
+def _marker_root_digest(
+    path: Path, deadline: MonotonicDeadline | None = None
+) -> str | None:
     try:
+        _tuf_deadline(deadline)
         descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
     except FileNotFoundError:
         return None
     try:
+        _tuf_deadline(deadline)
         metadata = os.fstat(descriptor)
+        _tuf_deadline(deadline)
         if (
             not stat.S_ISREG(metadata.st_mode)
             or metadata.st_uid not in {0, os.geteuid()}
@@ -547,7 +636,9 @@ def _marker_root_digest(path: Path) -> str | None:
             or metadata.st_size != 72
         ):
             raise TUFTrustError("TUF bootstrap marker is unsafe")
+        _tuf_deadline(deadline)
         raw = os.read(descriptor, 73)
+        _tuf_deadline(deadline)
     finally:
         os.close(descriptor)
     try:
@@ -560,55 +651,93 @@ def _marker_root_digest(path: Path) -> str | None:
     return match.group(1)
 
 
-def _cached_root_bytes(root: Path) -> bytes:
+def _cached_root_bytes(
+    root: Path, deadline: MonotonicDeadline | None = None
+) -> bytes:
     try:
+        _tuf_deadline(deadline)
         target = os.readlink(root / "root.json")
+        _tuf_deadline(deadline)
     except OSError as error:
         raise TUFTrustError("TUF cached root is unavailable") from error
     if not re.fullmatch(r"root_history/[1-9][0-9]*\.root\.json", target):
         raise TUFTrustError("TUF cached root pointer is unsafe")
+    _tuf_deadline(deadline)
     descriptor = os.open(
         root / target, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
     )
     try:
-        return _read_regular_fd(descriptor, 256 * 1024)
+        _tuf_deadline(deadline)
+        return _read_regular_fd(descriptor, 256 * 1024, deadline)
     finally:
         os.close(descriptor)
 
 
-def _replace_root_pointer(root: Path, target: str) -> None:
+def _replace_root_pointer(
+    root: Path,
+    target: str,
+    deadline: MonotonicDeadline | None = None,
+) -> None:
+    _tuf_deadline(deadline)
     parent = os.open(
         root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
     )
     temporary = ".root-link.new"
     try:
+        _tuf_deadline(deadline)
         try:
+            _tuf_deadline(deadline)
             os.unlink(temporary, dir_fd=parent)
+            _tuf_deadline(deadline)
         except FileNotFoundError:
             pass
+        _tuf_deadline(deadline)
         os.symlink(target, temporary, dir_fd=parent)
+        _tuf_deadline(deadline)
         os.replace(temporary, "root.json", src_dir_fd=parent, dst_dir_fd=parent)
+        # The root pointer is authority-bearing once replaced: make the rename
+        # durable before propagating an elapsed deadline.
         os.fsync(parent)
+        _tuf_deadline(deadline)
     finally:
         os.close(parent)
 
 
-def _read_regular(path: Path, limit: int) -> bytes:
+def _read_regular(
+    path: Path,
+    limit: int,
+    deadline: MonotonicDeadline | None = None,
+) -> bytes:
+    _tuf_deadline(deadline)
     descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
-        return _read_regular_fd(descriptor, limit)
+        _tuf_deadline(deadline)
+        return _read_regular_fd(descriptor, limit, deadline)
     finally:
         os.close(descriptor)
 
 
-def _read_regular_fd(descriptor: int, limit: int) -> bytes:
+def _read_regular_fd(
+    descriptor: int,
+    limit: int,
+    deadline: MonotonicDeadline | None = None,
+) -> bytes:
     try:
+        _tuf_deadline(deadline)
         metadata = os.fstat(descriptor)
+        _tuf_deadline(deadline)
         if not stat.S_ISREG(metadata.st_mode) or metadata.st_size > limit:
             raise TUFTrustError("TUF target is unsafe")
         chunks: list[bytes] = []
         total = 0
-        while chunk := os.read(descriptor, min(64 * 1024, limit + 1 - total)):
+        while True:
+            _tuf_deadline(deadline)
+            chunk = os.read(
+                descriptor, min(64 * 1024, limit + 1 - total)
+            )
+            _tuf_deadline(deadline)
+            if not chunk:
+                break
             total += len(chunk)
             if total > limit:
                 raise TUFTrustError("TUF target is too large")
@@ -620,18 +749,28 @@ def _read_regular_fd(descriptor: int, limit: int) -> bytes:
         raise TUFTrustError("TUF target is unsafe") from error
 
 
-def _validate_empty_target_cache(root: Path) -> None:
+def _validate_empty_target_cache(
+    root: Path, deadline: MonotonicDeadline | None = None
+) -> None:
+    _tuf_deadline(deadline)
     descriptor = os.open(
         root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
     )
     try:
-        if os.listdir(descriptor):
-            raise TUFTrustError("TUF target cache is not empty")
+        names = _tuf_names(descriptor, deadline)
+        try:
+            if next(names, None) is not None:
+                raise TUFTrustError("TUF target cache is not empty")
+        finally:
+            names.close()
     finally:
         os.close(descriptor)
 
 
-def _seal_target_fd(descriptor: int) -> None:
+def _seal_target_fd(
+    descriptor: int, deadline: MonotonicDeadline | None = None
+) -> None:
+    _tuf_deadline(deadline)
     fcntl.fcntl(
         descriptor,
         fcntl.F_ADD_SEALS,
@@ -640,49 +779,67 @@ def _seal_target_fd(descriptor: int) -> None:
         | fcntl.F_SEAL_GROW
         | fcntl.F_SEAL_WRITE,
     )
+    _tuf_deadline(deadline)
 
 
-def _harden_cache(root: Path) -> None:
+def _harden_cache(
+    root: Path, deadline: MonotonicDeadline | None = None
+) -> None:
+    _tuf_deadline(deadline)
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
-        _harden_cache_fd(root_fd)
+        _tuf_deadline(deadline)
+        _harden_cache_fd(root_fd, deadline)
     finally:
         os.close(root_fd)
 
 
-def _harden_cache_fd(directory_fd: int) -> None:
-    for name in os.listdir(directory_fd):
+def _harden_cache_fd(
+    directory_fd: int, deadline: MonotonicDeadline | None = None
+) -> None:
+    for name in _tuf_names(directory_fd, deadline):
         metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        _tuf_deadline(deadline)
         if stat.S_ISLNK(metadata.st_mode):
             continue
+        _tuf_deadline(deadline)
         os.chmod(
             name,
             0o700 if stat.S_ISDIR(metadata.st_mode) else 0o600,
             dir_fd=directory_fd,
             follow_symlinks=False,
         )
+        _tuf_deadline(deadline)
         if stat.S_ISDIR(metadata.st_mode):
             child = os.open(
                 name, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
                 dir_fd=directory_fd,
             )
             try:
-                _harden_cache_fd(child)
+                _tuf_deadline(deadline)
+                _harden_cache_fd(child, deadline)
             finally:
                 os.close(child)
 
 
-def _fsync_cache(root: Path) -> None:
+def _fsync_cache(
+    root: Path, deadline: MonotonicDeadline | None = None
+) -> None:
+    _tuf_deadline(deadline)
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
-        _fsync_cache_fd(root_fd)
+        _tuf_deadline(deadline)
+        _fsync_cache_fd(root_fd, deadline)
     finally:
         os.close(root_fd)
 
 
-def _fsync_cache_fd(directory_fd: int) -> None:
-    for name in os.listdir(directory_fd):
+def _fsync_cache_fd(
+    directory_fd: int, deadline: MonotonicDeadline | None = None
+) -> None:
+    for name in _tuf_names(directory_fd, deadline):
         metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        _tuf_deadline(deadline)
         if stat.S_ISLNK(metadata.st_mode):
             continue
         descriptor = os.open(
@@ -692,19 +849,29 @@ def _fsync_cache_fd(directory_fd: int) -> None:
             dir_fd=directory_fd,
         )
         try:
+            _tuf_deadline(deadline)
             if stat.S_ISDIR(metadata.st_mode):
-                _fsync_cache_fd(descriptor)
+                _fsync_cache_fd(descriptor, deadline)
+            _tuf_deadline(deadline)
             os.fsync(descriptor)
+            _tuf_deadline(deadline)
         finally:
             os.close(descriptor)
+    _tuf_deadline(deadline)
     os.fsync(directory_fd)
+    _tuf_deadline(deadline)
 
 
-def _persist_accepted_cache(metadata_root: Path, target_root: Path) -> None:
-    _harden_cache(metadata_root)
-    _harden_cache(target_root)
-    _fsync_cache(metadata_root)
-    _fsync_cache(target_root)
+def _persist_accepted_cache(
+    metadata_root: Path,
+    target_root: Path,
+    deadline: MonotonicDeadline | None = None,
+) -> None:
+    _tuf_deadline(deadline)
+    _harden_cache(metadata_root, deadline)
+    _harden_cache(target_root, deadline)
+    _fsync_cache(metadata_root, deadline)
+    _fsync_cache(target_root, deadline)
 
 
 def _allowed_tuf_path(path: str) -> bool:
@@ -720,6 +887,33 @@ def _allowed_tuf_path(path: str) -> bool:
 def _check_deadline(absolute_deadline: float) -> None:
     if time.monotonic() >= absolute_deadline:
         raise TUFTrustError("TUF authorization deadline has elapsed")
+
+
+def _tuf_deadline(deadline: MonotonicDeadline | None) -> None:
+    if deadline is None:
+        return
+    try:
+        deadline.check()
+    except DeadlineBindingError as error:
+        raise TUFTrustError("TUF authorization deadline has elapsed") from error
+
+
+def _tuf_names(
+    directory_fd: int, deadline: MonotonicDeadline | None
+):
+    _tuf_deadline(deadline)
+    entries = os.scandir(directory_fd)
+    try:
+        while True:
+            _tuf_deadline(deadline)
+            try:
+                entry = next(entries)
+            except StopIteration:
+                break
+            _tuf_deadline(deadline)
+            yield entry.name
+    finally:
+        entries.close()
 
 
 def _unique_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:

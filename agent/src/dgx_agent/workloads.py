@@ -356,13 +356,16 @@ class WorkloadOperations:
         release = self._releases_root / request.release_digest
         release_fd = -1
         try:
-            deadline.check()
+            _workload_deadline(deadline)
             release_fd = os.open(
                 release,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
             )
-            receipt_descriptor = verify_installed_release_fd(release_fd)
-            deadline.check()
+            _workload_deadline(deadline)
+            receipt_descriptor = verify_installed_release_fd(
+                release_fd, deadline
+            )
+            _workload_deadline(deadline)
             descriptor = self._release_trust.authorize(
                 ReleaseRequest(
                     1,
@@ -374,13 +377,19 @@ class WorkloadOperations:
                 ),
                 deadline,
             )
+            _workload_deadline(deadline)
             if descriptor != receipt_descriptor:
                 raise WorkloadValidationError(
                     "installed release receipt is not signed authorization"
                 )
+        except WorkloadExecutionError:
+            if release_fd >= 0:
+                os.close(release_fd)
+            raise
         except Exception as error:
             if release_fd >= 0:
                 os.close(release_fd)
+            _workload_deadline(deadline)
             raise WorkloadValidationError("workload release is not installed") from error
         try:
             if (
@@ -399,7 +408,7 @@ class WorkloadOperations:
             if member is None or member.mode != 0o500:
                 raise WorkloadValidationError("workload adapter is not executable")
             descriptor_fd = _snapshot_release_member(release_fd, member, deadline)
-            deadline.check()
+            _workload_deadline(deadline)
         except Exception:
             os.close(release_fd)
             raise
@@ -516,13 +525,15 @@ def _snapshot_release_member(
     root_fd: int, member: ReleaseMember, deadline: MonotonicDeadline
 ) -> int:
     """Snapshot one signed executable below a pinned installed-release dirfd."""
+    _workload_deadline(deadline)
     directory_fd = os.dup(root_fd)
     source_fd = -1
     snapshot_fd = -1
     try:
+        _workload_deadline(deadline)
         parts = PurePosixPath(member.path).parts
         for component in parts[:-1]:
-            deadline.check()
+            _workload_deadline(deadline)
             child_fd = os.open(
                 component,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
@@ -530,12 +541,16 @@ def _snapshot_release_member(
             )
             os.close(directory_fd)
             directory_fd = child_fd
+            _workload_deadline(deadline)
+        _workload_deadline(deadline)
         source_fd = os.open(
             parts[-1],
             os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
             dir_fd=directory_fd,
         )
+        _workload_deadline(deadline)
         before = os.fstat(source_fd)
+        _workload_deadline(deadline)
         if (
             not stat.S_ISREG(before.st_mode)
             or before.st_nlink != 1
@@ -545,23 +560,34 @@ def _snapshot_release_member(
             or before.st_size != member.size
         ):
             raise WorkloadValidationError("workload adapter metadata is invalid")
+        _workload_deadline(deadline)
         snapshot_fd = os.memfd_create(
             "dgx-workload-adapter", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
         )
+        _workload_deadline(deadline)
         digest = hashlib.sha256()
         remaining = member.size
         while remaining:
-            deadline.check()
+            _workload_deadline(deadline)
             data = os.read(source_fd, min(64 * 1024, remaining))
+            _workload_deadline(deadline)
             if not data:
                 raise WorkloadValidationError("workload adapter changed")
             digest.update(data)
             offset = 0
             while offset < len(data):
-                offset += os.write(snapshot_fd, data[offset:])
+                _workload_deadline(deadline)
+                written = os.write(snapshot_fd, data[offset:])
+                _workload_deadline(deadline)
+                if written <= 0:
+                    raise WorkloadValidationError(
+                        "workload adapter snapshot was incomplete"
+                    )
+                offset += written
             remaining -= len(data)
+        _workload_deadline(deadline)
         after = os.fstat(source_fd)
-        deadline.check()
+        _workload_deadline(deadline)
         if (
             digest.hexdigest() != member.sha256
             or before.st_dev != after.st_dev
@@ -571,12 +597,15 @@ def _snapshot_release_member(
             or before.st_size != after.st_size
         ):
             raise WorkloadValidationError("workload adapter changed")
+        _workload_deadline(deadline)
         fcntl.fcntl(
             snapshot_fd,
             fcntl.F_ADD_SEALS,
             fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE,
         )
+        _workload_deadline(deadline)
         os.lseek(snapshot_fd, 0, os.SEEK_SET)
+        _workload_deadline(deadline)
         result, snapshot_fd = snapshot_fd, -1
         return result
     except WorkloadValidationError:
@@ -589,6 +618,13 @@ def _snapshot_release_member(
         if source_fd >= 0:
             os.close(source_fd)
         os.close(directory_fd)
+
+
+def _workload_deadline(deadline: MonotonicDeadline) -> None:
+    try:
+        deadline.check()
+    except DeadlineBindingError as error:
+        raise WorkloadExecutionError("workload deadline has elapsed") from error
 
 
 def _token(value: Any, name: str) -> str:
