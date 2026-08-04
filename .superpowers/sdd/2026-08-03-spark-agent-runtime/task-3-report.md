@@ -54,6 +54,13 @@ RED/GREEN slices:
   typing, missing/replaced recovery intents, regular/symlink/hardlink leaf
   substitution, and durable complete/unsafe recovery temporary records. Repeated
   ancestry expiry additionally proves descriptor counts remain stable;
+- external review round 4 produced 13 RED regressions for raw public installer
+  setup filesystem errors, destination and reservation rescans, aggregate
+  persisted-plus-active reservation races, and recovery-budget expiry during
+  quarantine token generation. The public boundary now preserves existing
+  typed trust/validation failures while converting applicable setup OSErrors,
+  closing every acquired descriptor/lock, and stopping reservation/recovery
+  mutation on the claim or recovery deadline;
 - ProcessRequest initially accepted duplicate and reserved auxiliary FDs;
 - compiled adapter inspection initially failed during the monotonic deadline
   change, exposing and fixing the recovery deadline/binding contract;
@@ -63,10 +70,10 @@ RED/GREEN slices:
 - Compose/Caddy tests failed until the fourth distinct registry SNI, private
   networks, anchored digest routes, and publisher validation were complete.
 
-The release-only command now contains 135 passing tests. The brief's exact
-release/workload command contains 153 passing tests; the
-release/workload/operation command contains 168 tests, and the complete agent
-suite contains 386 tests.
+The release-only command now contains 149 passing tests. The brief's exact
+release/workload command contains 167 passing tests; the
+release/workload/operation command contains 182 tests, and the complete agent
+suite contains 400 tests.
 
 ## Exact typed contracts
 
@@ -207,6 +214,13 @@ and statuses/dispositions use closed operation-specific vocabularies.
   final-tree, legacy `.remove-*`, and any unsafe quarantine artifacts are all
   counted with active reservations against one aggregate recovery bound rather
   than becoming hidden after canonical sidecar removal.
+  Reservation performs a second descriptor-relative aggregate scan while
+  holding the installer recovery lock and charging the prospective active
+  reservation. A concurrent reservation is rejected while staging is active,
+  so persisted artifacts plus active work never exceed 16 and an active staging
+  tree is never reaped by another install. The rescan uses the original claim
+  deadline. Every recovery-generated token is followed by a budget check before
+  its first rename or other mutation.
 - Workload launch reauthorizes the receipt-derived release through TUF on every
   operation, requires exact signed-descriptor equality, verifies receipt/tree
   through one pinned release dirfd, then executes a write-sealed adapter memfd.
@@ -253,21 +267,21 @@ Executed on the final working tree:
 
 ```text
 uv run --project agent pytest agent/tests -q
-386 passed in 10.04s
+400 passed in 10.01s
 
 uv run --project agent pytest agent/tests/test_releases.py -q
-135 passed in 1.98s
+149 passed in 1.84s
 
 uv run --project agent pytest \
   agent/tests/test_releases.py agent/tests/test_workloads.py -v
-153 passed in 2.82s
+167 passed in 2.65s
 
 uv run --project agent pytest agent/tests/test_releases.py \
   agent/tests/test_workloads.py agent/tests/test_operations.py -v
-168 passed in 3.34s
+182 passed in 3.08s
 
 uv run pytest deploy/compose/tests -q
-21 passed in 7.72s
+21 passed in 8.00s
 
 uv run --project agent python -m compileall -q agent/src
 exit 0
@@ -318,6 +332,11 @@ findings and one Compose-command Minor. This follow-up addresses the submitted
 deadline, typed recovery, exact-inode completion/leaf cleanup, durable temporary
 recovery, and reproducible Compose-environment findings and awaits exact-range
 external re-review.
+External review round 4 returned three Important findings covering public
+installer setup error typing, race-free aggregate persisted/active recovery
+bounds, and a missing post-token recovery-budget check. This follow-up adds
+deterministic RED/GREEN coverage and addresses all three findings; exact-range
+external re-review remains pending.
 
 ## Remaining physical and later-task gates
 

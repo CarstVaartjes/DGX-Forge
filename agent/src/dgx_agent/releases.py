@@ -272,8 +272,15 @@ class ReleaseInstaller:
         _deadline(fixed_deadline)
         descriptor = self._trust.authorize(request, fixed_deadline)
         _deadline(fixed_deadline)
-        _secure_root(self._releases_root, fixed_deadline)
-        _secure_root(self._staging_root, fixed_deadline)
+        try:
+            _secure_root(self._releases_root, fixed_deadline)
+            _secure_root(self._staging_root, fixed_deadline)
+        except ReleaseInstallError:
+            raise
+        except OSError as error:
+            raise ReleaseInstallError(
+                "release installation setup failed"
+            ) from error
         _deadline(fixed_deadline)
         try:
             releases_fd = os.open(
@@ -294,7 +301,7 @@ class ReleaseInstaller:
                 raise ReleaseInstallError(
                     "release staging is not on the install filesystem"
                 )
-        except Exception:
+        except ReleaseInstallError:
             if staging_root_fd >= 0:
                 os.close(staging_root_fd)
                 staging_root_fd = -1
@@ -302,6 +309,16 @@ class ReleaseInstaller:
                 os.close(releases_fd)
                 releases_fd = -1
             raise
+        except OSError as error:
+            if staging_root_fd >= 0:
+                os.close(staging_root_fd)
+                staging_root_fd = -1
+            if releases_fd >= 0:
+                os.close(releases_fd)
+                releases_fd = -1
+            raise ReleaseInstallError(
+                "release installation setup failed"
+            ) from error
         try:
             try:
                 self._reap_deferred_staging(staging_root_fd)
@@ -312,14 +329,21 @@ class ReleaseInstaller:
                     "release staging recovery failed"
                 ) from error
             _deadline(fixed_deadline)
-            lock_fd = os.open(
-                f".install-{request.target_digest}.lock",
-                os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
-                0o600,
-                dir_fd=releases_fd,
-            )
-            _deadline(fixed_deadline)
-            _acquire_lock(lock_fd, fixed_deadline)
+            try:
+                lock_fd = os.open(
+                    f".install-{request.target_digest}.lock",
+                    os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=releases_fd,
+                )
+                _deadline(fixed_deadline)
+                _acquire_lock(lock_fd, fixed_deadline)
+            except ReleaseInstallError:
+                raise
+            except OSError as error:
+                raise ReleaseInstallError(
+                    "release installation setup failed"
+                ) from error
             _deadline(fixed_deadline)
             try:
                 os.stat(
@@ -330,6 +354,10 @@ class ReleaseInstaller:
                 _deadline(fixed_deadline)
             except FileNotFoundError:
                 pass
+            except OSError as error:
+                raise ReleaseInstallError(
+                    "release installation setup failed"
+                ) from error
             else:
                 _verify_installed_fd(
                     releases_fd, request.target_digest, descriptor,
@@ -342,9 +370,19 @@ class ReleaseInstaller:
                     request.adapter_id,
                 )
             _deadline(fixed_deadline)
-            self._reserve_staging()
+            try:
+                self._reserve_staging(
+                    staging_root_fd, lambda: _deadline(fixed_deadline)
+                )
+            except ReleaseInstallError:
+                raise
+            except (OSError, TimeoutError) as error:
+                raise ReleaseInstallError(
+                    "release staging recovery failed"
+                ) from error
             staging_reserved = True
             staging_token = secrets.token_hex(8)
+            _deadline(fixed_deadline)
             staging_name = f".install-{request.target_digest}-{staging_token}"
             recovery_name = f".recovery-{staging_token}.state"
             try:
@@ -528,12 +566,18 @@ class ReleaseInstaller:
             request.adapter_id,
         )
 
-    def _reserve_staging(self) -> None:
+    def _reserve_staging(self, parent_fd: int, check: Any) -> None:
         with self._recovery_lock:
-            if (
-                len(self._deferred_staging) + self._active_staging
-                >= _MAX_DEFERRED_STAGING
-            ):
+            if self._active_staging:
+                raise ReleaseInstallError(
+                    "release staging recovery backlog is full"
+                )
+            _read_recovery_records_fd(
+                parent_fd,
+                check,
+                active_reservations=1,
+            )
+            if len(self._deferred_staging) + 1 > _MAX_DEFERRED_STAGING:
                 raise ReleaseInstallError(
                     "release staging recovery backlog is full"
                 )
@@ -1757,6 +1801,7 @@ def _quarantine_unproven_staging_fd(
     quarantine_name = (
         f".quarantine-{match.group(1)}-{secrets.token_hex(8)}"
     )
+    check()
     _rename_noreplace(
         parent_fd, staging_name, parent_fd, quarantine_name
     )

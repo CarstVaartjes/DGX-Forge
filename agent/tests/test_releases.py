@@ -2671,6 +2671,269 @@ def test_install_setup_failure_without_identity_is_typed_and_restart_safe(
     assert tuple(staging.glob(".install-*"))
 
 
+@pytest.mark.parametrize(
+    "phase",
+    [
+        "secure-release-root",
+        "secure-staging-root",
+        "release-open",
+        "staging-open",
+        "release-fstat",
+        "staging-fstat",
+        "recovery-scan",
+        "lock-open",
+        "lock-acquire",
+        "target-stat",
+        "reservation-scan",
+    ],
+)
+def test_public_install_wraps_setup_oserror_and_closes_descriptors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    releases.mkdir(mode=0o700)
+    staging.mkdir(mode=0o700)
+    original_secure_root = release_module._secure_root
+    original_open = release_module.os.open
+    original_fstat = release_module.os.fstat
+    original_stat = release_module.os.stat
+    original_close = release_module.os.close
+    opened: dict[int, str] = {}
+    closed: set[int] = set()
+
+    def fail_secure_root(path, deadline=None):
+        if phase == f"secure-{'release' if Path(path) == releases else 'staging'}-root":
+            raise OSError(f"injected {phase} failure")
+        return original_secure_root(path, deadline)
+
+    def fail_open(path, flags, *args, **kwargs):
+        label = None
+        if Path(path) == releases:
+            label = "release"
+        elif Path(path) == staging:
+            label = "staging"
+        elif str(path).endswith(".lock"):
+            label = "lock"
+        if phase == f"{label}-open":
+            raise OSError(f"injected {phase} failure")
+        result = original_open(path, flags, *args, **kwargs)
+        if label is not None:
+            opened[result] = label
+        return result
+
+    def fail_fstat(fd):
+        label = opened.get(fd)
+        if phase == f"{label}-fstat":
+            raise OSError(f"injected {phase} failure")
+        return original_fstat(fd)
+
+    def fail_stat(path, *args, **kwargs):
+        if phase == "target-stat" and path == VALID_RELEASE["target_digest"]:
+            raise OSError("injected target stat failure")
+        return original_stat(path, *args, **kwargs)
+
+    def record_close(fd):
+        closed.add(fd)
+        return original_close(fd)
+
+    monkeypatch.setattr(release_module, "_secure_root", fail_secure_root)
+    monkeypatch.setattr(release_module.os, "open", fail_open)
+    monkeypatch.setattr(release_module.os, "fstat", fail_fstat)
+    monkeypatch.setattr(release_module.os, "stat", fail_stat)
+    monkeypatch.setattr(release_module.os, "close", record_close)
+    if phase == "recovery-scan":
+        monkeypatch.setattr(
+            release_module,
+            "_read_recovery_records_fd",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                OSError("injected recovery scan failure")
+            ),
+        )
+    if phase == "reservation-scan":
+        original_read_records = release_module._read_recovery_records_fd
+        scans = [0]
+
+        def fail_reservation_scan(*args, **kwargs):
+            scans[0] += 1
+            if scans[0] == 2:
+                raise OSError("injected reservation scan failure")
+            return original_read_records(*args, **kwargs)
+
+        monkeypatch.setattr(
+            release_module, "_read_recovery_records_fd", fail_reservation_scan
+        )
+    if phase == "lock-acquire":
+        monkeypatch.setattr(
+            release_module,
+            "_acquire_lock",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                OSError("injected lock acquire failure")
+            ),
+        )
+
+    with pytest.raises(ReleaseInstallError):
+        ReleaseInstaller(Trust(), object(), releases, staging).install(
+            ReleaseRequest.parse(VALID_RELEASE),
+            datetime.now(UTC) + timedelta(seconds=2),
+        )
+
+    assert set(opened) <= closed
+
+
+def test_reservation_recovery_scan_obeys_claim_deadline_before_transport(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    pulled = [False]
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            pulled[0] = True
+
+    clock = [0.0]
+    scans = [0]
+    continued_after_expiry = [False]
+    original_read_records = release_module._read_recovery_records_fd
+    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+
+    def expire_during_reservation(parent_fd, check, **kwargs):
+        scans[0] += 1
+        if scans[0] == 2:
+            clock[0] = 11.0
+            check()
+            continued_after_expiry[0] = True
+        return original_read_records(parent_fd, check, **kwargs)
+
+    monkeypatch.setattr(
+        release_module, "_read_recovery_records_fd", expire_during_reservation
+    )
+    with pytest.raises(ReleaseInstallError, match="deadline"):
+        ReleaseInstaller(
+            Trust(), Transport(), tmp_path / "releases", tmp_path / "staging"
+        ).install(
+            ReleaseRequest.parse(VALID_RELEASE),
+            MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
+        )
+    assert not pulled[0]
+    assert not continued_after_expiry[0]
+
+
+def test_concurrent_install_never_exceeds_aggregate_recovery_cap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return replace(base_descriptor, target_digest=request.target_digest)
+
+    entered_transport = threading.Barrier(2)
+    release_transport = threading.Event()
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            if descriptor.target_digest == VALID_RELEASE["target_digest"]:
+                entered_transport.wait(timeout=2)
+                assert release_transport.wait(timeout=5)
+            member = destination / "bin/runtime-adapter"
+            member.parent.mkdir()
+            member.write_bytes(b"x" * 17)
+            member.chmod(0o500)
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    releases.mkdir(mode=0o700)
+    staging.mkdir(mode=0o700)
+    for index in range(15):
+        (staging / f".unsafe-recovery-{index:016x}").write_bytes(b"held")
+    installer = ReleaseInstaller(Trust(), Transport(), releases, staging)
+    original_reserve = installer._reserve_staging
+    aggregate_counts: list[int] = []
+
+    def counted_reserve(parent_fd, check):
+        original_reserve(parent_fd, check)
+        aggregate_counts.append(15 + installer._active_staging)
+
+    monkeypatch.setattr(installer, "_reserve_staging", counted_reserve)
+    errors: dict[str, BaseException] = {}
+
+    def run(label: str, request: ReleaseRequest) -> None:
+        try:
+            installer.install(
+                request, datetime.now(UTC) + timedelta(seconds=5)
+            )
+        except BaseException as error:  # noqa: BLE001 - thread result capture
+            errors[label] = error
+
+    first_request = ReleaseRequest.parse(VALID_RELEASE)
+    second_request = ReleaseRequest.parse(
+        {**VALID_RELEASE, "target_digest": "4" * 64}
+    )
+    first = threading.Thread(target=run, args=("first", first_request))
+    second = threading.Thread(target=run, args=("second", second_request))
+    first.start()
+    entered_transport.wait(timeout=2)
+    first_staging = next(staging.glob(f".install-{first_request.target_digest}-*"))
+    second.start()
+    second.join(timeout=3)
+    try:
+        assert not second.is_alive()
+        assert isinstance(errors.get("second"), ReleaseInstallError)
+        assert max(aggregate_counts) <= release_module._MAX_DEFERRED_STAGING
+        assert first_staging.is_dir()
+    finally:
+        release_transport.set()
+        first.join(timeout=5)
+        second.join(timeout=5)
+    assert "first" not in errors
+
+
+def test_quarantine_token_generation_cannot_cross_recovery_budget_before_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    staging_name = f".install-{'2' * 64}-{'a' * 16}"
+    (staging / staging_name).mkdir(mode=0o700)
+    expired = [False]
+    renamed = [False]
+
+    def check() -> None:
+        if expired[0]:
+            raise TimeoutError("recovery budget elapsed")
+
+    def expire_budget(_size: int) -> str:
+        expired[0] = True
+        return "b" * 16
+
+    def record_rename(*args, **kwargs):
+        renamed[0] = True
+
+    monkeypatch.setattr(release_module.secrets, "token_hex", expire_budget)
+    monkeypatch.setattr(release_module, "_rename_noreplace", record_rename)
+    parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(TimeoutError, match="budget"):
+            release_module._quarantine_unproven_staging_fd(
+                parent_fd, staging_name, check
+            )
+    finally:
+        os.close(parent_fd)
+    assert not renamed[0]
+
+
 def test_recovery_completion_never_overwrites_replaced_intent(
     tmp_path: Path
 ) -> None:
