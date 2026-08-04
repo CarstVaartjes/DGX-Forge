@@ -79,6 +79,9 @@ class CopyBoundedChunk(bytes):
 
 
 class Authority(CertificateAuthority):
+    def __init__(self) -> None:
+        self.fail_revoke = False
+
     def issue_node(self, node_id: str, public_key_pem: bytes, now: datetime) -> IssuedCertificate:
         return IssuedCertificate(node_id, b"certificate", b"chain", "issued-serial", "issued-fingerprint", now, now + timedelta(days=1))
 
@@ -87,6 +90,10 @@ class Authority(CertificateAuthority):
 
     def revocation_bundle(self, now: datetime) -> bytes:
         return b""
+
+    def revoke_node(self, serial: str, now: datetime) -> None:
+        if self.fail_revoke:
+            raise RuntimeError("provider unavailable")
 
 
 @pytest.fixture
@@ -137,7 +144,10 @@ def valid_enrollment_body(token: str) -> bytes:
     key = ed25519.Ed25519PrivateKey.generate()
     csr = (
         x509.CertificateSigningRequestBuilder()
-        .subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "node")]))
+        .subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_A)]))
+        .add_extension(x509.SubjectAlternativeName([
+            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_A}")
+        ]), critical=False)
         .sign(key, algorithm=None)
         .public_bytes(serialization.Encoding.PEM)
     )
@@ -311,7 +321,7 @@ def test_enrollment_routes_are_admin_only_and_replay_is_rejected(agent_system) -
     # approval remains the point that rejects a duplicate immutable node.
     grant = client.post("/api/v1/agents/enrollments/grants", headers=admin_headers(codec), json={"node_id": NODE_A, "ttl_seconds": 60}).json()
     key = ed25519.Ed25519PrivateKey.generate()
-    csr = x509.CertificateSigningRequestBuilder().subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "node")])).sign(key, algorithm=None).public_bytes(serialization.Encoding.PEM)
+    csr = x509.CertificateSigningRequestBuilder().subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_A)])).add_extension(x509.SubjectAlternativeName([x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_A}")]), critical=False).sign(key, algorithm=None).public_bytes(serialization.Encoding.PEM)
     public = x509.load_pem_x509_csr(csr).public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
     body = {"grant_token": grant["token"], "csr": csr.decode(), "evidence": {"node_id": NODE_A, "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(), "host_key_fingerprint": "host", "hardware_fingerprint": "hardware", "agent_digest": "a" * 64, "boot_id": "boot"}}
     assert client.post("/agent/v1/enroll", json=body).status_code == 202
@@ -595,11 +605,26 @@ def test_revoked_identity_is_gated_before_invalid_json_is_parsed(agent_system) -
     assert client.post("/agent/v1/result", headers={**agent_headers(NODE_A, "serial-a"), "content-type": "application/json"}, content=b"{not-json").status_code == 401
 
 
+def test_node_revocation_has_typed_4xx_and_uncertain_remote_statuses(agent_system) -> None:
+    client, services, codec, _ = agent_system
+    headers = admin_headers(codec)
+    assert client.post("/api/v1/agents/nodes/not-canonical/revoke", headers=headers).status_code == 422
+    assert client.post(f"/api/v1/agents/nodes/{'spk_' + '1' * 32}/revoke", headers=headers).status_code == 404
+
+    authority = services.enrollment._authority
+    authority.fail_revoke = True
+    response = client.post(f"/api/v1/agents/nodes/{NODE_A}/revoke", headers=headers)
+    assert response.status_code == 503
+    with services.sessions() as session:
+        assert session.get(AgentNode, NODE_A).state == "retired"  # type: ignore[union-attr]
+        assert session.get(AgentCertificate, "serial-a").revoked_at is not None  # type: ignore[union-attr]
+
+
 def test_enrollment_overflow_burns_valid_grant_before_rejection(agent_system) -> None:
     client, _, codec, _ = agent_system
     grant = client.post("/api/v1/agents/enrollments/grants", headers=admin_headers(codec), json={"node_id": NODE_A, "ttl_seconds": 60}).json()
     key = ed25519.Ed25519PrivateKey.generate()
-    csr = x509.CertificateSigningRequestBuilder().subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "node")])).sign(key, algorithm=None).public_bytes(serialization.Encoding.PEM)
+    csr = x509.CertificateSigningRequestBuilder().subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_A)])).add_extension(x509.SubjectAlternativeName([x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_A}")]), critical=False).sign(key, algorithm=None).public_bytes(serialization.Encoding.PEM)
     public = x509.load_pem_x509_csr(csr).public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
     body = {"grant_token": grant["token"], "csr": csr.decode(), "evidence": {"node_id": NODE_A, "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(), "host_key_fingerprint": "x" * 513, "hardware_fingerprint": "hardware", "agent_digest": "a" * 64, "boot_id": "boot"}}
     assert client.post("/agent/v1/enroll", json=body).status_code == 403
@@ -610,7 +635,7 @@ def test_enrollment_unknown_top_level_field_burns_valid_grant(agent_system) -> N
     client, _, codec, _ = agent_system
     grant = client.post("/api/v1/agents/enrollments/grants", headers=admin_headers(codec), json={"node_id": NODE_A, "ttl_seconds": 60}).json()
     key = ed25519.Ed25519PrivateKey.generate()
-    csr = x509.CertificateSigningRequestBuilder().subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "node")])).sign(key, algorithm=None).public_bytes(serialization.Encoding.PEM)
+    csr = x509.CertificateSigningRequestBuilder().subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_A)])).add_extension(x509.SubjectAlternativeName([x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_A}")]), critical=False).sign(key, algorithm=None).public_bytes(serialization.Encoding.PEM)
     public = x509.load_pem_x509_csr(csr).public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
     body = {"grant_token": grant["token"], "csr": csr.decode(), "evidence": {"node_id": NODE_A, "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(), "host_key_fingerprint": "host", "hardware_fingerprint": "hardware", "agent_digest": "a" * 64, "boot_id": "boot"}, "unknown": "denied"}
     assert client.post("/agent/v1/enroll", json=body).status_code == 403
@@ -623,7 +648,7 @@ def test_enrollment_listing_paginates_stably_and_can_filter_issuing(agent_system
         for index in range(101):
             grant_id = str(uuid.uuid4())
             session.add(AgentEnrollmentGrant(id=grant_id, node_id=NODE_A, token_digest=hashlib.sha256(str(index).encode()).hexdigest(), created_by="admin", created_at=clock.now, expires_at=clock.now + timedelta(seconds=60)))
-            session.add(AgentEnrollment(id=str(uuid.uuid4()), grant_id=grant_id, node_id=NODE_A, state="issuing" if index == 0 else "rejected", csr_public_key_pem="pem", csr_public_key_fingerprint="a" * 64, host_key_fingerprint="host", hardware_fingerprint="hardware", agent_digest="a" * 64, boot_id="boot", created_at=clock.now))
+            session.add(AgentEnrollment(id=str(uuid.uuid4()), grant_id=grant_id, node_id=NODE_A, state="issuing" if index == 0 else "rejected", csr_pem="csr", csr_public_key_pem="pem", csr_public_key_fingerprint="a" * 64, host_key_fingerprint="host", hardware_fingerprint="hardware", agent_digest="a" * 64, boot_id="boot", created_at=clock.now))
     first = client.get("/api/v1/agents/enrollments?limit=100", headers=admin_headers(codec)).json()
     assert len(first["enrollments"]) == 100
     assert first["next_cursor"]

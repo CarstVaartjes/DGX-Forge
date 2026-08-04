@@ -88,7 +88,16 @@ def now() -> datetime:
 
 @pytest.fixture
 def public_key() -> bytes:
-    return _pem_public_key(ed25519.Ed25519PrivateKey.generate())
+    key = ed25519.Ed25519PrivateKey.generate()
+    return (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, NODE_ID)]))
+        .add_extension(x509.SubjectAlternativeName([
+            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_ID}")
+        ]), critical=False)
+        .sign(key, algorithm=None)
+        .public_bytes(serialization.Encoding.PEM)
+    )
 
 
 @pytest.fixture
@@ -118,7 +127,7 @@ def test_issued_certificate_is_short_lived_and_node_bound(
     )
     assert certificate.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw
-    ) == serialization.load_pem_public_key(public_key).public_bytes(
+    ) == x509.load_pem_x509_csr(public_key).public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw
     )
     assert issued.certificate_pem not in issued.chain_pem
@@ -311,12 +320,18 @@ def test_authority_rejects_unsafe_intermediate_constraints(
 
 def test_authority_rejects_non_ed25519_node_keys(authority: CertificateAuthority, now: datetime) -> None:
     rsa_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    public_key = rsa_key.public_key().public_bytes(
-        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+    request = (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, NODE_ID)]))
+        .add_extension(x509.SubjectAlternativeName([
+            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_ID}")
+        ]), critical=False)
+        .sign(rsa_key, hashes.SHA256())
+        .public_bytes(serialization.Encoding.PEM)
     )
 
     with pytest.raises(ValueError, match="Ed25519"):
-        authority.issue_node(NODE_ID, public_key, now)
+        authority.issue_node(NODE_ID, request, now)
 
 
 @pytest.mark.parametrize("node_id", ("spark1", "", "spk_1", "spk_" + "g" * 32, NODE_ID.upper()))

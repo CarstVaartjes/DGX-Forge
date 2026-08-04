@@ -32,6 +32,51 @@ class AdminServices:
     reconciler: Any | None
 
 
+def build_agent_services(settings: Any, sessions: Any, clock: Callable[[], Any]) -> AgentApiServices:
+    """Construct the fail-closed production agent runtime from one provider."""
+    from .agent_jobs import AgentJobService
+    from .enrollment import EnrollmentService
+    from .pki import BuiltinCertificateAuthority
+    from .step_ca import StepCertificateAuthority
+
+    if settings.agent_runtime != "enabled":
+        raise RuntimeError("agent runtime is disabled")
+    if settings.agent_intermediate_certificate_path is None:
+        raise RuntimeError("agent intermediate certificate path is unavailable")
+    if settings.agent_ca_provider == "step-ca":
+        if settings.agent_ca_root_path is None or settings.agent_ca_credential_path is None or settings.agent_ca_provisioner_public_jwk_path is None:
+            raise RuntimeError("step-ca provider files are unavailable")
+        authority = StepCertificateAuthority(
+            ca_url=settings.agent_ca_url,
+            root_certificate_path=settings.agent_ca_root_path,
+            intermediate_certificate_path=settings.agent_intermediate_certificate_path,
+            provisioner_name=settings.agent_ca_provisioner_name,
+            provisioner_kid=settings.agent_ca_provisioner_kid,
+            credential_path=settings.agent_ca_credential_path,
+            provisioner_public_jwk_path=settings.agent_ca_provisioner_public_jwk_path,
+            timeout_seconds=settings.agent_ca_timeout_seconds,
+            max_response_bytes=settings.agent_ca_max_response_bytes,
+        )
+        authority.check_health()
+    elif settings.agent_ca_provider == "builtin":
+        if settings.agent_intermediate_key_path is None:
+            raise RuntimeError("built-in intermediate key path is unavailable")
+        authority = BuiltinCertificateAuthority(
+            settings.agent_intermediate_key_path,
+            settings.agent_intermediate_certificate_path,
+        )
+    else:
+        raise RuntimeError("agent CA provider is unavailable")
+    settings.agent_artifact_root.mkdir(mode=0o750, parents=True, exist_ok=True)
+    return AgentApiServices(
+        enrollment=EnrollmentService(sessions, authority, clock=clock),
+        operations=AgentJobService(sessions, clock=clock),
+        sessions=sessions,
+        clock=clock,
+        artifact_root=settings.agent_artifact_root,
+    )
+
+
 class SpaFiles(StaticFiles):
     async def get_response(self, path: str, scope):
         try:
@@ -362,6 +407,7 @@ def production_app() -> FastAPI:
     )
     dashboard = DashboardService(repository, sessions)
     metrics = MetricsRegistry()
+    agent_services = build_agent_services(settings, sessions, clock)
     def refresh_metrics() -> None:
         fleet_state = dashboard.fleet()
         for node in fleet_state["nodes"]:
@@ -391,6 +437,7 @@ def production_app() -> FastAPI:
         metrics_token=settings.metrics_token,
         metrics_refresh=refresh_metrics,
         job_logs=JobLogStore(settings.state_path / "job-logs"),
+        agent=agent_services,
         trusted_agent_proxy_auth=settings.agent_proxy_auth,
     )
     web_root = Path(__file__).resolve().parent / "web"

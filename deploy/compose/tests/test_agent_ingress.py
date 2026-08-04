@@ -30,6 +30,9 @@ def _environment() -> dict[str, str]:
         "AGENT_INTERMEDIATE_CERTIFICATE_FILE": "/dev/null",
         "AGENT_PROXY_AUTH_FILE": "/dev/null",
         "AGENT_CA_CREDENTIAL_FILE": "/dev/null",
+        "AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE": "/dev/null",
+        "AGENT_CA_PROVISIONER_KID": "test-provisioner-kid",
+        "STEP_CA_CONFIG_FILE": "/dev/null",
         "STEP_CA_INTERMEDIATE_KEY_FILE": "/dev/null",
         "STEP_CA_PASSWORD_FILE": "/dev/null",
         "STEP_CA_ROOT_CERTIFICATE_FILE": "/dev/null",
@@ -106,6 +109,8 @@ def _settings_result(rendered: dict, tmp_path: Path) -> subprocess.CompletedProc
         "DGX_AGENT_CLIENT_CA_FILE": "test-client-ca\n",
         "DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE": "test-intermediate-certificate\n",
         "DGX_AGENT_CA_CREDENTIAL_FILE": "test-provider-credential\n",
+        "DGX_AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE": "test-provider-public-jwk\n",
+        "DGX_AGENT_CA_ROOT_FILE": "test-root-certificate\n",
         "DGX_AGENT_INTERMEDIATE_KEY_FILE": "test-builtin-key\n",
         "DGX_AGENT_PROXY_AUTH_FILE": "A" * 30 + "_-\r\n",
     }
@@ -115,6 +120,8 @@ def _settings_result(rendered: dict, tmp_path: Path) -> subprocess.CompletedProc
         secret = tmp_path / name.lower()
         secret.write_text(secret_values[name])
         control_environment[name] = str(secret)
+    control_environment.setdefault("DGX_AGENT_CA_PROVISIONER_NAME", "dgx-forge-agent")
+    control_environment.setdefault("DGX_AGENT_CA_PROVISIONER_KID", "test-provisioner-kid")
     environment.update({name: str(value) for name, value in control_environment.items()})
     return subprocess.run(
         [

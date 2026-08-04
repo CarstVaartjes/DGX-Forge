@@ -52,6 +52,10 @@ class EnrollmentDenied(RuntimeError):
     """Enrollment input or state does not authorize the requested operation."""
 
 
+class RemoteRevocationUncertain(EnrollmentDenied):
+    """Local denial committed, but provider confirmation remains pending."""
+
+
 @dataclass(frozen=True)
 class EnrollmentGrant:
     id: str
@@ -70,7 +74,7 @@ class PendingEnrollment:
 @dataclass(frozen=True)
 class _IssuanceClaim:
     node_id: str
-    public_key_pem: bytes
+    csr_pem: bytes
 
 
 class EnrollmentService:
@@ -133,7 +137,7 @@ class EnrollmentService:
                 try:
                     if not isinstance(csr, bytes) or len(csr) > _MAX_CSR_BYTES:
                         raise EnrollmentDenied("CSR is too large")
-                    public_key_pem, public_key_fingerprint = _load_csr(csr)
+                    csr_pem, public_key_pem, public_key_fingerprint = _load_csr(grant.node_id, csr)
                 except EnrollmentDenied as error:
                     failure = str(error)
                 else:
@@ -144,6 +148,7 @@ class EnrollmentService:
                         grant_id=grant.id,
                         node_id=grant.node_id,
                         state="pending-approval",
+                        csr_pem=csr_pem.decode("ascii"),
                         csr_public_key_pem=public_key_pem.decode("ascii"),
                         csr_public_key_fingerprint=public_key_fingerprint,
                         host_key_fingerprint=values["host_key_fingerprint"],
@@ -171,7 +176,7 @@ class EnrollmentService:
             claim = self._claim_issuance(enrollment_id, actor, now)
             if isinstance(claim, IssuedCertificate):
                 return claim
-            issued = self._authority.issue_node(claim.node_id, claim.public_key_pem, now)
+            issued = self._authority.issue_node(claim.node_id, claim.csr_pem, now)
             if issued.node_id != claim.node_id:
                 raise EnrollmentDenied("certificate authority returned a mismatched node identity")
             try:
@@ -212,7 +217,7 @@ class EnrollmentService:
         _validate_node_id(node_id)
         if not serial.strip():
             raise ValueError("certificate serial is required")
-        public_key_pem, _ = _load_csr(csr)
+        normalized_csr, _, _ = _load_csr(node_id, csr)
         now = _utc(self._clock())
         with self._sessions.begin() as session:
             node = session.scalar(
@@ -231,7 +236,7 @@ class EnrollmentService:
                 raise EnrollmentDenied("node identity is retired or revoked")
             if _stored_utc(certificate.not_before) > now or _stored_utc(certificate.not_after) <= now:
                 raise EnrollmentDenied("certificate is not currently valid")
-            issued = self._authority.renew_node(node_id, public_key_pem, now)
+            issued = self._authority.renew_node(node_id, normalized_csr, now)
             if issued.node_id != node_id:
                 raise EnrollmentDenied("certificate authority returned a mismatched node identity")
             if issued.serial == serial:
@@ -245,6 +250,48 @@ class EnrollmentService:
                 fingerprint=issued.fingerprint,
             ))
             return issued
+
+    def revoke_node(self, node_id: str, actor: str) -> None:
+        """Retire locally before best-effort provider revocation.
+
+        Retrying is safe: local state remains denied and provider revocation is
+        monotonic. An uncertain provider response is never allowed to restore
+        ingress access.
+        """
+        _validate_node_id(node_id)
+        _validate_actor(actor)
+        now = _utc(self._clock())
+        with self._sessions.begin() as session:
+            node = session.scalar(
+                select(AgentNode).where(AgentNode.node_id == node_id).with_for_update(of=AgentNode)
+            )
+            if node is None:
+                raise EnrollmentDenied("node identity does not exist")
+            node.state = "retired"
+            node.revoked_at = node.revoked_at or now
+            certificates = list(session.scalars(
+                select(AgentCertificate).where(AgentCertificate.node_id == node_id)
+            ))
+            serials = [certificate.serial for certificate in certificates if certificate.ca_revoked_at is None]
+            for certificate in certificates:
+                certificate.revoked_at = certificate.revoked_at or now
+        uncertain = False
+        for serial in serials:
+            try:
+                self._authority.revoke_node(serial, now)
+            except RuntimeError:
+                uncertain = True
+            else:
+                with self._sessions.begin() as session:
+                    certificate = session.scalar(
+                        select(AgentCertificate)
+                        .where(AgentCertificate.serial == serial, AgentCertificate.node_id == node_id)
+                        .with_for_update(of=AgentCertificate)
+                    )
+                    if certificate is not None:
+                        certificate.ca_revoked_at = certificate.ca_revoked_at or now
+        if uncertain:
+            raise RemoteRevocationUncertain("local revocation complete; remote CA revocation is uncertain")
 
     def _claim_issuance(self, enrollment_id: str, actor: str, now: datetime) -> _IssuanceClaim | IssuedCertificate:
         with self._sessions.begin() as session:
@@ -275,7 +322,7 @@ class EnrollmentService:
             enrollment.state = "issuing"
             enrollment.decision_actor = actor
             enrollment.decided_at = now
-            return _IssuanceClaim(enrollment.node_id, enrollment.csr_public_key_pem.encode("ascii"))
+            return _IssuanceClaim(enrollment.node_id, enrollment.csr_pem.encode("ascii"))
 
 
 def _persist_issued_enrollment(
@@ -355,19 +402,33 @@ def _pending(enrollment: AgentEnrollment) -> PendingEnrollment:
     return PendingEnrollment(id=enrollment.id, node_id=enrollment.node_id, state=enrollment.state)
 
 
-def _load_csr(csr: bytes) -> tuple[bytes, str]:
+def _load_csr(node_id: str, csr: bytes) -> tuple[bytes, bytes, str]:
     try:
         request = x509.load_pem_x509_csr(csr)
     except (TypeError, ValueError) as error:
         raise EnrollmentDenied("CSR must be valid PEM") from error
     if not request.is_signature_valid:
         raise EnrollmentDenied("CSR signature is invalid")
+    expected_subject = x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, node_id)])
+    if request.subject != expected_subject:
+        raise EnrollmentDenied("CSR subject does not match enrollment node")
+    if len(request.extensions) != 1:
+        raise EnrollmentDenied("CSR must contain only the node URI SAN extension")
+    try:
+        sans = request.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except x509.ExtensionNotFound as error:
+        raise EnrollmentDenied("CSR node URI SAN is required") from error
+    expected_sans = x509.SubjectAlternativeName([
+        x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{node_id}")
+    ])
+    if sans != expected_sans:
+        raise EnrollmentDenied("CSR node URI SAN does not match enrollment node")
     public_key = request.public_key()
     if not isinstance(public_key, ed25519.Ed25519PublicKey):
         raise EnrollmentDenied("CSR public key must be Ed25519")
     public_key_pem = public_key.public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo)
     public_key_der = public_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
-    return public_key_pem, _digest(public_key_der)
+    return request.public_bytes(serialization.Encoding.PEM), public_key_pem, _digest(public_key_der)
 
 
 def _validate_evidence(

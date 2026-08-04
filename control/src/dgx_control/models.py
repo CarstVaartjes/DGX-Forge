@@ -107,6 +107,7 @@ class AgentCertificate(Base):
     not_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     fingerprint: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    ca_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AgentEnrollmentGrant(Base):
@@ -128,6 +129,7 @@ class AgentEnrollment(Base):
     )
     node_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    csr_pem: Mapped[str] = mapped_column(Text, nullable=False)
     csr_public_key_pem: Mapped[str] = mapped_column(Text, nullable=False)
     csr_public_key_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
     host_key_fingerprint: Mapped[str] = mapped_column(String(512), nullable=False)

@@ -79,6 +79,7 @@ running mutating commands such as `prepare` or `switch`.
   count
 - [Direct-fabric runbook](docs/runbooks/fabric.md)
 - [Runtime release runbook](docs/runbooks/runtime-release.md)
+- [Spark agent PKI and recovery runbook](docs/runbooks/agent-pki.md)
 
 ## Security
 

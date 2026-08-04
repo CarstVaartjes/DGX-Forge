@@ -68,6 +68,8 @@ def test_production_agent_boundary_requires_secret_files_and_step_ca(tmp_path: P
         "DGX_AGENT_CLIENT_CA_FILE": "client-ca",
         "DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE": "intermediate-certificate",
         "DGX_AGENT_CA_CREDENTIAL_FILE": "provider-credential",
+        "DGX_AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE": "provider-public-jwk",
+        "DGX_AGENT_CA_ROOT_FILE": "root-certificate",
         "DGX_AGENT_PROXY_AUTH_FILE": "p" * 32 + "\r\n",
     }
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
@@ -76,6 +78,9 @@ def test_production_agent_boundary_requires_secret_files_and_step_ca(tmp_path: P
         path.write_text(value)
         monkeypatch.setenv(name, str(path))
     monkeypatch.setenv("DGX_AGENT_CA_PROVIDER", "step-ca")
+    monkeypatch.setenv("DGX_AGENT_CA_URL", "https://step-ca:9000")
+    monkeypatch.setenv("DGX_AGENT_CA_PROVISIONER_NAME", "dgx-forge-agent")
+    monkeypatch.setenv("DGX_AGENT_CA_PROVISIONER_KID", "test-kid")
 
     settings = Settings.from_env_and_secrets()
 
@@ -108,10 +113,15 @@ def test_production_rejects_noncanonical_agent_proxy_auth(
         "DGX_AGENT_CLIENT_CA_FILE": "client-ca",
         "DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE": "intermediate-certificate",
         "DGX_AGENT_CA_CREDENTIAL_FILE": "provider-credential",
+        "DGX_AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE": "provider-public-jwk",
+        "DGX_AGENT_CA_ROOT_FILE": "root-certificate",
         "DGX_AGENT_PROXY_AUTH_FILE": proxy_auth,
     }
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
     monkeypatch.setenv("DGX_AGENT_CA_PROVIDER", "step-ca")
+    monkeypatch.setenv("DGX_AGENT_CA_URL", "https://step-ca:9000")
+    monkeypatch.setenv("DGX_AGENT_CA_PROVISIONER_NAME", "dgx-forge-agent")
+    monkeypatch.setenv("DGX_AGENT_CA_PROVISIONER_KID", "test-kid")
     for name, value in values.items():
         path = tmp_path / name
         path.write_text(value)

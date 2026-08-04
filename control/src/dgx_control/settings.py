@@ -78,8 +78,17 @@ class Settings:
     agent_runtime: str
     agent_client_ca: bytes
     agent_intermediate_certificate: bytes
+    agent_intermediate_certificate_path: Path | None
     agent_intermediate_key_path: Path | None
-    agent_ca_credential: bytes
+    agent_ca_credential_path: Path | None
+    agent_ca_provisioner_public_jwk_path: Path | None
+    agent_ca_url: str
+    agent_ca_root_path: Path | None
+    agent_ca_provisioner_name: str
+    agent_ca_provisioner_kid: str
+    agent_ca_timeout_seconds: float
+    agent_ca_max_response_bytes: int
+    agent_artifact_root: Path
     agent_proxy_auth: bytes
 
     @property
@@ -104,7 +113,10 @@ class Settings:
             raise SettingsError("DGX_AGENT_CA_PROVIDER is invalid")
         step_ca_settings_present = any(
             os.environ.get(name)
-            for name in ("DGX_AGENT_CA_CREDENTIAL", "DGX_AGENT_CA_CREDENTIAL_FILE")
+            for name in (
+                "DGX_AGENT_CA_CREDENTIAL", "DGX_AGENT_CA_CREDENTIAL_FILE",
+                "DGX_AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE", "DGX_AGENT_CA_ROOT_FILE",
+            )
         )
         builtin_settings_present = bool(
             builtin_bootstrap or os.environ.get("DGX_AGENT_INTERMEDIATE_KEY_FILE")
@@ -165,18 +177,43 @@ class Settings:
             raise SettingsError("required checks must be unique")
         agent_enabled = mode == "production" and agent_runtime == "enabled"
         agent_client_ca = _secret("DGX_AGENT_CLIENT_CA_FILE", production=True).encode() if agent_enabled else b""
+        agent_intermediate_certificate_path = (
+            _secret_path("DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE") if agent_enabled else None
+        )
         agent_intermediate_certificate = (
-            _secret("DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE", production=True).encode()
-            if agent_enabled else b""
+            agent_intermediate_certificate_path.read_bytes() if agent_intermediate_certificate_path else b""
         )
         agent_intermediate_key_path = (
             _secret_path("DGX_AGENT_INTERMEDIATE_KEY_FILE")
             if mode == "production" and agent_ca_provider == "builtin" else None
         )
-        agent_ca_credential = (
-            _secret("DGX_AGENT_CA_CREDENTIAL_FILE", production=True).encode()
-            if agent_enabled and agent_ca_provider == "step-ca" else b""
+        step_ca_enabled = agent_enabled and agent_ca_provider == "step-ca"
+        agent_ca_credential_path = _secret_path("DGX_AGENT_CA_CREDENTIAL_FILE") if step_ca_enabled else None
+        agent_ca_provisioner_public_jwk_path = (
+            _secret_path("DGX_AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE") if step_ca_enabled else None
         )
+        agent_ca_root_path = _secret_path("DGX_AGENT_CA_ROOT_FILE") if step_ca_enabled else None
+        agent_ca_url = os.environ.get("DGX_AGENT_CA_URL", "") if step_ca_enabled else ""
+        parsed_ca_url = urlsplit(agent_ca_url)
+        if step_ca_enabled and (
+            parsed_ca_url.scheme != "https" or not parsed_ca_url.hostname
+            or parsed_ca_url.path not in {"", "/"} or parsed_ca_url.query or parsed_ca_url.fragment
+            or parsed_ca_url.username is not None or parsed_ca_url.password is not None
+        ):
+            raise SettingsError("DGX_AGENT_CA_URL must be a fixed HTTPS origin")
+        agent_ca_provisioner_name = os.environ.get("DGX_AGENT_CA_PROVISIONER_NAME", "") if step_ca_enabled else ""
+        agent_ca_provisioner_kid = os.environ.get("DGX_AGENT_CA_PROVISIONER_KID", "") if step_ca_enabled else ""
+        if step_ca_enabled and (not agent_ca_provisioner_name or not agent_ca_provisioner_kid):
+            raise SettingsError("Smallstep provisioner name and key ID are required")
+        try:
+            agent_ca_timeout_seconds = float(os.environ.get("DGX_AGENT_CA_TIMEOUT_SECONDS", "3"))
+            agent_ca_max_response_bytes = int(os.environ.get("DGX_AGENT_CA_MAX_RESPONSE_BYTES", str(64 * 1024)))
+        except ValueError as error:
+            raise SettingsError("Smallstep timeout and response limit must be numeric") from error
+        if not 0 < agent_ca_timeout_seconds <= 30:
+            raise SettingsError("Smallstep timeout must be between zero and 30 seconds")
+        if not 1024 <= agent_ca_max_response_bytes <= 1024 * 1024:
+            raise SettingsError("Smallstep response limit must be between 1024 bytes and one MiB")
         agent_proxy_auth = (
             _agent_proxy_auth_secret("DGX_AGENT_PROXY_AUTH_FILE", production=True)
             if agent_enabled else b""
@@ -195,7 +232,16 @@ class Settings:
             agent_runtime=agent_runtime,
             agent_client_ca=agent_client_ca,
             agent_intermediate_certificate=agent_intermediate_certificate,
+            agent_intermediate_certificate_path=agent_intermediate_certificate_path,
             agent_intermediate_key_path=agent_intermediate_key_path,
-            agent_ca_credential=agent_ca_credential,
+            agent_ca_credential_path=agent_ca_credential_path,
+            agent_ca_provisioner_public_jwk_path=agent_ca_provisioner_public_jwk_path,
+            agent_ca_url=agent_ca_url,
+            agent_ca_root_path=agent_ca_root_path,
+            agent_ca_provisioner_name=agent_ca_provisioner_name,
+            agent_ca_provisioner_kid=agent_ca_provisioner_kid,
+            agent_ca_timeout_seconds=agent_ca_timeout_seconds,
+            agent_ca_max_response_bytes=agent_ca_max_response_bytes,
+            agent_artifact_root=Path(os.environ.get("DGX_AGENT_ARTIFACT_ROOT", "/state/agent-artifacts")),
             agent_proxy_auth=agent_proxy_auth,
         )

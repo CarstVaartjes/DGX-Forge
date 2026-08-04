@@ -32,6 +32,7 @@ def upgrade() -> None:
         sa.Column("grant_id", sa.String(length=36), nullable=False),
         sa.Column("node_id", sa.String(length=36), nullable=False),
         sa.Column("state", sa.String(length=32), nullable=False),
+        sa.Column("csr_pem", sa.Text(), nullable=False),
         sa.Column("csr_public_key_pem", sa.Text(), nullable=False),
         sa.Column("csr_public_key_fingerprint", sa.String(length=64), nullable=False),
         sa.Column("host_key_fingerprint", sa.String(length=512), nullable=False),
@@ -57,9 +58,11 @@ def upgrade() -> None:
     op.create_index("ix_agent_enrollments_node_id", "agent_enrollments", ["node_id"])
     op.create_index("ix_agent_enrollments_state", "agent_enrollments", ["state"])
     op.create_index("ix_agent_enrollments_created_at", "agent_enrollments", ["created_at"])
+    op.add_column("agent_certificates", sa.Column("ca_revoked_at", sa.DateTime(timezone=True)))
 
 
 def downgrade() -> None:
+    op.drop_column("agent_certificates", "ca_revoked_at")
     op.drop_index("ix_agent_enrollments_created_at", table_name="agent_enrollments")
     op.drop_index("ix_agent_enrollments_state", table_name="agent_enrollments")
     op.drop_index("ix_agent_enrollments_node_id", table_name="agent_enrollments")

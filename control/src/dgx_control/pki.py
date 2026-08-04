@@ -44,16 +44,20 @@ class CertificateAuthority(ABC):
     """Stable CA provider boundary; Smallstep can implement this interface."""
 
     @abstractmethod
-    def issue_node(self, node_id: str, public_key_pem: bytes, now: datetime) -> IssuedCertificate:
+    def issue_node(self, node_id: str, csr_pem: bytes, now: datetime) -> IssuedCertificate:
         """Issue a client certificate that represents exactly one node."""
 
     @abstractmethod
-    def renew_node(self, node_id: str, public_key_pem: bytes, now: datetime) -> IssuedCertificate:
+    def renew_node(self, node_id: str, csr_pem: bytes, now: datetime) -> IssuedCertificate:
         """Rotate a node certificate after its authenticated renewal request."""
 
     @abstractmethod
     def revocation_bundle(self, now: datetime) -> bytes:
         """Return the intermediate's current signed CRL."""
+
+    @abstractmethod
+    def revoke_node(self, serial: str, now: datetime) -> None:
+        """Revoke one decimal certificate serial; repeated calls are safe in effect."""
 
 
 class BuiltinCertificateAuthority(CertificateAuthority):
@@ -77,12 +81,12 @@ class BuiltinCertificateAuthority(CertificateAuthority):
         self._certificate = certificate
         self._validate_intermediate(datetime.now(UTC))
 
-    def issue_node(self, node_id: str, public_key_pem: bytes, now: datetime) -> IssuedCertificate:
+    def issue_node(self, node_id: str, csr_pem: bytes, now: datetime) -> IssuedCertificate:
         timestamp = _utc_timestamp(now)
         self._validate_intermediate(timestamp)
         if _NODE_ID.fullmatch(node_id) is None:
             raise ValueError("node ID must be a canonical spk_<32 lowercase hex characters> value")
-        public_key = _load_node_public_key(public_key_pem)
+        public_key = _load_node_csr(node_id, csr_pem).public_key()
         not_after = timestamp + _CERTIFICATE_LIFETIME
         certificate = (
             x509.CertificateBuilder()
@@ -126,8 +130,15 @@ class BuiltinCertificateAuthority(CertificateAuthority):
             not_after=not_after,
         )
 
-    def renew_node(self, node_id: str, public_key_pem: bytes, now: datetime) -> IssuedCertificate:
-        return self.issue_node(node_id, public_key_pem, now)
+    def renew_node(self, node_id: str, csr_pem: bytes, now: datetime) -> IssuedCertificate:
+        return self.issue_node(node_id, csr_pem, now)
+
+    def revoke_node(self, serial: str, now: datetime) -> None:
+        # The built-in provider has no durable CA database. DGX-Forge's local
+        # certificate row is the immediate revocation authority for ingress.
+        if not serial.isdecimal() or int(serial) <= 0:
+            raise ValueError("certificate serial must be a positive decimal integer")
+        _utc_timestamp(now)
 
     def revocation_bundle(self, now: datetime) -> bytes:
         timestamp = _utc_timestamp(now)
@@ -184,14 +195,31 @@ def _raw_public_key(key: ed25519.Ed25519PublicKey) -> bytes:
     return key.public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
 
 
-def _load_node_public_key(public_key_pem: bytes) -> ed25519.Ed25519PublicKey:
+def _load_node_csr(node_id: str, csr_pem: bytes) -> x509.CertificateSigningRequest:
     try:
-        public_key = serialization.load_pem_public_key(public_key_pem)
-    except ValueError as error:
-        raise ValueError("node public key must be a PEM-encoded Ed25519 key") from error
+        request = x509.load_pem_x509_csr(csr_pem)
+    except (TypeError, ValueError) as error:
+        raise ValueError("node CSR must be valid PEM") from error
+    if not request.is_signature_valid:
+        raise ValueError("node CSR signature is invalid")
+    expected_subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, node_id)])
+    if request.subject != expected_subject:
+        raise ValueError("node CSR subject does not match node identity")
+    if len(request.extensions) != 1:
+        raise ValueError("node CSR must contain only the node URI SAN extension")
+    try:
+        sans = request.extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+    except x509.ExtensionNotFound as error:
+        raise ValueError("node CSR must contain the node URI SAN") from error
+    expected_sans = x509.SubjectAlternativeName(
+        [x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{node_id}")]
+    )
+    if sans != expected_sans:
+        raise ValueError("node CSR URI SAN does not match node identity")
+    public_key = request.public_key()
     if not isinstance(public_key, ed25519.Ed25519PublicKey):
-        raise ValueError("node public key must be Ed25519")
-    return public_key
+        raise ValueError("node CSR public key must be Ed25519")
+    return request
 
 
 def _utc_timestamp(value: datetime) -> datetime:

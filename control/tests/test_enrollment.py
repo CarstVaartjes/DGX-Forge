@@ -41,6 +41,8 @@ class RecordingAuthority(CertificateAuthority):
     def __init__(self) -> None:
         self.calls: list[tuple[str, bytes, datetime]] = []
         self._serial = 0
+        self.revocations: list[str] = []
+        self.revoke_failures: set[str] = set()
 
     def issue_node(self, node_id: str, public_key_pem: bytes, now: datetime) -> IssuedCertificate:
         self.calls.append((node_id, public_key_pem, now))
@@ -61,12 +63,20 @@ class RecordingAuthority(CertificateAuthority):
     def revocation_bundle(self, now: datetime) -> bytes:
         return b"revocation-bundle"
 
+    def revoke_node(self, serial: str, now: datetime) -> None:
+        self.revocations.append(serial)
+        if serial in self.revoke_failures:
+            raise RuntimeError("provider response deliberately lost")
 
-def csr() -> bytes:
+
+def csr(node_id: str = NODE_ID) -> bytes:
     key = ed25519.Ed25519PrivateKey.generate()
     return (
         x509.CertificateSigningRequestBuilder()
-        .subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "untrusted")]))
+        .subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, node_id)]))
+        .add_extension(x509.SubjectAlternativeName([
+            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{node_id}")
+        ]), critical=False)
         .sign(key, algorithm=None)
         .public_bytes(serialization.Encoding.PEM)
     )
@@ -86,7 +96,10 @@ def rsa_csr() -> bytes:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     return (
         x509.CertificateSigningRequestBuilder()
-        .subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, "untrusted")]))
+        .subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_ID)]))
+        .add_extension(x509.SubjectAlternativeName([
+            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_ID}")
+        ]), critical=False)
         .sign(key, hashes.SHA256())
         .public_bytes(serialization.Encoding.PEM)
     )
@@ -128,7 +141,7 @@ def service(tmp_path):
 
 
 def enroll(service: EnrollmentService, *, node_id: str = NODE_ID, request: bytes | None = None):
-    request = request or csr()
+    request = request or csr(node_id)
     grant = service.create(node_id, "admin", 600)
     return service.submit(grant.token, request, evidence(request, node_id=node_id))
 
@@ -267,14 +280,14 @@ def test_renewal_rotates_certificate_for_same_node_and_rejects_bad_serial_csr_or
 
     assert renewed.node_id == NODE_ID
     assert renewed.serial != issued.serial
-    assert authority.calls[-1][1] == x509.load_pem_x509_csr(renewed_csr).public_key().public_bytes(
-        serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+    assert authority.calls[-1][1] == x509.load_pem_x509_csr(renewed_csr).public_bytes(
+        serialization.Encoding.PEM
     )
     with sessions() as session:
         original = session.get(AgentCertificate, issued.serial)
         assert original is not None and original.revoked_at is not None
     with pytest.raises(EnrollmentDenied, match="serial"):
-        enrollment.renew(OTHER_NODE_ID, renewed.serial, csr())
+        enrollment.renew(OTHER_NODE_ID, renewed.serial, csr(OTHER_NODE_ID))
     with pytest.raises(EnrollmentDenied, match="CSR"):
         enrollment.renew(NODE_ID, renewed.serial, b"not a csr")
     with sessions.begin() as session:
@@ -295,6 +308,35 @@ def test_revoked_identity_denies_renewal_immediately(service) -> None:
 
     with pytest.raises(EnrollmentDenied, match="retired|revoked"):
         enrollment.renew(NODE_ID, issued.serial, csr())
+
+
+def test_local_revocation_precedes_remote_and_retry_calls_only_unconfirmed_serials(service) -> None:
+    enrollment, sessions, clock, authority = service
+    issued = enrollment.approve(enroll(enrollment).id, "admin")
+    with sessions.begin() as session:
+        session.add(AgentCertificate(
+            serial="serial-2", node_id=NODE_ID, fingerprint="fingerprint-2",
+            not_before=clock.now, not_after=clock.now + timedelta(hours=24),
+        ))
+    authority.revoke_failures.add("serial-2")
+
+    with pytest.raises(EnrollmentDenied, match="remote CA revocation is uncertain"):
+        enrollment.revoke_node(NODE_ID, "admin")
+
+    with sessions() as session:
+        node = session.get(AgentNode, NODE_ID)
+        first = session.get(AgentCertificate, issued.serial)
+        second = session.get(AgentCertificate, "serial-2")
+        assert node is not None and node.state == "retired" and node.revoked_at is not None
+        assert first is not None and first.revoked_at is not None and first.ca_revoked_at is not None
+        assert second is not None and second.revoked_at is not None and second.ca_revoked_at is None
+    assert authority.revocations == [issued.serial, "serial-2"]
+
+    authority.revoke_failures.clear()
+    enrollment.revoke_node(NODE_ID, "admin")
+    assert authority.revocations == [issued.serial, "serial-2", "serial-2"]
+    with sessions() as session:
+        assert session.get(AgentCertificate, "serial-2").ca_revoked_at is not None  # type: ignore[union-attr]
 
 
 @pytest.fixture(scope="module")

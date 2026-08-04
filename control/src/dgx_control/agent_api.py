@@ -27,7 +27,7 @@ from starlette.responses import JSONResponse, StreamingResponse
 
 from .agent_jobs import AgentJobService, StaleAgentAttempt
 from .auth import AgentIdentity, Actor, agent_identity_from_scope
-from .enrollment import EnrollmentDenied, EnrollmentService
+from .enrollment import EnrollmentDenied, EnrollmentService, RemoteRevocationUncertain
 from .models import AgentCertificate, AgentEnrollment, AgentNode, AgentOperation
 
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -552,16 +552,14 @@ def install_agent_routes(
     def revoke(node_id: str, authenticated: Actor = Depends(actor_dependency)) -> Response:
         _require_administrator(authenticated, "/api/v1/agents/nodes/{node_id}/revoke")
         required = _require_services(services)
-        now = _now(required.clock())
-        with required.sessions.begin() as session:
-            node = session.get(AgentNode, node_id)
-            if node is None:
-                raise HTTPException(status_code=404, detail="node not found")
-            node.state = "retired"
-            node.revoked_at = now
-            for certificate in session.scalars(select(AgentCertificate).where(AgentCertificate.node_id == node_id)):
-                if certificate.revoked_at is None:
-                    certificate.revoked_at = now
+        try:
+            required.enrollment.revoke_node(node_id, authenticated.subject)
+        except RemoteRevocationUncertain as error:
+            raise HTTPException(status_code=503, detail=str(error)) from None
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        except EnrollmentDenied as error:
+            raise HTTPException(status_code=404, detail=str(error)) from None
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @agent.post("/enroll", status_code=status.HTTP_202_ACCEPTED)
