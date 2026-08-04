@@ -1,0 +1,10 @@
+{
+  "version": "0.0.1",
+  "services": {
+    "svc:dgx-forge": {
+      "endpoints": {
+        "tcp:443": "http://caddy:8080"
+      }
+    }
+  }
+}

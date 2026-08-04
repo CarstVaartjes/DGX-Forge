@@ -25,6 +25,7 @@ def _rendered() -> dict:
         "LITELLM_UPSTREAM_KEY_FILE": "/dev/null",
         "LITELLM_DATABASE_URL_FILE": "/dev/null",
         "STEP_CA_IMAGE": "smallstep/step-ca:0.30.2@sha256:" + "1" * 64,
+        "TAILSCALE_IMAGE": "tailscale/tailscale:v1.98.8@sha256:d54b2e6a9c09f0e5ec52e82b9ad4af3d446b54a7c08075e92f11c39dd410105f",
         "AGENT_CLIENT_CA_FILE": "/dev/null",
         "AGENT_INTERMEDIATE_CERTIFICATE_FILE": "/dev/null",
         "AGENT_PROXY_AUTH_FILE": "/dev/null",
@@ -40,6 +41,11 @@ def _rendered() -> dict:
         "DGX_AGENT_HOSTNAME": "agents.test.example",
         "DGX_REGISTRY_HOSTNAME": "registry.test.example",
         "DGX_MANAGEMENT_CIDRS": "10.0.0.0/24",
+        "DGX_DIRECT_FABRIC_CIDRS": "192.168.100.0/24,192.168.101.0/24",
+        "NAS_LAN_IP": "10.0.0.2",
+        "DGX_BACKEND_PORT": "8443",
+        "TAILSCALE_OAUTH_CLIENT_ID_FILE": "/dev/null",
+        "TAILSCALE_OAUTH_CLIENT_SECRET_FILE": "/dev/null",
     }
     result = subprocess.run(
         ["docker", "compose", "-f", str(root / "deploy/compose/compose.yaml"), "-f", str(root / "deploy/compose/compose.step-ca.yaml"), "config", "--format", "json"],
@@ -58,7 +64,7 @@ def test_only_caddy_publishes_ports_and_images_are_digest_pinned() -> None:
 def test_database_has_only_data_network_and_ingress_is_segmented() -> None:
     services = _rendered()["services"]
     assert set(services["postgres"]["networks"]) == {"data"}
-    assert set(services["caddy"]["networks"]) == {"agent-proxy", "ingress", "registry-edge"}
+    assert set(services["caddy"]["networks"]) == {"agent-proxy", "ingress", "registry-edge", "tailnet-web-edge"}
     assert set(services["registry"]["networks"]) == {"registry-edge", "registry-publisher"}
     assert set(services["control-worker"]["networks"]) == {"application", "cluster-egress", "data"}
     assert set(services["control-api"]["networks"]) == {"agent-proxy", "application", "ca", "data"}

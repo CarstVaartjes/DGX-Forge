@@ -1,3 +1,6 @@
+include:
+  - tailscale/compose.yaml
+
 name: ${COMPOSE_PROJECT_NAME:-dgx-forge-control}
 
 x-bounded-logging: &bounded-logging
@@ -164,7 +167,7 @@ services:
       DGX_AGENT_HOSTNAME: ${DGX_AGENT_HOSTNAME:?set Caddy agent hostname}
       DGX_REGISTRY_HOSTNAME: ${DGX_REGISTRY_HOSTNAME:?set Caddy registry hostname}
     secrets: [agent-client-ca, agent-proxy-auth]
-    networks: [ingress, agent-proxy, registry-edge]
+    networks: [ingress, agent-proxy, registry-edge, tailnet-web-edge]
     depends_on:
       control-api: {condition: service_started}
       registry: {condition: service_healthy}

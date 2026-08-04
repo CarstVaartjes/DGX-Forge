@@ -1,0 +1,28 @@
+{
+  "tagOwners": {
+    "tag:dgx-gateway": ["autogroup:admin"]
+  },
+  "acls": [],
+  "grants": [
+    {
+      "src": ["autogroup:admin"],
+      "dst": ["svc:dgx-forge"],
+      "ip": ["tcp:443"]
+    }
+  ],
+  "autoApprovers": {
+    "services": {
+      "svc:dgx-forge": ["tag:dgx-gateway"]
+    }
+  },
+  "tests": [
+    {
+      "src": "autogroup:admin",
+      "accept": ["svc:dgx-forge:443"]
+    },
+    {
+      "src": "autogroup:member",
+      "deny": ["svc:dgx-forge:443"]
+    }
+  ]
+}

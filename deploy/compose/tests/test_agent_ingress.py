@@ -17,6 +17,7 @@ def _environment() -> dict[str, str]:
         "PROMETHEUS_IMAGE": "prom/prometheus:1@sha256:" + "e" * 64,
         "GRAFANA_IMAGE": "grafana/grafana:1@sha256:" + "f" * 64,
         "STEP_CA_IMAGE": "smallstep/step-ca:0.30.2@sha256:" + "1" * 64,
+        "TAILSCALE_IMAGE": "tailscale/tailscale:v1.98.8@sha256:d54b2e6a9c09f0e5ec52e82b9ad4af3d446b54a7c08075e92f11c39dd410105f",
         "REPOSITORY_PATH": "/srv/dgx-forge/repository",
         "DATABASE_URL_FILE": "/dev/null",
         "POSTGRES_PASSWORD_FILE": "/dev/null",
@@ -44,6 +45,11 @@ def _environment() -> dict[str, str]:
         "DGX_REGISTRY_HOSTNAME": "registry.test.example",
         "DGX_AGENT_PROXY_AUTH": "test-proxy-secret",
         "DGX_MANAGEMENT_CIDRS": "10.0.0.0/24",
+        "DGX_DIRECT_FABRIC_CIDRS": "192.168.100.0/24,192.168.101.0/24",
+        "NAS_LAN_IP": "10.0.0.2",
+        "DGX_BACKEND_PORT": "8443",
+        "TAILSCALE_OAUTH_CLIENT_ID_FILE": "/dev/null",
+        "TAILSCALE_OAUTH_CLIENT_SECRET_FILE": "/dev/null",
     }
 
 
@@ -367,7 +373,12 @@ def test_rendered_production_boundary_has_only_caddy_public_and_step_ca_private(
     rendered = _rendered()
     services = rendered["services"]
     assert {name for name, service in services.items() if service.get("ports")} == {"caddy"}
-    assert set(services["caddy"]["networks"]) == {"agent-proxy", "ingress", "registry-edge"}
+    assert set(services["caddy"]["networks"]) == {
+        "agent-proxy",
+        "ingress",
+        "registry-edge",
+        "tailnet-web-edge",
+    }
     assert set(services["control-api"]["networks"]) == {"agent-proxy", "application", "ca", "data"}
     assert rendered["networks"]["agent-proxy"]["internal"] is True
     assert "step-ca" in services
