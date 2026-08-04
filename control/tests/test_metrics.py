@@ -1,7 +1,8 @@
-from dgx_control.metrics import MetricsRegistry
+import pytest
 from dgx_control.api import create_app
 from dgx_control.audit import MemoryAuditStore
 from dgx_control.auth import TokenCodec
+from dgx_control.metrics import MetricsRegistry
 from fastapi.testclient import TestClient
 
 
@@ -42,6 +43,17 @@ def test_invalid_node_id_is_rejected() -> None:
         assert "node ID" in str(error)
     else:
         raise AssertionError("unsafe node label was accepted")
+
+
+def test_nonboolean_node_readiness_is_a_type_error() -> None:
+    with pytest.raises(TypeError, match="boolean"):
+        MetricsRegistry().update_node(
+            "spk_00000000000000000000000000000001",
+            ready=1,
+            memory_available_bytes=1,
+            disk_available_bytes=1,
+            probe_age_seconds=1,
+        )
 
 
 def test_metrics_endpoint_is_separately_authenticated() -> None:

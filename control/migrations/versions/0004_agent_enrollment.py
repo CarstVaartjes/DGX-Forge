@@ -1,8 +1,7 @@
 """Persist one-time Spark agent enrollment evidence and certificates."""
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "0004_agent_enrollment"
 down_revision = "0003_retry_disposition"

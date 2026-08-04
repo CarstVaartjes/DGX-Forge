@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import grp
 import hashlib
 import json
@@ -453,7 +454,8 @@ def test_reinstall_suppresses_token_only_for_durable_node_bound_active_identity(
     installed_token = host / "var/lib/dgx-forge-agent/bootstrap/enrollment-token"
     credentials = host / "var/lib/dgx-forge-agent/credentials"
     generation = credentials / "generation-00000001"
-    generation.mkdir(parents=True, mode=0o700)
+    credentials.mkdir(mode=0o700)
+    generation.mkdir(mode=0o700)
     generation.chmod(0o700)
     _write(credentials / "active.json", b'{"generation":1}', 0o600)
     _write(
@@ -475,13 +477,58 @@ def test_private_key_or_mixed_ca_input_is_rejected_before_target_mutation(
 ) -> None:
     ca = installer_inputs["paths"]["ca"]
     key = installer_inputs["paths"]["ca_key"]
-    ca.write_bytes(key.read_bytes())
+    private_der = subprocess.run(
+        ["openssl", "pkey", "-in", str(key), "-outform", "DER"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    ca.write_bytes(
+        b"-----BEGIN CERTIFICATE-----\n"
+        + base64.encodebytes(private_der)
+        + b"-----END CERTIFICATE-----\n"
+    )
     ca.chmod(0o644)
 
     rejected = _run_installer(installer_inputs)
 
     assert rejected.returncode != 0
-    assert "public CA bundle" in rejected.stderr
+    assert "public CA" in rejected.stderr
+    assert not installer_inputs["host"].exists()
+
+
+def test_non_ca_x509_certificate_is_rejected_before_target_mutation(
+    installer_inputs: dict[str, object], tmp_path: Path
+) -> None:
+    ca = installer_inputs["paths"]["ca"]
+    leaf_key = tmp_path / "leaf-key.pem"
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-subj",
+            "/CN=not-a-ca",
+            "-addext",
+            "basicConstraints=critical,CA:FALSE",
+            "-days",
+            "1",
+            "-keyout",
+            str(leaf_key),
+            "-out",
+            str(ca),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    ca.chmod(0o644)
+
+    rejected = _run_installer(installer_inputs)
+
+    assert rejected.returncode != 0
+    assert "public CA certificate is invalid" in rejected.stderr
     assert not installer_inputs["host"].exists()
 
 
@@ -512,6 +559,20 @@ def test_file_publication_resists_parent_and_temporary_inode_substitution(
             assert recovered.returncode == 0, recovered.stderr
         else:
             break
+
+
+def test_root_publication_rejects_untrusted_existing_parent(
+    installer_inputs: dict[str, object],
+) -> None:
+    libexec = installer_inputs["host"] / "usr/libexec"
+    libexec.mkdir(parents=True)
+    libexec.chmod(0o777)
+
+    rejected = _run_installer(installer_inputs)
+
+    assert rejected.returncode != 0
+    assert "destination ancestry" in rejected.stderr
+    assert not (libexec / "dgx-agent-supervisor").exists()
 
 
 @pytest.mark.parametrize(

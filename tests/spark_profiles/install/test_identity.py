@@ -111,3 +111,13 @@ def test_identity_contract_rejects_malformed_digests(digest: str) -> None:
             host_key_fingerprints=HOST_KEYS,
             requires_console_repair=False,
         )
+
+
+def test_identity_contract_rejects_nonboolean_repair_flag_as_type_error() -> None:
+    with pytest.raises(TypeError, match="boolean"):
+        IdentityObservation(
+            product_serial_sha256=SERIAL,
+            machine_id_sha256=MACHINE,
+            host_key_fingerprints=HOST_KEYS,
+            requires_console_repair=1,
+        )

@@ -1,22 +1,20 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import hashlib
 import json
-from pathlib import Path
 import shutil
 import subprocess
 import tomllib
 import uuid
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from dgx_agent_protocol import AgentOperation, AgentProtocolError
 from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
 from dgx_control.models import AgentCertificate, AgentNode, Base, Job
-
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 ROOT = Path(__file__).resolve().parents[3]
 NODE_A = "spk_" + "a" * 32
@@ -219,7 +217,10 @@ def test_agent_environment_installs_the_verified_protocol_wheel() -> None:
 def test_root_context_image_installs_the_verified_protocol_wheel() -> None:
     if shutil.which("docker") is None:
         pytest.skip("Docker CLI is unavailable")
-    if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
+    if (
+        subprocess.run(["docker", "info"], capture_output=True, check=False).returncode
+        != 0
+    ):
         pytest.skip("Docker daemon is unavailable")
     image = "dgx-control:test-protocol-wheel"
     build = subprocess.run(
@@ -232,6 +233,7 @@ def test_root_context_image_installs_the_verified_protocol_wheel() -> None:
         cwd=ROOT,
         capture_output=True,
         text=True,
+        check=False,
     )
     assert build.returncode == 0, build.stderr
     result = subprocess.run(
@@ -263,7 +265,10 @@ def test_root_context_image_installs_the_verified_protocol_wheel() -> None:
 def test_root_context_cannot_copy_reincluded_credential_artifacts(relative_path: str) -> None:
     if shutil.which("docker") is None:
         pytest.skip("Docker CLI is unavailable")
-    if subprocess.run(["docker", "info"], capture_output=True).returncode != 0:
+    if (
+        subprocess.run(["docker", "info"], capture_output=True, check=False).returncode
+        != 0
+    ):
         pytest.skip("Docker daemon is unavailable")
     artifact = ROOT / relative_path
     artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -275,6 +280,7 @@ def test_root_context_cannot_copy_reincluded_credential_artifacts(relative_path:
             input=f"FROM scratch\nCOPY {relative_path} /forbidden\n",
             capture_output=True,
             text=True,
+            check=False,
         )
     finally:
         artifact.unlink()

@@ -7,7 +7,8 @@ import json
 import os
 import re
 import tempfile
-from collections.abc import Callable, Mapping, Set
+from collections.abc import Callable, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -50,7 +51,7 @@ class RoutePublisher:
         self,
         root: Path,
         *,
-        allowed_upstreams: Set[str],
+        allowed_upstreams: AbstractSet[str],
         validate: Callable[[bytes], bool],
         apply: Callable[[bytes], None],
     ) -> None:

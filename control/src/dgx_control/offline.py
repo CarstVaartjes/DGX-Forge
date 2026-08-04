@@ -15,6 +15,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Sequence
 from pathlib import Path, PurePosixPath
+from typing import Self
 
 
 class OfflineConflict(RuntimeError):
@@ -30,7 +31,7 @@ class OfflineLock:
         self._path = path
         self._descriptor: int | None = None
 
-    def __enter__(self) -> "OfflineLock":
+    def __enter__(self) -> Self:
         if self._descriptor is not None:
             return self
         self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -57,7 +58,7 @@ class OnlineLock:
         self._path = path
         self._descriptor: int | None = None
 
-    def __enter__(self) -> "OnlineLock":
+    def __enter__(self) -> Self:
         self._path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         descriptor = os.open(self._path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
         fcntl.flock(descriptor, fcntl.LOCK_SH)
@@ -248,6 +249,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.command == "migrate":
                 from alembic import command
                 from alembic.config import Config
+
                 from .settings import Settings
 
                 settings = Settings.from_env_and_secrets()
@@ -256,7 +258,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 command.upgrade(config, "head")
                 return 0
             if args.command == "create-admin":
-                from datetime import UTC, datetime
                 from .db import build_engine, session_factory
                 from .models import User
                 from .settings import Settings

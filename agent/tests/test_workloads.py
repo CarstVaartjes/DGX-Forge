@@ -1,28 +1,26 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 import os
-from pathlib import Path
 import time
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
-import pytest
 import dgx_agent.workloads as workloads_module
-
+import pytest
+from dgx_agent.deadlines import MonotonicDeadline
+from dgx_agent.releases import ReleaseDescriptor
 from dgx_agent.workloads import (
+    CompiledAdapterPolicy,
     WorkloadAction,
     WorkloadDisposition,
     WorkloadEvidence,
     WorkloadInspection,
-    CompiledAdapterPolicy,
     WorkloadOperations,
     WorkloadRequest,
     WorkloadValidationError,
 )
-from dgx_agent.releases import ReleaseDescriptor
-from dgx_agent.deadlines import MonotonicDeadline
-
 
 BASE = {
     "schema_version": 1,
@@ -360,3 +358,24 @@ def test_adapter_stale_or_cross_operation_binding_is_never_accepted(
         "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
     )
     assert inspection.disposition is WorkloadDisposition.OPERATOR_INTERVENTION
+
+
+def test_inspection_does_not_mask_unexpected_programming_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    operations, _ = _installed_adapter(tmp_path)
+    monkeypatch.setattr(
+        operations,
+        "_open_adapter",
+        lambda *_args: (_ for _ in ()).throw(AssertionError("programming defect")),
+    )
+
+    with pytest.raises(AssertionError, match="programming defect"):
+        operations.inspect(
+            WorkloadRequest.parse(WorkloadAction.HEALTH, BASE),
+            datetime.now(UTC) + timedelta(seconds=2),
+            "11111111-1111-4111-8111-111111111111",
+            "22222222-2222-4222-8222-222222222222",
+            1,
+            "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        )

@@ -1,10 +1,10 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
+import pytest
 from dgx_control.dashboard import DashboardService
 from dgx_control.models import Base, Observation
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 class Repository:
@@ -13,6 +13,15 @@ class Repository:
         return type("Document", (), {"parsed": {"schema_version": 2, "nodes": {
             "spk_00000000000000000000000000000001": {"display_name": "Alpha", "hostname": "alpha", "lifecycle": "ready", "management": {"host": "alpha.local", "user": "admin", "port": 22}, "labels": {"zone": "lab"}}
         }}})()
+
+
+def test_dashboard_rejects_nonmapping_fleet_document_as_type_error() -> None:
+    class InvalidRepository(Repository):
+        def read_document(self, commit, path):
+            return type("Document", (), {"parsed": []})()
+
+    with pytest.raises(TypeError, match="node table"):
+        DashboardService(InvalidRepository(), None).fleet()
 
 
 def test_dashboard_joins_repository_fleet_with_latest_observation(tmp_path) -> None:

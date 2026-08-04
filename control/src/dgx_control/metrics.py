@@ -26,7 +26,7 @@ class MetricsRegistry:
         self._api_durations: dict[tuple[str, str], list[float]] = defaultdict(list)
 
     @staticmethod
-    def _number(value: int | float, field: str) -> float:
+    def _number(value: float, field: str) -> float:
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0 or not math.isfinite(value):
             raise ValueError(f"{field} must be a nonnegative finite number")
         return float(value)
@@ -35,7 +35,7 @@ class MetricsRegistry:
         if _NODE.fullmatch(node_id) is None:
             raise ValueError("metrics node ID must be a stable generated ID")
         if not isinstance(ready, bool):
-            raise ValueError("node readiness must be boolean")
+            raise TypeError("node readiness must be boolean")
         memory = int(self._number(memory_available_bytes, "memory"))
         disk = int(self._number(disk_available_bytes, "disk"))
         age = self._number(probe_age_seconds, "probe age")

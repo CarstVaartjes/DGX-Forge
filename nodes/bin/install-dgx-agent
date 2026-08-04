@@ -307,7 +307,26 @@ def _certificate_bundle(raw: bytes) -> bytes:
             der = base64.b64decode("".join(match.group(1).split()), validate=True)
         except (binascii.Error, ValueError) as error:
             raise InstallError("public CA certificate is invalid") from error
-        if len(der) < 64 or der[0] != 0x30:
+        parsed = subprocess.run(
+            [
+                "/usr/bin/openssl",
+                "x509",
+                "-inform",
+                "DER",
+                "-noout",
+                "-ext",
+                "basicConstraints",
+            ],
+            input=der,
+            capture_output=True,
+            check=False,
+            env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin"},
+        )
+        if parsed.returncode != 0 or not re.fullmatch(
+            rb"X509v3 Basic Constraints:(?: critical)?\n"
+            rb"[ \t]+CA:TRUE(?:, pathlen:[0-9]+)?\n?",
+            parsed.stdout,
+        ):
             raise InstallError("public CA certificate is invalid")
         certificates += 1
         position = match.end()
@@ -441,9 +460,11 @@ def _ensure_directory(path: Path, mode: int, owner: Identity) -> bool:
     descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     for index, component in enumerate(path.parts[1:]):
         final = index == len(path.parts[1:]) - 1
+        created = False
         try:
             os.mkdir(component, mode if final else 0o755, dir_fd=descriptor)
             changed = True
+            created = True
         except FileExistsError:
             pass
         try:
@@ -467,15 +488,17 @@ def _ensure_directory(path: Path, mode: int, owner: Identity) -> bool:
                 expected_uid,
                 expected_gid,
             ):
-                if _test_root() is None:
+                if created and _test_root() is None:
                     os.fchown(child, expected_uid, expected_gid)
                     changed = True
-                elif metadata.st_uid != expected_uid:
+                elif not created:
                     raise InstallError("destination ownership is unsafe")
             if stat.S_IMODE(metadata.st_mode) != expected_mode:
-                if final:
+                if final and created:
                     os.fchmod(child, expected_mode)
                     changed = True
+                elif final:
+                    raise InstallError("destination ancestry mode is unsafe")
                 elif stat.S_IMODE(metadata.st_mode) & 0o022 and not (
                     stat.S_IMODE(metadata.st_mode) & stat.S_ISVTX
                 ):
@@ -489,12 +512,14 @@ def _ensure_directory(path: Path, mode: int, owner: Identity) -> bool:
     return changed
 
 
-def _open_destination_directory(path: Path) -> int:
+def _open_destination_directory(
+    path: Path, *, final_owner: Identity, final_mode: int
+) -> int:
     if not path.is_absolute():
         raise InstallError("destination directory must be absolute")
     descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
     try:
-        for component in path.parts[1:]:
+        for index, component in enumerate(path.parts[1:]):
             child = os.open(
                 component,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -505,6 +530,22 @@ def _open_destination_directory(path: Path) -> int:
             metadata = os.fstat(descriptor)
             if not stat.S_ISDIR(metadata.st_mode):
                 raise InstallError("destination ancestry is unsafe")
+            final = index == len(path.parts[1:]) - 1
+            if final:
+                if (
+                    (metadata.st_uid, metadata.st_gid) != final_owner
+                    or stat.S_IMODE(metadata.st_mode) != final_mode
+                ):
+                    raise InstallError("destination ancestry is unsafe")
+            else:
+                allowed_uids = {0, final_owner[0]}
+                if _test_root() is not None:
+                    allowed_uids.add(os.geteuid())
+                mode = stat.S_IMODE(metadata.st_mode)
+                if metadata.st_uid not in allowed_uids or (
+                    mode & 0o022 and not mode & stat.S_ISVTX
+                ):
+                    raise InstallError("destination ancestry is unsafe")
         return descriptor
     except Exception:
         os.close(descriptor)
@@ -600,14 +641,18 @@ def _recover_file_staging(directory: int, leaf: str, owner: Identity) -> None:
         os.fsync(directory)
 
 
-def _publish_file(path: Path, raw: bytes, mode: int, owner: Identity) -> bool:
-    if not path.parent.exists():
-        _ensure_directory(
-            path.parent,
-            0o755 if owner == (0, 0) else 0o700,
-            (0, 0) if owner == (0, 0) else owner,
-        )
-    parent = _open_destination_directory(path.parent)
+def _publish_file(
+    path: Path,
+    raw: bytes,
+    mode: int,
+    owner: Identity,
+    *,
+    parent_mode: int = 0o700,
+) -> bool:
+    _ensure_directory(path.parent, parent_mode, owner)
+    parent = _open_destination_directory(
+        path.parent, final_owner=owner, final_mode=parent_mode
+    )
     _race("parent-opened", path, parent, "")
     _recover_file_staging(parent, path.name, owner)
     try:
@@ -674,7 +719,9 @@ def _publish_tree(
     root: Path, files: dict[str, tuple[bytes, int]], owner: Identity = (0, 0)
 ) -> bool:
     _ensure_directory(root.parent, 0o755, owner)
-    parent = _open_destination_directory(root.parent)
+    parent = _open_destination_directory(
+        root.parent, final_owner=owner, final_mode=0o755
+    )
     _race("parent-opened", root, parent, "")
     _recover_tree_staging(parent, root.name, owner)
     try:
@@ -1136,7 +1183,9 @@ def _enrollment_identity_is_active(
     state_root: Path, node_id: str, owner: Identity
 ) -> bool:
     try:
-        credentials = _open_destination_directory(state_root / "credentials")
+        credentials = _open_destination_directory(
+            state_root / "credentials", final_owner=owner, final_mode=0o700
+        )
         active_raw, active_metadata = _read_at(credentials, "active.json", 256)
         active = _json(active_raw, "active credential pointer", canonical=False)
         if (
@@ -1367,8 +1416,12 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
         changed |= _ensure_directory(etc, 0o755, root_owner)
         ca_path = etc / "ca.pem"
         tuf_path = etc / "tuf-root.json"
-        changed |= _publish_file(ca_path, snapshots["ca"], 0o644, root_owner)
-        changed |= _publish_file(tuf_path, snapshots["tuf"], 0o644, root_owner)
+        changed |= _publish_file(
+            ca_path, snapshots["ca"], 0o644, root_owner, parent_mode=0o755
+        )
+        changed |= _publish_file(
+            tuf_path, snapshots["tuf"], 0o644, root_owner, parent_mode=0o755
+        )
         changed |= _publish_file(
             etc / "nvidia-policy.json",
             _canonical(
@@ -1382,6 +1435,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
             ),
             0o644,
             root_owner,
+            parent_mode=0o755,
         )
         changed |= _publish_file(
             etc / "runtime-policy.json",
@@ -1397,16 +1451,24 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
             ),
             0o644,
             root_owner,
+            parent_mode=0o755,
         )
 
         supervisor_path = _destination("/usr/libexec/dgx-agent-supervisor")
-        changed |= _publish_file(supervisor_path, supervisor_raw, 0o555, root_owner)
+        changed |= _publish_file(
+            supervisor_path,
+            supervisor_raw,
+            0o555,
+            root_owner,
+            parent_mode=0o755,
+        )
         for unit_name, unit_raw in unit_snapshots.items():
             changed |= _publish_file(
                 _destination(f"/etc/systemd/system/{unit_name}"),
                 unit_raw,
                 0o644,
                 root_owner,
+                parent_mode=0o755,
             )
         supervisor_env = dict(os.environ)
         if _test_root() is not None:
@@ -1438,6 +1500,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
             _canonical(_configuration(site, arguments.node_id)),
             0o644,
             root_owner,
+            parent_mode=0o755,
         )
         systemctl = _systemctl_path()
         if systemctl is not None:

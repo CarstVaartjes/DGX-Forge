@@ -84,7 +84,11 @@ def test_operator_publisher_validates_project_and_digest_before_docker(tmp_path:
         "REGISTRY_REPOSITORY": "dgx/releases",
     }
     result = subprocess.run(
-        [str(script), str(tmp_path)], capture_output=True, text=True, env=environment
+        [str(script), str(tmp_path)],
+        capture_output=True,
+        text=True,
+        env=environment,
+        check=False,
     )
     assert result.returncode == 64
     assert "project name is invalid" in result.stderr.lower()
@@ -110,6 +114,7 @@ def test_operator_publisher_validates_project_and_digest_before_docker(tmp_path:
     valid = subprocess.run(
         [str(script), str(release)], capture_output=True, text=True,
         env=valid_environment,
+        check=False,
     )
     assert valid.returncode == 0, valid.stderr
     argv = record.read_text().splitlines()
@@ -128,5 +133,6 @@ def test_operator_publisher_validates_project_and_digest_before_docker(tmp_path:
         rejected = subprocess.run(
             [str(script), str(release)], capture_output=True, text=True,
             env=valid_environment | changed,
+            check=False,
         )
         assert rejected.returncode == 64

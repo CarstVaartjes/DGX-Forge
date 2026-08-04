@@ -15,10 +15,42 @@ PROJECT = Path(__file__).resolve().parents[1]
 SUPERVISOR = PROJECT / "supervisor" / "dgx-agent-supervisor"
 AGENT_UNIT = PROJECT / "systemd" / "dgx-forge-agent.service"
 SUPERVISOR_UNIT = PROJECT / "systemd" / "dgx-forge-agent-supervisor.service"
+SYSTEMD_VERIFY = PROJECT.parent / "scripts" / "verify-agent-systemd"
 
 
 def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_supervisor_entrypoint_ignores_writable_python_site_hooks(
+    tmp_path: Path,
+) -> None:
+    marker = tmp_path / "sitecustomize-ran"
+    python_path = tmp_path / "python-path"
+    python_path.mkdir()
+    (python_path / "sitecustomize.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('unsafe')\n"
+    )
+    home = tmp_path / "home"
+    user_site = home / (
+        f".local/lib/python{platform.python_version_tuple()[0]}."
+        f"{platform.python_version_tuple()[1]}/site-packages"
+    )
+    user_site.mkdir(parents=True)
+    (user_site / "sitecustomize.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('unsafe')\n"
+    )
+
+    result = subprocess.run(
+        [str(SUPERVISOR), "--help"],
+        env={**os.environ, "HOME": str(home), "PYTHONPATH": str(python_path)},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert not marker.exists()
 
 
 class SupervisorHost:
@@ -352,6 +384,41 @@ def test_activation_with_exact_readiness_commits_new_slot(
     assert state["activation_deadline"] is None
 
 
+def test_pending_slot_replacement_before_commit_rolls_back(
+    supervisor_host: SupervisorHost,
+) -> None:
+    a = supervisor_host.compile_agent("A", "slot-a")
+    b = supervisor_host.compile_agent("B", "slot-b")
+    assert (
+        supervisor_host.run(
+            "initialize", "--slot", "A", "--sha256", _digest(a)
+        ).returncode
+        == 0
+    )
+    assert (
+        supervisor_host.run(
+            "activate", "--slot", "B", "--sha256", _digest(b)
+        ).returncode
+        == 0
+    )
+    pending = supervisor_host.state()
+    supervisor_host.readiness(
+        generation=int(pending["generation"]), slot="B", digest=_digest(b)
+    )
+    replacement = b.with_name(".dgx-forge-agent.commit-race")
+    replacement.write_bytes(a.read_bytes())
+    replacement.chmod(0o555)
+    supervisor_host.environment["DGX_SUPERVISOR_SWAP_SLOT_BEFORE_COMMIT_TEST"] = "1"
+
+    supervised = supervisor_host.run("supervise")
+
+    assert supervised.returncode != 0
+    state = supervisor_host.state()
+    assert state["active_slot"] == "A"
+    assert state["expected_sha256"] == _digest(a)
+    assert state["rollback_performed"] is True
+
+
 def test_readiness_replacement_during_consumption_is_not_unlinked(
     supervisor_host: SupervisorHost,
 ) -> None:
@@ -388,6 +455,54 @@ def test_readiness_replacement_during_consumption_is_not_unlinked(
     )
     replacement.chmod(0o600)
     supervisor_host.environment["DGX_SUPERVISOR_SWAP_READINESS_TEST"] = "1"
+
+    supervised = supervisor_host.run("supervise")
+
+    assert supervised.returncode == 0, supervised.stderr
+    assert supervisor_host.state()["status"] == "stable"
+    assert json.loads(supervisor_host.readiness_path.read_text())["generation"] == (
+        generation - 1
+    )
+
+
+def test_readiness_replacement_after_identity_check_survives(
+    supervisor_host: SupervisorHost,
+) -> None:
+    a = supervisor_host.compile_agent("A", "slot-a")
+    b = supervisor_host.compile_agent("B", "slot-b")
+    assert (
+        supervisor_host.run(
+            "initialize", "--slot", "A", "--sha256", _digest(a)
+        ).returncode
+        == 0
+    )
+    assert (
+        supervisor_host.run(
+            "activate", "--slot", "B", "--sha256", _digest(b)
+        ).returncode
+        == 0
+    )
+    pending = supervisor_host.state()
+    generation = int(pending["generation"])
+    supervisor_host.readiness(generation=generation, slot="B", digest=_digest(b))
+    replacement = supervisor_host.readiness_path.with_name("replacement.json")
+    replacement.write_text(
+        json.dumps(
+            {
+                "generation": generation - 1,
+                "schema_version": 1,
+                "sha256": _digest(b),
+                "slot": "B",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
+    replacement.chmod(0o600)
+    supervisor_host.environment[
+        "DGX_SUPERVISOR_SWAP_READINESS_AFTER_STAT_TEST"
+    ] = "1"
 
     supervised = supervisor_host.run("supervise")
 
@@ -603,6 +718,12 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
     assert effective[SUPERVISOR_UNIT.name]["PrivateNetwork"] is True
     assert effective[SUPERVISOR_UNIT.name]["NoNewPrivileges"] is True
     assert effective[SUPERVISOR_UNIT.name]["ProtectSystem"] is True
+    assert (
+        effective[SUPERVISOR_UNIT.name][
+            "CapabilityBoundingSet_CAP_CHOWN_FSETID_SETFCAP"
+        ]
+        is False
+    )
     agent = AGENT_UNIT.read_text()
     supervisor = SUPERVISOR_UNIT.read_text()
     for literal in (
@@ -628,10 +749,76 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
         "ExecStart=/usr/libexec/dgx-agent-supervisor supervise",
         "UMask=0077",
         "NoNewPrivileges=yes",
-        "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE",
+        "CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE",
         "AmbientCapabilities=",
         "PrivateNetwork=yes",
         "ProtectSystem=strict",
     ):
         assert literal in supervisor
     assert "User=" not in supervisor
+
+
+def test_agent_effective_device_policy_is_closed_and_read_only() -> None:
+    analyzed = subprocess.run(
+        [
+            "systemd-analyze",
+            "security",
+            "--offline=yes",
+            "--json=short",
+            str(AGENT_UNIT),
+        ],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert analyzed.returncode == 0, analyzed.stderr
+    assessments = {
+        assessment["json_field"]: assessment
+        for assessment in json.loads(analyzed.stdout)
+    }
+    assert assessments["PrivateDevices"]["set"] is True
+    device_acl = assessments["DeviceAllow"]["description"].split(": ", 1)[1]
+    assert set(device_acl.split()) == {
+        "/dev/nvidia-caps/nvidia-cap2:r",
+        "/dev/nvidia-modeset:r",
+        "/dev/nvidia-uvm-tools:r",
+        "/dev/nvidia-uvm:r",
+        "/dev/nvidia0:r",
+        "/dev/nvidiactl:r",
+        "char-rtc:r",
+    }
+    directives = AGENT_UNIT.read_text().splitlines()
+    assert "DevicePolicy=closed" in directives
+    bind = next(
+        line.removeprefix("BindReadOnlyPaths=").split()
+        for line in directives
+        if line.startswith("BindReadOnlyPaths=")
+    )
+    assert set(bind) == {
+        "-/dev/nvidia-caps/nvidia-cap2",
+        "-/dev/nvidia-modeset",
+        "-/dev/nvidia-uvm-tools",
+        "-/dev/nvidia-uvm",
+        "-/dev/nvidia0",
+        "-/dev/nvidiactl",
+    }
+
+
+def test_installed_systemd_harness_verifies_units_by_installed_name() -> None:
+    assert SYSTEMD_VERIFY.is_file()
+
+    verified = subprocess.run(
+        [str(SYSTEMD_VERIFY), "--json"],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert verified.returncode == 0, verified.stderr
+    report = json.loads(verified.stdout)
+    assert report["verify"] == "passed"
+    assert set(report["units"]) == {
+        "dgx-forge-agent.service",
+        "dgx-forge-agent-supervisor.service",
+    }
+    assert all(unit["exposure"] == "OK" for unit in report["units"].values())

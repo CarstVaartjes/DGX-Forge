@@ -1,9 +1,11 @@
-#!/usr/bin/python3
+#!/usr/bin/python3 -I
 """Stable, path-closed A/B launcher and rollback coordinator."""
 
 from __future__ import annotations
 
 import argparse
+import ctypes
+import errno
 import fcntl
 import hashlib
 import json
@@ -119,6 +121,7 @@ def _systemctl() -> str:
 STATE_ROOT = "/var/lib/dgx-forge-agent-supervisor"
 SLOT_ROOT = "/opt/dgx-forge/agent-slots"
 RUNTIME_ROOT = "/run/dgx-forge-agent"
+READINESS_QUARANTINE_ROOT = "/run/dgx-forge-agent-supervisor"
 
 
 def _canonical(value: object) -> bytes:
@@ -573,6 +576,89 @@ def activate(slot: str, digest: str) -> int:
     return 0
 
 
+def _rename_noreplace(
+    source_directory: int,
+    source: str,
+    destination_directory: int,
+    destination: str,
+) -> None:
+    renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+    if renameat2 is None:
+        raise SupervisorError("atomic readiness quarantine is unavailable")
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    renameat2.restype = ctypes.c_int
+    if (
+        renameat2(
+            source_directory,
+            os.fsencode(source),
+            destination_directory,
+            os.fsencode(destination),
+            1,
+        )
+        != 0
+    ):
+        value = ctypes.get_errno()
+        if value == errno.ENOENT:
+            raise FileNotFoundError(value, os.strerror(value), source)
+        if value == errno.EEXIST:
+            raise FileExistsError(value, os.strerror(value), destination)
+        raise SupervisorError("readiness marker cannot be quarantined")
+
+
+def _readiness_quarantine_directory() -> int:
+    path = _path(READINESS_QUARANTINE_ROOT)
+    if _test_root() and not path.parent.exists():
+        _mkdirs(path.parent, 0o755)
+    parent = _open_directory_ancestry(path.parent)
+    try:
+        try:
+            os.mkdir(path.name, 0o700, dir_fd=parent)
+            os.fsync(parent)
+        except FileExistsError:
+            pass
+        directory = os.open(
+            path.name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent,
+        )
+        _trusted(os.fstat(directory), 0o700, regular=False)
+        return directory
+    except Exception:
+        if "directory" in locals():
+            os.close(directory)
+        raise
+    finally:
+        os.close(parent)
+
+
+def _publish_readiness_replacement_for_test(directory: int) -> None:
+    configured = any(
+        os.environ.get(name) == "1"
+        for name in (
+            "DGX_SUPERVISOR_SWAP_READINESS_TEST",
+            "DGX_SUPERVISOR_SWAP_READINESS_AFTER_STAT_TEST",
+        )
+    )
+    if not configured:
+        return
+    try:
+        os.rename(
+            "replacement.json",
+            "readiness.json",
+            src_dir_fd=directory,
+            dst_dir_fd=directory,
+        )
+        os.fsync(directory)
+    except OSError as error:
+        raise SupervisorError("readiness race hook failed") from error
+
+
 def _read_readiness(state: dict[str, Any]) -> bool:
     root = _path(RUNTIME_ROOT)
     expected_owner = _owner() if _test_root() else pwd.getpwnam("dgx-agent").pw_uid
@@ -580,13 +666,25 @@ def _read_readiness(state: dict[str, Any]) -> bool:
         directory = _open_directory_ancestry(root, final_owner=expected_owner)
     except FileNotFoundError:
         return False
+    quarantine = _readiness_quarantine_directory()
+    quarantine_name = f"readiness.{secrets.token_hex(12)}.consumed"
     descriptor = -1
-    safe_metadata: os.stat_result | None = None
     try:
+        try:
+            _rename_noreplace(
+                directory,
+                "readiness.json",
+                quarantine,
+                quarantine_name,
+            )
+        except FileNotFoundError:
+            return False
+        os.fsync(directory)
+        os.fsync(quarantine)
         descriptor = os.open(
-            "readiness.json",
+            quarantine_name,
             os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
-            dir_fd=directory,
+            dir_fd=quarantine,
         )
         metadata = os.fstat(descriptor)
         runtime_metadata = os.fstat(directory)
@@ -602,7 +700,6 @@ def _read_readiness(state: dict[str, Any]) -> bool:
             or metadata.st_nlink != 1
         ):
             raise SupervisorError("readiness marker is unsafe")
-        safe_metadata = metadata
         if metadata.st_size > 4096:
             raise SupervisorError("readiness marker is too large")
         raw = os.read(descriptor, 4097)
@@ -621,44 +718,22 @@ def _read_readiness(state: dict[str, Any]) -> bool:
             and marker["slot"] == state["active_slot"]
             and marker["sha256"] == state["expected_sha256"]
         )
-        if (
-            _test_root()
-            and os.environ.get("DGX_SUPERVISOR_SWAP_READINESS_TEST") == "1"
-        ):
-            os.rename(
-                "replacement.json",
-                "readiness.json",
-                src_dir_fd=directory,
-                dst_dir_fd=directory,
-            )
-        _remove_readiness_if_same(directory, metadata)
+        _publish_readiness_replacement_for_test(directory)
         return accepted
     except FileNotFoundError:
         return False
     except (KeyError, SupervisorError):
-        if safe_metadata is not None:
-            _remove_readiness_if_same(directory, safe_metadata)
         return False
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+        try:
+            os.unlink(quarantine_name, dir_fd=quarantine)
+            os.fsync(quarantine)
+        except FileNotFoundError:
+            pass
+        os.close(quarantine)
         os.close(directory)
-
-
-def _remove_readiness_if_same(directory: int, opened: os.stat_result) -> None:
-    try:
-        current = os.stat(
-            "readiness.json", dir_fd=directory, follow_symlinks=False
-        )
-    except FileNotFoundError:
-        return
-    if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
-        return
-    try:
-        os.unlink("readiness.json", dir_fd=directory)
-        os.fsync(directory)
-    except OSError as error:
-        raise SupervisorError("readiness marker cannot be consumed") from error
 
 
 def _stable(state: dict[str, Any], *, rollback: bool = False) -> dict[str, Any]:
@@ -669,6 +744,28 @@ def _stable(state: dict[str, Any], *, rollback: bool = False) -> dict[str, Any]:
         "status": "stable",
         "rollback_performed": rollback,
     }
+
+
+def _swap_pending_slot_before_commit_for_test(state: dict[str, Any]) -> None:
+    configured = os.environ.get("DGX_SUPERVISOR_SWAP_SLOT_BEFORE_COMMIT_TEST")
+    if configured is None:
+        return
+    if _test_root() is None or configured != "1":
+        raise SupervisorError("pending slot race hook is invalid")
+    path = _slot_path(state["active_slot"])
+    parent = _open_directory_ancestry(path.parent)
+    try:
+        os.rename(
+            ".dgx-forge-agent.commit-race",
+            path.name,
+            src_dir_fd=parent,
+            dst_dir_fd=parent,
+        )
+        os.fsync(parent)
+    except OSError as error:
+        raise SupervisorError("pending slot race hook failed") from error
+    finally:
+        os.close(parent)
 
 
 def _rollback(directory: int, state: dict[str, Any]) -> None:
@@ -797,13 +894,25 @@ def supervise() -> int:
                             min(poll, state["activation_deadline"] - _now()),
                         )
                     )
+                if ready:
+                    _swap_pending_slot_before_commit_for_test(state)
                 lock = _lock(directory, exclusive=True)
                 current = _read_state(directory)
                 if current != state:
                     raise SupervisorError("activation state changed during supervision")
                 if ready:
-                    _publish(directory, _stable(state))
-                    result = 0
+                    try:
+                        pending_fd = _open_slot(
+                            state["active_slot"], state["expected_sha256"]
+                        )
+                    except SupervisorError:
+                        _rollback(directory, state)
+                        restart_after_rollback = True
+                        result = 1
+                    else:
+                        os.close(pending_fd)
+                        _publish(directory, _stable(state))
+                        result = 0
                 else:
                     _rollback(directory, state)
                     restart_after_rollback = True
@@ -874,6 +983,16 @@ def main(argv: list[str] | None = None) -> int:
             not _test_root() or readiness_swap != "1"
         ):
             raise SupervisorError("readiness race hook is invalid")
+        readiness_after_stat = os.environ.get(
+            "DGX_SUPERVISOR_SWAP_READINESS_AFTER_STAT_TEST"
+        )
+        if readiness_after_stat is not None and (
+            not _test_root() or readiness_after_stat != "1"
+        ):
+            raise SupervisorError("readiness race hook is invalid")
+        slot_swap = os.environ.get("DGX_SUPERVISOR_SWAP_SLOT_BEFORE_COMMIT_TEST")
+        if slot_swap is not None and (not _test_root() or slot_swap != "1"):
+            raise SupervisorError("pending slot race hook is invalid")
         if arguments.command in {"initialize", "activate"} and not DIGEST.fullmatch(arguments.sha256):
             raise SupervisorError("SHA-256 is invalid")
         if arguments.command == "initialize":

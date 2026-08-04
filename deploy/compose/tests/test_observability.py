@@ -3,7 +3,6 @@ from pathlib import Path
 
 from deploy.compose.tests.test_networking import _rendered
 
-
 ROOT = Path(__file__).resolve().parents[3]
 
 

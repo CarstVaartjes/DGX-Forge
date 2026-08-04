@@ -1,7 +1,6 @@
 from contextlib import contextmanager
 
 import pytest
-
 from dgx_control.git_policy import Eligibility
 from dgx_control.reconcile import IneligibleCommit, Reconciler, RepositoryDefinitions
 
@@ -59,6 +58,17 @@ def test_failed_reconcile_leaves_affected_routes_withdrawn() -> None:
     assert leases.acquired == [("spk_a", "spk_b")]
 
 
+def test_reconcile_does_not_mask_unexpected_programming_error() -> None:
+    class BrokenController(Controller):
+        def apply(self, plan):
+            raise AssertionError("programming defect")
+
+    reconciler = Reconciler(Policy(), definitions, Routes(), BrokenController(), Leases())
+
+    with pytest.raises(AssertionError, match="programming defect"):
+        reconciler.execute(reconciler.plan("a" * 40))
+
+
 def test_successful_plan_is_deterministic_and_publishes_atomically() -> None:
     policy, routes, controller, leases = Policy(), Routes(), Controller(), Leases()
     reconciler = Reconciler(policy, definitions, routes, controller, leases)
@@ -101,6 +111,22 @@ def test_repository_definitions_reads_commit_pinned_document() -> None:
             return type("Document", (), {"parsed": definitions(commit)})()
 
     assert RepositoryDefinitions(Repository())("a" * 40) == definitions("a" * 40)
+
+
+def test_reconciliation_mapping_shapes_raise_type_error() -> None:
+    class InvalidRepository:
+        def read_document(self, commit, path):
+            return type("Document", (), {"parsed": []})()
+
+    with pytest.raises(TypeError, match="JSON object"):
+        RepositoryDefinitions(InvalidRepository())("a" * 40)
+
+    reconciler = Reconciler(
+        Policy(),
+        lambda _commit: definitions(_commit) | {"placements": []},
+    )
+    with pytest.raises(TypeError, match="placements"):
+        reconciler.plan("a" * 40)
 
 
 def test_planning_only_reconciler_cannot_execute_in_api_process() -> None:

@@ -497,8 +497,9 @@ Expected: missing unit failures.
 Set explicit dependencies so the root supervisor initializes/coordinates before
 the agent starts, without a dependency cycle. Use systemd 249-compatible
 directives for the supported DGX OS baseline; retain stronger directives
-accepted by that version. Give the root unit only `CAP_DAC_READ_SEARCH` if
-required to read the exact `0600` agent-owned marker and no ambient capability.
+accepted by that version. Give the root unit only `CAP_CHOWN` for clean-boot
+runtime ownership plus `CAP_DAC_READ_SEARCH` and `CAP_DAC_OVERRIDE` to consume
+the exact `0600` agent-owned marker, and no ambient capability.
 Preserve read-only `/dev/nvidia*` visibility under `PrivateDevices` using the
 supported device policy/directives and do not expose unrelated devices.
 
@@ -508,9 +509,7 @@ Run:
 
 ```bash
 uv run --project agent pytest agent/tests/test_supervisor.py -k systemd -v
-systemd-analyze verify agent/systemd/dgx-forge-agent.service agent/systemd/dgx-forge-agent-supervisor.service
-systemd-analyze security --no-pager agent/systemd/dgx-forge-agent.service
-systemd-analyze security --no-pager agent/systemd/dgx-forge-agent-supervisor.service
+scripts/verify-agent-systemd --json
 ```
 
 Expected: verify exits zero; record both exposure summaries and any target-DGX
@@ -533,7 +532,7 @@ Run and record exact counts/output:
 ```bash
 uv run --project agent pytest agent/tests/test_supervisor.py agent/tests/test_runtime_policy.py agent/tests/test_client.py agent/tests/test_lifecycle.py -v
 uv run pytest tests/nodes/test_install_dgx_agent.py -v
-uvx --from ruff==0.16.1 ruff check agent/src agent/tests tests/nodes/test_install_dgx_agent.py
+uvx --from ruff==0.16.1 ruff check .
 shellcheck nodes/bin/* agent/supervisor/* 2>/dev/null || test $? -eq 127
 git diff --check
 ```
@@ -550,9 +549,7 @@ uv run pytest tests/nodes -q
 uv run pytest deploy/compose/tests -q
 docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml config --quiet
 docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml -f deploy/compose/compose.builtin-ca.yaml config --quiet
-systemd-analyze verify agent/systemd/dgx-forge-agent.service agent/systemd/dgx-forge-agent-supervisor.service
-systemd-analyze security --no-pager agent/systemd/dgx-forge-agent.service
-systemd-analyze security --no-pager agent/systemd/dgx-forge-agent-supervisor.service
+scripts/verify-agent-systemd --json
 uv run --project agent python -m compileall -q agent/src agent/supervisor nodes/bin/install-dgx-agent
 uv build --project agent
 uv run --project agent pytest agent/tests/test_slot_artifact.py -v
@@ -567,6 +564,11 @@ isolated `--help` and `--packaged-module-smoke` with checkout/venv/global and
 user site packages unavailable, run supervisor `--help` and an unprivileged
 relocated FD-execution smoke, and validate an ARM64 ELF/site-policy fixture
 without executing it.
+
+The physical GPU-device acceptance remains the existing
+`approved-physical-spark-lifecycle` release gate. It runs the installed-unit
+inventory and health adapters on each supported DGX Spark device inventory;
+local effective-property tests do not substitute for that physical evidence.
 
 - [ ] **Step 3: Self-review the final diff**
 

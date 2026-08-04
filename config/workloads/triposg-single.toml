@@ -23,7 +23,7 @@ reference = "nvcr.io/nvidia/pytorch:25.11-py3@sha256:4a85d8cf6fb3a943280960b8948
 
 [runtime_release]
 manifest = "adapters/creative/triposg/runtime-manifest.json"
-sha256 = "925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469"
+sha256 = "0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2"
 
 [paths]
 cache = "/srv/models/snapshots/triposg"
@@ -35,13 +35,13 @@ host = "127.0.0.1"
 port = 9109
 
 [commands]
-prepare = ["/opt/spark/model-adapters/triposg/releases/925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469/bin/triposg", "prepare"]
-verify = ["/opt/spark/model-adapters/triposg/releases/925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469/bin/triposg", "verify"]
-start = ["/opt/spark/model-adapters/triposg/releases/925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469/bin/triposg", "start"]
-health = ["/opt/spark/model-adapters/triposg/releases/925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469/bin/triposg", "health"]
-infer = ["/opt/spark/model-adapters/triposg/releases/925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469/bin/triposg", "infer"]
-stop = ["/opt/spark/model-adapters/triposg/releases/925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469/bin/triposg", "stop"]
-verify-release = ["/opt/spark/model-adapters/triposg/releases/925d467ef469043eaf3eedf0fc40a03e93fac7bd3def42b713859e53dacd7469/bin/triposg", "verify-release"]
+prepare = ["/opt/spark/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "prepare"]
+verify = ["/opt/spark/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "verify"]
+start = ["/opt/spark/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "start"]
+health = ["/opt/spark/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "health"]
+infer = ["/opt/spark/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "infer"]
+stop = ["/opt/spark/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "stop"]
+verify-release = ["/opt/spark/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "verify-release"]
 
 [deadlines]
 prepare = 86400

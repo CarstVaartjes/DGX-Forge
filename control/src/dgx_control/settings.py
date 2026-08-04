@@ -96,7 +96,7 @@ class Settings:
         return urlsplit(self.database_url).hostname
 
     @classmethod
-    def from_env_and_secrets(cls) -> "Settings":
+    def from_env_and_secrets(cls) -> Settings:
         mode = os.environ.get("DGX_DEPLOYMENT_MODE", "development")
         if mode not in {"development", "test", "production"}:
             raise SettingsError("DGX_DEPLOYMENT_MODE is invalid")

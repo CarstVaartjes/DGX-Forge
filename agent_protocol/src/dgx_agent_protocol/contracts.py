@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, fields, is_dataclass
-from datetime import UTC, datetime
-from enum import StrEnum
 import hashlib
 import importlib.resources
 import json
 import re
+from collections.abc import Mapping
+from dataclasses import dataclass, fields, is_dataclass
+from datetime import UTC, datetime
+from enum import StrEnum
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any
 from uuid import UUID
 
 from jsonschema import Draft202012Validator, FormatChecker
-
 
 MAX_DOCUMENT_BYTES = 64 * 1024
 NODE_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
@@ -260,7 +260,7 @@ class AgentClaim:
         object.__setattr__(self, "deadline", _deadline(self.deadline))
 
     @classmethod
-    def parse(cls, raw: Any) -> "AgentClaim":
+    def parse(cls, raw: Any) -> AgentClaim:
         value = _mapping(raw)
         _fields(
             value,
@@ -304,7 +304,7 @@ class AgentProgress:
         object.__setattr__(self, "progress", _validate_bounded_document(self.progress, name="progress"))
 
     @classmethod
-    def parse(cls, raw: Any) -> "AgentProgress":
+    def parse(cls, raw: Any) -> AgentProgress:
         value = _mapping(raw)
         _fields(value, required={"schema_version", "job_id", "operation_id", "attempt", "fence", "node_id", "deadline", "progress"})
         return cls(**_attempt_fields(value), progress=value["progress"])
@@ -335,7 +335,7 @@ class AgentResult:
         object.__setattr__(self, "result", _validate_bounded_document(self.result, name="result"))
 
     @classmethod
-    def parse(cls, raw: Any) -> "AgentResult":
+    def parse(cls, raw: Any) -> AgentResult:
         value = _mapping(raw)
         _fields(value, required={"schema_version", "job_id", "operation_id", "attempt", "fence", "node_id", "deadline", "state", "result"})
         return cls(**_attempt_fields(value), state=value["state"], result=value["result"])

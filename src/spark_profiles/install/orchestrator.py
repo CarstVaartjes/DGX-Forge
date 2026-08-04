@@ -203,7 +203,7 @@ class NodeInstaller:
                 journal = journal.wait(reason=str(error), at=self._clock())
                 self._store.save(journal, expected_revision=revision)
                 return journal
-            except Exception as error:
+            except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
                 journal = journal.fail(
                     reason=f"{type(error).__name__}: {error}",
                     at=self._clock(),

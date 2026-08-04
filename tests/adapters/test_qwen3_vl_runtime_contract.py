@@ -1,7 +1,7 @@
-from pathlib import Path
 import importlib.util
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -91,7 +91,9 @@ def test_model_response_requires_one_text_choice() -> None:
 
 def test_adapter_rejects_unknown_operation() -> None:
     adapter = Path(__file__).parents[2] / "adapters/creative/qwen3-vl-8b-single/bin/qwen3-vl-8b-single"
-    result = subprocess.run([str(adapter), "unknown"], capture_output=True, text=True)
+    result = subprocess.run(
+        [str(adapter), "unknown"], capture_output=True, text=True, check=False
+    )
     assert result.returncode == 64
     assert "unknown operation" in result.stderr
 

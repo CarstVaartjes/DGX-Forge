@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 from .jobs import JobService
 
+
 @dataclass(frozen=True)
 class HandlerRequest(Mapping[str, object]):
     job_id: str
@@ -52,7 +53,7 @@ class Worker:
                 attempt.job_id, attempt.kind, attempt.payload,
                 attempt.base_commit, attempt.targets,
             ))
-        except Exception as error:
+        except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
             self._jobs.fail(attempt, f"{type(error).__name__}: {error}")
             if self._logs is not None:
                 self._logs.save(attempt.job_id, f"job failed: {type(error).__name__}: {error}".encode())
@@ -68,13 +69,13 @@ if __name__ == "__main__":
     import time
     from datetime import UTC, datetime
 
-    from .db import build_engine, session_factory
-    from .settings import Settings
-    from .offline import OnlineLock
-    from .logging import JobLogStore
     from .code_host import RepositoryCodeHost
+    from .db import build_engine, session_factory
     from .git_policy import GitPolicy, PolicyStore
+    from .logging import JobLogStore
+    from .offline import OnlineLock
     from .runtime import RuntimeHandlers
+    from .settings import Settings
 
     settings = Settings.from_env_and_secrets()
     jobs = JobService(session_factory(build_engine(settings.database_url)), clock=lambda: datetime.now(UTC))

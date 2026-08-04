@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Mapping
 
 from spark_profiles.fleet.install_contracts import InstallationRequest
 
@@ -30,7 +30,7 @@ class ProductionStepOptions:
     expected_artifact_sha256: Mapping[str, str] = field(default_factory=dict)
 
     @classmethod
-    def from_arguments(cls, arguments: object, *, root: Path) -> "ProductionStepOptions":
+    def from_arguments(cls, arguments: object, *, root: Path) -> ProductionStepOptions:
         public_key = getattr(arguments, "admin_public_key", None)
         return cls(
             repository_root=root,
@@ -58,7 +58,7 @@ def _json_result(result: RemoteResult, action: str) -> dict[str, object]:
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         raise RuntimeError(f"{action} returned invalid JSON") from error
     if not isinstance(value, dict):
-        raise RuntimeError(f"{action} returned a non-object")
+        raise TypeError(f"{action} returned a non-object")
     return value
 
 

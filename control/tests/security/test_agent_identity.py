@@ -3,9 +3,12 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-
-from dgx_control.auth import AgentIdentity, AuthError, TrustedProxyAgentIdentityMiddleware, agent_identity_from_scope
-
+from dgx_control.auth import (
+    AgentIdentity,
+    AuthError,
+    TrustedProxyAgentIdentityMiddleware,
+    agent_identity_from_scope,
+)
 
 NODE = "spk_" + "a" * 32
 

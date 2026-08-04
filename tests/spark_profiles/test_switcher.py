@@ -21,10 +21,10 @@ from spark_profiles.contracts import (
     WorkloadDefinition,
     WorkloadPaths,
 )
-from spark_profiles.state import ControllerState, StateStore
-from spark_profiles.switcher import ProfileSwitcher
 from spark_profiles.fleet import NodeId
 from spark_profiles.placement import PlacementPlan
+from spark_profiles.state import ControllerState, StateStore
+from spark_profiles.switcher import ProfileSwitcher
 
 SHA_A = "a" * 64
 BOOT_IDS = {"spark1": "1" * 32, "spark2": "2" * 32}

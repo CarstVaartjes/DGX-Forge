@@ -3,7 +3,6 @@ import subprocess
 from pathlib import Path
 
 import pytest
-
 from dgx_control.proposals import DocumentChange, ProposalService
 from dgx_control.repository import RepositoryService
 

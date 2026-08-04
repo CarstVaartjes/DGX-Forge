@@ -1,8 +1,6 @@
-import json
 from pathlib import Path
 
 import pytest
-
 from dgx_control.offline import BackupError, create_backup, inspect_backup
 
 

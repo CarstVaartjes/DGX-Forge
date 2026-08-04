@@ -104,6 +104,7 @@ class Agent:
         if claim is None:
             self._report_authenticated_exchange()
             return
+        self._report_authenticated_exchange()
         execution = self._registry.execute(claim, self._context)
         self._submit(execution.result)
 

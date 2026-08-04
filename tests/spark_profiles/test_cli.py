@@ -1,9 +1,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
-import shutil
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import dataclass, replace

@@ -184,7 +184,7 @@ class NodeHealthService:
         self.max_workers = max_workers
         self._nodes = tuple(
             node_id.value
-            for node_id, record in sorted((fleet.nodes.items() if fleet else ()))
+            for node_id, record in sorted(fleet.nodes.items() if fleet else ())
             if record.lifecycle != "retired"
         ) or _NODES
         if fleet is None:

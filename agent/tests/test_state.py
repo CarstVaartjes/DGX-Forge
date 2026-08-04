@@ -1,25 +1,27 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
 import errno
 import hashlib
-import json
 import os
-from pathlib import Path
 import sqlite3
 import stat
 import subprocess
 import sys
 import threading
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
-
 from dgx_agent import state as state_module
-from dgx_agent_protocol import AgentClaim, AgentOperation, AgentProgress, AgentResult, canonical_message
-
 from dgx_agent.state import AgentStateConflict, AgentStateError, AgentStateStore
-
+from dgx_agent_protocol import (
+    AgentClaim,
+    AgentOperation,
+    AgentProgress,
+    AgentResult,
+    canonical_message,
+)
 
 NODE_ID = "spk_0123456789abcdef0123456789abcdef"
 JOB_ID = "11111111-1111-4111-8111-111111111111"
@@ -438,9 +440,14 @@ def test_repeated_fresh_root_initialization_is_race_free(tmp_path: Path) -> None
         root = tmp_path / f"state-{iteration}"
         barrier = threading.Barrier(8)
 
-        def initialize(_: int) -> None:
-            barrier.wait()
-            AgentStateStore(root)
+        def initialize(
+            _: int,
+            *,
+            _barrier: threading.Barrier = barrier,
+            _root: Path = root,
+        ) -> None:
+            _barrier.wait()
+            AgentStateStore(_root)
 
         with ThreadPoolExecutor(max_workers=8) as pool:
             list(pool.map(initialize, range(8)))

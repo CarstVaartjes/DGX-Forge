@@ -3,12 +3,11 @@ from __future__ import annotations
 
 import ctypes
 import os
-from pathlib import Path
 import signal
 import subprocess
 import sys
 import time
-
+from pathlib import Path
 
 _PR_SET_CHILD_SUBREAPER = 36
 _PR_SET_PDEATHSIG = 1

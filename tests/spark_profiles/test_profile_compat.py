@@ -1,12 +1,15 @@
 import json
 from pathlib import Path
 
-from spark_profiles.contracts import ClusterProfile
-from spark_profiles.fleet import Fleet, ManagementEndpoint, NodeId, NodeRecord
-from spark_profiles.profile_compat import adapt_legacy_profile
 from spark_profiles.admission import check_generic_admission
-from spark_profiles.contracts import GenericClusterProfile, LifecycleConstraints
+from spark_profiles.contracts import (
+    ClusterProfile,
+    GenericClusterProfile,
+    LifecycleConstraints,
+)
+from spark_profiles.fleet import Fleet, ManagementEndpoint, NodeId, NodeRecord
 from spark_profiles.placement import NodeObservation, PlacementRequirement
+from spark_profiles.profile_compat import adapt_legacy_profile
 
 ROOT = Path(__file__).resolve().parents[2]
 

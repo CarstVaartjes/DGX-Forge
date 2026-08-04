@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import hashlib
 import fcntl
+import hashlib
 import os
 import re
 import shutil
@@ -56,7 +56,7 @@ class RepositoryCodeHost:
     ) -> bytes:
         completed = subprocess.run(
             ("git", "-c", "core.hooksPath=/dev/null", "-c", "protocol.file.allow=never", "-C", str(cwd or self._root), *arguments),
-            input=input, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            input=input, capture_output=True,
             timeout=30, check=False, shell=False, env=self._environment,
         )
         if completed.returncode != 0 or len(completed.stdout) > limit:

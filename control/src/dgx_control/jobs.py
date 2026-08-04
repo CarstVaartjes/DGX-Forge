@@ -14,8 +14,8 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from .models import Job, JobAttempt
 from .logging import redact_text
+from .models import Job, JobAttempt
 
 _SENSITIVE = re.compile(r"(?i)(password|secret|token|private.?key|authorization)")
 _MAX_PAYLOAD = 65_536
@@ -47,7 +47,7 @@ def _canonical_payload(payload: Mapping[str, object]) -> tuple[dict[str, object]
         if isinstance(value, Mapping):
             for key, child in value.items():
                 if not isinstance(key, str):
-                    raise ValueError("job payload keys must be strings")
+                    raise TypeError("job payload keys must be strings")
                 if _SENSITIVE.search(key):
                     raise ValueError("job payload contains a sensitive field")
                 inspect(child)
@@ -55,8 +55,8 @@ def _canonical_payload(payload: Mapping[str, object]) -> tuple[dict[str, object]
             for child in value:
                 inspect(child)
 
+    inspect(payload)
     copied = json.loads(json.dumps(payload, sort_keys=True, separators=(",", ":")))
-    inspect(copied)
     encoded = json.dumps(copied, sort_keys=True, separators=(",", ":")).encode()
     if len(encoded) > _MAX_PAYLOAD:
         raise ValueError("job payload is too large")

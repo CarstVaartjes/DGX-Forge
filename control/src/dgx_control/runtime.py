@@ -74,25 +74,25 @@ class RuntimeHandlers:
         if not isinstance(digest, str) or _SHA256.fullmatch(digest) is None:
             raise ValueError("reconciliation plan digest is invalid")
         if not isinstance(placements, Mapping):
-            raise ValueError("reconciliation placements are invalid")
+            raise TypeError("reconciliation placements are invalid")
+        workloads = placements.get("workloads")
+        releases = payload.get("releases", {})
+        if not isinstance(workloads, Mapping) or not isinstance(releases, Mapping):
+            raise TypeError("reconciliation workloads or releases are invalid")
         content = {
             "commit": request.base_commit,
             "targets": sorted(request.targets),
             "placements": placements,
             "routes": payload.get("routes", {}),
-            "releases": payload.get("releases", {}),
+            "releases": releases,
             "input_digests": payload.get("input_digests", {}),
         }
         encoded = json.dumps(content, sort_keys=True, separators=(",", ":")).encode()
         if not hashlib.sha256(encoded).hexdigest() == digest:
             raise ValueError("reconciliation plan digest does not match queued content")
         profile = placements.get("profile")
-        workloads = placements.get("workloads")
-        releases = content["releases"]
         if not isinstance(profile, str) or _NAME.fullmatch(profile) is None:
             raise ValueError("reconciliation profile is invalid")
-        if not isinstance(workloads, Mapping) or not isinstance(releases, Mapping):
-            raise ValueError("reconciliation workloads or releases are invalid")
         if set(workloads) != set(releases):
             raise ValueError("reconciliation workloads and releases differ")
         commands = 0

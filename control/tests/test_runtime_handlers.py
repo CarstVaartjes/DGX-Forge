@@ -4,7 +4,6 @@ import hashlib
 import json
 
 import pytest
-
 from dgx_control.runtime import RuntimeHandlers
 from dgx_control.worker import HandlerRequest
 
@@ -52,6 +51,33 @@ def test_reconcile_rejects_when_checkout_advanced(tmp_path) -> None:
     )
     with pytest.raises(ValueError, match="checkout"):
         handlers.reconcile(_request({}))
+
+
+@pytest.mark.parametrize(
+    "payload, message",
+    [
+        ({"plan_digest": "0" * 64, "placements": []}, "placements"),
+        (
+            {
+                "plan_digest": "0" * 64,
+                "placements": {"profile": "agent", "workloads": []},
+                "releases": {},
+            },
+            "workloads or releases",
+        ),
+    ],
+)
+def test_reconcile_mapping_shapes_raise_type_error(
+    tmp_path, payload: dict[str, object], message: str
+) -> None:
+    handlers = RuntimeHandlers(
+        tmp_path,
+        eligible=lambda _commit: True,
+        current_commit=lambda: "a" * 40,
+        run=lambda _argv: pytest.fail("must not run"),
+    )
+    with pytest.raises(TypeError, match=message):
+        handlers.reconcile(_request(payload))
 
 
 def test_production_registry_exposes_only_bounded_job_kinds(tmp_path) -> None:

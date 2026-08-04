@@ -34,7 +34,7 @@ class RepositoryDefinitions:
     def __call__(self, commit: str) -> Mapping[str, object]:
         parsed = self._repository.read_document(commit, self._path).parsed
         if not isinstance(parsed, Mapping):
-            raise ValueError("reconciliation document must be a JSON object")
+            raise TypeError("reconciliation document must be a JSON object")
         return parsed
 
 
@@ -75,7 +75,7 @@ def _plan_content(commit: str, values: Mapping[str, object]) -> tuple[dict[str, 
     }
     for field in ("placements", "routes", "releases", "input_digests"):
         if not isinstance(content[field], Mapping):
-            raise ValueError(f"reconciliation {field} must be a mapping")
+            raise TypeError(f"reconciliation {field} must be a mapping")
     encoded = json.dumps(content, sort_keys=True, separators=(",", ":")).encode()
     return content, encoded
 
@@ -142,7 +142,7 @@ class Reconciler:
                 if self._controller.verify(plan) is not True:
                     raise RuntimeError("acceptance verification failed")
                 self._routes.publish_atomically(dict(plan.routes))
-        except Exception as error:
+        except (OSError, RuntimeError, TypeError, ValueError, KeyError) as error:
             return ReconciliationResult(plan.digest, plan.commit, plan.targets, "failed", f"{type(error).__name__}: reconciliation step failed")
         return ReconciliationResult(plan.digest, plan.commit, plan.targets, "succeeded")
 

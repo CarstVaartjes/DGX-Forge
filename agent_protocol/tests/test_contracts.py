@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable
-from datetime import UTC, datetime
 import hashlib
 import importlib.resources
 import json
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from jsonschema import Draft202012Validator
-
 from dgx_agent_protocol import (
     AgentClaim,
     AgentOperation,
@@ -20,6 +18,7 @@ from dgx_agent_protocol import (
     schema_validator,
     validate_schema_message,
 )
+from jsonschema import Draft202012Validator
 
 
 def valid_claim() -> dict[str, object]:

@@ -1,11 +1,10 @@
 import base64
 
-from fastapi.testclient import TestClient
-
 from dgx_control.api import AdminServices, SpaFiles, create_app
 from dgx_control.audit import MemoryAuditStore
 from dgx_control.auth import Actor, TokenCodec
 from dgx_control.proposals import ProposalPreview
+from fastapi.testclient import TestClient
 
 
 class Jobs:
@@ -50,7 +49,7 @@ def test_admin_proposal_returns_canonical_patch_and_digest() -> None:
 
 def test_repository_document_reads_require_authentication() -> None:
     codec = TokenCodec(b"k" * 32)
-    app = create_app(jobs=Jobs(), tokens=codec, audits=MemoryAuditStore(), fleet=lambda: {}, admin=AdminServices(Repository(), Proposals(), None, None))
+    app = create_app(jobs=Jobs(), tokens=codec, audits=MemoryAuditStore(), fleet=dict, admin=AdminServices(Repository(), Proposals(), None, None))
     client = TestClient(app)
     assert client.get("/api/v1/repository", params={"commit": "a" * 40}).status_code == 401
 

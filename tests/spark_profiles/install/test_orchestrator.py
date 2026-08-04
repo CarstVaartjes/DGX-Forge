@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import hashlib
 import base64
+import hashlib
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -125,6 +125,25 @@ def test_installer_retries_failed_step_without_repeating_completed_gates(
     assert calls["identity"] == calls["pre-inventory"] == 1
     assert calls["public-key"] == 2
     assert all(calls[name] == 1 for name in STEP_NAMES[3:])
+
+
+def test_installer_does_not_mask_unexpected_programming_error(
+    tmp_path: Path,
+) -> None:
+    request = _request(1, "alpha")
+    installer = _installer(
+        tmp_path,
+        handlers={
+            name: lambda _request: (_ for _ in ()).throw(
+                AssertionError("programming defect")
+            )
+            for name in STEP_NAMES
+        },
+    )
+    installer.start(request)
+
+    with pytest.raises(AssertionError, match="programming defect"):
+        installer.run(request.node_id)
 
 
 def test_wait_for_console_is_persisted_and_requires_explicit_resume(

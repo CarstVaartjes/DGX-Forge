@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 from spark_profiles.fleet.install_contracts import InstallationJournal
 

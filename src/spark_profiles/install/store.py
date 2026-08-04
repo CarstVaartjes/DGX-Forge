@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import tempfile
-import fcntl
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
 from dataclasses import replace

@@ -1,7 +1,7 @@
 {
   "files": {
     "adapters/creative/triposg/bin/triposg": "2320395878030b3fb8a2ea9fd346dbb37d4f511816228be6b6377c09311e00d2",
-    "adapters/creative/triposg/runtime.py": "c150f3d476d984105633873b1e56532f9f50f11c32e6a1832e25937375f1f78d",
-    "adapters/creative/triposg/server.py": "242efbafadaf1948038e8a0b89deef049828d7c4c8920a3b031309f2011e21f9"
+    "adapters/creative/triposg/runtime.py": "e8a63e2e2fe1560c5ce061aff44304b2e216ab45063cbe6ab8683c8a52a3930d",
+    "adapters/creative/triposg/server.py": "3f62cd9dcd8b5da0c0aec122c18326e86f921aa824b11b0ba6402a6f99765614"
   }
 }

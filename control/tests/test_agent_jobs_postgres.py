@@ -1,19 +1,15 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta
 import hashlib
 import shutil
 import subprocess
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine, event, func, select
-from sqlalchemy.engine import Engine
-from sqlalchemy.orm import sessionmaker
-
 from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
 from dgx_control.models import (
     AgentCertificate,
@@ -23,7 +19,10 @@ from dgx_control.models import (
     Base,
     Job,
 )
-
+from sqlalchemy import create_engine, event, func, select
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import sessionmaker
 
 NODE_A = "spk_" + "a" * 32
 NODE_B = "spk_" + "b" * 32
@@ -62,7 +61,7 @@ def postgres_engine() -> Engine:
             try:
                 with engine.connect():
                     break
-            except Exception:
+            except (OSError, SQLAlchemyError):
                 time.sleep(0.1)
         else:
             pytest.skip("disposable PostgreSQL did not become ready")
@@ -267,13 +266,13 @@ def test_postgres_enqueue_cannot_race_parent_finalization(service, postgres_engi
     def finish() -> None:
         try:
             finishing.succeed(claim.fence, {"healthy": True})
-        except Exception as error:
+        except (AssertionError, OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
             finish_errors.append(error)
 
     def enqueue() -> None:
         try:
             enqueueing.enqueue(parent_job.id, NODE_B, "node.probe", COMMIT, {})
-        except Exception as error:
+        except (AssertionError, OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
             enqueue_errors.append(error)
 
     event.listen(postgres_engine, "after_cursor_execute", pause_after_aggregation_read)
@@ -330,7 +329,7 @@ def test_postgres_complete_holds_operation_lock_against_expired_reclaim(service,
         def finish() -> None:
             try:
                 completing.succeed(first.fence, {"healthy": True})
-            except Exception as error:
+            except (AssertionError, OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
                 errors.append(error)
 
         thread = threading.Thread(target=finish, name="finisher")
@@ -375,7 +374,7 @@ def test_postgres_concurrent_final_completions_aggregate_parent_once(service, po
     def complete(service, fence) -> None:
         try:
             service.succeed(fence, {"healthy": True})
-        except Exception as error:
+        except (AssertionError, OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
             errors.append(error)
     try:
         thread_a = threading.Thread(target=complete, args=(first_service, first.fence), name="first-finisher")

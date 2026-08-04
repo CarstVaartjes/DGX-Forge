@@ -23,7 +23,7 @@ reference = "nvcr.io/nvidia/cuda:13.0.1-devel-ubuntu24.04@sha256:7d2f6a8c2071d91
 
 [runtime_release]
 manifest = "adapters/creative/nemotron-nano-omni-single/runtime-manifest.json"
-sha256 = "b6f7df8f068987b74e9995370b858daf2dac2308e7e9e34e8bcb5282e662b533"
+sha256 = "8b9763c9cea0ba396c814284a6286991933a6e0c3f4bd18c1587665c95205509"
 
 [paths]
 cache = "/srv/models/snapshots/nemotron-nano-omni-single"
@@ -35,13 +35,13 @@ host = "127.0.0.1"
 port = 9101
 
 [commands]
-prepare = ["/opt/spark/model-adapters/nemotron-nano-omni-single/releases/b6f7df8f068987b74e9995370b858daf2dac2308e7e9e34e8bcb5282e662b533/bin/nemotron-nano-omni-single", "prepare"]
-verify = ["/opt/spark/model-adapters/nemotron-nano-omni-single/releases/b6f7df8f068987b74e9995370b858daf2dac2308e7e9e34e8bcb5282e662b533/bin/nemotron-nano-omni-single", "verify"]
-start = ["/opt/spark/model-adapters/nemotron-nano-omni-single/releases/b6f7df8f068987b74e9995370b858daf2dac2308e7e9e34e8bcb5282e662b533/bin/nemotron-nano-omni-single", "start"]
-health = ["/opt/spark/model-adapters/nemotron-nano-omni-single/releases/b6f7df8f068987b74e9995370b858daf2dac2308e7e9e34e8bcb5282e662b533/bin/nemotron-nano-omni-single", "health"]
-infer = ["/opt/spark/model-adapters/nemotron-nano-omni-single/releases/b6f7df8f068987b74e9995370b858daf2dac2308e7e9e34e8bcb5282e662b533/bin/nemotron-nano-omni-single", "infer"]
-stop = ["/opt/spark/model-adapters/nemotron-nano-omni-single/releases/b6f7df8f068987b74e9995370b858daf2dac2308e7e9e34e8bcb5282e662b533/bin/nemotron-nano-omni-single", "stop"]
-verify-release = ["/opt/spark/model-adapters/nemotron-nano-omni-single/releases/b6f7df8f068987b74e9995370b858daf2dac2308e7e9e34e8bcb5282e662b533/bin/nemotron-nano-omni-single", "verify-release"]
+prepare = ["/opt/spark/model-adapters/nemotron-nano-omni-single/releases/8b9763c9cea0ba396c814284a6286991933a6e0c3f4bd18c1587665c95205509/bin/nemotron-nano-omni-single", "prepare"]
+verify = ["/opt/spark/model-adapters/nemotron-nano-omni-single/releases/8b9763c9cea0ba396c814284a6286991933a6e0c3f4bd18c1587665c95205509/bin/nemotron-nano-omni-single", "verify"]
+start = ["/opt/spark/model-adapters/nemotron-nano-omni-single/releases/8b9763c9cea0ba396c814284a6286991933a6e0c3f4bd18c1587665c95205509/bin/nemotron-nano-omni-single", "start"]
+health = ["/opt/spark/model-adapters/nemotron-nano-omni-single/releases/8b9763c9cea0ba396c814284a6286991933a6e0c3f4bd18c1587665c95205509/bin/nemotron-nano-omni-single", "health"]
+infer = ["/opt/spark/model-adapters/nemotron-nano-omni-single/releases/8b9763c9cea0ba396c814284a6286991933a6e0c3f4bd18c1587665c95205509/bin/nemotron-nano-omni-single", "infer"]
+stop = ["/opt/spark/model-adapters/nemotron-nano-omni-single/releases/8b9763c9cea0ba396c814284a6286991933a6e0c3f4bd18c1587665c95205509/bin/nemotron-nano-omni-single", "stop"]
+verify-release = ["/opt/spark/model-adapters/nemotron-nano-omni-single/releases/8b9763c9cea0ba396c814284a6286991933a6e0c3f4bd18c1587665c95205509/bin/nemotron-nano-omni-single", "verify-release"]
 
 [deadlines]
 prepare = 86400

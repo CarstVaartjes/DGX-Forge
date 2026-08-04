@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
-import fcntl
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -11,7 +11,6 @@ import pytest
 
 from spark_profiles.fleet import ManagementEndpoint, NodeId
 from spark_profiles.fleet.install_contracts import (
-    InstallationJournal,
     InstallationRequest,
 )
 from spark_profiles.install.store import (
@@ -183,7 +182,7 @@ def test_save_holds_process_lock_across_revision_check_and_replace(
     def save() -> None:
         try:
             result.append(store.save(journal, expected_revision=0))
-        except BaseException as error:
+        except (AssertionError, OSError, RuntimeError, TypeError, ValueError) as error:
             result.append(error)
 
     thread = threading.Thread(target=save)
@@ -191,9 +190,8 @@ def test_save_holds_process_lock_across_revision_check_and_replace(
     assert entered_write.wait(timeout=2)
 
     lock_path = tmp_path / "state" / ".install-journal.lock"
-    with lock_path.open("rb") as lock_file:
-        with pytest.raises(BlockingIOError):
-            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    with lock_path.open("rb") as lock_file, pytest.raises(BlockingIOError):
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
     allow_write.set()
     thread.join(timeout=2)

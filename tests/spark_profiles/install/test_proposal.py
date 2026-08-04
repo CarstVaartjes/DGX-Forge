@@ -5,8 +5,15 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from spark_profiles.fleet import ManagementEndpoint, NodeId
-from spark_profiles.fleet.install_contracts import InstallationJournal, InstallationRequest
-from spark_profiles.install.proposal import ProposalError, build_node_proposal, emit_node_record
+from spark_profiles.fleet.install_contracts import (
+    InstallationJournal,
+    InstallationRequest,
+)
+from spark_profiles.install.proposal import (
+    ProposalError,
+    build_node_proposal,
+    emit_node_record,
+)
 
 
 def _journal(*, accepted: bool) -> InstallationJournal:

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import sys
@@ -35,11 +34,12 @@ class TripoService:
         self._lock = Lock()
         sys.path.insert(0, str(source_root / "scripts"))
         sys.path.insert(0, str(source_root))
-        from inference_triposg import run_triposg  # type: ignore[import-not-found]
-        from briarmbg import BriaRMBG  # type: ignore[import-not-found]
-        from triposg.pipelines.pipeline_triposg import TripoSGPipeline  # type: ignore[import-not-found]
-
         import torch  # type: ignore[import-not-found]
+        from briarmbg import BriaRMBG  # type: ignore[import-not-found]
+        from inference_triposg import run_triposg  # type: ignore[import-not-found]
+        from triposg.pipelines.pipeline_triposg import (
+            TripoSGPipeline,  # type: ignore[import-not-found]
+        )
 
         self._torch = torch
         self._run_triposg = run_triposg
@@ -74,7 +74,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         if self.path == "/health":
             self._json(HTTPStatus.OK, health_payload(ready=self.service is not None))
             return
@@ -83,7 +83,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         if self.path != "/v1/generate":
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
@@ -100,7 +100,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.OK, {"model": "triposg", "output_path": str(output_path)})
         except InferRequestError as error:
             self._json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-        except Exception as error:  # pragma: no cover - exercised by the live Spark gate
+        except (OSError, RuntimeError, TypeError, ValueError) as error:  # pragma: no cover - live Spark gate
             self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
 
     def log_message(self, format: str, *args: object) -> None:

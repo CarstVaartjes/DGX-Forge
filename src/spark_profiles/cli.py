@@ -15,8 +15,8 @@ from typing import Protocol
 from .admission import check_admission, check_placement_policy
 from .backend import SshBackend
 from .catalog import Catalog
-from .health import ClusterHealth, LocalHealthError, NodeHealthService
 from .fleet.loaders import load_fleet, validate_topology_references
+from .health import ClusterHealth, LocalHealthError, NodeHealthService
 from .state import ControllerState, LockBusy, LockNotStale, StateError, StateStore
 from .switcher import PrepareReport, ProfileSwitcher, SwitchReport
 

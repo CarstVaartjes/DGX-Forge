@@ -10,7 +10,12 @@ SCRIPT = ROOT / "scripts/verify-platform-release"
 
 
 def test_release_verifier_lists_external_gates() -> None:
-    result = subprocess.run([SCRIPT, "--candidate", "1.0.0", "--json"], capture_output=True, text=True)
+    result = subprocess.run(
+        [SCRIPT, "--candidate", "1.0.0", "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     report = json.loads(result.stdout)
     assert result.returncode == 2
     assert report["status"] == "blocked"
@@ -28,6 +33,18 @@ def test_release_verifier_lists_missing_report(tmp_path: Path) -> None:
     supply = repository / "scripts/verify-supply-chain"
     supply.write_text("#!/bin/sh\nexit 0\n")
     supply.chmod(0o755)
-    result = subprocess.run([repository / "scripts/verify-platform-release", "--root", repository, "--candidate", "1.0.0", "--json"], capture_output=True, text=True)
+    result = subprocess.run(
+        [
+            repository / "scripts/verify-platform-release",
+            "--root",
+            repository,
+            "--candidate",
+            "1.0.0",
+            "--json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
     assert result.returncode == 2
     assert "control-plane-recovery" in json.loads(result.stdout)["missing_gates"]

@@ -2,7 +2,6 @@ from pathlib import Path
 
 from spark_profiles.catalog import Catalog
 
-
 PHASE4_IDS = {
     "nemotron-super-single",
     "nemotron-nano-omni-single",

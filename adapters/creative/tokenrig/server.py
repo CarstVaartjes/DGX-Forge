@@ -50,9 +50,8 @@ class TokenRigService:
         atexit.register(self.close)
         self._wait_for_bpy()
         sys.path.insert(0, str(source_root))
-        from demo import load_model, run_rig  # type: ignore[import-not-found]
-
         import torch  # type: ignore[import-not-found]
+        from demo import load_model, run_rig  # type: ignore[import-not-found]
 
         self._torch = torch
         self._run_rig = run_rig
@@ -71,7 +70,7 @@ class TokenRigService:
                 with urlopen("http://127.0.0.1:59876/ping", timeout=1) as response:
                     if response.status == 200:
                         return
-            except Exception:
+            except OSError:
                 time.sleep(0.5)
         raise RuntimeError("official Blender server did not become ready")
 
@@ -114,7 +113,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(encoded)
 
-    def do_GET(self) -> None:  # noqa: N802
+    def do_GET(self) -> None:
         if self.path == "/health":
             self._json(HTTPStatus.OK, health_payload(ready=self.service is not None))
             return
@@ -123,7 +122,7 @@ class Handler(BaseHTTPRequestHandler):
             return
         self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
 
-    def do_POST(self) -> None:  # noqa: N802
+    def do_POST(self) -> None:
         if self.path != "/v1/rig":
             self._json(HTTPStatus.NOT_FOUND, {"error": "not found"})
             return
@@ -145,7 +144,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.OK, {"model": "tokenrig", "output_path": str(output_path)})
         except InferRequestError as error:
             self._json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-        except Exception as error:  # pragma: no cover - exercised by live Spark gate
+        except (OSError, RuntimeError, TypeError, ValueError) as error:  # pragma: no cover - live Spark gate
             self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
 
     def log_message(self, format: str, *args: object) -> None:

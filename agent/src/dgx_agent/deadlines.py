@@ -1,9 +1,9 @@
 """One-time binding of an authenticated wall deadline to a monotonic clock."""
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import time
 
 
 class DeadlineBindingError(ValueError):
@@ -16,7 +16,7 @@ class MonotonicDeadline:
     absolute_monotonic: float
 
     @classmethod
-    def bind(cls, value: datetime | "MonotonicDeadline") -> "MonotonicDeadline":
+    def bind(cls, value: datetime | MonotonicDeadline) -> MonotonicDeadline:
         if type(value) is cls:
             return value
         if not isinstance(value, datetime) or value.tzinfo is None:

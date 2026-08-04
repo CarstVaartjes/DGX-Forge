@@ -70,6 +70,15 @@ class Probe:
         return {"status": "healthy"}
 
 
+class OrderingProbe:
+    def __init__(self, events: list[str]) -> None:
+        self._events = events
+
+    def collect(self, deadline: datetime) -> dict[str, object]:
+        self._events.append("execute")
+        return {"status": "healthy"}
+
+
 def test_readiness_reporter_requires_complete_environment_and_publishes_exact_marker(
     tmp_path: Path,
 ) -> None:
@@ -126,6 +135,27 @@ def test_readiness_callback_runs_only_after_authenticated_runtime_exchange(
         ).run_once()
     assert calls == ["ready"]
 
+
+def test_nonempty_authenticated_claim_reports_readiness_before_operation_execution(
+    tmp_path: Path,
+) -> None:
+    control = FakeControl()
+    control.queue(probe_claim())
+    events: list[str] = []
+    context = OperationContext(
+        node_id=NODE_ID,
+        state=AgentStateStore(tmp_path / "state"),
+        probe=OrderingProbe(events),
+    )
+
+    Agent(
+        control,
+        OperationRegistry(),
+        context,
+        on_authenticated_exchange=lambda: events.append("ready"),
+    ).run_once()
+
+    assert events == ["ready", "execute"]
 
 def test_agent_claims_executes_and_reports_with_same_fence(tmp_path: Path) -> None:
     fake_control = FakeControl()

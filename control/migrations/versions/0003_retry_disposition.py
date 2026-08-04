@@ -1,8 +1,7 @@
 """Persist attempt-bound retry dispositions for agent operations."""
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 revision = "0003_retry_disposition"
 down_revision = "0002_agent_operations"

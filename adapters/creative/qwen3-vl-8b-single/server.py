@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
-import base64
 import argparse
+import base64
 import json
 import mimetypes
 import os
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 from urllib.request import Request, urlopen
 
 from runtime import InferRequest, InferRequestError, health_payload

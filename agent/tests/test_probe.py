@@ -1,31 +1,27 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
-from pathlib import Path
 import signal
 import subprocess
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
-import pytest
-import dgx_agent.nvidia_tools as nvidia_tools
 import dgx_agent.probe as probe_module
-
-from dgx_agent_protocol import canonical_message
-
+import pytest
+from dgx_agent import nvidia_tools
 from dgx_agent.nvidia_tools import (
     NVIDIA_TOOL_NAMES,
     REVIEWED_BUNDLE_SHA256,
     REVIEWED_BUNDLE_VERSION,
     InstalledPolicy,
     InstalledToolSecurityError,
-    ToolName,
-    open_verified_support_archive,
     open_verified_executable,
+    open_verified_support_archive,
 )
 from dgx_agent.probe import (
     AGGREGATE_OUTPUT_LIMIT_BYTES,
@@ -39,7 +35,7 @@ from dgx_agent.probe import (
     ProcessOutcome,
     ProcessRequest,
 )
-
+from dgx_agent_protocol import canonical_message
 
 TOOL_CONTRACT = {
     "device_identity": ("bin/device_identity.py", "1.1.0"),

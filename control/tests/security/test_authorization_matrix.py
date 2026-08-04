@@ -1,7 +1,6 @@
-from dgx_control.auth import MUTATION_ROLES
 from dgx_control.api import create_app
 from dgx_control.audit import MemoryAuditStore
-from dgx_control.auth import TokenCodec
+from dgx_control.auth import MUTATION_ROLES, TokenCodec
 
 
 def test_every_mutating_route_has_explicit_role() -> None:
@@ -9,7 +8,7 @@ def test_every_mutating_route_has_explicit_role() -> None:
         def list(self): return []
         def get(self, _): raise KeyError
         def enqueue(self, *_args, **_kwargs): raise AssertionError
-    app = create_app(jobs=Jobs(), tokens=TokenCodec(b"k" * 32), audits=MemoryAuditStore(), fleet=lambda: {})
+    app = create_app(jobs=Jobs(), tokens=TokenCodec(b"k" * 32), audits=MemoryAuditStore(), fleet=dict)
     routes = {
         (method, route.path)
         for route in app.routes

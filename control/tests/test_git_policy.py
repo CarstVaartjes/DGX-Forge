@@ -1,9 +1,13 @@
 from pathlib import Path
 
 import pytest
-
 from dgx_control.code_host import InMemoryCodeHost
-from dgx_control.git_policy import GitPolicy, IrreversiblePolicyError, PolicyStore, ReleaseGateError
+from dgx_control.git_policy import (
+    GitPolicy,
+    IrreversiblePolicyError,
+    PolicyStore,
+    ReleaseGateError,
+)
 from dgx_control.proposals import ProposalPreview
 
 

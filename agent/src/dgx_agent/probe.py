@@ -1,22 +1,23 @@
 """Bounded, read-only node probing through an installed fixed policy."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import UTC, datetime
 import ipaddress
 import json
 import math
 import os
-from pathlib import Path
+import re
 import select
 import selectors
 import signal
 import subprocess
 import sys
 import time
-import re
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Callable, Mapping, Protocol
+from typing import Any, Protocol
 
 from dgx_agent_protocol import canonical_message
 
@@ -28,7 +29,6 @@ from .nvidia_tools import (
     open_verified_support_archive,
     parse_tool_document,
 )
-
 
 TOTAL_PROBE_SECONDS = 15
 AGGREGATE_OUTPUT_LIMIT_BYTES = 256 * 1024
@@ -98,7 +98,7 @@ class ProcessRequest:
         support_archive_fd: int | None = None,
         absolute_deadline: float | None = None,
         additional_fds: tuple[int, ...] = (),
-    ) -> "ProcessRequest":
+    ) -> ProcessRequest:
         if (
             not argv
             or not isinstance(argv[0], str)
@@ -507,7 +507,7 @@ def _terminate_guardian(pidfd: int) -> None:
 @dataclass(frozen=True)
 class PinnedNodeProbe:
     policy: InstalledPolicy
-    _runner: _ProcessRunner = BoundedProcessRunner()
+    _runner: _ProcessRunner = field(default_factory=BoundedProcessRunner)
     _monotonic: Callable[[], float] = time.monotonic
     _utcnow: Callable[[], datetime] = lambda: datetime.now(UTC)
 

@@ -1,11 +1,11 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
+import pytest
 from dgx_control.jobs import JobService
 from dgx_control.models import Base
 from dgx_control.worker import HandlerRequest, Worker
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 def _service(tmp_path):
@@ -45,3 +45,17 @@ def test_unknown_job_kind_fails_without_execution(tmp_path) -> None:
     job = jobs.enqueue("unknown", "admin", "abc", [], {})
     assert Worker(jobs, "worker-1", {}).run_once()
     assert jobs.get(job.id).state == "failed"
+
+
+def test_worker_does_not_mask_unexpected_programming_error(tmp_path) -> None:
+    jobs = _service(tmp_path)
+    jobs.enqueue("probe", "admin", "abc", [], {})
+
+    with pytest.raises(AssertionError, match="programming defect"):
+        Worker(
+            jobs,
+            "worker-1",
+            {"probe": lambda _request: (_ for _ in ()).throw(
+                AssertionError("programming defect")
+            )},
+        ).run_once()

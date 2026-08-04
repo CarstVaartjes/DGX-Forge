@@ -4,11 +4,10 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from dgx_control.jobs import JobService, StaleAttempt
 from dgx_control.models import Base
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 class Clock:
@@ -71,6 +70,8 @@ def test_payload_is_bounded_and_rejects_credential_fields(service) -> None:
         jobs.enqueue("probe", "admin", "abc", [], {"password": "no"})
     with pytest.raises(ValueError, match="large"):
         jobs.enqueue("probe", "admin", "abc", [], {"value": "x" * 70_000})
+    with pytest.raises(TypeError, match="keys"):
+        jobs.enqueue("probe", "admin", "abc", [], {1: "not-a-string-key"})
 
 
 def test_matching_fence_can_heartbeat_wait_and_fail(service) -> None:

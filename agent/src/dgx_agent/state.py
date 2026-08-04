@@ -1,17 +1,18 @@
 """Fenced, crash-safe local state for the outbound agent."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import UTC, datetime
 import errno
 import fcntl
 import json
 import os
-from pathlib import Path
 import sqlite3
 import stat
 import time
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 from dgx_agent_protocol import (
     AgentClaim,

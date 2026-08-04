@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import re
 import subprocess
-
-
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 RUNBOOK = ROOT / "docs/runbooks/agent-pki.md"
@@ -33,7 +31,12 @@ def test_runbook_shell_blocks_are_syntactically_executable_and_never_mount_root_
     for index, block in enumerate(blocks):
         script = tmp_path / f"block-{index}.sh"
         script.write_text("set -eu\n" + block)
-        result = subprocess.run(["bash", "-n", str(script)], capture_output=True, text=True)
+        result = subprocess.run(
+            ["bash", "-n", str(script)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
         assert result.returncode == 0, result.stderr
     forbidden = re.compile(r"(?:cp|install|mv|mount|volumes?:).*root(?:_ca)?(?:\.key|[-_]key)", re.IGNORECASE)
     assert forbidden.search(text) is None
@@ -73,7 +76,7 @@ def test_public_provisioner_config_bootstrap_executes_in_disposable_fixture(tmp_
     private_path.write_text(json.dumps(private_jwk))
     result = subprocess.run(
         ["bash", "-eu", "-c", "jq --slurpfile key \"$1\" '.authority.provisioners[0].key=$key[0]' \"$2\" > \"$3\"", "bootstrap", str(public_path), str(ROOT / "deploy/compose/step-ca/ca.json"), str(config_path)],
-        capture_output=True, text=True,
+        capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stderr
     generated = json.loads(config_path.read_text())
@@ -97,7 +100,7 @@ def test_pinned_step_image_supports_documented_jwk_thumbprint_command() -> None:
         "docker", "run", "--rm", "-i", "--entrypoint", "step",
         "smallstep/step-ca:0.30.2@sha256:a2b17872915c193259b75a5474c398326f41bd199f0842093e52cf4182bc8270",
         "crypto", "jwk", "thumbprint",
-    ], input=json.dumps(public), capture_output=True, text=True, timeout=30)
+    ], input=json.dumps(public), capture_output=True, text=True, timeout=30, check=False)
     assert result.returncode == 0, result.stderr
     assert re.fullmatch(r"[A-Za-z0-9_-]{43}\n?", result.stdout)
 

@@ -8,10 +8,10 @@ import os
 import re
 import subprocess
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from types import MappingProxyType
-from typing import Mapping
 
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _ROOTS = (

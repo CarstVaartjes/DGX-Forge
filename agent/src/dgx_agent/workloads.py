@@ -1,28 +1,28 @@
 """Compiled typed workload-adapter request boundary."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
-from enum import StrEnum
 import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
 import re
 import stat
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import datetime
+from enum import StrEnum
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol
 
-from .probe import BoundedProcessRunner, ProcessRequest
 from .deadlines import DeadlineBindingError, MonotonicDeadline
+from .probe import BoundedProcessRunner, ProcessRequest
 from .releases import (
     ReleaseDescriptor,
     ReleaseMember,
     ReleaseRequest,
     verify_installed_release_fd,
 )
-
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _TOKEN = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
@@ -85,7 +85,7 @@ class WorkloadRequest:
     @classmethod
     def parse(
         cls, action: WorkloadAction, document: Mapping[str, Any]
-    ) -> "WorkloadRequest":
+    ) -> WorkloadRequest:
         if type(action) is not WorkloadAction or not isinstance(document, Mapping):
             raise WorkloadValidationError("workload action is invalid")
         action_field = _ACTION_FIELD[action]
@@ -179,7 +179,7 @@ class WorkloadOperations:
     def __init__(
         self,
         releases_root: Path,
-        release_trust: "WorkloadReleaseTrustBoundary",
+        release_trust: WorkloadReleaseTrustBoundary,
     ) -> None:
         self._initialize(releases_root, _PRODUCTION_POLICIES, release_trust)
 
@@ -188,8 +188,8 @@ class WorkloadOperations:
         cls,
         releases_root: Path,
         policies: Mapping[str, CompiledAdapterPolicy],
-        release_trust: "WorkloadReleaseTrustBoundary",
-    ) -> "WorkloadOperations":
+        release_trust: WorkloadReleaseTrustBoundary,
+    ) -> WorkloadOperations:
         instance = object.__new__(cls)
         instance._initialize(releases_root, policies, release_trust)
         return instance
@@ -198,7 +198,7 @@ class WorkloadOperations:
         self,
         releases_root: Path,
         policies: Mapping[str, CompiledAdapterPolicy],
-        release_trust: "WorkloadReleaseTrustBoundary",
+        release_trust: WorkloadReleaseTrustBoundary,
     ) -> None:
         root = Path(releases_root)
         if not root.is_absolute():
@@ -337,7 +337,7 @@ class WorkloadOperations:
                 _digest(document["evidence_digest"], "evidence digest"),
             )
             return WorkloadInspection(disposition, evidence)
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError, KeyError):
             return WorkloadInspection(WorkloadDisposition.OPERATOR_INTERVENTION)
         finally:
             if executable_fd >= 0:

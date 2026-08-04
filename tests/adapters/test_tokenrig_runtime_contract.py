@@ -1,5 +1,5 @@
-from pathlib import Path
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -46,7 +46,9 @@ def test_health_payload_exposes_stable_identity() -> None:
 
 def test_adapter_rejects_unknown_operation() -> None:
     adapter = Path(__file__).parents[2] / "adapters/creative/tokenrig/bin/tokenrig"
-    result = subprocess.run([str(adapter), "unknown"], capture_output=True, text=True)
+    result = subprocess.run(
+        [str(adapter), "unknown"], capture_output=True, text=True, check=False
+    )
     assert result.returncode == 64
     assert "unknown operation" in result.stderr
 

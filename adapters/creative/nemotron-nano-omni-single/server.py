@@ -10,7 +10,12 @@ from collections.abc import Mapping
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from runtime import InferRequestError, build_output_path, health_payload, parse_infer_request
+from runtime import (
+    InferRequestError,
+    build_output_path,
+    health_payload,
+    parse_infer_request,
+)
 
 
 def _request_json(url: str, payload: Mapping[str, object] | None = None) -> dict[str, object]:

@@ -1,10 +1,9 @@
 from dataclasses import dataclass
 
-from fastapi.testclient import TestClient
-
 from dgx_control.api import create_app
 from dgx_control.audit import MemoryAuditStore
 from dgx_control.auth import Actor, TokenCodec
+from fastapi.testclient import TestClient
 
 
 @dataclass

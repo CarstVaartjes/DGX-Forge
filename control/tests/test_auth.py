@@ -1,5 +1,4 @@
 import pytest
-
 from dgx_control.auth import Actor, AuthError, TokenCodec
 
 

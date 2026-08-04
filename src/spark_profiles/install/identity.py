@@ -33,7 +33,7 @@ class IdentityObservation:
         _digest(self.machine_id_sha256, field="machine id")
         _fingerprints(self.host_key_fingerprints)
         if not isinstance(self.requires_console_repair, bool):
-            raise ValueError("requires_console_repair must be boolean")
+            raise TypeError("requires_console_repair must be boolean")
 
 
 @dataclass(frozen=True)

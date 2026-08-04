@@ -21,7 +21,7 @@ class DashboardService:
         document = self._repository.read_document(commit, "inventory/fleet.toml")
         parsed = document.parsed
         if not isinstance(parsed, Mapping) or not isinstance(parsed.get("nodes"), Mapping):
-            raise ValueError("fleet document does not contain a node table")
+            raise TypeError("fleet document does not contain a node table")
         with self._sessions() as session:
             observations = list(session.scalars(select(Observation).where(Observation.kind == "health").order_by(Observation.observed_at.desc())))
             reconciliations = list(session.scalars(select(Reconciliation).where(Reconciliation.status == "succeeded").order_by(Reconciliation.created_at.desc()).limit(1)))

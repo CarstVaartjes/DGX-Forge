@@ -39,7 +39,7 @@ class ControlClient:
         self._timeout = timeout_seconds
 
     @classmethod
-    def from_environment(cls) -> "ControlClient":
+    def from_environment(cls) -> ControlClient:
         import os
 
         url = os.environ.get("DGX_CONTROL_URL", "")

@@ -12,6 +12,7 @@ from spark_profiles.install.orchestrator import WaitForOperator
 from spark_profiles.install.remote import RemoteResult
 from spark_profiles.install.steps import (
     ProductionStepOptions,
+    _json_result,
     build_production_handlers,
 )
 
@@ -20,6 +21,11 @@ SERIAL_DIGEST = "a" * 64
 MACHINE_DIGEST = "b" * 64
 HOST_FINGERPRINT = "SHA256:host-key"
 ADMIN_FINGERPRINT = "SHA256:admin-key"
+
+
+def test_remote_nonobject_json_is_a_type_error() -> None:
+    with pytest.raises(TypeError, match="non-object"):
+        _json_result(RemoteResult(0, b"[]", b""), "fixture")
 
 
 class ScriptedTransport:

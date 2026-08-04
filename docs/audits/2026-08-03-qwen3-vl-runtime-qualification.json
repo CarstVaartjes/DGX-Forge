@@ -1,7 +1,7 @@
 {
   "model_definition": "qwen3-vl-8b-single",
-  "definition_sha256": "0a1ebe5f2b07af49b340abb82466a34c8357aabb6841a58af43c506c52fe4aab",
-  "runtime_release_sha256": "38040e8b30dc81f764c9975cc361066653d36021b8e22e2ecfdbf9ad91f23d8a",
+  "definition_sha256": "aea18c822589c2acbce8a5b5f12d8b58b504a7eec2f554c1a45a1641d6bcfe94",
+  "runtime_release_sha256": "8022bd60dd108dce87adf1aae411b727af2cb037bc053fcfdaeaf151155d528b",
   "node": "spark2",
   "boot_id": "abeace49-049a-4c8c-b079-b4ce66793b67",
   "source": {

@@ -1,0 +1,136 @@
+#!/usr/bin/python3 -I
+"""Verify DGX agent units through a disposable installed filesystem root."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+UNITS = (
+    "dgx-forge-agent.service",
+    "dgx-forge-agent-supervisor.service",
+)
+SUMMARY = re.compile(
+    r"Overall exposure level for ([^:]+): ([0-9]+(?:\.[0-9]+)?) ([A-Z]+)"
+)
+
+
+def _canonical(value: object) -> str:
+    return json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n"
+
+
+def _run(arguments: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        arguments,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+
+def _install(root: Path, repository: Path) -> None:
+    shutil.copytree(
+        "/usr/lib/systemd/system",
+        root / "usr/lib/systemd/system",
+        symlinks=True,
+    )
+    unit_root = root / "etc/systemd/system"
+    executable_root = root / "usr/libexec"
+    unit_root.mkdir(parents=True)
+    executable_root.mkdir(parents=True)
+    for name in UNITS:
+        shutil.copy2(repository / "agent/systemd" / name, unit_root / name)
+    shutil.copy2(
+        repository / "agent/supervisor/dgx-agent-supervisor",
+        executable_root / "dgx-agent-supervisor",
+    )
+
+
+def _verify(root: Path) -> None:
+    verified = _run(
+        [
+            "systemd-analyze",
+            "verify",
+            f"--root={root}",
+            *(f"/etc/systemd/system/{name}" for name in UNITS),
+        ]
+    )
+    if verified.returncode != 0:
+        raise RuntimeError(verified.stderr.strip() or verified.stdout.strip())
+
+
+def _security(root: Path, name: str) -> dict[str, object]:
+    effective = _run(
+        [
+            "systemd-analyze",
+            "security",
+            "--offline=yes",
+            f"--root={root}",
+            "--json=short",
+            name,
+        ]
+    )
+    if effective.returncode != 0:
+        raise RuntimeError(effective.stderr.strip() or effective.stdout.strip())
+    assessments = json.loads(effective.stdout)
+    if not isinstance(assessments, list) or not assessments:
+        raise RuntimeError(f"security analysis for {name} is empty")
+    rendered = _run(
+        [
+            "systemd-analyze",
+            "security",
+            "--offline=yes",
+            f"--root={root}",
+            "--no-pager",
+            name,
+        ]
+    )
+    if rendered.returncode != 0:
+        raise RuntimeError(rendered.stderr.strip() or rendered.stdout.strip())
+    match = SUMMARY.search(rendered.stdout)
+    if match is None or match.group(1) != name:
+        raise RuntimeError(f"security summary for {name} is unavailable")
+    return {
+        "assessment_count": len(assessments),
+        "exposure": match.group(3),
+        "score": float(match.group(2)),
+    }
+
+
+def verify(repository: Path) -> dict[str, object]:
+    with tempfile.TemporaryDirectory(prefix="dgx-agent-systemd-") as temporary:
+        root = Path(temporary)
+        _install(root, repository)
+        _verify(root)
+        units = {name: _security(root, name) for name in UNITS}
+    return {"schema_version": 1, "units": units, "verify": "passed"}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--json", action="store_true")
+    arguments = parser.parse_args()
+    repository = Path(__file__).resolve().parents[1]
+    try:
+        report = verify(repository)
+    except (OSError, RuntimeError, subprocess.SubprocessError, json.JSONDecodeError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 1
+    if arguments.json:
+        print(_canonical(report), end="")
+    else:
+        print("systemd installed-root verification: passed")
+        for name, unit in report["units"].items():
+            print(f"{name}: {unit['score']:.1f} {unit['exposure']}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
