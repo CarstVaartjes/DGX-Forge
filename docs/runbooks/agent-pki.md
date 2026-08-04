@@ -33,6 +33,29 @@ Keep NTP healthy on the NAS and Sparks. Alert at 30 seconds of clock skew and
 stop issuance before one minute; authorization tokens deliberately allow only
 30 seconds and step-ca v0.30.2 allows at most one minute.
 
+## Restricted LAN endpoint
+
+Reserve `10.0.0.2` for the NAS and resolve the enrollment, agent, and registry
+names below to that same address only on the management LAN:
+
+```text
+enroll.dgx-forge.lan   10.0.0.2
+agents.dgx-forge.lan   10.0.0.2
+registry.dgx-forge.lan 10.0.0.2
+```
+
+Caddy binds backend TLS only to `10.0.0.2:8443`. The NAS firewall permits that
+port only from `10.0.0.0/24`, preferably narrowed to reserved Spark leases.
+Enrollment exposes only `/agent/v1/enroll`; the agent and registry names require
+the issued mTLS identity. Human control, inference, Grafana, and devbox routes
+are absent from this listener and remain tailnet-only.
+
+Install the Caddy backend trust anchor and stable DNS names during each manual
+Spark hardening/bootstrap. The installed agent initiates outbound long polling;
+the manager does not scan the LAN. The certificate-bound `spk_` identity and a
+fresh proxy-observed address within `DGX_MANAGEMENT_CIDRS` drive availability.
+DHCP reservations improve operations but are not a correctness dependency.
+
 ## Create the offline root and online intermediate
 
 Perform this block on the disconnected workstation. Store the root password in

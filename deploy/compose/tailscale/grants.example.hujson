@@ -3,7 +3,7 @@
     "tag:dgx-gateway": ["autogroup:admin"]
   },
   "groups": {
-    "group:ai-devbox-users": ["user@example.invalid"]
+    "group:ai-devbox-users": ["replace-with-your-login@github"]
   },
   "acls": [],
   "grants": [
@@ -34,7 +34,7 @@
       "deny": ["svc:dgx-forge:443"]
     },
     {
-      "src": "user@example.invalid",
+      "src": "replace-with-your-login@github",
       "accept": ["svc:ai-devbox:22"]
     },
     {

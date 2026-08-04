@@ -124,7 +124,7 @@ def test_grants_example_is_exact_service_least_privilege() -> None:
 
     assert policy["tagOwners"] == {"tag:dgx-gateway": ["autogroup:admin"]}
     assert policy["groups"] == {
-        "group:ai-devbox-users": ["user@example.invalid"]
+        "group:ai-devbox-users": ["replace-with-your-login@github"]
     }
     assert policy["acls"] == []
     assert policy["grants"] == [
@@ -148,8 +148,11 @@ def test_grants_example_is_exact_service_least_privilege() -> None:
     assert policy["tests"] == [
         {"src": "autogroup:admin", "accept": ["svc:dgx-forge:443"]},
         {"src": "autogroup:member", "deny": ["svc:dgx-forge:443"]},
-        {"src": "user@example.invalid", "accept": ["svc:ai-devbox:22"]},
+        {
+            "src": "replace-with-your-login@github",
+            "accept": ["svc:ai-devbox:22"],
+        },
         {"src": "autogroup:member", "deny": ["svc:ai-devbox:22"]},
     ]
     assert "svc:*" not in json.dumps(policy)
-    assert "github" not in json.dumps(policy).lower()
+    assert "tskey-" not in json.dumps(policy).lower()
