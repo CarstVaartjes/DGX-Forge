@@ -89,8 +89,8 @@ def _process_is_gone(pid: int) -> bool:
     return False
 
 
-def _assert_process_gone(pid: int) -> None:
-    deadline = time.monotonic() + 2
+def _assert_process_gone(pid: int, *, within_seconds: float = 2) -> None:
+    deadline = time.monotonic() + within_seconds
     while time.monotonic() < deadline:
         if _process_is_gone(pid):
             return
@@ -817,13 +817,70 @@ def test_stopped_supervisor_is_resumed_for_bounded_descendant_cleanup(tmp_path) 
     _assert_process_gone(int(pid_file.read_text()))
 
 
-def test_supervisor_crash_is_not_misreported_as_a_tool_exit(tmp_path) -> None:
+def test_guardian_crash_is_not_misreported_as_a_tool_exit(tmp_path) -> None:
     script = tmp_path / "crash-supervisor.py"
+    pid_file = tmp_path / "crash-supervisor-tool.pid"
     digest = _executable(
         script,
         b"#!/usr/bin/env python3\n"
-        b"import os, signal\n"
-        b"os.kill(os.getppid(), signal.SIGKILL)\n",
+        b"import os, signal, time\n"
+        b"open('crash-supervisor-tool.pid', 'w').write(str(os.getpid()))\n"
+        b"null = os.open('/dev/null', os.O_RDWR)\n"
+        b"os.dup2(null, 0); os.dup2(null, 1); os.dup2(null, 2)\n"
+        b"os.kill(os.getppid(), signal.SIGKILL)\n"
+        b"time.sleep(60)\n",
+    )
+    descriptor = open_verified_executable(
+        script, digest, _test_only_allow_unprivileged=True
+    )
+    assert descriptor is not None
+    request = ProcessRequest.fixed(
+        argv=(str(script),), cwd=tmp_path, timeout_seconds=1,
+        output_limit_bytes=1024, executable_fd=descriptor,
+    )
+    started = time.monotonic()
+    try:
+        with pytest.raises(ProbeCollectorError):
+            BoundedProcessRunner().run(request)
+    finally:
+        os.close(descriptor)
+
+    assert time.monotonic() - started < 0.3
+    _assert_process_gone(int(pid_file.read_text()), within_seconds=0.3)
+
+
+@pytest.mark.parametrize("escape", ["same-group", "setsid-double-fork"])
+def test_guardian_crash_after_descendant_escape_is_contained(
+    tmp_path, escape
+) -> None:
+    script = tmp_path / f"crash-guardian-{escape}.py"
+    tool_pid_file = tmp_path / f"crash-guardian-{escape}-tool.pid"
+    child_pid_file = tmp_path / f"crash-guardian-{escape}-child.pid"
+    child_setup = (
+        "if os.fork() == 0:\n"
+        if escape == "same-group"
+        else (
+            "if os.fork() == 0:\n"
+            "    os.setsid()\n"
+            "    if os.fork() != 0: os._exit(0)\n"
+        )
+    )
+    digest = _executable(
+        script,
+        (
+            "#!/usr/bin/env python3\n"
+            "import os, signal, time\n"
+            "from pathlib import Path\n"
+            f"open('{tool_pid_file.name}', 'w').write(str(os.getpid()))\n"
+            f"{child_setup}"
+            f"    open('{child_pid_file.name}', 'w').write(str(os.getpid()))\n"
+            "    null = os.open('/dev/null', os.O_RDWR)\n"
+            "    os.dup2(null, 0); os.dup2(null, 1); os.dup2(null, 2)\n"
+            "    time.sleep(60); os._exit(0)\n"
+            f"while not Path('{child_pid_file.name}').exists(): time.sleep(0.001)\n"
+            "os.kill(os.getppid(), signal.SIGKILL)\n"
+            "time.sleep(60)\n"
+        ).encode(),
     )
     descriptor = open_verified_executable(
         script, digest, _test_only_allow_unprivileged=True
@@ -838,6 +895,86 @@ def test_supervisor_crash_is_not_misreported_as_a_tool_exit(tmp_path) -> None:
             BoundedProcessRunner().run(request)
     finally:
         os.close(descriptor)
+
+    _assert_process_gone(int(tool_pid_file.read_text()), within_seconds=0.3)
+    _assert_process_gone(int(child_pid_file.read_text()), within_seconds=0.3)
+
+
+@pytest.mark.parametrize("escape", ["same-group", "setsid-double-fork"])
+def test_outer_supervisor_crash_is_cleaned_by_surviving_guardian(
+    tmp_path, escape
+) -> None:
+    script = tmp_path / f"crash-outer-{escape}.py"
+    tool_pid_file = tmp_path / f"crash-outer-{escape}-tool.pid"
+    child_pid_file = tmp_path / f"crash-outer-{escape}-child.pid"
+    child_setup = (
+        "if os.fork() == 0:\n"
+        if escape == "same-group"
+        else (
+            "if os.fork() == 0:\n"
+            "    os.setsid()\n"
+            "    if os.fork() != 0: os._exit(0)\n"
+        )
+    )
+    digest = _executable(
+        script,
+        (
+            "#!/usr/bin/env python3\n"
+            "import os, signal, time\n"
+            "from pathlib import Path\n"
+            f"open('{tool_pid_file.name}', 'w').write(str(os.getpid()))\n"
+            "guardian = os.getppid()\n"
+            "raw = Path(f'/proc/{guardian}/stat').read_text()\n"
+            "supervisor = int(raw[raw.rfind(')') + 2:].split()[1])\n"
+            f"{child_setup}"
+            f"    open('{child_pid_file.name}', 'w').write(str(os.getpid()))\n"
+            "    null = os.open('/dev/null', os.O_RDWR)\n"
+            "    os.dup2(null, 0); os.dup2(null, 1); os.dup2(null, 2)\n"
+            "    time.sleep(60); os._exit(0)\n"
+            f"while not Path('{child_pid_file.name}').exists(): time.sleep(0.001)\n"
+            "os.kill(supervisor, signal.SIGKILL)\n"
+            "time.sleep(60)\n"
+        ).encode(),
+    )
+    descriptor = open_verified_executable(
+        script, digest, _test_only_allow_unprivileged=True
+    )
+    assert descriptor is not None
+    request = ProcessRequest.fixed(
+        argv=(str(script),), cwd=tmp_path, timeout_seconds=1,
+        output_limit_bytes=1024, executable_fd=descriptor,
+    )
+    started = time.monotonic()
+    try:
+        with pytest.raises(ProbeCollectorError):
+            BoundedProcessRunner().run(request)
+    finally:
+        os.close(descriptor)
+
+    assert time.monotonic() - started < 0.35
+    _assert_process_gone(int(tool_pid_file.read_text()), within_seconds=0.3)
+    _assert_process_gone(int(child_pid_file.read_text()), within_seconds=0.3)
+
+
+def test_authenticated_fallback_signals_only_the_pidfd_bound_guardian(
+    monkeypatch,
+) -> None:
+    pidfd_signals: list[tuple[int, int]] = []
+    monkeypatch.setattr(
+        probe_module.signal,
+        "pidfd_send_signal",
+        lambda pidfd, signum: pidfd_signals.append((pidfd, signum)),
+    )
+    poller = type(
+        "ReadyPidfd",
+        (),
+        {"register": lambda *_: None, "poll": lambda *_: [7]},
+    )()
+    monkeypatch.setattr(probe_module.select, "poll", lambda: poller)
+
+    probe_module._terminate_guardian(7)
+
+    assert pidfd_signals == [(7, signal.SIGTERM), (7, signal.SIGCONT)]
 
 
 def test_supervised_tool_launch_failure_is_bounded_and_typed(tmp_path) -> None:

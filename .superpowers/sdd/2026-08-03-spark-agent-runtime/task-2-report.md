@@ -63,6 +63,26 @@ Review-fix round 1 added independent RED/GREEN regressions for six findings:
 - Tool exit 124 is mapped to generic nonzero 125 and cannot collide with the
   supervisor's typed timeout status.
 
+Review-fix round 2 closed the remaining unexpected-supervisor-exit gap. Its
+RED regression recorded the tool PID, killed the supervisor from the running
+tool, observed the expected typed collector error, and proved that the tool
+still survived beyond a bounded 300-ms cleanup window. The runner now uses a
+private two-phase lifecycle handshake: a trusted guardian becomes an isolated
+process-group leader but waits on a private gate; the supervisor reports that
+PID/PGID over its bounded status pipe; the runner opens a pidfd, records it, and
+acknowledges; only then does the supervisor release the guardian to launch the
+sealed tool in a child session. The guardian remains alive as a second
+per-invocation subreaper rather than execing the tool. A supervisor crash before
+acknowledgement cannot start the tool; after release, `PR_SET_PDEATHSIG` plus an
+expected-parent check wakes the guardian to clean same-group and
+setsid/double-fork descendants. The runner's fallback uses only the authenticated
+pidfd, including `SIGCONT` for a stopped guardian, and never sends a numeric
+tool/guardian-group signal. Conversely, if the guardian itself crashes, the
+outer supervisor adopts and cleans the tool tree. Private status,
+acknowledgement, gate, and guardian-result descriptors are never inherited by
+the tool; the result pipe also distinguishes launch failure from a genuine tool
+exit in the reserved return-code range.
+
 ## Exact installed-policy contract
 
 The installed policy is schema version 1. Its root object has exactly these
@@ -149,11 +169,15 @@ adapted and normalized by `probe.py`.
   deterministic sealed ZIP containing only the four reviewed module names at
   archive root, with user site and bytecode writes disabled.
 - Child calls use exact argv, a fixed cwd/environment, closed stdin, no shell,
-  and only sealed executable/support plus internal bounded-status descriptors.
-  Each invocation has a separate supervisor subreaper, avoiding process-wide
-  subreaper races and unrelated child management. Stdout/stderr are incrementally
-  bounded; success, launch failure, timeout, flood, crash, and setsid/double-fork
-  cases terminate and reap owned descendants.
+  and only sealed executable/support descriptors. Private bounded status,
+  acknowledgement, guardian-gate, and result descriptors are confined to
+  trusted runner processes and close before tool exec. Each invocation has
+  nested, private supervisor and guardian subreapers, avoiding process-wide
+  subreaper races and unrelated child management. The authenticated gated-launch
+  handshake exposes one pidfd-bound guardian before the tool can run, so outer
+  fallback cleanup never signals a recycled numeric tool process group.
+  Stdout/stderr are incrementally bounded; success, launch failure, timeout,
+  flood, crash, and setsid/double-fork cases terminate and reap owned descendants.
 - The total probe deadline includes integrity verification and is bounded by
   both 15 seconds and the claim deadline. Per-process, 256-KiB aggregate raw,
   and 64-KiB canonical result ceilings are enforced independently.
@@ -173,7 +197,7 @@ adapted and normalized by `probe.py`.
 uv run --project agent pytest agent/tests/test_operations.py agent/tests/test_probe.py agent/tests/test_nvidia_tools.py -v
 ```
 
-Result after review-fix round 1: 109 passed in 1.96s.
+Result after review-fix round 2: 114 passed in 2.48s.
 
 ```sh
 uv run pytest tests/nodes/test_collect_health.py -q
@@ -182,12 +206,13 @@ uv run --project agent python -m compileall -q agent/src
 git diff --check
 ```
 
-Results: 24 collector tests passed in 2.81s; 222 agent tests passed in 6.88s;
+Results: 24 collector tests passed in 2.81s; 227 agent tests passed in 7.38s;
 bytecode compilation and whitespace validation exited successfully with no
 output.
 
-The concurrent-runner plus stopped-supervisor regressions were also repeated
-five times (10 cases total); every repetition passed in 0.35–0.36s.
+The guardian-crash, outer-supervisor-crash, stopped-supervisor, and concurrent
+containment regressions were also repeated five times (30 cases total); every
+repetition passed in 0.63–0.65s.
 
 ## Remaining concerns
 
@@ -204,5 +229,11 @@ five times (10 cases total); every repetition passed in 0.35–0.36s.
   integration responsibility.
 - Descriptor execution, process groups, procfs, and subreaper cleanup are
   intentionally Linux-specific, matching the target DGX Spark runtime.
+- The enforceable no-cgroup boundary tolerates one unexpected containment-layer
+  death: guardian loss is covered by the outer subreaper, and outer-supervisor
+  loss is covered by the pidfd-bound guardian. An actively malicious fixed tool
+  that discovers and simultaneously `SIGKILL`s both trusted layers cannot be
+  contained without a privileged cgroup or PID namespace; Task 2 neither scans
+  ambient PIDs nor risks unrelated process groups to approximate that guarantee.
 - Release/workload handlers, network transport, supervision, and installation
   remain out of scope for Tasks 3–6.

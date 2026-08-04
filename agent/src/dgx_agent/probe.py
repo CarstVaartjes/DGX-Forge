@@ -8,6 +8,7 @@ import json
 import math
 import os
 from pathlib import Path
+import select
 import selectors
 import signal
 import subprocess
@@ -33,6 +34,7 @@ TOTAL_PROBE_SECONDS = 15
 AGGREGATE_OUTPUT_LIMIT_BYTES = 256 * 1024
 RESULT_LIMIT_BYTES = 64 * 1024
 _CLEANUP_RESERVE_SECONDS = 0.04
+_SUPERVISOR_STATUS_LIMIT_BYTES = 64
 FIXED_PROCESS_ENVIRONMENT: Mapping[str, str] = MappingProxyType(
     {
         "LANG": "C.UTF-8",
@@ -173,6 +175,11 @@ class BoundedProcessRunner:
         process: subprocess.Popen[bytes] | None = None
         status_read = -1
         status_write = -1
+        acknowledgement_read = -1
+        acknowledgement_write = -1
+        tool_process_group: int | None = None
+        tool_pidfd = -1
+        total = 0
         deadline = request.absolute_deadline
         if deadline is None:
             deadline = time.monotonic() + request.timeout_seconds
@@ -182,12 +189,14 @@ class BoundedProcessRunner:
         try:
             supervisor = Path(__file__).with_name("_probe_supervisor.py")
             status_read, status_write = os.pipe2(os.O_CLOEXEC)
+            acknowledgement_read, acknowledgement_write = os.pipe2(os.O_CLOEXEC)
             process = subprocess.Popen(
                 [
                     sys.executable,
                     "-I",
                     str(supervisor),
                     str(status_write),
+                    str(acknowledgement_read),
                     str(request.executable_fd),
                     str(request.support_archive_fd if request.support_archive_fd is not None else -1),
                     repr(deadline),
@@ -202,25 +211,37 @@ class BoundedProcessRunner:
                 cwd="/",
                 env=dict(request.env),
                 close_fds=True,
-                pass_fds=(*request.inherited_fds, status_write),
+                pass_fds=(
+                    *request.inherited_fds,
+                    status_write,
+                    acknowledgement_read,
+                ),
                 start_new_session=True,
                 text=False,
                 bufsize=0,
             )
             os.close(status_write)
             status_write = -1
+            os.close(acknowledgement_read)
+            acknowledgement_read = -1
             assert process.stdout is not None and process.stderr is not None
+            stdout_fd = process.stdout.fileno()
+            stderr_fd = process.stderr.fileno()
             streams = {
-                process.stdout.fileno(): bytearray(),
-                process.stderr.fileno(): bytearray(),
+                stdout_fd: bytearray(),
+                stderr_fd: bytearray(),
             }
-            for descriptor in streams:
+            for descriptor in (*streams, status_read):
                 os.set_blocking(descriptor, False)
             selector = selectors.DefaultSelector()
             try:
                 for descriptor in streams:
-                    selector.register(descriptor, selectors.EVENT_READ)
-                total = 0
+                    selector.register(descriptor, selectors.EVENT_READ, "output")
+                selector.register(status_read, selectors.EVENT_READ, "status")
+                status_buffer = bytearray()
+                status_bytes = 0
+                status_eof = False
+                final_status: tuple[str, int] | None = None
                 while selector.get_map():
                     remaining_time = execution_deadline - time.monotonic()
                     if remaining_time <= 0:
@@ -236,6 +257,61 @@ class BoundedProcessRunner:
                             for key in tuple(selector.get_map().values())
                         ]
                     for key, _ in events:
+                        if key.data == "status":
+                            chunk = os.read(
+                                key.fd,
+                                _SUPERVISOR_STATUS_LIMIT_BYTES - status_bytes + 1,
+                            )
+                            if not chunk:
+                                selector.unregister(key.fd)
+                                status_eof = True
+                                if status_buffer:
+                                    raise ProbeCollectorError(
+                                        "probe supervisor returned invalid status"
+                                    )
+                                continue
+                            status_bytes += len(chunk)
+                            if status_bytes > _SUPERVISOR_STATUS_LIMIT_BYTES:
+                                raise ProbeCollectorError(
+                                    "probe supervisor returned invalid status"
+                                )
+                            status_buffer.extend(chunk)
+                            while b"\n" in status_buffer:
+                                raw_line, _, remainder = status_buffer.partition(b"\n")
+                                status_buffer[:] = remainder
+                                tool_process_group, final_status = (
+                                    _parse_supervisor_status_line(
+                                        raw_line,
+                                        tool_process_group,
+                                        final_status,
+                                    )
+                                )
+                                if (
+                                    tool_process_group is not None
+                                    and acknowledgement_write >= 0
+                                ):
+                                    provisional_pidfd = os.pidfd_open(
+                                        tool_process_group
+                                    )
+                                    try:
+                                        if (
+                                            os.getpgid(tool_process_group)
+                                            != tool_process_group
+                                        ):
+                                            raise OSError(
+                                                "guardian process-group identity is invalid"
+                                            )
+                                        if os.write(acknowledgement_write, b"A") != 1:
+                                            raise OSError(
+                                                "supervisor acknowledgement failed"
+                                            )
+                                    except OSError:
+                                        os.close(provisional_pidfd)
+                                        raise
+                                    tool_pidfd = provisional_pidfd
+                                    os.close(acknowledgement_write)
+                                    acknowledgement_write = -1
+                            continue
                         allowance = request.output_limit_bytes - total
                         chunk = os.read(key.fd, min(64 * 1024, allowance + 1))
                         if not chunk:
@@ -248,6 +324,15 @@ class BoundedProcessRunner:
                                 captured_bytes=total,
                             )
                         streams[key.fd].extend(chunk)
+                    supervisor_returncode = process.poll()
+                    if status_eof and final_status is None:
+                        raise ProbeCollectorError(
+                            "probe supervisor exited without final status"
+                        )
+                    if supervisor_returncode not in (None, 0):
+                        raise ProbeCollectorError(
+                            "probe supervisor exited unexpectedly"
+                        )
                 remaining_time = execution_deadline - time.monotonic()
                 if remaining_time <= 0:
                     raise ProbeDeadlineExceeded(
@@ -259,40 +344,41 @@ class BoundedProcessRunner:
                     raise ProbeDeadlineExceeded(
                         "probe process timed out", captured_bytes=total
                     ) from error
-                status = os.read(status_read, 33)
                 if time.monotonic() >= deadline:
                     raise ProbeDeadlineExceeded(
                         "probe process timed out", captured_bytes=total
                     )
-                if returncode != 0 or len(status) > 32 or not status.endswith(b"\n"):
+                if returncode != 0 or final_status is None:
                     raise ProbeCollectorError("probe process could not be executed")
-                try:
-                    kind, raw_code = status[:-1].decode("ascii").split(":", 1)
-                    tool_returncode = int(raw_code)
-                except (UnicodeDecodeError, ValueError) as error:
-                    raise ProbeCollectorError(
-                        "probe supervisor returned invalid status"
-                    ) from error
+                kind, tool_returncode = final_status
                 if kind == "timeout":
                     raise ProbeDeadlineExceeded(
                         "probe process timed out", captured_bytes=total
                     )
-                if kind != "ok" or not 0 <= tool_returncode <= 125:
+                if kind != "ok":
                     raise ProbeCollectorError("probe process could not be executed")
                 return ProcessOutcome(
                     tool_returncode,
-                    bytes(streams[process.stdout.fileno()]),
-                    bytes(streams[process.stderr.fileno()]),
+                    bytes(streams[stdout_fd]),
+                    bytes(streams[stderr_fd]),
                 )
             finally:
                 selector.close()
-        except (ProbeDeadlineExceeded, ProbeOutputLimitExceeded):
+        except ProbeError:
             if process is not None:
-                _terminate_group(process, deadline)
+                _terminate_group(
+                    process,
+                    deadline,
+                    tool_pidfd,
+                )
             raise
         except (OSError, subprocess.SubprocessError) as error:
             if process is not None:
-                _terminate_group(process, deadline)
+                _terminate_group(
+                    process,
+                    deadline,
+                    tool_pidfd,
+                )
             raise ProbeCollectorError("probe process could not be executed") from error
         finally:
             if process is not None:
@@ -304,15 +390,57 @@ class BoundedProcessRunner:
                 os.close(status_read)
             if status_write >= 0:
                 os.close(status_write)
+            if acknowledgement_read >= 0:
+                os.close(acknowledgement_read)
+            if acknowledgement_write >= 0:
+                os.close(acknowledgement_write)
+            if tool_pidfd >= 0:
+                os.close(tool_pidfd)
+
+
+def _parse_supervisor_status_line(
+    raw_line: bytes,
+    tool_process_group: int | None,
+    final_status: tuple[str, int] | None,
+) -> tuple[int | None, tuple[str, int] | None]:
+    try:
+        fields = raw_line.decode("ascii").split(":")
+        if fields[0:1] == ["start"]:
+            if (
+                len(fields) != 2
+                or tool_process_group is not None
+                or final_status is not None
+            ):
+                raise ValueError
+            process_group = int(fields[1])
+            if process_group <= 1:
+                raise ValueError
+            return process_group, final_status
+        if fields[0:1] != ["done"] or len(fields) != 3 or final_status is not None:
+            raise ValueError
+        kind = fields[1]
+        code = int(fields[2])
+        if kind == "ok":
+            if tool_process_group is None or not 0 <= code <= 125:
+                raise ValueError
+        elif kind not in {"timeout", "launch", "internal"} or code != 0:
+            raise ValueError
+        return tool_process_group, (kind, code)
+    except (UnicodeDecodeError, ValueError) as error:
+        raise ProbeCollectorError("probe supervisor returned invalid status") from error
 
 
 def _terminate_group(
-    process: subprocess.Popen[bytes], absolute_deadline: float
+    process: subprocess.Popen[bytes],
+    absolute_deadline: float,
+    tool_pidfd: int = -1,
 ) -> None:
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
+    if tool_pidfd >= 0:
+        _terminate_guardian(tool_pidfd)
     try:
         os.kill(process.pid, signal.SIGCONT)
     except ProcessLookupError:
@@ -333,6 +461,22 @@ def _terminate_group(
                 process.wait(timeout=0.01)
             except subprocess.TimeoutExpired:
                 pass
+
+
+def _terminate_guardian(pidfd: int) -> None:
+    try:
+        signal.pidfd_send_signal(pidfd, signal.SIGTERM)
+        signal.pidfd_send_signal(pidfd, signal.SIGCONT)
+    except OSError:
+        return
+    poller = select.poll()
+    poller.register(pidfd, select.POLLIN)
+    if poller.poll(60):
+        return
+    try:
+        signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+    except OSError:
+        pass
 
 
 @dataclass(frozen=True)
