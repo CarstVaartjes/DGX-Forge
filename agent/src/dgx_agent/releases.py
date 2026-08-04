@@ -698,30 +698,56 @@ class ReleaseInstaller:
             descriptor = self._trust.authorize(
                 request, fixed_deadline,
             )
-            destination = self._releases_root / request.target_digest
-            if destination.exists():
-                _verify_installed(
-                    self._releases_root, destination.name, descriptor,
-                    fixed_deadline,
-                )
-                return ReleaseInspection(
-                    ReleaseDisposition.COMPLETED,
-                    ReleaseEvidence(
-                        "already-installed",
-                        request.target_digest,
-                        request.oci_manifest_digest,
-                        request.adapter_id,
-                    ),
-                )
-            staging_root_fd = os.open(
-                self._staging_root,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-            )
+            releases_fd = -1
+            staging_root_fd = -1
             recovery_lock_fd = -1
             try:
+                _deadline(fixed_deadline)
+                releases_fd = os.open(
+                    self._releases_root,
+                    os.O_RDONLY
+                    | os.O_DIRECTORY
+                    | os.O_CLOEXEC
+                    | os.O_NOFOLLOW,
+                )
+                _deadline(fixed_deadline)
+                staging_root_fd = os.open(
+                    self._staging_root,
+                    os.O_RDONLY
+                    | os.O_DIRECTORY
+                    | os.O_CLOEXEC
+                    | os.O_NOFOLLOW,
+                )
+                _deadline(fixed_deadline)
                 recovery_lock_fd = _open_install_recovery_lock_fd(
                     staging_root_fd, fixed_deadline
                 )
+                _deadline(fixed_deadline)
+                try:
+                    os.stat(
+                        request.target_digest,
+                        dir_fd=releases_fd,
+                        follow_symlinks=False,
+                    )
+                except FileNotFoundError:
+                    _deadline(fixed_deadline)
+                else:
+                    _deadline(fixed_deadline)
+                    _verify_installed_fd(
+                        releases_fd,
+                        request.target_digest,
+                        descriptor,
+                        fixed_deadline,
+                    )
+                    return ReleaseInspection(
+                        ReleaseDisposition.COMPLETED,
+                        ReleaseEvidence(
+                            "already-installed",
+                            request.target_digest,
+                            request.oci_manifest_digest,
+                            request.adapter_id,
+                        ),
+                    )
                 recovered = self._reap_deferred_staging(staging_root_fd)
                 _deadline(fixed_deadline)
                 names = os.listdir(staging_root_fd)
@@ -769,7 +795,10 @@ class ReleaseInstaller:
             finally:
                 if recovery_lock_fd >= 0:
                     os.close(recovery_lock_fd)
-                os.close(staging_root_fd)
+                if staging_root_fd >= 0:
+                    os.close(staging_root_fd)
+                if releases_fd >= 0:
+                    os.close(releases_fd)
         except Exception:  # noqa: BLE001 - inspection intentionally fails closed
             return ReleaseInspection(ReleaseDisposition.OPERATOR_INTERVENTION)
         return ReleaseInspection(ReleaseDisposition.OPERATOR_INTERVENTION)

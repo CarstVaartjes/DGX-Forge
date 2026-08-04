@@ -3136,6 +3136,130 @@ def test_inspection_cannot_reap_another_installers_active_staging(
     assert len(inspection_results) == 1
 
 
+def test_inspection_observes_same_release_published_while_waiting_for_root_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    entered_transport = threading.Event()
+    release_transport = threading.Event()
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            entered_transport.set()
+            assert release_transport.wait(timeout=5)
+            member = destination / "bin/runtime-adapter"
+            member.parent.mkdir()
+            member.write_bytes(b"x" * 17)
+            member.chmod(0o500)
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    installer = ReleaseInstaller(Trust(), Transport(), releases, staging)
+    inspector = ReleaseInstaller(Trust(), object(), releases, staging)
+    real_flock = release_module.fcntl.flock
+    inspector_contended = threading.Event()
+
+    def observed_flock(file_descriptor, operation):
+        try:
+            return real_flock(file_descriptor, operation)
+        except BlockingIOError:
+            if threading.current_thread().name == "same-release-inspector":
+                inspector_contended.set()
+            raise
+
+    monkeypatch.setattr(release_module.fcntl, "flock", observed_flock)
+    install_errors: list[BaseException] = []
+    inspection_results: list[ReleaseInspection] = []
+
+    def run_install() -> None:
+        try:
+            installer.install(
+                ReleaseRequest.parse(VALID_RELEASE),
+                datetime.now(UTC) + timedelta(seconds=5),
+            )
+        except BaseException as error:  # noqa: BLE001 - thread result capture
+            install_errors.append(error)
+
+    def run_inspection() -> None:
+        inspection_results.append(
+            inspector.inspect(
+                ReleaseRequest.parse(VALID_RELEASE),
+                datetime.now(UTC) + timedelta(seconds=5),
+            )
+        )
+
+    install_thread = threading.Thread(target=run_install)
+    inspect_thread = threading.Thread(
+        target=run_inspection, name="same-release-inspector"
+    )
+    install_thread.start()
+    assert entered_transport.wait(timeout=2)
+    inspect_thread.start()
+    try:
+        contended = inspector_contended.wait(timeout=2)
+        inspection_waited = inspect_thread.is_alive()
+    finally:
+        release_transport.set()
+        install_thread.join(timeout=5)
+        inspect_thread.join(timeout=5)
+
+    assert contended
+    assert inspection_waited
+    assert not install_thread.is_alive()
+    assert not inspect_thread.is_alive()
+    assert not install_errors
+    assert (releases / VALID_RELEASE["target_digest"]).is_dir()
+    assert not any(
+        release_module._STAGING_NAME.fullmatch(entry.name)
+        for entry in staging.iterdir()
+    )
+    assert not tuple(staging.glob(".recovery-*.state"))
+    assert inspection_results == [
+        ReleaseInspection(
+            ReleaseDisposition.COMPLETED,
+            ReleaseEvidence(
+                "already-installed",
+                "2" * 64,
+                "sha256:" + "1" * 64,
+                "spark-runtime-v1",
+            ),
+        )
+    ]
+
+
+@pytest.mark.skipif(
+    not Path("/proc/self/fd").is_dir(), reason="requires Linux fd inspection"
+)
+def test_inspection_closes_releases_root_fd_when_staging_root_open_fails(
+    tmp_path: Path,
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "not-a-staging-directory"
+    releases.mkdir(mode=0o700)
+    staging.write_bytes(b"not a directory")
+    inspector = ReleaseInstaller(Trust(), object(), releases, staging)
+    request = ReleaseRequest.parse(VALID_RELEASE)
+    before = len(os.listdir("/proc/self/fd"))
+
+    for _ in range(32):
+        assert inspector.inspect(
+            request, datetime.now(UTC) + timedelta(seconds=2)
+        ) == ReleaseInspection(ReleaseDisposition.OPERATOR_INTERVENTION)
+
+    assert len(os.listdir("/proc/self/fd")) == before
+
+
 def test_inspection_holds_root_lock_through_candidate_inode_verification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

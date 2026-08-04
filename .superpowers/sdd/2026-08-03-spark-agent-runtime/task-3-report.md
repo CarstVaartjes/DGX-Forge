@@ -454,3 +454,111 @@ exit 0
   publish is an environment/physical acceptance gate.
 - Long polling, supervisor lifecycle, agent update/rollback, simulator, and
   control-plane orchestration remain assigned to later tasks.
+
+## Reset review loop — fix round 1/5
+
+The reset review found one same-release inspection race introduced by the
+global staging lifecycle lock. Inspection probed the installed destination
+before acquiring that lock. If an active install published and cleaned while
+inspection waited, the stale inspection flow found neither a staging candidate
+nor recovery state and returned operator intervention even though the verified
+destination now existed.
+
+The deterministic regression uses two real `ReleaseInstaller` instances and a
+blocking transport. A same-release install enters transport while holding the
+global lifecycle lock; inspection is observed contending on that real lock;
+the install is released to publish and clean; inspection then acquires the
+lock. The expected result is `COMPLETED` with the literal, exact
+`already-installed` `ReleaseEvidence`. Before production changed, the corrected
+RED selection was:
+
+```text
+uv run --project agent pytest agent/tests/test_releases.py -q -k \
+  'inspection_observes_same_release_published_while_waiting_for_root_lock or \
+   inspection_cannot_reap_another_installers_active_staging or \
+   inspection_holds_root_lock_through_candidate_inode_verification'
+.F.                                                                      [100%]
+1 failed, 2 passed, 156 deselected in 2.27s
+```
+
+The exact failing value was
+`ReleaseInspection(OPERATOR_INTERVENTION, evidence=None)` instead of
+`ReleaseInspection(COMPLETED, ReleaseEvidence("already-installed", ...))`.
+An initial RED attempt reached a test-only cleanup assertion first because the
+glob `.install-*` also matched the permanent `.install-recovery.lock`; the
+assertion was narrowed to the canonical staging-name regex and RED was rerun
+before production editing.
+
+The correction removes the path-based pre-lock destination optimization.
+Inspection now opens and holds both the releases-root and staging-root dirfds,
+acquires the global staging lifecycle lock before any other lock, then probes
+the requested digest relative to the held releases-root descriptor. An existing
+destination receives the unchanged full installed-release verification:
+canonical receipt parsing, exact signed-descriptor equality, member/tree
+verification, and final name/inode identity recheck. This happens before any
+recovery or staging-candidate disposition. The existing candidate dirfd
+verification and final candidate name/inode check are unchanged.
+
+The same fixed monotonic deadline guards both new root opens, the post-lock
+relative stat, and `_verify_installed_fd`. All three descriptors close through
+one nested `finally` that remains inside inspection's fail-closed exception
+boundary. A Linux `/proc/self/fd` regression repeats the new partial-setup
+failure path 32 times after the releases root opens and the non-directory
+staging-root open fails; every call returns operator intervention and the fd
+count remains exact.
+
+Focused GREEN and complete verification outputs on the final source/test tree:
+
+```text
+focused concurrency and FD selection:
+4 passed, 156 deselected in 2.24s
+
+all inspection tests:
+7 passed, 153 deselected in 2.17s
+
+uv run --project agent pytest agent/tests/test_releases.py -q
+160 passed in 3.48s
+
+uv run --project agent pytest \
+  agent/tests/test_releases.py agent/tests/test_workloads.py -q
+178 passed in 4.28s
+
+uv run --project agent pytest agent/tests/test_releases.py \
+  agent/tests/test_workloads.py agent/tests/test_operations.py -q
+193 passed in 4.71s
+
+uv run --project agent pytest agent/tests -q
+411 passed in 11.87s
+
+uv run pytest deploy/compose/tests -q
+21 passed in 7.45s
+
+docker compose --env-file deploy/compose/tests/test.env \
+  -f deploy/compose/compose.yaml \
+  -f deploy/compose/compose.step-ca.yaml config --quiet
+exit 0
+
+uvx --from ruff==0.16.1 ruff check \
+  agent/src/dgx_agent/releases.py agent/tests/test_releases.py
+All checks passed!
+
+uv run --project agent python -m compileall -q agent/src
+exit 0
+
+uv build --project agent
+Successfully built agent/dist/dgx_agent-0.1.0.tar.gz
+Successfully built agent/dist/dgx_agent-0.1.0-py3-none-any.whl
+
+fresh temporary Python 3.12 environment installed the built agent wheel and
+committed protocol wheel, then parsed ReleaseRequest and prepare/start/stop/
+health/verify WorkloadRequest values:
+fresh-wheel-release-plus-five-workload-parses-ok
+
+scripts/verify-supply-chain --json
+{"errors":[],"images":6,"manifest_sha256":"7369da0a48bc740a1c3a6f774c7415036ef07018aeb6ff3fc53810720d37cd17","ok":true,"sboms":["inventory/sbom/agent-protocol.spdx.json","inventory/sbom/agent-python.spdx.json","inventory/sbom/control-python.spdx.json","inventory/sbom/control-web.spdx.json"]}
+```
+
+The dispatched `.superpowers/sdd/2026-08-03-spark-agent-runtime/task-3-brief.md`
+was not present in the controller directory. This round used the exact dispatch,
+the existing Task 3 report, and the controller-appended reset ledger entry as
+its source record.
