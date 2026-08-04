@@ -70,6 +70,7 @@ def _adapted_caddy(environment: dict[str, str]) -> dict:
             "-e", f"DGX_AGENT_ENROLL_HOSTNAME={environment['DGX_AGENT_ENROLL_HOSTNAME']}",
             "-e", f"DGX_AGENT_HOSTNAME={environment['DGX_AGENT_HOSTNAME']}",
             "-e", f"DGX_REGISTRY_HOSTNAME={environment['DGX_REGISTRY_HOSTNAME']}",
+            "-e", f"DGX_BACKEND_PORT={environment.get('DGX_BACKEND_PORT', '8443')}",
             "-e", "DGX_AGENT_PROXY_AUTH=test-proxy-secret",
             "caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb",
             "caddy", "adapt", "--config", "-", "--adapter", "caddyfile",
@@ -82,6 +83,15 @@ def _adapted_caddy(environment: dict[str, str]) -> dict:
     return json.loads(result.stdout)
 
 
+def _server_on_port(adapted: dict, port: int) -> dict:
+    suffix = f":{port}"
+    return next(
+        server
+        for server in adapted["apps"]["http"]["servers"].values()
+        if any(str(listener).endswith(suffix) for listener in server.get("listen", []))
+    )
+
+
 def _entrypoint_result(
     environment: dict[str, str],
     secret_source: str | None = None,
@@ -90,7 +100,8 @@ def _entrypoint_result(
     environment = environment | {
         "DGX_REGISTRY_HOSTNAME": environment.get(
             "DGX_REGISTRY_HOSTNAME", "registry.test.example"
-        )
+        ),
+        "DGX_BACKEND_PORT": environment.get("DGX_BACKEND_PORT", "8443"),
     }
     command = ["docker", "run", "--rm"]
     for name, value in environment.items():
@@ -168,15 +179,13 @@ def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents(
         "DGX_CONTROL_HOSTNAME", "DGX_AGENT_ENROLL_HOSTNAME", "DGX_AGENT_HOSTNAME",
     )}
     adapted = _adapted_caddy(caddy_environment | {"DGX_AGENT_PROXY_AUTH": "test-proxy-secret"})
-    server = adapted["apps"]["http"]["servers"]["srv0"]
+    tailnet_server = _server_on_port(adapted, 8080)
+    backend_server = _server_on_port(adapted, 8443)
 
     def site(host: str) -> dict:
-        return next(route for route in server["routes"] if route.get("match") == [{"host": [host]}])
+        return next(route for route in backend_server["routes"] if route.get("match") == [{"host": [host]}])
 
-    control_site = next(
-        route for route in server["routes"] if route.get("match") == [{"host": ["control.test.example"]}]
-    )
-    control_routes = control_site["handle"][0]["routes"]
+    control_routes = tailnet_server["routes"]
     denied = next(
         index for index, route in enumerate(control_routes)
         if route.get("match") == [{"path": ["/agent/v1/*"]}]
@@ -195,7 +204,7 @@ def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents(
     agent_site = site("agents.test.example")
     client_auth = next(
         policy["client_authentication"]
-        for policy in server["tls_connection_policies"]
+        for policy in backend_server["tls_connection_policies"]
         if "agents.test.example" in policy.get("match", {}).get("sni", [])
     )
     assert client_auth["mode"] == "require_and_verify"
@@ -234,6 +243,31 @@ def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents(
     }]
 
 
+def test_tailnet_and_spark_backend_routes_are_on_separate_listeners() -> None:
+    environment = _environment()
+    adapted = _adapted_caddy(environment)
+
+    tailnet = json.dumps(_server_on_port(adapted, 8080), sort_keys=True)
+    backend = json.dumps(_server_on_port(adapted, 8443), sort_keys=True)
+
+    assert "control-api:8000" in tailnet
+    assert "litellm:4000" in tailnet
+    assert "grafana:3000" in tailnet
+    for hostname in (
+        "enroll.test.example",
+        "agents.test.example",
+        "registry.test.example",
+    ):
+        assert hostname not in tailnet
+
+    assert "enroll.test.example" in backend
+    assert "agents.test.example" in backend
+    assert "registry.test.example" in backend
+    assert "control.test.example" not in backend
+    assert "litellm:4000" not in backend
+    assert "grafana:3000" not in backend
+
+
 def test_caddy_activation_route_is_exposed_only_on_verified_mtls_agent_sni() -> None:
     caddy_environment = _rendered("compose.yaml")["services"]["caddy"][
         "environment"
@@ -241,19 +275,20 @@ def test_caddy_activation_route_is_exposed_only_on_verified_mtls_agent_sni() -> 
     adapted = _adapted_caddy(
         caddy_environment | {"DGX_AGENT_PROXY_AUTH": "test-proxy-secret"}
     )
-    server = adapted["apps"]["http"]["servers"]["srv0"]
+    tailnet_server = _server_on_port(adapted, 8080)
+    backend_server = _server_on_port(adapted, 8443)
     activation_path = "/agent/v1/renew/activate"
 
     def site(host: str) -> dict:
         return next(
             route
-            for route in server["routes"]
+            for route in backend_server["routes"]
             if route.get("match") == [{"host": [host]}]
         )
 
     agent_policy = next(
         policy
-        for policy in server["tls_connection_policies"]
+        for policy in backend_server["tls_connection_policies"]
         if "agents.test.example" in policy.get("match", {}).get("sni", [])
     )
     assert agent_policy["client_authentication"]["mode"] == "require_and_verify"
@@ -275,7 +310,7 @@ def test_caddy_activation_route_is_exposed_only_on_verified_mtls_agent_sni() -> 
     )
     assert not fnmatchcase(activation_path, enrollment_proxy["match"][0]["path"][0])
 
-    control_routes = site("control.test.example")["handle"][0]["routes"]
+    control_routes = tailnet_server["routes"]
     control_denial = next(
         route
         for route in control_routes

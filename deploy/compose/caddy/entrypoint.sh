@@ -5,6 +5,18 @@ set -eu
 : "${DGX_AGENT_ENROLL_HOSTNAME:?set DGX_AGENT_ENROLL_HOSTNAME}"
 : "${DGX_AGENT_HOSTNAME:?set DGX_AGENT_HOSTNAME}"
 : "${DGX_REGISTRY_HOSTNAME:?set DGX_REGISTRY_HOSTNAME}"
+: "${DGX_BACKEND_PORT:?set DGX_BACKEND_PORT}"
+
+case "$DGX_BACKEND_PORT" in
+  "" | *[!0-9]*)
+    echo "DGX_BACKEND_PORT must be an integer from 1 through 65535" >&2
+    exit 64
+    ;;
+esac
+if [ "$DGX_BACKEND_PORT" -lt 1 ] || [ "$DGX_BACKEND_PORT" -gt 65535 ]; then
+  echo "DGX_BACKEND_PORT must be an integer from 1 through 65535" >&2
+  exit 64
+fi
 
 normalize_hostname() {
   hostname=$1

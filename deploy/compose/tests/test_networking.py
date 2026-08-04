@@ -61,6 +61,21 @@ def test_only_caddy_publishes_ports_and_images_are_digest_pinned() -> None:
     assert all("@sha256:" in service["image"] for service in rendered["services"].values())
 
 
+def test_caddy_publishes_only_reserved_nas_backend_listener() -> None:
+    caddy = _rendered()["services"]["caddy"]
+
+    assert caddy["ports"] == [
+        {
+            "mode": "ingress",
+            "target": 8443,
+            "published": "8443",
+            "protocol": "tcp",
+            "host_ip": "10.0.0.2",
+        }
+    ]
+    assert caddy["environment"]["DGX_BACKEND_PORT"] == "8443"
+
+
 def test_database_has_only_data_network_and_ingress_is_segmented() -> None:
     services = _rendered()["services"]
     assert set(services["postgres"]["networks"]) == {"data"}

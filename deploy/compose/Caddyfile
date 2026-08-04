@@ -1,5 +1,6 @@
 {
 	admin off
+	auto_https disable_redirects
 }
 
 (edge_guards) {
@@ -22,8 +23,10 @@
 	}
 }
 
-# Browser and operator traffic. Agent paths have no route on this SNI.
-{$DGX_CONTROL_HOSTNAME:control.example.invalid} {
+# Browser and operator traffic arrives only from the Tailscale gateway over the
+# private tailnet-web-edge network. Tailscale terminates HTTPS before this HTTP
+# listener; Docker does not publish port 8080.
+:8080 {
 	import edge_guards
 
 	@agent_path path /agent/v1/*
@@ -43,7 +46,7 @@
 
 # Bootstrap is server-authenticated but intentionally does not request a client
 # certificate. It exposes exactly the bounded enrollment submission route.
-{$DGX_AGENT_ENROLL_HOSTNAME:enroll.example.invalid} {
+https://{$DGX_AGENT_ENROLL_HOSTNAME:enroll.example.invalid}:{$DGX_BACKEND_PORT:8443} {
 	import edge_guards
 
 	@not_enrollment not path /agent/v1/enroll
@@ -58,7 +61,7 @@
 # The agent endpoint is a distinct TLS SNI because client authentication cannot
 # be conditional on an HTTP path. The subject is mapped strictly to the exact
 # node-ID grammar before it reaches the application.
-{$DGX_AGENT_HOSTNAME:agents.example.invalid} {
+https://{$DGX_AGENT_HOSTNAME:agents.example.invalid}:{$DGX_BACKEND_PORT:8443} {
 	import edge_guards
 	tls {
 		client_auth {
@@ -92,7 +95,7 @@
 
 # Signed OCI artifacts are pull-only for authenticated agents. Operator
 # publication uses the private registry network, never this SNI.
-{$DGX_REGISTRY_HOSTNAME:registry.example.invalid} {
+https://{$DGX_REGISTRY_HOSTNAME:registry.example.invalid}:{$DGX_BACKEND_PORT:8443} {
 	import edge_guards
 	tls {
 		client_auth {
