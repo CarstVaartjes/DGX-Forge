@@ -20,7 +20,7 @@ NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
 
 
 def _endpoint(
-    address: str = "192.168.10.42",
+    address: str = "10.0.0.42",
     *,
     node_id: str = NODE_ID,
     port: int = 8888,
@@ -48,8 +48,8 @@ def _candidate(
 def _policy() -> RouteEndpointPolicy:
     return RouteEndpointPolicy(
         management=ManagementAddressPolicy.parse(
-            "192.168.10.0/24,fd00:10::/64",
-            forbidden_cidrs="192.168.10.240/28",
+            "10.0.0.0/24,fd00:10::/64",
+            forbidden_cidrs="10.0.0.240/28",
         ),
         allowed_ports=frozenset({8000, 8888}),
         maximum_age_seconds=150,
@@ -78,8 +78,8 @@ def test_publish_renders_validated_structured_endpoint(tmp_path: Path) -> None:
 
     assert state.generation == 1
     assert state.aliases == {
-        "deepseek": "http://192.168.10.42:8888/v1",
-        "reasoning": "http://192.168.10.42:8888/v1",
+        "deepseek": "http://10.0.0.42:8888/v1",
+        "reasoning": "http://10.0.0.42:8888/v1",
     }
     assert publisher.visible_aliases() == {"deepseek", "reasoning"}
     assert len(applied) == 1
@@ -98,10 +98,10 @@ def test_ipv6_upstream_is_rendered_with_brackets(tmp_path: Path) -> None:
         (_endpoint(observed_at=NOW + timedelta(seconds=1)), "future"),
         (_endpoint(scheme="https"), "scheme"),
         (_endpoint(port=9999), "port"),
-        (_endpoint("user@192.168.10.42"), "IP literal"),
+        (_endpoint("user@10.0.0.42"), "IP literal"),
         (_endpoint("spark-a.internal"), "IP literal"),
-        (_endpoint("192.168.10.241"), "forbidden"),
-        (_endpoint("192.168.11.42"), "outside"),
+        (_endpoint("10.0.0.241"), "forbidden"),
+        (_endpoint("10.0.1.42"), "outside"),
     ),
 )
 def test_endpoint_policy_rejects_untrusted_routes(
@@ -121,7 +121,7 @@ def test_invalid_candidate_keeps_explicit_maintenance_routes(tmp_path: Path) -> 
     publisher.maintenance((NODE_ID,), "switch")
 
     with pytest.raises(RouteValidationError, match="outside"):
-        publisher.publish(_candidate(_endpoint("192.168.11.42")))
+        publisher.publish(_candidate(_endpoint("10.0.1.42")))
 
     assert publisher.snapshot().state == "maintenance"
     assert publisher.visible_aliases() == set()
@@ -134,21 +134,21 @@ def test_address_change_transitions_to_maintenance_before_replacement_validation
     applied: list[bytes] = []
 
     def validate(content: bytes) -> bool:
-        return b"192.168.10.43" not in content
+        return b"10.0.0.43" not in content
 
     publisher = _publisher(tmp_path, validate=validate, apply=applied.append)
-    first = publisher.publish(_candidate(_endpoint("192.168.10.42"), ("deepseek",)))
+    first = publisher.publish(_candidate(_endpoint("10.0.0.42"), ("deepseek",)))
 
     with pytest.raises(RouteValidationError, match="configuration validation"):
-        publisher.transition(_candidate(_endpoint("192.168.10.43"), ("deepseek",)))
+        publisher.transition(_candidate(_endpoint("10.0.0.43"), ("deepseek",)))
 
     assert first.state == "published"
     assert publisher.snapshot().state == "maintenance"
     assert publisher.snapshot().aliases == {}
     assert publisher.visible_aliases() == set()
     assert len(applied) == 2
-    assert b"192.168.10.42" in applied[0]
-    assert b"192.168.10.42" not in applied[1]
+    assert b"10.0.0.42" in applied[0]
+    assert b"10.0.0.42" not in applied[1]
 
 
 def test_validator_or_apply_failure_keeps_previous_generation(tmp_path: Path) -> None:

@@ -95,7 +95,7 @@ def run(host: str, display_name: str) -> dict[str, object]:
         audit = [f"install:{journal.state}", f"proposal:{proposal.sha256}", f"merge:{commit}"]
         observed_at = datetime(2026, 8, 3, tzinfo=UTC)
         endpoint_policy = RouteEndpointPolicy(
-            management=ManagementAddressPolicy.parse("192.168.10.0/24"),
+            management=ManagementAddressPolicy.parse("10.0.0.0/24"),
             allowed_ports=frozenset({8000}),
             maximum_age_seconds=150,
             clock=lambda: observed_at,
@@ -111,7 +111,7 @@ def run(host: str, display_name: str) -> dict[str, object]:
             "agent",
             "model-repository/revision",
             (node_id.value,),
-            {"test-model": RouteEndpoint(node_id.value, "192.168.10.42", 8000, "http", observed_at)},
+            {"test-model": RouteEndpoint(node_id.value, "10.0.0.42", 8000, "http", observed_at)},
             observed_at,
         )
         routes = Routes(route_publisher, candidate, audit)

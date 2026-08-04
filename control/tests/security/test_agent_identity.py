@@ -43,7 +43,7 @@ def test_non_secret_caller_on_any_network_cannot_populate_agent_scope() -> None:
             (b"x-dgx-agent-fingerprint", b"fingerprint"),
             (b"x-dgx-agent-verified", b"1"),
             (b"x-dgx-agent-proxy-auth", b"wrong-secret"),
-            (b"x-dgx-agent-source", b"192.168.10.42"),
+            (b"x-dgx-agent-source", b"10.0.0.42"),
         ),
     }
 
@@ -70,11 +70,11 @@ def test_trusted_proxy_source_is_typed_and_removed_from_headers() -> None:
             (b"x-dgx-agent-fingerprint", b"fingerprint"),
             (b"x-dgx-agent-verified", b"1"),
             (b"x-dgx-agent-proxy-auth", b"p" * 32),
-            (b"x-dgx-agent-source", b"192.168.10.42"),
+            (b"x-dgx-agent-source", b"10.0.0.42"),
         ),
     }
 
     asyncio.run(middleware(scope, lambda: None, lambda _: None))
 
-    assert agent_source_from_scope(received[0]) == "192.168.10.42"
+    assert agent_source_from_scope(received[0]) == "10.0.0.42"
     assert received[0]["headers"] == ()

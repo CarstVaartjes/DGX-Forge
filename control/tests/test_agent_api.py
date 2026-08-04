@@ -131,7 +131,7 @@ def agent_system(tmp_path):
         operations=AgentJobService(sessions, clock=clock), sessions=sessions, clock=clock,
         presence=AgentPresenceService(
             sessions,
-            ManagementAddressPolicy.parse("192.168.10.0/24"),
+            ManagementAddressPolicy.parse("10.0.0.0/24"),
         ),
         artifact_root=tmp_path / "artifacts",
     )
@@ -148,7 +148,7 @@ def agent_headers(node: str, serial: str) -> dict[str, str]:
         "x-dgx-agent-fingerprint": f"fingerprint-{serial}",
         "x-dgx-agent-verified": "1",
         "x-dgx-agent-proxy-auth": "p" * 32,
-        "x-dgx-agent-source": "192.168.10.42",
+        "x-dgx-agent-source": "10.0.0.42",
     }
 
 
@@ -318,11 +318,11 @@ def test_claim_requires_one_valid_proxy_observed_source_address(agent_system) ->
     assert client.post("/agent/v1/claim", headers=missing).status_code == 422
     assert client.post(
         "/agent/v1/claim",
-        headers={**agent_headers(NODE_A, "serial-a"), "x-dgx-agent-source": "192.168.11.42"},
+        headers={**agent_headers(NODE_A, "serial-a"), "x-dgx-agent-source": "10.0.1.42"},
     ).status_code == 422
 
     duplicate = list(agent_headers(NODE_A, "serial-a").items())
-    duplicate.append(("x-dgx-agent-source", "192.168.10.43"))
+    duplicate.append(("x-dgx-agent-source", "10.0.0.43"))
     assert client.post("/agent/v1/claim", headers=duplicate).status_code == 401
     with services.sessions() as session:
         assert session.query(Observation).count() == 0
@@ -340,7 +340,7 @@ def test_authenticated_claim_records_presence_before_polling(agent_system) -> No
     assert node is not None and node.last_seen_at is not None
     assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
     assert len(observations) == 1
-    assert observations[0].payload == {"address": "192.168.10.42"}
+    assert observations[0].payload == {"address": "10.0.0.42"}
 
 
 def test_forged_certificate_identity_writes_no_presence(agent_system) -> None:

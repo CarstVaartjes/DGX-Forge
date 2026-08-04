@@ -43,7 +43,7 @@ def _environment() -> dict[str, str]:
         "DGX_AGENT_HOSTNAME": "agents.test.example",
         "DGX_REGISTRY_HOSTNAME": "registry.test.example",
         "DGX_AGENT_PROXY_AUTH": "test-proxy-secret",
-        "DGX_MANAGEMENT_CIDRS": "192.168.10.0/24",
+        "DGX_MANAGEMENT_CIDRS": "10.0.0.0/24",
     }
 
 

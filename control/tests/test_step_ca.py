@@ -423,7 +423,7 @@ def test_production_agent_service_builder_selects_step_ca_and_checks_reachabilit
         agent_ca_provisioner_name="dgx-forge-agent", agent_ca_provisioner_kid="kid",
         agent_ca_timeout_seconds=2.0, agent_ca_max_response_bytes=4096,
         agent_artifact_root=tmp_path / "artifacts",
-        management_cidrs="192.168.10.0/24", direct_fabric_cidrs="",
+        management_cidrs="10.0.0.0/24", direct_fabric_cidrs="",
     )
 
     services = build_agent_services(settings, sessions, lambda: NOW)
@@ -452,7 +452,7 @@ def test_production_agent_service_builder_fails_closed_on_unreachable_or_mixed_p
         agent_ca_provisioner_name="dgx-forge-agent", agent_ca_provisioner_kid="kid",
         agent_ca_timeout_seconds=2.0, agent_ca_max_response_bytes=4096,
         agent_artifact_root=tmp_path / "artifacts",
-        management_cidrs="192.168.10.0/24", direct_fabric_cidrs="",
+        management_cidrs="10.0.0.0/24", direct_fabric_cidrs="",
     )
     with pytest.raises(StepCAError, match="request failed"):
         build_agent_services(settings, object(), lambda: NOW)

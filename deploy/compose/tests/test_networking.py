@@ -39,7 +39,7 @@ def _rendered() -> dict:
         "DGX_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
         "DGX_AGENT_HOSTNAME": "agents.test.example",
         "DGX_REGISTRY_HOSTNAME": "registry.test.example",
-        "DGX_MANAGEMENT_CIDRS": "192.168.10.0/24",
+        "DGX_MANAGEMENT_CIDRS": "10.0.0.0/24",
     }
     result = subprocess.run(
         ["docker", "compose", "-f", str(root / "deploy/compose/compose.yaml"), "-f", str(root / "deploy/compose/compose.step-ca.yaml"), "config", "--format", "json"],
