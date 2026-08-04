@@ -30,7 +30,7 @@ The implementation was developed through separate RED/GREEN slices:
   to close its descriptor on every success and error path; the regression and
   adjacent owner/type tests then passed 2/2.
 
-The final focused suite contains 109 tests. Test fixtures use the explicit
+The final focused suite contains 114 tests. Test fixtures use the explicit
 private loader and then construct immutable policy values with fixture-local
 hashes; production `InstalledPolicy.load` additionally requires root-owned,
 non-agent-writable ancestry while accepting only the compiled reviewed contract.
