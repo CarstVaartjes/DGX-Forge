@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
+import errno
 import hashlib
 import json
 import os
@@ -14,6 +15,7 @@ import threading
 
 import pytest
 
+from dgx_agent import state as state_module
 from dgx_agent_protocol import AgentClaim, AgentOperation, AgentProgress, AgentResult, canonical_message
 
 from dgx_agent.state import AgentStateConflict, AgentStateError, AgentStateStore
@@ -614,3 +616,74 @@ def test_sqlite_open_is_anchored_against_path_substitution(tmp_path: Path, monke
 
     monkeypatch.setattr("dgx_agent.state.sqlite3.connect", swapping_connect)
     assert store.recover_active().claim == claim()
+
+
+def test_initialization_lock_has_deterministic_bounded_deadline(monkeypatch) -> None:
+    attempts: list[int] = []
+    waits: list[float] = []
+    clock = iter([0.0, 1.0, 5.0])
+
+    def unavailable_lock(_descriptor: int, operation: int) -> None:
+        attempts.append(operation)
+        raise BlockingIOError(errno.EAGAIN, "busy")
+
+    monkeypatch.setattr(state_module.fcntl, "flock", unavailable_lock)
+    with pytest.raises(AgentStateError):
+        state_module._acquire_initialization_lock(
+            123,
+            monotonic=lambda: next(clock),
+            wait=waits.append,
+        )
+
+    assert len(attempts) == 2
+    assert all(operation == state_module.fcntl.LOCK_EX | state_module.fcntl.LOCK_NB for operation in attempts)
+    assert waits and all(0 < delay <= 0.05 for delay in waits)
+
+
+def test_initialization_lock_retries_interrupted_system_call(monkeypatch) -> None:
+    calls = 0
+
+    def interrupted_once(_descriptor: int, _operation: int) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise InterruptedError(errno.EINTR, "interrupted")
+
+    monkeypatch.setattr(state_module.fcntl, "flock", interrupted_once)
+    state_module._acquire_initialization_lock(123, monotonic=lambda: 0.0, wait=lambda _delay: None)
+    assert calls == 2
+
+
+def test_repeated_lock_interruptions_remain_deadline_bounded(monkeypatch) -> None:
+    clock = iter([0.0, 5.0])
+
+    def always_interrupted(_descriptor: int, _operation: int) -> None:
+        raise InterruptedError(errno.EINTR, "interrupted")
+
+    monkeypatch.setattr(state_module.fcntl, "flock", always_interrupted)
+    with pytest.raises(AgentStateError):
+        state_module._acquire_initialization_lock(
+            123,
+            monotonic=lambda: next(clock),
+            wait=lambda _delay: None,
+        )
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "CREATE TRIGGER destroy_after_insert AFTER INSERT ON attempts BEGIN DELETE FROM attempts; END",
+        "CREATE TRIGGER destroy_after_delete AFTER DELETE ON attempts BEGIN DELETE FROM attempts; END",
+        "CREATE VIEW leaked_attempts AS SELECT * FROM attempts",
+        "CREATE TABLE extra_state(value TEXT)",
+        "CREATE INDEX extra_attempt_index ON attempts(job_id)",
+    ],
+)
+def test_unexpected_schema_objects_are_rejected(tmp_path: Path, statement: str) -> None:
+    root = tmp_path / "state"
+    AgentStateStore(root)
+    with sqlite3.connect(_database(root)) as connection:
+        connection.execute(statement)
+
+    with pytest.raises(AgentStateError):
+        AgentStateStore(root)

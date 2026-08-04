@@ -3,13 +3,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+import errno
 import fcntl
 import json
 import os
 from pathlib import Path
 import sqlite3
 import stat
-from typing import Any
+import time
+from typing import Any, Callable
 
 from dgx_agent_protocol import (
     AgentClaim,
@@ -22,6 +24,8 @@ from dgx_agent_protocol import (
 _DATABASE_NAME = "agent-state.sqlite3"
 _SCHEMA_VERSION = 1
 _BUSY_TIMEOUT_MS = 5000
+_LOCK_TIMEOUT_SECONDS = _BUSY_TIMEOUT_MS / 1000
+_LOCK_RETRY_SECONDS = 0.05
 _TABLE_SQL = """CREATE TABLE attempts (
     node_id TEXT NOT NULL,
     job_id TEXT NOT NULL,
@@ -273,9 +277,11 @@ class AgentStateStore:
         root_descriptor = _open_root(self._root, create=True)
         database_descriptor = -1
         connection: _AnchoredConnection | None = None
+        lock_acquired = False
         try:
             database_descriptor = _open_database(root_descriptor, create=True)
-            fcntl.flock(database_descriptor, fcntl.LOCK_EX)
+            _acquire_initialization_lock(database_descriptor)
+            lock_acquired = True
             _validate_state_files(root_descriptor)
             connection = _connect(os.dup(root_descriptor), initialize=True)
             connection.execute("BEGIN IMMEDIATE")
@@ -300,6 +306,12 @@ class AgentStateStore:
             if connection is not None:
                 connection.close()
             if database_descriptor >= 0:
+                if lock_acquired:
+                    try:
+                        fcntl.flock(database_descriptor, fcntl.LOCK_UN)
+                    except OSError:
+                        # Closing the descriptor below still releases the lock.
+                        pass
                 os.close(database_descriptor)
             os.close(root_descriptor)
 
@@ -351,6 +363,30 @@ def _connect(root_descriptor: int, *, initialize: bool) -> _AnchoredConnection:
         else:
             os.close(root_descriptor)
         raise AgentStateError("state database cannot be opened") from error
+
+
+def _acquire_initialization_lock(
+    descriptor: int,
+    *,
+    monotonic: Callable[[], float] = time.monotonic,
+    wait: Callable[[float], None] = time.sleep,
+) -> None:
+    deadline = monotonic() + _LOCK_TIMEOUT_SECONDS
+    while True:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except OSError as error:
+            if error.errno == errno.EINTR:
+                if deadline - monotonic() <= 0:
+                    raise AgentStateError("state initialization lock timed out") from error
+                continue
+            if error.errno not in {errno.EACCES, errno.EAGAIN}:
+                raise AgentStateError("state initialization lock failed") from error
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            raise AgentStateError("state initialization lock timed out")
+        wait(min(_LOCK_RETRY_SECONDS, remaining))
 
 
 def _open_root(root: Path, *, create: bool) -> int:
@@ -466,6 +502,20 @@ def _normalize_sql(value: Any) -> str:
 
 def _validate_schema(connection: sqlite3.Connection) -> None:
     try:
+        schema_objects = {
+            (row[0], row[1], row[2], row[3])
+            for row in connection.execute(
+                "SELECT type,name,tbl_name,sql FROM sqlite_master"
+            )
+        }
+        expected_objects = {
+            ("table", "attempts", "attempts", _TABLE_SQL),
+            ("index", "one_unresolved_attempt", "attempts", _UNRESOLVED_INDEX_SQL),
+            ("index", "sqlite_autoindex_attempts_1", "attempts", None),
+            ("index", "sqlite_autoindex_attempts_2", "attempts", None),
+        }
+        if schema_objects != expected_objects:
+            raise AgentStateError("state schema contains unexpected objects")
         table_row = connection.execute(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='attempts'"
         ).fetchone()

@@ -32,6 +32,13 @@ backward-clock updates. GREEN now runs 104 tests. Four parallel repetitions of
 the thread/process fresh-root initialization tests also passed (eight focused
 runs total), exercising advisory-locked first initialization.
 
+Review-fix round 3 RED collected 47 state tests with seven expected failures:
+two for the missing bounded/EINTR-safe initialization lock and five for
+unexpected triggers, views, tables, and indexes. GREEN now runs 112 agent tests,
+including repeated-EINTR deadline coverage.
+Four parallel repetitions of both fresh-root thread/process initialization
+tests passed after the fix.
+
 Packaging was also verified with `uv build --project agent --wheel` followed by
 an isolated `uv run --no-project --with` import using that wheel and the pinned
 protocol wheel. Generated wheel artifacts were removed afterward.
@@ -45,9 +52,11 @@ protocol wheel. Generated wheel artifacts were removed afterward.
   `O_DIRECTORY|O_NOFOLLOW`; unsafe owners, writable non-sticky ancestors,
   symlinks, devices, and FIFOs fail closed.
 - SQLite opens through `/proc/self/fd/<root-fd>` while the verified `0700` root
-  descriptor remains live. An advisory lock serializes one-time WAL/schema
-  initialization, while routine connections do not renegotiate journal mode.
-- Schema acceptance uses the exact normalized table/index definitions plus
+  descriptor remains live. A nonblocking advisory lock with an EINTR-safe,
+  monotonic five-second deadline serializes WAL/schema initialization, while
+  routine connections do not renegotiate journal mode.
+- Schema acceptance uses the exact table/index definitions plus an exact
+  schema-object allowlist and
   column, primary-key, uniqueness, and partial-index metadata. The unresolved
   partial unique index covers either active mutation or pending terminal
   delivery until exact acknowledgment.
@@ -64,7 +73,7 @@ protocol wheel. Generated wheel artifacts were removed afterward.
 - `agent/src/dgx_agent/config.py`: strict immutable configuration.
 - `agent/src/dgx_agent/state.py`: durable fenced SQLite state store.
 - `agent/src/dgx_agent/__init__.py`: package marker.
-- `agent/tests/test_config.py`, `agent/tests/test_state.py`: 104 deterministic
+- `agent/tests/test_config.py`, `agent/tests/test_state.py`: 112 deterministic
   configuration, security, restart, replay, corruption, and concurrency tests.
 
 ## Self-review and remaining concerns
