@@ -41,6 +41,14 @@ RED/GREEN slices:
   deadline propagation, and unbounded error persistence; two further RED cases
   proved that naive elapsed checks skipped required parent fsync after release
   and marker publication;
+- external review round 2 produced ten RED regressions for work continuing
+  inside python-tuf and the ORAS executable snapshot after expiry, recursive
+  cleanup after expiry, orphaned staging state, and path-reopened publication
+  parents. The final suite additionally covers updater-constructor root
+  validation, per-thread trace restoration and two-thread isolation, durable
+  restart recovery/crash windows, corrupt and substituted recovery state,
+  recovery-aware inspection, exact-inode sidecar deletion, and empty-directory
+  substitution at the final cleanup step;
 - ProcessRequest initially accepted duplicate and reserved auxiliary FDs;
 - compiled adapter inspection initially failed during the monotonic deadline
   change, exposing and fixing the recovery deadline/binding contract;
@@ -50,9 +58,9 @@ RED/GREEN slices:
 - Compose/Caddy tests failed until the fourth distinct registry SNI, private
   networks, anchored digest routes, and publisher validation were complete.
 
-The brief's exact release/workload command now contains 87 passing tests; the
-release/workload/operation command contains 102 tests, and the complete agent
-suite contains 320 tests.
+The brief's exact release/workload command now contains 112 passing tests; the
+release/workload/operation command contains 127 tests, and the complete agent
+suite contains 345 tests.
 
 ## Exact typed contracts
 
@@ -151,6 +159,11 @@ and statuses/dispositions use closed operation-specific vocabularies.
   and adapter launch. Checks occur before and immediately after each potentially
   blocking step. A syscall cannot be preempted in-process, so deadline overrun
   is bounded to the one syscall already in progress; no next chunk/member starts.
+  The fixed deadline callback also protects the ORAS executable snapshot loop.
+  Updater construction, refresh, target lookup, and target download execute
+  under a per-thread Python trace guard, so python-tuf validation/hash/copy work
+  is interrupted at Python line boundaries without replacing another thread's
+  trace state; each call restores the prior trace in `finally`.
   After an irreversible release/marker/root-pointer rename, the one mandatory
   parent fsync completes before elapsed is reported. Recovery inspection uses a
   separate compiled local budget; an expired mutation can be inspected/completed
@@ -161,6 +174,16 @@ and statuses/dispositions use closed operation-specific vocabularies.
   Verification, receipt, and fsync use one held staging dirfd; publication
   rechecks the source identity and then requires the destination to be that
   same inode and pass full verification before success.
+  Releases, staging, and metadata publication hold their exact parent dirfds;
+  rename/replace and durability fsync are relative to those descriptors. Staging
+  ownership is recorded by a canonical `O_EXCL|O_NOFOLLOW` sidecar containing
+  its name and captured device/inode, with file and parent fsync, before the
+  first post-creation deadline check. Expired requests never recurse: a fresh
+  installer or recovery inspection reaps authenticated state under an
+  independent 100 ms budget. Incomplete intents are quarantined without
+  deleting an unproven same-UID inode, corrupt or substituted records fail
+  closed, and both sidecar deletion and the final empty-directory removal use
+  atomic quarantine plus exact-inode verification.
 - Workload launch reauthorizes the receipt-derived release through TUF on every
   operation, requires exact signed-descriptor equality, verifies receipt/tree
   through one pinned release dirfd, then executes a write-sealed adapter memfd.
@@ -207,18 +230,18 @@ Executed on the final working tree:
 
 ```text
 uv run --project agent pytest agent/tests -q
-320 passed in 8.88s
+345 passed in 8.98s
 
 uv run --project agent pytest \
   agent/tests/test_releases.py agent/tests/test_workloads.py -v
-87 passed in 1.67s
+112 passed in 1.98s
 
 uv run --project agent pytest agent/tests/test_releases.py \
   agent/tests/test_workloads.py agent/tests/test_operations.py -v
-102 passed in 2.10s
+127 passed in 2.26s
 
 uv run pytest deploy/compose/tests -q
-21 passed in 7.46s
+21 passed in 7.38s
 
 uv run --project agent python -m compileall -q agent/src
 exit 0
@@ -235,6 +258,15 @@ git diff --check
 exit 0
 ```
 
+The repository-root aggregate invocation is not recorded as a passing Task 3
+gate: on this accepted worktree it reproducibly segfaults during pytest
+collection in the unrelated Spark-profile catalog's recursive
+`jsonschema.validate` path (`tests/spark_profiles/test_cli.py`), before Task 3
+tests execute. The isolated agent, focused Task 3, and Compose suites above run
+in fresh processes and are authoritative for this change. Repository-wide Ruff
+likewise reports pre-existing findings outside the changed files; Ruff passes
+for every Python file changed by this round.
+
 A fresh temporary virtual environment installed the built agent wheel together
 with the committed protocol wheel, resolved `tuf==7.0.0`, and imported all
 Task 1–3 production modules. It also parsed the exact release request and each
@@ -245,7 +277,10 @@ The earlier internal targeted re-review found the inode-publication fix Ready.
 Exact-range external review round 1 subsequently returned Not Ready with two
 Important findings (production private-credential ownership and end-to-end
 deadline threading) plus one canonical-receipt Minor. This follow-up addresses
-those submitted findings and awaits exact-range external re-review.
+those submitted findings. External review round 2 returned Not Ready with three
+Important findings covering internal library/snapshot deadlines, expired
+staging recovery, and descriptor-bound publication. This follow-up addresses
+all three and awaits exact-range external re-review.
 
 ## Remaining physical and later-task gates
 

@@ -2,32 +2,32 @@
 from __future__ import annotations
 
 import fcntl
-from datetime import datetime
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import ssl
 import stat
+import sys
 import time
+from collections.abc import Callable
+from datetime import datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
 import urllib3
-
 from tuf.api.exceptions import DownloadError, DownloadHTTPError, RepositoryError
 from tuf.ngclient import FetcherInterface, Updater
 from tuf.ngclient.config import UpdaterConfig
 
+from .deadlines import DeadlineBindingError, MonotonicDeadline
 from .releases import (
     ReleaseDescriptor,
     ReleaseRequest,
     ReleaseValidationError,
     semantic_version,
 )
-from .deadlines import DeadlineBindingError, MonotonicDeadline
-
 
 _BOOTSTRAP_MARKER = ".bootstrap-established"
 _LOCK_NAME = ".updater.lock"
@@ -40,6 +40,25 @@ _TARGET_FILE = re.compile(r"[a-z0-9][a-z0-9._-]{0,126}\Z")
 
 class TUFTrustError(RuntimeError):
     """Signed release authorization failed closed."""
+
+
+def _interruptible_tuf_call[T](
+    deadline: MonotonicDeadline,
+    operation: Callable[[], T],
+) -> T:
+    """Interrupt python-tuf Python work at line boundaries using this thread only."""
+    previous_trace = sys.gettrace()
+
+    def deadline_trace(frame: Any, event: str, argument: Any) -> Any:
+        _tuf_deadline(deadline)
+        return deadline_trace
+
+    _tuf_deadline(deadline)
+    sys.settrace(deadline_trace)
+    try:
+        return operation()
+    finally:
+        sys.settrace(previous_trace)
 
 
 class BoundedHTTPSFetcher(FetcherInterface):
@@ -204,7 +223,7 @@ class TUFReleaseTrust:
         try:
             fixed_deadline = MonotonicDeadline.bind(deadline)
             fixed_deadline.check()
-        except DeadlineBindingError as error:
+        except DeadlineBindingError:
             raise TUFTrustError("TUF authorization deadline has elapsed")
         absolute_deadline = fixed_deadline.absolute_monotonic
         check_deadline = lambda: _check_deadline(absolute_deadline)
@@ -247,23 +266,26 @@ class TUFReleaseTrust:
                 else self._bootstrap_root
             )
             check_deadline()
-            updater = Updater(
-                str(self._metadata_root),
-                self._metadata_base_url,
-                str(self._target_root),
-                self._target_base_url,
-                self._fetcher,
-                UpdaterConfig(
-                    max_root_rotations=32,
-                    max_delegations=16,
-                    root_max_length=256 * 1024,
-                    timestamp_max_length=64 * 1024,
-                    snapshot_max_length=1024 * 1024,
-                    targets_max_length=2 * 1024 * 1024,
-                    prefix_targets_with_hash=False,
-                    app_user_agent="dgx-forge-agent/0.1.0",
+            updater = _interruptible_tuf_call(
+                fixed_deadline,
+                lambda: Updater(
+                    str(self._metadata_root),
+                    self._metadata_base_url,
+                    str(self._target_root),
+                    self._target_base_url,
+                    self._fetcher,
+                    UpdaterConfig(
+                        max_root_rotations=32,
+                        max_delegations=16,
+                        root_max_length=256 * 1024,
+                        timestamp_max_length=64 * 1024,
+                        snapshot_max_length=1024 * 1024,
+                        targets_max_length=2 * 1024 * 1024,
+                        prefix_targets_with_hash=False,
+                        app_user_agent="dgx-forge-agent/0.1.0",
+                    ),
+                    bootstrap=bootstrap,
                 ),
-                bootstrap=bootstrap,
             )
             check_deadline()
             updater_started = True
@@ -278,9 +300,12 @@ class TUFReleaseTrust:
                     ).hexdigest(), fixed_deadline
                 )
             check_deadline()
-            updater.refresh()
+            _interruptible_tuf_call(fixed_deadline, updater.refresh)
             check_deadline()
-            target_info = updater.get_targetinfo(request.target_name)
+            target_info = _interruptible_tuf_call(
+                fixed_deadline,
+                lambda: updater.get_targetinfo(request.target_name),
+            )
             check_deadline()
             if target_info is None:
                 raise TUFTrustError("TUF target is not authorized")
@@ -298,8 +323,11 @@ class TUFReleaseTrust:
             )
             try:
                 check_deadline()
-                updater.download_target(
-                    target_info, f"/proc/self/fd/{target_fd}"
+                _interruptible_tuf_call(
+                    fixed_deadline,
+                    lambda: updater.download_target(
+                        target_info, f"/proc/self/fd/{target_fd}"
+                    ),
                 )
                 check_deadline()
                 _seal_target_fd(target_fd, fixed_deadline)
@@ -498,40 +526,49 @@ def _write_marker(
 ) -> None:
     if not re.fullmatch(r"[0-9a-f]{64}", root_digest):
         raise TUFTrustError("TUF root marker digest is invalid")
-    temporary = path.with_name(path.name + ".new")
-    _remove_stale_entry(temporary, deadline)
     _tuf_deadline(deadline)
-    descriptor = os.open(
-        temporary,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
-        0o600,
+    parent = os.open(
+        path.parent,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
     )
     try:
-        _tuf_deadline(deadline)
-        content = f"sha256:{root_digest}\n".encode("ascii")
-        offset = 0
-        while offset < len(content):
+        temporary_name = path.name + ".new"
+        _remove_stale_entry_fd(parent, temporary_name, deadline)
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=parent,
+        )
+        try:
             _tuf_deadline(deadline)
-            written = os.write(descriptor, content[offset:])
+            content = f"sha256:{root_digest}\n".encode("ascii")
+            offset = 0
+            while offset < len(content):
+                _tuf_deadline(deadline)
+                written = os.write(descriptor, content[offset:])
+                _tuf_deadline(deadline)
+                if written <= 0:
+                    raise TUFTrustError("TUF root marker write was incomplete")
+                offset += written
             _tuf_deadline(deadline)
-            if written <= 0:
-                raise TUFTrustError("TUF root marker write was incomplete")
-            offset += written
+            os.fsync(descriptor)
+            _tuf_deadline(deadline)
+        finally:
+            os.close(descriptor)
         _tuf_deadline(deadline)
-        os.fsync(descriptor)
+        os.replace(
+            temporary_name,
+            path.name,
+            src_dir_fd=parent,
+            dst_dir_fd=parent,
+        )
+        # Once publication occurs, make the marker durable through the exact
+        # directory identity used by replace before reporting expiry.
+        os.fsync(parent)
         _tuf_deadline(deadline)
     finally:
-        os.close(descriptor)
-    _tuf_deadline(deadline)
-    os.replace(temporary, path)
-    # Once publication occurs, make the marker durable before reporting an
-    # elapsed deadline so a crash cannot reopen bootstrap trust.
-    directory = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
-    try:
-        os.fsync(directory)
-        _tuf_deadline(deadline)
-    finally:
-        os.close(directory)
+        os.close(parent)
 
 
 def _remove_stale_entry(
@@ -542,22 +579,29 @@ def _remove_stale_entry(
         path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
     )
     try:
-        _tuf_deadline(deadline)
-        try:
-            _tuf_deadline(deadline)
-            metadata = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
-            _tuf_deadline(deadline)
-        except FileNotFoundError:
-            return
-        if stat.S_ISDIR(metadata.st_mode):
-            raise TUFTrustError("TUF temporary state is unsafe")
-        _tuf_deadline(deadline)
-        os.unlink(path.name, dir_fd=parent)
-        _tuf_deadline(deadline)
-        os.fsync(parent)
-        _tuf_deadline(deadline)
+        _remove_stale_entry_fd(parent, path.name, deadline)
     finally:
         os.close(parent)
+
+
+def _remove_stale_entry_fd(
+    parent: int,
+    name: str,
+    deadline: MonotonicDeadline | None = None,
+) -> None:
+    _tuf_deadline(deadline)
+    try:
+        metadata = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        _tuf_deadline(deadline)
+    except FileNotFoundError:
+        return
+    if stat.S_ISDIR(metadata.st_mode):
+        raise TUFTrustError("TUF temporary state is unsafe")
+    _tuf_deadline(deadline)
+    os.unlink(name, dir_fd=parent)
+    _tuf_deadline(deadline)
+    os.fsync(parent)
+    _tuf_deadline(deadline)
 
 
 def _established_root_is_openable(

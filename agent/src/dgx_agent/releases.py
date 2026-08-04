@@ -1,9 +1,6 @@
 """Typed, content-addressed Spark release installation boundary."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
-from enum import StrEnum
 import ctypes
 import errno
 import fcntl
@@ -11,18 +8,20 @@ import hashlib
 import json
 import os
 import re
-from pathlib import Path
-from pathlib import PurePosixPath
+import secrets
 import stat
-import tempfile
+import threading
 import time
-from typing import Any, Mapping
-from typing import Protocol
 import unicodedata
+from collections.abc import Mapping
+from dataclasses import dataclass
+from datetime import datetime
+from enum import StrEnum
+from pathlib import Path, PurePosixPath
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from .deadlines import DeadlineBindingError, MonotonicDeadline
-
 
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _OCI_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
@@ -60,6 +59,11 @@ _DESCRIPTOR_FIELDS = frozenset(
 _MEMBER_FIELDS = frozenset({"path", "sha256", "size", "mode", "uid", "gid"})
 _REPOSITORY = re.compile(r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*\Z")
 _VERSION = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
+_STAGING_NAME = re.compile(r"\.install-[0-9a-f]{64}-([0-9a-f]{16})\Z")
+_RECOVERY_NAME = re.compile(r"\.recovery-([0-9a-f]{16})\.state\Z")
+_RECOVERY_TEMP_NAME = re.compile(r"\.recovery-([0-9a-f]{16})\.new\Z")
+_MAX_DEFERRED_STAGING = 16
+_RECOVERY_SECONDS = 0.1
 
 
 class ReleaseValidationError(ValueError):
@@ -137,7 +141,7 @@ class ReleaseDescriptor:
     members: tuple[ReleaseMember, ...]
 
     @classmethod
-    def parse(cls, document: Mapping[str, Any]) -> "ReleaseDescriptor":
+    def parse(cls, document: Mapping[str, Any]) -> ReleaseDescriptor:
         if not isinstance(document, Mapping) or set(document) != _DESCRIPTOR_FIELDS:
             raise ReleaseValidationError("release descriptor fields are invalid")
         if document["schema_version"] != 1 or isinstance(document["schema_version"], bool):
@@ -241,43 +245,81 @@ class ReleaseInstaller:
         self._transport = transport
         self._releases_root = Path(releases_root)
         self._staging_root = Path(staging_root)
+        self._deferred_staging: dict[str, tuple[int, int]] = {}
+        self._active_staging = 0
+        self._recovery_lock = threading.Lock()
 
     def install(
         self, request: ReleaseRequest, deadline: datetime | MonotonicDeadline
     ) -> ReleaseEvidence:
         fixed_deadline = _bind_deadline(deadline)
+        releases_fd = -1
+        staging_root_fd = -1
+        lock_fd = -1
+        staging_fd = -1
+        staging_name: str | None = None
+        staging_identity: tuple[int, int] | None = None
+        recovery_name: str | None = None
+        recovery_identity: tuple[int, int] | None = None
+        staging_reserved = False
+        published = False
         _deadline(fixed_deadline)
         descriptor = self._trust.authorize(request, fixed_deadline)
         _deadline(fixed_deadline)
         _secure_root(self._releases_root, fixed_deadline)
         _secure_root(self._staging_root, fixed_deadline)
         _deadline(fixed_deadline)
-        releases_metadata = self._releases_root.stat()
-        _deadline(fixed_deadline)
-        staging_root_metadata = self._staging_root.stat()
-        _deadline(fixed_deadline)
-        if releases_metadata.st_dev != staging_root_metadata.st_dev:
-            raise ReleaseInstallError("release staging is not on the install filesystem")
-        destination = self._releases_root / request.target_digest
-        _deadline(fixed_deadline)
-        lock_fd = os.open(
-            self._releases_root / f".install-{request.target_digest}.lock",
-            os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
-            0o600,
-        )
         try:
+            releases_fd = os.open(
+                self._releases_root,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            )
+            _deadline(fixed_deadline)
+            staging_root_fd = os.open(
+                self._staging_root,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            )
+            _deadline(fixed_deadline)
+            releases_metadata = os.fstat(releases_fd)
+            _deadline(fixed_deadline)
+            staging_root_metadata = os.fstat(staging_root_fd)
+            _deadline(fixed_deadline)
+            if releases_metadata.st_dev != staging_root_metadata.st_dev:
+                raise ReleaseInstallError(
+                    "release staging is not on the install filesystem"
+                )
+        except Exception:
+            if staging_root_fd >= 0:
+                os.close(staging_root_fd)
+                staging_root_fd = -1
+            if releases_fd >= 0:
+                os.close(releases_fd)
+                releases_fd = -1
+            raise
+        try:
+            self._reap_deferred_staging(staging_root_fd)
+            _deadline(fixed_deadline)
+            lock_fd = os.open(
+                f".install-{request.target_digest}.lock",
+                os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=releases_fd,
+            )
             _deadline(fixed_deadline)
             _acquire_lock(lock_fd, fixed_deadline)
             _deadline(fixed_deadline)
             try:
-                _deadline(fixed_deadline)
-                os.stat(destination, follow_symlinks=False)
+                os.stat(
+                    request.target_digest,
+                    dir_fd=releases_fd,
+                    follow_symlinks=False,
+                )
                 _deadline(fixed_deadline)
             except FileNotFoundError:
                 pass
             else:
-                _verify_installed(
-                    self._releases_root, destination.name, descriptor,
+                _verify_installed_fd(
+                    releases_fd, request.target_digest, descriptor,
                     fixed_deadline,
                 )
                 return ReleaseEvidence(
@@ -287,27 +329,61 @@ class ReleaseInstaller:
                     request.adapter_id,
                 )
             _deadline(fixed_deadline)
-            staging = Path(
-                tempfile.mkdtemp(
-                    prefix=f".install-{request.target_digest}-",
-                    dir=self._staging_root,
-                )
-            )
-            _deadline(fixed_deadline)
-            os.chmod(staging, 0o700)
-            _deadline(fixed_deadline)
-            staging_metadata = staging.stat()
-            _deadline(fixed_deadline)
-            staging_fd = os.open(
-                staging,
-                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
-            )
-            published = False
+            self._reserve_staging()
+            staging_reserved = True
+            staging_token = secrets.token_hex(8)
+            staging_name = f".install-{request.target_digest}-{staging_token}"
+            recovery_name = f".recovery-{staging_token}.state"
             try:
+                recovery_identity = _write_recovery_intent_fd(
+                    staging_root_fd, recovery_name, staging_name
+                )
+                # Creation, open and identity capture are one ownership step:
+                # deadline checks resume only after the inode is held.
+                os.mkdir(staging_name, 0o700, dir_fd=staging_root_fd)
+                try:
+                    # mkdir/open/fstat and this constant-size durable record
+                    # form one ownership transaction. There is deliberately
+                    # no claim-deadline check until recovery identity survives
+                    # a process restart.
+                    staging_fd = os.open(
+                        staging_name,
+                        os.O_RDONLY
+                        | os.O_DIRECTORY
+                        | os.O_CLOEXEC
+                        | os.O_NOFOLLOW,
+                        dir_fd=staging_root_fd,
+                    )
+                    staging_metadata = os.fstat(staging_fd)
+                    staging_identity = (
+                        staging_metadata.st_dev,
+                        staging_metadata.st_ino,
+                    )
+                    recovery_identity = _complete_recovery_record_fd(
+                        staging_root_fd,
+                        recovery_name,
+                        staging_name,
+                        staging_identity,
+                    )
+                except (OSError, ReleaseInstallError, TimeoutError):
+                    metadata = os.stat(
+                        staging_name,
+                        dir_fd=staging_root_fd,
+                        follow_symlinks=False,
+                    )
+                    staging_identity = (metadata.st_dev, metadata.st_ino)
+                    raise
+                os.fchmod(staging_fd, 0o700)
                 _deadline(fixed_deadline)
+                staging = self._staging_root / staging_name
                 self._transport.pull(descriptor, staging, fixed_deadline)
                 _deadline(fixed_deadline)
-                _require_path_identity(staging, staging_metadata, fixed_deadline)
+                _require_entry_identity(
+                    staging_root_fd,
+                    staging_name,
+                    staging_metadata,
+                    fixed_deadline,
+                )
                 _verify_release_tree_fd(
                     staging_fd, descriptor, deadline=fixed_deadline
                 )
@@ -317,22 +393,35 @@ class ReleaseInstaller:
                 ) != descriptor:
                     raise ReleaseInstallError("staged release receipt does not match")
                 _fsync_tree_fd(staging_fd, fixed_deadline)
-                _require_path_identity(staging, staging_metadata, fixed_deadline)
+                _require_entry_identity(
+                    staging_root_fd,
+                    staging_name,
+                    staging_metadata,
+                    fixed_deadline,
+                )
                 try:
                     _deadline(fixed_deadline)
-                    _rename_noreplace(staging, destination)
+                    _rename_noreplace(
+                        staging_root_fd,
+                        staging_name,
+                        releases_fd,
+                        request.target_digest,
+                    )
                     published = True
-                    _fsync_directory(
+                    os.fsync(releases_fd)
+                    _deadline(fixed_deadline)
+                    _require_root_identity(
                         self._releases_root,
+                        releases_metadata,
                         fixed_deadline,
-                        commit_started=True,
                     )
                     destination_fd = os.open(
-                        destination,
+                        request.target_digest,
                         os.O_RDONLY
                         | os.O_DIRECTORY
                         | os.O_CLOEXEC
                         | os.O_NOFOLLOW,
+                        dir_fd=releases_fd,
                     )
                     try:
                         _deadline(fixed_deadline)
@@ -354,13 +443,14 @@ class ReleaseInstaller:
                             # deadline leaves the verified staged inode in
                             # place for idempotent re-verification on retry.
                             _deadline(fixed_deadline)
-                            _remove_bound_tree(
-                                self._releases_root,
-                                destination.name,
+                            _remove_bound_tree_fd(
+                                releases_fd,
+                                request.target_digest,
                                 (
                                     installed_metadata.st_dev,
                                     installed_metadata.st_ino,
                                 ),
+                                lambda: _deadline(fixed_deadline),
                             )
                             raise
                         if installed_descriptor != descriptor:
@@ -370,8 +460,8 @@ class ReleaseInstaller:
                     finally:
                         os.close(destination_fd)
                 except FileExistsError:
-                    _verify_installed(
-                        self._releases_root, destination.name, descriptor,
+                    _verify_installed_fd(
+                        releases_fd, request.target_digest, descriptor,
                         fixed_deadline,
                     )
             except ReleaseInstallError:
@@ -379,21 +469,150 @@ class ReleaseInstaller:
             except Exception as error:
                 raise ReleaseInstallError("release installation failed") from error
             finally:
-                os.close(staging_fd)
-                if not published:
-                    _remove_bound_tree(
-                        self._staging_root,
-                        staging.name,
-                        (staging_metadata.st_dev, staging_metadata.st_ino),
+                if staging_fd >= 0:
+                    os.close(staging_fd)
+                    staging_fd = -1
+                deferred = False
+                try:
+                    if (
+                        not published
+                        and staging_name is not None
+                        and staging_identity is not None
+                    ):
+                        _deadline(fixed_deadline)
+                        _remove_bound_tree_fd(
+                            staging_root_fd,
+                            staging_name,
+                            staging_identity,
+                            lambda: _deadline(fixed_deadline),
+                        )
+                    if recovery_name is not None:
+                        record_removed = _remove_recovery_record_fd(
+                            staging_root_fd,
+                            recovery_name,
+                            recovery_identity,
+                            lambda: _deadline(fixed_deadline),
+                        )
+                        if not record_removed:
+                            raise ReleaseInstallError(
+                                "release staging recovery record identity changed"
+                            )
+                except (OSError, ReleaseInstallError, TimeoutError):
+                    deferred = True
+                if staging_reserved:
+                    self._finish_staging(
+                        staging_name,
+                        staging_identity,
+                        deferred=deferred,
                     )
+                    staging_reserved = False
         finally:
-            os.close(lock_fd)
+            if lock_fd >= 0:
+                os.close(lock_fd)
+            if staging_root_fd >= 0:
+                os.close(staging_root_fd)
+            if releases_fd >= 0:
+                os.close(releases_fd)
         return ReleaseEvidence(
             "installed" if published else "already-installed",
             request.target_digest,
             request.oci_manifest_digest,
             request.adapter_id,
         )
+
+    def _reserve_staging(self) -> None:
+        with self._recovery_lock:
+            if (
+                len(self._deferred_staging) + self._active_staging
+                >= _MAX_DEFERRED_STAGING
+            ):
+                raise ReleaseInstallError(
+                    "release staging recovery backlog is full"
+                )
+            self._active_staging += 1
+
+    def _finish_staging(
+        self,
+        name: str | None,
+        identity: tuple[int, int] | None,
+        *,
+        deferred: bool,
+    ) -> None:
+        with self._recovery_lock:
+            self._active_staging -= 1
+            if deferred:
+                if name is None or identity is None:
+                    raise AssertionError("deferred release staging has no identity")
+                self._deferred_staging[name] = identity
+
+    def _reap_deferred_staging(self, parent_fd: int) -> bool:
+        recovery_deadline = time.monotonic() + _RECOVERY_SECONDS
+
+        def recovery_check() -> None:
+            if time.monotonic() >= recovery_deadline:
+                raise TimeoutError("release staging recovery budget elapsed")
+
+        with self._recovery_lock:
+            persisted = _read_recovery_records_fd(parent_fd, recovery_check)
+            recovered = bool(persisted or self._deferred_staging)
+            for record_name, (name, identity, record_identity) in tuple(
+                persisted.items()
+            ):
+                if identity is None:
+                    _quarantine_unproven_staging_fd(
+                        parent_fd, name, recovery_check
+                    )
+                    if not _remove_recovery_record_fd(
+                        parent_fd,
+                        record_name,
+                        record_identity,
+                        recovery_check,
+                    ):
+                        raise ReleaseInstallError(
+                            "release staging recovery record identity changed"
+                        )
+                    persisted.pop(record_name)
+                    continue
+                self._deferred_staging.setdefault(name, identity)
+            if (
+                len(persisted) + self._active_staging
+                > _MAX_DEFERRED_STAGING
+            ):
+                raise ReleaseInstallError(
+                    "release staging recovery backlog is full"
+                )
+            for name, identity in tuple(self._deferred_staging.items()):
+                try:
+                    _remove_bound_tree_fd(
+                        parent_fd, name, identity, recovery_check
+                    )
+                    record_removed = _remove_recovery_record_fd(
+                        parent_fd,
+                        _recovery_name_for_staging(name),
+                        persisted.get(
+                            _recovery_name_for_staging(name),
+                            (name, identity, None),
+                        )[2],
+                        recovery_check,
+                    )
+                    if not record_removed:
+                        raise ReleaseInstallError(
+                            "release staging recovery record identity changed"
+                        )
+                except TimeoutError:
+                    break
+                except OSError:
+                    continue
+                else:
+                    self._deferred_staging.pop(name, None)
+            if (
+                len(self._deferred_staging) + self._active_staging
+                >= _MAX_DEFERRED_STAGING
+            ):
+                raise ReleaseInstallError(
+                    "release staging recovery backlog is full"
+                )
+            return recovered
 
     def inspect(
         self,
@@ -420,6 +639,14 @@ class ReleaseInstaller:
                         request.adapter_id,
                     ),
                 )
+            staging_root_fd = os.open(
+                self._staging_root,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            )
+            try:
+                recovered = self._reap_deferred_staging(staging_root_fd)
+            finally:
+                os.close(staging_root_fd)
             candidates = tuple(
                 self._staging_root.glob(f".install-{request.target_digest}-*")
             )
@@ -429,9 +656,13 @@ class ReleaseInstaller:
                 )
                 return ReleaseInspection(ReleaseDisposition.SAFE_TO_RESUME)
             if not candidates:
-                return ReleaseInspection(ReleaseDisposition.OPERATOR_INTERVENTION)
-        except Exception:
-            pass
+                return ReleaseInspection(
+                    ReleaseDisposition.SAFE_TO_RESUME
+                    if recovered
+                    else ReleaseDisposition.OPERATOR_INTERVENTION
+                )
+        except Exception:  # noqa: BLE001 - inspection intentionally fails closed
+            return ReleaseInspection(ReleaseDisposition.OPERATOR_INTERVENTION)
         return ReleaseInspection(ReleaseDisposition.OPERATOR_INTERVENTION)
 
 
@@ -685,6 +916,44 @@ def _verify_installed(
             os.close(parent_fd)
 
 
+def _verify_installed_fd(
+    parent_fd: int,
+    name: str,
+    descriptor: ReleaseDescriptor,
+    deadline: MonotonicDeadline | None = None,
+) -> None:
+    root_fd = -1
+    try:
+        _deadline_step(deadline)
+        root_fd = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=parent_fd,
+        )
+        _deadline_step(deadline)
+        metadata = os.fstat(root_fd)
+        _deadline_step(deadline)
+        installed_descriptor = verify_installed_release_fd(root_fd, deadline)
+        if installed_descriptor != descriptor:
+            raise ReleaseInstallError("installed release receipt does not match")
+        _deadline_step(deadline)
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        _deadline_step(deadline)
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or (current.st_dev, current.st_ino)
+            != (metadata.st_dev, metadata.st_ino)
+        ):
+            raise ReleaseInstallError("installed release identity changed")
+    except ReleaseInstallError:
+        raise
+    except Exception as error:
+        raise ReleaseInstallError("installed release is invalid") from error
+    finally:
+        if root_fd >= 0:
+            os.close(root_fd)
+
+
 def verify_installed_release(root: Path) -> ReleaseDescriptor:
     """Return the signed descriptor only when its receipt and tree still agree."""
     root_fd = -1
@@ -766,7 +1035,7 @@ def _bind_deadline(deadline: datetime | MonotonicDeadline) -> MonotonicDeadline:
 def _deadline(deadline: MonotonicDeadline) -> None:
     try:
         deadline.check()
-    except DeadlineBindingError as error:
+    except DeadlineBindingError:
         raise ReleaseInstallError("release deadline has elapsed")
 
 
@@ -860,22 +1129,27 @@ def _fsync_directory(
         os.close(descriptor)
 
 
-def _rename_noreplace(source: Path, destination: Path) -> None:
+def _rename_noreplace(
+    source_parent_fd: int,
+    source_name: str,
+    destination_parent_fd: int,
+    destination_name: str,
+) -> None:
     renameat2 = ctypes.CDLL(None, use_errno=True).renameat2
     renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
     renameat2.restype = ctypes.c_int
     result = renameat2(
-        -100,
-        os.fsencode(source),
-        -100,
-        os.fsencode(destination),
+        source_parent_fd,
+        os.fsencode(source_name),
+        destination_parent_fd,
+        os.fsencode(destination_name),
         1,
     )
     if result != 0:
         value = ctypes.get_errno()
         if value == errno.EEXIST:
-            raise FileExistsError(value, os.strerror(value), destination)
-        raise OSError(value, os.strerror(value), destination)
+            raise FileExistsError(value, os.strerror(value), destination_name)
+        raise OSError(value, os.strerror(value), destination_name)
 
 
 def _require_path_identity(
@@ -894,6 +1168,43 @@ def _require_path_identity(
         or (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino)
     ):
         raise ReleaseInstallError("release staging identity changed")
+
+
+def _require_entry_identity(
+    parent_fd: int,
+    name: str,
+    expected: os.stat_result,
+    deadline: MonotonicDeadline | None = None,
+) -> None:
+    try:
+        _deadline_step(deadline)
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        _deadline_step(deadline)
+    except OSError as error:
+        raise ReleaseInstallError("release staging identity changed") from error
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino)
+    ):
+        raise ReleaseInstallError("release staging identity changed")
+
+
+def _require_root_identity(
+    path: Path,
+    expected: os.stat_result,
+    deadline: MonotonicDeadline | None = None,
+) -> None:
+    try:
+        _deadline_step(deadline)
+        current = os.stat(path, follow_symlinks=False)
+        _deadline_step(deadline)
+    except OSError as error:
+        raise ReleaseInstallError("release root identity changed") from error
+    if (
+        not stat.S_ISDIR(current.st_mode)
+        or (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino)
+    ):
+        raise ReleaseInstallError("release root identity changed")
 
 
 def _remove_bound_tree(parent: Path, name: str, identity: tuple[int, int]) -> None:
@@ -938,6 +1249,378 @@ def _remove_directory_contents(
         os.rmdir(name, dir_fd=parent_fd)
 
 
+def _remove_bound_tree_fd(
+    parent_fd: int,
+    name: str,
+    identity: tuple[int, int],
+    check: Any,
+) -> None:
+    """Remove one owned tree, checking the caller's budget around every syscall."""
+    check()
+    try:
+        metadata = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        check()
+    except FileNotFoundError:
+        return
+    if (
+        not stat.S_ISDIR(metadata.st_mode)
+        or (metadata.st_dev, metadata.st_ino) != identity
+    ):
+        return
+    _remove_directory_contents_fd(parent_fd, name, identity, check)
+
+
+def _recovery_name_for_staging(name: str) -> str:
+    match = _STAGING_NAME.fullmatch(name)
+    if match is None:
+        raise ReleaseInstallError("release staging recovery record is invalid")
+    return f".recovery-{match.group(1)}.state"
+
+
+def _recovery_record_bytes(name: str, identity: tuple[int, int]) -> bytes:
+    if _STAGING_NAME.fullmatch(name) is None:
+        raise ReleaseInstallError("release staging recovery record is invalid")
+    return f"1\n{name}\n{identity[0]}\n{identity[1]}\n".encode("ascii")
+
+
+def _recovery_intent_bytes(name: str) -> bytes:
+    if _STAGING_NAME.fullmatch(name) is None:
+        raise ReleaseInstallError("release staging recovery record is invalid")
+    return f"0\n{name}\n".encode("ascii")
+
+
+def _write_recovery_bytes_fd(
+    parent_fd: int,
+    record_name: str,
+    data: bytes,
+) -> tuple[int, int]:
+    descriptor = os.open(
+        record_name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=parent_fd,
+    )
+    try:
+        offset = 0
+        while offset < len(data):
+            written = os.write(descriptor, data[offset:])
+            if written <= 0:
+                raise ReleaseInstallError(
+                    "release staging recovery record was incomplete"
+                )
+            offset += written
+        os.fsync(descriptor)
+        metadata = os.fstat(descriptor)
+        identity = (metadata.st_dev, metadata.st_ino)
+    finally:
+        os.close(descriptor)
+    os.fsync(parent_fd)
+    return identity
+
+
+def _write_recovery_intent_fd(
+    parent_fd: int,
+    record_name: str,
+    staging_name: str,
+) -> tuple[int, int]:
+    if record_name != _recovery_name_for_staging(staging_name):
+        raise ReleaseInstallError("release staging recovery record is invalid")
+    return _write_recovery_bytes_fd(
+        parent_fd, record_name, _recovery_intent_bytes(staging_name)
+    )
+
+
+def _complete_recovery_record_fd(
+    parent_fd: int,
+    record_name: str,
+    staging_name: str,
+    identity: tuple[int, int],
+) -> tuple[int, int]:
+    match = _RECOVERY_NAME.fullmatch(record_name)
+    if match is None or record_name != _recovery_name_for_staging(staging_name):
+        raise ReleaseInstallError("release staging recovery record is invalid")
+    temporary_name = f".recovery-{match.group(1)}.new"
+    complete_identity = _write_recovery_bytes_fd(
+        parent_fd,
+        temporary_name,
+        _recovery_record_bytes(staging_name, identity),
+    )
+    os.replace(
+        temporary_name,
+        record_name,
+        src_dir_fd=parent_fd,
+        dst_dir_fd=parent_fd,
+    )
+    os.fsync(parent_fd)
+    metadata = os.stat(record_name, dir_fd=parent_fd, follow_symlinks=False)
+    if (metadata.st_dev, metadata.st_ino) != complete_identity:
+        raise ReleaseInstallError("release staging recovery record identity changed")
+    return complete_identity
+
+
+def _write_recovery_record_fd(
+    parent_fd: int,
+    record_name: str,
+    staging_name: str,
+    identity: tuple[int, int],
+) -> tuple[int, int]:
+    if record_name != _recovery_name_for_staging(staging_name):
+        raise ReleaseInstallError("release staging recovery record is invalid")
+    return _write_recovery_bytes_fd(
+        parent_fd, record_name, _recovery_record_bytes(staging_name, identity)
+    )
+
+
+def _read_recovery_records_fd(
+    parent_fd: int,
+    check: Any,
+) -> dict[str, tuple[str, tuple[int, int] | None, tuple[int, int]]]:
+    check()
+    entries = os.listdir(parent_fd)
+    check()
+    names = [
+        name for name in entries if _RECOVERY_NAME.fullmatch(name) is not None
+    ]
+    staging_names = [
+        name for name in entries if _STAGING_NAME.fullmatch(name) is not None
+    ]
+    quarantined_names = [
+        name
+        for name in entries
+        if name.startswith((".quarantine-", ".unsafe-recovery-"))
+        or _RECOVERY_TEMP_NAME.fullmatch(name) is not None
+    ]
+    if (
+        len(names) > _MAX_DEFERRED_STAGING
+        or len(staging_names) > _MAX_DEFERRED_STAGING
+        or len(quarantined_names) > _MAX_DEFERRED_STAGING
+    ):
+        raise ReleaseInstallError("release staging recovery backlog is full")
+    records: dict[
+        str, tuple[str, tuple[int, int] | None, tuple[int, int]]
+    ] = {}
+    for record_name in names:
+        check()
+        try:
+            descriptor = os.open(
+                record_name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=parent_fd,
+            )
+        except OSError as error:
+            raise ReleaseInstallError(
+                "release staging recovery record is unsafe"
+            ) from error
+        try:
+            check()
+            metadata = os.fstat(descriptor)
+            check()
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or metadata.st_uid != os.geteuid()
+                or metadata.st_gid != os.getegid()
+                or stat.S_IMODE(metadata.st_mode) != 0o600
+                or metadata.st_size > 512
+            ):
+                raise ReleaseInstallError(
+                    "release staging recovery record is unsafe"
+                )
+            data = os.read(descriptor, 513)
+            check()
+        finally:
+            os.close(descriptor)
+        try:
+            fields = data.decode("ascii").split("\n")
+            version = fields[0]
+            staging_name = fields[1]
+            if version == "0" and fields == ["0", staging_name, ""]:
+                identity = None
+                canonical = _recovery_intent_bytes(staging_name)
+            elif version == "1" and len(fields) == 5 and fields[-1] == "":
+                identity = (int(fields[2]), int(fields[3]))
+                canonical = _recovery_record_bytes(staging_name, identity)
+            else:
+                raise ValueError("invalid recovery fields")
+        except (UnicodeDecodeError, ValueError, IndexError) as error:
+            raise ReleaseInstallError(
+                "release staging recovery record is invalid"
+            ) from error
+        if (
+            identity is not None and any(value < 0 for value in identity)
+            or record_name != _recovery_name_for_staging(staging_name)
+            or data != canonical
+        ):
+            raise ReleaseInstallError(
+                "release staging recovery record is invalid"
+            )
+        records[record_name] = (
+            staging_name,
+            identity,
+            (metadata.st_dev, metadata.st_ino),
+        )
+    return records
+
+
+def _quarantine_unproven_staging_fd(
+    parent_fd: int,
+    staging_name: str,
+    check: Any,
+) -> None:
+    match = _STAGING_NAME.fullmatch(staging_name)
+    if match is None:
+        raise ReleaseInstallError("release staging recovery record is invalid")
+    check()
+    try:
+        os.stat(staging_name, dir_fd=parent_fd, follow_symlinks=False)
+        check()
+    except FileNotFoundError:
+        return
+    quarantine_name = (
+        f".quarantine-{match.group(1)}-{secrets.token_hex(8)}"
+    )
+    _rename_noreplace(
+        parent_fd, staging_name, parent_fd, quarantine_name
+    )
+    check()
+    os.fsync(parent_fd)
+    check()
+
+
+def _remove_recovery_record_fd(
+    parent_fd: int,
+    record_name: str,
+    expected_identity: tuple[int, int] | None,
+    check: Any,
+) -> bool:
+    if _RECOVERY_NAME.fullmatch(record_name) is None:
+        raise ReleaseInstallError("release staging recovery record is invalid")
+    check()
+    try:
+        metadata = os.stat(
+            record_name, dir_fd=parent_fd, follow_symlinks=False
+        )
+        check()
+    except FileNotFoundError:
+        return True
+    if expected_identity is None:
+        return False
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or metadata.st_uid != os.geteuid()
+        or metadata.st_gid != os.getegid()
+        or stat.S_IMODE(metadata.st_mode) != 0o600
+        or (metadata.st_dev, metadata.st_ino) != expected_identity
+    ):
+        return False
+    quarantine_name = f".{record_name[1:]}.remove-{secrets.token_hex(8)}"
+    check()
+    _rename_noreplace(
+        parent_fd, record_name, parent_fd, quarantine_name
+    )
+    check()
+    quarantined = os.stat(
+        quarantine_name, dir_fd=parent_fd, follow_symlinks=False
+    )
+    check()
+    if (quarantined.st_dev, quarantined.st_ino) != expected_identity:
+        try:
+            _rename_noreplace(
+                parent_fd, quarantine_name, parent_fd, record_name
+            )
+        except FileExistsError as error:
+            raise ReleaseInstallError(
+                "release staging recovery record identity changed"
+            ) from error
+        return False
+    os.unlink(quarantine_name, dir_fd=parent_fd)
+    check()
+    os.fsync(parent_fd)
+    check()
+    return True
+
+
+def _remove_directory_contents_fd(
+    parent_fd: int,
+    name: str,
+    identity: tuple[int, int],
+    check: Any,
+) -> None:
+    check()
+    directory_fd = os.open(
+        name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        dir_fd=parent_fd,
+    )
+    try:
+        check()
+        metadata = os.fstat(directory_fd)
+        check()
+        if (metadata.st_dev, metadata.st_ino) != identity:
+            return
+        check()
+        children = os.listdir(directory_fd)
+        check()
+        for child_name in children:
+            check()
+            child = os.stat(
+                child_name, dir_fd=directory_fd, follow_symlinks=False
+            )
+            check()
+            child_identity = (child.st_dev, child.st_ino)
+            if stat.S_ISDIR(child.st_mode):
+                _remove_directory_contents_fd(
+                    directory_fd, child_name, child_identity, check
+                )
+            else:
+                check()
+                os.unlink(child_name, dir_fd=directory_fd)
+                check()
+    finally:
+        os.close(directory_fd)
+    _remove_empty_directory_by_identity(parent_fd, name, identity, check)
+
+
+def _remove_empty_directory_by_identity(
+    parent_fd: int,
+    name: str,
+    identity: tuple[int, int],
+    check: Any,
+) -> None:
+    quarantine_name = f".remove-{secrets.token_hex(8)}"
+    check()
+    try:
+        _rename_noreplace(parent_fd, name, parent_fd, quarantine_name)
+    except FileNotFoundError:
+        return
+    check()
+    quarantined_fd = os.open(
+        quarantine_name,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        dir_fd=parent_fd,
+    )
+    try:
+        check()
+        metadata = os.fstat(quarantined_fd)
+        check()
+    finally:
+        os.close(quarantined_fd)
+    if (metadata.st_dev, metadata.st_ino) != identity:
+        try:
+            _rename_noreplace(
+                parent_fd, quarantine_name, parent_fd, name
+            )
+        except FileExistsError as error:
+            raise ReleaseInstallError(
+                "release staging cleanup identity changed"
+            ) from error
+        return
+    check()
+    os.rmdir(quarantine_name, dir_fd=parent_fd)
+    check()
+
+
 @dataclass(frozen=True)
 class ReleaseRequest:
     schema_version: int
@@ -948,7 +1631,7 @@ class ReleaseRequest:
     adapter_id: str
 
     @classmethod
-    def parse(cls, document: Mapping[str, Any]) -> "ReleaseRequest":
+    def parse(cls, document: Mapping[str, Any]) -> ReleaseRequest:
         if not isinstance(document, Mapping) or set(document) != _RELEASE_FIELDS:
             raise ReleaseValidationError("release request fields are invalid")
         if document["schema_version"] != 1 or isinstance(

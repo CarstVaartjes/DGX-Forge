@@ -1,26 +1,48 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
-import hashlib
+import builtins
 import fcntl
+import hashlib
 import json
 import os
-from pathlib import Path
+import socket
+import ssl
+import stat
+import sys
 import threading
 import time
-import ssl
-import socket
-import stat
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from urllib.parse import urlsplit
 
+import dgx_agent.oci as oci_module
+import dgx_agent.releases as release_module
 import pytest
+from dgx_agent import update_trust
+from dgx_agent.deadlines import DeadlineBindingError, MonotonicDeadline
+from dgx_agent.oci import OCIError, ORASClient, ORASPolicy
+from dgx_agent.probe import ProcessOutcome
+from dgx_agent.releases import (
+    ReleaseDescriptor,
+    ReleaseDisposition,
+    ReleaseEvidence,
+    ReleaseInspection,
+    ReleaseInstaller,
+    ReleaseInstallError,
+    ReleaseRequest,
+    ReleaseValidationError,
+    verify_installed_release,
+    verify_release_tree,
+)
+from dgx_agent.update_trust import BoundedHTTPSFetcher, TUFReleaseTrust, TUFTrustError
 from securesystemslib.signer import CryptoSigner
 from tuf.api.exceptions import DownloadError, DownloadHTTPError
 from tuf.api.metadata import (
     DelegatedRole,
     Delegations,
-    MetaFile,
     Metadata,
+    MetaFile,
     Root,
     Snapshot,
     TargetFile,
@@ -28,27 +50,7 @@ from tuf.api.metadata import (
     Timestamp,
 )
 from tuf.ngclient import FetcherInterface
-
-from dgx_agent.releases import (
-    ReleaseDescriptor,
-    ReleaseDisposition,
-    ReleaseEvidence,
-    ReleaseInspection,
-    ReleaseRequest,
-    ReleaseInstallError,
-    ReleaseInstaller,
-    ReleaseValidationError,
-    verify_installed_release,
-    verify_release_tree,
-)
-from dgx_agent.update_trust import BoundedHTTPSFetcher, TUFReleaseTrust, TUFTrustError
-import dgx_agent.update_trust as update_trust
-import dgx_agent.releases as release_module
-import dgx_agent.oci as oci_module
-from dgx_agent.deadlines import DeadlineBindingError, MonotonicDeadline
-from dgx_agent.oci import OCIError, ORASClient, ORASPolicy
-from dgx_agent.probe import ProcessOutcome
-
+from tuf.ngclient._internal.trusted_metadata_set import TrustedMetadataSet
 
 VALID_RELEASE = {
     "schema_version": 1,
@@ -701,6 +703,174 @@ def test_tuf_error_persistence_receives_same_expired_deadline_and_stops(
     assert hardens == []
 
 
+def test_tuf_deadline_interrupts_signed_metadata_before_persistence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root_bytes, fetcher = _signed_repository(_descriptor())
+    trust = TUFReleaseTrust(
+        tmp_path / "metadata", tmp_path / "targets",
+        "https://control.test.example/agent/v1/tuf/metadata/",
+        "https://control.test.example/agent/v1/tuf/targets/",
+        root_bytes, fetcher,
+        "https://registry.test.example", "dgx/releases", "linux-arm64",
+    )
+    clock = [0.0]
+    writes: list[str] = []
+    original_update = TrustedMetadataSet.update_timestamp
+    original_persist = update_trust.Updater._persist_file
+    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+
+    def expire_inside_verification(self, data):
+        writes.clear()
+        clock[0] = 11.0
+        return original_update(self, data)
+
+    def record_persist(self, filename, data):
+        writes.append(filename)
+        return original_persist(self, filename, data)
+
+    monkeypatch.setattr(
+        TrustedMetadataSet, "update_timestamp", expire_inside_verification
+    )
+    monkeypatch.setattr(update_trust.Updater, "_persist_file", record_persist)
+    deadline = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(seconds=10), 10.0
+    )
+
+    with pytest.raises(TUFTrustError, match="deadline"):
+        trust.authorize(ReleaseRequest.parse(VALID_RELEASE), deadline)
+    assert writes == []
+
+
+def test_tuf_deadline_interrupts_constructor_after_root_verification_before_persistence(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root_bytes, fetcher = _signed_repository(_descriptor())
+    trust = TUFReleaseTrust(
+        tmp_path / "metadata", tmp_path / "targets",
+        "https://control.test.example/agent/v1/tuf/metadata/",
+        "https://control.test.example/agent/v1/tuf/targets/",
+        root_bytes, fetcher,
+        "https://registry.test.example", "dgx/releases", "linux-arm64",
+    )
+    clock = [0.0]
+    persisted: list[int] = []
+    original_init = TrustedMetadataSet.__init__
+    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+
+    def verify_root_then_expire(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        clock[0] = 11.0
+
+    def record_root_persistence(self, version, data):
+        persisted.append(version)
+
+    monkeypatch.setattr(TrustedMetadataSet, "__init__", verify_root_then_expire)
+    monkeypatch.setattr(update_trust.Updater, "_persist_root", record_root_persistence)
+
+    with pytest.raises(TUFTrustError, match="deadline"):
+        trust.authorize(
+            ReleaseRequest.parse(VALID_RELEASE),
+            MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
+        )
+    assert persisted == []
+    assert not (tmp_path / "metadata/root.json").exists()
+
+
+def test_tuf_deadline_interrupts_target_hash_before_destination_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root_bytes, fetcher = _signed_repository(_descriptor())
+    trust = TUFReleaseTrust(
+        tmp_path / "metadata", tmp_path / "targets",
+        "https://control.test.example/agent/v1/tuf/metadata/",
+        "https://control.test.example/agent/v1/tuf/targets/",
+        root_bytes, fetcher,
+        "https://registry.test.example", "dgx/releases", "linux-arm64",
+    )
+    clock = [0.0]
+    destination_opens: list[str] = []
+    original_verify = TargetFile.verify_length_and_hashes
+    original_open = builtins.open
+    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+
+    def expire_inside_hash(self, fileobj):
+        clock[0] = 11.0
+        return original_verify(self, fileobj)
+
+    def record_open(path, mode="r", *args, **kwargs):
+        if mode == "wb":
+            destination_opens.append(str(path))
+        return original_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(TargetFile, "verify_length_and_hashes", expire_inside_hash)
+    monkeypatch.setattr(builtins, "open", record_open)
+    deadline = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(seconds=10), 10.0
+    )
+
+    with pytest.raises(TUFTrustError, match="deadline"):
+        trust.authorize(ReleaseRequest.parse(VALID_RELEASE), deadline)
+    assert destination_opens == []
+
+
+def test_tuf_deadline_hook_restores_thread_trace_on_success_and_error() -> None:
+    previous = sys.gettrace()
+    deadline = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(seconds=1), time.monotonic() + 1
+    )
+    assert update_trust._interruptible_tuf_call(deadline, lambda: "ok") == "ok"
+    assert sys.gettrace() is previous
+    with pytest.raises(RuntimeError, match="injected"):
+        update_trust._interruptible_tuf_call(
+            deadline, lambda: (_ for _ in ()).throw(RuntimeError("injected"))
+        )
+    assert sys.gettrace() is previous
+
+
+def test_tuf_deadline_guards_are_isolated_between_concurrent_threads() -> None:
+    barrier = threading.Barrier(2)
+    active: list[tuple[int, bool]] = []
+    restored: list[tuple[int, bool]] = []
+    results: list[tuple[int, int]] = []
+    errors: list[BaseException] = []
+
+    def worker(index: int) -> None:
+        def prior_trace(frame, event, argument):
+            return prior_trace
+
+        sys.settrace(prior_trace)
+        try:
+            deadline = MonotonicDeadline(
+                datetime.now(UTC) + timedelta(seconds=2),
+                time.monotonic() + 2,
+            )
+
+            def operation() -> int:
+                active.append((index, sys.gettrace() is not prior_trace))
+                barrier.wait(timeout=1)
+                return index
+
+            result = update_trust._interruptible_tuf_call(deadline, operation)
+            restored.append((index, sys.gettrace() is prior_trace))
+            results.append((index, result))
+        except BaseException as error:  # noqa: BLE001 - report worker failures
+            errors.append(error)
+        finally:
+            sys.settrace(None)
+
+    threads = [threading.Thread(target=worker, args=(index,)) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    assert sorted(active) == [(0, True), (1, True)]
+    assert sorted(restored) == [(0, True), (1, True)]
+    assert sorted(results) == [(0, 0), (1, 1)]
+
+
 def test_tuf_marker_replace_is_parent_fsynced_before_elapsed_is_reported(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -739,6 +909,43 @@ def test_tuf_marker_replace_is_parent_fsynced_before_elapsed_is_reported(
         marker,
         MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 20.0),
     ) == "a" * 64
+
+
+def test_tuf_marker_replace_fsyncs_held_original_parent_after_path_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "metadata"
+    moved = tmp_path / "metadata-moved"
+    root.mkdir(mode=0o700)
+    marker = root / ".bootstrap-established"
+    original_identity = (root.stat().st_dev, root.stat().st_ino)
+    original_replace = update_trust.os.replace
+    original_fsync = update_trust.os.fsync
+    synced: list[tuple[int, int]] = []
+    swapped = False
+
+    def replace_then_swap(source, destination, *args, **kwargs):
+        nonlocal swapped
+        original_replace(source, destination, *args, **kwargs)
+        if not swapped and str(destination).endswith(".bootstrap-established"):
+            swapped = True
+            os.rename(root, moved)
+            root.mkdir(mode=0o700)
+
+    def record_fsync(fd):
+        metadata = os.fstat(fd)
+        if stat.S_ISDIR(metadata.st_mode):
+            synced.append((metadata.st_dev, metadata.st_ino))
+        return original_fsync(fd)
+
+    monkeypatch.setattr(update_trust.os, "replace", replace_then_swap)
+    monkeypatch.setattr(update_trust.os, "fsync", record_fsync)
+    update_trust._write_marker(marker, "a" * 64)
+
+    replacement_identity = (root.stat().st_dev, root.stat().st_ino)
+    assert original_identity in synced
+    assert replacement_identity not in synced
+    assert (moved / marker.name).is_file()
 
 
 def test_tuf_bootstrap_marker_and_authorization_require_successful_fsync(
@@ -1023,6 +1230,37 @@ def test_oras_uses_sealed_credential_snapshots_after_path_and_inode_mutation(tmp
     assert invocation["credentials"][:2] == ["auth.json", "ca.pem"]
 
 
+def test_oras_executable_snapshot_stops_after_crossing_read(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    policy, _ = _oras_policy(tmp_path)
+    with policy.executable.open("ab") as executable:
+        executable.write(b"#" * (3 * 64 * 1024))
+    policy = replace(
+        policy,
+        executable_sha256=hashlib.sha256(policy.executable.read_bytes()).hexdigest(),
+    )
+    client = ORASClient(policy)
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    original_read = oci_module.os.read
+    reads = 0
+
+    def slow_read(fd, size):
+        nonlocal reads
+        reads += 1
+        time.sleep(0.03)
+        return original_read(fd, size)
+
+    monkeypatch.setattr(oci_module.os, "read", slow_read)
+    deadline = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(seconds=1), time.monotonic() + 0.01
+    )
+    with pytest.raises(OCIError, match="deadline"):
+        client.pull(ReleaseDescriptor.parse(_descriptor()), staging, deadline)
+    assert reads == 1
+
+
 def test_oras_rejects_policy_mismatch_before_launch(tmp_path: Path) -> None:
     policy, record = _oras_policy(tmp_path)
     staging = tmp_path / "staging"
@@ -1061,7 +1299,7 @@ def test_oras_close_waits_for_active_pull_and_then_fails_closed(tmp_path: Path) 
                 ReleaseDescriptor.parse(_descriptor()), staging,
                 datetime.now(UTC) + timedelta(seconds=2),
             )
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - report thread failures
             errors.append(error)
 
     pull_thread = threading.Thread(target=pull)
@@ -1277,9 +1515,10 @@ def test_release_rename_is_parent_fsynced_before_elapsed_is_reported(
     parent_synced = False
     monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
 
-    def rename_then_expire(source, destination):
-        original_rename(source, destination)
-        clock[0] = 11.0
+    def rename_then_expire(*args):
+        original_rename(*args)
+        if args[3] == "2" * 64:
+            clock[0] = 11.0
 
     def record_fsync(fd):
         nonlocal parent_synced
@@ -1309,6 +1548,529 @@ def test_release_rename_is_parent_fsynced_before_elapsed_is_reported(
         request,
         MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
     ).status == "already-installed"
+
+
+def test_release_publication_fsyncs_held_original_parent_after_path_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            member = destination / "bin/runtime-adapter"
+            member.parent.mkdir()
+            member.write_bytes(b"x" * 17)
+            member.chmod(0o500)
+
+    releases = tmp_path / "releases"
+    moved = tmp_path / "releases-moved"
+    staging = tmp_path / "staging"
+    installer = ReleaseInstaller(Trust(), Transport(), releases, staging)
+    original_rename = release_module._rename_noreplace
+    original_fsync = release_module.os.fsync
+    synced: list[tuple[int, int]] = []
+
+    def rename_then_swap(*args):
+        original_rename(*args)
+        if args[3] == "2" * 64:
+            os.rename(releases, moved)
+            releases.mkdir(mode=0o700)
+
+    def record_fsync(fd):
+        metadata = os.fstat(fd)
+        if stat.S_ISDIR(metadata.st_mode):
+            synced.append((metadata.st_dev, metadata.st_ino))
+        return original_fsync(fd)
+
+    monkeypatch.setattr(release_module, "_rename_noreplace", rename_then_swap)
+    monkeypatch.setattr(release_module.os, "fsync", record_fsync)
+    with pytest.raises(ReleaseInstallError):
+        installer.install(
+            ReleaseRequest.parse(VALID_RELEASE),
+            datetime.now(UTC) + timedelta(seconds=2),
+        )
+
+    original_identity = (moved.stat().st_dev, moved.stat().st_ino)
+    replacement_identity = (releases.stat().st_dev, releases.stat().st_ino)
+    assert original_identity in synced
+    assert replacement_identity not in synced
+    assert (moved / ("2" * 64)).is_dir()
+
+
+@pytest.mark.parametrize("phase", ["create", "chmod", "open"])
+def test_expired_staging_setup_defers_cleanup_and_next_attempt_reaps(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, phase: str
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            member = destination / "bin/runtime-adapter"
+            member.parent.mkdir()
+            member.write_bytes(b"x" * 17)
+            member.chmod(0o500)
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    installer = ReleaseInstaller(Trust(), Transport(), releases, staging)
+    clock = [0.0]
+    armed = [True]
+    mutations: list[str] = []
+    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    original_mkdir = release_module.os.mkdir
+    original_chmod = release_module.os.chmod
+    original_fchmod = release_module.os.fchmod
+    original_open = release_module.os.open
+    original_unlink = release_module.os.unlink
+    original_rmdir = release_module.os.rmdir
+
+    def expire():
+        if armed[0]:
+            clock[0] = 11.0
+            armed[0] = False
+
+    def mkdir(path, *args, **kwargs):
+        result = original_mkdir(path, *args, **kwargs)
+        if phase == "create" and str(path).startswith(".install-"):
+            expire()
+        return result
+
+    def chmod(path, mode, *args, **kwargs):
+        result = original_chmod(path, mode, *args, **kwargs)
+        if phase == "chmod" and ".install-" in str(path):
+            expire()
+        return result
+
+    def fchmod(fd, mode):
+        result = original_fchmod(fd, mode)
+        if phase == "chmod":
+            expire()
+        return result
+
+    def open_then_expire(path, flags, *args, **kwargs):
+        result = original_open(path, flags, *args, **kwargs)
+        if (
+            phase == "open"
+            and ".install-" in str(path)
+            and not str(path).endswith(".lock")
+        ):
+            expire()
+        return result
+
+    def unlink(path, *args, **kwargs):
+        if clock[0] > 10:
+            mutations.append("unlink")
+        return original_unlink(path, *args, **kwargs)
+
+    def rmdir(path, *args, **kwargs):
+        if clock[0] > 10:
+            mutations.append("rmdir")
+        return original_rmdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(release_module.os, "mkdir", mkdir)
+    monkeypatch.setattr(release_module.os, "chmod", chmod)
+    monkeypatch.setattr(release_module.os, "fchmod", fchmod)
+    monkeypatch.setattr(release_module.os, "open", open_then_expire)
+    monkeypatch.setattr(release_module.os, "unlink", unlink)
+    monkeypatch.setattr(release_module.os, "rmdir", rmdir)
+    request = ReleaseRequest.parse(VALID_RELEASE)
+
+    with pytest.raises(ReleaseInstallError, match="deadline"):
+        installer.install(
+            request,
+            MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
+        )
+    assert mutations == []
+    assert len(tuple(staging.glob(".install-*"))) == 1
+
+    clock[0] = 0.0
+    assert installer.install(
+        request,
+        MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
+    ).status == "installed"
+    assert tuple(staging.iterdir()) == ()
+
+
+def test_expired_member_verification_never_recursively_cleans_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    content = b"x" * (3 * 64 * 1024)
+    document = _descriptor()
+    document["target_length"] = len(content)
+    document["members"][0]["size"] = len(content)
+    document["members"][0]["sha256"] = hashlib.sha256(content).hexdigest()
+    descriptor = ReleaseDescriptor.parse(document)
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            member = destination / "bin/runtime-adapter"
+            member.parent.mkdir()
+            member.write_bytes(content)
+            member.chmod(0o500)
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    installer = ReleaseInstaller(Trust(), Transport(), releases, staging)
+    clock = [0.0]
+    armed = [True]
+    mutations: list[str] = []
+    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    original_read = release_module.os.read
+    original_unlink = release_module.os.unlink
+    original_rmdir = release_module.os.rmdir
+
+    def expire_after_read(fd, size):
+        data = original_read(fd, size)
+        if armed[0]:
+            armed[0] = False
+            clock[0] = 11.0
+        return data
+
+    def unlink(path, *args, **kwargs):
+        if clock[0] > 10:
+            mutations.append("unlink")
+        return original_unlink(path, *args, **kwargs)
+
+    def rmdir(path, *args, **kwargs):
+        if clock[0] > 10:
+            mutations.append("rmdir")
+        return original_rmdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(release_module.os, "read", expire_after_read)
+    monkeypatch.setattr(release_module.os, "unlink", unlink)
+    monkeypatch.setattr(release_module.os, "rmdir", rmdir)
+    request = ReleaseRequest.parse(VALID_RELEASE)
+    with pytest.raises(ReleaseInstallError, match="deadline"):
+        installer.install(
+            request,
+            MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
+        )
+    assert mutations == []
+    assert len(tuple(staging.glob(".install-*"))) == 1
+
+    clock[0] = 0.0
+    assert installer.install(
+        request,
+        MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
+    ).status == "installed"
+    assert tuple(staging.iterdir()) == ()
+
+
+def test_deferred_reaper_preserves_foreign_inode_substituted_at_owned_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            member = destination / "bin/runtime-adapter"
+            member.parent.mkdir()
+            member.write_bytes(b"x" * 17)
+            member.chmod(0o500)
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    installer = ReleaseInstaller(Trust(), Transport(), releases, staging)
+    clock = [0.0]
+    armed = [True]
+    original_fchmod = release_module.os.fchmod
+    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+
+    def expire_after_identity(fd, mode):
+        result = original_fchmod(fd, mode)
+        if armed[0]:
+            armed[0] = False
+            clock[0] = 11.0
+        return result
+
+    monkeypatch.setattr(release_module.os, "fchmod", expire_after_identity)
+    request = ReleaseRequest.parse(VALID_RELEASE)
+    deadline = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(seconds=10), 10.0
+    )
+    with pytest.raises(ReleaseInstallError, match="deadline"):
+        installer.install(request, deadline)
+
+    owned = next(staging.glob(".install-*"))
+    moved = staging / ".attacker-moved-owned-tree"
+    os.rename(owned, moved)
+    owned.mkdir(mode=0o700)
+    foreign = owned / "foreign"
+    foreign.write_bytes(b"preserve")
+
+    clock[0] = 0.0
+    restarted = ReleaseInstaller(Trust(), Transport(), releases, staging)
+    assert restarted.install(request, deadline).status == "installed"
+    assert foreign.read_bytes() == b"preserve"
+    assert moved.is_dir()
+    assert restarted._deferred_staging == {}
+
+
+def test_fresh_inspection_reaps_authenticated_partial_staging_for_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            member = destination / "bin/runtime-adapter"
+            member.parent.mkdir()
+            member.write_bytes(b"x" * 17)
+            member.chmod(0o500)
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    clock = [0.0]
+    original_fchmod = release_module.os.fchmod
+    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+
+    def expire_after_identity(fd, mode):
+        result = original_fchmod(fd, mode)
+        clock[0] = 11.0
+        return result
+
+    monkeypatch.setattr(release_module.os, "fchmod", expire_after_identity)
+    request = ReleaseRequest.parse(VALID_RELEASE)
+    deadline = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(seconds=10), 10.0
+    )
+    with pytest.raises(ReleaseInstallError, match="deadline"):
+        ReleaseInstaller(Trust(), Transport(), releases, staging).install(
+            request, deadline
+        )
+    assert tuple(staging.glob(".recovery-*.state"))
+
+    clock[0] = 0.0
+    restarted = ReleaseInstaller(Trust(), Transport(), releases, staging)
+    assert restarted.inspect(request, deadline).disposition is ReleaseDisposition.SAFE_TO_RESUME
+    assert tuple(staging.iterdir()) == ()
+
+
+def test_recovery_record_swap_before_delete_preserves_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    token = "c" * 16
+    staging_name = f".install-{'2' * 64}-{token}"
+    recovery_name = f".recovery-{token}.state"
+    staging_path = staging / staging_name
+    staging_path.mkdir(mode=0o700)
+    metadata = staging_path.stat()
+    identity = (metadata.st_dev, metadata.st_ino)
+    parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    original_rename = release_module._rename_noreplace
+    moved = staging / ".moved-original-record"
+    swapped = [False]
+    try:
+        record_identity = release_module._write_recovery_record_fd(
+            parent_fd, recovery_name, staging_name, identity
+        )
+        record = staging / recovery_name
+        canonical = record.read_bytes()
+
+        def swap_then_rename(source_fd, source, destination_fd, destination):
+            if source == recovery_name and not swapped[0]:
+                swapped[0] = True
+                os.rename(record, moved)
+                record.write_bytes(canonical)
+                record.chmod(0o600)
+            return original_rename(
+                source_fd, source, destination_fd, destination
+            )
+
+        monkeypatch.setattr(release_module, "_rename_noreplace", swap_then_rename)
+        assert not release_module._remove_recovery_record_fd(
+            parent_fd, recovery_name, record_identity, lambda: None
+        )
+    finally:
+        os.close(parent_fd)
+
+    assert moved.is_file()
+    assert (staging / recovery_name).is_file()
+    assert (staging / recovery_name).stat().st_ino != moved.stat().st_ino
+
+
+def test_recursive_cleanup_final_remove_preserves_empty_foreign_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    name = ".install-owned"
+    owned = staging / name
+    owned.mkdir(mode=0o700)
+    metadata = owned.stat()
+    identity = (metadata.st_dev, metadata.st_ino)
+    moved = staging / ".moved-owned"
+    original_rename = release_module._rename_noreplace
+    swapped = [False]
+
+    def substitute_then_rename(source_fd, source, destination_fd, destination):
+        if source == name and not swapped[0]:
+            swapped[0] = True
+            os.rename(owned, moved)
+            owned.mkdir(mode=0o700)
+        return original_rename(source_fd, source, destination_fd, destination)
+
+    monkeypatch.setattr(release_module, "_rename_noreplace", substitute_then_rename)
+    parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        release_module._remove_bound_tree_fd(
+            parent_fd, name, identity, lambda: None
+        )
+    finally:
+        os.close(parent_fd)
+
+    assert moved.is_dir()
+    assert owned.is_dir()
+    assert moved.stat().st_ino != owned.stat().st_ino
+
+
+def test_deferred_staging_backlog_is_bounded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installer = ReleaseInstaller(
+        object(), object(), tmp_path / "releases", tmp_path / "staging"
+    )
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    installer._deferred_staging = {
+        f".install-owned-{index}": (1, index)
+        for index in range(release_module._MAX_DEFERRED_STAGING)
+    }
+    monkeypatch.setattr(
+        release_module,
+        "_remove_bound_tree_fd",
+        lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError()),
+    )
+    parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(ReleaseInstallError, match="backlog"):
+            installer._reap_deferred_staging(parent_fd)
+    finally:
+        os.close(parent_fd)
+    assert len(installer._deferred_staging) == release_module._MAX_DEFERRED_STAGING
+
+
+@pytest.mark.parametrize(
+    "window",
+    [
+        "sidecar-before-dir",
+        "dir-before-complete-sidecar",
+        "published-with-sidecar",
+        "cleanup-before-sidecar",
+    ],
+)
+def test_restart_reaper_resolves_durable_recovery_crash_windows(
+    tmp_path: Path, window: str
+) -> None:
+    staging = tmp_path / "staging"
+    releases = tmp_path / "releases"
+    staging.mkdir(mode=0o700)
+    releases.mkdir(mode=0o700)
+    token = "a" * 16
+    staging_name = f".install-{'2' * 64}-{token}"
+    recovery_name = f".recovery-{token}.state"
+    staging_path = staging / staging_name
+    parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    published = releases / ("2" * 64)
+    try:
+        if window != "sidecar-before-dir":
+            staging_path.mkdir(mode=0o700)
+            metadata = staging_path.stat()
+            identity = (metadata.st_dev, metadata.st_ino)
+        else:
+            identity = (123, 456)
+        if window in {"sidecar-before-dir", "dir-before-complete-sidecar"}:
+            release_module._write_recovery_intent_fd(
+                parent_fd, recovery_name, staging_name
+            )
+        else:
+            release_module._write_recovery_record_fd(
+                parent_fd, recovery_name, staging_name, identity
+            )
+        if window == "published-with-sidecar":
+            os.rename(staging_path, published)
+        elif window == "cleanup-before-sidecar":
+            os.rmdir(staging_path)
+
+        restarted = ReleaseInstaller(object(), object(), releases, staging)
+        restarted._reap_deferred_staging(parent_fd)
+    finally:
+        os.close(parent_fd)
+
+    assert not (staging / recovery_name).exists()
+    assert not staging_path.exists()
+    assert published.exists() is (window == "published-with-sidecar")
+    assert bool(tuple(staging.glob(".quarantine-*"))) is (
+        window == "dir-before-complete-sidecar"
+    )
+
+
+@pytest.mark.parametrize("damage", ["corrupt", "truncated", "symlink", "permission"])
+def test_restart_reaper_fails_closed_on_unsafe_recovery_sidecar(
+    tmp_path: Path, damage: str
+) -> None:
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    token = "b" * 16
+    staging_name = f".install-{'2' * 64}-{token}"
+    recovery_name = f".recovery-{token}.state"
+    staging_path = staging / staging_name
+    staging_path.mkdir(mode=0o700)
+    metadata = staging_path.stat()
+    identity = (metadata.st_dev, metadata.st_ino)
+    recovery = staging / recovery_name
+    if damage == "symlink":
+        target = tmp_path / "foreign-record"
+        target.write_bytes(
+            release_module._recovery_record_bytes(staging_name, identity)
+        )
+        recovery.symlink_to(target)
+    else:
+        recovery.write_bytes(
+            b"invalid\n"
+            if damage == "corrupt"
+            else (
+                b"1\n"
+                if damage == "truncated"
+                else release_module._recovery_record_bytes(staging_name, identity)
+            )
+        )
+        recovery.chmod(0o644 if damage == "permission" else 0o600)
+
+    restarted = ReleaseInstaller(
+        object(), object(), tmp_path / "releases", staging
+    )
+    parent_fd = os.open(staging, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        with pytest.raises(ReleaseInstallError, match="recovery record"):
+            restarted._reap_deferred_staging(parent_fd)
+    finally:
+        os.close(parent_fd)
+
+    assert staging_path.is_dir()
+    assert os.path.lexists(recovery)
 
 
 @pytest.mark.parametrize("branch", ["initial-existing", "rename-race", "inspect"])
@@ -1365,10 +2127,14 @@ def test_every_idempotent_branch_rejects_destination_identity_swap(
     deadline = datetime.now(UTC) + timedelta(seconds=2)
 
     if branch == "rename-race":
-        def competing_publish(source, target):
+        original_rename = release_module._rename_noreplace
+
+        def competing_publish(*args):
+            if args[3] != "2" * 64:
+                return original_rename(*args)
             make_installed(destination)
             make_installed(replacement)
-            raise FileExistsError(target)
+            raise FileExistsError(request.target_digest)
 
         monkeypatch.setattr(
             release_module, "_rename_noreplace", competing_publish
@@ -1620,7 +2386,7 @@ def test_installer_serializes_same_release_transport(tmp_path: Path) -> None:
     def install() -> None:
         try:
             installer.install(request, datetime.now(UTC) + timedelta(seconds=2))
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - report thread failures
             errors.append(error)
 
     threads = [threading.Thread(target=install) for _ in range(2)]
@@ -1770,7 +2536,17 @@ def test_publication_detects_but_never_deletes_foreign_staging_substitution(
     staging = tmp_path / "staging"
     original_rename = release_module._rename_noreplace
 
-    def substitute_then_rename(source, destination):
+    def substitute_then_rename(
+        source_parent_fd, source_name, destination_parent_fd, destination_name
+    ):
+        if destination_name != "2" * 64:
+            return original_rename(
+                source_parent_fd,
+                source_name,
+                destination_parent_fd,
+                destination_name,
+            )
+        source = Path(f"/proc/self/fd/{source_parent_fd}/{source_name}")
         backup = source.with_name(".attacker-moved-verified-tree")
         os.rename(source, backup)
         source.mkdir(mode=0o700)
@@ -1778,7 +2554,12 @@ def test_publication_detects_but_never_deletes_foreign_staging_substitution(
         malicious.parent.mkdir()
         malicious.write_bytes(b"attacker")
         malicious.chmod(0o500)
-        original_rename(source, destination)
+        original_rename(
+            source_parent_fd,
+            source_name,
+            destination_parent_fd,
+            destination_name,
+        )
 
     monkeypatch.setattr(
         release_module, "_rename_noreplace", substitute_then_rename

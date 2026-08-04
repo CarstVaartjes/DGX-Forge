@@ -1,20 +1,19 @@
 """Digest-only ORAS transport through an installed local policy."""
 from __future__ import annotations
 
-from dataclasses import dataclass
-from datetime import datetime
 import fcntl
 import os
-from pathlib import Path
 import stat
 import threading
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
 from urllib.parse import urlsplit
 
-from .nvidia_tools import InstalledToolSecurityError, open_verified_executable
 from .deadlines import DeadlineBindingError, MonotonicDeadline
-from .probe import BoundedProcessRunner, ProcessRequest, ProbeError
+from .nvidia_tools import InstalledToolSecurityError, open_verified_executable
+from .probe import BoundedProcessRunner, ProbeError, ProcessRequest
 from .releases import ReleaseDescriptor
-
 
 _ORAS_VERSION = "1.3.3"
 _OUTPUT_LIMIT = 64 * 1024
@@ -23,6 +22,13 @@ _MAX_PULL_SECONDS = 300
 
 class OCIError(RuntimeError):
     error_code = "release_transport_failed"
+
+
+def _oci_deadline(deadline: MonotonicDeadline) -> None:
+    try:
+        deadline.check()
+    except DeadlineBindingError as error:
+        raise OCIError("release transport deadline has elapsed") from error
 
 
 @dataclass(frozen=True)
@@ -140,6 +146,7 @@ class ORASClient:
                 self._policy.executable,
                 self._policy.executable_sha256,
                 _test_only_allow_unprivileged=self._policy.allow_unprivileged_test_files,
+                _check_deadline=lambda: _oci_deadline(fixed_deadline),
             )
             if executable_fd is None:
                 raise OCIError("reviewed ORAS executable is unavailable")
