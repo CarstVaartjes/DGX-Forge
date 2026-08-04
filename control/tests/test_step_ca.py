@@ -1,34 +1,36 @@
 from __future__ import annotations
 
-# Keep this import first so the TDD RED proves the provider is absent before
-# any new runtime dependency is imported.
-from dgx_control.step_ca import StepCertificateAuthority, StepCAError, _validate_crl_freshness
-
-from datetime import UTC, datetime, timedelta
 import base64
 import json
 import os
-from pathlib import Path
 import socket
 import subprocess
 import time
-from types import SimpleNamespace
 import uuid
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
 
+import httpx
+import jwt
+import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.x509.oid import ExtendedKeyUsageOID, ExtensionOID, NameOID
-import httpx
-import jwt
-import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from dgx_control.agent_api import AgentApiServices
 from dgx_control.api import build_agent_services
 from dgx_control.models import Base
 
+# Keep this import first so the TDD RED proves the provider is absent before
+# any new runtime dependency is imported.
+from dgx_control.step_ca import (
+    StepCAError,
+    StepCertificateAuthority,
+    _validate_crl_freshness,
+)
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 NODE_ID = "spk_0123456789abcdef0123456789abcdef"
 NOW = datetime(2026, 8, 4, 12, tzinfo=UTC)
@@ -187,9 +189,17 @@ def test_renewal_uses_new_signed_csr_and_fresh_serial(tmp_path: Path) -> None:
     provider, material = _provider(tmp_path, handler)
     holder["material"] = material
     request_pem = _csr()
-    issued = provider.renew_node(NODE_ID, request_pem, NOW)
+    request_id = "r" * 43
+    issued = provider.renew_node(
+        NODE_ID,
+        request_pem,
+        NOW,
+        request_id=request_id,
+    )
 
     assert seen[0]["body"]["csr"] == request_pem.decode()
+    claims = jwt.decode(seen[0]["body"]["ott"], options={"verify_signature": False})
+    assert claims["jti"] == request_id
     assert issued.serial == "5678"
 
 
@@ -489,7 +499,7 @@ def test_pinned_step_ca_issues_tracked_leaf_profile_and_serves_fresh_crl(tmp_pat
         ], input=input_text, capture_output=True, text=True, timeout=60, check=True)
 
     root = tmp_path / "root_ca.crt"
-    root_key = tmp_path / "root_ca.key"
+    root_key = tmp_path / "root_ca.key"  # noqa: F841 - created by step ca init
     intermediate = tmp_path / "intermediate_ca.crt"
     intermediate_key = tmp_path / "intermediate_ca_key"
     public_jwk = tmp_path / "agent-ca-public.jwk"
@@ -561,7 +571,12 @@ def test_pinned_step_ca_issues_tracked_leaf_profile_and_serves_fresh_crl(tmp_pat
                 break
             except StepCAError:
                 if time.monotonic() >= deadline:
-                    logs = subprocess.run(["docker", "logs", container], capture_output=True, text=True).stderr
+                    logs = subprocess.run(
+                        ["docker", "logs", container],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    ).stderr
                     pytest.fail(f"pinned step-ca did not become healthy: {logs}")
                 time.sleep(0.1)
         now = datetime.now(UTC).replace(microsecond=0)
@@ -576,4 +591,10 @@ def test_pinned_step_ca_issues_tracked_leaf_profile_and_serves_fresh_crl(tmp_pat
         crl = x509.load_pem_x509_crl(provider.revocation_bundle(datetime.now(UTC).replace(microsecond=0)))
         assert issued.serial in {str(record.serial_number) for record in crl}
     finally:
-        subprocess.run(["docker", "stop", container], capture_output=True, text=True, timeout=30)
+        subprocess.run(
+            ["docker", "stop", container],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )

@@ -50,8 +50,63 @@ def upgrade() -> None:
             "uq_agent_certificates_node_generation", ["node_id", "generation"]
         )
 
+    op.create_table(
+        "agent_certificate_rotations",
+        sa.Column("node_id", sa.String(length=36), nullable=False),
+        sa.Column("source_serial", sa.String(length=128), nullable=False),
+        sa.Column("generation", sa.Integer(), nullable=False),
+        sa.Column("csr_pem", sa.Text(), nullable=False),
+        sa.Column(
+            "csr_public_key_fingerprint",
+            sa.String(length=64),
+            nullable=False,
+        ),
+        sa.Column(
+            "provider_request_id",
+            sa.String(length=64),
+            nullable=False,
+        ),
+        sa.Column("state", sa.String(length=32), nullable=False),
+        sa.Column(
+            "created_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+        ),
+        sa.Column(
+            "updated_at",
+            sa.DateTime(timezone=True),
+            nullable=False,
+        ),
+        sa.ForeignKeyConstraint(
+            ["node_id"],
+            ["agent_nodes.node_id"],
+            ondelete="CASCADE",
+        ),
+        sa.PrimaryKeyConstraint("node_id"),
+        sa.UniqueConstraint("provider_request_id"),
+    )
+    op.create_index(
+        op.f("ix_agent_certificate_rotations_state"),
+        "agent_certificate_rotations",
+        ["state"],
+        unique=False,
+    )
+
 
 def downgrade() -> None:
+    # The previous application has no state discriminator and authenticates a
+    # valid certificate when revoked_at is NULL. Preserve denial for staged or
+    # locally retired rows before removing the discriminator.
+    op.execute(sa.text("""
+        UPDATE agent_certificates
+        SET revoked_at = CURRENT_TIMESTAMP
+        WHERE state <> 'active' AND revoked_at IS NULL
+    """))
+    op.drop_index(
+        op.f("ix_agent_certificate_rotations_state"),
+        table_name="agent_certificate_rotations",
+    )
+    op.drop_table("agent_certificate_rotations")
     with op.batch_alter_table("agent_certificates") as batch:
         batch.drop_constraint(
             "uq_agent_certificates_node_generation", type_="unique"

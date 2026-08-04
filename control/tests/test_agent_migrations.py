@@ -146,6 +146,7 @@ def test_certificate_rotation_migration_backfills_active_generation_and_is_rever
         ))
 
     upgrade_to("head", database)
+    assert "agent_certificate_rotations" in tables(database)
     columns = {column["name"] for column in inspect(engine).get_columns("agent_certificates")}
     assert {
         "state", "generation", "certificate_pem", "chain_pem",
@@ -159,8 +160,19 @@ def test_certificate_rotation_migration_backfills_active_generation_and_is_rever
             ("serial-1", "active", 1),
             ("serial-2", "active", 2),
         ]
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO agent_certificates "
+            "(serial,node_id,not_before,not_after,fingerprint,revoked_at,"
+            "state,generation,certificate_pem,chain_pem,csr_public_key_fingerprint) "
+            "VALUES ('serial-3','spk_0123456789abcdef0123456789abcdef',"
+            "'2026-08-04 00:00:00','2026-08-06 00:00:00','fingerprint-3',NULL,"
+            "'staged',3,'certificate','chain','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')"
+        ))
 
     downgrade_to("0004_agent_enrollment", database)
+    assert "agent_certificate_rotations" not in tables(database)
     downgraded = {column["name"] for column in inspect(engine).get_columns("agent_certificates")}
     assert not {
         "state", "generation", "certificate_pem", "chain_pem",
@@ -168,5 +180,26 @@ def test_certificate_rotation_migration_backfills_active_generation_and_is_rever
     } & downgraded
     with engine.connect() as connection:
         assert connection.execute(text(
-            "SELECT serial FROM agent_certificates ORDER BY serial"
-        )).scalars().all() == ["serial-1", "serial-2"]
+            "SELECT serial,revoked_at IS NULL FROM agent_certificates ORDER BY serial"
+        )).all() == [
+            ("serial-1", False),
+            ("serial-2", True),
+            ("serial-3", False),
+        ]
+        assert connection.execute(text(
+            "SELECT certificate.serial FROM agent_certificates AS certificate "
+            "JOIN agent_nodes AS node ON node.node_id = certificate.node_id "
+            "WHERE certificate.serial = 'serial-3' "
+            "AND certificate.node_id = 'spk_0123456789abcdef0123456789abcdef' "
+            "AND certificate.fingerprint = 'fingerprint-3' "
+            "AND certificate.revoked_at IS NULL "
+            "AND certificate.not_before <= '2026-08-05 00:00:00' "
+            "AND certificate.not_after > '2026-08-05 00:00:00' "
+            "AND node.state = 'active' AND node.revoked_at IS NULL"
+        )).scalar_one_or_none() is None
+
+    upgrade_to("head", database)
+    from dgx_control.models import Base
+
+    with engine.connect() as connection:
+        assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []

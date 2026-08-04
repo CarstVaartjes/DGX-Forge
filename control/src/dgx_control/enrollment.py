@@ -17,10 +17,16 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from sqlalchemy import select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
-from .models import AgentCertificate, AgentEnrollment, AgentEnrollmentGrant, AgentNode
+from .models import (
+    AgentCertificate,
+    AgentCertificateRotation,
+    AgentEnrollment,
+    AgentEnrollmentGrant,
+    AgentNode,
+)
 from .pki import CertificateAuthority, IssuedCertificate
 
 _NODE_ID = re.compile(r"spk_[0-9a-f]{32}")
@@ -44,6 +50,7 @@ _EVIDENCE_LIMITS = {
     "boot_id": 128,
 }
 _HEX_64 = re.compile(r"[0-9a-f]{64}\Z")
+_ROTATION_ISSUANCE_TIMEOUT = timedelta(minutes=5)
 
 
 class EnrollmentDenied(RuntimeError):
@@ -52,6 +59,14 @@ class EnrollmentDenied(RuntimeError):
 
 class RemoteRevocationUncertain(EnrollmentDenied):
     """Local denial committed, but provider confirmation remains pending."""
+
+
+class RenewalInProgress(RuntimeError):
+    """A committed renewal owner may still persist its provider result."""
+
+
+class RenewalIssuanceUncertain(EnrollmentDenied):
+    """Renewal issuance is terminal until an operator reconciles the intent."""
 
 
 @dataclass(frozen=True)
@@ -73,6 +88,18 @@ class PendingEnrollment:
 class _IssuanceClaim:
     node_id: str
     csr_pem: bytes
+
+
+@dataclass(frozen=True)
+class _RotationClaim:
+    node_id: str
+    source_serial: str
+    generation: int
+    csr_pem: bytes
+    csr_public_key_fingerprint: str
+    provider_request_id: str
+    state: str
+    owner: bool
 
 
 class EnrollmentService:
@@ -245,6 +272,56 @@ class EnrollmentService:
             raise ValueError("certificate serial is required")
         normalized_csr, _, csr_fingerprint = _load_csr(node_id, csr)
         now = _utc(self._clock())
+        try:
+            claim = self._claim_rotation(
+                node_id,
+                serial,
+                normalized_csr,
+                csr_fingerprint,
+                now,
+            )
+        except IntegrityError:
+            # SQLite does not implement SELECT FOR UPDATE. A node-unique row
+            # still arbitrates separate service instances at commit.
+            claim = self._claim_rotation(
+                node_id,
+                serial,
+                normalized_csr,
+                csr_fingerprint,
+                now,
+            )
+        if isinstance(claim, IssuedCertificate):
+            return claim
+        if not claim.owner:
+            if claim.state == "manual-recovery":
+                raise RenewalIssuanceUncertain(
+                    "certificate rotation requires manual recovery"
+                )
+            raise RenewalInProgress("certificate rotation issuance is in progress")
+        try:
+            issued = self._authority.renew_node(
+                node_id,
+                normalized_csr,
+                now,
+                request_id=claim.provider_request_id,
+            )
+            self._validate_renewal_result(issued, claim)
+            self._persist_rotation(issued, claim)
+        except Exception as error:
+            self._mark_rotation_uncertain(claim, now)
+            raise RenewalIssuanceUncertain(
+                "certificate rotation requires manual recovery"
+            ) from error
+        return replace(issued, generation=claim.generation)
+
+    def _claim_rotation(
+        self,
+        node_id: str,
+        serial: str,
+        normalized_csr: bytes,
+        csr_fingerprint: str,
+        now: datetime,
+    ) -> _RotationClaim | IssuedCertificate:
         with self._sessions.begin() as session:
             node = session.scalar(
                 select(AgentNode).where(AgentNode.node_id == node_id).with_for_update(of=AgentNode)
@@ -278,35 +355,121 @@ class EnrollmentService:
                 if staged.csr_public_key_fingerprint != csr_fingerprint:
                     raise EnrollmentDenied("a different certificate rotation is already staged")
                 return _certificate_issued(staged)
-            issued = self._authority.renew_node(node_id, normalized_csr, now)
-            if issued.node_id != node_id:
-                raise EnrollmentDenied("certificate authority returned a mismatched node identity")
-            if issued.serial == serial:
-                raise EnrollmentDenied("certificate authority reused renewal serial")
+            intent = session.scalar(
+                select(AgentCertificateRotation)
+                .where(AgentCertificateRotation.node_id == node_id)
+                .with_for_update(of=AgentCertificateRotation)
+            )
+            if intent is not None:
+                if (
+                    intent.source_serial != serial
+                    or intent.csr_public_key_fingerprint != csr_fingerprint
+                    or intent.csr_pem != normalized_csr.decode("ascii")
+                ):
+                    raise EnrollmentDenied("a different certificate rotation is already in progress")
+                if (
+                    intent.state == "issuing"
+                    and now - _stored_utc(intent.updated_at) >= _ROTATION_ISSUANCE_TIMEOUT
+                ):
+                    intent.state = "manual-recovery"
+                    intent.updated_at = now
+                if intent.state not in {"issuing", "manual-recovery"}:
+                    raise EnrollmentDenied("certificate rotation state is invalid")
+                return _rotation_claim(intent, owner=False)
             generations = list(session.scalars(
                 select(AgentCertificate.generation)
                 .where(AgentCertificate.node_id == node_id)
                 .with_for_update()
             ))
             generation = max(generations, default=0) + 1
-            try:
-                certificate_pem = issued.certificate_pem.decode("ascii")
-                chain_pem = issued.chain_pem.decode("ascii")
-            except UnicodeDecodeError as error:
-                raise EnrollmentDenied("certificate authority returned non-PEM certificate material") from error
+            intent = AgentCertificateRotation(
+                node_id=node_id,
+                source_serial=serial,
+                generation=generation,
+                csr_pem=normalized_csr.decode("ascii"),
+                csr_public_key_fingerprint=csr_fingerprint,
+                provider_request_id=secrets.token_urlsafe(32),
+                state="issuing",
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(intent)
+            return _rotation_claim(intent, owner=True)
+
+    @staticmethod
+    def _validate_renewal_result(
+        issued: IssuedCertificate,
+        claim: _RotationClaim,
+    ) -> None:
+        if issued.node_id != claim.node_id:
+            raise EnrollmentDenied("certificate authority returned a mismatched node identity")
+        if issued.serial == claim.source_serial:
+            raise EnrollmentDenied("certificate authority reused renewal serial")
+        try:
+            issued.certificate_pem.decode("ascii")
+            issued.chain_pem.decode("ascii")
+        except UnicodeDecodeError as error:
+            raise EnrollmentDenied(
+                "certificate authority returned non-PEM certificate material"
+            ) from error
+
+    def _persist_rotation(
+        self,
+        issued: IssuedCertificate,
+        claim: _RotationClaim,
+    ) -> None:
+        with self._sessions.begin() as session:
+            intent = session.scalar(
+                select(AgentCertificateRotation)
+                .where(
+                    AgentCertificateRotation.node_id == claim.node_id,
+                    AgentCertificateRotation.provider_request_id
+                    == claim.provider_request_id,
+                )
+                .with_for_update(of=AgentCertificateRotation)
+            )
+            if intent is None or intent.state != "issuing":
+                raise EnrollmentDenied(
+                    "certificate rotation issuance state changed; manual recovery required"
+                )
             session.add(AgentCertificate(
                 serial=issued.serial,
-                node_id=node_id,
+                node_id=claim.node_id,
                 not_before=issued.not_before,
                 not_after=issued.not_after,
                 fingerprint=issued.fingerprint,
                 state="staged",
-                generation=generation,
-                certificate_pem=certificate_pem,
-                chain_pem=chain_pem,
-                csr_public_key_fingerprint=csr_fingerprint,
+                generation=claim.generation,
+                certificate_pem=issued.certificate_pem.decode("ascii"),
+                chain_pem=issued.chain_pem.decode("ascii"),
+                csr_public_key_fingerprint=claim.csr_public_key_fingerprint,
             ))
-            return replace(issued, generation=generation)
+            session.delete(intent)
+            session.flush()
+
+    def _mark_rotation_uncertain(
+        self,
+        claim: _RotationClaim,
+        now: datetime,
+    ) -> None:
+        try:
+            with self._sessions.begin() as session:
+                intent = session.scalar(
+                    select(AgentCertificateRotation)
+                    .where(
+                        AgentCertificateRotation.node_id == claim.node_id,
+                        AgentCertificateRotation.provider_request_id
+                        == claim.provider_request_id,
+                    )
+                    .with_for_update(of=AgentCertificateRotation)
+                )
+                if intent is not None:
+                    intent.state = "manual-recovery"
+                    intent.updated_at = now
+        except SQLAlchemyError:
+            # The committed issuing row remains authoritative when the
+            # follow-up annotation cannot be stored. It still forbids a call.
+            pass
 
     def activate(self, node_id: str, serial: str, generation: int) -> None:
         with self._rotation_lock:
@@ -547,6 +710,23 @@ def _certificate_issued(certificate: AgentCertificate) -> IssuedCertificate:
         not_before=_stored_utc(certificate.not_before),
         not_after=_stored_utc(certificate.not_after),
         generation=certificate.generation,
+    )
+
+
+def _rotation_claim(
+    rotation: AgentCertificateRotation,
+    *,
+    owner: bool,
+) -> _RotationClaim:
+    return _RotationClaim(
+        node_id=rotation.node_id,
+        source_serial=rotation.source_serial,
+        generation=rotation.generation,
+        csr_pem=rotation.csr_pem.encode("ascii"),
+        csr_public_key_fingerprint=rotation.csr_public_key_fingerprint,
+        provider_request_id=rotation.provider_request_id,
+        state=rotation.state,
+        owner=owner,
     )
 
 

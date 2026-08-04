@@ -21,7 +21,7 @@ from dgx_agent_protocol import AgentClaim, AgentOperation, canonical_message
 NODE_ID = "spk_0123456789abcdef0123456789abcdef"
 
 
-def probe_claim() -> AgentClaim:
+def probe_claim(*, deadline: datetime | None = None) -> AgentClaim:
     payload: dict[str, object] = {}
     return AgentClaim(
         schema_version=1,
@@ -34,7 +34,7 @@ def probe_claim() -> AgentClaim:
         base_commit="a" * 40,
         payload_digest=hashlib.sha256(canonical_message(payload)).hexdigest(),
         payload=payload,
-        deadline=datetime.now(UTC) + timedelta(minutes=1),
+        deadline=deadline or datetime.now(UTC) + timedelta(minutes=1),
     )
 
 
@@ -114,6 +114,50 @@ def test_active_attempt_is_recovered_and_executed_before_any_new_claim(tmp_path:
     assert restarted.results[0]["fence"] == active.fence
     assert state.recover_active() is None
     assert state.recover_pending() is None
+
+
+def test_expired_active_attempt_persists_and_replays_exact_failure_before_new_claim(
+    tmp_path: Path,
+) -> None:
+    state = AgentStateStore(tmp_path / "state")
+    expired = probe_claim(deadline=datetime.now(UTC) - timedelta(seconds=1))
+    state.begin(expired)
+    context = OperationContext(node_id=NODE_ID, state=state, probe=Probe())
+    disconnected = FakeControl()
+    disconnected.result_failures = 1
+
+    with pytest.raises(AgentTransportError):
+        Agent(disconnected, OperationRegistry(), context).run_once()
+
+    pending = state.recover_pending()
+    assert pending is not None and pending.result is not None
+    assert pending.result.fence == expired.fence
+    assert pending.result.deadline == expired.deadline
+    assert pending.result.state == "failed"
+    assert pending.result.result == {
+        "status": "failed",
+        "error_code": "claim_deadline_expired",
+    }
+    assert disconnected.claim_calls == 0
+
+    fresh = probe_claim()
+    restarted = FakeControl()
+    restarted.queue(fresh)
+    agent = Agent(restarted, OperationRegistry(), context)
+
+    agent.run_once()
+
+    assert restarted.claim_calls == 0
+    assert restarted.results == [json.loads(pending.canonical_result)]
+    assert state.recover_pending() is None
+
+    agent.run_once()
+
+    assert restarted.claim_calls == 1
+    assert [result["fence"] for result in restarted.results] == [
+        expired.fence,
+        fresh.fence,
+    ]
 
 
 class _SequencedControl(FakeControl):

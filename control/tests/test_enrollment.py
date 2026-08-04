@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
@@ -13,9 +14,15 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from dgx_control.enrollment import EnrollmentDenied, EnrollmentService
+from dgx_control.enrollment import (
+    EnrollmentDenied,
+    EnrollmentService,
+    RenewalInProgress,
+    RenewalIssuanceUncertain,
+)
 from dgx_control.models import (
     AgentCertificate,
+    AgentCertificateRotation,
     AgentEnrollment,
     AgentEnrollmentGrant,
     AgentNode,
@@ -48,6 +55,9 @@ class RecordingAuthority(CertificateAuthority):
         self._serial = 0
         self.revocations: list[str] = []
         self.revoke_failures: set[str] = set()
+        self.renew_error: BaseException | None = None
+        self.renew_request_ids: list[str] = []
+        self.observe_renewal: Callable[[], None] | None = None
 
     def issue_node(self, node_id: str, public_key_pem: bytes, now: datetime) -> IssuedCertificate:
         self.calls.append((node_id, public_key_pem, now))
@@ -62,8 +72,21 @@ class RecordingAuthority(CertificateAuthority):
             not_after=now + timedelta(hours=24),
         )
 
-    def renew_node(self, node_id: str, public_key_pem: bytes, now: datetime) -> IssuedCertificate:
-        return self.issue_node(node_id, public_key_pem, now)
+    def renew_node(
+        self,
+        node_id: str,
+        public_key_pem: bytes,
+        now: datetime,
+        *,
+        request_id: str,
+    ) -> IssuedCertificate:
+        self.renew_request_ids.append(request_id)
+        if self.observe_renewal is not None:
+            self.observe_renewal()
+        issued = self.issue_node(node_id, public_key_pem, now)
+        if self.renew_error is not None:
+            raise self.renew_error
+        return issued
 
     def revocation_bundle(self, now: datetime) -> bytes:
         return b"revocation-bundle"
@@ -355,15 +378,112 @@ def test_renewal_stages_once_then_activation_atomically_retires_older_identity(s
         enrollment.renew(NODE_ID, renewed.serial, csr())
 
 
+def test_renewal_intent_is_committed_before_provider_call(service) -> None:
+    enrollment, sessions, _clock, authority = service
+    issued = enrollment.approve(enroll(enrollment).id, "admin")
+    request = csr()
+
+    def observe() -> None:
+        with sessions() as session:
+            intent = session.get(AgentCertificateRotation, NODE_ID)
+            assert intent is not None
+            assert intent.source_serial == issued.serial
+            assert intent.state == "issuing"
+            assert intent.csr_public_key_fingerprint == public_key_fingerprint(request)
+            assert intent.provider_request_id == authority.renew_request_ids[-1]
+            assert session.scalar(select(func.count()).select_from(AgentCertificate).where(
+                AgentCertificate.state == "staged"
+            )) == 0
+
+    authority.observe_renewal = observe
+
+    renewed = enrollment.renew(NODE_ID, issued.serial, request)
+
+    assert renewed.generation == 2
+
+
+def test_renewal_provider_exception_is_durable_manual_recovery_without_reissue(service) -> None:
+    enrollment, sessions, _clock, authority = service
+    issued = enrollment.approve(enroll(enrollment).id, "admin")
+    request = csr()
+    authority.renew_error = RuntimeError("provider response deliberately lost")
+
+    with pytest.raises(RenewalIssuanceUncertain, match="manual recovery"):
+        enrollment.renew(NODE_ID, issued.serial, request)
+    with pytest.raises(RenewalIssuanceUncertain, match="manual recovery"):
+        enrollment.renew(NODE_ID, issued.serial, request)
+
+    assert len(authority.calls) == 2
+    assert len(authority.renew_request_ids) == 1
+    with sessions() as session:
+        intent = session.get(AgentCertificateRotation, NODE_ID)
+        assert intent is not None and intent.state == "manual-recovery"
+        assert intent.provider_request_id == authority.renew_request_ids[0]
+        assert session.scalar(select(func.count()).select_from(AgentCertificate).where(
+            AgentCertificate.state == "staged"
+        )) == 0
+
+
+def test_process_death_leaves_inspectable_intent_then_becomes_terminal_without_reissue(service) -> None:
+    enrollment, sessions, clock, authority = service
+    issued = enrollment.approve(enroll(enrollment).id, "admin")
+    request = csr()
+    authority.renew_error = SystemExit("simulated process death after provider request")
+
+    with pytest.raises(SystemExit, match="simulated process death"):
+        enrollment.renew(NODE_ID, issued.serial, request)
+    authority.renew_error = None
+    restarted = EnrollmentService(sessions, authority, clock=clock)
+
+    with pytest.raises(RenewalInProgress, match="in progress"):
+        restarted.renew(NODE_ID, issued.serial, request)
+    clock.advance(seconds=301)
+    with pytest.raises(RenewalIssuanceUncertain, match="manual recovery"):
+        restarted.renew(NODE_ID, issued.serial, request)
+
+    assert len(authority.calls) == 2
+    assert len(authority.renew_request_ids) == 1
+    with sessions() as session:
+        intent = session.get(AgentCertificateRotation, NODE_ID)
+        assert intent is not None and intent.state == "manual-recovery"
+
+
+def test_renewal_persistence_ambiguity_is_terminal_without_reissue(service) -> None:
+    enrollment, sessions, clock, authority = service
+    issued = enrollment.approve(enroll(enrollment).id, "admin")
+    request = csr()
+    with sessions.begin() as session:
+        session.add(AgentNode(node_id=OTHER_NODE_ID, state="active", capabilities=[]))
+        session.add(AgentCertificate(
+            serial="serial-2",
+            node_id=OTHER_NODE_ID,
+            not_before=clock.now,
+            not_after=clock.now + timedelta(hours=1),
+            fingerprint="fingerprint-2",
+        ))
+
+    with pytest.raises(RenewalIssuanceUncertain, match="manual recovery"):
+        enrollment.renew(NODE_ID, issued.serial, request)
+    with pytest.raises(RenewalIssuanceUncertain, match="manual recovery"):
+        enrollment.renew(NODE_ID, issued.serial, request)
+
+    assert len(authority.calls) == 2
+    assert len(authority.renew_request_ids) == 1
+    with sessions() as session:
+        intent = session.get(AgentCertificateRotation, NODE_ID)
+        assert intent is not None and intent.state == "manual-recovery"
+
+
 def test_sqlite_simultaneous_exact_renewal_issues_one_staged_generation(
     service,
 ) -> None:
-    enrollment, _, _, _ = service
+    enrollment, sessions, clock, _ = service
     issued = enrollment.approve(enroll(enrollment).id, "admin")
     renewed_csr = csr()
     authority = PausingAuthority()
     authority._serial = 1
     enrollment._authority = authority
+    follower = EnrollmentService(sessions, authority, clock=clock)
     results: list[object] = []
 
     def renew() -> None:
@@ -373,17 +493,16 @@ def test_sqlite_simultaneous_exact_renewal_issues_one_staged_generation(
             results.append(error)
 
     first = threading.Thread(target=renew)
-    second = threading.Thread(target=renew)
     first.start()
     assert authority.entered.wait(timeout=5)
-    second.start()
-    time.sleep(0.2)
+    with pytest.raises(RenewalInProgress, match="in progress"):
+        follower.renew(NODE_ID, issued.serial, renewed_csr)
     authority.release.set()
     first.join(timeout=5)
-    second.join(timeout=5)
 
-    assert results == [results[0], results[0]]
+    assert len(results) == 1
     assert isinstance(results[0], IssuedCertificate)
+    assert follower.renew(NODE_ID, issued.serial, renewed_csr) == results[0]
     assert len(authority.calls) == 1
 
 
@@ -567,6 +686,40 @@ def test_postgres_same_node_approval_race_issues_exactly_once(postgres_engine: E
         assert session.scalar(select(func.count()).select_from(AgentEnrollment).where(
             AgentEnrollment.state == "approved"
         )) == 1
+
+
+def test_postgres_separate_services_never_duplicate_in_progress_renewal(
+    postgres_engine: Engine,
+) -> None:
+    Base.metadata.drop_all(postgres_engine)
+    Base.metadata.create_all(postgres_engine)
+    clock = Clock()
+    sessions = sessionmaker(postgres_engine, expire_on_commit=False)
+    initial = EnrollmentService(sessions, RecordingAuthority(), clock=clock)
+    issued = initial.approve(enroll(initial).id, "admin")
+    request = csr()
+    authority = PausingAuthority()
+    authority._serial = 1
+    owner = EnrollmentService(sessions, authority, clock=clock)
+    follower = EnrollmentService(sessions, authority, clock=clock)
+    results: list[IssuedCertificate] = []
+
+    thread = threading.Thread(
+        target=lambda: results.append(owner.renew(NODE_ID, issued.serial, request))
+    )
+    thread.start()
+    assert authority.entered.wait(timeout=5)
+
+    with pytest.raises(RenewalInProgress, match="in progress"):
+        follower.renew(NODE_ID, issued.serial, request)
+    assert len(authority.calls) == 1
+
+    authority.release.set()
+    thread.join(timeout=5)
+    assert not thread.is_alive()
+    assert len(results) == 1
+    assert follower.renew(NODE_ID, issued.serial, request) == results[0]
+    assert len(authority.calls) == 1
 
 
 def test_approval_persistence_failure_stays_recoverable_without_reissuing(service) -> None:

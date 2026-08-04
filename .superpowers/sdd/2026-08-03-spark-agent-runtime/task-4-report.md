@@ -180,3 +180,118 @@ builder wires the node-probe boundary available from the Task 1 configuration.
 Task 5 remains responsible for installing the fixed ORAS/TUF/release/workload
 paths and policy material before those production handlers can be constructed
 by the service entry point. No network claim can supply those paths or policy.
+
+## Fix round 1 — durable issuance and expired recovery
+
+The first independent review found three correctness defects. Renewal called
+the external CA before any durable rotation authority existed, downgrade could
+make a staged certificate satisfy the 0004 `revoked_at IS NULL` authentication
+predicate, and an expired persisted active attempt raised before a terminal
+result could be stored. All three are closed in this round.
+
+### RED/GREEN evidence
+
+- Renewal service tests initially failed collection because
+  `AgentCertificateRotation`, `RenewalInProgress`, and
+  `RenewalIssuanceUncertain` did not exist. With the model surface present,
+  tests proved a provider exception/process death otherwise lost all issuance
+  evidence and allowed another provider call. The final tests observe the
+  committed intent from a separate transaction inside the provider boundary,
+  and prove provider exception, post-provider persistence failure, process
+  death, exact replay, and stale recovery never issue twice.
+- The follower API RED propagated `RenewalInProgress` as an unhandled server
+  exception. It now returns canonical 503 while the owner can finish, then
+  replays the staged certificate; durable manual recovery returns terminal 403.
+- The Step CA RED rejected the new `request_id` keyword. Renewal now uses the
+  persisted 43-character provider request ID as the sign JWT `jti`; initial
+  enrollment and revocation retain fresh one-use identifiers.
+- The migration RED found no `agent_certificate_rotations` table. After adding
+  it, the staged-downgrade test showed the literal previous authentication
+  predicate remains false because downgrade first stamps `revoked_at` on every
+  non-active certificate. Re-upgrade has exact model/head parity.
+- The lifecycle RED raised `AgentProtocolError: claim deadline has expired`
+  before `AgentStateStore.finish`. Recovery now stores the exact original fence
+  as a failed `claim_deadline_expired` result, replays identical canonical bytes
+  after transport loss, acknowledges them, and only then claims new work.
+
+Separate `EnrollmentService` instances were exercised against SQLite and a
+disposable PostgreSQL 16 database while the owner was paused inside the CA.
+Both followers made zero provider calls, returned bounded in-progress state,
+and later replayed the one staged certificate.
+
+### Fix-round verification
+
+Executed on the final candidate:
+
+```text
+uv run --project agent pytest \
+  agent/tests/test_client.py agent/tests/test_lifecycle.py -v
+40 passed in 14.15s
+
+uv run --project control pytest \
+  control/tests/test_enrollment.py control/tests/test_agent_api.py \
+  control/tests/test_step_ca.py control/tests/test_agent_migrations.py -q
+108 passed in 12.55s
+
+uv run --project agent pytest agent/tests -q
+453 passed in 26.01s
+
+uv run --project agent_protocol pytest agent_protocol/tests -q
+321 passed in 0.32s
+
+uv run --project control pytest control/tests -q
+281 passed in 23.91s
+
+uv run --project control pytest control/tests/test_agent_migrations.py -q
+6 passed in 1.16s
+
+uv run pytest deploy/compose/tests -q
+22 passed in 8.38s
+
+docker compose --env-file deploy/compose/tests/test.env \
+  -f deploy/compose/compose.yaml \
+  -f deploy/compose/compose.step-ca.yaml config --quiet
+exit 0
+
+docker compose --env-file deploy/compose/tests/test.env \
+  -f deploy/compose/compose.yaml \
+  -f deploy/compose/compose.builtin-ca.yaml config --quiet
+exit 0
+
+uvx --from ruff==0.16.1 ruff check \
+  agent/src/dgx_agent/operations.py \
+  agent/tests/test_lifecycle.py agent/tests/test_operations.py \
+  control/src/dgx_control/agent_api.py \
+  control/src/dgx_control/enrollment.py control/src/dgx_control/models.py \
+  control/src/dgx_control/pki.py control/src/dgx_control/step_ca.py \
+  control/tests/test_agent_api.py control/tests/test_agent_migrations.py \
+  control/tests/test_enrollment.py control/tests/test_pki.py \
+  control/tests/test_step_ca.py \
+  control/migrations/versions/0005_certificate_rotation.py
+All checks passed!
+
+uv run --project agent python -m compileall -q agent/src
+uv run --project control python -m compileall -q control/src
+exit 0
+
+uv build --project agent_protocol
+uv build --project agent
+uv build --project control
+all source distributions and wheels built successfully
+
+fresh separate Python 3.12 environments; install protocol+agent and
+protocol+control wheels; import renewed public surfaces; run agent entry --help
+fresh-agent-wheel-imports-ok
+fresh-control-wheel-imports-ok
+fresh-wheel-entrypoint-ok
+
+scripts/verify-supply-chain --json
+{"errors":[],"images":6,"manifest_sha256":"6d3f8a95cc355d2156dcf7429bda4453637676538cf56847657e1c3eb3f8edea","ok":true,"sboms":["inventory/sbom/agent-protocol.spdx.json","inventory/sbom/agent-python.spdx.json","inventory/sbom/control-python.spdx.json","inventory/sbom/control-web.spdx.json"]}
+
+git diff --check
+exit 0
+```
+
+Agent and control wheels were smoke-tested in separate fresh environments,
+matching their independent service images and intentionally different pinned
+`cryptography` versions. No derived inventory files changed in this round.

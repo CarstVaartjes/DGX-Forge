@@ -37,6 +37,7 @@ from .enrollment import (
     EnrollmentService,
     PendingEnrollment,
     RemoteRevocationUncertain,
+    RenewalInProgress,
 )
 from .models import AgentCertificate, AgentEnrollment, AgentNode, AgentOperation
 from .pki import IssuedCertificate
@@ -733,6 +734,8 @@ def install_agent_routes(
             issued = required.enrollment.renew(identity.node_id, identity.certificate_serial, body.csr.encode("ascii"))
         except UnicodeEncodeError:
             raise HTTPException(status_code=422, detail="CSR must be ASCII PEM") from None
+        except RenewalInProgress as error:
+            raise HTTPException(status_code=503, detail=str(error)) from None
         except (EnrollmentDenied, ValueError) as error:
             raise HTTPException(status_code=403, detail=str(error)) from None
         return _json_response(_issued_response(issued))

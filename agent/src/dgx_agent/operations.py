@@ -1,11 +1,11 @@
 """Closed dispatch for fenced outbound-agent operations."""
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
-from typing import Any, Mapping, Protocol
+from typing import Any, Protocol
 
 from dgx_agent_protocol import (
     AgentClaim,
@@ -15,18 +15,18 @@ from dgx_agent_protocol import (
     canonical_message,
 )
 
-from .state import AgentAttemptRecord, AgentStateConflict, AgentStateStore
 from .deadlines import MonotonicDeadline
 from .nvidia_tools import InstalledToolSecurityError
 from .probe import ProbeError
 from .releases import (
     ReleaseDisposition,
     ReleaseEvidence,
-    ReleaseInstallError,
     ReleaseInspection,
+    ReleaseInstallError,
     ReleaseRequest,
     ReleaseValidationError,
 )
+from .state import AgentAttemptRecord, AgentStateConflict, AgentStateStore
 from .workloads import (
     WorkloadAction,
     WorkloadDisposition,
@@ -166,7 +166,32 @@ class OperationRegistry:
         try:
             execution_deadline = MonotonicDeadline.bind(claim.deadline)
         except Exception as error:
-            raise AgentProtocolError("claim deadline has expired") from error
+            if exact is None:
+                raise AgentProtocolError("claim deadline has expired") from error
+            record = context.state.begin(claim)
+            if record.result is not None:
+                assert record.canonical_result is not None
+                return OperationExecution(
+                    record.result,
+                    record.canonical_result,
+                    True,
+                )
+            expired = _result(
+                claim,
+                "failed",
+                {
+                    "status": "failed",
+                    "error_code": "claim_deadline_expired",
+                },
+            )
+            finished = context.state.finish(expired)
+            assert finished.result is not None
+            assert finished.canonical_result is not None
+            return OperationExecution(
+                finished.result,
+                finished.canonical_result,
+                exact is not None,
+            )
         record = context.state.begin(claim)
         if record.result is not None:
             assert record.canonical_result is not None
@@ -176,7 +201,7 @@ class OperationRegistry:
                 claim, request, context, execution_deadline
             )
             result = _result(claim, "succeeded", {"status": "ok", "evidence": evidence})
-        except Exception as error:
+        except Exception as error:  # noqa: BLE001 - closed registry bounds every handler failure
             error_code = _stable_error_code(error, claim.operation)
             result = _result(
                 claim,

@@ -124,6 +124,21 @@ class AgentCertificate(Base):
     ca_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class AgentCertificateRotation(Base):
+    __tablename__ = "agent_certificate_rotations"
+    node_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_nodes.node_id", ondelete="CASCADE"), primary_key=True
+    )
+    source_serial: Mapped[str] = mapped_column(String(128), nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    csr_pem: Mapped[str] = mapped_column(Text, nullable=False)
+    csr_public_key_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    provider_request_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class AgentEnrollmentGrant(Base):
     __tablename__ = "agent_enrollment_grants"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))

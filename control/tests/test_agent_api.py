@@ -28,6 +28,7 @@ from dgx_control.auth import Actor, TokenCodec
 from dgx_control.enrollment import EnrollmentDenied, EnrollmentService
 from dgx_control.models import (
     AgentCertificate,
+    AgentCertificateRotation,
     AgentEnrollment,
     AgentEnrollmentGrant,
     AgentNode,
@@ -95,7 +96,14 @@ class Authority(CertificateAuthority):
     def issue_node(self, node_id: str, public_key_pem: bytes, now: datetime) -> IssuedCertificate:
         return IssuedCertificate(node_id, b"certificate", b"chain", "issued-serial", "issued-fingerprint", now, now + timedelta(days=1))
 
-    def renew_node(self, node_id: str, public_key_pem: bytes, now: datetime) -> IssuedCertificate:
+    def renew_node(
+        self,
+        node_id: str,
+        public_key_pem: bytes,
+        now: datetime,
+        *,
+        request_id: str,
+    ) -> IssuedCertificate:
         return self.issue_node(node_id, public_key_pem, now)
 
     def revocation_bundle(self, now: datetime) -> bytes:
@@ -403,6 +411,45 @@ def _csr_for(node_id: str) -> bytes:
         .sign(key, algorithm=None)
         .public_bytes(serialization.Encoding.PEM)
     )
+
+
+def _csr_fingerprint(csr_pem: bytes) -> str:
+    public_key = x509.load_pem_x509_csr(csr_pem).public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    return hashlib.sha256(public_key).hexdigest()
+
+
+def test_fresh_rotation_follower_receives_canonical_retryable_response(
+    agent_system,
+) -> None:
+    client, services, _, clock = agent_system
+    request = _csr_for(NODE_A)
+    with services.sessions.begin() as session:
+        session.add(AgentCertificateRotation(
+            node_id=NODE_A,
+            source_serial="serial-a",
+            generation=2,
+            csr_pem=request.decode("ascii"),
+            csr_public_key_fingerprint=_csr_fingerprint(request),
+            provider_request_id="r" * 43,
+            state="issuing",
+            created_at=clock.now,
+            updated_at=clock.now,
+        ))
+
+    response = client.post(
+        "/agent/v1/renew",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json={"node_id": NODE_A, "csr": request.decode()},
+    )
+
+    assert response.status_code == 503
+    assert response.content == canonical_message(response.json())
+    assert response.json() == {
+        "detail": "certificate rotation issuance is in progress"
+    }
 
 
 def test_staged_certificate_can_only_activate_and_activation_is_idempotent_after_response_loss(

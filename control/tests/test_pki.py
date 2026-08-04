@@ -1,11 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-# This import is deliberately first: the initial TDD run must prove the provider
-# does not exist yet, rather than fail because its new dependency is unavailable.
-from dgx_control.pki import BuiltinCertificateAuthority, CertificateAuthority, IssuedCertificate
-from dgx_control.auth import TrustedProxyAgentIdentityMiddleware, agent_identity_from_scope
-
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -14,7 +9,17 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, ExtensionOID, NameOID
+from dgx_control.auth import (
+    TrustedProxyAgentIdentityMiddleware,
+    agent_identity_from_scope,
+)
 
+# This import is deliberately first: the initial TDD run must prove the provider
+# does not exist yet, rather than fail because its new dependency is unavailable.
+from dgx_control.pki import (
+    BuiltinCertificateAuthority,
+    CertificateAuthority,
+)
 
 NODE_ID = "spk_0123456789abcdef0123456789abcdef"
 # The authority validates the intermediate against the real wall clock during
@@ -243,7 +248,12 @@ def test_renewal_issues_a_fresh_short_lived_certificate(
     authority: CertificateAuthority, public_key: bytes, now: datetime
 ) -> None:
     original = authority.issue_node(NODE_ID, public_key, now)
-    renewed = authority.renew_node(NODE_ID, public_key, now + timedelta(hours=12))
+    renewed = authority.renew_node(
+        NODE_ID,
+        public_key,
+        now + timedelta(hours=12),
+        request_id="r" * 43,
+    )
 
     assert renewed.serial != original.serial
     assert original.node_id == NODE_ID

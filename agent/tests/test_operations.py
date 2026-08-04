@@ -1,14 +1,11 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import hashlib
+import time
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-import time
-
-from dgx_agent_protocol import AgentClaim, AgentOperation, AgentProtocolError, canonical_message
-
 from dgx_agent.operations import (
     InspectionDisposition,
     OperationContext,
@@ -27,7 +24,12 @@ from dgx_agent.workloads import (
     WorkloadEvidence,
     WorkloadInspection,
 )
-
+from dgx_agent_protocol import (
+    AgentClaim,
+    AgentOperation,
+    AgentProtocolError,
+    canonical_message,
+)
 
 NODE_ID = "spk_0123456789abcdef0123456789abcdef"
 
@@ -450,7 +452,7 @@ def test_release_and_workload_failures_persist_family_code_and_replay_exactly(
     assert replay.replayed is True
 
 
-def test_expired_active_mutation_can_inspect_and_complete_but_never_retry(tmp_path) -> None:
+def test_expired_active_mutation_can_inspect_complete_or_persist_deadline_failure(tmp_path) -> None:
     payload = {
         "schema_version": 1,
         "workload_id": "deepseek-v4-flash-a",
@@ -503,6 +505,11 @@ def test_expired_active_mutation_can_inspect_and_complete_but_never_retry(tmp_pa
     assert OperationRegistry().inspect(
         retry_claim, retry_context
     ).disposition is InspectionDisposition.SAFE_TO_RETRY
-    with pytest.raises(AgentProtocolError, match="deadline"):
-        OperationRegistry().execute(retry_claim, retry_context)
+    failed = OperationRegistry().execute(retry_claim, retry_context)
+    assert failed.result.state == "failed"
+    assert failed.result.fence == retry_claim.fence
+    assert failed.result.result == {
+        "status": "failed",
+        "error_code": "claim_deadline_expired",
+    }
     assert all(item[0] == "inspect" for item in retry_workloads.requests)

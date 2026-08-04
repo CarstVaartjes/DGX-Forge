@@ -2,25 +2,31 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, timedelta
 import base64
 import hashlib
 import json
+import re
 import secrets
 import ssl
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-import re
 from urllib.parse import urlsplit
 
+import httpx
+import jwt
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.x509.oid import ExtendedKeyUsageOID, ExtensionOID, NameOID
-import httpx
-import jwt
 
-from .pki import CertificateAuthority, IssuedCertificate, _load_node_csr, _read_regular_secret_file, _utc_timestamp
-
+from .pki import (
+    CertificateAuthority,
+    IssuedCertificate,
+    _load_node_csr,
+    _read_regular_secret_file,
+    _utc_timestamp,
+    _validate_provider_request_id,
+)
 
 _NODE_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
 _SERIAL = re.compile(r"[1-9][0-9]{0,127}\Z")
@@ -83,7 +89,9 @@ class StepCertificateAuthority(CertificateAuthority):
         except (UnicodeDecodeError, ValueError, jwt.PyJWTError) as error:
             raise ValueError("provisioner credential must be a private EC P-256 JWK") from error
         if not isinstance(credential, ec.EllipticCurvePrivateKey) or not isinstance(credential.curve, ec.SECP256R1):
-            raise ValueError("provisioner credential must be a private EC P-256 JWK")
+            raise ValueError(  # noqa: TRY004 - all invalid provider configuration is ValueError
+                "provisioner credential must be a private EC P-256 JWK"
+            )
         if credential_jwk.algorithm_name != "ES256" or credential_jwk.key_id != provisioner_kid:
             raise ValueError("provisioner credential metadata does not match configured key ID")
         try:
@@ -129,10 +137,18 @@ class StepCertificateAuthority(CertificateAuthority):
         if self._json_request("GET", "/health", None) != {"status": "ok"}:
             raise StepCAError("step-ca health response is invalid")
 
-    def renew_node(self, node_id: str, csr_pem: bytes, now: datetime) -> IssuedCertificate:
+    def renew_node(
+        self,
+        node_id: str,
+        csr_pem: bytes,
+        now: datetime,
+        *,
+        request_id: str,
+    ) -> IssuedCertificate:
         # DGX-Forge authorizes renewal with the currently active mTLS identity;
         # step-ca receives a fresh, fixed-policy sign authorization and CSR.
-        return self._sign(node_id, csr_pem, now)
+        _validate_provider_request_id(request_id)
+        return self._sign(node_id, csr_pem, now, request_id=request_id)
 
     def revoke_node(self, serial: str, now: datetime) -> None:
         timestamp = _utc_timestamp(now)
@@ -165,7 +181,14 @@ class StepCertificateAuthority(CertificateAuthority):
         _validate_crl_freshness(crl, timestamp, self._clock_skew)
         return crl.public_bytes(serialization.Encoding.PEM)
 
-    def _sign(self, node_id: str, csr_pem: bytes, now: datetime) -> IssuedCertificate:
+    def _sign(
+        self,
+        node_id: str,
+        csr_pem: bytes,
+        now: datetime,
+        *,
+        request_id: str | None = None,
+    ) -> IssuedCertificate:
         timestamp = _utc_timestamp(now)
         if _NODE_ID.fullmatch(node_id) is None:
             raise ValueError("node ID must be canonical")
@@ -177,6 +200,7 @@ class StepCertificateAuthority(CertificateAuthority):
             "ott": self._token(
                 node_id, endpoint, timestamp,
                 sans=[f"spiffe://dgx-forge.local/node/{node_id}"],
+                request_id=request_id,
             ),
             "notBefore": _rfc3339(timestamp),
             "notAfter": _rfc3339(timestamp + _LIFETIME),
@@ -278,7 +302,15 @@ class StepCertificateAuthority(CertificateAuthority):
         if abs(leaf.not_valid_before_utc - requested_at) > self._clock_skew:
             raise StepCAError("step-ca returned a certificate outside the allowed clock skew")
 
-    def _token(self, subject: str, audience: str, now: datetime, *, sans: list[str] | None) -> str:
+    def _token(
+        self,
+        subject: str,
+        audience: str,
+        now: datetime,
+        *,
+        sans: list[str] | None,
+        request_id: str | None = None,
+    ) -> str:
         timestamp = int(now.timestamp())
         claims: dict[str, object] = {
             "iss": self._provisioner_name,
@@ -287,7 +319,7 @@ class StepCertificateAuthority(CertificateAuthority):
             "iat": timestamp,
             "nbf": timestamp - int(self._clock_skew.total_seconds()),
             "exp": timestamp + 60,
-            "jti": secrets.token_urlsafe(32),
+            "jti": request_id or secrets.token_urlsafe(32),
         }
         if sans is not None:
             claims["sans"] = sans

@@ -22,6 +22,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 _NODE_ID = re.compile(r"spk_[0-9a-f]{32}")
+_PROVIDER_REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{43}\Z")
 _CERTIFICATE_LIFETIME = timedelta(hours=24)
 _MINIMUM_INTERMEDIATE_LIFETIME = timedelta(days=7)
 
@@ -48,7 +49,14 @@ class CertificateAuthority(ABC):
         """Issue a client certificate that represents exactly one node."""
 
     @abstractmethod
-    def renew_node(self, node_id: str, csr_pem: bytes, now: datetime) -> IssuedCertificate:
+    def renew_node(
+        self,
+        node_id: str,
+        csr_pem: bytes,
+        now: datetime,
+        *,
+        request_id: str,
+    ) -> IssuedCertificate:
         """Rotate a node certificate after its authenticated renewal request."""
 
     @abstractmethod
@@ -130,7 +138,15 @@ class BuiltinCertificateAuthority(CertificateAuthority):
             not_after=not_after,
         )
 
-    def renew_node(self, node_id: str, csr_pem: bytes, now: datetime) -> IssuedCertificate:
+    def renew_node(
+        self,
+        node_id: str,
+        csr_pem: bytes,
+        now: datetime,
+        *,
+        request_id: str,
+    ) -> IssuedCertificate:
+        _validate_provider_request_id(request_id)
         return self.issue_node(node_id, csr_pem, now)
 
     def revoke_node(self, serial: str, now: datetime) -> None:
@@ -220,6 +236,11 @@ def _load_node_csr(node_id: str, csr_pem: bytes) -> x509.CertificateSigningReque
     if not isinstance(public_key, ed25519.Ed25519PublicKey):
         raise ValueError("node CSR public key must be Ed25519")  # noqa: TRY004
     return request
+
+
+def _validate_provider_request_id(request_id: str) -> None:
+    if _PROVIDER_REQUEST_ID.fullmatch(request_id) is None:
+        raise ValueError("provider request ID must be a 43-character base64url value")
 
 
 def _utc_timestamp(value: datetime) -> datetime:
