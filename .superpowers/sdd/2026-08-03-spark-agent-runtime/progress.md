@@ -36,3 +36,7 @@ Task 3: review loop reset by user; fresh fix round 1/5 (1 Important submitted �
 Task 3: reset fix round 1/5 implementation delivered (post-lock descriptor-relative installed-release recheck with exact verification, deterministic same-release publication race and FD cleanup coverage; 160 release, 178 release/workload, 193 release/workload/operation, 411 full agent, and 21 Compose tests; through this commit; exact-range re-review pending)
 Task 3: reset fix round 1/5 (1 addressed, 0 open — same-release publication inspection race closed; commits 1043170..0e5799e; exact-range scoped re-review clean)
 Task 3: complete (base c66b544 through 0e5799e; 160 release tests, 411 full agent tests, 21 Compose tests; final review Ready Yes)
+Task 4: active (outbound enrollment, bounded long polling, durable result replay, and two-phase certificate rotation; base 985f5a1)
+Task 4: fix round 1/5 (2 Critical + 1 Important submitted — durable/inspectable ambiguous CA renewal issuance, downgrade denial of staged certificates, and terminal reconciliation of expired recovered active work; commits 494e447..pending)
+Task 4: fix round 1/5 (3 addressed, 0 open — durable renewal intent, safe downgrade, and expired exact-fence reconciliation verified; commits 494e447..d31b14b; scoped re-review clean)
+Task 4: complete (base 985f5a1 through d31b14b; 453 agent tests, 321 protocol tests, 281 control tests, 6 migration tests, 22 Compose tests; final task review Ready Yes)
