@@ -1,4 +1,5 @@
 """Strict outbound HTTPS transport for the Spark agent protocol."""
+
 from __future__ import annotations
 
 import fcntl
@@ -21,7 +22,7 @@ from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from cryptography import x509
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.x509.oid import NameOID
 from dgx_agent_protocol import (
@@ -83,15 +84,21 @@ class StaticCredentialProvider:
 
     @contextmanager
     def snapshot(self) -> Iterator[CredentialSnapshot]:
-        certificate = None if self.certificate_path is None else Path(self.certificate_path)
-        private_key = None if self.private_key_path is None else Path(self.private_key_path)
+        certificate = (
+            None if self.certificate_path is None else Path(self.certificate_path)
+        )
+        private_key = (
+            None if self.private_key_path is None else Path(self.private_key_path)
+        )
         try:
             with _stable_snapshot(
                 Path(self.ca_path), certificate, private_key, generation=1
             ) as snapshot:
                 yield snapshot
         except CredentialStoreError as error:
-            raise AgentTransportError("agent TLS credentials are unavailable") from error
+            raise AgentTransportError(
+                "agent TLS credentials are unavailable"
+            ) from error
 
 
 @dataclass(frozen=True)
@@ -121,6 +128,7 @@ class CredentialStoreError(RuntimeError):
 class PendingRotation:
     node_id: str
     csr_pem: bytes
+    purpose: str
 
 
 class _GenerationProvider:
@@ -163,6 +171,21 @@ class CredentialStore:
         return 1 if pointer is None else pointer
 
     @property
+    def has_active_credentials(self) -> bool:
+        if self._pointer(self._ACTIVE) is not None:
+            return True
+        certificate_exists = os.path.lexists(self._seed_certificate_path)
+        key_exists = os.path.lexists(self._seed_private_key_path)
+        if certificate_exists != key_exists:
+            raise CredentialStoreError("seed certificate and key must be paired")
+        return certificate_exists
+
+    @property
+    def has_published_credentials(self) -> bool:
+        """Return whether a durable active generation pointer exists."""
+        return self._pointer(self._ACTIVE) is not None
+
+    @property
     def staged_generation(self) -> int | None:
         return self._pointer(self._STAGED)
 
@@ -170,6 +193,12 @@ class CredentialStore:
     def snapshot(self) -> Iterator[CredentialSnapshot]:
         generation = self.active_generation
         if generation == 1 and self._pointer(self._ACTIVE) is None:
+            if not self.has_active_credentials:
+                with _stable_snapshot(
+                    self._ca_path, None, None, generation=1
+                ) as snapshot:
+                    yield snapshot
+                return
             with _stable_snapshot(
                 self._ca_path,
                 self._seed_certificate_path,
@@ -195,23 +224,33 @@ class CredentialStore:
             return now.astimezone(UTC) >= snapshot.not_after - lifetime / 3
 
     def prepare_rotation(self, node_id: str) -> PendingRotation:
+        return self._prepare_pending(node_id, "rotation")
+
+    def prepare_enrollment(self, node_id: str) -> PendingRotation:
+        return self._prepare_pending(node_id, "enrollment")
+
+    def _prepare_pending(self, node_id: str, purpose: str) -> PendingRotation:
         if re.fullmatch(r"spk_[0-9a-f]{32}", node_id) is None:
             raise ValueError("node ID is not canonical")
+        if purpose not in {"enrollment", "rotation"}:
+            raise ValueError("credential request purpose is invalid")
         existing = self.pending_rotation()
         if existing is not None:
-            if existing.node_id != node_id:
-                raise CredentialStoreError("pending rotation belongs to another node")
+            if existing.node_id != node_id or existing.purpose != purpose:
+                raise CredentialStoreError("pending credential request conflicts")
             return existing
         key = ed25519.Ed25519PrivateKey.generate()
         csr = (
             x509.CertificateSigningRequestBuilder()
             .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, node_id)]))
             .add_extension(
-                x509.SubjectAlternativeName([
-                    x509.UniformResourceIdentifier(
-                        f"spiffe://dgx-forge.local/node/{node_id}"
-                    )
-                ]),
+                x509.SubjectAlternativeName(
+                    [
+                        x509.UniformResourceIdentifier(
+                            f"spiffe://dgx-forge.local/node/{node_id}"
+                        )
+                    ]
+                ),
                 critical=False,
             )
             .sign(key, algorithm=None)
@@ -235,13 +274,14 @@ class CredentialStore:
                     {
                         "csr_sha256": hashlib.sha256(csr).hexdigest(),
                         "node_id": node_id,
+                        "purpose": purpose,
                     }
                 ),
                 0o600,
             )
         finally:
             os.close(descriptor)
-        return PendingRotation(node_id, csr)
+        return PendingRotation(node_id, csr, purpose)
 
     def pending_rotation(self) -> PendingRotation | None:
         descriptor = self._credentials_descriptor()
@@ -250,15 +290,21 @@ class CredentialStore:
             if raw is None:
                 return None
             document = _strict_document(raw)
-            if not isinstance(document, dict) or set(document) != {"csr_sha256", "node_id"}:
+            if not isinstance(document, dict) or set(document) != {
+                "csr_sha256",
+                "node_id",
+                "purpose",
+            }:
                 raise CredentialStoreError("pending rotation metadata is invalid")
             node_id = document["node_id"]
             digest = document["csr_sha256"]
+            purpose = document["purpose"]
             if (
                 not isinstance(node_id, str)
                 or re.fullmatch(r"spk_[0-9a-f]{32}", node_id) is None
                 or not isinstance(digest, str)
                 or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                or purpose not in {"enrollment", "rotation"}
             ):
                 raise CredentialStoreError("pending rotation metadata is invalid")
             csr = _read_required(descriptor, self._PENDING_CSR, 16 * 1024, mode=0o600)
@@ -275,7 +321,7 @@ class CredentialStore:
                 serialization.Encoding.Raw, serialization.PublicFormat.Raw
             ):
                 raise CredentialStoreError("pending rotation key does not match CSR")
-            return PendingRotation(node_id, csr)
+            return PendingRotation(node_id, csr, purpose)
         except CredentialStoreError:
             raise
         except (OSError, TypeError, ValueError) as error:
@@ -287,7 +333,11 @@ class CredentialStore:
         if not isinstance(issued, IssuedCredential):
             raise CredentialStoreError("issued credential is invalid")
         pending = self.pending_rotation()
-        if pending is None or pending.node_id != issued.node_id:
+        if (
+            pending is None
+            or pending.node_id != issued.node_id
+            or pending.purpose != "rotation"
+        ):
             raise CredentialStoreError("issued credential has no pending rotation")
         if issued.generation <= self.active_generation:
             raise CredentialStoreError("issued credential generation is stale")
@@ -332,7 +382,9 @@ class CredentialStore:
                 os.fsync(temp_descriptor)
                 os.close(temp_descriptor)
                 temp_descriptor = -1
-                os.rename(temporary, final, src_dir_fd=descriptor, dst_dir_fd=descriptor)
+                os.rename(
+                    temporary, final, src_dir_fd=descriptor, dst_dir_fd=descriptor
+                )
                 os.fsync(descriptor)
             except FileExistsError:
                 if temp_descriptor >= 0:
@@ -355,7 +407,151 @@ class CredentialStore:
             if temp_descriptor >= 0:
                 os.close(temp_descriptor)
             _remove_generation(descriptor, temporary)
-            raise CredentialStoreError("credential generation could not be staged") from error
+            raise CredentialStoreError(
+                "credential generation could not be staged"
+            ) from error
+        finally:
+            os.close(descriptor)
+
+    def install_initial(self, issued: IssuedCredential) -> None:
+        """Durably publish an enrollment-issued generation one identity."""
+        if not isinstance(issued, IssuedCredential) or issued.generation != 1:
+            raise CredentialStoreError("initial credential generation is invalid")
+        active = self._pointer(self._ACTIVE)
+        if active is not None:
+            if active != 1:
+                raise CredentialStoreError("an active credential already exists")
+            self._verify_generation(1, expected=issued)
+            self.recover_initial_enrollment(issued.node_id)
+            return
+        pending = self.pending_rotation()
+        if (
+            pending is None
+            or pending.node_id != issued.node_id
+            or pending.purpose != "enrollment"
+        ):
+            raise CredentialStoreError("issued credential has no pending enrollment")
+        _validate_issued_authority(issued, self._ca_path)
+        descriptor = self._credentials_descriptor()
+        temporary = f".generation-{issued.generation:08d}-{secrets.token_hex(8)}"
+        final = _generation_name(issued.generation)
+        temp_descriptor = -1
+        try:
+            key_bytes = _read_required(
+                descriptor, self._PENDING_KEY, 16 * 1024, mode=0o600
+            )
+            _validate_issued_key(issued, key_bytes)
+            try:
+                os.mkdir(temporary, 0o700, dir_fd=descriptor)
+                temp_descriptor = os.open(
+                    temporary,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+                    dir_fd=descriptor,
+                )
+                _write_new(temp_descriptor, "private-key.pem", key_bytes, 0o600)
+                _write_new(
+                    temp_descriptor,
+                    "certificate.pem",
+                    issued.certificate_pem + issued.chain_pem,
+                    0o600,
+                )
+                _write_new(
+                    temp_descriptor,
+                    "credential.json",
+                    canonical_message(
+                        {
+                            "fingerprint": issued.fingerprint,
+                            "generation": 1,
+                            "node_id": issued.node_id,
+                            "not_after": issued.not_after.isoformat(),
+                            "not_before": issued.not_before.isoformat(),
+                            "serial": issued.serial,
+                        }
+                    ),
+                    0o600,
+                )
+                os.fsync(temp_descriptor)
+                os.close(temp_descriptor)
+                temp_descriptor = -1
+                os.rename(
+                    temporary, final, src_dir_fd=descriptor, dst_dir_fd=descriptor
+                )
+                os.fsync(descriptor)
+            except FileExistsError:
+                if temp_descriptor >= 0:
+                    os.close(temp_descriptor)
+                    temp_descriptor = -1
+                _remove_generation(descriptor, temporary)
+                self._verify_generation(1, expected=issued)
+            _atomic_write(
+                descriptor,
+                self._ACTIVE,
+                canonical_message({"generation": 1}),
+                0o600,
+            )
+            for name in (
+                self._STAGED,
+                self._PENDING_KEY,
+                self._PENDING_CSR,
+                self._PENDING_META,
+            ):
+                _unlink_optional(descriptor, name)
+            os.fsync(descriptor)
+        except CredentialStoreError:
+            if temp_descriptor >= 0:
+                os.close(temp_descriptor)
+            _remove_generation(descriptor, temporary)
+            raise
+        except OSError as error:
+            if temp_descriptor >= 0:
+                os.close(temp_descriptor)
+            _remove_generation(descriptor, temporary)
+            raise CredentialStoreError(
+                "initial credential could not be installed"
+            ) from error
+        finally:
+            os.close(descriptor)
+
+    def recover_initial_enrollment(self, node_id: str) -> bool:
+        """Remove only enrollment-pending material after generation one is active."""
+        if self._pointer(self._ACTIVE) != 1:
+            return False
+        self._verify_generation(1)
+        cleanup_identity = self._pending_cleanup_identity()
+        if cleanup_identity != (node_id, "enrollment"):
+            return False
+        descriptor = self._credentials_descriptor()
+        try:
+            for name in (
+                self._STAGED,
+                self._PENDING_KEY,
+                self._PENDING_CSR,
+                self._PENDING_META,
+            ):
+                _unlink_optional(descriptor, name)
+                os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        return True
+
+    def _pending_cleanup_identity(self) -> tuple[str, str] | None:
+        descriptor = self._credentials_descriptor()
+        try:
+            raw = _read_optional(descriptor, self._PENDING_META, 4096, mode=0o600)
+            if raw is None:
+                return None
+            document = _strict_document(raw)
+            if (
+                not isinstance(document, dict)
+                or set(document) != {"csr_sha256", "node_id", "purpose"}
+                or not isinstance(document["node_id"], str)
+                or re.fullmatch(r"spk_[0-9a-f]{32}", document["node_id"]) is None
+                or not isinstance(document["csr_sha256"], str)
+                or re.fullmatch(r"[0-9a-f]{64}", document["csr_sha256"]) is None
+                or document["purpose"] not in {"enrollment", "rotation"}
+            ):
+                raise CredentialStoreError("pending credential metadata is invalid")
+            return document["node_id"], document["purpose"]
         finally:
             os.close(descriptor)
 
@@ -403,9 +599,7 @@ class CredentialStore:
                     raise CredentialStoreError("credential state directory is unsafe")
                 removed = False
                 for name in os.listdir(descriptor):
-                    if re.fullmatch(
-                        r"\.generation-[0-9]{8}-[0-9a-f]{16}", name
-                    ):
+                    if re.fullmatch(r"\.generation-[0-9]{8}-[0-9a-f]{16}", name):
                         _remove_generation(descriptor, name)
                         removed = True
                 if removed:
@@ -413,7 +607,9 @@ class CredentialStore:
             finally:
                 os.close(descriptor)
         except OSError as error:
-            raise CredentialStoreError("credential state directory is unavailable") from error
+            raise CredentialStoreError(
+                "credential state directory is unavailable"
+            ) from error
         finally:
             os.close(root)
         self._pointer(self._ACTIVE)
@@ -422,7 +618,13 @@ class CredentialStore:
             self._verify_generation(self.active_generation)
         if self.staged_generation is not None:
             self._verify_generation(self.staged_generation)
-        self.pending_rotation()
+        cleanup = self._pending_cleanup_identity()
+        if not (
+            self._pointer(self._ACTIVE) == 1
+            and cleanup is not None
+            and cleanup[1] == "enrollment"
+        ):
+            self.pending_rotation()
 
     def _credentials_descriptor(self) -> int:
         root = _open_state_root(self._state_root, create=False)
@@ -434,7 +636,9 @@ class CredentialStore:
             )
         except OSError as error:
             os.close(root)
-            raise CredentialStoreError("credential state directory is unavailable") from error
+            raise CredentialStoreError(
+                "credential state directory is unavailable"
+            ) from error
         os.close(root)
         metadata = os.fstat(descriptor)
         if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
@@ -449,7 +653,9 @@ class CredentialStore:
             if raw is None:
                 return None
             document = _strict_document(raw)
-            generation = document.get("generation") if isinstance(document, dict) else None
+            generation = (
+                document.get("generation") if isinstance(document, dict) else None
+            )
             if (
                 not isinstance(document, dict)
                 or set(document) != {"generation"}
@@ -477,7 +683,10 @@ class CredentialStore:
                 dir_fd=descriptor,
             )
             metadata = os.fstat(generation_descriptor)
-            if metadata.st_uid != os.geteuid() or stat.S_IMODE(metadata.st_mode) != 0o700:
+            if (
+                metadata.st_uid != os.geteuid()
+                or stat.S_IMODE(metadata.st_mode) != 0o700
+            ):
                 raise CredentialStoreError("credential generation directory is unsafe")
             document = _strict_document(
                 _read_required(
@@ -485,8 +694,12 @@ class CredentialStore:
                 )
             )
             required = {
-                "fingerprint", "generation", "node_id", "not_after",
-                "not_before", "serial",
+                "fingerprint",
+                "generation",
+                "node_id",
+                "not_after",
+                "not_before",
+                "serial",
             }
             if not isinstance(document, dict) or set(document) != required:
                 raise CredentialStoreError("credential generation metadata is invalid")
@@ -495,7 +708,7 @@ class CredentialStore:
             _read_required(
                 generation_descriptor, "certificate.pem", MAX_BODY_BYTES, mode=0o600
             )
-            _read_required(
+            key_bytes = _read_required(
                 generation_descriptor, "private-key.pem", 16 * 1024, mode=0o600
             )
             if expected is not None and document != {
@@ -506,12 +719,28 @@ class CredentialStore:
                 "not_before": expected.not_before.isoformat(),
                 "serial": expected.serial,
             }:
-                raise CredentialStoreError("staged generation conflicts with server response")
+                raise CredentialStoreError(
+                    "staged generation conflicts with server response"
+                )
+            if expected is not None:
+                certificate_bytes = _read_required(
+                    generation_descriptor,
+                    "certificate.pem",
+                    MAX_BODY_BYTES,
+                    mode=0o600,
+                )
+                if certificate_bytes != expected.certificate_pem + expected.chain_pem:
+                    raise CredentialStoreError(
+                        "staged generation conflicts with server response"
+                    )
+                _validate_issued_key(expected, key_bytes)
             return document
         except CredentialStoreError:
             raise
         except OSError as error:
-            raise CredentialStoreError("credential generation is unavailable") from error
+            raise CredentialStoreError(
+                "credential generation is unavailable"
+            ) from error
         finally:
             if generation_descriptor >= 0:
                 os.close(generation_descriptor)
@@ -525,7 +754,9 @@ class CredentialStore:
             not_before = datetime.fromisoformat(str(document["not_before"]))
             not_after = datetime.fromisoformat(str(document["not_after"]))
         except ValueError as error:
-            raise CredentialStoreError("credential generation validity is invalid") from error
+            raise CredentialStoreError(
+                "credential generation validity is invalid"
+            ) from error
         with _stable_snapshot(
             self._ca_path,
             root / "certificate.pem",
@@ -537,7 +768,11 @@ class CredentialStore:
 
 
 def _generation_name(generation: int) -> str:
-    if not isinstance(generation, int) or isinstance(generation, bool) or not 1 <= generation <= 99999999:
+    if (
+        not isinstance(generation, int)
+        or isinstance(generation, bool)
+        or not 1 <= generation <= 99999999
+    ):
         raise CredentialStoreError("credential generation is invalid")
     return f"generation-{generation:08d}"
 
@@ -634,7 +869,9 @@ def _strict_document(raw: bytes) -> Any:
         result: dict[str, Any] = {}
         for key, value in pairs:
             if key in result:
-                raise CredentialStoreError("credential metadata contains duplicate fields")
+                raise CredentialStoreError(
+                    "credential metadata contains duplicate fields"
+                )
             result[key] = value
         return result
 
@@ -707,9 +944,7 @@ def _remove_generation(directory: int, name: str) -> None:
     except FileNotFoundError:
         return
     except OSError as error:
-        raise CredentialStoreError(
-            "credential staging directory is unsafe"
-        ) from error
+        raise CredentialStoreError("credential staging directory is unsafe") from error
     try:
         for leaf in ("private-key.pem", "certificate.pem", "credential.json"):
             _unlink_optional(child, leaf)
@@ -737,11 +972,13 @@ def _validate_issued_key(issued: IssuedCredential, private_key_pem: bytes) -> No
         sans = certificate.extensions.get_extension_for_class(
             x509.SubjectAlternativeName
         ).value
-        expected_sans = x509.SubjectAlternativeName([
-            x509.UniformResourceIdentifier(
-                f"spiffe://dgx-forge.local/node/{issued.node_id}"
-            )
-        ])
+        expected_sans = x509.SubjectAlternativeName(
+            [
+                x509.UniformResourceIdentifier(
+                    f"spiffe://dgx-forge.local/node/{issued.node_id}"
+                )
+            ]
+        )
         if (
             certificate_public != key_public
             or certificate.subject != subject
@@ -751,12 +988,31 @@ def _validate_issued_key(issued: IssuedCredential, private_key_pem: bytes) -> No
             or str(certificate.serial_number) != issued.serial
             or hashlib.sha256(
                 certificate.public_bytes(serialization.Encoding.DER)
-            ).hexdigest() != issued.fingerprint
+            ).hexdigest()
+            != issued.fingerprint
             or len(issued.certificate_pem) + len(issued.chain_pem) > MAX_BODY_BYTES
         ):
             raise ValueError
     except (TypeError, ValueError, x509.ExtensionNotFound) as error:
-        raise CredentialStoreError("issued credential does not match pending key") from error
+        raise CredentialStoreError(
+            "issued credential does not match pending key"
+        ) from error
+
+
+def _validate_issued_authority(issued: IssuedCredential, ca_path: Path) -> None:
+    try:
+        with _stable_snapshot(ca_path, None, None, generation=1) as snapshot:
+            ca = x509.load_pem_x509_certificate(snapshot.ca_path.read_bytes())
+        certificate = x509.load_pem_x509_certificate(issued.certificate_pem)
+        chain_ca = x509.load_pem_x509_certificate(issued.chain_pem)
+        if chain_ca.fingerprint(hashes.SHA256()) != ca.fingerprint(hashes.SHA256()):
+            raise ValueError
+        certificate.verify_directly_issued_by(ca)
+        now = datetime.now(UTC)
+        if not issued.not_before <= now < issued.not_after:
+            raise ValueError
+    except (CredentialStoreError, TypeError, ValueError) as error:
+        raise CredentialStoreError("issued credential authority is invalid") from error
 
 
 @contextmanager
@@ -787,14 +1043,18 @@ def _stable_snapshot(
                         _read_descriptor(certificate, MAX_BODY_BYTES)
                     )
                 except ValueError as error:
-                    raise CredentialStoreError("certificate snapshot is invalid") from error
+                    raise CredentialStoreError(
+                        "certificate snapshot is invalid"
+                    ) from error
                 not_before = parsed.not_valid_before_utc
                 not_after = parsed.not_valid_after_utc
             else:
                 not_before, not_after = validity
         yield CredentialSnapshot(
             ca_path=Path(f"/proc/self/fd/{ca}"),
-            certificate_path=None if certificate is None else Path(f"/proc/self/fd/{certificate}"),
+            certificate_path=None
+            if certificate is None
+            else Path(f"/proc/self/fd/{certificate}"),
             private_key_path=None if key is None else Path(f"/proc/self/fd/{key}"),
             generation=generation,
             not_before=not_before,
@@ -922,7 +1182,10 @@ class AgentClient:
         max_body_bytes: int = MAX_BODY_BYTES,
     ) -> None:
         self._runtime_origin = _origin(runtime_origin)
-        if not isinstance(node_id, str) or re.fullmatch(r"spk_[0-9a-f]{32}", node_id) is None:
+        if (
+            not isinstance(node_id, str)
+            or re.fullmatch(r"spk_[0-9a-f]{32}", node_id) is None
+        ):
             raise ValueError("node ID is not canonical")
         if (
             connect_timeout <= 0
@@ -963,7 +1226,9 @@ class AgentClient:
         try:
             return AgentClaim.parse(response.document)
         except (AgentProtocolError, TypeError, ValueError) as error:
-            raise AgentProtocolResponseError("claim response violates the protocol contract") from error
+            raise AgentProtocolResponseError(
+                "claim response violates the protocol contract"
+            ) from error
 
     def enroll(
         self,
@@ -972,7 +1237,10 @@ class AgentClient:
         csr: bytes,
         evidence: Mapping[str, object],
     ) -> EnrollmentPending | IssuedCredential:
-        if not isinstance(grant_token, str) or re.fullmatch(r"[A-Za-z0-9_-]{43}", grant_token) is None:
+        if (
+            not isinstance(grant_token, str)
+            or re.fullmatch(r"[A-Za-z0-9_-]{43}", grant_token) is None
+        ):
             raise ValueError("enrollment grant token is invalid")
         try:
             csr_text = csr.decode("ascii")
@@ -1006,7 +1274,9 @@ class AgentClient:
         try:
             return AgentProgress.parse(response.document)
         except (AgentProtocolError, TypeError, ValueError) as error:
-            raise AgentProtocolResponseError("heartbeat response violates the protocol contract") from error
+            raise AgentProtocolResponseError(
+                "heartbeat response violates the protocol contract"
+            ) from error
 
     def result(self, result: Any) -> None:
         from dgx_agent_protocol import AgentResult
@@ -1040,7 +1310,11 @@ class AgentClient:
         return _issued(response.document, self._node_id)
 
     def activate(self, generation: int, credentials: CredentialProvider) -> None:
-        if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
+        if (
+            not isinstance(generation, int)
+            or isinstance(generation, bool)
+            or generation < 1
+        ):
             raise ValueError("credential generation is invalid")
         response = self._post(
             self._runtime_origin,
@@ -1101,7 +1375,12 @@ class AgentClient:
                 return _Response(response.status, raw, document)
             except AgentClientError:
                 raise
-            except (http.client.HTTPException, OSError, TimeoutError, ssl.SSLError) as error:
+            except (
+                http.client.HTTPException,
+                OSError,
+                TimeoutError,
+                ssl.SSLError,
+            ) as error:
                 raise AgentTransportError("control-plane transport failed") from error
             finally:
                 if response is not None:
@@ -1110,9 +1389,7 @@ class AgentClient:
 
 
 def _origin(value: str) -> str:
-    if not isinstance(value, str) or any(
-        ord(character) <= 32 for character in value
-    ):
+    if not isinstance(value, str) or any(ord(character) <= 32 for character in value):
         raise ValueError("origin is invalid")
     try:
         parsed = urlsplit(value)
@@ -1135,20 +1412,19 @@ def _origin(value: str) -> str:
     try:
         parsed_ip = ipaddress.ip_address(host)
         rendered_host = (
-            f"[{parsed_ip.compressed}]"
-            if parsed_ip.version == 6
-            else str(parsed_ip)
+            f"[{parsed_ip.compressed}]" if parsed_ip.version == 6 else str(parsed_ip)
         )
     except ValueError:
-        if re.fullmatch(
-            r"(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+))*",
-            host,
-        ) or _DNS_HOST.fullmatch(host) is None:
+        if (
+            re.fullmatch(
+                r"(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+))*",
+                host,
+            )
+            or _DNS_HOST.fullmatch(host) is None
+        ):
             raise ValueError("origin is invalid") from None
         rendered_host = host
-    rendered = "https://" + rendered_host + (
-        "" if port is None else f":{port}"
-    )
+    rendered = "https://" + rendered_host + ("" if port is None else f":{port}")
     if rendered != value:
         raise ValueError("origin is not canonical")
     return value
@@ -1190,7 +1466,9 @@ def _read_bounded(response: http.client.HTTPResponse, maximum: int) -> bytes:
         try:
             advertised = int(content_length)
         except ValueError as error:
-            raise AgentProtocolResponseError("response content length is invalid") from error
+            raise AgentProtocolResponseError(
+                "response content length is invalid"
+            ) from error
         if advertised < 0 or advertised > maximum:
             raise AgentProtocolResponseError("response body is too large")
     body = response.read(maximum + 1)
@@ -1253,7 +1531,9 @@ def _pending(value: Any, node_id: str) -> EnrollmentPending:
     try:
         identifier = str(uuid.UUID(value["id"]))
     except (TypeError, ValueError, AttributeError) as error:
-        raise AgentProtocolResponseError("pending enrollment response is invalid") from error
+        raise AgentProtocolResponseError(
+            "pending enrollment response is invalid"
+        ) from error
     if (
         identifier != value["id"]
         or value["node_id"] != node_id
@@ -1274,10 +1554,18 @@ def _issued(value: Any, node_id: str) -> IssuedCredential:
         "not_after",
         "generation",
     }
-    if not isinstance(value, dict) or set(value) != required or value.get("node_id") != node_id:
+    if (
+        not isinstance(value, dict)
+        or set(value) != required
+        or value.get("node_id") != node_id
+    ):
         raise AgentProtocolResponseError("issued credential response is invalid")
     generation = value.get("generation")
-    if not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
+    if (
+        not isinstance(generation, int)
+        or isinstance(generation, bool)
+        or generation < 1
+    ):
         raise AgentProtocolResponseError("issued credential response is invalid")
     try:
         certificate = value["certificate_pem"].encode("ascii")
@@ -1285,7 +1573,9 @@ def _issued(value: Any, node_id: str) -> IssuedCredential:
         not_before = datetime.fromisoformat(value["not_before"])
         not_after = datetime.fromisoformat(value["not_after"])
     except (AttributeError, TypeError, UnicodeEncodeError, ValueError) as error:
-        raise AgentProtocolResponseError("issued credential response is invalid") from error
+        raise AgentProtocolResponseError(
+            "issued credential response is invalid"
+        ) from error
     if (
         not certificate
         or not chain

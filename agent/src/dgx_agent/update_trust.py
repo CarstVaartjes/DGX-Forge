@@ -1,4 +1,5 @@
 """Single-writer python-tuf trust boundary for signed Spark releases."""
+
 from __future__ import annotations
 
 import fcntl
@@ -21,6 +22,7 @@ from tuf.api.exceptions import DownloadError, DownloadHTTPError, RepositoryError
 from tuf.ngclient import FetcherInterface, Updater
 from tuf.ngclient.config import UpdaterConfig
 
+from .client import CredentialProvider
 from .deadlines import DeadlineBindingError, MonotonicDeadline
 from .releases import (
     ReleaseDescriptor,
@@ -67,11 +69,12 @@ class BoundedHTTPSFetcher(FetcherInterface):
     def __init__(
         self,
         control_origin: str,
-        ssl_context: ssl.SSLContext,
+        ssl_context: ssl.SSLContext | None = None,
         *,
         connect_timeout: float = 3.0,
         read_timeout: float = 10.0,
         pool: Any | None = None,
+        credential_provider: CredentialProvider | None = None,
     ) -> None:
         parsed = urlsplit(control_origin)
         try:
@@ -103,16 +106,32 @@ class BoundedHTTPSFetcher(FetcherInterface):
         self._deadline = float("inf")
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
-        self._pool = pool or urllib3.PoolManager(
-            num_pools=1,
-            maxsize=1,
-            block=True,
-            ssl_context=ssl_context,
-            retries=False,
+        if credential_provider is not None and (
+            ssl_context is not None or pool is not None
+        ):
+            raise TUFTrustError("dynamic TUF credentials conflict with a static pool")
+        if credential_provider is None and ssl_context is None and pool is None:
+            raise TUFTrustError("TUF HTTPS credentials are unavailable")
+        self._credential_provider = credential_provider
+        self._pool = (
+            pool
+            if pool is not None
+            else None
+            if credential_provider is not None
+            else urllib3.PoolManager(
+                num_pools=1,
+                maxsize=1,
+                block=True,
+                ssl_context=ssl_context,
+                retries=False,
+            )
         )
 
     def set_deadline(self, absolute_monotonic: float) -> None:
-        if not isinstance(absolute_monotonic, (int, float)) or absolute_monotonic <= time.monotonic():
+        if (
+            not isinstance(absolute_monotonic, (int, float))
+            or absolute_monotonic <= time.monotonic()
+        ):
             raise TUFTrustError("TUF fetch deadline has elapsed")
         self._deadline = float(absolute_monotonic)
 
@@ -137,7 +156,43 @@ class BoundedHTTPSFetcher(FetcherInterface):
             read=min(self._read_timeout, remaining, 0.25),
             total=remaining,
         )
-        response = self._pool.request(
+        if self._credential_provider is not None:
+            try:
+                with self._credential_provider.snapshot() as credentials:
+                    if (
+                        credentials.certificate_path is None
+                        or credentials.private_key_path is None
+                    ):
+                        raise DownloadError("active TUF client identity is unavailable")
+                    context = ssl.create_default_context(
+                        ssl.Purpose.SERVER_AUTH, cafile=str(credentials.ca_path)
+                    )
+                    context.minimum_version = ssl.TLSVersion.TLSv1_2
+                    context.load_cert_chain(
+                        str(credentials.certificate_path),
+                        str(credentials.private_key_path),
+                    )
+                    pool = urllib3.PoolManager(
+                        num_pools=1,
+                        maxsize=1,
+                        block=True,
+                        ssl_context=context,
+                        retries=False,
+                    )
+                    try:
+                        yield from self._fetch_from_pool(pool, url, timeout)
+                    finally:
+                        pool.clear()
+                return
+            except DownloadError:
+                raise
+            except (OSError, ssl.SSLError, RuntimeError) as error:
+                raise DownloadError("active TUF credentials are unavailable") from error
+        assert self._pool is not None
+        yield from self._fetch_from_pool(self._pool, url, timeout)
+
+    def _fetch_from_pool(self, pool: Any, url: str, timeout: urllib3.Timeout):
+        response = pool.request(
             "GET",
             url,
             headers={"User-Agent": "dgx-forge-agent/0.1.0"},
@@ -247,16 +302,10 @@ class TUFReleaseTrust:
                 raise TUFTrustError("TUF metadata cache is already in use") from error
             self._fetcher.set_deadline(absolute_deadline)
             marker = self._metadata_root / _BOOTSTRAP_MARKER
-            _remove_stale_entry(
-                marker.with_name(marker.name + ".new"), fixed_deadline
-            )
-            _remove_stale_entry(
-                self._metadata_root / ".root-link.new", fixed_deadline
-            )
+            _remove_stale_entry(marker.with_name(marker.name + ".new"), fixed_deadline)
+            _remove_stale_entry(self._metadata_root / ".root-link.new", fixed_deadline)
             _validate_cache(self._metadata_root, fixed_deadline)
-            _validate_empty_target_cache(
-                self._target_root, fixed_deadline
-            )
+            _validate_empty_target_cache(self._target_root, fixed_deadline)
             check_deadline()
             bootstrap = (
                 None
@@ -293,11 +342,11 @@ class TUFReleaseTrust:
                 _harden_cache(self._metadata_root, fixed_deadline)
                 _fsync_cache(self._metadata_root, fixed_deadline)
                 _write_marker(
-                    marker, hashlib.sha256(
-                        _cached_root_bytes(
-                            self._metadata_root, fixed_deadline
-                        )
-                    ).hexdigest(), fixed_deadline
+                    marker,
+                    hashlib.sha256(
+                        _cached_root_bytes(self._metadata_root, fixed_deadline)
+                    ).hexdigest(),
+                    fixed_deadline,
                 )
             check_deadline()
             _interruptible_tuf_call(fixed_deadline, updater.refresh)
@@ -309,10 +358,9 @@ class TUFReleaseTrust:
             check_deadline()
             if target_info is None:
                 raise TUFTrustError("TUF target is not authorized")
-            if (
-                target_info.length > _TARGET_LIMIT
-                or set(target_info.hashes) != {"sha256"}
-            ):
+            if target_info.length > _TARGET_LIMIT or set(target_info.hashes) != {
+                "sha256"
+            }:
                 raise TUFTrustError("TUF target bounds are invalid")
             custom = target_info.unrecognized_fields.get("custom")
             if not isinstance(custom, dict) or set(custom) != {"release"}:
@@ -382,9 +430,7 @@ class TUFReleaseTrust:
             _write_marker(
                 marker,
                 hashlib.sha256(
-                    _cached_root_bytes(
-                        self._metadata_root, fixed_deadline
-                    )
+                    _cached_root_bytes(self._metadata_root, fixed_deadline)
                 ).hexdigest(),
                 fixed_deadline,
             )
@@ -394,7 +440,8 @@ class TUFReleaseTrust:
             if updater_started:
                 try:
                     _persist_accepted_cache(
-                        self._metadata_root, self._target_root,
+                        self._metadata_root,
+                        self._target_root,
                         fixed_deadline,
                     )
                 except OSError as persistence_error:
@@ -414,7 +461,8 @@ class TUFReleaseTrust:
             if updater_started:
                 try:
                     _persist_accepted_cache(
-                        self._metadata_root, self._target_root,
+                        self._metadata_root,
+                        self._target_root,
                         fixed_deadline,
                     )
                 except OSError as persistence_error:
@@ -430,9 +478,7 @@ class TUFReleaseTrust:
             os.close(lock)
 
 
-def _secure_directory(
-    path: Path, deadline: MonotonicDeadline | None = None
-) -> None:
+def _secure_directory(path: Path, deadline: MonotonicDeadline | None = None) -> None:
     if not path.is_absolute():
         raise TUFTrustError("TUF cache path is invalid")
     _tuf_deadline(deadline)
@@ -464,9 +510,8 @@ def _secure_directory(
             _tuf_deadline(deadline)
             final = index == len(path.parts[1:]) - 1
             mode = stat.S_IMODE(metadata.st_mode)
-            if (
-                metadata.st_uid not in {0, os.geteuid()}
-                or (mode & 0o077 if final else mode & 0o022 and not mode & stat.S_ISVTX)
+            if metadata.st_uid not in {0, os.geteuid()} or (
+                mode & 0o077 if final else mode & 0o022 and not mode & stat.S_ISVTX
             ):
                 raise TUFTrustError("TUF cache directory is unsafe")
     except OSError as error:
@@ -475,9 +520,7 @@ def _secure_directory(
         os.close(descriptor)
 
 
-def _validate_cache(
-    root: Path, deadline: MonotonicDeadline | None = None
-) -> None:
+def _validate_cache(root: Path, deadline: MonotonicDeadline | None = None) -> None:
     _tuf_deadline(deadline)
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
@@ -583,9 +626,7 @@ def _write_marker(
         os.close(parent)
 
 
-def _remove_stale_entry(
-    path: Path, deadline: MonotonicDeadline | None = None
-) -> None:
+def _remove_stale_entry(path: Path, deadline: MonotonicDeadline | None = None) -> None:
     _tuf_deadline(deadline)
     parent = os.open(
         path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
@@ -645,23 +686,20 @@ def _established_root_is_openable(
                 continue
             _tuf_deadline(deadline)
             descriptor = os.open(
-                name, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                name,
+                os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
                 dir_fd=history_fd,
             )
             try:
                 _tuf_deadline(deadline)
-                content = _read_regular_fd(
-                    descriptor, 256 * 1024, deadline
-                )
+                content = _read_regular_fd(descriptor, 256 * 1024, deadline)
             finally:
                 os.close(descriptor)
             if hashlib.sha256(content).hexdigest() == digest:
                 matches.append((int(match.group(1)), name))
         if matches:
             _, name = max(matches)
-            _replace_root_pointer(
-                root, f"root_history/{name}", deadline
-            )
+            _replace_root_pointer(root, f"root_history/{name}", deadline)
             return True
     except (FileNotFoundError, OSError):
         pass
@@ -707,9 +745,7 @@ def _marker_root_digest(
     return match.group(1)
 
 
-def _cached_root_bytes(
-    root: Path, deadline: MonotonicDeadline | None = None
-) -> bytes:
+def _cached_root_bytes(root: Path, deadline: MonotonicDeadline | None = None) -> bytes:
     try:
         _tuf_deadline(deadline)
         target = os.readlink(root / "root.json")
@@ -719,9 +755,7 @@ def _cached_root_bytes(
     if not re.fullmatch(r"root_history/[1-9][0-9]*\.root\.json", target):
         raise TUFTrustError("TUF cached root pointer is unsafe")
     _tuf_deadline(deadline)
-    descriptor = os.open(
-        root / target, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW
-    )
+    descriptor = os.open(root / target, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
         _tuf_deadline(deadline)
         return _read_regular_fd(descriptor, 256 * 1024, deadline)
@@ -735,9 +769,7 @@ def _replace_root_pointer(
     deadline: MonotonicDeadline | None = None,
 ) -> None:
     _tuf_deadline(deadline)
-    parent = os.open(
-        root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW
-    )
+    parent = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
     temporary = ".root-link.new"
     try:
         _tuf_deadline(deadline)
@@ -788,9 +820,7 @@ def _read_regular_fd(
         total = 0
         while True:
             _tuf_deadline(deadline)
-            chunk = os.read(
-                descriptor, min(64 * 1024, limit + 1 - total)
-            )
+            chunk = os.read(descriptor, min(64 * 1024, limit + 1 - total))
             _tuf_deadline(deadline)
             if not chunk:
                 break
@@ -823,9 +853,7 @@ def _validate_empty_target_cache(
         os.close(descriptor)
 
 
-def _seal_target_fd(
-    descriptor: int, deadline: MonotonicDeadline | None = None
-) -> None:
+def _seal_target_fd(descriptor: int, deadline: MonotonicDeadline | None = None) -> None:
     _tuf_deadline(deadline)
     fcntl.fcntl(
         descriptor,
@@ -838,9 +866,7 @@ def _seal_target_fd(
     _tuf_deadline(deadline)
 
 
-def _harden_cache(
-    root: Path, deadline: MonotonicDeadline | None = None
-) -> None:
+def _harden_cache(root: Path, deadline: MonotonicDeadline | None = None) -> None:
     _tuf_deadline(deadline)
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
@@ -868,7 +894,8 @@ def _harden_cache_fd(
         _tuf_deadline(deadline)
         if stat.S_ISDIR(metadata.st_mode):
             child = os.open(
-                name, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
                 dir_fd=directory_fd,
             )
             try:
@@ -878,9 +905,7 @@ def _harden_cache_fd(
                 os.close(child)
 
 
-def _fsync_cache(
-    root: Path, deadline: MonotonicDeadline | None = None
-) -> None:
+def _fsync_cache(root: Path, deadline: MonotonicDeadline | None = None) -> None:
     _tuf_deadline(deadline)
     root_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW)
     try:
@@ -934,9 +959,9 @@ def _allowed_tuf_path(path: str) -> bool:
     metadata_prefix = "/agent/v1/tuf/metadata/"
     targets_prefix = "/agent/v1/tuf/targets/"
     if path.startswith(metadata_prefix):
-        return bool(_TUF_FILE.fullmatch(path[len(metadata_prefix):]))
+        return bool(_TUF_FILE.fullmatch(path[len(metadata_prefix) :]))
     if path.startswith(targets_prefix):
-        return bool(_TARGET_FILE.fullmatch(path[len(targets_prefix):]))
+        return bool(_TARGET_FILE.fullmatch(path[len(targets_prefix) :]))
     return False
 
 
@@ -954,9 +979,7 @@ def _tuf_deadline(deadline: MonotonicDeadline | None) -> None:
         raise TUFTrustError("TUF authorization deadline has elapsed") from error
 
 
-def _tuf_names(
-    directory_fd: int, deadline: MonotonicDeadline | None
-):
+def _tuf_names(directory_fd: int, deadline: MonotonicDeadline | None):
     _tuf_deadline(deadline)
     entries = os.scandir(directory_fd)
     try:

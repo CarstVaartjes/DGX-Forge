@@ -13,8 +13,14 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from dgx_agent.client import AgentTransportError, CredentialStore, IssuedCredential
-from dgx_agent.main import Agent
+from dgx_agent.config import AgentConfig
+from dgx_agent.main import (
+    Agent,
+    ensure_initial_enrollment,
+    remove_consumed_enrollment_token,
+)
 from dgx_agent.operations import OperationContext, OperationRegistry
+from dgx_agent.readiness import ReadinessError, ReadinessReporter
 from dgx_agent.state import AgentStateStore
 from dgx_agent_protocol import AgentClaim, AgentOperation, canonical_message
 
@@ -64,6 +70,63 @@ class Probe:
         return {"status": "healthy"}
 
 
+def test_readiness_reporter_requires_complete_environment_and_publishes_exact_marker(
+    tmp_path: Path,
+) -> None:
+    assert ReadinessReporter._from_environment_for_test({}, tmp_path).report() is False
+    with pytest.raises(ReadinessError):
+        ReadinessReporter._from_environment_for_test(
+            {"DGX_AGENT_SUPERVISOR_GENERATION": "2"}, tmp_path
+        )
+    environment = {
+        "DGX_AGENT_SUPERVISOR_GENERATION": "2",
+        "DGX_AGENT_SUPERVISOR_SLOT": "B",
+        "DGX_AGENT_SUPERVISOR_SHA256": "a" * 64,
+    }
+    reporter = ReadinessReporter._from_environment_for_test(environment, tmp_path)
+
+    assert reporter.report() is True
+    marker = tmp_path / "readiness.json"
+    assert marker.read_bytes() == (
+        b'{"generation":2,"schema_version":1,"sha256":"'
+        + b"a" * 64
+        + b'","slot":"B"}\n'
+    )
+    assert marker.stat().st_mode & 0o777 == 0o600
+    before = marker.stat().st_mtime_ns
+    assert reporter.report() is False
+    assert marker.stat().st_mtime_ns == before
+
+
+def test_readiness_callback_runs_only_after_authenticated_runtime_exchange(
+    tmp_path: Path,
+) -> None:
+    context = OperationContext(
+        node_id=NODE_ID,
+        state=AgentStateStore(tmp_path / "state"),
+        probe=Probe(),
+    )
+    calls: list[str] = []
+    empty = FakeControl()
+    Agent(
+        empty,
+        OperationRegistry(),
+        context,
+        on_authenticated_exchange=lambda: calls.append("ready"),
+    ).run_once()
+    assert calls == ["ready"]
+
+    failing = _SequencedControl([AgentTransportError("offline")])
+    with pytest.raises(AgentTransportError):
+        Agent(
+            failing,
+            OperationRegistry(),
+            context,
+            on_authenticated_exchange=lambda: calls.append("unsafe"),
+        ).run_once()
+    assert calls == ["ready"]
+
+
 def test_agent_claims_executes_and_reports_with_same_fence(tmp_path: Path) -> None:
     fake_control = FakeControl()
     claim = probe_claim()
@@ -100,7 +163,9 @@ def test_pending_result_is_replayed_before_any_new_claim(tmp_path: Path) -> None
     assert state.recover_pending() is None
 
 
-def test_active_attempt_is_recovered_and_executed_before_any_new_claim(tmp_path: Path) -> None:
+def test_active_attempt_is_recovered_and_executed_before_any_new_claim(
+    tmp_path: Path,
+) -> None:
     state = AgentStateStore(tmp_path / "state")
     active = probe_claim()
     state.begin(active)
@@ -186,7 +251,9 @@ class _Stop:
         return self.is_set()
 
 
-def test_run_forever_applies_bounded_jitter_and_resets_after_success(tmp_path: Path) -> None:
+def test_run_forever_applies_bounded_jitter_and_resets_after_success(
+    tmp_path: Path,
+) -> None:
     control = _SequencedControl(
         [
             AgentTransportError("first outage"),
@@ -238,10 +305,19 @@ def _credential_material(tmp_path: Path):
         .serial_number(x509.random_serial_number())
         .not_valid_before(now - timedelta(hours=2))
         .not_valid_after(now + timedelta(minutes=30))
-        .add_extension(x509.SubjectAlternativeName([
-            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_ID}")
-        ]), critical=False)
-        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False)
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    x509.UniformResourceIdentifier(
+                        f"spiffe://dgx-forge.local/node/{NODE_ID}"
+                    )
+                ]
+            ),
+            critical=False,
+        )
+        .add_extension(
+            x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False
+        )
         .sign(ca_key, algorithm=None)
     )
 
@@ -253,7 +329,9 @@ def _credential_material(tmp_path: Path):
 
     return (
         write("ca.pem", ca.public_bytes(serialization.Encoding.PEM), 0o644),
-        write("client.pem", certificate.public_bytes(serialization.Encoding.PEM), 0o644),
+        write(
+            "client.pem", certificate.public_bytes(serialization.Encoding.PEM), 0o644
+        ),
         write(
             "client.key",
             key.private_bytes(
@@ -268,7 +346,9 @@ def _credential_material(tmp_path: Path):
     )
 
 
-def _issue_rotation(csr_pem: bytes, ca: x509.Certificate, ca_key) -> IssuedCredential:
+def _issue_rotation(
+    csr_pem: bytes, ca: x509.Certificate, ca_key, *, generation: int = 2
+) -> IssuedCredential:
     request = x509.load_pem_x509_csr(csr_pem)
     now = datetime.now(UTC)
     certificate = (
@@ -280,10 +360,14 @@ def _issue_rotation(csr_pem: bytes, ca: x509.Certificate, ca_key) -> IssuedCrede
         .not_valid_before(now - timedelta(minutes=1))
         .not_valid_after(now + timedelta(hours=1))
         .add_extension(
-            request.extensions.get_extension_for_class(x509.SubjectAlternativeName).value,
+            request.extensions.get_extension_for_class(
+                x509.SubjectAlternativeName
+            ).value,
             critical=False,
         )
-        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False)
+        .add_extension(
+            x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=False
+        )
         .sign(ca_key, algorithm=None)
     )
     der = certificate.public_bytes(serialization.Encoding.DER)
@@ -295,16 +379,92 @@ def _issue_rotation(csr_pem: bytes, ca: x509.Certificate, ca_key) -> IssuedCrede
         fingerprint=hashlib.sha256(der).hexdigest(),
         not_before=certificate.not_valid_before_utc,
         not_after=certificate.not_valid_after_utc,
-        generation=2,
+        generation=generation,
     )
 
 
+class EnrollmentControl:
+    def __init__(self, response) -> None:
+        self.response = response
+        self.csrs: list[bytes] = []
+
+    def enroll(self, _origin: str, _token: str, csr: bytes, _evidence):
+        self.csrs.append(csr)
+        return self.response
+
+
+def test_initial_enrollment_reuses_csr_keeps_token_until_durable_pickup(
+    tmp_path: Path,
+) -> None:
+    ca_path, _certificate_path, _key_path, ca, ca_key = _credential_material(tmp_path)
+    state_root = tmp_path / "bootstrap-state"
+    token = tmp_path / "enrollment-token"
+    token.write_text("t" * 43 + "\n")
+    token.chmod(0o600)
+    missing_certificate = tmp_path / "initial-missing.pem"
+    missing_key = tmp_path / "initial-missing.key"
+    config = AgentConfig(
+        "https://runtime.example",
+        "https://enroll.example",
+        NODE_ID,
+        missing_certificate,
+        missing_key,
+        ca_path,
+        1,
+        60,
+        state_root,
+        tmp_path / "nvidia.json",
+        tmp_path / "runtime.json",
+        token,
+    )
+    store = CredentialStore(state_root, ca_path, missing_certificate, missing_key)
+    from dgx_agent.client import EnrollmentPending
+
+    pending_control = EnrollmentControl(
+        EnrollmentPending(
+            "00000000-0000-0000-0000-000000000001", NODE_ID, "pending-approval"
+        )
+    )
+    evidence = {
+        "agent_digest": "a" * 64,
+        "boot_id": "boot",
+        "csr_public_key_fingerprint": "b" * 64,
+        "hardware_fingerprint": "hardware",
+        "host_key_fingerprint": "host",
+        "node_id": NODE_ID,
+    }
+
+    assert ensure_initial_enrollment(config, store, pending_control, evidence) is False
+    assert token.exists()
+    issued = _issue_rotation(pending_control.csrs[0], ca, ca_key, generation=1)
+    issued_control = EnrollmentControl(issued)
+
+    assert ensure_initial_enrollment(config, store, issued_control, evidence) is True
+    assert issued_control.csrs == pending_control.csrs
+    assert not token.exists()
+    assert store.has_active_credentials
+
+    # A crash after active publication but before unlink is recovered safely.
+    token.write_text("t" * 43 + "\n")
+    token.chmod(0o600)
+    assert remove_consumed_enrollment_token(config, store) is True
+    assert not token.exists()
+
+
 class RotationControl(FakeControl):
-    def __init__(self, issued: IssuedCredential, *, fail_renew: int = 0, fail_activate: int = 0) -> None:
+    def __init__(
+        self,
+        issued: IssuedCredential,
+        *,
+        fail_renew: int = 0,
+        fail_activate: int = 0,
+        fail_claim: bool = False,
+    ) -> None:
         super().__init__()
         self.issued = issued
         self.fail_renew = fail_renew
         self.fail_activate = fail_activate
+        self.fail_claim = fail_claim
         self.renewed_csrs: list[bytes] = []
         self.activations: list[int] = []
 
@@ -320,6 +480,11 @@ class RotationControl(FakeControl):
         if self.fail_activate:
             self.fail_activate -= 1
             raise AgentTransportError("activation response lost")
+
+    def claim(self):
+        if self.fail_claim:
+            raise AgentTransportError("claim response lost")
+        return super().claim()
 
 
 def test_rotation_retries_same_csr_after_renew_response_loss_and_resumes_activation_after_restart(
@@ -342,34 +507,43 @@ def test_rotation_retries_same_csr_after_renew_response_loss_and_resumes_activat
     assert store.pending_rotation() is not None
     first_csr = first.renewed_csrs[0]
 
-    after_renew_restart = CredentialStore(state_root, ca_path, certificate_path, key_path)
+    after_renew_restart = CredentialStore(
+        state_root, ca_path, certificate_path, key_path
+    )
     second = RotationControl(issued, fail_activate=1)
+    failed_readiness: list[str] = []
     with pytest.raises(AgentTransportError):
         Agent(
             second,
             OperationRegistry(),
             context,
             credentials=after_renew_restart,
+            on_authenticated_exchange=lambda: failed_readiness.append("ready"),
         ).run_once()
     assert second.renewed_csrs == [first_csr]
     assert after_renew_restart.active_generation == 1
     assert after_renew_restart.staged_generation == 2
+    assert failed_readiness == []
 
     after_activation_restart = CredentialStore(
         state_root, ca_path, certificate_path, key_path
     )
-    third = RotationControl(issued)
-    Agent(
-        third,
-        OperationRegistry(),
-        context,
-        credentials=after_activation_restart,
-    ).run_once()
+    third = RotationControl(issued, fail_claim=True)
+    activated_readiness: list[str] = []
+    with pytest.raises(AgentTransportError):
+        Agent(
+            third,
+            OperationRegistry(),
+            context,
+            credentials=after_activation_restart,
+            on_authenticated_exchange=lambda: activated_readiness.append("ready"),
+        ).run_once()
 
     assert third.renewed_csrs == []
     assert third.activations == [2]
     assert after_activation_restart.active_generation == 2
     assert after_activation_restart.staged_generation is None
+    assert activated_readiness == ["ready"]
 
 
 def test_installed_console_entry_point_has_bounded_help_without_loading_credentials(

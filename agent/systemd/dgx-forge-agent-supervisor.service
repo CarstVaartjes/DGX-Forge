@@ -1,0 +1,42 @@
+[Unit]
+Description=DGX Forge stable agent slot supervisor
+After=local-fs.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/libexec/dgx-agent-supervisor supervise
+TimeoutStartSec=150s
+TimeoutStopSec=15s
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX
+ReadOnlyPaths=/opt/dgx-forge/agent-slots /usr/libexec/dgx-agent-supervisor
+ReadWritePaths=/var/lib/dgx-forge-agent-supervisor -/run/dgx-forge-agent
+
+[Install]
+WantedBy=multi-user.target

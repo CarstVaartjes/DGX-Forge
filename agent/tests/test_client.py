@@ -13,6 +13,7 @@ from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import dgx_agent.client as client_module
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -141,7 +142,9 @@ def tls_files(tmp_path: Path, *, server_name: str = "localhost") -> TLSFiles:
         key = ed25519.Ed25519PrivateKey.generate()
         builder = (
             x509.CertificateBuilder()
-            .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)]))
+            .subject_name(
+                x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+            )
             .issuer_name(ca.subject)
             .public_key(key.public_key())
             .serial_number(x509.random_serial_number())
@@ -150,15 +153,23 @@ def tls_files(tmp_path: Path, *, server_name: str = "localhost") -> TLSFiles:
             .add_extension(x509.ExtendedKeyUsage([eku]), critical=False)
         )
         if dns is not None:
-            builder = builder.add_extension(x509.SubjectAlternativeName([x509.DNSName(dns)]), critical=False)
+            builder = builder.add_extension(
+                x509.SubjectAlternativeName([x509.DNSName(dns)]), critical=False
+            )
         return key, builder.sign(ca_key, algorithm=None)
 
-    server_key, server = issue(server_name, ExtendedKeyUsageOID.SERVER_AUTH, dns=server_name)
+    server_key, server = issue(
+        server_name, ExtendedKeyUsageOID.SERVER_AUTH, dns=server_name
+    )
     client_key, client = issue(NODE_ID, ExtendedKeyUsageOID.CLIENT_AUTH)
     return TLSFiles(
-        ca=_pem(tmp_path / "ca.pem", ca.public_bytes(serialization.Encoding.PEM), 0o644),
+        ca=_pem(
+            tmp_path / "ca.pem", ca.public_bytes(serialization.Encoding.PEM), 0o644
+        ),
         server_certificate=_pem(
-            tmp_path / "server.pem", server.public_bytes(serialization.Encoding.PEM), 0o644
+            tmp_path / "server.pem",
+            server.public_bytes(serialization.Encoding.PEM),
+            0o644,
         ),
         server_key=_pem(
             tmp_path / "server.key",
@@ -170,7 +181,9 @@ def tls_files(tmp_path: Path, *, server_name: str = "localhost") -> TLSFiles:
             0o600,
         ),
         client_certificate=_pem(
-            tmp_path / "client.pem", client.public_bytes(serialization.Encoding.PEM), 0o644
+            tmp_path / "client.pem",
+            client.public_bytes(serialization.Encoding.PEM),
+            0o644,
         ),
         client_key=_pem(
             tmp_path / "client.key",
@@ -280,7 +293,9 @@ def issue_rotation(
         .not_valid_before(now - timedelta(minutes=1))
         .not_valid_after(now + timedelta(hours=1))
         .add_extension(
-            request.extensions.get_extension_for_class(x509.SubjectAlternativeName).value,
+            request.extensions.get_extension_for_class(
+                x509.SubjectAlternativeName
+            ).value,
             critical=False,
         )
         .add_extension(
@@ -342,11 +357,15 @@ def test_client_rejects_ambiguous_or_noncanonical_runtime_origins(
         )
 
 
-def test_claim_uses_fixed_mtls_post_and_parses_canonical_protocol_claim(tmp_path: Path) -> None:
+def test_claim_uses_fixed_mtls_post_and_parses_canonical_protocol_claim(
+    tmp_path: Path,
+) -> None:
     files = tls_files(tmp_path)
     expected = probe_claim()
     with https_server(files) as server:
-        server.responses.append(ResponseSpec(200, canonical_message(expected), "application/json"))
+        server.responses.append(
+            ResponseSpec(200, canonical_message(expected), "application/json")
+        )
 
         claimed = client_for(server, files).claim()
 
@@ -363,10 +382,10 @@ def test_claim_uses_fixed_mtls_post_and_parses_canonical_protocol_claim(tmp_path
 @pytest.mark.parametrize(
     ("response", "message"),
     [
-        (ResponseSpec(200, b'{}', "text/json"), "content type"),
+        (ResponseSpec(200, b"{}", "text/json"), "content type"),
         (ResponseSpec(200, b'{"x":1,"x":2}', "application/json"), "duplicate"),
         (ResponseSpec(200, b'{ "x":1}', "application/json"), "canonical"),
-        (ResponseSpec(200, b'x' * (64 * 1024 + 1), "application/json"), "large"),
+        (ResponseSpec(200, b"x" * (64 * 1024 + 1), "application/json"), "large"),
     ],
 )
 def test_claim_rejects_wrong_content_type_duplicate_noncanonical_and_oversized_responses(
@@ -379,7 +398,9 @@ def test_claim_rejects_wrong_content_type_duplicate_noncanonical_and_oversized_r
             client_for(server, files).claim()
 
 
-def test_claim_reports_disconnect_as_retryable_transport_failure(tmp_path: Path) -> None:
+def test_claim_reports_disconnect_as_retryable_transport_failure(
+    tmp_path: Path,
+) -> None:
     files = tls_files(tmp_path)
     with https_server(files) as server:
         server.responses.append(ResponseSpec(0, close_without_response=True))
@@ -464,8 +485,12 @@ def test_runtime_tls_rejects_wrong_ca_hostname_and_missing_client_certificate(
         server.responses.append(ResponseSpec(204))
         without_identity = StaticCredentialProvider(files.ca, None, None)
         client = AgentClient(
-            f"https://localhost:{server.server_port}", NODE_ID, without_identity,
-            connect_timeout=1, read_timeout=1, long_poll_seconds=1,
+            f"https://localhost:{server.server_port}",
+            NODE_ID,
+            without_identity,
+            connect_timeout=1,
+            read_timeout=1,
+            long_poll_seconds=1,
         )
         with pytest.raises(AgentTransportError):
             client.claim()
@@ -524,7 +549,9 @@ def test_enrollment_uses_explicit_server_authenticated_origin_without_client_ide
         client = AgentClient(
             runtime_origin,
             NODE_ID,
-            StaticCredentialProvider(files.ca, files.client_certificate, files.client_key),
+            StaticCredentialProvider(
+                files.ca, files.client_certificate, files.client_key
+            ),
             connect_timeout=1,
             read_timeout=1,
         )
@@ -547,16 +574,24 @@ def test_enrollment_uses_explicit_server_authenticated_origin_without_client_ide
     }
 
 
-def test_enrollment_returns_issued_certificate_on_approved_pickup(tmp_path: Path) -> None:
+def test_enrollment_returns_issued_certificate_on_approved_pickup(
+    tmp_path: Path,
+) -> None:
     files = tls_files(tmp_path)
     with https_server(files, require_client=False) as server:
         server.responses.append(
-            ResponseSpec(200, canonical_message(issued_document(generation=1)), "application/json")
+            ResponseSpec(
+                200,
+                canonical_message(issued_document(generation=1)),
+                "application/json",
+            )
         )
         client = AgentClient(
             "https://runtime.invalid",
             NODE_ID,
-            StaticCredentialProvider(files.ca, files.client_certificate, files.client_key),
+            StaticCredentialProvider(
+                files.ca, files.client_certificate, files.client_key
+            ),
             connect_timeout=1,
             read_timeout=1,
         )
@@ -609,7 +644,9 @@ def test_heartbeat_parses_protocol_progress_and_result_accepts_204_or_stale_409(
     assert server.requests[2].body == canonical_message(terminal)
 
 
-def test_result_transport_failure_replays_the_exact_payload_and_fence(tmp_path: Path) -> None:
+def test_result_transport_failure_replays_the_exact_payload_and_fence(
+    tmp_path: Path,
+) -> None:
     files = tls_files(tmp_path)
     terminal = result(probe_claim())
     with https_server(files) as server:
@@ -625,12 +662,20 @@ def test_result_transport_failure_replays_the_exact_payload_and_fence(tmp_path: 
         client.result(terminal)
 
     assert len(server.requests) == 2
-    assert server.requests[0].body == server.requests[1].body == canonical_message(terminal)
+    assert (
+        server.requests[0].body
+        == server.requests[1].body
+        == canonical_message(terminal)
+    )
 
 
 @pytest.mark.parametrize(
     ("status", "error"),
-    [(401, AgentAuthenticationError), (403, AgentAuthenticationError), (422, AgentPermanentError)],
+    [
+        (401, AgentAuthenticationError),
+        (403, AgentAuthenticationError),
+        (422, AgentPermanentError),
+    ],
 )
 def test_terminal_client_errors_are_typed_and_not_silent(
     tmp_path: Path, status: int, error: type[Exception]
@@ -638,22 +683,30 @@ def test_terminal_client_errors_are_typed_and_not_silent(
     files = tls_files(tmp_path)
     with https_server(files) as server:
         server.responses.append(
-            ResponseSpec(status, canonical_message({"detail": "denied"}), "application/json")
+            ResponseSpec(
+                status, canonical_message({"detail": "denied"}), "application/json"
+            )
         )
         with pytest.raises(error):
             client_for(server, files).result(result(probe_claim()))
 
 
-def test_renew_and_activation_use_fixed_paths_and_staged_identity(tmp_path: Path) -> None:
+def test_renew_and_activation_use_fixed_paths_and_staged_identity(
+    tmp_path: Path,
+) -> None:
     files = tls_files(tmp_path)
     with https_server(files) as server:
         server.responses.extend(
             [
-                ResponseSpec(200, canonical_message(issued_document()), "application/json"),
+                ResponseSpec(
+                    200, canonical_message(issued_document()), "application/json"
+                ),
                 ResponseSpec(204),
             ]
         )
-        staged = StaticCredentialProvider(files.ca, files.client_certificate, files.client_key)
+        staged = StaticCredentialProvider(
+            files.ca, files.client_certificate, files.client_key
+        )
         client = AgentClient(
             f"https://localhost:{server.server_port}",
             NODE_ID,
@@ -721,7 +774,10 @@ def test_credential_store_stages_service_owned_generation_and_publishes_only_aft
         assert snapshot.generation == 2
         assert snapshot.certificate_path is not None
         assert snapshot.private_key_path is not None
-        assert snapshot.certificate_path.read_bytes() == issued.certificate_pem + issued.chain_pem
+        assert (
+            snapshot.certificate_path.read_bytes()
+            == issued.certificate_pem + issued.chain_pem
+        )
         stored_key = serialization.load_pem_private_key(
             snapshot.private_key_path.read_bytes(), password=None
         )
@@ -738,6 +794,93 @@ def test_credential_store_stages_service_owned_generation_and_publishes_only_aft
     assert restarted.active_generation == 2
     assert restarted.staged_generation is None
     assert restarted.pending_rotation() is None
+
+
+def test_credential_store_installs_initial_generation_without_seed_and_reuses_pending_key(
+    tmp_path: Path,
+) -> None:
+    files = tls_files(tmp_path)
+    state_root = tmp_path / "state"
+    missing_certificate = tmp_path / "not-yet-enrolled.pem"
+    missing_key = tmp_path / "not-yet-enrolled.key"
+    store = CredentialStore(state_root, files.ca, missing_certificate, missing_key)
+    pending = store.prepare_enrollment(NODE_ID)
+    assert store.prepare_enrollment(NODE_ID).csr_pem == pending.csr_pem
+    issued = issue_rotation(files, pending.csr_pem, generation=1)
+
+    store.install_initial(issued)
+
+    assert store.active_generation == 1
+    assert store.pending_rotation() is None
+    assert (state_root / "credentials/active.json").read_bytes() == b'{"generation":1}'
+    with store.snapshot() as snapshot:
+        assert snapshot.generation == 1
+        assert snapshot.certificate_path is not None
+        assert snapshot.private_key_path is not None
+        assert (
+            snapshot.certificate_path.read_bytes()
+            == issued.certificate_pem + issued.chain_pem
+        )
+
+    # An identical approved pickup is idempotent after a response/restart boundary.
+    CredentialStore(
+        state_root, files.ca, missing_certificate, missing_key
+    ).install_initial(issued)
+
+
+@pytest.mark.parametrize("crash_call", [1, 2, 3, 4])
+def test_initial_install_recovers_each_pending_cleanup_boundary_without_renewal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, crash_call: int
+) -> None:
+    files = tls_files(tmp_path)
+    state_root = tmp_path / "state"
+    store = CredentialStore(
+        state_root, files.ca, tmp_path / "missing.pem", tmp_path / "missing.key"
+    )
+    pending = store.prepare_enrollment(NODE_ID)
+    issued = issue_rotation(files, pending.csr_pem, generation=1)
+    original = client_module._unlink_optional
+    calls = 0
+
+    def crash_after_active(descriptor: int, name: str) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == crash_call:
+            raise OSError("simulated cleanup crash")
+        original(descriptor, name)
+
+    monkeypatch.setattr(client_module, "_unlink_optional", crash_after_active)
+    with pytest.raises(CredentialStoreError, match="could not be installed"):
+        store.install_initial(issued)
+    monkeypatch.setattr(client_module, "_unlink_optional", original)
+
+    restarted = CredentialStore(
+        state_root, files.ca, tmp_path / "missing.pem", tmp_path / "missing.key"
+    )
+    assert restarted.recover_initial_enrollment(NODE_ID) is True
+    assert restarted.pending_rotation() is None
+    assert restarted.active_generation == 1
+
+
+def test_initial_credential_rejects_certificate_for_another_key(tmp_path: Path) -> None:
+    files = tls_files(tmp_path)
+    store = CredentialStore(
+        tmp_path / "state", files.ca, tmp_path / "missing.pem", tmp_path / "missing.key"
+    )
+    store.prepare_enrollment(NODE_ID)
+    unrelated = IssuedCredential(
+        node_id=NODE_ID,
+        certificate_pem=files.client_certificate.read_bytes(),
+        chain_pem=files.ca.read_bytes(),
+        serial="1",
+        fingerprint="a" * 64,
+        not_before=datetime.now(UTC) - timedelta(minutes=1),
+        not_after=datetime.now(UTC) + timedelta(hours=1),
+        generation=1,
+    )
+
+    with pytest.raises(CredentialStoreError, match="pending key"):
+        store.install_initial(unrelated)
 
 
 def test_credential_store_renews_at_one_third_remaining_and_closes_snapshot_descriptors(
