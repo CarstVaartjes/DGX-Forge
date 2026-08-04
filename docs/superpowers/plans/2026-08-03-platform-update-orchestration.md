@@ -16,6 +16,11 @@
 - Spark updates use the agent channel when healthy; SSH is recovery-only.
 - Default rollout is explicit canary, soak, then batches of one; distributed workload availability constrains batches.
 - First failure pauses fan-out and continuing after rollback requires operator approval.
+- This plan updates DGX-Forge application/control/agent artifacts. DGX OS,
+  driver, firmware, and kernel maintenance is a separate node-maintenance
+  workflow. The pinned NVIDIA `spark_updatectl.py` may supply reboot readiness,
+  next-boot kernel, and rollback evidence, but cannot authorize or transport a
+  DGX-Forge release.
 
 ---
 
@@ -278,7 +283,10 @@ Expected: FAIL missing script/report requirement.
 Exercise real manifest loader, host generation state machine fakes, agent slots,
 rollout planner, API/CLI, and failure injection. Document download/offline media,
 backup, canary selection, pause/resume, rollback, SSH recovery, and evidence
-sanitization. Never convert simulated evidence into a physical pass.
+sanitization. Cross-link DGX OS maintenance and explain the fixed NVIDIA
+`spark_updatectl.py` evidence boundary so operators cannot confuse host
+firmware/kernel maintenance with DGX-Forge TUF/OCI fan-out. Never convert
+simulated evidence into a physical pass.
 
 - [ ] **Step 4: Run Phase 6 verification**
 

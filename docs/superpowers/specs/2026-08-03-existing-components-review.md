@@ -29,6 +29,10 @@ on UGREEN-specific APIs or a fixed fleet size.
 | Release/artifact storage | CNCF Distribution registry plus ORAS | Adopt | OCI stores immutable blobs/manifests. Agents pull exact digest references with a pinned ORAS client. Keep the control API artifact route only for bounded bootstrap/recovery artifacts, not normal release distribution. |
 | Update trust and rollback protection | The Update Framework (TUF) | Adopt | TUF authorizes versions and digests and protects against rollback/freeze/mix-and-match attacks. OCI transports the bytes; TUF metadata determines whether they are installable. |
 | Host installation/hardening | Ansible roles plus Ansible Runner | Adopt | Bootstrap may use SSH once. It transfers/runs a pinned local role bundle; after enrollment, typed agent operations invoke the same local Runner boundary. Do not run an autonomous `ansible-pull` loop that bypasses DGX-Forge jobs and audit. |
+| DGX Spark lifecycle collectors | NVIDIA Enterprise Manageability scripts | Adopt behind a pinned, tested adapter | Install the exact MIT-licensed bundle as a DGX-Forge release target. NVIDIA supplies reference implementations for device, hardware, firmware, OS, driver, software, diagnostic, reset-reason, and reboot/kernel-rollback collection. DGX-Forge owns bounded invocation, normalization, redaction, evidence retention, and the job fence. Keep the existing collector only for DGX-Forge-specific fabric/runtime fields and explicit compatibility fallback. |
+| Fresh or replacement-node provisioning | NVIDIA DGX Spark cloud-init/OEMDATA workflow | Adopt as an installation-mode option | Use NVIDIA's BaseOS/FastOS customization and OEMDATA contracts for fresh/reimaged devices. `spark-install` supplies a versioned DGX-Forge seed/policy and resumes at physical identity approval; already-running devices retain the one-time SSH bootstrap path. DGX-Forge does not fork the NVIDIA installer or embed fixed users, names, or addresses. |
+| Ubuntu fleet management | Canonical Landscape | Optional provider, not a default service | NVIDIA recommends Landscape for enterprise DGX Spark fleets, but DGX-Forge's small-cluster default already needs its domain agent and control plane. Operators that already run Landscape may use it for Ubuntu policy/package channels; it never becomes model/profile authority or a second routine mutation path. |
+| Spark cabling/bootstrap | NVIDIA Sync Cluster Assistant | Optional operator aid | It can validate and configure supported small direct/switch topologies, but its documented device limits and SSH setup do not define DGX-Forge inventory, identity, topology, or normal control. Import only reviewed evidence; never infer a fleet-size limit from it. |
 | Durable operation delivery | PostgreSQL queue with `SKIP LOCKED` | Keep current design | NATS JetStream and Temporal still provide at-least-once execution and require additional services. They do not remove DGX-Forge's need for node fences, mutation inspection, compensation, and operator-wait states. PostgreSQL is appropriate for this small fleet. |
 | Python/TypeScript API clients | `openapi-python-client`, `openapi-typescript`, and `openapi-fetch` | Adopt | FastAPI OpenAPI is the contract. Generated clients/types are checked for drift in CI. Thin DGX wrappers retain safe polling, request-ID reuse, and typed domain errors. |
 | Host/GPU telemetry | Prometheus node exporter, NVIDIA DCGM exporter, and Grafana Alloy | Adopt | Exporters bind to loopback on each Spark. Alloy scrapes locally and sends mTLS `remote_write` outbound through Caddy to the NAS. The Spark opens no listener to the LAN and the DGX agent does not reimplement exporter metrics. |
@@ -49,6 +53,15 @@ application, and GPU telemetry are security-sensitive standards-heavy areas.
 Using established components there removes meaningful custom protocol and
 parser work without turning the product into a distributed-systems platform.
 
+The NVIDIA lifecycle bundle reviewed on 2026-08-04 is the official
+`enterprise-lifecycle-integration-scripts-20260520-1602.zip` download, whose
+SHA-256 is
+`0eb1c93dd839b6bd4136cc8b79ea04a1e44fd637ff6afa6ee9568951a4c179f3`.
+Its package identifies the tools as version `0.1.0` and includes NVIDIA's MIT
+license. That review digest is evidence, not a floating dependency: release
+engineering must mirror the exact bytes into the OCI/TUF path and may advance
+the lock only through a reviewed repository change.
+
 The resulting deployment is a composed system, not a monolith:
 
 ```text
@@ -63,6 +76,7 @@ Prometheus        Grafana          LiteLLM
 
 Spark (outbound only)
   -> DGX agent -> control API
+  -> pinned NVIDIA lifecycle tools behind fixed typed operations
   -> ORAS -> OCI registry
   -> Alloy -> Prometheus remote_write through Caddy
   -> node_exporter + DCGM exporter on loopback
@@ -85,6 +99,12 @@ These are deliberately non-overlapping:
 - Ansible roles describe idempotent local host policy, but every mutation is
   initiated and journaled by installation mode, recovery mode, or a fenced
   agent operation.
+- NVIDIA lifecycle tools are node-local implementation dependencies, not a
+  transport or authority. Their JSON is untrusted bounded input until the
+  DGX-Forge adapter validates, normalizes, and redacts it.
+- Landscape and NVIDIA Sync are optional external operator tools. Their state
+  cannot make a node eligible, change repository desired state, or bypass a
+  fenced operation.
 
 ## Plan impact
 
@@ -107,6 +127,18 @@ that already owns each boundary:
 6. Observability installs node exporter, DCGM exporter, and Alloy per Spark;
    control-plane metrics remain native because they describe DGX-specific
    operational state.
+7. Agent Runtime Tasks 2 and 5 add a fixed-path adapter and install a pinned
+   NVIDIA Enterprise Manageability bundle. Routine probes combine its safe
+   platform evidence with the existing DGX-Forge fabric/runtime fields;
+   diagnostic/log modes remain explicit, bounded, and redacted.
+8. Agent Migration Tasks 1, 3, 5, and 6 add fresh/reimage cloud-init mode,
+   record NVIDIA-tool provenance, and distinguish DGX OS maintenance from
+   DGX-Forge application releases. Existing-node SSH bootstrap remains a
+   one-time compatibility path.
+9. Platform Update Tasks retain TUF/OCI for DGX-Forge. NVIDIA
+   `spark_updatectl.py` contributes reboot readiness, next-boot kernel, and
+   rollback evidence only; it does not replace NAS generations or agent A/B
+   fan-out.
 
 ## Primary references
 
@@ -120,6 +152,11 @@ that already owns each boundary:
 - [The Update Framework specification](https://theupdateframework.github.io/specification/latest/)
 - [Ansible Runner](https://docs.ansible.com/projects/runner/en/stable/index.html)
   and [ansible-pull](https://docs.ansible.com/projects/ansible-core/devel/cli/ansible-pull.html)
+- [NVIDIA DGX Spark Enterprise Manageability](https://docs.nvidia.com/dgx/dgx-spark/enterprise-manageability.html),
+  [Enterprise Lifecycle Integration](https://docs.nvidia.com/dgx/dgx-spark/enterprise-fleet-lifecycle.html),
+  and [custom installation with cloud-init](https://docs.nvidia.com/dgx/dgx-spark/enterprise-custom-install.html)
+- [DGX Spark clustering and Cluster Assistant boundaries](https://docs.nvidia.com/dgx/dgx-spark/spark-clustering.html)
+- [Canonical Landscape self-hosted deployment](https://documentation.ubuntu.com/landscape/explanation/landscape/self-hosted-landscape/)
 - [PostgreSQL `SKIP LOCKED`](https://www.postgresql.org/docs/current/sql-select.html),
   [NATS JetStream consumers](https://docs.nats.io/nats-concepts/jetstream/consumers),
   and [Temporal durable execution](https://docs.temporal.io/)

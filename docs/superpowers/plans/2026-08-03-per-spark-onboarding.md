@@ -6,6 +6,14 @@
 
 **Architecture:** `sparkctl install node` drives a local journal and a sequence of typed steps. Bootstrap SSH transfers and invokes a pinned Ansible Runner project locally on the one target; versioned roles apply idempotent host policy and emit JSON evidence without cluster identity constants. Git proposal output is canonical and separate from live mutation.
 
+**Post-plan integration note (2026-08-04):** For a fresh or reimaged Spark,
+the later outbound-agent migration phase adds a second bootstrap mode that
+generates a DGX-Forge seed overlay for NVIDIA's documented
+BaseOS/FastOS/cloud-init/OEMDATA workflow. This completed SSH-based mode remains
+the path for an already-running node. Both converge on the same physical
+identity gate, journal, agent enrollment, and canonical Git proposal; neither
+introduces fixed names, addresses, or a fleet-size limit.
+
 **Tech Stack:** Python 3.12, argparse, dataclasses, OpenSSH transport interface, Ansible Runner and roles, Bash wrappers, JSON, pytest, ansible-lint/ShellCheck where available.
 
 ## Global Constraints
