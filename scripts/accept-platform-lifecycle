@@ -23,8 +23,14 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT / "control/src")]
 
 from dgx_control.git_policy import Eligibility  # noqa: E402
 from dgx_control.litellm import LiteLlmPolicy, LiteLlmPublisher  # noqa: E402
+from dgx_control.presence import ManagementAddressPolicy  # noqa: E402
 from dgx_control.reconcile import Reconciler  # noqa: E402
-from dgx_control.routes import RouteCandidate, RoutePublisher  # noqa: E402
+from dgx_control.routes import (  # noqa: E402
+    RouteCandidate,
+    RouteEndpoint,
+    RouteEndpointPolicy,
+    RoutePublisher,
+)
 from spark_profiles.fleet import ManagementEndpoint, NodeId  # noqa: E402
 from spark_profiles.fleet.install_contracts import InstallationRequest  # noqa: E402
 from spark_profiles.install.orchestrator import FileEvidenceStore, NodeInstaller, StepResult  # noqa: E402
@@ -87,9 +93,27 @@ def run(host: str, display_name: str) -> dict[str, object]:
         proposal = build_node_proposal("0" * 40, journal, {"hostname": host})
         commit = hashlib.sha1(proposal.content).hexdigest()
         audit = [f"install:{journal.state}", f"proposal:{proposal.sha256}", f"merge:{commit}"]
-        upstream = "http://spark.internal:8000/v1"
-        route_publisher = RoutePublisher(workspace / "routes", allowed_upstreams={upstream}, validate=lambda _: True, apply=lambda _: None)
-        candidate = RouteCandidate(commit, "agent", "model-repository/revision", (node_id.value,), {"test-model": upstream}, datetime(2026, 8, 3, tzinfo=UTC))
+        observed_at = datetime(2026, 8, 3, tzinfo=UTC)
+        endpoint_policy = RouteEndpointPolicy(
+            management=ManagementAddressPolicy.parse("192.168.10.0/24"),
+            allowed_ports=frozenset({8000}),
+            maximum_age_seconds=150,
+            clock=lambda: observed_at,
+        )
+        route_publisher = RoutePublisher(
+            workspace / "routes",
+            endpoint_policy=endpoint_policy,
+            validate=lambda _: True,
+            apply=lambda _: None,
+        )
+        candidate = RouteCandidate(
+            commit,
+            "agent",
+            "model-repository/revision",
+            (node_id.value,),
+            {"test-model": RouteEndpoint(node_id.value, "192.168.10.42", 8000, "http", observed_at)},
+            observed_at,
+        )
         routes = Routes(route_publisher, candidate, audit)
         definitions = lambda _commit: {"targets": [node_id.value], "placements": {"test-model": [node_id.value]}, "routes": {node_id.value: "test-model"}, "releases": {node_id.value: "sha256:" + "b" * 64}, "input_digests": {"fleet": proposal.sha256, "profile": "c" * 64}}
         result = Reconciler(Policy(), definitions, routes, Controller(audit), Leases()).execute(Reconciler(Policy(), definitions, routes, Controller(audit), Leases()).plan(commit))

@@ -1,4 +1,5 @@
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -28,6 +29,7 @@ def test_rendered_config_contains_secret_references_not_values(tmp_path: Path) -
     decoded = json.loads(rendered)
     assert decoded["general_settings"]["master_key"] == "os.environ/LITELLM_MASTER_KEY"
     assert decoded["model_list"][0]["litellm_params"]["api_key"] == "os.environ/LITELLM_UPSTREAM_KEY"
+    assert decoded["model_list"][0]["litellm_params"]["api_base"] == "http://node.internal:8000/v1"
     assert b"sk-live" not in rendered
     assert decoded["model_list"][0]["model_name"] == "deepseek"
 
@@ -48,3 +50,14 @@ def test_maintenance_snapshot_cannot_render_models(tmp_path: Path) -> None:
     maintenance = RouteState(snapshot.generation, "maintenance", None, None, None, snapshot.node_ids, {}, None, "switch", snapshot.digest)
     with pytest.raises(LiteLlmPolicyError, match="published"):
         LiteLlmPublisher(tmp_path, validate=lambda _: True, apply=lambda _: None).render(maintenance, _policy())
+
+
+def test_litellm_accepts_only_already_rendered_route_strings(tmp_path: Path) -> None:
+    snapshot = replace(_snapshot(), aliases={"deepseek": object()})
+
+    with pytest.raises(LiteLlmPolicyError, match="rendered strings"):
+        LiteLlmPublisher(
+            tmp_path,
+            validate=lambda _: True,
+            apply=lambda _: None,
+        ).render(snapshot, _policy())

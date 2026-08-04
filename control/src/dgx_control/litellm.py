@@ -42,6 +42,8 @@ class LiteLlmPublisher:
     def render(self, routes: RouteState, policy: LiteLlmPolicy) -> bytes:
         if routes.state != "published" or not routes.aliases:
             raise LiteLlmPolicyError("LiteLLM models require a published route snapshot")
+        if any(not isinstance(value, str) or not value for value in routes.aliases.values()):
+            raise LiteLlmPolicyError("LiteLLM routes must be already-rendered strings")
         models = dict(policy.models)
         unknown = set(models) - set(routes.aliases)
         if unknown:
