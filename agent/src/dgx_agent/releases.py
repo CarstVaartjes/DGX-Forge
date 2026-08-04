@@ -267,7 +267,9 @@ class ReleaseInstaller:
             except FileNotFoundError:
                 pass
             else:
-                _verify_installed(destination, descriptor)
+                _verify_installed(
+                    self._releases_root, destination.name, descriptor
+                )
                 return ReleaseEvidence(
                     "already-installed",
                     request.target_digest,
@@ -339,7 +341,9 @@ class ReleaseInstaller:
                         os.close(destination_fd)
                     published = True
                 except FileExistsError:
-                    _verify_installed(destination, descriptor)
+                    _verify_installed(
+                        self._releases_root, destination.name, descriptor
+                    )
                 _fsync_directory(self._releases_root)
                 _deadline(fixed_deadline)
             except ReleaseInstallError:
@@ -375,7 +379,9 @@ class ReleaseInstaller:
             )
             destination = self._releases_root / request.target_digest
             if destination.exists():
-                _verify_installed(destination, descriptor)
+                _verify_installed(
+                    self._releases_root, destination.name, descriptor
+                )
                 return ReleaseInspection(
                     ReleaseDisposition.COMPLETED,
                     ReleaseEvidence(
@@ -540,18 +546,32 @@ def _write_receipt_fd(root_fd: int, descriptor: ReleaseDescriptor) -> None:
         os.close(fd)
 
 
-def _verify_installed(root: Path, descriptor: ReleaseDescriptor) -> None:
+def _verify_installed(
+    parent: Path, name: str, descriptor: ReleaseDescriptor
+) -> None:
+    parent_fd = -1
     root_fd = -1
     try:
-        root_fd = os.open(
-            root,
+        parent_fd = os.open(
+            parent,
             os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+        root_fd = os.open(
+            name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=parent_fd,
         )
         metadata = os.fstat(root_fd)
         installed_descriptor = verify_installed_release_fd(root_fd)
         if installed_descriptor != descriptor:
             raise ReleaseInstallError("installed release receipt does not match")
-        _require_path_identity(root, metadata)
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (
+            not stat.S_ISDIR(current.st_mode)
+            or (current.st_dev, current.st_ino)
+            != (metadata.st_dev, metadata.st_ino)
+        ):
+            raise ReleaseInstallError("installed release identity changed")
     except ReleaseInstallError:
         raise
     except Exception as error:
@@ -559,6 +579,8 @@ def _verify_installed(root: Path, descriptor: ReleaseDescriptor) -> None:
     finally:
         if root_fd >= 0:
             os.close(root_fd)
+        if parent_fd >= 0:
+            os.close(parent_fd)
 
 
 def verify_installed_release(root: Path) -> ReleaseDescriptor:

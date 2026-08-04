@@ -26,8 +26,10 @@ RED/GREEN slices:
   raced;
 - a deterministic same-UID destination swap initially combined a receipt from
   one inode with a tree from another; installed verification now holds one
-  directory descriptor for the receipt and full tree and rechecks the pathname
-  identity before reporting idempotent success;
+  releases-parent descriptor and one destination descriptor for the receipt and
+  full tree, then rechecks the destination name through that same parent before
+  reporting idempotent success; the initial-existing, publish-race, and inspect
+  branches each have deterministic substitution coverage;
 - two ORAS attacks failed before the fix: credential arguments exposed mutable
   paths, and path/same-inode mutations changed the bytes seen by ORAS;
 - ProcessRequest initially accepted duplicate and reserved auxiliary FDs;
@@ -39,9 +41,9 @@ RED/GREEN slices:
 - Compose/Caddy tests failed until the fourth distinct registry SNI, private
   networks, anchored digest routes, and publisher validation were complete.
 
-Final focused release/workload/operation coverage is 83 passing tests; the
-brief's exact release/workload command contains 71 passing tests, and the final
-complete agent suite contains 304 passing tests.
+Final focused release/workload/operation coverage is 86 passing tests; the
+brief's exact release/workload command contains 74 passing tests, and the final
+complete agent suite contains 307 passing tests.
 
 ## Exact typed contracts
 
@@ -181,14 +183,14 @@ Executed on the final working tree:
 
 ```text
 uv run --project agent pytest agent/tests -q
-304 passed in 8.44s
+307 passed in 7.33s
 
 uv run --project agent pytest \
   agent/tests/test_releases.py agent/tests/test_workloads.py -v
-71 passed in 1.41s
+74 passed in 1.42s
 
 uv run pytest deploy/compose/tests -q
-21 passed in 7.46s
+21 passed in 7.26s
 
 uv run --project agent python -m compileall -q agent/src
 exit 0
@@ -211,9 +213,11 @@ Task 1–3 production modules. It also parsed the exact release request and each
 of the five typed workload request shapes from the installed wheel. Output:
 `fresh-wheel-imports-and-typed-execution-ok`.
 
-The final independent re-review found no remaining Critical or Important
-issues. Its targeted verification included all 54 release tests and the
-deterministic destination-swap regression; verdict: Ready.
+The internal targeted re-review found no remaining Critical or Important
+issues. Its verification included all 54 then-current release tests and the
+first deterministic destination-swap regression; verdict: Ready. The explicit
+three-branch follow-up increased that suite to 57 tests. Exact-range external
+review of the follow-up remains pending.
 
 ## Remaining physical and later-task gates
 

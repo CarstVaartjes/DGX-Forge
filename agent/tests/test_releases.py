@@ -942,8 +942,87 @@ def test_installed_verification_rejects_destination_swap_between_receipt_and_tre
     monkeypatch.setattr(release_module.json, "loads", loads_then_swap)
 
     with pytest.raises(ReleaseInstallError, match="identity"):
-        release_module._verify_installed(destination, descriptor)
+        release_module._verify_installed(
+            destination.parent, destination.name, descriptor
+        )
 
+    assert destination.stat().st_ino != moved.stat().st_ino
+
+
+@pytest.mark.parametrize("branch", ["initial-existing", "rename-race", "inspect"])
+def test_every_idempotent_branch_rejects_destination_identity_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, branch: str
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            member = destination / "bin/runtime-adapter"
+            member.parent.mkdir()
+            member.write_bytes(b"x" * 17)
+            member.chmod(0o500)
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    releases.mkdir(mode=0o700)
+    staging.mkdir(mode=0o700)
+    destination = releases / ("2" * 64)
+    replacement = tmp_path / "replacement"
+    moved = tmp_path / "moved"
+
+    def make_installed(root: Path) -> None:
+        member = root / "bin/runtime-adapter"
+        member.parent.mkdir(parents=True, mode=0o700)
+        member.write_bytes(b"x" * 17)
+        member.chmod(0o500)
+        release_module._write_receipt(root, descriptor)
+
+    if branch != "rename-race":
+        make_installed(destination)
+        make_installed(replacement)
+
+    original_loads = release_module.json.loads
+    swapped = False
+
+    def loads_then_swap(raw):
+        nonlocal swapped
+        document = original_loads(raw)
+        if not swapped and destination.exists() and replacement.exists():
+            swapped = True
+            os.rename(destination, moved)
+            os.rename(replacement, destination)
+        return document
+
+    monkeypatch.setattr(release_module.json, "loads", loads_then_swap)
+    installer = ReleaseInstaller(Trust(), Transport(), releases, staging)
+    request = ReleaseRequest.parse(VALID_RELEASE)
+    deadline = datetime.now(UTC) + timedelta(seconds=2)
+
+    if branch == "rename-race":
+        def competing_publish(source, target):
+            make_installed(destination)
+            make_installed(replacement)
+            raise FileExistsError(target)
+
+        monkeypatch.setattr(
+            release_module, "_rename_noreplace", competing_publish
+        )
+        with pytest.raises(ReleaseInstallError, match="identity"):
+            installer.install(request, deadline)
+    elif branch == "initial-existing":
+        with pytest.raises(ReleaseInstallError, match="identity"):
+            installer.install(request, deadline)
+    else:
+        assert (
+            installer.inspect(request, deadline).disposition
+            is ReleaseDisposition.OPERATOR_INTERVENTION
+        )
+
+    assert swapped
     assert destination.stat().st_ino != moved.stat().st_ino
 
 
