@@ -5,6 +5,7 @@ import fcntl
 import hashlib
 import json
 import os
+import select
 import socket
 import ssl
 import stat
@@ -1550,7 +1551,9 @@ def test_release_install_is_atomic_verified_and_idempotent(tmp_path: Path) -> No
     assert (installed / "bin/runtime-adapter").read_bytes() == b"x" * 17
     assert (installed / ".install-receipt.json").is_file()
     assert record.read_bytes() == first_invocation
-    assert list(staging_root.iterdir()) == []
+    assert {entry.name for entry in staging_root.iterdir()} == {
+        release_module._INSTALL_RECOVERY_LOCK_NAME
+    }
 
 
 def test_installed_verification_rejects_destination_swap_between_receipt_and_tree(
@@ -1892,14 +1895,20 @@ def test_expired_staging_setup_defers_cleanup_and_next_attempt_reaps(
             MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
         )
     assert mutations == []
-    assert len(tuple(staging.glob(".install-*"))) == 1
+    assert sum(
+        release_module._STAGING_NAME.fullmatch(entry.name) is not None
+        for entry in staging.iterdir()
+    ) == 1
 
     clock[0] = 0.0
     assert installer.install(
         request,
         MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
     ).status == "installed"
-    assert tuple(staging.glob(".install-*")) == ()
+    assert not any(
+        release_module._STAGING_NAME.fullmatch(entry.name)
+        for entry in staging.iterdir()
+    )
     assert tuple(staging.glob(".recovery-*")) == ()
     assert len(tuple(staging.glob(".quarantine-*"))) == (
         1 if phase in {"create", "open"} else 0
@@ -2134,14 +2143,19 @@ def test_expired_member_verification_never_recursively_cleans_staging(
             MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
         )
     assert mutations == []
-    assert len(tuple(staging.glob(".install-*"))) == 1
+    assert sum(
+        release_module._STAGING_NAME.fullmatch(entry.name) is not None
+        for entry in staging.iterdir()
+    ) == 1
 
     clock[0] = 0.0
     assert installer.install(
         request,
         MonotonicDeadline(datetime.now(UTC) + timedelta(seconds=10), 10.0),
     ).status == "installed"
-    assert tuple(staging.iterdir()) == ()
+    assert {entry.name for entry in staging.iterdir()} == {
+        release_module._INSTALL_RECOVERY_LOCK_NAME
+    }
 
 
 def test_deferred_reaper_preserves_foreign_inode_substituted_at_owned_name(
@@ -2183,7 +2197,11 @@ def test_deferred_reaper_preserves_foreign_inode_substituted_at_owned_name(
     with pytest.raises(ReleaseInstallError, match="deadline"):
         installer.install(request, deadline)
 
-    owned = next(staging.glob(".install-*"))
+    owned = next(
+        entry
+        for entry in staging.iterdir()
+        if release_module._STAGING_NAME.fullmatch(entry.name)
+    )
     moved = staging / ".attacker-moved-owned-tree"
     os.rename(owned, moved)
     owned.mkdir(mode=0o700)
@@ -2239,7 +2257,9 @@ def test_fresh_inspection_reaps_authenticated_partial_staging_for_retry(
     clock[0] = 0.0
     restarted = ReleaseInstaller(Trust(), Transport(), releases, staging)
     assert restarted.inspect(request, deadline).disposition is ReleaseDisposition.SAFE_TO_RESUME
-    assert tuple(staging.iterdir()) == ()
+    assert {entry.name for entry in staging.iterdir()} == {
+        release_module._INSTALL_RECOVERY_LOCK_NAME
+    }
 
 
 def test_recovery_record_swap_before_delete_preserves_replacement(
@@ -2830,23 +2850,18 @@ def test_reservation_recovery_scan_obeys_claim_deadline_before_transport(
     assert not continued_after_expiry[0]
 
 
-def test_concurrent_install_never_exceeds_aggregate_recovery_cap(
+def test_live_install_never_exceeds_real_aggregate_recovery_cap(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    base_descriptor = ReleaseDescriptor.parse(_descriptor())
+    descriptor = ReleaseDescriptor.parse(_descriptor())
 
     class Trust:
         def authorize(self, request, deadline):
-            return replace(base_descriptor, target_digest=request.target_digest)
-
-    entered_transport = threading.Barrier(2)
-    release_transport = threading.Event()
+            return descriptor
 
     class Transport:
         def pull(self, descriptor, destination, deadline):
-            if descriptor.target_digest == VALID_RELEASE["target_digest"]:
-                entered_transport.wait(timeout=2)
-                assert release_transport.wait(timeout=5)
+            observe("transport")
             member = destination / "bin/runtime-adapter"
             member.parent.mkdir()
             member.write_bytes(b"x" * 17)
@@ -2856,22 +2871,149 @@ def test_concurrent_install_never_exceeds_aggregate_recovery_cap(
     staging = tmp_path / "staging"
     releases.mkdir(mode=0o700)
     staging.mkdir(mode=0o700)
-    for index in range(15):
+    for index in range(12):
         (staging / f".unsafe-recovery-{index:016x}").write_bytes(b"held")
     installer = ReleaseInstaller(Trust(), Transport(), releases, staging)
-    original_reserve = installer._reserve_staging
-    aggregate_counts: list[int] = []
+    observed: dict[str, int] = {}
 
-    def counted_reserve(parent_fd, check):
-        original_reserve(parent_fd, check)
-        aggregate_counts.append(15 + installer._active_staging)
+    def artifact_count() -> int:
+        count = 0
+        for entry in staging.iterdir():
+            name = entry.name
+            if (
+                release_module._RECOVERY_NAME.fullmatch(name)
+                or release_module._RECOVERY_TEMP_NAME.fullmatch(name)
+                or release_module._STAGING_NAME.fullmatch(name)
+                or name.startswith((".quarantine-", ".unsafe-recovery-", ".remove-"))
+                or (name.startswith(".recovery-") and ".state.remove-" in name)
+            ):
+                count += 1
+        return count
 
-    monkeypatch.setattr(installer, "_reserve_staging", counted_reserve)
+    def observe(phase: str) -> None:
+        observed[phase] = artifact_count() + installer._active_staging
+
+    original_intent = release_module._write_recovery_intent_fd
+    original_mkdir = release_module.os.mkdir
+    original_write = release_module._write_recovery_bytes_fd
+
+    def observe_intent(*args, **kwargs):
+        result = original_intent(*args, **kwargs)
+        observe("intent")
+        return result
+
+    def observe_mkdir(path, *args, **kwargs):
+        result = original_mkdir(path, *args, **kwargs)
+        if release_module._STAGING_NAME.fullmatch(str(path)):
+            observe("staging")
+        return result
+
+    def observe_write(parent_fd, record_name, data, check=None):
+        result = original_write(parent_fd, record_name, data, check)
+        if release_module._RECOVERY_TEMP_NAME.fullmatch(record_name):
+            observe("completion-temp")
+        return result
+
+    monkeypatch.setattr(release_module, "_write_recovery_intent_fd", observe_intent)
+    monkeypatch.setattr(release_module.os, "mkdir", observe_mkdir)
+    monkeypatch.setattr(release_module, "_write_recovery_bytes_fd", observe_write)
+
+    installer.install(
+        ReleaseRequest.parse(VALID_RELEASE),
+        datetime.now(UTC) + timedelta(seconds=5),
+    )
+
+    assert observed == {
+        "intent": 14,
+        "staging": 15,
+        "completion-temp": 16,
+        "transport": 15,
+    }
+    assert max(observed.values()) == release_module._MAX_DEFERRED_STAGING
+
+
+def test_live_install_rejects_when_maximum_transient_footprint_would_exceed_cap(
+    tmp_path: Path,
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    pulled = [False]
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            pulled[0] = True
+
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    for index in range(13):
+        (staging / f".unsafe-recovery-{index:016x}").write_bytes(b"held")
+    installer = ReleaseInstaller(
+        Trust(), Transport(), tmp_path / "releases", staging
+    )
+
+    with pytest.raises(ReleaseInstallError, match="backlog"):
+        installer.install(
+            ReleaseRequest.parse(VALID_RELEASE),
+            datetime.now(UTC) + timedelta(seconds=5),
+        )
+
+    assert not pulled[0]
+    assert installer._active_staging == 0
+    assert not any(
+        release_module._STAGING_NAME.fullmatch(entry.name)
+        for entry in staging.iterdir()
+    )
+    assert not tuple(staging.glob(".recovery-*.state"))
+
+
+def test_distinct_installers_serialize_real_install_lifecycles_by_staging_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return replace(base_descriptor, target_digest=request.target_digest)
+
+    first_entered = threading.Event()
+    release_first = threading.Event()
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            if descriptor.target_digest == VALID_RELEASE["target_digest"]:
+                first_entered.set()
+                assert release_first.wait(timeout=5)
+            member = destination / "bin/runtime-adapter"
+            member.parent.mkdir()
+            member.write_bytes(b"x" * 17)
+            member.chmod(0o500)
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    first_installer = ReleaseInstaller(Trust(), Transport(), releases, staging)
+    second_installer = ReleaseInstaller(Trust(), Transport(), releases, staging)
+    real_flock = release_module.fcntl.flock
+    second_contended = threading.Event()
+
+    def observed_flock(descriptor, operation):
+        try:
+            return real_flock(descriptor, operation)
+        except BlockingIOError:
+            if threading.current_thread().name == "second-installer":
+                second_contended.set()
+            raise
+
+    monkeypatch.setattr(release_module.fcntl, "flock", observed_flock)
+    results: dict[str, ReleaseEvidence] = {}
     errors: dict[str, BaseException] = {}
 
-    def run(label: str, request: ReleaseRequest) -> None:
+    def run(label: str, installer: ReleaseInstaller, request: ReleaseRequest) -> None:
         try:
-            installer.install(
+            results[label] = installer.install(
                 request, datetime.now(UTC) + timedelta(seconds=5)
             )
         except BaseException as error:  # noqa: BLE001 - thread result capture
@@ -2881,23 +3023,450 @@ def test_concurrent_install_never_exceeds_aggregate_recovery_cap(
     second_request = ReleaseRequest.parse(
         {**VALID_RELEASE, "target_digest": "4" * 64}
     )
-    first = threading.Thread(target=run, args=("first", first_request))
-    second = threading.Thread(target=run, args=("second", second_request))
+    first = threading.Thread(
+        target=run,
+        args=("first", first_installer, first_request),
+        name="first-installer",
+    )
+    second = threading.Thread(
+        target=run,
+        args=("second", second_installer, second_request),
+        name="second-installer",
+    )
     first.start()
-    entered_transport.wait(timeout=2)
+    assert first_entered.wait(timeout=2)
     first_staging = next(staging.glob(f".install-{first_request.target_digest}-*"))
     second.start()
-    second.join(timeout=3)
     try:
-        assert not second.is_alive()
-        assert isinstance(errors.get("second"), ReleaseInstallError)
-        assert max(aggregate_counts) <= release_module._MAX_DEFERRED_STAGING
-        assert first_staging.is_dir()
+        contended = second_contended.wait(timeout=2)
+        active_tree_survived = first_staging.is_dir()
+        second_waited = second.is_alive()
     finally:
-        release_transport.set()
+        release_first.set()
         first.join(timeout=5)
         second.join(timeout=5)
-    assert "first" not in errors
+
+    assert contended
+    assert active_tree_survived
+    assert second_waited
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert not errors
+    assert set(results) == {"first", "second"}
+
+
+def test_inspection_cannot_reap_another_installers_active_staging(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return replace(base_descriptor, target_digest=request.target_digest)
+
+    entered_transport = threading.Event()
+    release_transport = threading.Event()
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            entered_transport.set()
+            assert release_transport.wait(timeout=5)
+            member = destination / "bin/runtime-adapter"
+            member.parent.mkdir()
+            member.write_bytes(b"x" * 17)
+            member.chmod(0o500)
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    installer = ReleaseInstaller(Trust(), Transport(), releases, staging)
+    inspector = ReleaseInstaller(Trust(), object(), releases, staging)
+    real_flock = release_module.fcntl.flock
+    inspector_contended = threading.Event()
+
+    def observed_flock(descriptor, operation):
+        try:
+            return real_flock(descriptor, operation)
+        except BlockingIOError:
+            if threading.current_thread().name == "release-inspector":
+                inspector_contended.set()
+            raise
+
+    monkeypatch.setattr(release_module.fcntl, "flock", observed_flock)
+    install_errors: list[BaseException] = []
+    inspection_results: list[ReleaseInspection] = []
+
+    def run_install() -> None:
+        try:
+            installer.install(
+                ReleaseRequest.parse(VALID_RELEASE),
+                datetime.now(UTC) + timedelta(seconds=5),
+            )
+        except BaseException as error:  # noqa: BLE001 - thread result capture
+            install_errors.append(error)
+
+    def run_inspection() -> None:
+        inspection_results.append(
+            inspector.inspect(
+                ReleaseRequest.parse(
+                    {**VALID_RELEASE, "target_digest": "4" * 64}
+                ),
+                datetime.now(UTC) + timedelta(seconds=5),
+            )
+        )
+
+    install_thread = threading.Thread(target=run_install)
+    inspect_thread = threading.Thread(
+        target=run_inspection, name="release-inspector"
+    )
+    install_thread.start()
+    assert entered_transport.wait(timeout=2)
+    active_staging = next(staging.glob(f".install-{VALID_RELEASE['target_digest']}-*"))
+    inspect_thread.start()
+    try:
+        contended = inspector_contended.wait(timeout=2)
+        active_tree_survived = active_staging.is_dir()
+    finally:
+        release_transport.set()
+        install_thread.join(timeout=5)
+        inspect_thread.join(timeout=5)
+
+    assert contended
+    assert active_tree_survived
+    assert not install_errors
+    assert len(inspection_results) == 1
+
+
+def test_inspection_holds_root_lock_through_candidate_inode_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base_descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return replace(base_descriptor, target_digest=request.target_digest)
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    releases.mkdir(mode=0o700)
+    staging.mkdir(mode=0o700)
+    candidate = staging / f".install-{VALID_RELEASE['target_digest']}-{'a' * 16}"
+    candidate_member = candidate / "bin/runtime-adapter"
+    candidate_member.parent.mkdir(parents=True)
+    candidate_member.write_bytes(b"x" * 17)
+    candidate_member.chmod(0o500)
+    verification_started = threading.Event()
+    allow_verification = threading.Event()
+    second_entered_recovery = threading.Event()
+    allow_replacement = threading.Event()
+    replacement_finished = threading.Event()
+    original_verify = release_module._verify_release_tree_fd
+
+    def pause_inspection_verification(root_fd, descriptor, **kwargs):
+        if threading.current_thread().name == "candidate-inspector":
+            verification_started.set()
+            assert allow_verification.wait(timeout=5)
+        return original_verify(root_fd, descriptor, **kwargs)
+
+    monkeypatch.setattr(
+        release_module, "_verify_release_tree_fd", pause_inspection_verification
+    )
+
+    class ReplacingInstaller(ReleaseInstaller):
+        def _reap_deferred_staging(self, parent_fd):
+            second_entered_recovery.set()
+            assert allow_replacement.wait(timeout=5)
+            moved = staging / ".moved-inspection-candidate"
+            os.rename(candidate, moved)
+            malicious = candidate / "bin/runtime-adapter"
+            malicious.parent.mkdir(parents=True)
+            malicious.write_bytes(b"attacker")
+            malicious.chmod(0o500)
+            replacement_finished.set()
+            return False
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            member = destination / "bin/runtime-adapter"
+            member.parent.mkdir()
+            member.write_bytes(b"x" * 17)
+            member.chmod(0o500)
+
+    inspection_results: list[ReleaseInspection] = []
+    install_errors: list[BaseException] = []
+
+    def inspect_candidate() -> None:
+        inspection_results.append(
+            ReleaseInstaller(Trust(), object(), releases, staging).inspect(
+                ReleaseRequest.parse(VALID_RELEASE),
+                datetime.now(UTC) + timedelta(seconds=5),
+            )
+        )
+
+    def run_next_install() -> None:
+        try:
+            ReplacingInstaller(Trust(), Transport(), releases, staging).install(
+                ReleaseRequest.parse(
+                    {**VALID_RELEASE, "target_digest": "4" * 64}
+                ),
+                datetime.now(UTC) + timedelta(seconds=5),
+            )
+        except BaseException as error:  # noqa: BLE001 - thread result capture
+            install_errors.append(error)
+
+    inspector_thread = threading.Thread(
+        target=inspect_candidate, name="candidate-inspector"
+    )
+    installer_thread = threading.Thread(target=run_next_install)
+    inspector_thread.start()
+    assert verification_started.wait(timeout=2)
+    installer_thread.start()
+    entered_before_verification = second_entered_recovery.wait(timeout=2)
+    allow_replacement.set()
+    if entered_before_verification:
+        assert replacement_finished.wait(timeout=2)
+    candidate_survived = candidate_member.read_bytes() == b"x" * 17
+    allow_verification.set()
+    inspector_thread.join(timeout=5)
+    installer_thread.join(timeout=5)
+
+    assert not entered_before_verification
+    assert candidate_survived
+    assert not inspector_thread.is_alive()
+    assert not installer_thread.is_alive()
+    assert not install_errors
+    assert inspection_results == [
+        ReleaseInspection(ReleaseDisposition.SAFE_TO_RESUME)
+    ]
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="requires POSIX advisory locks")
+def test_staging_root_lifecycle_lock_is_process_safe(tmp_path: Path) -> None:
+    base_descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return replace(base_descriptor, target_digest=request.target_digest)
+
+    parent_entered = threading.Event()
+    release_parent = threading.Event()
+
+    class ParentTransport:
+        def pull(self, descriptor, destination, deadline):
+            parent_entered.set()
+            assert release_parent.wait(timeout=8)
+            member = destination / "bin/runtime-adapter"
+            member.parent.mkdir()
+            member.write_bytes(b"x" * 17)
+            member.chmod(0o500)
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    releases.mkdir(mode=0o700)
+    staging.mkdir(mode=0o700)
+    control_read, control_write = os.pipe()
+    status_read, status_write = os.pipe()
+    child_pid = os.fork()
+    if child_pid == 0:
+        os.close(control_write)
+        os.close(status_read)
+        real_flock = release_module.fcntl.flock
+        reported_contention = False
+
+        def child_flock(descriptor, operation):
+            nonlocal reported_contention
+            try:
+                return real_flock(descriptor, operation)
+            except BlockingIOError:
+                if not reported_contention:
+                    os.write(status_write, b"B")
+                    reported_contention = True
+                raise
+
+        class ChildTransport:
+            def pull(self, descriptor, destination, deadline):
+                os.write(status_write, b"T")
+                member = destination / "bin/runtime-adapter"
+                member.parent.mkdir()
+                member.write_bytes(b"x" * 17)
+                member.chmod(0o500)
+
+        try:
+            release_module.fcntl.flock = child_flock
+            os.write(status_write, b"R")
+            if os.read(control_read, 1) != b"G":
+                os._exit(2)
+            request = ReleaseRequest.parse(
+                {**VALID_RELEASE, "target_digest": "4" * 64}
+            )
+            ReleaseInstaller(Trust(), ChildTransport(), releases, staging).install(
+                request, datetime.now(UTC) + timedelta(seconds=6)
+            )
+            os.write(status_write, b"S")
+            os._exit(0)
+        except BaseException:  # noqa: BLE001 - report isolated child failure
+            os.write(status_write, b"E")
+            os._exit(1)
+
+    os.close(control_read)
+    os.close(status_write)
+    assert os.read(status_read, 1) == b"R"
+    errors: list[BaseException] = []
+
+    def run_parent() -> None:
+        try:
+            ReleaseInstaller(Trust(), ParentTransport(), releases, staging).install(
+                ReleaseRequest.parse(VALID_RELEASE),
+                datetime.now(UTC) + timedelta(seconds=8),
+            )
+        except BaseException as error:  # noqa: BLE001 - thread result capture
+            errors.append(error)
+
+    parent = threading.Thread(target=run_parent)
+    parent.start()
+    assert parent_entered.wait(timeout=2)
+    parent_staging = next(staging.glob(f".install-{VALID_RELEASE['target_digest']}-*"))
+    os.write(control_write, b"G")
+    ready, _, _ = select.select([status_read], [], [], 2)
+    first_child_status = os.read(status_read, 1) if ready else b""
+    active_tree_survived = parent_staging.is_dir()
+    release_parent.set()
+    parent.join(timeout=8)
+    _, child_status = os.waitpid(child_pid, 0)
+    remaining_status = os.read(status_read, 8)
+    os.close(control_write)
+    os.close(status_read)
+
+    assert first_child_status == b"B"
+    assert active_tree_survived
+    assert not parent.is_alive()
+    assert not errors
+    assert os.waitstatus_to_exitcode(child_status) == 0
+    assert remaining_status == b"TS"
+
+
+@pytest.mark.parametrize("damage", ["symlink", "mode"])
+def test_staging_root_lifecycle_lock_is_fixed_nofollow_and_mode_0600(
+    tmp_path: Path, damage: str
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    releases = tmp_path / "releases"
+    staging = tmp_path / "staging"
+    releases.mkdir(mode=0o700)
+    staging.mkdir(mode=0o700)
+    lock_path = staging / ".install-recovery.lock"
+    foreign = tmp_path / "foreign"
+    foreign.write_bytes(b"unchanged")
+    if damage == "symlink":
+        lock_path.symlink_to(foreign)
+    else:
+        lock_path.write_bytes(b"")
+        lock_path.chmod(0o644)
+
+    with pytest.raises(ReleaseInstallError, match="setup"):
+        ReleaseInstaller(Trust(), object(), releases, staging).install(
+            ReleaseRequest.parse(VALID_RELEASE),
+            datetime.now(UTC) + timedelta(seconds=2),
+        )
+
+    assert foreign.read_bytes() == b"unchanged"
+
+
+def test_staging_token_oserror_is_typed_and_releases_reservation_for_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            member = destination / "bin/runtime-adapter"
+            member.parent.mkdir()
+            member.write_bytes(b"x" * 17)
+            member.chmod(0o500)
+
+    installer = ReleaseInstaller(
+        Trust(), Transport(), tmp_path / "releases", tmp_path / "staging"
+    )
+    real_token_hex = release_module.secrets.token_hex
+    calls = [0]
+
+    def fail_once(size: int) -> str:
+        calls[0] += 1
+        if calls[0] == 1:
+            raise OSError("injected token failure")
+        return real_token_hex(size)
+
+    monkeypatch.setattr(release_module.secrets, "token_hex", fail_once)
+    request = ReleaseRequest.parse(VALID_RELEASE)
+    with pytest.raises(ReleaseInstallError, match="installation failed"):
+        installer.install(request, datetime.now(UTC) + timedelta(seconds=5))
+
+    assert installer._active_staging == 0
+    assert not any(
+        release_module._STAGING_NAME.fullmatch(entry.name)
+        for entry in (tmp_path / "staging").iterdir()
+    )
+    assert not tuple((tmp_path / "staging").glob(".recovery-*"))
+    assert installer.install(
+        request, datetime.now(UTC) + timedelta(seconds=5)
+    ).status == "installed"
+
+
+def test_staging_token_deadline_crossing_releases_reservation_for_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    class Trust:
+        def authorize(self, request, deadline):
+            return descriptor
+
+    class Transport:
+        def pull(self, descriptor, destination, deadline):
+            member = destination / "bin/runtime-adapter"
+            member.parent.mkdir()
+            member.write_bytes(b"x" * 17)
+            member.chmod(0o500)
+
+    clock = [0.0]
+    real_token_hex = release_module.secrets.token_hex
+    calls = [0]
+
+    def expire_once(size: int) -> str:
+        calls[0] += 1
+        token = real_token_hex(size)
+        if calls[0] == 1:
+            clock[0] = 11.0
+        return token
+
+    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr(release_module.secrets, "token_hex", expire_once)
+    installer = ReleaseInstaller(
+        Trust(), Transport(), tmp_path / "releases", tmp_path / "staging"
+    )
+    request = ReleaseRequest.parse(VALID_RELEASE)
+    deadline = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(seconds=10), 10.0
+    )
+    with pytest.raises(ReleaseInstallError, match="deadline"):
+        installer.install(request, deadline)
+
+    assert installer._active_staging == 0
+    assert not any(
+        release_module._STAGING_NAME.fullmatch(entry.name)
+        for entry in (tmp_path / "staging").iterdir()
+    )
+    assert not tuple((tmp_path / "staging").glob(".recovery-*"))
+    clock[0] = 0.0
+    assert installer.install(request, deadline).status == "installed"
 
 
 def test_quarantine_token_generation_cannot_cross_recovery_budget_before_rename(
@@ -3102,7 +3671,9 @@ def test_restart_reaper_consumes_complete_temp_without_quarantine_accumulation(
                 Trust(), object(), releases, staging
             ).inspect(request, datetime.now(UTC) + timedelta(seconds=2))
             assert inspection.disposition is ReleaseDisposition.SAFE_TO_RESUME
-            assert tuple(staging.iterdir()) == ()
+            assert {entry.name for entry in staging.iterdir()} == {
+                release_module._INSTALL_RECOVERY_LOCK_NAME
+            }
     finally:
         os.close(parent_fd)
 
@@ -3579,7 +4150,7 @@ def test_release_inspection_considers_only_matching_digest_staging(tmp_path: Pat
     staging = tmp_path / "staging"
     releases.mkdir(mode=0o700)
     staging.mkdir(mode=0o700)
-    other = staging / (".install-" + "9" * 64 + "-stale")
+    other = staging / (".install-" + "9" * 64 + "-" + "b" * 16)
     member = other / "bin/runtime-adapter"
     member.parent.mkdir(parents=True)
     member.write_bytes(b"x" * 17)
@@ -3591,7 +4162,7 @@ def test_release_inspection_considers_only_matching_digest_staging(tmp_path: Pat
         request, datetime.now(UTC) + timedelta(seconds=2)
     ).disposition is ReleaseDisposition.OPERATOR_INTERVENTION
 
-    matching = staging / (".install-" + "2" * 64 + "-resume")
+    matching = staging / (".install-" + "2" * 64 + "-" + "c" * 16)
     matching_member = matching / "bin/runtime-adapter"
     matching_member.parent.mkdir(parents=True)
     matching_member.write_bytes(b"x" * 17)

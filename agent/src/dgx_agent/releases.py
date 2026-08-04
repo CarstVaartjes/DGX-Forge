@@ -69,6 +69,12 @@ _RECOVERY_QUARANTINE_NAME = re.compile(
     r"\.quarantine-recovery-([0-9a-f]{16})-[0-9a-f]{16}\Z"
 )
 _MAX_DEFERRED_STAGING = 16
+_INSTALL_RECOVERY_LOCK_NAME = ".install-recovery.lock"
+# One live install can simultaneously own its active reservation, durable
+# intent, staging directory, and completion temporary. Reserving all four
+# slots before creating any artifact keeps the real aggregate at or below the
+# cap through every transaction phase.
+_ACTIVE_INSTALL_RECOVERY_SLOTS = 4
 _RECOVERY_SECONDS = 0.1
 
 
@@ -261,6 +267,7 @@ class ReleaseInstaller:
         fixed_deadline = _bind_deadline(deadline)
         releases_fd = -1
         staging_root_fd = -1
+        recovery_lock_fd = -1
         lock_fd = -1
         staging_fd = -1
         staging_name: str | None = None
@@ -301,7 +308,13 @@ class ReleaseInstaller:
                 raise ReleaseInstallError(
                     "release staging is not on the install filesystem"
                 )
+            recovery_lock_fd = _open_install_recovery_lock_fd(
+                staging_root_fd, fixed_deadline
+            )
         except ReleaseInstallError:
+            if recovery_lock_fd >= 0:
+                os.close(recovery_lock_fd)
+                recovery_lock_fd = -1
             if staging_root_fd >= 0:
                 os.close(staging_root_fd)
                 staging_root_fd = -1
@@ -310,6 +323,9 @@ class ReleaseInstaller:
                 releases_fd = -1
             raise
         except OSError as error:
+            if recovery_lock_fd >= 0:
+                os.close(recovery_lock_fd)
+                recovery_lock_fd = -1
             if staging_root_fd >= 0:
                 os.close(staging_root_fd)
                 staging_root_fd = -1
@@ -381,11 +397,11 @@ class ReleaseInstaller:
                     "release staging recovery failed"
                 ) from error
             staging_reserved = True
-            staging_token = secrets.token_hex(8)
-            _deadline(fixed_deadline)
-            staging_name = f".install-{request.target_digest}-{staging_token}"
-            recovery_name = f".recovery-{staging_token}.state"
             try:
+                staging_token = secrets.token_hex(8)
+                _deadline(fixed_deadline)
+                staging_name = f".install-{request.target_digest}-{staging_token}"
+                recovery_name = f".recovery-{staging_token}.state"
                 recovery_identity = _write_recovery_intent_fd(
                     staging_root_fd,
                     recovery_name,
@@ -555,6 +571,8 @@ class ReleaseInstaller:
         finally:
             if lock_fd >= 0:
                 os.close(lock_fd)
+            if recovery_lock_fd >= 0:
+                os.close(recovery_lock_fd)
             if staging_root_fd >= 0:
                 os.close(staging_root_fd)
             if releases_fd >= 0:
@@ -575,7 +593,7 @@ class ReleaseInstaller:
             _read_recovery_records_fd(
                 parent_fd,
                 check,
-                active_reservations=1,
+                active_reservations=_ACTIVE_INSTALL_RECOVERY_SLOTS,
             )
             if len(self._deferred_staging) + 1 > _MAX_DEFERRED_STAGING:
                 raise ReleaseInstallError(
@@ -699,24 +717,59 @@ class ReleaseInstaller:
                 self._staging_root,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
             )
+            recovery_lock_fd = -1
             try:
+                recovery_lock_fd = _open_install_recovery_lock_fd(
+                    staging_root_fd, fixed_deadline
+                )
                 recovered = self._reap_deferred_staging(staging_root_fd)
+                _deadline(fixed_deadline)
+                names = os.listdir(staging_root_fd)
+                _deadline(fixed_deadline)
+                prefix = f".install-{request.target_digest}-"
+                candidates = tuple(
+                    name
+                    for name in names
+                    if name.startswith(prefix)
+                    and _STAGING_NAME.fullmatch(name) is not None
+                )
+                if len(candidates) == 1:
+                    candidate_fd = os.open(
+                        candidates[0],
+                        os.O_RDONLY
+                        | os.O_DIRECTORY
+                        | os.O_CLOEXEC
+                        | os.O_NOFOLLOW,
+                        dir_fd=staging_root_fd,
+                    )
+                    try:
+                        _deadline(fixed_deadline)
+                        candidate_metadata = os.fstat(candidate_fd)
+                        _deadline(fixed_deadline)
+                        _verify_release_tree_fd(
+                            candidate_fd,
+                            descriptor,
+                            deadline=fixed_deadline,
+                        )
+                        _require_entry_identity(
+                            staging_root_fd,
+                            candidates[0],
+                            candidate_metadata,
+                            fixed_deadline,
+                        )
+                    finally:
+                        os.close(candidate_fd)
+                    return ReleaseInspection(ReleaseDisposition.SAFE_TO_RESUME)
+                if not candidates:
+                    return ReleaseInspection(
+                        ReleaseDisposition.SAFE_TO_RESUME
+                        if recovered
+                        else ReleaseDisposition.OPERATOR_INTERVENTION
+                    )
             finally:
+                if recovery_lock_fd >= 0:
+                    os.close(recovery_lock_fd)
                 os.close(staging_root_fd)
-            candidates = tuple(
-                self._staging_root.glob(f".install-{request.target_digest}-*")
-            )
-            if len(candidates) == 1:
-                verify_release_tree(
-                    candidates[0], descriptor, deadline=fixed_deadline
-                )
-                return ReleaseInspection(ReleaseDisposition.SAFE_TO_RESUME)
-            if not candidates:
-                return ReleaseInspection(
-                    ReleaseDisposition.SAFE_TO_RESUME
-                    if recovered
-                    else ReleaseDisposition.OPERATOR_INTERVENTION
-                )
         except Exception:  # noqa: BLE001 - inspection intentionally fails closed
             return ReleaseInspection(ReleaseDisposition.OPERATOR_INTERVENTION)
         return ReleaseInspection(ReleaseDisposition.OPERATOR_INTERVENTION)
@@ -1116,6 +1169,38 @@ def _deadline_names(
             yield entry.name
     finally:
         entries.close()
+
+
+def _open_install_recovery_lock_fd(
+    parent_fd: int, deadline: MonotonicDeadline
+) -> int:
+    _deadline(deadline)
+    descriptor = os.open(
+        _INSTALL_RECOVERY_LOCK_NAME,
+        os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=parent_fd,
+    )
+    try:
+        _deadline(deadline)
+        metadata = os.fstat(descriptor)
+        _deadline(deadline)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_uid != os.geteuid()
+            or metadata.st_gid != os.getegid()
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+        ):
+            raise ReleaseInstallError(
+                "release installation setup lock is unsafe"
+            )
+        _acquire_lock(descriptor, deadline)
+        _deadline(deadline)
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
 
 
 def _acquire_lock(descriptor: int, deadline: MonotonicDeadline) -> None:

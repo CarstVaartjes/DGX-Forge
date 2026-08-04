@@ -338,6 +338,109 @@ bounds, and a missing post-token recovery-budget check. This follow-up adds
 deterministic RED/GREEN coverage and addresses all three findings; exact-range
 external re-review remains pending.
 
+## External review fix round 5/5
+
+The final review round found that the round-4 recovery mutex and active count
+were instance-local, that the reservation charged only one slot despite a
+four-slot live transaction footprint, and that staging-token generation sat
+outside reservation cleanup. The correction adds one fixed
+`.install-recovery.lock`, opened descriptor-relative beneath the staging root
+with `O_NOFOLLOW`, exact `0600` mode, exact service ownership, regular-file and
+single-link validation. Its nonblocking `flock` acquisition uses the original
+claim deadline. Installers acquire this global lock before recovery preflight,
+then the per-release lock, and retain both in that order through publication
+and cleanup. Inspection also holds the global lock through canonical
+descriptor-relative candidate enumeration, open, tree verification, and final
+name/inode recheck, so it cannot race the next recovery pass.
+
+A live install reserves four capacity slots before mutation: one active
+reservation, one `.recovery-*.state`, one `.install-*` directory, and the
+transient `.recovery-*.new`. With 12 pre-existing real artifacts, observed
+directory artifacts plus the active reservation were exactly 14 after intent,
+15 after staging creation, 16 while the completion temporary existed, and 15
+in normal transport. Twelve is accepted and thirteen is rejected before any
+new artifact or transport work. Token generation and its immediate deadline
+check now run inside the reservation cleanup scope; both `OSError` and deadline
+crossing surface as `ReleaseInstallError`, restore the active count to zero,
+leave no recovery/staging orphan, and permit a successful retry.
+
+The first RED command ran against production base `fd4a17a` after adding the
+round tests and before changing `releases.py`:
+
+```text
+uv run --project agent pytest agent/tests/test_releases.py -q -k \
+  'live_install_never_exceeds_real_aggregate_recovery_cap or \
+   live_install_rejects_when_maximum_transient_footprint_would_exceed_cap or \
+   distinct_installers_serialize_real_install_lifecycles_by_staging_root or \
+   staging_root_lifecycle_lock_is_process_safe or \
+   staging_root_lifecycle_lock_is_fixed_nofollow_and_mode_0600 or \
+   staging_token_oserror_is_typed_and_releases_reservation_for_retry or \
+   staging_token_deadline_crossing_releases_reservation_for_retry'
+7 failed, 1 passed, 148 deselected in 2.58s
+```
+
+The failures were exact: the 13-artifact boundary reached transport instead of
+rejecting; the second instance never contended; the child process reported
+transport `T` instead of lock contention `B`; symlink and wrong-mode fixed-lock
+attacks reached transport; token `OSError` escaped raw; and deadline crossing
+left `_active_staging == 1`. The one passing RED-phase test independently
+observed the intended 14/15/16/15 live counts. A subsequent inspection race
+test also failed before its production correction because a second installer
+entered recovery and replaced the candidate while verification was paused:
+
+```text
+uv run --project agent pytest \
+  agent/tests/test_releases.py::test_inspection_holds_root_lock_through_candidate_inode_verification -q
+1 failed in 0.23s
+```
+
+Final focused GREEN and complete verification outputs:
+
+```text
+round-5 focused selection:
+10 passed, 148 deselected in 2.24s
+
+uv run --project agent pytest agent/tests/test_releases.py -q
+158 passed in 3.55s
+
+uv run --project agent pytest \
+  agent/tests/test_releases.py agent/tests/test_workloads.py -q
+176 passed in 4.28s
+
+uv run --project agent pytest agent/tests/test_releases.py \
+  agent/tests/test_workloads.py agent/tests/test_operations.py -q
+191 passed in 4.70s
+
+uv run --project agent pytest agent/tests -q
+409 passed in 12.15s
+
+uv run pytest deploy/compose/tests -q
+21 passed in 7.46s
+
+docker compose --env-file deploy/compose/tests/test.env \
+  -f deploy/compose/compose.yaml \
+  -f deploy/compose/compose.step-ca.yaml config --quiet
+exit 0
+
+uvx --from ruff==0.16.1 ruff check \
+  agent/src/dgx_agent/releases.py agent/tests/test_releases.py
+All checks passed!
+
+uv run --project agent python -m compileall -q agent/src
+exit 0
+
+uv build --project agent
+Successfully built agent/dist/dgx_agent-0.1.0.tar.gz
+Successfully built agent/dist/dgx_agent-0.1.0-py3-none-any.whl
+
+fresh wheel plus committed protocol wheel, all production-module imports,
+ReleaseRequest, and all five WorkloadRequest parses:
+fresh-wheel-imports-and-release-plus-five-workload-parses-ok
+
+git diff --check
+exit 0
+```
+
 ## Remaining physical and later-task gates
 
 - Task 5 must create root-owned, non-group/world-writable ancestry; install the
