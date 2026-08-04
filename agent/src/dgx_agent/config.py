@@ -164,6 +164,12 @@ def _origin(value: Any) -> str:
         parsed_ip = ipaddress.ip_address(host)
         rendered = f"[{parsed_ip.compressed}]" if parsed_ip.version == 6 else str(parsed_ip)
     except ValueError:
+        numeric_alias = re.fullmatch(
+            r"(?:0x[0-9a-f]+|[0-9]+)(?:\.(?:0x[0-9a-f]+|[0-9]+))*",
+            host,
+        )
+        if numeric_alias:
+            raise AgentConfigError("control origin uses an ambiguous numeric host")
         if not _DNS.fullmatch(host):
             raise AgentConfigError("control origin is invalid")
         rendered = host

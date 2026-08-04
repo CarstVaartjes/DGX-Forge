@@ -264,6 +264,10 @@ def test_configuration_errors_do_not_echo_secret_values(tmp_path: Path) -> None:
         "https://control.example.test\\path",
         "https://control.example.test\n",
         "https:///missing-host",
+        "https://127.1",
+        "https://2130706433",
+        "https://0177.0.0.1",
+        "https://0x7f.0.0.1",
     ],
 )
 def test_configuration_rejects_noncanonical_or_unusable_https_origins(tmp_path: Path, origin: str) -> None:

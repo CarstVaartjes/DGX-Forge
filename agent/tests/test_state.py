@@ -8,6 +8,8 @@ import os
 from pathlib import Path
 import sqlite3
 import stat
+import subprocess
+import sys
 import threading
 
 import pytest
@@ -49,7 +51,7 @@ def claim(
     )
 
 
-def progress(*, fence: str = FENCE_A, value: int = 1, job_id: str = JOB_ID) -> AgentProgress:
+def progress(*, fence: str = FENCE_A, value: int = 1, job_id: str = JOB_ID, deadline: datetime = DEADLINE) -> AgentProgress:
     return AgentProgress(
         schema_version=1,
         job_id=job_id,
@@ -57,12 +59,12 @@ def progress(*, fence: str = FENCE_A, value: int = 1, job_id: str = JOB_ID) -> A
         attempt=1,
         fence=fence,
         node_id=NODE_ID,
-        deadline=DEADLINE,
+        deadline=deadline,
         progress={"completed": value},
     )
 
 
-def result(*, fence: str = FENCE_A, value: str = "ok", job_id: str = JOB_ID, attempt: int = 1) -> AgentResult:
+def result(*, fence: str = FENCE_A, value: str = "ok", job_id: str = JOB_ID, attempt: int = 1, deadline: datetime = DEADLINE) -> AgentResult:
     return AgentResult(
         schema_version=1,
         job_id=job_id,
@@ -70,7 +72,7 @@ def result(*, fence: str = FENCE_A, value: str = "ok", job_id: str = JOB_ID, att
         attempt=attempt,
         fence=fence,
         node_id=NODE_ID,
-        deadline=DEADLINE,
+        deadline=deadline,
         state="succeeded",
         result={"outcome": value},
     )
@@ -427,3 +429,188 @@ def test_state_files_are_private_while_wal_is_live(tmp_path: Path) -> None:
             assert stat.S_IMODE(path.stat().st_mode) == 0o600
     finally:
         connection.close()
+
+
+def test_repeated_fresh_root_initialization_is_race_free(tmp_path: Path) -> None:
+    for iteration in range(12):
+        root = tmp_path / f"state-{iteration}"
+        barrier = threading.Barrier(8)
+
+        def initialize(_: int) -> None:
+            barrier.wait()
+            AgentStateStore(root)
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(initialize, range(8)))
+        assert AgentStateStore(root).recover_active() is None
+
+
+def test_fresh_root_initialization_is_race_free_across_processes(tmp_path: Path) -> None:
+    root = tmp_path / "process-state"
+    script = """
+from concurrent.futures import ProcessPoolExecutor
+import os
+from pathlib import Path
+from dgx_agent.state import AgentStateStore
+
+def initialize(_):
+    AgentStateStore(Path(os.environ['AGENT_STATE_TEST_ROOT']))
+
+if __name__ == '__main__':
+    with ProcessPoolExecutor(max_workers=6) as pool:
+        list(pool.map(initialize, range(18)))
+"""
+    environment = os.environ.copy()
+    environment["AGENT_STATE_TEST_ROOT"] = str(root)
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        env=environment,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert AgentStateStore(root).recover_active() is None
+
+
+def test_state_rejects_writable_nonsticky_ancestor(tmp_path: Path) -> None:
+    unsafe = tmp_path / "unsafe-parent"
+    unsafe.mkdir(mode=0o777)
+    unsafe.chmod(0o777)
+    with pytest.raises(AgentStateError):
+        AgentStateStore(unsafe / "state")
+
+
+def test_state_rejects_broad_root_and_fifo_sidecar_without_blocking(tmp_path: Path) -> None:
+    with pytest.raises(AgentStateError):
+        AgentStateStore(Path("/"))
+
+    root = tmp_path / "state"
+    AgentStateStore(root)
+    wal = root / "agent-state.sqlite3-wal"
+    if wal.exists():
+        wal.unlink()
+    os.mkfifo(wal)
+    with pytest.raises(AgentStateError):
+        AgentStateStore(root)
+
+
+def test_constraintless_versioned_schema_is_rejected_with_typed_error(tmp_path: Path) -> None:
+    root = tmp_path / "state"
+    root.mkdir(mode=0o700)
+    database = _database(root)
+    with sqlite3.connect(database) as connection:
+        connection.execute("CREATE TABLE attempts(node_id,job_id,operation_id,attempt,fence,state,claim_json,progress_sequence,progress_json,result_json,created_at,updated_at,finished_at,acknowledged_at)")
+        connection.execute("PRAGMA user_version=1")
+    database.chmod(0o600)
+
+    with pytest.raises(AgentStateError):
+        AgentStateStore(root)
+
+
+@pytest.mark.parametrize("object_sql", ["CREATE VIEW attempts AS SELECT 1 AS node_id", "CREATE TABLE unrelated(value)"])
+def test_malformed_versioned_schema_objects_raise_typed_error(tmp_path: Path, object_sql: str) -> None:
+    root = tmp_path / "state"
+    root.mkdir(mode=0o700)
+    database = _database(root)
+    with sqlite3.connect(database) as connection:
+        connection.execute(object_sql)
+        connection.execute("PRAGMA user_version=1")
+    database.chmod(0o600)
+    with pytest.raises(AgentStateError):
+        AgentStateStore(root)
+
+
+def test_schema_comment_cannot_spoof_required_constraints(tmp_path: Path) -> None:
+    root = tmp_path / "state"
+    root.mkdir(mode=0o700)
+    database = _database(root)
+    columns = "node_id,job_id,operation_id,attempt,fence,state,claim_json,progress_sequence,progress_json,result_json,created_at,updated_at,finished_at,acknowledged_at"
+    with sqlite3.connect(database) as connection:
+        connection.execute(f"CREATE TABLE attempts({columns} /* fence TEXT NOT NULL UNIQUE CHECK((progress_sequence=0 CHECK((state='active' */)")
+        connection.execute("CREATE UNIQUE INDEX one_unresolved ON attempts(state) WHERE state='active' OR acknowledged_at IS NULL")
+        connection.execute("PRAGMA user_version=1")
+    database.chmod(0o600)
+    with pytest.raises(AgentStateError):
+        AgentStateStore(root)
+
+
+def test_schema_missing_progress_nonnegative_check_is_rejected(tmp_path: Path) -> None:
+    root = tmp_path / "state"
+    root.mkdir(mode=0o700)
+    database = _database(root)
+    table = """CREATE TABLE attempts(
+        node_id TEXT NOT NULL, job_id TEXT NOT NULL, operation_id TEXT NOT NULL,
+        attempt INTEGER NOT NULL, fence TEXT NOT NULL UNIQUE,
+        state TEXT NOT NULL CHECK(state IN ('active','succeeded','failed','waiting-for-operator')),
+        claim_json BLOB NOT NULL, progress_sequence INTEGER NOT NULL,
+        progress_json BLOB, result_json BLOB, created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL, finished_at TEXT, acknowledged_at TEXT,
+        PRIMARY KEY(node_id,job_id,operation_id,attempt),
+        CHECK((progress_sequence=0 AND progress_json IS NULL) OR (progress_sequence>0 AND progress_json IS NOT NULL)),
+        CHECK((state='active' AND result_json IS NULL AND finished_at IS NULL AND acknowledged_at IS NULL)
+           OR (state!='active' AND result_json IS NOT NULL AND finished_at IS NOT NULL)))"""
+    with sqlite3.connect(database) as connection:
+        connection.execute(table)
+        connection.execute("CREATE UNIQUE INDEX one_unresolved ON attempts((1)) WHERE state='active' OR acknowledged_at IS NULL")
+        connection.execute("PRAGMA user_version=1")
+    database.chmod(0o600)
+    with pytest.raises(AgentStateError):
+        AgentStateStore(root)
+
+
+def test_progress_and_result_deadline_must_match_claim(tmp_path: Path) -> None:
+    store = AgentStateStore(tmp_path / "state")
+    store.begin(claim())
+    changed = datetime(2031, 1, 1, tzinfo=UTC)
+    with pytest.raises(AgentStateConflict):
+        store.heartbeat(progress(deadline=changed))
+    with pytest.raises(AgentStateConflict):
+        store.finish(result(deadline=changed))
+    assert store.recover_active().progress_sequence == 0
+
+
+@pytest.mark.parametrize("method", ["heartbeat", "finish", "acknowledge"])
+def test_backward_clock_never_commits_corrupt_timestamps(tmp_path: Path, monkeypatch, method: str) -> None:
+    store = AgentStateStore(tmp_path / "state")
+    store.begin(claim())
+    if method == "acknowledge":
+        store.finish(result())
+    monkeypatch.setattr("dgx_agent.state._now", lambda: "2020-01-01T00:00:00+00:00")
+    if method == "heartbeat":
+        store.heartbeat(progress())
+    elif method == "finish":
+        store.finish(result())
+    else:
+        store.acknowledge(result())
+    reopened = AgentStateStore(tmp_path / "state")
+    record = reopened.recover_active() if method == "heartbeat" else reopened.recover_pending()
+    if method == "acknowledge":
+        assert reopened.recover_active() is None
+        assert reopened.recover_pending() is None
+        with sqlite3.connect(_database(tmp_path / "state")) as connection:
+            created_at, updated_at = connection.execute("SELECT created_at, updated_at FROM attempts").fetchone()
+    else:
+        assert record is not None
+        created_at, updated_at = record.created_at, record.updated_at
+    assert datetime.fromisoformat(updated_at) >= datetime.fromisoformat(created_at)
+
+
+def test_sqlite_open_is_anchored_against_path_substitution(tmp_path: Path, monkeypatch) -> None:
+    root = tmp_path / "state"
+    store = AgentStateStore(root)
+    store.begin(claim())
+    original = tmp_path / "original-state"
+    real_connect = sqlite3.connect
+    swapped = False
+
+    def swapping_connect(database, *args, **kwargs):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            root.rename(original)
+            root.mkdir(mode=0o700)
+        return real_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr("dgx_agent.state.sqlite3.connect", swapping_connect)
+    assert store.recover_active().claim == claim()

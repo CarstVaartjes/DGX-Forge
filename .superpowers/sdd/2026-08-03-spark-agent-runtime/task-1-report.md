@@ -26,10 +26,11 @@ connection's WAL, foreign-key, `FULL` synchronous, and bounded busy-timeout
 settings. A live configured connection also showed database, WAL, and SHM files
 at mode `0600` under the `0700` state root.
 
-Review-fix GREEN: `uv run --project agent pytest agent/tests -q` completed with
-86 passing tests. The follow-up coverage adds terminal delivery acknowledgment,
-fence/attempt history, schema-corruption, canonical-origin, package-import,
-credential-swap, and live sidecar checks.
+Review-fix round 2 RED collected 97 tests with nine expected failures for
+numeric URL aliases, unsafe state ancestors, mismatched protocol deadlines, and
+backward-clock updates. GREEN now runs 104 tests. Four parallel repetitions of
+the thread/process fresh-root initialization tests also passed (eight focused
+runs total), exercising advisory-locked first initialization.
 
 Packaging was also verified with `uv build --project agent --wheel` followed by
 an isolated `uv run --no-project --with` import using that wheel and the pinned
@@ -40,16 +41,22 @@ protocol wheel. Generated wheel artifacts were removed afterward.
 - `AgentConfig` is a frozen dataclass with only the permitted durable fields.
   It rejects duplicate/unknown/missing JSON fields, unsafe URLs and identifiers,
   unsafe paths, oversized files, and insecure key modes without echoing values.
-- File checks use `lstat` path-component validation and `O_NOFOLLOW` for the
-  final configuration read, so FIFO/device inputs are rejected without reads.
-- `AgentStateStore` creates a restrictive root and database, initializes WAL
-  SQLite with explicit immediate transactions, and lets a partial unique index
-  enforce one active attempt across instances.
+- Configuration and state paths are walked descriptor-relative with
+  `O_DIRECTORY|O_NOFOLLOW`; unsafe owners, writable non-sticky ancestors,
+  symlinks, devices, and FIFOs fail closed.
+- SQLite opens through `/proc/self/fd/<root-fd>` while the verified `0700` root
+  descriptor remains live. An advisory lock serializes one-time WAL/schema
+  initialization, while routine connections do not renegotiate journal mode.
+- Schema acceptance uses the exact normalized table/index definitions plus
+  column, primary-key, uniqueness, and partial-index metadata. The unresolved
+  partial unique index covers either active mutation or pending terminal
+  delivery until exact acknowledgment.
 - Canonical protocol bytes are persisted and parsed back through the pinned
   `dgx-agent-protocol` wheel. Corrupt/noncanonical records raise a typed error.
-- Exact claim/result replay is idempotent; altered claims, fences, messages, or
-  terminal results fail closed. Progress sequence numbers are incremented in
-  SQLite, not memory.
+- Exact claim/result replay is idempotent; global fence reuse, stale attempts,
+  changed deadlines/identities, and conflicting terminal results fail closed.
+  Mutations use nondecreasing canonical UTC timestamps and validate the updated
+  row before commit.
 
 ## File inventory
 
@@ -57,7 +64,7 @@ protocol wheel. Generated wheel artifacts were removed afterward.
 - `agent/src/dgx_agent/config.py`: strict immutable configuration.
 - `agent/src/dgx_agent/state.py`: durable fenced SQLite state store.
 - `agent/src/dgx_agent/__init__.py`: package marker.
-- `agent/tests/test_config.py`, `agent/tests/test_state.py`: 60 deterministic
+- `agent/tests/test_config.py`, `agent/tests/test_state.py`: 104 deterministic
   configuration, security, restart, replay, corruption, and concurrency tests.
 
 ## Self-review and remaining concerns
