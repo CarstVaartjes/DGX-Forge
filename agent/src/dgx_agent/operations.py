@@ -74,6 +74,10 @@ class OperationRegistry:
         self, claim: AgentClaim, context: OperationContext
     ) -> OperationExecution:
         self._validate(claim, context)
+        exact = context.state.lookup_exact(claim)
+        if exact is not None and exact.result is not None:
+            assert exact.canonical_result is not None
+            return OperationExecution(exact.result, exact.canonical_result, True)
         pending = context.state.recover_pending()
         if pending is not None:
             _require_exact(pending, claim)
@@ -105,6 +109,15 @@ class OperationRegistry:
         self, claim: AgentClaim, context: OperationContext
     ) -> OperationInspection:
         self._validate(claim, context)
+        exact = context.state.lookup_exact(claim)
+        if exact is not None:
+            if exact.result is None:
+                return OperationInspection(InspectionDisposition.SAFE_TO_RETRY)
+            return OperationInspection(
+                InspectionDisposition.COMPLETED,
+                exact.result,
+                exact.canonical_result,
+            )
         unresolved = context.state.recover_active()
         if unresolved is None:
             unresolved = context.state.recover_pending()

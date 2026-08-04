@@ -259,6 +259,29 @@ class AgentStateStore:
     def recover_pending(self) -> AgentAttemptRecord | None:
         return self._recover("state!='active' AND acknowledged_at IS NULL")
 
+    def lookup_exact(self, claim: AgentClaim) -> AgentAttemptRecord | None:
+        """Read an exact attempt, including acknowledged terminal history."""
+        claim_bytes = _canonical(claim, AgentClaim)
+        connection = self._connection()
+        try:
+            row = connection.execute(
+                "SELECT * FROM attempts WHERE node_id=? AND job_id=? "
+                "AND operation_id=? AND attempt=?",
+                _identity(claim),
+            ).fetchone()
+            if row is None:
+                return None
+            record = _record(row)
+            if record.fence != claim.fence or record.canonical_claim != claim_bytes:
+                raise AgentStateConflict("attempt conflicts with persisted state")
+            return record
+        except (AgentStateConflict, AgentStateError):
+            raise
+        except sqlite3.Error as error:
+            raise AgentStateError("state operation failed") from error
+        finally:
+            connection.close()
+
     def _recover(self, predicate: str) -> AgentAttemptRecord | None:
         connection = self._connection()
         try:

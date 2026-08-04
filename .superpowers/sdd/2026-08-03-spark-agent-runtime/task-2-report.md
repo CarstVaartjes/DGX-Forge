@@ -30,11 +30,38 @@ The implementation was developed through separate RED/GREEN slices:
   to close its descriptor on every success and error path; the regression and
   adjacent owner/type tests then passed 2/2.
 
-The final focused suite contains 85 tests. Test fixtures construct immutable
-policy values with fixture-local hashes only after proving that production
-`InstalledPolicy.load` accepts exclusively the compiled reviewed contract.
+The final focused suite contains 109 tests. Test fixtures use the explicit
+private loader and then construct immutable policy values with fixture-local
+hashes; production `InstalledPolicy.load` additionally requires root-owned,
+non-agent-writable ancestry while accepting only the compiled reviewed contract.
 Neither production code nor tests download, extract, or depend on a bundle
 archive.
+
+Review-fix round 1 added independent RED/GREEN regressions for six findings:
+
+- An acknowledged result became invisible to inspection and an expired exact
+  replay was rejected. A read-only exact historical lookup now returns pending
+  or acknowledged terminal bytes across restart without bypassing conflicts for
+  changed claims.
+- A same-inode overwrite changed bytes executed through the previously verified
+  descriptor, and support imports still followed mutable paths. Executables are
+  now hash-copied into write-sealed memfds; the four support modules are copied
+  into a deterministic write-sealed ZIP inherited read-only by tools. Production
+  policy/ancestry ownership is root-only; unprivileged fixtures use the explicit
+  private `_load_for_test` seam.
+- Setsid descendants survived success, timeout, overflow, and concurrent runs.
+  Each invocation now has a separate supervisor subreaper with a bounded status
+  pipe and cleanup reserve. Tests cover double-fork/setsid escape, concurrent
+  supervisors, an unrelated child, a stopped supervisor, supervisor crash,
+  launch failure, and descendant cleanup on every bounded exit path.
+- Slow verification reads, per-tool deadlines, spawn setup, cleanup, injected
+  runner returns, normalization, and final canonical construction now share and
+  recheck one absolute monotonic deadline. Cleanup has a reserved bounded slice
+  and cannot turn an expired execution into success.
+- A valid `ok=false,data=null` NVIDIA envelope now becomes redacted degraded
+  `tool_reported_failure` evidence; `ok=true,data=null` remains incompatible.
+- Tool exit 124 is mapped to generic nonzero 125 and cannot collide with the
+  supervisor's typed timeout status.
 
 ## Exact installed-policy contract
 
@@ -88,12 +115,16 @@ has exactly `interface` and `hca`. The adapter derives the collector argv as
 - `agent/src/dgx_agent/operations.py`: frozen operation context and immutable
   inspection/execution records; source-closed `NODE_PROBE` dispatch; exact
   fenced replay and stable failure results.
+- `agent/src/dgx_agent/state.py`: Task 1 state store plus a read-only exact
+  historical lookup used for acknowledged replay.
 - `agent/src/dgx_agent/nvidia_tools.py`: immutable installed-policy model,
-  compiled reviewed artifact lock, descriptor-safe integrity checks, and seven
-  strict allowlist normalizers.
+  compiled reviewed artifact lock, root-owned production policy boundary,
+  sealed executable/support snapshots, and seven strict allowlist normalizers.
 - `agent/src/dgx_agent/probe.py`: fixed-policy orchestration, descriptor-bound
   bounded process runner, collector compatibility normalization, and canonical
   output limits.
+- `agent/src/dgx_agent/_probe_supervisor.py`: isolated per-invocation Linux
+  subreaper, fixed bounded status protocol, and descendant termination/reaping.
 - `agent/tests/test_operations.py`, `agent/tests/test_nvidia_tools.py`, and
   `agent/tests/test_probe.py`: registry, policy, evidence, process, deadline,
   cleanup, replay, and attack coverage.
@@ -106,20 +137,23 @@ adapted and normalized by `probe.py`.
 - Dispatch accepts only the exact protocol `AgentClaim` type and the compiled
   `NODE_PROBE` enum member with an empty payload. No plugin, import, callable,
   command, path, environment, tool selector, or timeout is claim-controlled.
-- Policy and artifact paths are opened component-by-component without symlink
-  following. Policy reads are bounded and require regular trusted files.
+- Production policy and artifact paths require root-owned, non-agent-writable
+  ancestry and are opened component-by-component without symlink following.
+  Policy reads are bounded and require regular trusted files.
   Present unsafe owners, modes, file types, sizes, hashes, or support-directory
   members are hard typed failures; absent bundles/tools are capabilities marked
   unavailable and never trigger PATH fallback.
-- Every executable is opened, metadata-checked, size-checked, hashed, rewound,
-  and retained before the first child starts. Linux executes the retained
-  `/proc/self/fd/<n>` object, closing the pathname swap race. Imported Python
-  support is the exact reviewed `bin/common` set, with user site and bytecode
-  writes disabled.
+- Every executable is metadata/size checked while its bytes are simultaneously
+  hashed into a write-sealed memfd. Linux executes that sealed snapshot, closing
+  pathname swaps and same-inode overwrites. Imported Python support is a
+  deterministic sealed ZIP containing only the four reviewed module names at
+  archive root, with user site and bytecode writes disabled.
 - Child calls use exact argv, a fixed cwd/environment, closed stdin, no shell,
-  closed descriptors except the verified executable, and a new process group.
-  Stdout/stderr are incrementally bounded. Timeout, flood, and successful
-  daemon cases terminate and reap descendants.
+  and only sealed executable/support plus internal bounded-status descriptors.
+  Each invocation has a separate supervisor subreaper, avoiding process-wide
+  subreaper races and unrelated child management. Stdout/stderr are incrementally
+  bounded; success, launch failure, timeout, flood, crash, and setsid/double-fork
+  cases terminate and reap owned descendants.
 - The total probe deadline includes integrity verification and is bounded by
   both 15 seconds and the claim deadline. Per-process, 256-KiB aggregate raw,
   and 64-KiB canonical result ceilings are enforced independently.
@@ -139,7 +173,7 @@ adapted and normalized by `probe.py`.
 uv run --project agent pytest agent/tests/test_operations.py agent/tests/test_probe.py agent/tests/test_nvidia_tools.py -v
 ```
 
-Result: 85 passed in 0.50s.
+Result after review-fix round 1: 109 passed in 1.96s.
 
 ```sh
 uv run pytest tests/nodes/test_collect_health.py -q
@@ -148,15 +182,22 @@ uv run --project agent python -m compileall -q agent/src
 git diff --check
 ```
 
-Results: 24 collector tests passed in 2.77s; 198 agent tests passed in 5.36s;
+Results: 24 collector tests passed in 2.81s; 222 agent tests passed in 6.88s;
 bytecode compilation and whitespace validation exited successfully with no
 output.
+
+The concurrent-runner plus stopped-supervisor regressions were also repeated
+five times (10 cases total); every repetition passed in 0.35–0.36s.
 
 ## Remaining concerns
 
 - Task 5 must install the exact TUF/OCI-authorized artifacts and materialize
   this policy contract with privileged ownership and safe modes. Task 2 does
   not install, fetch, or update those artifacts.
+- NVIDIA logging initialization remains a Task 5 on-node systemd/read-only
+  integration gate. The fixed `--no-write-file` argument disables the reviewed
+  report-file output mode but is not claimed here to prove that every possible
+  library log initialization is write-free.
 - Tests validate the real Linux process boundary with purpose-built local
   executables and validate reviewed NVIDIA documents through fixtures/fakes;
   on-node ARM64 execution of the installed reviewed bundle remains a Task 5

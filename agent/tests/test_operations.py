@@ -151,6 +151,43 @@ def test_terminal_result_replays_after_deadline_without_local_execution(tmp_path
     assert replay.replayed is True
     assert len(probe.deadlines) == 1
 
+def test_acknowledged_terminal_result_inspects_and_replays_after_restart_and_expiry(
+    tmp_path,
+) -> None:
+    state_root = tmp_path / "state"
+    probe = RecordingProbe()
+    request = claim(deadline=datetime.now(UTC) + timedelta(milliseconds=30))
+    first_context = OperationContext(
+        node_id=NODE_ID,
+        state=AgentStateStore(state_root),
+        probe=probe,
+    )
+    first = OperationRegistry().execute(request, first_context)
+    first_context.state.acknowledge(first.result)
+    time.sleep(0.04)
+    restarted = OperationContext(
+        node_id=NODE_ID,
+        state=AgentStateStore(state_root),
+        probe=NeverProbe(),
+    )
+
+    inspection = OperationRegistry().inspect(request, restarted)
+    replay = OperationRegistry().execute(request, restarted)
+
+    assert inspection.disposition is InspectionDisposition.COMPLETED
+    assert inspection.result == first.result
+    assert inspection.canonical_result == first.canonical_result
+    assert replay.result == first.result
+    assert replay.canonical_result == first.canonical_result
+    assert replay.replayed is True
+    assert len(probe.deadlines) == 1
+
+    changed = claim(deadline=datetime.now(UTC) + timedelta(minutes=1))
+    with pytest.raises(AgentStateConflict):
+        OperationRegistry().inspect(changed, restarted)
+    with pytest.raises(AgentStateConflict):
+        OperationRegistry().execute(changed, restarted)
+
 
 def test_inspection_is_read_only_for_interrupted_and_completed_probe(tmp_path) -> None:
     request = claim()

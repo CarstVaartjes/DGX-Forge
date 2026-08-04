@@ -1,15 +1,19 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor
 import hashlib
 import json
 import os
 from pathlib import Path
 import signal
+import subprocess
 import time
 from dataclasses import replace
 
 import pytest
+import dgx_agent.nvidia_tools as nvidia_tools
+import dgx_agent.probe as probe_module
 
 from dgx_agent_protocol import canonical_message
 
@@ -20,6 +24,7 @@ from dgx_agent.nvidia_tools import (
     InstalledPolicy,
     InstalledToolSecurityError,
     ToolName,
+    open_verified_support_archive,
     open_verified_executable,
 )
 from dgx_agent.probe import (
@@ -27,6 +32,7 @@ from dgx_agent.probe import (
     FIXED_PROCESS_ENVIRONMENT,
     BoundedProcessRunner,
     PinnedNodeProbe,
+    ProbeCollectorError,
     ProbeDeadlineExceeded,
     ProbeOutputLimitExceeded,
     ProbeResultLimitExceeded,
@@ -67,6 +73,33 @@ def _executable(path: Path, body: bytes = b"#!/bin/sh\nexit 0\n") -> str:
     path.write_bytes(body)
     path.chmod(0o755)
     return hashlib.sha256(body).hexdigest()
+
+
+def _process_is_gone(pid: int) -> bool:
+    try:
+        reaped, _ = os.waitpid(pid, os.WNOHANG)
+        if reaped == pid:
+            return True
+    except ChildProcessError:
+        pass
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return True
+    return False
+
+
+def _assert_process_gone(pid: int) -> None:
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        if _process_is_gone(pid):
+            return
+        time.sleep(0.02)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    pytest.fail(f"descendant {pid} survived probe cleanup")
 
 
 def installed_policy(tmp_path: Path) -> tuple[InstalledPolicy, dict[str, object]]:
@@ -116,7 +149,7 @@ def installed_policy(tmp_path: Path) -> tuple[InstalledPolicy, dict[str, object]
     path = tmp_path / "policy.json"
     path.write_text(json.dumps(document), encoding="utf-8")
     path.chmod(0o644)
-    policy = InstalledPolicy.load(path)
+    policy = InstalledPolicy._load_for_test(path)
     tools = tuple(
         replace(tool, sha256=hashlib.sha256(tool.executable.read_bytes()).hexdigest())
         for tool in policy.tools
@@ -361,6 +394,31 @@ def test_nonzero_and_incompatible_tool_output_are_redacted_capability_evidence(t
     assert b"secret" not in canonical_message(evidence)
 
 
+def test_reported_tool_failure_accepts_null_data_as_redacted_degraded_evidence(
+    tmp_path,
+) -> None:
+    policy, _ = installed_policy(tmp_path)
+    runner = successful_runner(policy)
+    runner.outcomes["hardware_config.py"] = ProcessOutcome(
+        0,
+        b'{"ok":false,"data":null,"errors":["raw secret"],"meta":{}}',
+        b"",
+    )
+
+    evidence = PinnedNodeProbe(policy, _runner=runner).collect(
+        datetime.now(UTC) + timedelta(seconds=30)
+    )
+
+    assert evidence["nvidia"]["tools"]["hardware_config"] == {
+        "status": "degraded",
+        "version": "1.0.0",
+        "sha256": policy.tools[1].sha256,
+        "data": {},
+        "error_code": "tool_reported_failure",
+    }
+    assert b"secret" not in canonical_message(evidence)
+
+
 def test_probe_rejects_expired_deadline_without_verifying_or_running(tmp_path) -> None:
     policy, _ = installed_policy(tmp_path)
     runner = successful_runner(policy)
@@ -384,6 +442,79 @@ def test_early_claim_deadline_bounds_every_process_timeout(tmp_path) -> None:
     assert all(0 < request.timeout_seconds <= 0.5 for request in runner.requests)
 
 
+def test_broken_runner_cannot_return_last_tool_success_after_total_deadline(
+    tmp_path,
+) -> None:
+    policy, _ = installed_policy(tmp_path)
+
+    class Clock:
+        value = time.monotonic()
+
+        def __call__(self) -> float:
+            return self.value
+
+    clock = Clock()
+
+    class DeadlineCrossingRunner(RecordingRunner):
+        def run(self, request: ProcessRequest) -> ProcessOutcome:
+            outcome = super().run(request)
+            if len(self.requests) == 1 + len(NVIDIA_TOOL_NAMES):
+                clock.value += 16
+            return outcome
+
+    base = successful_runner(policy)
+    runner = DeadlineCrossingRunner(base.outcomes)
+
+    with pytest.raises(ProbeDeadlineExceeded):
+        PinnedNodeProbe(policy, _runner=runner, _monotonic=clock).collect(
+            datetime.now(UTC) + timedelta(seconds=30)
+        )
+
+
+@pytest.mark.parametrize("stage", ["last-tool-normalization", "canonical-result"])
+def test_normalization_or_result_construction_cannot_finish_after_deadline(
+    tmp_path, monkeypatch, stage
+) -> None:
+    policy, _ = installed_policy(tmp_path)
+
+    class Clock:
+        value = time.monotonic()
+
+        def __call__(self) -> float:
+            return self.value
+
+    clock = Clock()
+    if stage == "last-tool-normalization":
+        original = probe_module.parse_tool_document
+        calls = 0
+
+        def delayed_parse(*args, **kwargs):
+            nonlocal calls
+            calls += 1
+            result = original(*args, **kwargs)
+            if calls == len(NVIDIA_TOOL_NAMES):
+                clock.value += 16
+            return result
+
+        monkeypatch.setattr(probe_module, "parse_tool_document", delayed_parse)
+    else:
+        original_canonical = probe_module.canonical_message
+
+        def delayed_canonical(value):
+            result = original_canonical(value)
+            clock.value += 16
+            return result
+
+        monkeypatch.setattr(probe_module, "canonical_message", delayed_canonical)
+
+    with pytest.raises(ProbeDeadlineExceeded):
+        PinnedNodeProbe(
+            policy,
+            _runner=successful_runner(policy),
+            _monotonic=clock,
+        ).collect(datetime.now(UTC) + timedelta(seconds=30))
+
+
 def test_total_deadline_includes_installed_file_verification(tmp_path) -> None:
     policy, _ = installed_policy(tmp_path)
     runner = successful_runner(policy)
@@ -393,6 +524,70 @@ def test_total_deadline_includes_installed_file_verification(tmp_path) -> None:
     with pytest.raises(ProbeDeadlineExceeded):
         probe.collect(datetime.now(UTC) + timedelta(seconds=30))
 
+    assert runner.requests == []
+
+
+def test_verification_stops_at_deadline_between_bounded_read_chunks(
+    tmp_path, monkeypatch
+) -> None:
+    policy, _ = installed_policy(tmp_path)
+    runner = successful_runner(policy)
+    fixed_now = datetime.now(UTC)
+
+    class Clock:
+        value = 0.0
+
+        def __call__(self) -> float:
+            return self.value
+
+    clock = Clock()
+    original_read = nvidia_tools.os.read
+    reads = 0
+
+    def slow_read(descriptor: int, size: int) -> bytes:
+        nonlocal reads
+        reads += 1
+        result = original_read(descriptor, size)
+        clock.value += 0.06
+        return result
+
+    monkeypatch.setattr(nvidia_tools.os, "read", slow_read)
+
+    with pytest.raises(ProbeDeadlineExceeded):
+        PinnedNodeProbe(
+            policy,
+            _runner=runner,
+            _monotonic=clock,
+            _utcnow=lambda: fixed_now,
+        ).collect(fixed_now + timedelta(milliseconds=50))
+
+    assert reads == 1
+    assert runner.requests == []
+
+
+def test_slow_verification_read_cannot_overrun_claim_by_hundreds_of_milliseconds(
+    tmp_path, monkeypatch
+) -> None:
+    policy, _ = installed_policy(tmp_path)
+    runner = successful_runner(policy)
+    original_read = nvidia_tools.os.read
+    reads = 0
+
+    def slow_read(descriptor: int, size: int) -> bytes:
+        nonlocal reads
+        reads += 1
+        time.sleep(0.06)
+        return original_read(descriptor, size)
+
+    monkeypatch.setattr(nvidia_tools.os, "read", slow_read)
+    started = time.monotonic()
+    with pytest.raises(ProbeDeadlineExceeded):
+        PinnedNodeProbe(policy, _runner=runner).collect(
+            datetime.now(UTC) + timedelta(milliseconds=50)
+        )
+
+    assert time.monotonic() - started < 0.15
+    assert reads == 1
     assert runner.requests == []
 
 
@@ -436,7 +631,9 @@ def test_real_runner_kills_process_group_on_timeout(tmp_path) -> None:
         script,
         b"#!/bin/sh\nsleep 60 &\necho $! > child.pid\nwait\n",
     )
-    descriptor = open_verified_executable(script, digest)
+    descriptor = open_verified_executable(
+        script, digest, _test_only_allow_unprivileged=True
+    )
     assert descriptor is not None
     request = ProcessRequest.fixed(
         argv=(str(script),),
@@ -467,7 +664,9 @@ def test_real_runner_kills_process_group_on_timeout(tmp_path) -> None:
 def test_real_runner_bounds_capture_and_kills_output_flood(tmp_path) -> None:
     script = tmp_path / "flood.sh"
     digest = _executable(script, b"#!/bin/sh\nwhile :; do printf 'xxxxxxxxxxxxxxxx'; done\n")
-    descriptor = open_verified_executable(script, digest)
+    descriptor = open_verified_executable(
+        script, digest, _test_only_allow_unprivileged=True
+    )
     assert descriptor is not None
     request = ProcessRequest.fixed(
         argv=(str(script),),
@@ -484,6 +683,181 @@ def test_real_runner_bounds_capture_and_kills_output_flood(tmp_path) -> None:
         os.close(descriptor)
 
 
+def test_real_runner_enforces_per_tool_timeout_below_total_deadline(tmp_path) -> None:
+    script = tmp_path / "slow.sh"
+    digest = _executable(script, b"#!/bin/sh\nsleep 0.5\n")
+    descriptor = open_verified_executable(
+        script, digest, _test_only_allow_unprivileged=True
+    )
+    assert descriptor is not None
+    request = ProcessRequest.fixed(
+        argv=(str(script),),
+        cwd=tmp_path,
+        timeout_seconds=0.1,
+        output_limit_bytes=1024,
+        executable_fd=descriptor,
+        absolute_deadline=time.monotonic() + 3,
+    )
+    started = time.monotonic()
+    try:
+        with pytest.raises(ProbeDeadlineExceeded):
+            BoundedProcessRunner().run(request)
+    finally:
+        os.close(descriptor)
+
+    assert time.monotonic() - started < 0.5
+
+
+def test_tool_exit_124_is_generic_nonzero_not_supervisor_timeout(tmp_path) -> None:
+    script = tmp_path / "exit-124.sh"
+    digest = _executable(script, b"#!/bin/sh\nexit 124\n")
+    descriptor = open_verified_executable(
+        script, digest, _test_only_allow_unprivileged=True
+    )
+    assert descriptor is not None
+    request = ProcessRequest.fixed(
+        argv=(str(script),), cwd=tmp_path, timeout_seconds=1,
+        output_limit_bytes=1024, executable_fd=descriptor,
+    )
+    try:
+        outcome = BoundedProcessRunner().run(request)
+    finally:
+        os.close(descriptor)
+
+    assert outcome.returncode == 125
+
+
+def test_real_runner_detects_deadline_crossed_during_spawn(tmp_path, monkeypatch) -> None:
+    script = tmp_path / "quick.sh"
+    digest = _executable(script)
+    descriptor = open_verified_executable(
+        script, digest, _test_only_allow_unprivileged=True
+    )
+    assert descriptor is not None
+    request = ProcessRequest.fixed(
+        argv=(str(script),), cwd=tmp_path, timeout_seconds=1,
+        output_limit_bytes=1024, executable_fd=descriptor,
+        absolute_deadline=time.monotonic() + 0.05,
+    )
+    original_popen = probe_module.subprocess.Popen
+
+    def slow_popen(*args, **kwargs):
+        time.sleep(0.08)
+        return original_popen(*args, **kwargs)
+
+    monkeypatch.setattr(probe_module.subprocess, "Popen", slow_popen)
+    started = time.monotonic()
+    try:
+        with pytest.raises(ProbeDeadlineExceeded):
+            BoundedProcessRunner().run(request)
+    finally:
+        os.close(descriptor)
+    assert time.monotonic() - started < 0.15
+
+
+def test_cleanup_deadline_cannot_turn_expired_execution_into_success(tmp_path) -> None:
+    script = tmp_path / "slow-cleanup.py"
+    digest = _executable(
+        script,
+        b"#!/usr/bin/env python3\n"
+        b"import os, signal, time\n"
+        b"if os.fork() == 0:\n"
+        b"    os.setsid(); signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        b"    null = os.open('/dev/null', os.O_RDWR)\n"
+        b"    os.dup2(null, 0); os.dup2(null, 1); os.dup2(null, 2)\n"
+        b"    time.sleep(60); os._exit(0)\n"
+        b"time.sleep(0.02)\n",
+    )
+    descriptor = open_verified_executable(
+        script, digest, _test_only_allow_unprivileged=True
+    )
+    assert descriptor is not None
+    request = ProcessRequest.fixed(
+        argv=(str(script),), cwd=tmp_path, timeout_seconds=1,
+        output_limit_bytes=1024, executable_fd=descriptor,
+        absolute_deadline=time.monotonic() + 0.08,
+    )
+    started = time.monotonic()
+    try:
+        with pytest.raises(ProbeDeadlineExceeded):
+            BoundedProcessRunner().run(request)
+    finally:
+        os.close(descriptor)
+
+    assert time.monotonic() - started < 0.18
+
+
+def test_stopped_supervisor_is_resumed_for_bounded_descendant_cleanup(tmp_path) -> None:
+    script = tmp_path / "stop-supervisor.py"
+    pid_file = tmp_path / "stopped-supervisor-child.pid"
+    digest = _executable(
+        script,
+        b"#!/usr/bin/env python3\n"
+        b"import os, signal, time\n"
+        b"open('stopped-supervisor-child.pid', 'w').write(str(os.getpid()))\n"
+        b"os.kill(os.getppid(), signal.SIGSTOP)\n"
+        b"time.sleep(60)\n",
+    )
+    descriptor = open_verified_executable(
+        script, digest, _test_only_allow_unprivileged=True
+    )
+    assert descriptor is not None
+    request = ProcessRequest.fixed(
+        argv=(str(script),), cwd=tmp_path, timeout_seconds=0.1,
+        output_limit_bytes=1024, executable_fd=descriptor,
+    )
+    started = time.monotonic()
+    try:
+        with pytest.raises(ProbeDeadlineExceeded):
+            BoundedProcessRunner().run(request)
+    finally:
+        os.close(descriptor)
+
+    assert time.monotonic() - started < 0.2
+    _assert_process_gone(int(pid_file.read_text()))
+
+
+def test_supervisor_crash_is_not_misreported_as_a_tool_exit(tmp_path) -> None:
+    script = tmp_path / "crash-supervisor.py"
+    digest = _executable(
+        script,
+        b"#!/usr/bin/env python3\n"
+        b"import os, signal\n"
+        b"os.kill(os.getppid(), signal.SIGKILL)\n",
+    )
+    descriptor = open_verified_executable(
+        script, digest, _test_only_allow_unprivileged=True
+    )
+    assert descriptor is not None
+    request = ProcessRequest.fixed(
+        argv=(str(script),), cwd=tmp_path, timeout_seconds=1,
+        output_limit_bytes=1024, executable_fd=descriptor,
+    )
+    try:
+        with pytest.raises(ProbeCollectorError):
+            BoundedProcessRunner().run(request)
+    finally:
+        os.close(descriptor)
+
+
+def test_supervised_tool_launch_failure_is_bounded_and_typed(tmp_path) -> None:
+    executable = tmp_path / "invalid-executable"
+    digest = _executable(executable, b"not an executable format")
+    descriptor = open_verified_executable(
+        executable, digest, _test_only_allow_unprivileged=True
+    )
+    assert descriptor is not None
+    request = ProcessRequest.fixed(
+        argv=(str(executable),), cwd=tmp_path, timeout_seconds=1,
+        output_limit_bytes=1024, executable_fd=descriptor,
+    )
+    try:
+        with pytest.raises(ProbeCollectorError):
+            BoundedProcessRunner().run(request)
+    finally:
+        os.close(descriptor)
+
+
 def test_real_runner_kills_successful_daemonized_child(tmp_path) -> None:
     script = tmp_path / "daemon.sh"
     child_file = tmp_path / "daemon-child.pid"
@@ -491,7 +865,9 @@ def test_real_runner_kills_successful_daemonized_child(tmp_path) -> None:
         script,
         b"#!/bin/sh\nsleep 60 </dev/null >/dev/null 2>&1 &\necho $! > daemon-child.pid\nexit 0\n",
     )
-    descriptor = open_verified_executable(script, digest)
+    descriptor = open_verified_executable(
+        script, digest, _test_only_allow_unprivileged=True
+    )
     assert descriptor is not None
     request = ProcessRequest.fixed(
         argv=(str(script),), cwd=tmp_path, timeout_seconds=1,
@@ -514,10 +890,148 @@ def test_real_runner_kills_successful_daemonized_child(tmp_path) -> None:
         pytest.fail("successful daemonized child survived probe cleanup")
 
 
+def test_real_runner_kills_descendant_that_escapes_to_a_new_session(tmp_path) -> None:
+    script = tmp_path / "setsid.py"
+    child_file = tmp_path / "setsid-child.pid"
+    digest = _executable(
+        script,
+        b"#!/usr/bin/env python3\n"
+        b"import os, time\n"
+        b"if os.fork() == 0:\n"
+        b"    os.setsid()\n"
+        b"    if os.fork() != 0:\n"
+        b"        os._exit(0)\n"
+        b"    open('setsid-child.pid', 'w').write(str(os.getpid()))\n"
+        b"    null = os.open('/dev/null', os.O_RDWR)\n"
+        b"    os.dup2(null, 0); os.dup2(null, 1); os.dup2(null, 2)\n"
+        b"    time.sleep(60)\n"
+        b"    os._exit(0)\n"
+        b"time.sleep(0.1)\n",
+    )
+    descriptor = open_verified_executable(
+        script, digest, _test_only_allow_unprivileged=True
+    )
+    assert descriptor is not None
+    request = ProcessRequest.fixed(
+        argv=(str(script),), cwd=tmp_path, timeout_seconds=1,
+        output_limit_bytes=1024, executable_fd=descriptor,
+    )
+    try:
+        assert BoundedProcessRunner().run(request).returncode == 0
+    finally:
+        os.close(descriptor)
+
+    _assert_process_gone(int(child_file.read_text()))
+
+
+@pytest.mark.parametrize("failure", ["timeout", "overflow"])
+def test_real_runner_kills_setsid_descendant_on_bounded_failure(
+    tmp_path, failure
+) -> None:
+    script = tmp_path / f"setsid-{failure}.py"
+    child_file = tmp_path / f"setsid-{failure}.pid"
+    parent_action = (
+        "time.sleep(60)"
+        if failure == "timeout"
+        else "\nwhile True:\n    os.write(1, b'x' * 4096)"
+    )
+    body = (
+        "#!/usr/bin/env python3\n"
+        "import os, time\n"
+        "if os.fork() == 0:\n"
+        "    os.setsid()\n"
+        f"    open('{child_file.name}', 'w').write(str(os.getpid()))\n"
+        "    null = os.open('/dev/null', os.O_RDWR)\n"
+        "    os.dup2(null, 0); os.dup2(null, 1); os.dup2(null, 2)\n"
+        "    time.sleep(60)\n"
+        "    os._exit(0)\n"
+        "time.sleep(0.1)\n"
+        f"{parent_action}\n"
+    ).encode()
+    digest = _executable(script, body)
+    descriptor = open_verified_executable(
+        script, digest, _test_only_allow_unprivileged=True
+    )
+    assert descriptor is not None
+    request = ProcessRequest.fixed(
+        argv=(str(script),), cwd=tmp_path, timeout_seconds=0.25,
+        output_limit_bytes=1024, executable_fd=descriptor,
+    )
+    expected = ProbeDeadlineExceeded if failure == "timeout" else ProbeOutputLimitExceeded
+    try:
+        with pytest.raises(expected):
+            BoundedProcessRunner().run(request)
+    finally:
+        os.close(descriptor)
+
+    _assert_process_gone(int(child_file.read_text()))
+
+
+def test_concurrent_runners_contain_only_their_own_escaped_descendants(tmp_path) -> None:
+    unrelated = subprocess.Popen(
+        ["/usr/bin/sleep", "5"],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    requests: list[tuple[ProcessRequest, int, Path]] = []
+    for index in range(2):
+        script = tmp_path / f"concurrent-{index}.py"
+        pid_file = tmp_path / f"concurrent-{index}.pid"
+        body = (
+            "#!/usr/bin/env python3\n"
+            "import os, time\n"
+            "if os.fork() == 0:\n"
+            "    os.setsid()\n"
+            f"    open('{pid_file.name}', 'w').write(str(os.getpid()))\n"
+            "    null = os.open('/dev/null', os.O_RDWR)\n"
+            "    os.dup2(null, 0); os.dup2(null, 1); os.dup2(null, 2)\n"
+            "    time.sleep(60)\n"
+            "    os._exit(0)\n"
+            "time.sleep(0.2)\n"
+        ).encode()
+        digest = _executable(script, body)
+        descriptor = open_verified_executable(
+            script, digest, _test_only_allow_unprivileged=True
+        )
+        assert descriptor is not None
+        requests.append(
+            (
+                ProcessRequest.fixed(
+                    argv=(str(script),), cwd=tmp_path, timeout_seconds=1,
+                    output_limit_bytes=1024, executable_fd=descriptor,
+                ),
+                descriptor,
+                pid_file,
+            )
+        )
+    try:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            outcomes = list(
+                executor.map(
+                    BoundedProcessRunner().run,
+                    [request for request, _, _ in requests],
+                )
+            )
+        assert [item.returncode for item in outcomes] == [0, 0]
+        assert unrelated.poll() is None
+    finally:
+        for _, descriptor, _ in requests:
+            os.close(descriptor)
+        unrelated.terminate()
+        unrelated.wait(timeout=2)
+
+    for _, _, pid_file in requests:
+        _assert_process_gone(int(pid_file.read_text()))
+
+
 def test_process_request_cannot_enable_shell_stdin_or_inherited_descriptors(tmp_path) -> None:
     executable = tmp_path / "tool"
     digest = _executable(executable)
-    descriptor = open_verified_executable(executable, digest)
+    descriptor = open_verified_executable(
+        executable, digest, _test_only_allow_unprivileged=True
+    )
     assert descriptor is not None
     try:
         request = ProcessRequest.fixed(
@@ -542,7 +1056,9 @@ def test_process_request_cannot_enable_shell_stdin_or_inherited_descriptors(tmp_
 def test_verified_descriptor_execution_resists_path_swap(tmp_path) -> None:
     executable = tmp_path / "fixed-tool"
     digest = _executable(executable, b"#!/bin/sh\nprintf trusted\n")
-    descriptor = open_verified_executable(executable, digest)
+    descriptor = open_verified_executable(
+        executable, digest, _test_only_allow_unprivileged=True
+    )
     assert descriptor is not None
     replacement = tmp_path / "replacement"
     _executable(replacement, b"#!/bin/sh\nprintf attacker\n")
@@ -563,6 +1079,31 @@ def test_verified_descriptor_execution_resists_path_swap(tmp_path) -> None:
     assert outcome.stdout == b"trusted"
 
 
+def test_verified_descriptor_execution_resists_same_inode_overwrite(tmp_path) -> None:
+    executable = tmp_path / "fixed-tool"
+    digest = _executable(executable, b"#!/bin/sh\nprintf trusted\n")
+    descriptor = open_verified_executable(
+        executable, digest, _test_only_allow_unprivileged=True
+    )
+    assert descriptor is not None
+    executable.write_bytes(b"#!/bin/sh\nprintf attacker\n")
+    executable.chmod(0o755)
+    request = ProcessRequest.fixed(
+        argv=(str(executable),),
+        cwd=tmp_path,
+        timeout_seconds=1,
+        output_limit_bytes=1024,
+        executable_fd=descriptor,
+    )
+    try:
+        outcome = BoundedProcessRunner().run(request)
+    finally:
+        os.close(descriptor)
+
+    assert outcome.returncode == 0
+    assert outcome.stdout == b"trusted"
+
+
 def test_descriptor_bound_python_tool_imports_only_fixed_common_directory(tmp_path) -> None:
     bundle = tmp_path / "bundle"
     common = bundle / "bin/common"
@@ -573,7 +1114,9 @@ def test_descriptor_bound_python_tool_imports_only_fixed_common_directory(tmp_pa
         executable,
         b"#!/usr/bin/env python3\nimport fixture_helper\nprint(fixture_helper.VALUE, end='')\n",
     )
-    descriptor = open_verified_executable(executable, digest)
+    descriptor = open_verified_executable(
+        executable, digest, _test_only_allow_unprivileged=True
+    )
     assert descriptor is not None
     request = ProcessRequest(
         (str(executable),),
@@ -587,6 +1130,55 @@ def test_descriptor_bound_python_tool_imports_only_fixed_common_directory(tmp_pa
         outcome = BoundedProcessRunner().run(request)
     finally:
         os.close(descriptor)
+
+    assert outcome.returncode == 0
+    assert outcome.stdout == b"trusted"
+
+
+def test_python_tool_imports_verified_support_snapshot_after_source_path_swap(
+    tmp_path,
+) -> None:
+    policy, _ = installed_policy(tmp_path)
+    source = policy.bundle_root / "bin/common/asset_id.py"
+    source.write_text("VALUE = 'trusted'\n", encoding="utf-8")
+    support = tuple(
+        replace(
+            item,
+            sha256=hashlib.sha256(source.read_bytes()).hexdigest(),
+            size_bytes=source.stat().st_size,
+        )
+        if item.relative_path == "bin/common/asset_id.py"
+        else item
+        for item in policy.support_files
+    )
+    policy = replace(policy, support_files=support)
+    support_archive = open_verified_support_archive(policy)
+    executable = tmp_path / "tool.py"
+    digest = _executable(
+        executable,
+        b"#!/usr/bin/env python3\nimport asset_id\nprint(asset_id.VALUE, end='')\n",
+    )
+    descriptor = open_verified_executable(
+        executable, digest, _test_only_allow_unprivileged=True
+    )
+    assert descriptor is not None
+    replacement = tmp_path / "attacker.py"
+    replacement.write_text("VALUE = 'attacker'\n", encoding="utf-8")
+    os.replace(replacement, source)
+    request = ProcessRequest(
+        (str(executable),),
+        tmp_path,
+        {**FIXED_PROCESS_ENVIRONMENT, "PYTHONPATH": f"/proc/self/fd/{support_archive}"},
+        2,
+        1024,
+        descriptor,
+        support_archive_fd=support_archive,
+    )
+    try:
+        outcome = BoundedProcessRunner().run(request)
+    finally:
+        os.close(descriptor)
+        os.close(support_archive)
 
     assert outcome.returncode == 0
     assert outcome.stdout == b"trusted"

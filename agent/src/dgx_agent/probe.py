@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-import ctypes
 import ipaddress
 import json
 import math
@@ -12,6 +11,7 @@ from pathlib import Path
 import selectors
 import signal
 import subprocess
+import sys
 import time
 import re
 from types import MappingProxyType
@@ -24,14 +24,15 @@ from .nvidia_tools import (
     InstalledPolicyError,
     ToolName,
     open_verified_executable,
+    open_verified_support_archive,
     parse_tool_document,
-    verify_reviewed_support_files,
 )
 
 
 TOTAL_PROBE_SECONDS = 15
 AGGREGATE_OUTPUT_LIMIT_BYTES = 256 * 1024
 RESULT_LIMIT_BYTES = 64 * 1024
+_CLEANUP_RESERVE_SECONDS = 0.04
 FIXED_PROCESS_ENVIRONMENT: Mapping[str, str] = MappingProxyType(
     {
         "LANG": "C.UTF-8",
@@ -75,6 +76,8 @@ class ProcessRequest:
     timeout_seconds: float
     output_limit_bytes: int
     executable_fd: int
+    support_archive_fd: int | None = None
+    absolute_deadline: float | None = None
     shell: bool = False
     stdin_closed: bool = True
     close_fds: bool = True
@@ -89,6 +92,8 @@ class ProcessRequest:
         timeout_seconds: float,
         output_limit_bytes: int,
         executable_fd: int,
+        support_archive_fd: int | None = None,
+        absolute_deadline: float | None = None,
     ) -> "ProcessRequest":
         if (
             not argv
@@ -120,6 +125,18 @@ class ProcessRequest:
             os.fstat(executable_fd)
         except OSError as error:
             raise ProbeCollectorError("verified executable descriptor is invalid") from error
+        if support_archive_fd is not None:
+            try:
+                os.fstat(support_archive_fd)
+            except OSError as error:
+                raise ProbeCollectorError("verified support descriptor is invalid") from error
+        now = time.monotonic()
+        fixed_deadline = min(
+            now + float(timeout_seconds),
+            absolute_deadline if absolute_deadline is not None else math.inf,
+        )
+        if not math.isfinite(fixed_deadline) or fixed_deadline <= now:
+            raise ProbeDeadlineExceeded("process deadline has elapsed")
         return cls(
             tuple(argv),
             path,
@@ -127,11 +144,15 @@ class ProcessRequest:
             float(timeout_seconds),
             output_limit_bytes,
             executable_fd,
+            support_archive_fd,
+            fixed_deadline,
         )
 
     @property
     def inherited_fds(self) -> tuple[int, ...]:
-        return (self.executable_fd,)
+        if self.support_archive_fd is None:
+            return (self.executable_fd,)
+        return (self.executable_fd, self.support_archive_fd)
 
 
 @dataclass(frozen=True)
@@ -150,23 +171,44 @@ class BoundedProcessRunner:
 
     def run(self, request: ProcessRequest) -> ProcessOutcome:
         process: subprocess.Popen[bytes] | None = None
-        restore_subreaper = _enable_subreaper()
+        status_read = -1
+        status_write = -1
+        deadline = request.absolute_deadline
+        if deadline is None:
+            deadline = time.monotonic() + request.timeout_seconds
+        execution_deadline = deadline - _CLEANUP_RESERVE_SECONDS
+        if time.monotonic() >= execution_deadline:
+            raise ProbeDeadlineExceeded("probe process timed out")
         try:
+            supervisor = Path(__file__).with_name("_probe_supervisor.py")
+            status_read, status_write = os.pipe2(os.O_CLOEXEC)
             process = subprocess.Popen(
-                list(request.argv),
-                executable=f"/proc/self/fd/{request.executable_fd}",
+                [
+                    sys.executable,
+                    "-I",
+                    str(supervisor),
+                    str(status_write),
+                    str(request.executable_fd),
+                    str(request.support_archive_fd if request.support_archive_fd is not None else -1),
+                    repr(deadline),
+                    str(request.cwd),
+                    *request.argv,
+                ],
+                executable=sys.executable,
                 shell=False,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
-                cwd=str(request.cwd),
+                cwd="/",
                 env=dict(request.env),
                 close_fds=True,
-                pass_fds=request.inherited_fds,
+                pass_fds=(*request.inherited_fds, status_write),
                 start_new_session=True,
                 text=False,
                 bufsize=0,
             )
+            os.close(status_write)
+            status_write = -1
             assert process.stdout is not None and process.stderr is not None
             streams = {
                 process.stdout.fileno(): bytearray(),
@@ -178,10 +220,9 @@ class BoundedProcessRunner:
             try:
                 for descriptor in streams:
                     selector.register(descriptor, selectors.EVENT_READ)
-                deadline = time.monotonic() + request.timeout_seconds
                 total = 0
                 while selector.get_map():
-                    remaining_time = deadline - time.monotonic()
+                    remaining_time = execution_deadline - time.monotonic()
                     if remaining_time <= 0:
                         raise ProbeDeadlineExceeded(
                             "probe process timed out", captured_bytes=total
@@ -207,7 +248,7 @@ class BoundedProcessRunner:
                                 captured_bytes=total,
                             )
                         streams[key.fd].extend(chunk)
-                remaining_time = deadline - time.monotonic()
+                remaining_time = execution_deadline - time.monotonic()
                 if remaining_time <= 0:
                     raise ProbeDeadlineExceeded(
                         "probe process timed out", captured_bytes=total
@@ -218,22 +259,40 @@ class BoundedProcessRunner:
                     raise ProbeDeadlineExceeded(
                         "probe process timed out", captured_bytes=total
                     ) from error
-                outcome = ProcessOutcome(
-                    returncode,
+                status = os.read(status_read, 33)
+                if time.monotonic() >= deadline:
+                    raise ProbeDeadlineExceeded(
+                        "probe process timed out", captured_bytes=total
+                    )
+                if returncode != 0 or len(status) > 32 or not status.endswith(b"\n"):
+                    raise ProbeCollectorError("probe process could not be executed")
+                try:
+                    kind, raw_code = status[:-1].decode("ascii").split(":", 1)
+                    tool_returncode = int(raw_code)
+                except (UnicodeDecodeError, ValueError) as error:
+                    raise ProbeCollectorError(
+                        "probe supervisor returned invalid status"
+                    ) from error
+                if kind == "timeout":
+                    raise ProbeDeadlineExceeded(
+                        "probe process timed out", captured_bytes=total
+                    )
+                if kind != "ok" or not 0 <= tool_returncode <= 125:
+                    raise ProbeCollectorError("probe process could not be executed")
+                return ProcessOutcome(
+                    tool_returncode,
                     bytes(streams[process.stdout.fileno()]),
                     bytes(streams[process.stderr.fileno()]),
                 )
-                _cleanup_residual_group(process.pid)
-                return outcome
             finally:
                 selector.close()
         except (ProbeDeadlineExceeded, ProbeOutputLimitExceeded):
             if process is not None:
-                _terminate_group(process)
+                _terminate_group(process, deadline)
             raise
         except (OSError, subprocess.SubprocessError) as error:
             if process is not None:
-                _terminate_group(process)
+                _terminate_group(process, deadline)
             raise ProbeCollectorError("probe process could not be executed") from error
         finally:
             if process is not None:
@@ -241,97 +300,39 @@ class BoundedProcessRunner:
                     process.stdout.close()
                 if process.stderr is not None:
                     process.stderr.close()
-            if restore_subreaper:
-                _set_subreaper(False)
+            if status_read >= 0:
+                os.close(status_read)
+            if status_write >= 0:
+                os.close(status_write)
 
 
-def _terminate_group(process: subprocess.Popen[bytes]) -> None:
+def _terminate_group(
+    process: subprocess.Popen[bytes], absolute_deadline: float
+) -> None:
     try:
         os.killpg(process.pid, signal.SIGTERM)
     except ProcessLookupError:
         pass
     try:
-        process.wait(timeout=0.25)
+        os.kill(process.pid, signal.SIGCONT)
+    except ProcessLookupError:
+        pass
+    cleanup_end = min(time.monotonic() + 0.08, absolute_deadline + 0.08)
+    try:
+        process.wait(timeout=max(0.0, cleanup_end - time.monotonic()))
     except subprocess.TimeoutExpired:
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
         try:
-            process.wait(timeout=1)
+            process.wait(timeout=max(0.0, cleanup_end - time.monotonic()))
         except subprocess.TimeoutExpired:
             process.kill()
-            process.wait(timeout=1)
-    # The leader can exit before descendants.  Kill the residual group too.
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    _reap_group(process.pid)
-
-
-_PR_SET_CHILD_SUBREAPER = 36
-_PR_GET_CHILD_SUBREAPER = 37
-
-
-def _set_subreaper(enabled: bool) -> bool:
-    try:
-        libc = ctypes.CDLL(None, use_errno=True)
-        return libc.prctl(_PR_SET_CHILD_SUBREAPER, int(enabled), 0, 0, 0) == 0
-    except (AttributeError, OSError):
-        return False
-
-
-def _enable_subreaper() -> bool:
-    try:
-        current = ctypes.c_int()
-        libc = ctypes.CDLL(None, use_errno=True)
-        if libc.prctl(_PR_GET_CHILD_SUBREAPER, ctypes.byref(current), 0, 0, 0) != 0:
-            return False
-        if current.value:
-            return False
-        return _set_subreaper(True)
-    except (AttributeError, OSError):
-        return False
-
-
-def _cleanup_residual_group(process_group: int) -> None:
-    try:
-        os.killpg(process_group, signal.SIGTERM)
-    except ProcessLookupError:
-        _reap_group(process_group)
-        return
-    deadline = time.monotonic() + 0.1
-    while time.monotonic() < deadline:
-        _reap_group(process_group)
-        try:
-            os.killpg(process_group, 0)
-        except ProcessLookupError:
-            return
-        time.sleep(0.005)
-    try:
-        os.killpg(process_group, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    _reap_group(process_group, wait_seconds=0.25)
-
-
-def _reap_group(process_group: int, *, wait_seconds: float = 0.0) -> None:
-    deadline = time.monotonic() + wait_seconds
-    while True:
-        reaped = False
-        try:
-            while True:
-                child, _ = os.waitpid(-process_group, os.WNOHANG)
-                if child == 0:
-                    break
-                reaped = True
-        except ChildProcessError:
-            return
-        if reaped or time.monotonic() >= deadline:
-            if time.monotonic() >= deadline:
-                return
-        time.sleep(0.005)
+            try:
+                process.wait(timeout=0.01)
+            except subprocess.TimeoutExpired:
+                pass
 
 
 @dataclass(frozen=True)
@@ -355,14 +356,26 @@ class PinnedNodeProbe:
 
         descriptors: dict[ToolName, int | None] = {}
         opened: list[int] = []
+        support_archive: int | None = None
         try:
             # Open and hash every path before executing anything.  Retaining
             # these descriptors closes the verify/open pathname race.
             if self.policy.bundle_root_available():
-                verify_reviewed_support_files(self.policy)
+                support_archive = open_verified_support_archive(
+                    self.policy,
+                    _check_deadline=lambda: self._ensure_time(absolute_deadline),
+                )
+                opened.append(support_archive)
                 self._ensure_time(absolute_deadline)
                 for tool in self.policy.tools:
-                    descriptor = open_verified_executable(tool.executable, tool.sha256)
+                    descriptor = open_verified_executable(
+                        tool.executable,
+                        tool.sha256,
+                        _test_only_allow_unprivileged=(
+                            self.policy._test_only_allow_unprivileged
+                        ),
+                        _check_deadline=lambda: self._ensure_time(absolute_deadline),
+                    )
                     descriptors[tool.name] = descriptor
                     if descriptor is not None:
                         opened.append(descriptor)
@@ -370,7 +383,12 @@ class PinnedNodeProbe:
             else:
                 descriptors.update({tool.name: None for tool in self.policy.tools})
             health_descriptor = open_verified_executable(
-                self.policy.health.executable, self.policy.health.sha256
+                self.policy.health.executable,
+                self.policy.health.sha256,
+                _test_only_allow_unprivileged=(
+                    self.policy._test_only_allow_unprivileged
+                ),
+                _check_deadline=lambda: self._ensure_time(absolute_deadline),
             )
             if health_descriptor is None:
                 raise ProbeCollectorError("fixed health collector is unavailable")
@@ -386,12 +404,14 @@ class PinnedNodeProbe:
                 absolute_deadline,
                 aggregate,
                 health_descriptor,
+                support_archive_fd=None,
                 tool_environment=False,
             )
             aggregate = _add_raw(aggregate, health_outcome)
             if health_outcome.returncode != 0:
                 raise ProbeCollectorError("fixed health collector failed")
             health = _normalize_health(health_outcome.stdout, self.policy.health.output_limit_bytes)
+            self._ensure_time(absolute_deadline)
 
             tools: dict[str, Mapping[str, Any]] = {}
             for tool in self.policy.tools:
@@ -409,6 +429,7 @@ class PinnedNodeProbe:
                         absolute_deadline,
                         aggregate,
                         descriptor,
+                        support_archive_fd=support_archive,
                         tool_environment=True,
                     )
                     aggregate = _add_raw(aggregate, outcome)
@@ -421,6 +442,7 @@ class PinnedNodeProbe:
                     parsed = parse_tool_document(
                         tool.name, outcome.stdout, limit=tool.output_limit_bytes
                     )
+                    self._ensure_time(absolute_deadline)
                     item: dict[str, Any] = {
                         "status": "ok" if parsed.ok else "degraded",
                         **provenance,
@@ -466,6 +488,7 @@ class PinnedNodeProbe:
         frozen = _freeze(evidence)
         if len(canonical_message({"status": "ok", "evidence": frozen})) > RESULT_LIMIT_BYTES:
             raise ProbeResultLimitExceeded("normalized probe result is too large")
+        self._ensure_time(absolute_deadline)
         return frozen
 
     def _run(
@@ -478,6 +501,7 @@ class PinnedNodeProbe:
         aggregate: int,
         executable_fd: int,
         *,
+        support_archive_fd: int | None,
         tool_environment: bool,
     ) -> ProcessOutcome:
         remaining_time = absolute_deadline - self._monotonic()
@@ -492,6 +516,8 @@ class PinnedNodeProbe:
             timeout_seconds=min(float(policy_timeout), remaining_time),
             output_limit_bytes=min(policy_output_limit, remaining_output),
             executable_fd=executable_fd,
+            support_archive_fd=support_archive_fd,
+            absolute_deadline=absolute_deadline,
         )
         if tool_environment:
             request = ProcessRequest(
@@ -500,14 +526,18 @@ class PinnedNodeProbe:
                 MappingProxyType(
                     {
                         **FIXED_PROCESS_ENVIRONMENT,
-                        "PYTHONPATH": str(self.policy.bundle_root / "bin" / "common"),
+                        "PYTHONPATH": f"/proc/self/fd/{support_archive_fd}",
                     }
                 ),
                 request.timeout_seconds,
                 request.output_limit_bytes,
                 request.executable_fd,
+                request.support_archive_fd,
+                request.absolute_deadline,
             )
-        return self._runner.run(request)
+        outcome = self._runner.run(request)
+        self._ensure_time(absolute_deadline)
+        return outcome
 
     def _ensure_time(self, absolute_deadline: float) -> None:
         if self._monotonic() >= absolute_deadline:

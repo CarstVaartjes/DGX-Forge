@@ -5,10 +5,12 @@ import json
 import os
 from dataclasses import replace
 from pathlib import Path
+import zipfile
 
 import pytest
 
 from dgx_agent_protocol import canonical_message
+import dgx_agent.nvidia_tools as nvidia_tools
 
 from dgx_agent.nvidia_tools import (
     NVIDIA_TOOL_NAMES,
@@ -134,7 +136,7 @@ def write_policy(tmp_path: Path, document: object, *, raw: bytes | None = None) 
 def test_installed_policy_contract_is_strict_typed_and_immutable(tmp_path) -> None:
     document, root = policy_document(tmp_path)
 
-    policy = InstalledPolicy.load(write_policy(tmp_path, document))
+    policy = InstalledPolicy._load_for_test(write_policy(tmp_path, document))
 
     assert policy.schema_version == 1
     assert policy.bundle_version == "0.1.0"
@@ -156,6 +158,16 @@ def test_installed_policy_contract_is_strict_typed_and_immutable(tmp_path) -> No
     assert policy.health.fabric_pairs[0].interface == "enp1s0f1np1"
     with pytest.raises(AttributeError):
         policy.bundle_version = "changed"  # type: ignore[misc]
+
+
+def test_production_policy_rejects_unprivileged_mutable_ownership(tmp_path) -> None:
+    document, _ = policy_document(tmp_path)
+    path = write_policy(tmp_path, document)
+
+    with pytest.raises(InstalledToolSecurityError):
+        InstalledPolicy.load(path)
+
+    assert InstalledPolicy._load_for_test(path).bundle_version == "0.1.0"
 
 
 @pytest.mark.parametrize(
@@ -192,7 +204,7 @@ def test_policy_rejects_missing_unknown_or_unreviewed_values(tmp_path, mutation)
     mutation(document)
 
     with pytest.raises(InstalledPolicyError):
-        InstalledPolicy.load(write_policy(tmp_path, document))
+        InstalledPolicy._load_for_test(write_policy(tmp_path, document))
 
 
 def test_policy_rejects_duplicate_json_fields_tools_and_fabric_pairs(tmp_path) -> None:
@@ -200,19 +212,19 @@ def test_policy_rejects_duplicate_json_fields_tools_and_fabric_pairs(tmp_path) -
     encoded = json.dumps(document).encode()
     duplicate = encoded[:-1] + b',"schema_version":1}'
     with pytest.raises(InstalledPolicyError, match="duplicate"):
-        InstalledPolicy.load(write_policy(tmp_path, {}, raw=duplicate))
+        InstalledPolicy._load_for_test(write_policy(tmp_path, {}, raw=duplicate))
 
     document, _ = policy_document(tmp_path)
     document["tools"][1]["name"] = document["tools"][0]["name"]
     with pytest.raises(InstalledPolicyError):
-        InstalledPolicy.load(write_policy(tmp_path, document))
+        InstalledPolicy._load_for_test(write_policy(tmp_path, document))
 
     document, _ = policy_document(tmp_path)
     document["health"]["fabric_pairs"].append(
         {"interface": "enp1s0f1np1", "hca": "different"}
     )
     with pytest.raises(InstalledPolicyError):
-        InstalledPolicy.load(write_policy(tmp_path, document))
+        InstalledPolicy._load_for_test(write_policy(tmp_path, document))
 
 
 @pytest.mark.parametrize(
@@ -245,7 +257,7 @@ def test_policy_rejects_unsafe_paths_arguments_and_bounds(
         document["health"][field] = value
 
     with pytest.raises(InstalledPolicyError):
-        InstalledPolicy.load(write_policy(tmp_path, document))
+        InstalledPolicy._load_for_test(write_policy(tmp_path, document))
 
 
 def test_policy_file_read_is_bounded_utf8_regular_and_descriptor_safe(tmp_path) -> None:
@@ -254,24 +266,24 @@ def test_policy_file_read_is_bounded_utf8_regular_and_descriptor_safe(tmp_path) 
     linked = tmp_path / "linked-policy.json"
     linked.symlink_to(real)
     with pytest.raises(InstalledPolicyError):
-        InstalledPolicy.load(linked)
+        InstalledPolicy._load_for_test(linked)
 
     fifo = tmp_path / "policy.fifo"
     os.mkfifo(fifo)
     with pytest.raises(InstalledPolicyError):
-        InstalledPolicy.load(fifo)
+        InstalledPolicy._load_for_test(fifo)
 
     with pytest.raises(InstalledPolicyError):
-        InstalledPolicy.load(write_policy(tmp_path, {}, raw=b"\xff"))
+        InstalledPolicy._load_for_test(write_policy(tmp_path, {}, raw=b"\xff"))
     with pytest.raises(InstalledPolicyError, match="large"):
-        InstalledPolicy.load(write_policy(tmp_path, {}, raw=b"{" + b" " * 65536 + b"}"))
+        InstalledPolicy._load_for_test(write_policy(tmp_path, {}, raw=b"{" + b" " * 65536 + b"}"))
 
 
 def test_present_executables_are_descriptor_verified_for_type_mode_owner_and_digest(
     tmp_path, monkeypatch
 ) -> None:
     document, root = policy_document(tmp_path)
-    policy = fixture_policy(InstalledPolicy.load(write_policy(tmp_path, document)))
+    policy = fixture_policy(InstalledPolicy._load_for_test(write_policy(tmp_path, document)))
     policy.verify_installed()
 
     first = Path(document["tools"][0]["executable"])
@@ -301,7 +313,7 @@ def test_present_executables_are_descriptor_verified_for_type_mode_owner_and_dig
 
 def test_missing_tool_is_unavailable_but_present_tampering_is_not(tmp_path) -> None:
     document, _ = policy_document(tmp_path)
-    policy = fixture_policy(InstalledPolicy.load(write_policy(tmp_path, document)))
+    policy = fixture_policy(InstalledPolicy._load_for_test(write_policy(tmp_path, document)))
     missing = Path(document["tools"][0]["executable"])
     missing.unlink()
 
@@ -317,7 +329,7 @@ def test_missing_tool_is_unavailable_but_present_tampering_is_not(tmp_path) -> N
 
 def test_rejected_bundle_directory_does_not_leak_descriptors(tmp_path) -> None:
     document, root = policy_document(tmp_path)
-    policy = fixture_policy(InstalledPolicy.load(write_policy(tmp_path, document)))
+    policy = fixture_policy(InstalledPolicy._load_for_test(write_policy(tmp_path, document)))
     root.chmod(0o777)
     before = len(os.listdir("/proc/self/fd"))
 
@@ -328,20 +340,40 @@ def test_rejected_bundle_directory_does_not_leak_descriptors(tmp_path) -> None:
     assert len(os.listdir("/proc/self/fd")) == before
 
 
+def test_rejected_artifact_snapshot_does_not_leak_descriptors(tmp_path) -> None:
+    executable = tmp_path / "tool"
+    _executable(executable)
+    before = len(os.listdir("/proc/self/fd"))
+
+    for _ in range(10):
+        with pytest.raises(InstalledToolSecurityError, match="digest"):
+            open_verified_executable(
+                executable,
+                "a" * 64,
+                _test_only_allow_unprivileged=True,
+            )
+
+    assert len(os.listdir("/proc/self/fd")) == before
+
+
 def test_unavailable_executable_never_closes_standard_input(tmp_path) -> None:
     try:
         before = os.fstat(0)
     except OSError:
         pytest.skip("test process has no standard input descriptor")
 
-    assert open_verified_executable(tmp_path / "missing", "a" * 64) is None
+    assert open_verified_executable(
+        tmp_path / "missing",
+        "a" * 64,
+        _test_only_allow_unprivileged=True,
+    ) is None
     assert os.fstat(0) == before
 
 
 @pytest.mark.parametrize("attack", ["tamper", "symlink", "extra"])
 def test_imported_common_module_attacks_fail_before_execution(tmp_path, attack) -> None:
     document, _ = policy_document(tmp_path)
-    policy = fixture_policy(InstalledPolicy.load(write_policy(tmp_path, document)))
+    policy = fixture_policy(InstalledPolicy._load_for_test(write_policy(tmp_path, document)))
     target = policy.bundle_root / "bin/common/output.py"
     if attack == "tamper":
         target.write_text("attacker", encoding="utf-8")
@@ -353,6 +385,28 @@ def test_imported_common_module_attacks_fail_before_execution(tmp_path, attack) 
 
     with pytest.raises(InstalledToolSecurityError):
         verify_reviewed_support_files(policy)
+
+
+def test_reviewed_support_archive_is_exact_deterministic_and_write_sealed(tmp_path) -> None:
+    document, _ = policy_document(tmp_path)
+    policy = fixture_policy(InstalledPolicy._load_for_test(write_policy(tmp_path, document)))
+
+    first = nvidia_tools.open_verified_support_archive(policy)
+    second = nvidia_tools.open_verified_support_archive(policy)
+    try:
+        with zipfile.ZipFile(f"/proc/self/fd/{first}") as archive:
+            assert archive.namelist() == [
+                "__init__.py",
+                "asset_id.py",
+                "cli_base.py",
+                "output.py",
+            ]
+        assert os.pread(first, 1 << 20, 0) == os.pread(second, 1 << 20, 0)
+        with pytest.raises(OSError):
+            os.write(first, b"attacker")
+    finally:
+        os.close(first)
+        os.close(second)
 
 
 def envelope(data, *, ok: bool = True) -> bytes:
@@ -530,6 +584,7 @@ def test_sensitive_value_shapes_are_dropped_even_from_allowlisted_fields(sensiti
         b'{"ok":true,"data":{},"errors":[],"meta":{},"extra":1}',
         b'{"ok":true,"ok":false,"data":{},"errors":[],"meta":{}}',
         b'{"ok":"yes","data":{},"errors":[],"meta":{}}',
+        b'{"ok":true,"data":null,"errors":[],"meta":{}}',
         b'{"ok":true,"data":{},"errors":"raw secret","meta":{}}',
     ],
 )

@@ -7,7 +7,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+import fcntl
 import hashlib
+import io
 import ipaddress
 import json
 import math
@@ -16,7 +18,8 @@ from pathlib import Path, PurePosixPath
 import re
 import stat
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
+import zipfile
 
 
 REVIEWED_BUNDLE_VERSION = "0.1.0"
@@ -162,10 +165,23 @@ class InstalledPolicy:
     tools: tuple[ToolPolicy, ...]
     support_files: tuple[SupportFilePolicy, ...]
     health: HealthPolicy
+    _test_only_allow_unprivileged: bool = False
 
     @classmethod
     def load(cls, path: Path) -> "InstalledPolicy":
-        raw = _read_policy(Path(path))
+        return cls._load(Path(path), test_only_allow_unprivileged=False)
+
+    @classmethod
+    def _load_for_test(cls, path: Path) -> "InstalledPolicy":
+        return cls._load(Path(path), test_only_allow_unprivileged=True)
+
+    @classmethod
+    def _load(
+        cls, path: Path, *, test_only_allow_unprivileged: bool
+    ) -> "InstalledPolicy":
+        raw = _read_policy(
+            path, test_only_allow_unprivileged=test_only_allow_unprivileged
+        )
         try:
             document = json.loads(raw.decode("utf-8"), object_pairs_hook=_unique)
         except UnicodeDecodeError as error:
@@ -213,23 +229,38 @@ class InstalledPolicy:
             tuple(parsed[name] for name in ToolName),
             support,
             health,
+            test_only_allow_unprivileged,
         )
 
     def verify_installed(self) -> Mapping[ToolName, bool]:
-        root_status = _verify_directory(self.bundle_root)
+        root_status = _verify_directory(
+            self.bundle_root,
+            test_only_allow_unprivileged=self._test_only_allow_unprivileged,
+        )
         if not root_status:
             return MappingProxyType({name: False for name in ToolName})
         verify_reviewed_support_files(self)
         result: dict[ToolName, bool] = {}
         for tool in self.tools:
-            result[tool.name] = _verify_executable(tool.executable, tool.sha256)
+            result[tool.name] = _verify_executable(
+                tool.executable,
+                tool.sha256,
+                test_only_allow_unprivileged=self._test_only_allow_unprivileged,
+            )
         return MappingProxyType(result)
 
     def verify_health_collector(self) -> bool:
-        return _verify_executable(self.health.executable, self.health.sha256)
+        return _verify_executable(
+            self.health.executable,
+            self.health.sha256,
+            test_only_allow_unprivileged=self._test_only_allow_unprivileged,
+        )
 
     def bundle_root_available(self) -> bool:
-        return _verify_directory(self.bundle_root)
+        return _verify_directory(
+            self.bundle_root,
+            test_only_allow_unprivileged=self._test_only_allow_unprivileged,
+        )
 
 
 @dataclass(frozen=True)
@@ -261,7 +292,9 @@ def parse_tool_document(
     if not isinstance(envelope["meta"], dict):
         raise InstalledPolicyError("NVIDIA envelope metadata is invalid")
     data = envelope["data"]
-    if not isinstance(data, dict):
+    if data is None and envelope["ok"] is False:
+        data = {}
+    elif not isinstance(data, dict):
         raise InstalledPolicyError("NVIDIA envelope data is invalid")
     normalized = _NORMALIZERS[name](data)
     return NormalizedToolDocument(envelope["ok"], _freeze(normalized))
@@ -404,8 +437,10 @@ def _support_files(value: Any) -> tuple[SupportFilePolicy, ...]:
     return tuple(parsed[name] for name in sorted(parsed))
 
 
-def _read_policy(path: Path) -> bytes:
-    parent, leaf = _open_parent(path)
+def _read_policy(path: Path, *, test_only_allow_unprivileged: bool) -> bytes:
+    parent, leaf = _open_parent(
+        path, test_only_allow_unprivileged=test_only_allow_unprivileged
+    )
     descriptor = -1
     try:
         descriptor = os.open(
@@ -414,7 +449,12 @@ def _read_policy(path: Path) -> bytes:
             dir_fd=parent,
         )
         metadata = os.fstat(descriptor)
-        _trusted(metadata, directory=False, executable=False)
+        _trusted(
+            metadata,
+            directory=False,
+            executable=False,
+            test_only_allow_unprivileged=test_only_allow_unprivileged,
+        )
         if not stat.S_ISREG(metadata.st_mode):
             raise InstalledPolicyError("installed policy must be a regular file")
         if metadata.st_size > MAX_POLICY_BYTES:
@@ -433,7 +473,9 @@ def _read_policy(path: Path) -> bytes:
         os.close(parent)
 
 
-def _open_parent(path: Path) -> tuple[int, str]:
+def _open_parent(
+    path: Path, *, test_only_allow_unprivileged: bool = False
+) -> tuple[int, str]:
     if not path.is_absolute() or len(path.parts) < 2:
         raise InstalledPolicyError("path must be absolute")
     descriptor = os.open("/", os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC)
@@ -446,7 +488,12 @@ def _open_parent(path: Path) -> tuple[int, str]:
             )
             os.close(descriptor)
             descriptor = child
-            _trusted(os.fstat(descriptor), directory=True, executable=False)
+            _trusted(
+                os.fstat(descriptor),
+                directory=True,
+                executable=False,
+                test_only_allow_unprivileged=test_only_allow_unprivileged,
+            )
         return descriptor, path.name
     except InstalledPolicyError:
         os.close(descriptor)
@@ -456,11 +503,20 @@ def _open_parent(path: Path) -> tuple[int, str]:
         raise InstalledPolicyError("path must not traverse symlinks") from error
 
 
-def _trusted(metadata: os.stat_result, *, directory: bool, executable: bool) -> None:
-    if metadata.st_uid not in {0, os.geteuid()}:
+def _trusted(
+    metadata: os.stat_result,
+    *,
+    directory: bool,
+    executable: bool,
+    test_only_allow_unprivileged: bool = False,
+) -> None:
+    permitted_owners = {0}
+    if test_only_allow_unprivileged:
+        permitted_owners.add(os.geteuid())
+    if metadata.st_uid not in permitted_owners:
         raise InstalledToolSecurityError("installed path owner is unsafe")
     mode = stat.S_IMODE(metadata.st_mode)
-    if directory and mode & stat.S_ISVTX:
+    if test_only_allow_unprivileged and directory and mode & stat.S_ISVTX:
         return
     if mode & 0o022 or mode & (stat.S_ISUID | stat.S_ISGID):
         raise InstalledToolSecurityError("installed path mode is unsafe")
@@ -468,9 +524,13 @@ def _trusted(metadata: os.stat_result, *, directory: bool, executable: bool) -> 
         raise InstalledToolSecurityError("installed executable mode is unsafe")
 
 
-def _verify_directory(path: Path) -> bool:
+def _verify_directory(
+    path: Path, *, test_only_allow_unprivileged: bool = False
+) -> bool:
     try:
-        parent, leaf = _open_parent(path)
+        parent, leaf = _open_parent(
+            path, test_only_allow_unprivileged=test_only_allow_unprivileged
+        )
     except InstalledPolicyError as error:
         if isinstance(error.__cause__, FileNotFoundError):
             return False
@@ -486,7 +546,12 @@ def _verify_directory(path: Path) -> bool:
         except FileNotFoundError:
             return False
         metadata = os.fstat(descriptor)
-        _trusted(metadata, directory=True, executable=False)
+        _trusted(
+            metadata,
+            directory=True,
+            executable=False,
+            test_only_allow_unprivileged=test_only_allow_unprivileged,
+        )
         return True
     except InstalledPolicyError:
         raise
@@ -498,24 +563,65 @@ def _verify_directory(path: Path) -> bool:
         os.close(parent)
 
 
-def _verify_executable(path: Path, expected_digest: str) -> bool:
-    descriptor = open_verified_executable(path, expected_digest)
+def _verify_executable(
+    path: Path,
+    expected_digest: str,
+    *,
+    test_only_allow_unprivileged: bool = False,
+) -> bool:
+    descriptor = open_verified_executable(
+        path,
+        expected_digest,
+        _test_only_allow_unprivileged=test_only_allow_unprivileged,
+    )
     if descriptor is None:
         return False
     os.close(descriptor)
     return True
 
 
-def open_verified_executable(path: Path, expected_digest: str) -> int | None:
-    """Return an open, hashed descriptor so execution cannot race pathname swaps."""
-    return _open_verified_file(path, expected_digest, executable=True)
+def open_verified_executable(
+    path: Path,
+    expected_digest: str,
+    *,
+    _test_only_allow_unprivileged: bool = False,
+    _check_deadline: Callable[[], None] | None = None,
+) -> int | None:
+    """Return a sealed snapshot so later inode mutations cannot change execution."""
+    return _open_verified_file(
+        path,
+        expected_digest,
+        executable=True,
+        test_only_allow_unprivileged=_test_only_allow_unprivileged,
+        check_deadline=_check_deadline,
+    )
 
 
-def verify_reviewed_support_files(policy: InstalledPolicy) -> None:
-    """Verify imported reviewed modules when the compiled production lock is used."""
+def verify_reviewed_support_files(
+    policy: InstalledPolicy,
+    *,
+    _check_deadline: Callable[[], None] | None = None,
+) -> None:
+    """Verify that the exact reviewed imports can be snapshotted safely."""
+    descriptor = open_verified_support_archive(
+        policy, _check_deadline=_check_deadline
+    )
+    os.close(descriptor)
+
+
+def open_verified_support_archive(
+    policy: InstalledPolicy,
+    *,
+    _check_deadline: Callable[[], None] | None = None,
+) -> int:
+    """Return a deterministic sealed ZIP containing only reviewed import bytes."""
     common = policy.bundle_root / "bin" / "common"
+    _check(_check_deadline)
     try:
-        parent, leaf = _open_parent(common)
+        parent, leaf = _open_parent(
+            common,
+            test_only_allow_unprivileged=policy._test_only_allow_unprivileged,
+        )
     except InstalledPolicyError as error:
         raise InstalledToolSecurityError("reviewed support directory is unsafe") from error
     descriptor = -1
@@ -525,10 +631,16 @@ def verify_reviewed_support_files(policy: InstalledPolicy) -> None:
             os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=parent,
         )
-        _trusted(os.fstat(descriptor), directory=True, executable=False)
+        _trusted(
+            os.fstat(descriptor),
+            directory=True,
+            executable=False,
+            test_only_allow_unprivileged=policy._test_only_allow_unprivileged,
+        )
         expected_names = {Path(item.relative_path).name for item in policy.support_files}
         if set(os.listdir(descriptor)) != expected_names:
             raise InstalledToolSecurityError("reviewed support directory has unexpected entries")
+        _check(_check_deadline)
     except InstalledPolicyError:
         raise
     except OSError as error:
@@ -537,16 +649,41 @@ def verify_reviewed_support_files(policy: InstalledPolicy) -> None:
         if descriptor >= 0:
             os.close(descriptor)
         os.close(parent)
+    support_bytes: dict[str, bytes] = {}
     for item in policy.support_files:
-        descriptor = _open_verified_file(
+        snapshot = _open_verified_file(
             policy.bundle_root / item.relative_path,
             item.sha256,
             executable=False,
             expected_size=item.size_bytes,
+            test_only_allow_unprivileged=policy._test_only_allow_unprivileged,
+            check_deadline=_check_deadline,
         )
-        if descriptor is None:
+        if snapshot is None:
             raise InstalledToolSecurityError("reviewed support file is unavailable")
-        os.close(descriptor)
+        try:
+            _check(_check_deadline)
+            support_bytes[Path(item.relative_path).name] = os.pread(
+                snapshot, item.size_bytes, 0
+            )
+            _check(_check_deadline)
+        finally:
+            os.close(snapshot)
+    rendered = io.BytesIO()
+    with zipfile.ZipFile(rendered, "w", compression=zipfile.ZIP_STORED) as archive:
+        for name in sorted(support_bytes):
+            _check(_check_deadline)
+            info = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_STORED
+            info.create_system = 3
+            info.external_attr = 0o100444 << 16
+            archive.writestr(info, support_bytes[name])
+            _check(_check_deadline)
+    return _sealed_memfd(
+        "dgx-agent-reviewed-support",
+        rendered.getvalue(),
+        check_deadline=_check_deadline,
+    )
 
 
 def _open_verified_file(
@@ -555,14 +692,20 @@ def _open_verified_file(
     *,
     executable: bool,
     expected_size: int | None = None,
+    test_only_allow_unprivileged: bool = False,
+    check_deadline: Callable[[], None] | None = None,
 ) -> int | None:
+    _check(check_deadline)
     try:
-        parent, leaf = _open_parent(path)
+        parent, leaf = _open_parent(
+            path, test_only_allow_unprivileged=test_only_allow_unprivileged
+        )
     except InstalledPolicyError as error:
         if isinstance(error.__cause__, FileNotFoundError):
             return None
         raise InstalledToolSecurityError("installed executable path is unsafe") from error
     descriptor = -1
+    snapshot = -1
     try:
         try:
             descriptor = os.open(
@@ -573,7 +716,12 @@ def _open_verified_file(
         except FileNotFoundError:
             return None
         metadata = os.fstat(descriptor)
-        _trusted(metadata, directory=False, executable=executable)
+        _trusted(
+            metadata,
+            directory=False,
+            executable=executable,
+            test_only_allow_unprivileged=test_only_allow_unprivileged,
+        )
         if not stat.S_ISREG(metadata.st_mode):
             raise InstalledToolSecurityError("installed executable is not a regular file")
         locked_size = expected_size if expected_size is not None else _REVIEWED_FILE_SIZES.get(expected_digest)
@@ -583,19 +731,42 @@ def _open_verified_file(
             raise InstalledToolSecurityError("installed executable is too large")
         digest = hashlib.sha256()
         total = 0
+        snapshot = os.memfd_create(
+            "dgx-agent-verified-artifact", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
+        )
         while True:
+            _check(check_deadline)
             chunk = os.read(descriptor, 64 * 1024)
+            _check(check_deadline)
             if not chunk:
                 break
             total += len(chunk)
             if total > MAX_EXECUTABLE_BYTES:
                 raise InstalledToolSecurityError("installed executable is too large")
             digest.update(chunk)
+            _write_all(snapshot, chunk, check_deadline=check_deadline)
         if digest.hexdigest() != expected_digest:
             raise InstalledToolSecurityError("installed executable digest mismatch")
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        verified = descriptor
-        descriptor = -1
+        after = os.fstat(descriptor)
+        if (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
+            raise InstalledToolSecurityError("installed executable changed during verification")
+        _seal(snapshot)
+        _check(check_deadline)
+        os.lseek(snapshot, 0, os.SEEK_SET)
+        verified = snapshot
+        snapshot = -1
         return verified
     except InstalledPolicyError:
         raise
@@ -604,7 +775,56 @@ def _open_verified_file(
     finally:
         if descriptor >= 0:
             os.close(descriptor)
+        if snapshot >= 0:
+            os.close(snapshot)
         os.close(parent)
+
+
+def _sealed_memfd(
+    name: str,
+    content: bytes,
+    *,
+    check_deadline: Callable[[], None] | None = None,
+) -> int:
+    _check(check_deadline)
+    descriptor = os.memfd_create(name, os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+    try:
+        _write_all(descriptor, content, check_deadline=check_deadline)
+        _seal(descriptor)
+        _check(check_deadline)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        sealed = descriptor
+        descriptor = -1
+        return sealed
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _write_all(
+    descriptor: int,
+    content: bytes,
+    *,
+    check_deadline: Callable[[], None] | None = None,
+) -> None:
+    offset = 0
+    while offset < len(content):
+        _check(check_deadline)
+        written = os.write(descriptor, content[offset:])
+        _check(check_deadline)
+        if written <= 0:
+            raise InstalledToolSecurityError("verified snapshot could not be written")
+        offset += written
+
+
+def _check(callback: Callable[[], None] | None) -> None:
+    if callback is not None:
+        callback()
+
+
+def _seal(descriptor: int) -> None:
+    seals = fcntl.F_SEAL_SEAL | fcntl.F_SEAL_SHRINK | fcntl.F_SEAL_GROW | fcntl.F_SEAL_WRITE
+    fcntl.fcntl(descriptor, fcntl.F_ADD_SEALS, seals)
 
 
 def _safe_string(value: Any, *, maximum: int = 256) -> str | None:
