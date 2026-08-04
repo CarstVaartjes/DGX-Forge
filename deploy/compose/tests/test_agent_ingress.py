@@ -1,8 +1,8 @@
 import json
 import os
 import subprocess
+from fnmatch import fnmatchcase
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[3]
 
@@ -98,7 +98,9 @@ def _entrypoint_result(
         "/bin/sh", "/usr/local/bin/dgx-caddy-entrypoint",
     ))
     command.extend(entrypoint_arguments)
-    return subprocess.run(command, capture_output=True, text=True, timeout=10)
+    return subprocess.run(
+        command, capture_output=True, text=True, timeout=10, check=False
+    )
 
 
 def _settings_result(rendered: dict, tmp_path: Path) -> subprocess.CompletedProcess[str]:
@@ -145,6 +147,7 @@ def _settings_result(rendered: dict, tmp_path: Path) -> subprocess.CompletedProc
         text=True,
         env=environment,
         timeout=30,
+        check=False,
     )
 
 
@@ -223,11 +226,69 @@ def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents(
     }]
 
 
+def test_caddy_activation_route_is_exposed_only_on_verified_mtls_agent_sni() -> None:
+    caddy_environment = _rendered("compose.yaml")["services"]["caddy"][
+        "environment"
+    ]
+    adapted = _adapted_caddy(
+        caddy_environment | {"DGX_AGENT_PROXY_AUTH": "test-proxy-secret"}
+    )
+    server = adapted["apps"]["http"]["servers"]["srv0"]
+    activation_path = "/agent/v1/renew/activate"
+
+    def site(host: str) -> dict:
+        return next(
+            route
+            for route in server["routes"]
+            if route.get("match") == [{"host": [host]}]
+        )
+
+    agent_policy = next(
+        policy
+        for policy in server["tls_connection_policies"]
+        if "agents.test.example" in policy.get("match", {}).get("sni", [])
+    )
+    assert agent_policy["client_authentication"]["mode"] == "require_and_verify"
+
+    agent_routes = site("agents.test.example")["handle"][0]["routes"]
+    agent_proxy = next(
+        route
+        for route in agent_routes
+        if "control-api:8000" in json.dumps(route, sort_keys=True)
+    )
+    agent_path_pattern = agent_proxy["match"][0]["path"][0]
+    assert fnmatchcase(activation_path, agent_path_pattern)
+
+    enrollment_routes = site("enroll.test.example")["handle"][0]["routes"]
+    enrollment_proxy = next(
+        route
+        for route in enrollment_routes
+        if "control-api:8000" in json.dumps(route, sort_keys=True)
+    )
+    assert not fnmatchcase(activation_path, enrollment_proxy["match"][0]["path"][0])
+
+    control_routes = site("control.test.example")["handle"][0]["routes"]
+    control_denial = next(
+        route
+        for route in control_routes
+        if fnmatchcase(
+            activation_path,
+            route.get("match", [{}])[0].get("path", [""])[0],
+        )
+    )
+    assert '"handler": "static_response"' in json.dumps(
+        control_denial, sort_keys=True
+    )
+    assert '"status_code": 404' in json.dumps(control_denial, sort_keys=True)
+
+
 def test_caddy_compose_requires_distinct_sni_hostnames_before_startup(tmp_path: Path) -> None:
     missing = _environment()
     missing.pop("DGX_AGENT_HOSTNAME")
     command = ["docker", "compose", "-f", str(ROOT / "deploy/compose/compose.yaml"), "config", "--quiet"]
-    absent = subprocess.run(command, capture_output=True, text=True, env=missing)
+    absent = subprocess.run(
+        command, capture_output=True, text=True, env=missing, check=False
+    )
     assert absent.returncode != 0
     assert "DGX_AGENT_HOSTNAME" in absent.stderr
 
@@ -344,7 +405,13 @@ def test_provider_overlays_require_only_their_own_secrets() -> None:
     missing_step_secret = _environment()
     missing_step_secret.pop("STEP_CA_PASSWORD_FILE")
     command = ["docker", "compose", "-f", str(ROOT / "deploy/compose/compose.yaml"), "-f", str(ROOT / "deploy/compose/compose.step-ca.yaml"), "config", "--quiet"]
-    result = subprocess.run(command, capture_output=True, text=True, env=missing_step_secret)
+    result = subprocess.run(
+        command,
+        capture_output=True,
+        text=True,
+        env=missing_step_secret,
+        check=False,
+    )
     assert result.returncode != 0
     assert "STEP_CA_PASSWORD_FILE" in result.stderr
 

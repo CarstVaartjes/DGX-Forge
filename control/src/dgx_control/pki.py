@@ -8,19 +8,18 @@ changing enrollment callers.
 
 from __future__ import annotations
 
+import os
+import re
+import stat
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-import os
 from pathlib import Path
-import re
-import stat
 
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
-
 
 _NODE_ID = re.compile(r"spk_[0-9a-f]{32}")
 _CERTIFICATE_LIFETIME = timedelta(hours=24)
@@ -38,6 +37,7 @@ class IssuedCertificate:
     fingerprint: str
     not_before: datetime
     not_after: datetime
+    generation: int = 1
 
 
 class CertificateAuthority(ABC):
@@ -72,9 +72,9 @@ class BuiltinCertificateAuthority(CertificateAuthority):
         except ValueError as error:
             raise ValueError("intermediate key and certificate must be valid PEM") from error
         if not isinstance(key, ed25519.Ed25519PrivateKey):
-            raise ValueError("intermediate signing key must be Ed25519")
+            raise ValueError("intermediate signing key must be Ed25519")  # noqa: TRY004
         if not isinstance(certificate.public_key(), ed25519.Ed25519PublicKey):
-            raise ValueError("intermediate certificate public key must be Ed25519")
+            raise ValueError("intermediate certificate public key must be Ed25519")  # noqa: TRY004
         if _raw_public_key(key.public_key()) != _raw_public_key(certificate.public_key()):
             raise ValueError("intermediate signing key does not match certificate")
         self._key = key
@@ -218,7 +218,7 @@ def _load_node_csr(node_id: str, csr_pem: bytes) -> x509.CertificateSigningReque
         raise ValueError("node CSR URI SAN does not match node identity")
     public_key = request.public_key()
     if not isinstance(public_key, ed25519.Ed25519PublicKey):
-        raise ValueError("node CSR public key must be Ed25519")
+        raise ValueError("node CSR public key must be Ed25519")  # noqa: TRY004
     return request
 
 

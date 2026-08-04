@@ -5,16 +5,24 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 
-from dgx_agent_protocol import AgentClaim, AgentOperation, AgentProgress, AgentResult, canonical_message
+from dgx_agent_protocol import (
+    AgentClaim,
+    AgentOperation,
+    AgentProgress,
+    AgentResult,
+    canonical_message,
+)
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from .logging import redact_text
-from .models import AgentCertificate, AgentNode, AgentOperation as StoredOperation, AgentOperationAttempt, Job
+from .models import AgentCertificate, AgentNode, AgentOperationAttempt, Job
+from .models import AgentOperation as StoredOperation
 
 AgentFence = str | AgentClaim | AgentProgress | AgentResult
 _SAFE_AUTOMATIC_RECLAIM = frozenset({
@@ -51,6 +59,7 @@ class AgentJobService:
         # SQLite ignores row locks. This only prevents same-service test races;
         # PostgreSQL correctness is provided by the database locks below.
         self._claim_lock = threading.RLock()
+        self._available = threading.Condition()
 
     def enqueue(
         self,
@@ -103,6 +112,8 @@ class AgentJobService:
             if session.get(AgentNode, node_id) is None:
                 raise KeyError(node_id)
             session.add(stored)
+        with self._available:
+            self._available.notify_all()
         return stored
 
     def claim(
@@ -110,9 +121,33 @@ class AgentJobService:
         node_id: str,
         certificate_serial: str,
         lease_seconds: int,
+        wait_seconds: float = 0,
     ) -> AgentClaim | None:
-        if not node_id.strip() or not certificate_serial.strip() or lease_seconds <= 0:
+        if (
+            not node_id.strip()
+            or not certificate_serial.strip()
+            or lease_seconds <= 0
+            or isinstance(wait_seconds, bool)
+            or not 0 <= wait_seconds <= 60
+        ):
             raise ValueError("node, certificate, and positive lease are required")
+        deadline = time.monotonic() + wait_seconds
+        with self._available:
+            while True:
+                claim = self._claim_once(node_id, certificate_serial, lease_seconds)
+                if claim is not None:
+                    return claim
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return None
+                self._available.wait(remaining)
+
+    def _claim_once(
+        self,
+        node_id: str,
+        certificate_serial: str,
+        lease_seconds: int,
+    ) -> AgentClaim | None:
         now = self._clock()
         with self._claim_lock, self._sessions.begin() as session:
             if self._active_certificate(session, node_id, certificate_serial, now) is None:
@@ -325,6 +360,7 @@ class AgentJobService:
             .where(
                 AgentCertificate.serial == certificate_serial,
                 AgentCertificate.node_id == node_id,
+                AgentCertificate.state == "active",
                 AgentCertificate.revoked_at.is_(None),
                 AgentCertificate.not_before <= now,
                 AgentCertificate.not_after > now,

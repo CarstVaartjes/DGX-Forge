@@ -10,25 +10,36 @@ import re
 import stat
 import tempfile
 import time
-from collections.abc import Callable, Mapping
 from collections import deque
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
 from typing import Any, Protocol
 
-from dgx_agent_protocol import AgentProgress, AgentProtocolError, AgentResult, canonical_message
+from dgx_agent_protocol import (
+    AgentProgress,
+    AgentProtocolError,
+    AgentResult,
+    canonical_message,
+)
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, sessionmaker
-from starlette.responses import JSONResponse, StreamingResponse
+from starlette.responses import StreamingResponse
 
 from .agent_jobs import AgentJobService, StaleAgentAttempt
-from .auth import AgentIdentity, Actor, agent_identity_from_scope
-from .enrollment import EnrollmentDenied, EnrollmentService, RemoteRevocationUncertain
+from .auth import Actor, AgentIdentity, agent_identity_from_scope
+from .enrollment import (
+    EnrollmentDenied,
+    EnrollmentService,
+    PendingEnrollment,
+    RemoteRevocationUncertain,
+)
 from .models import AgentCertificate, AgentEnrollment, AgentNode, AgentOperation
+from .pki import IssuedCertificate
 
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _LIVE_OPERATION_STATES = frozenset({"queued", "running"})
@@ -127,12 +138,22 @@ class ClaimRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     lease_seconds: int = Field(default=30, ge=1, le=300)
     node_id: str | None = Field(default=None, pattern=r"^spk_[0-9a-f]{32}$")
+    wait_seconds: int = Field(default=0, ge=0, le=60)
 
 
 class RenewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     csr: str = Field(min_length=1, max_length=_MAX_CSR_BYTES)
     node_id: str | None = Field(default=None, pattern=r"^spk_[0-9a-f]{32}$")
+
+
+class ActivateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    generation: int = Field(ge=1)
+    node_id: str | None = Field(default=None, pattern=r"^spk_[0-9a-f]{32}$")
+
+
+_DEFAULT_CLAIM_REQUEST = ClaimRequest()
 
 
 def _wire(value: object) -> object:
@@ -152,7 +173,16 @@ def _issued_response(issued: object) -> dict[str, object]:
         "fingerprint": issued.fingerprint,
         "not_before": _now(issued.not_before).isoformat(),
         "not_after": _now(issued.not_after).isoformat(),
+        "generation": issued.generation,
     }
+
+
+def _json_response(value: object, *, status_code: int = 200) -> Response:
+    return Response(
+        content=canonical_message(value),
+        status_code=status_code,
+        media_type="application/json",
+    )
 
 
 def _require_services(services: AgentApiServices | None) -> AgentApiServices:
@@ -174,12 +204,22 @@ def _scope_identity(request: Request) -> AgentIdentity:
 
 
 def active_agent_identity(services: AgentApiServices, identity: AgentIdentity | None) -> bool:
+    return _agent_identity_state(services, identity) == "active"
+
+
+def activation_agent_identity(services: AgentApiServices, identity: AgentIdentity | None) -> bool:
+    return _agent_identity_state(services, identity) in {"active", "staged"}
+
+
+def _agent_identity_state(
+    services: AgentApiServices, identity: AgentIdentity | None
+) -> str | None:
     if identity is None:
-        return False
+        return None
     now = _now(services.clock())
     with services.sessions() as session:
         valid = session.scalar(
-            select(AgentCertificate.serial)
+            select(AgentCertificate.state)
             .join(AgentNode, AgentNode.node_id == AgentCertificate.node_id)
             .where(
                 AgentCertificate.serial == identity.certificate_serial,
@@ -192,13 +232,22 @@ def active_agent_identity(services: AgentApiServices, identity: AgentIdentity | 
                 AgentNode.revoked_at.is_(None),
             )
         )
-    return valid is not None
+    return valid
 
 
 def _authenticated_identity(request: Request, services: AgentApiServices) -> AgentIdentity:
     identity = _scope_identity(request)
     if not active_agent_identity(services, identity):
         raise HTTPException(status_code=401, detail="agent certificate is not active")
+    return identity
+
+
+def _authenticated_activation_identity(
+    request: Request, services: AgentApiServices
+) -> AgentIdentity:
+    identity = _scope_identity(request)
+    if not activation_agent_identity(services, identity):
+        raise HTTPException(status_code=401, detail="agent certificate cannot activate")
     return identity
 
 
@@ -427,7 +476,8 @@ def _read_chunks(descriptor: int, start: int, length: int):
 def _sealed_snapshot(descriptor: int, size: int, maximum: int, digest: str):
     snapshot = None
     try:
-        snapshot = tempfile.TemporaryFile(mode="w+b")
+        # Ownership transfers to _SnapshotResponse, which closes after send.
+        snapshot = tempfile.TemporaryFile(mode="w+b")  # noqa: SIM115
         copied = 0
         content_hash = hashlib.sha256()
         while copied < size:
@@ -486,9 +536,10 @@ def install_agent_routes(
     human = APIRouter(prefix="/api/v1/agents")
     agent = APIRouter(prefix="/agent/v1")
     limiter = enrollment_rate_limiter or EnrollmentRateLimiter()
+    authenticated_actor = Depends(actor_dependency)
 
     @human.post("/enrollments/grants", status_code=status.HTTP_201_CREATED)
-    def create_grant(body: GrantRequest, authenticated: Actor = Depends(actor_dependency)) -> dict[str, object]:
+    def create_grant(body: GrantRequest, authenticated: Actor = authenticated_actor) -> dict[str, object]:
         _require_administrator(authenticated, "/api/v1/agents/enrollments/grants")
         required = _require_services(services)
         try:
@@ -502,7 +553,7 @@ def install_agent_routes(
         cursor: str | None = None,
         state: str | None = None,
         limit: int = 100,
-        authenticated: Actor = Depends(actor_dependency),
+        authenticated: Actor = authenticated_actor,
     ) -> dict[str, object]:
         _require_administrator(authenticated, "/api/v1/agents/enrollments")
         required = _require_services(services)
@@ -530,7 +581,7 @@ def install_agent_routes(
         }
 
     @human.post("/enrollments/{enrollment_id}/approve")
-    def approve(enrollment_id: str, authenticated: Actor = Depends(actor_dependency)) -> dict[str, object]:
+    def approve(enrollment_id: str, authenticated: Actor = authenticated_actor) -> dict[str, object]:
         _require_administrator(authenticated, "/api/v1/agents/enrollments/{enrollment_id}/approve")
         required = _require_services(services)
         try:
@@ -539,7 +590,7 @@ def install_agent_routes(
             raise HTTPException(status_code=409, detail=str(error)) from None
 
     @human.post("/enrollments/{enrollment_id}/reject")
-    def reject(enrollment_id: str, body: RejectRequest, authenticated: Actor = Depends(actor_dependency)) -> dict[str, object]:
+    def reject(enrollment_id: str, body: RejectRequest, authenticated: Actor = authenticated_actor) -> dict[str, object]:
         _require_administrator(authenticated, "/api/v1/agents/enrollments/{enrollment_id}/reject")
         required = _require_services(services)
         try:
@@ -549,7 +600,7 @@ def install_agent_routes(
         return {"id": record.id, "node_id": record.node_id, "state": record.state}
 
     @human.post("/nodes/{node_id}/revoke", status_code=status.HTTP_204_NO_CONTENT)
-    def revoke(node_id: str, authenticated: Actor = Depends(actor_dependency)) -> Response:
+    def revoke(node_id: str, authenticated: Actor = authenticated_actor) -> Response:
         _require_administrator(authenticated, "/api/v1/agents/nodes/{node_id}/revoke")
         required = _require_services(services)
         try:
@@ -563,7 +614,7 @@ def install_agent_routes(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @agent.post("/enroll", status_code=status.HTTP_202_ACCEPTED)
-    async def enroll(request: Request) -> dict[str, object]:
+    async def enroll(request: Request) -> Response:
         required = _require_services(services)
         if not limiter.admit():
             raise HTTPException(status_code=429, detail="enrollment rate limit exceeded")
@@ -600,26 +651,37 @@ def install_agent_routes(
             else {}
         )
         try:
-            pending = required.enrollment.submit(body["grant_token"], csr_bytes, service_evidence)
+            outcome = required.enrollment.submit(body["grant_token"], csr_bytes, service_evidence)
         except EnrollmentDenied as error:
             _consume_enrollment_denial(required, scan.tokens)
             raise HTTPException(status_code=403, detail=str(error)) from None
-        return {"id": pending.id, "node_id": pending.node_id, "state": pending.state}
+        if isinstance(outcome, IssuedCertificate):
+            return _json_response(_issued_response(outcome))
+        assert isinstance(outcome, PendingEnrollment)
+        return _json_response(
+            {"id": outcome.id, "node_id": outcome.node_id, "state": outcome.state},
+            status_code=status.HTTP_202_ACCEPTED,
+        )
 
     @agent.post("/claim")
-    def claim(request: Request, body: ClaimRequest = ClaimRequest()) -> Response:
+    def claim(request: Request, body: ClaimRequest = _DEFAULT_CLAIM_REQUEST) -> Response:
         _scope_identity(request)
         required = _require_services(services)
         identity = _authenticated_identity(request, required)
         _body_node_matches(body.node_id, identity)
         try:
-            result = required.operations.claim(identity.node_id, identity.certificate_serial, body.lease_seconds)
+            result = required.operations.claim(
+                identity.node_id,
+                identity.certificate_serial,
+                body.lease_seconds,
+                body.wait_seconds,
+            )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
-        return Response(status_code=status.HTTP_204_NO_CONTENT) if result is None else JSONResponse(_wire(result))
+        return Response(status_code=status.HTTP_204_NO_CONTENT) if result is None else _json_response(_wire(result))
 
     @agent.post("/heartbeat")
-    def heartbeat(body: dict[str, object], request: Request) -> object:
+    def heartbeat(body: dict[str, object], request: Request) -> Response:
         _scope_identity(request)
         required = _require_services(services)
         identity = _authenticated_identity(request, required)
@@ -629,7 +691,7 @@ def install_agent_routes(
             raise HTTPException(status_code=422, detail=str(error)) from None
         _body_node_matches(message.node_id, identity)
         try:
-            return _wire(required.operations.heartbeat(message, message.progress, 30))
+            return _json_response(_wire(required.operations.heartbeat(message, message.progress, 30)))
         except (StaleAgentAttempt, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from None
 
@@ -647,7 +709,14 @@ def install_agent_routes(
             if message.state == "succeeded":
                 required.operations.succeed(message, message.result)
             elif message.state == "failed":
-                required.operations.fail(message, str(message.result.get("reason", "")))
+                error_code = message.result.get("error_code")
+                if (
+                    message.result.get("status") != "failed"
+                    or not isinstance(error_code, str)
+                    or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error_code) is None
+                ):
+                    raise ValueError("stable failure error code is required")
+                required.operations.fail(message, error_code)
             else:
                 required.operations.wait_for_operator(message, str(message.result.get("reason", "")))
         except (StaleAgentAttempt, ValueError) as error:
@@ -655,7 +724,7 @@ def install_agent_routes(
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @agent.post("/renew")
-    def renew(body: RenewRequest, request: Request) -> dict[str, object]:
+    def renew(body: RenewRequest, request: Request) -> Response:
         _scope_identity(request)
         required = _require_services(services)
         identity = _authenticated_identity(request, required)
@@ -666,7 +735,23 @@ def install_agent_routes(
             raise HTTPException(status_code=422, detail="CSR must be ASCII PEM") from None
         except (EnrollmentDenied, ValueError) as error:
             raise HTTPException(status_code=403, detail=str(error)) from None
-        return _issued_response(issued)
+        return _json_response(_issued_response(issued))
+
+    @agent.post("/renew/activate", status_code=status.HTTP_204_NO_CONTENT)
+    def activate(body: ActivateRequest, request: Request) -> Response:
+        _scope_identity(request)
+        required = _require_services(services)
+        identity = _authenticated_activation_identity(request, required)
+        _body_node_matches(body.node_id, identity)
+        try:
+            required.enrollment.activate(
+                identity.node_id,
+                identity.certificate_serial,
+                body.generation,
+            )
+        except (EnrollmentDenied, ValueError) as error:
+            raise HTTPException(status_code=403, detail=str(error)) from None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @agent.get("/artifacts/{sha256}")
     def artifact(sha256: str, request: Request) -> Response:

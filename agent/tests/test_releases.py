@@ -12,6 +12,7 @@ import stat
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -21,6 +22,7 @@ import dgx_agent.oci as oci_module
 import dgx_agent.releases as release_module
 import pytest
 from dgx_agent import nvidia_tools, update_trust
+from dgx_agent.client import CredentialSnapshot
 from dgx_agent.deadlines import DeadlineBindingError, MonotonicDeadline
 from dgx_agent.oci import OCIError, ORASClient, ORASPolicy
 from dgx_agent.probe import ProcessOutcome
@@ -1321,6 +1323,88 @@ def test_oras_uses_sealed_credential_snapshots_after_path_and_inode_mutation(tmp
 
     invocation = json.loads(record.read_text())
     assert invocation["credentials"][:2] == ["auth.json", "ca.pem"]
+
+
+def test_oras_resolves_shared_active_credential_provider_for_every_pull(tmp_path: Path) -> None:
+    policy, record = _oras_policy(tmp_path)
+    second_certificate = tmp_path / "client-2.pem"
+    second_certificate.write_text("rotated-client.pem")
+    second_certificate.chmod(0o644)
+    second_key = tmp_path / "client-2.key"
+    second_key.write_text("rotated-client.key")
+    second_key.chmod(0o600)
+
+    class SwitchingProvider:
+        certificate = policy.client_certificate_path
+        key = policy.client_key_path
+
+        @contextmanager
+        def snapshot(self):
+            yield CredentialSnapshot(
+                ca_path=policy.ca_path,
+                certificate_path=self.certificate,
+                private_key_path=self.key,
+            )
+
+    provider = SwitchingProvider()
+    client = ORASClient(replace(policy, credential_provider=provider))
+    first_staging = tmp_path / "first-staging"
+    first_staging.mkdir(mode=0o700)
+    second_staging = tmp_path / "second-staging"
+    second_staging.mkdir(mode=0o700)
+    descriptor = ReleaseDescriptor.parse(_descriptor())
+
+    client.pull(descriptor, first_staging, datetime.now(UTC) + timedelta(seconds=2))
+    first = json.loads(record.read_text())["credentials"]
+    provider.certificate = second_certificate
+    provider.key = second_key
+    client.pull(descriptor, second_staging, datetime.now(UTC) + timedelta(seconds=2))
+    second = json.loads(record.read_text())["credentials"]
+
+    assert first == ["auth.json", "ca.pem", "client.pem", "client.key"]
+    assert second == [
+        "auth.json", "ca.pem", "rotated-client.pem", "rotated-client.key",
+    ]
+
+
+def test_oras_closes_partial_dynamic_credential_snapshot_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    policy, _ = _oras_policy(tmp_path)
+
+    class Provider:
+        @contextmanager
+        def snapshot(self):
+            yield CredentialSnapshot(
+                ca_path=policy.ca_path,
+                certificate_path=policy.client_certificate_path,
+                private_key_path=policy.client_key_path,
+            )
+
+    client = ORASClient(replace(policy, credential_provider=Provider()))
+    staging = tmp_path / "staging"
+    staging.mkdir(mode=0o700)
+    original = oci_module._snapshot_provider_file
+    calls = 0
+
+    def fail_second(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OCIError("credential snapshot failed")
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(oci_module, "_snapshot_provider_file", fail_second)
+    baseline = len(tuple(Path("/proc/self/fd").iterdir()))
+
+    with pytest.raises(OCIError, match="credential snapshot failed"):
+        client.pull(
+            ReleaseDescriptor.parse(_descriptor()),
+            staging,
+            datetime.now(UTC) + timedelta(seconds=2),
+        )
+
+    assert len(tuple(Path("/proc/self/fd").iterdir())) == baseline
 
 
 def test_oras_executable_snapshot_stops_after_crossing_read(

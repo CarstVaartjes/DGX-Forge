@@ -7,8 +7,8 @@ import hashlib
 import hmac
 import json
 import re
-from dataclasses import dataclass
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from starlette.responses import Response
@@ -79,10 +79,18 @@ class TrustedProxyAgentIdentityMiddleware:
     the typed ASGI scope value, never a client supplied header.
     """
 
-    def __init__(self, app: Any, *, trusted_proxy_auth: bytes = b"", agent_identity_validator: Callable[[AgentIdentity], bool] | None = None) -> None:
+    def __init__(
+        self,
+        app: Any,
+        *,
+        trusted_proxy_auth: bytes = b"",
+        agent_identity_validator: Callable[[AgentIdentity], bool] | None = None,
+        activation_identity_validator: Callable[[AgentIdentity], bool] | None = None,
+    ) -> None:
         self.app = app
         self._trusted_proxy_auth = trusted_proxy_auth
         self._agent_identity_validator = agent_identity_validator
+        self._activation_identity_validator = activation_identity_validator
 
     async def __call__(self, scope: dict[str, Any], receive: Any, send: Any) -> None:
         if scope.get("type") != "http":
@@ -117,14 +125,19 @@ class TrustedProxyAgentIdentityMiddleware:
             except (AuthError, KeyError):
                 pass
         path = safe_scope.get("path")
+        validator = (
+            self._activation_identity_validator
+            if path == "/agent/v1/renew/activate"
+            else self._agent_identity_validator
+        )
         if (
             isinstance(path, str)
             and path.startswith("/agent/v1/")
             and path != "/agent/v1/enroll"
             and (
                 agent_identity_from_scope(safe_scope) is None
-                or self._agent_identity_validator is None
-                or not self._agent_identity_validator(agent_identity_from_scope(safe_scope))
+                or validator is None
+                or not validator(agent_identity_from_scope(safe_scope))
             )
         ):
             await Response(status_code=401)(safe_scope, receive, send)

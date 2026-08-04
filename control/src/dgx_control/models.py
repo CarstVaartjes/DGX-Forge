@@ -5,7 +5,15 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import (
+    JSON,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -101,11 +109,17 @@ class AgentNode(Base):
 
 class AgentCertificate(Base):
     __tablename__ = "agent_certificates"
+    __table_args__ = (UniqueConstraint("node_id", "generation"),)
     serial: Mapped[str] = mapped_column(String(128), primary_key=True)
     node_id: Mapped[str] = mapped_column(ForeignKey("agent_nodes.node_id"), nullable=False, index=True)
     not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     not_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     fingerprint: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False, default="active")
+    generation: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    certificate_pem: Mapped[str | None] = mapped_column(Text)
+    chain_pem: Mapped[str | None] = mapped_column(Text)
+    csr_public_key_fingerprint: Mapped[str | None] = mapped_column(String(64))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ca_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

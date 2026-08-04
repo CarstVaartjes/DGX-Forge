@@ -3,7 +3,10 @@ name = "dgx-agent"
 version = "0.1.0"
 description = "DGX Forge outbound agent runtime scaffold"
 requires-python = ">=3.12"
-dependencies = ["dgx-agent-protocol==1.0.0", "tuf==7.0.0", "securesystemslib[crypto]==1.4.0"]
+dependencies = ["cryptography==50.0.0", "dgx-agent-protocol==1.0.0", "tuf==7.0.0", "securesystemslib[crypto]==1.4.0"]
+
+[project.scripts]
+dgx-forge-agent = "dgx_agent.main:main"
 
 [build-system]
 requires = ["hatchling==1.27.0"]

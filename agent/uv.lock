@@ -160,6 +160,7 @@ name = "dgx-agent"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "cryptography" },
     { name = "dgx-agent-protocol" },
     { name = "securesystemslib", extra = ["crypto"] },
     { name = "tuf" },
@@ -172,6 +173,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", specifier = "==50.0.0" },
     { name = "dgx-agent-protocol", path = "../inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl" },
     { name = "securesystemslib", extras = ["crypto"], specifier = "==1.4.0" },
     { name = "tuf", specifier = "==7.0.0" },

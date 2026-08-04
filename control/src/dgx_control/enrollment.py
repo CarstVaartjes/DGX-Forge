@@ -4,26 +4,24 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
 import hashlib
 import re
 import secrets
 import threading
 import uuid
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime, timedelta
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from sqlalchemy import select
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import AgentCertificate, AgentEnrollment, AgentEnrollmentGrant, AgentNode
 from .pki import CertificateAuthority, IssuedCertificate
-
 
 _NODE_ID = re.compile(r"spk_[0-9a-f]{32}")
 _TOKEN = re.compile(r"[A-Za-z0-9_-]{43}")
@@ -94,6 +92,10 @@ class EnrollmentService:
         # PostgreSQL uses a durable advisory lock for cross-service claims.
         # This makes SQLite's same-process behavior match that safety rule.
         self._issuance_lock = threading.RLock()
+        # SQLite ignores the row locks used by renewal and activation. Keep
+        # same-process rotations serialized so its behavior matches the
+        # production database transaction boundary.
+        self._rotation_lock = threading.RLock()
 
     def create(self, node_id: str, actor: str, ttl_seconds: int) -> EnrollmentGrant:
         _validate_node_id(node_id)
@@ -115,11 +117,13 @@ class EnrollmentService:
             session.add(grant)
         return EnrollmentGrant(id=grant.id, node_id=node_id, expires_at=grant.expires_at, token=token)
 
-    def submit(self, token: str, csr: bytes, evidence: Mapping[str, object]) -> PendingEnrollment:
+    def submit(
+        self, token: str, csr: bytes, evidence: Mapping[str, object]
+    ) -> PendingEnrollment | IssuedCertificate:
         token_bytes = _decode_token(token)
         now = _utc(self._clock())
         failure: str | None = None
-        pending: PendingEnrollment | None = None
+        outcome: PendingEnrollment | IssuedCertificate | None = None
         with self._submit_lock, self._sessions.begin() as session:
             grant = session.scalar(
                 select(AgentEnrollmentGrant)
@@ -129,7 +133,23 @@ class EnrollmentService:
             if grant is None:
                 failure = "invalid enrollment grant"
             elif grant.consumed_at is not None:
-                failure = "enrollment grant is consumed"
+                enrollment = session.scalar(
+                    select(AgentEnrollment)
+                    .where(AgentEnrollment.grant_id == grant.id)
+                    .with_for_update(of=AgentEnrollment)
+                )
+                if enrollment is None:
+                    failure = "enrollment grant is consumed"
+                elif not _replay_matches(enrollment, csr, evidence):
+                    failure = "enrollment replay does not match original request"
+                elif enrollment.state == "approved":
+                    outcome = _issued(enrollment)
+                elif enrollment.state == "rejected":
+                    failure = "enrollment was rejected"
+                elif enrollment.state in {"pending-approval", "issuing"}:
+                    outcome = _pending(enrollment)
+                else:
+                    failure = "enrollment state is invalid"
             elif _stored_utc(grant.expires_at) <= now:
                 grant.consumed_at = now
                 failure = "enrollment grant is expired"
@@ -159,15 +179,15 @@ class EnrollmentService:
                     )
                     grant.consumed_at = now
                     session.add(enrollment)
-                    pending = _pending(enrollment)
+                    outcome = _pending(enrollment)
                 else:
                     # A valid bearer token is one-use even when its holder
                     # supplies evidence that cannot be accepted.
                     grant.consumed_at = now
         if failure is not None:
             raise EnrollmentDenied(failure)
-        assert pending is not None
-        return pending
+        assert outcome is not None
+        return outcome
 
     def approve(self, enrollment_id: str, actor: str) -> IssuedCertificate:
         _validate_actor(actor)
@@ -214,10 +234,16 @@ class EnrollmentService:
             return _pending(enrollment)
 
     def renew(self, node_id: str, serial: str, csr: bytes) -> IssuedCertificate:
+        with self._rotation_lock:
+            return self._renew_locked(node_id, serial, csr)
+
+    def _renew_locked(
+        self, node_id: str, serial: str, csr: bytes
+    ) -> IssuedCertificate:
         _validate_node_id(node_id)
         if not serial.strip():
             raise ValueError("certificate serial is required")
-        normalized_csr, _, _ = _load_csr(node_id, csr)
+        normalized_csr, _, csr_fingerprint = _load_csr(node_id, csr)
         now = _utc(self._clock())
         with self._sessions.begin() as session:
             node = session.scalar(
@@ -234,22 +260,104 @@ class EnrollmentService:
                 raise EnrollmentDenied("certificate serial does not identify node")
             if node.state != "active" or node.revoked_at is not None or certificate.revoked_at is not None:
                 raise EnrollmentDenied("node identity is retired or revoked")
+            if certificate.state != "active":
+                raise EnrollmentDenied("certificate is not active")
             if _stored_utc(certificate.not_before) > now or _stored_utc(certificate.not_after) <= now:
                 raise EnrollmentDenied("certificate is not currently valid")
+            staged = session.scalar(
+                select(AgentCertificate)
+                .where(
+                    AgentCertificate.node_id == node_id,
+                    AgentCertificate.state == "staged",
+                    AgentCertificate.revoked_at.is_(None),
+                )
+                .with_for_update(of=AgentCertificate)
+                .limit(1)
+            )
+            if staged is not None:
+                if staged.csr_public_key_fingerprint != csr_fingerprint:
+                    raise EnrollmentDenied("a different certificate rotation is already staged")
+                return _certificate_issued(staged)
             issued = self._authority.renew_node(node_id, normalized_csr, now)
             if issued.node_id != node_id:
                 raise EnrollmentDenied("certificate authority returned a mismatched node identity")
             if issued.serial == serial:
                 raise EnrollmentDenied("certificate authority reused renewal serial")
-            certificate.revoked_at = now
+            generations = list(session.scalars(
+                select(AgentCertificate.generation)
+                .where(AgentCertificate.node_id == node_id)
+                .with_for_update()
+            ))
+            generation = max(generations, default=0) + 1
+            try:
+                certificate_pem = issued.certificate_pem.decode("ascii")
+                chain_pem = issued.chain_pem.decode("ascii")
+            except UnicodeDecodeError as error:
+                raise EnrollmentDenied("certificate authority returned non-PEM certificate material") from error
             session.add(AgentCertificate(
                 serial=issued.serial,
                 node_id=node_id,
                 not_before=issued.not_before,
                 not_after=issued.not_after,
                 fingerprint=issued.fingerprint,
+                state="staged",
+                generation=generation,
+                certificate_pem=certificate_pem,
+                chain_pem=chain_pem,
+                csr_public_key_fingerprint=csr_fingerprint,
             ))
-            return issued
+            return replace(issued, generation=generation)
+
+    def activate(self, node_id: str, serial: str, generation: int) -> None:
+        with self._rotation_lock:
+            self._activate_locked(node_id, serial, generation)
+
+    def _activate_locked(
+        self, node_id: str, serial: str, generation: int
+    ) -> None:
+        _validate_node_id(node_id)
+        if not serial.strip() or not isinstance(generation, int) or isinstance(generation, bool) or generation < 1:
+            raise ValueError("certificate activation identity is invalid")
+        now = _utc(self._clock())
+        with self._sessions.begin() as session:
+            node = session.scalar(
+                select(AgentNode).where(AgentNode.node_id == node_id).with_for_update(of=AgentNode)
+            )
+            certificate = session.scalar(
+                select(AgentCertificate)
+                .where(
+                    AgentCertificate.serial == serial,
+                    AgentCertificate.node_id == node_id,
+                )
+                .with_for_update(of=AgentCertificate)
+            )
+            if node is None or certificate is None:
+                raise EnrollmentDenied("certificate serial does not identify node")
+            if node.state != "active" or node.revoked_at is not None:
+                raise EnrollmentDenied("node identity is retired or revoked")
+            if certificate.generation != generation:
+                raise EnrollmentDenied("certificate generation does not match")
+            if certificate.state == "active" and certificate.revoked_at is None:
+                return
+            if (
+                certificate.state != "staged"
+                or certificate.revoked_at is not None
+                or _stored_utc(certificate.not_before) > now
+                or _stored_utc(certificate.not_after) <= now
+            ):
+                raise EnrollmentDenied("certificate is not staged for activation")
+            older = list(session.scalars(
+                select(AgentCertificate)
+                .where(
+                    AgentCertificate.node_id == node_id,
+                    AgentCertificate.generation < generation,
+                )
+                .with_for_update(of=AgentCertificate)
+            ))
+            certificate.state = "active"
+            for previous in older:
+                previous.state = "revoked"
+                previous.revoked_at = previous.revoked_at or now
 
     def revoke_node(self, node_id: str, actor: str) -> None:
         """Retire locally before best-effort provider revocation.
@@ -274,6 +382,7 @@ class EnrollmentService:
             ))
             serials = [certificate.serial for certificate in certificates if certificate.ca_revoked_at is None]
             for certificate in certificates:
+                certificate.state = "revoked"
                 certificate.revoked_at = certificate.revoked_at or now
         uncertain = False
         for serial in serials:
@@ -349,6 +458,10 @@ def _persist_issued_enrollment(
         not_before=issued.not_before,
         not_after=issued.not_after,
         fingerprint=issued.fingerprint,
+        state="active",
+        generation=1,
+        certificate_pem=certificate_pem,
+        chain_pem=chain_pem,
     ))
     enrollment.state = "approved"
     enrollment.decision_actor = actor
@@ -402,6 +515,41 @@ def _pending(enrollment: AgentEnrollment) -> PendingEnrollment:
     return PendingEnrollment(id=enrollment.id, node_id=enrollment.node_id, state=enrollment.state)
 
 
+def _replay_matches(
+    enrollment: AgentEnrollment,
+    csr: bytes,
+    evidence: Mapping[str, object],
+) -> bool:
+    try:
+        normalized, _, fingerprint = _load_csr(enrollment.node_id, csr)
+    except EnrollmentDenied:
+        return False
+    values, failure = _validate_evidence(evidence, enrollment.node_id, fingerprint)
+    return failure is None and (
+        normalized.decode("ascii") == enrollment.csr_pem
+        and fingerprint == enrollment.csr_public_key_fingerprint
+        and values["host_key_fingerprint"] == enrollment.host_key_fingerprint
+        and values["hardware_fingerprint"] == enrollment.hardware_fingerprint
+        and values["agent_digest"] == enrollment.agent_digest
+        and values["boot_id"] == enrollment.boot_id
+    )
+
+
+def _certificate_issued(certificate: AgentCertificate) -> IssuedCertificate:
+    if certificate.certificate_pem is None or certificate.chain_pem is None:
+        raise RuntimeError("staged certificate is missing public material")
+    return IssuedCertificate(
+        node_id=certificate.node_id,
+        certificate_pem=certificate.certificate_pem.encode("ascii"),
+        chain_pem=certificate.chain_pem.encode("ascii"),
+        serial=certificate.serial,
+        fingerprint=certificate.fingerprint,
+        not_before=_stored_utc(certificate.not_before),
+        not_after=_stored_utc(certificate.not_after),
+        generation=certificate.generation,
+    )
+
+
 def _load_csr(node_id: str, csr: bytes) -> tuple[bytes, bytes, str]:
     try:
         request = x509.load_pem_x509_csr(csr)
@@ -437,11 +585,11 @@ def _validate_evidence(
     values: dict[str, str] = {}
     if set(evidence) != set(_EVIDENCE_FIELDS):
         return values, "evidence fields are invalid"
-    for field in _EVIDENCE_FIELDS:
-        value = evidence.get(field)
-        if not isinstance(value, str) or not value.strip() or len(value) > _EVIDENCE_LIMITS[field]:
-            return values, f"evidence {field} is required"
-        values[field] = value
+    for name in _EVIDENCE_FIELDS:
+        value = evidence.get(name)
+        if not isinstance(value, str) or not value.strip() or len(value) > _EVIDENCE_LIMITS[name]:
+            return values, f"evidence {name} is required"
+        values[name] = value
     if values["node_id"] != node_id:
         return values, "evidence node ID does not match enrollment grant"
     if values["csr_public_key_fingerprint"] != public_key_fingerprint:

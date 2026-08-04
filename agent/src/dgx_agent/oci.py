@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import fcntl
 import os
+import re
 import stat
 import threading
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .client import CredentialProvider
 from .deadlines import DeadlineBindingError, MonotonicDeadline
 from .nvidia_tools import InstalledToolSecurityError, open_verified_executable
 from .probe import BoundedProcessRunner, ProbeError, ProcessRequest
@@ -43,6 +45,7 @@ class ORASPolicy:
     client_certificate_path: Path
     client_key_path: Path
     allow_unprivileged_test_files: bool = False
+    credential_provider: CredentialProvider | None = None
 
     def __post_init__(self) -> None:
         parsed = urlsplit(self.registry_origin)
@@ -67,12 +70,14 @@ class ORASPolicy:
             raise OCIError("registry origin is invalid")
         if self.executable_version != _ORAS_VERSION:
             raise OCIError("ORAS version is not reviewed")
-        for path, private in (
-            (self.auth_path, True),
-            (self.ca_path, False),
-            (self.client_certificate_path, False),
-            (self.client_key_path, True),
-        ):
+        paths = [(self.auth_path, True)]
+        if self.credential_provider is None:
+            paths.extend((
+                (self.ca_path, False),
+                (self.client_certificate_path, False),
+                (self.client_key_path, True),
+            ))
+        for path, private in paths:
             _regular_file(path, private=private)
 
 
@@ -82,12 +87,14 @@ class ORASClient:
         self._runner = BoundedProcessRunner()
         descriptors: list[int] = []
         try:
-            for path, private in (
-                (policy.auth_path, True),
-                (policy.ca_path, False),
-                (policy.client_certificate_path, False),
-                (policy.client_key_path, True),
-            ):
+            paths = [(policy.auth_path, True)]
+            if policy.credential_provider is None:
+                paths.extend((
+                    (policy.ca_path, False),
+                    (policy.client_certificate_path, False),
+                    (policy.client_key_path, True),
+                ))
+            for path, private in paths:
                 descriptors.append(
                     _snapshot_policy_file(
                         path,
@@ -141,7 +148,30 @@ class ORASClient:
             raise OCIError("release staging destination is unsafe")
         executable_fd = -1
         policy_fds = self._begin_pull()
+        dynamic_fds: list[int] = []
         try:
+            if self._policy.credential_provider is not None:
+                with self._policy.credential_provider.snapshot() as credentials:
+                    if (
+                        credentials.certificate_path is None
+                        or credentials.private_key_path is None
+                    ):
+                        raise OCIError("active agent identity is unavailable")
+                    for path, private in (
+                            (credentials.ca_path, False),
+                            (credentials.certificate_path, False),
+                            (credentials.private_key_path, True),
+                        ):
+                        dynamic_fds.append(
+                            _snapshot_provider_file(
+                                path,
+                                private=private,
+                                allow_unprivileged_test_files=(
+                                    self._policy.allow_unprivileged_test_files
+                                ),
+                            )
+                        )
+                policy_fds = (policy_fds[0], *dynamic_fds)
             executable_fd = open_verified_executable(
                 self._policy.executable,
                 self._policy.executable_sha256,
@@ -192,11 +222,14 @@ class ORASClient:
         finally:
             if executable_fd >= 0:
                 os.close(executable_fd)
+            for descriptor_fd in dynamic_fds:
+                os.close(descriptor_fd)
             self._end_pull()
 
     def _begin_pull(self) -> tuple[int, ...]:
         with self._condition:
-            if self._closed or len(self._policy_fds) != 4:
+            expected = 1 if self._policy.credential_provider is not None else 4
+            if self._closed or len(self._policy_fds) != expected:
                 raise OCIError("release transport policy is closed")
             self._active_pulls += 1
             return self._policy_fds
@@ -307,6 +340,45 @@ def _snapshot_policy_file(
         if source >= 0:
             os.close(source)
         os.close(parent)
+
+
+def _snapshot_provider_file(
+    path: Path,
+    *,
+    private: bool,
+    allow_unprivileged_test_files: bool,
+) -> int:
+    rendered = os.fspath(path)
+    if re.fullmatch(r"/proc/self/fd/[0-9]+", rendered):
+        try:
+            descriptor = os.open(rendered, os.O_RDONLY | os.O_CLOEXEC)
+            metadata = os.fstat(descriptor)
+            required_seals = (
+                fcntl.F_SEAL_SEAL
+                | fcntl.F_SEAL_SHRINK
+                | fcntl.F_SEAL_GROW
+                | fcntl.F_SEAL_WRITE
+            )
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or fcntl.fcntl(descriptor, fcntl.F_GET_SEALS) & required_seals
+                != required_seals
+            ):
+                raise OCIError("credential provider snapshot is unsafe")
+            return descriptor
+        except OCIError:
+            if "descriptor" in locals():
+                os.close(descriptor)
+            raise
+        except OSError as error:
+            if "descriptor" in locals():
+                os.close(descriptor)
+            raise OCIError("credential provider snapshot is unavailable") from error
+    return _snapshot_policy_file(
+        path,
+        private=private,
+        allow_unprivileged_test_files=allow_unprivileged_test_files,
+    )
 
 
 def _trusted_ancestry(

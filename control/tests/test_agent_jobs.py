@@ -1,17 +1,16 @@
 from __future__ import annotations
 
+import hashlib
+import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
-import hashlib
-import uuid
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
 from dgx_control.models import AgentCertificate, AgentNode, Base, Job
-
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 NODE_A = "spk_" + "a" * 32
 NODE_B = "spk_" + "b" * 32
@@ -100,6 +99,27 @@ def test_concurrent_agents_cannot_claim_the_same_operation(service) -> None:
     claimed = [claim for claim in claims if claim is not None]
     assert len(claimed) == 1
     assert claimed[0].operation_id == operation.id
+
+
+def test_long_poll_wakes_on_enqueue_and_times_out_without_per_client_state(service) -> None:
+    jobs, sessions, clock = service
+    parent_job = parent(sessions, clock)
+
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        waiting = pool.submit(jobs.claim, NODE_A, "serial-a", 30, 1.0)
+        time.sleep(0.05)
+        operation = jobs.enqueue(parent_job.id, NODE_A, "node.probe", COMMIT, {})
+        claim = waiting.result(timeout=1)
+    elapsed = time.monotonic() - started
+
+    assert claim is not None and claim.operation_id == operation.id
+    assert elapsed < 0.8
+
+    timeout_started = time.monotonic()
+    assert jobs.claim(NODE_B, "serial-b", 30, 0.08) is None
+    timeout_elapsed = time.monotonic() - timeout_started
+    assert 0.06 <= timeout_elapsed < 0.5
 
 
 def test_expired_attempt_cannot_publish_success(service) -> None:

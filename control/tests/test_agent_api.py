@@ -1,21 +1,19 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import UTC, datetime, timedelta
 import hashlib
 import json
 import os
+import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
+from dgx_agent_protocol import canonical_message
 from dgx_control.agent_api import (
     AgentApiServices,
     EnrollmentRateLimiter,
@@ -28,12 +26,24 @@ from dgx_control.api import create_app
 from dgx_control.audit import MemoryAuditStore
 from dgx_control.auth import Actor, TokenCodec
 from dgx_control.enrollment import EnrollmentDenied, EnrollmentService
-from dgx_control.models import AgentCertificate, AgentEnrollment, AgentEnrollmentGrant, AgentNode, Base, Job
+from dgx_control.models import (
+    AgentCertificate,
+    AgentEnrollment,
+    AgentEnrollmentGrant,
+    AgentNode,
+    AgentOperationAttempt,
+    Base,
+    Job,
+)
 from dgx_control.pki import CertificateAuthority, IssuedCertificate
-
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 NODE_A = "spk_" + "a" * 32
 NODE_B = "spk_" + "b" * 32
+NODE_C = "spk_" + "c" * 32
 
 
 class Jobs:
@@ -113,7 +123,7 @@ def agent_system(tmp_path):
     )
     services.artifact_root.mkdir()
     codec = TokenCodec(b"k" * 32)
-    app = create_app(jobs=Jobs(), tokens=codec, audits=MemoryAuditStore(), fleet=lambda: {}, now=lambda: 0, agent=services, trusted_agent_proxy_auth=b"p" * 32)
+    app = create_app(jobs=Jobs(), tokens=codec, audits=MemoryAuditStore(), fleet=dict, now=lambda: 0, agent=services, trusted_agent_proxy_auth=b"p" * 32)
     return TestClient(app), services, codec, clock
 
 
@@ -217,7 +227,7 @@ def parent(sessions, clock: Clock) -> Job:
 def test_spoofed_agent_header_is_rejected() -> None:
     app = create_app(
         jobs=Jobs(), tokens=TokenCodec(b"k" * 32),
-        audits=MemoryAuditStore(), fleet=lambda: {},
+        audits=MemoryAuditStore(), fleet=dict,
     )
 
     response = TestClient(app).post("/agent/v1/claim", headers={"x-dgx-agent-node": NODE_A})
@@ -228,7 +238,7 @@ def test_spoofed_agent_header_is_rejected() -> None:
 def test_unauthenticated_agent_gate_returns_without_reading_request_body() -> None:
     app = create_app(
         jobs=Jobs(), tokens=TokenCodec(b"k" * 32),
-        audits=MemoryAuditStore(), fleet=lambda: {},
+        audits=MemoryAuditStore(), fleet=dict,
     )
     sent: list[dict[str, object]] = []
     body_reads = 0
@@ -262,7 +272,7 @@ def test_unauthenticated_agent_gate_returns_without_reading_request_body() -> No
 def test_agent_routes_do_not_require_human_bearer_tokens() -> None:
     app = create_app(
         jobs=Jobs(), tokens=TokenCodec(b"k" * 32),
-        audits=MemoryAuditStore(), fleet=lambda: {},
+        audits=MemoryAuditStore(), fleet=dict,
     )
 
     response = TestClient(app).post("/agent/v1/claim", headers={"Authorization": "Bearer invalid"})
@@ -275,7 +285,7 @@ def test_untrusted_proxy_and_malformed_forwarded_identity_are_rejected(agent_sys
     assert client.post("/agent/v1/claim").status_code == 401
     assert client.post("/agent/v1/claim", headers={**agent_headers(NODE_A, "serial-a"), "x-dgx-agent-verified": "false"}).status_code == 401
 
-    app = create_app(jobs=Jobs(), tokens=TokenCodec(b"k" * 32), audits=MemoryAuditStore(), fleet=lambda: {})
+    app = create_app(jobs=Jobs(), tokens=TokenCodec(b"k" * 32), audits=MemoryAuditStore(), fleet=dict)
     assert TestClient(app).post("/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")).status_code == 401
 
 
@@ -314,7 +324,7 @@ def test_fence_and_cross_node_result_updates_are_denied(agent_system) -> None:
     assert client.post("/agent/v1/result", headers=agent_headers(NODE_A, "serial-a"), json=stale).status_code == 409
 
 
-def test_enrollment_routes_are_admin_only_and_replay_is_rejected(agent_system) -> None:
+def test_enrollment_routes_are_admin_only_and_pending_exact_replay_is_idempotent(agent_system) -> None:
     client, _, codec, _ = agent_system
     assert client.post("/api/v1/agents/enrollments/grants", headers=admin_headers(codec, "operator"), json={"node_id": NODE_A, "ttl_seconds": 60}).status_code == 403
     # Existing node is deliberately unrelated to submitting a one-use grant;
@@ -324,15 +334,201 @@ def test_enrollment_routes_are_admin_only_and_replay_is_rejected(agent_system) -
     csr = x509.CertificateSigningRequestBuilder().subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_A)])).add_extension(x509.SubjectAlternativeName([x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_A}")]), critical=False).sign(key, algorithm=None).public_bytes(serialization.Encoding.PEM)
     public = x509.load_pem_x509_csr(csr).public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
     body = {"grant_token": grant["token"], "csr": csr.decode(), "evidence": {"node_id": NODE_A, "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(), "host_key_fingerprint": "host", "hardware_fingerprint": "hardware", "agent_digest": "a" * 64, "boot_id": "boot"}}
-    assert client.post("/agent/v1/enroll", json=body).status_code == 202
-    assert client.post("/agent/v1/enroll", json=body).status_code == 403
+    first = client.post("/agent/v1/enroll", json=body)
+    replay = client.post("/agent/v1/enroll", json=body)
+    assert first.status_code == replay.status_code == 202
+    assert first.content == replay.content == canonical_message(first.json())
+
+
+def test_approved_exact_enrollment_replay_picks_up_certificate_and_mismatch_is_denied(
+    agent_system,
+) -> None:
+    client, services, codec, _ = agent_system
+    grant = services.enrollment.create(NODE_C, "administrator", 60)
+    key = ed25519.Ed25519PrivateKey.generate()
+    csr = (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_C)]))
+        .add_extension(x509.SubjectAlternativeName([
+            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_C}")
+        ]), critical=False)
+        .sign(key, algorithm=None)
+        .public_bytes(serialization.Encoding.PEM)
+    )
+    public = x509.load_pem_x509_csr(csr).public_key().public_bytes(
+        serialization.Encoding.DER,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    body = {
+        "grant_token": grant.token,
+        "csr": csr.decode(),
+        "evidence": {
+            "node_id": NODE_C,
+            "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(),
+            "host_key_fingerprint": "host",
+            "hardware_fingerprint": "hardware",
+            "agent_digest": "a" * 64,
+            "boot_id": "boot",
+        },
+    }
+    pending = client.post("/agent/v1/enroll", json=body)
+    enrollment_id = pending.json()["id"]
+    assert client.post(
+        f"/api/v1/agents/enrollments/{enrollment_id}/approve",
+        headers=admin_headers(codec),
+    ).status_code == 200
+
+    pickup = client.post("/agent/v1/enroll", json=body)
+    mismatch = client.post(
+        "/agent/v1/enroll",
+        json={**body, "evidence": {**body["evidence"], "boot_id": "different"}},
+    )
+
+    assert pickup.status_code == 200
+    assert pickup.content == canonical_message(pickup.json())
+    assert pickup.json()["generation"] == 1
+    assert "certificate_pem" in pickup.json()
+    assert mismatch.status_code == 403
+    assert "certificate" not in mismatch.text.lower()
+
+
+def _csr_for(node_id: str) -> bytes:
+    key = ed25519.Ed25519PrivateKey.generate()
+    return (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, node_id)]))
+        .add_extension(x509.SubjectAlternativeName([
+            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{node_id}")
+        ]), critical=False)
+        .sign(key, algorithm=None)
+        .public_bytes(serialization.Encoding.PEM)
+    )
+
+
+def test_staged_certificate_can_only_activate_and_activation_is_idempotent_after_response_loss(
+    agent_system,
+) -> None:
+    client, services, _, _ = agent_system
+    csr = _csr_for(NODE_A)
+    first = client.post(
+        "/agent/v1/renew",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json={"node_id": NODE_A, "csr": csr.decode()},
+    )
+    replay = client.post(
+        "/agent/v1/renew",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json={"node_id": NODE_A, "csr": csr.decode()},
+    )
+    assert first.status_code == replay.status_code == 200
+    assert first.json() == replay.json()
+    issued = first.json()
+    staged_headers = agent_headers(NODE_A, issued["serial"])
+    staged_headers["x-dgx-agent-fingerprint"] = issued["fingerprint"]
+
+    assert client.post("/agent/v1/claim", headers=staged_headers).status_code == 401
+    assert client.post(
+        "/agent/v1/heartbeat", headers=staged_headers, json={"invalid": True}
+    ).status_code == 401
+    assert client.post(
+        "/agent/v1/result", headers=staged_headers, json={"invalid": True}
+    ).status_code == 401
+    assert client.post(
+        "/agent/v1/renew", headers=staged_headers,
+        json={"node_id": NODE_A, "csr": _csr_for(NODE_A).decode()},
+    ).status_code == 401
+    assert client.get(
+        "/agent/v1/artifacts/" + "a" * 64,
+        headers=staged_headers,
+    ).status_code == 401
+
+    activation = {"node_id": NODE_A, "generation": issued["generation"]}
+    assert client.post(
+        "/agent/v1/renew/activate", headers=staged_headers, json=activation
+    ).status_code == 204
+    assert client.post(
+        "/agent/v1/renew/activate", headers=staged_headers, json=activation
+    ).status_code == 204
+    assert client.post(
+        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
+    ).status_code == 401
+    assert client.post("/agent/v1/claim", headers=staged_headers).status_code == 204
+    with services.sessions() as session:
+        old = session.get(AgentCertificate, "serial-a")
+        new = session.get(AgentCertificate, issued["serial"])
+        assert old is not None and old.state == "revoked" and old.revoked_at is not None
+        assert new is not None and new.state == "active" and new.revoked_at is None
+
+
+def test_failed_result_maps_stable_error_code_to_bounded_failure_reason(agent_system) -> None:
+    client, services, _, clock = agent_system
+    services.operations.enqueue(
+        parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {}
+    )
+    claim = client.post(
+        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
+    ).json()
+    result = {
+        key: claim[key]
+        for key in (
+            "schema_version", "job_id", "operation_id", "attempt", "fence",
+            "node_id", "deadline",
+        )
+    } | {
+        "state": "failed",
+        "result": {"status": "failed", "error_code": "probe_failed"},
+    }
+
+    response = client.post(
+        "/agent/v1/result", headers=agent_headers(NODE_A, "serial-a"), json=result
+    )
+
+    assert response.status_code == 204
+    with services.sessions() as session:
+        attempt = session.query(AgentOperationAttempt).filter_by(fence=claim["fence"]).one()
+        assert attempt.result == {"reason": "probe_failed"}
+
+
+def test_agent_validation_errors_are_canonical_json(agent_system) -> None:
+    client, _, _, _ = agent_system
+
+    response = client.post(
+        "/agent/v1/claim",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json={"lease_seconds": 0, "node_id": NODE_A, "wait_seconds": 0},
+    )
+
+    assert response.status_code == 422
+    assert response.content == canonical_message(response.json())
+
+
+def test_claim_endpoint_long_poll_wakes_when_work_is_enqueued(agent_system) -> None:
+    client, services, _, clock = agent_system
+    parent_job = parent(services.sessions, clock)
+    started = time.monotonic()
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        waiting = pool.submit(
+            client.post,
+            "/agent/v1/claim",
+            headers=agent_headers(NODE_A, "serial-a"),
+            json={"node_id": NODE_A, "lease_seconds": 30, "wait_seconds": 1},
+        )
+        time.sleep(0.05)
+        operation = services.operations.enqueue(
+            parent_job.id, NODE_A, "node.probe", "a" * 40, {}
+        )
+        response = waiting.result(timeout=1)
+
+    assert response.status_code == 200
+    assert response.json()["operation_id"] == operation.id
+    assert time.monotonic() - started < 0.8
 
 
 def test_enrollment_rate_limit_rejects_before_reading_request_body(agent_system) -> None:
     _, services, codec, _ = agent_system
     limiter = EnrollmentRateLimiter(maximum=1, window_seconds=60, clock=lambda: 0.0)
     app = create_app(
-        jobs=Jobs(), tokens=codec, audits=MemoryAuditStore(), fleet=lambda: {}, agent=services,
+        jobs=Jobs(), tokens=codec, audits=MemoryAuditStore(), fleet=dict, agent=services,
         enrollment_rate_limiter=limiter,
     )
     assert asgi_post(app, "/agent/v1/enroll", valid_enrollment_body(enrollment_grant(services)))[0] == 202

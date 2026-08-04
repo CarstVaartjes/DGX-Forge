@@ -11,17 +11,36 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
+from dgx_agent_protocol import canonical_message
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exception_handlers import (
+    http_exception_handler,
+    request_validation_exception_handler,
+)
+from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
-from starlette.responses import FileResponse
-from starlette.exceptions import HTTPException as StarletteHTTPException
 from pydantic import BaseModel, ConfigDict, Field
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import FileResponse
 
+from .agent_api import (
+    AgentApiServices,
+    EnrollmentRateLimiter,
+    activation_agent_identity,
+    active_agent_identity,
+    install_agent_routes,
+)
 from .audit import AuditRecord
-from .auth import Actor, AuthError, MUTATION_ROLES, TokenCodec, TrustedProxyAgentIdentityMiddleware
-from .agent_api import AgentApiServices, EnrollmentRateLimiter, active_agent_identity, install_agent_routes
-from .proposals import DocumentChange
+from .auth import (
+    MUTATION_ROLES,
+    Actor,
+    AuthError,
+    TokenCodec,
+    TrustedProxyAgentIdentityMiddleware,
+)
 from .metrics import MetricsRegistry
+from .proposals import DocumentChange
 
 
 @dataclass(frozen=True)
@@ -155,10 +174,39 @@ def create_app(
     enrollment_rate_limiter: EnrollmentRateLimiter | None = None,
 ) -> FastAPI:
     app = FastAPI(title="DGX Forge Control", version="1.0", docs_url=None, redoc_url=None)
+
+    @app.exception_handler(StarletteHTTPException)
+    async def canonical_agent_http_error(
+        request: Request, error: StarletteHTTPException
+    ) -> Response:
+        if not request.url.path.startswith("/agent/v1/"):
+            return await http_exception_handler(request, error)
+        return Response(
+            content=canonical_message({"detail": jsonable_encoder(error.detail)}),
+            status_code=error.status_code,
+            headers=error.headers,
+            media_type="application/json",
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def canonical_agent_validation_error(
+        request: Request, error: RequestValidationError
+    ) -> Response:
+        if not request.url.path.startswith("/agent/v1/"):
+            return await request_validation_exception_handler(request, error)
+        return Response(
+            content=canonical_message({"detail": jsonable_encoder(error.errors())}),
+            status_code=422,
+            media_type="application/json",
+        )
+
     app.add_middleware(
         TrustedProxyAgentIdentityMiddleware,
         trusted_proxy_auth=trusted_agent_proxy_auth,
         agent_identity_validator=(lambda identity: active_agent_identity(agent, identity)) if agent is not None else None,
+        activation_identity_validator=(
+            lambda identity: activation_agent_identity(agent, identity)
+        ) if agent is not None else None,
     )
 
     @app.middleware("http")
@@ -212,6 +260,7 @@ def create_app(
         services=agent,
         enrollment_rate_limiter=enrollment_rate_limiter,
     )
+    authenticated_actor = Depends(actor)
 
     @app.get("/api/v1/healthz")
     def healthz() -> dict[str, str]:
@@ -233,11 +282,11 @@ def create_app(
         return Response(metrics.render(), media_type="application/openmetrics-text; version=1.0.0; charset=utf-8")
 
     @app.get("/api/v1/fleet")
-    def fleet_view(_actor: Actor = Depends(actor)) -> Mapping[str, object]:
+    def fleet_view(_actor: Actor = authenticated_actor) -> Mapping[str, object]:
         return fleet()
 
     @app.get("/api/v1/repository")
-    def repository_view(commit: str | None = None, _actor: Actor = Depends(actor)) -> dict[str, object]:
+    def repository_view(commit: str | None = None, _actor: Actor = authenticated_actor) -> dict[str, object]:
         if admin is None:
             raise HTTPException(status_code=503, detail="repository administration unavailable")
         resolved = commit or admin.repository.head()
@@ -245,7 +294,7 @@ def create_app(
         return {"commit": snapshot.commit, "documents": dict(snapshot.documents), "dependencies": dict(snapshot.dependencies)}
 
     @app.get("/api/v1/documents")
-    def document_view(commit: str | None = None, path: str | None = None, kind: str | None = None, _actor: Actor = Depends(actor)) -> dict[str, object]:
+    def document_view(commit: str | None = None, path: str | None = None, kind: str | None = None, _actor: Actor = authenticated_actor) -> dict[str, object]:
         if admin is None:
             raise HTTPException(status_code=503, detail="repository administration unavailable")
         resolved = commit or admin.repository.head()
@@ -255,7 +304,7 @@ def create_app(
                 "models": ("config/workloads/", "locks/", "manifests/"),
                 "profiles": ("config/cluster-profiles/",),
             }
-            selected = prefixes.get(kind or "", tuple())
+            selected = prefixes.get(kind or "", ())
             if not selected:
                 raise HTTPException(status_code=400, detail="document kind is invalid")
             return {"commit": resolved, "documents": [name for name in snapshot.documents if name.startswith(selected)]}
@@ -263,7 +312,7 @@ def create_app(
         return {"commit": document.commit, "path": document.path, "sha256": document.sha256, "document": document.parsed}
 
     @app.post("/api/v1/proposals")
-    def proposal_preview(body: ProposalRequest, authenticated: Actor = Depends(actor)) -> dict[str, object]:
+    def proposal_preview(body: ProposalRequest, authenticated: Actor = authenticated_actor) -> dict[str, object]:
         require_mutation_role(authenticated, "/api/v1/proposals")
         if admin is None:
             raise HTTPException(status_code=503, detail="repository administration unavailable")
@@ -281,7 +330,7 @@ def create_app(
         }
 
     @app.post("/api/v1/changes", status_code=status.HTTP_202_ACCEPTED)
-    def submit_change(body: ChangeRequest, request: Request, authenticated: Actor = Depends(actor)) -> dict[str, object]:
+    def submit_change(body: ChangeRequest, request: Request, authenticated: Actor = authenticated_actor) -> dict[str, object]:
         require_mutation_role(authenticated, "/api/v1/changes")
         if admin is None or admin.changes is None:
             raise HTTPException(status_code=503, detail="change submission unavailable")
@@ -290,7 +339,7 @@ def create_app(
         return dict(result)
 
     @app.post("/api/v1/reconciliations/plan")
-    def reconcile_plan(body: ReconciliationPlanRequest, authenticated: Actor = Depends(actor)) -> dict[str, object]:
+    def reconcile_plan(body: ReconciliationPlanRequest, authenticated: Actor = authenticated_actor) -> dict[str, object]:
         require_mutation_role(authenticated, "/api/v1/reconciliations/plan")
         if admin is None or admin.reconciler is None:
             raise HTTPException(status_code=503, detail="reconciliation unavailable")
@@ -302,32 +351,32 @@ def create_app(
         }
 
     @app.post("/api/v1/reconciliations", status_code=status.HTTP_202_ACCEPTED)
-    def reconcile(body: ReconciliationRequest, request: Request, authenticated: Actor = Depends(actor)) -> dict[str, object]:
+    def reconcile(body: ReconciliationRequest, request: Request, authenticated: Actor = authenticated_actor) -> dict[str, object]:
         require_mutation_role(authenticated, "/api/v1/reconciliations")
         if admin is None or admin.reconciler is None:
             raise HTTPException(status_code=503, detail="reconciliation unavailable")
         return dict(admin.reconciler.enqueue(body.plan_digest, authenticated.subject, request.state.request_id))
 
     @app.post("/api/v1/jobs", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
-    def enqueue(body: JobRequest, request: Request, authenticated: Actor = Depends(actor)) -> JobResponse:
+    def enqueue(body: JobRequest, request: Request, authenticated: Actor = authenticated_actor) -> JobResponse:
         require_mutation_role(authenticated, "/api/v1/jobs")
         job = jobs.enqueue(body.kind, authenticated.subject, body.base_commit, body.targets, body.payload, request_id=request.state.request_id)
         audits.append(AuditRecord(request.state.request_id, authenticated.subject, f"job.enqueue:{body.kind}", body.base_commit, tuple(body.targets)))
         return JobResponse(id=str(job.id), state=str(job.state))
 
     @app.get("/api/v1/jobs")
-    def jobs_view(_actor: Actor = Depends(actor)) -> dict[str, object]:
+    def jobs_view(_actor: Actor = authenticated_actor) -> dict[str, object]:
         return {"jobs": [{"id": str(job.id), "state": str(job.state), "kind": str(job.kind)} for job in jobs.list()]}
 
     @app.get("/api/v1/audit")
-    def audit_view(_actor: Actor = Depends(actor)) -> dict[str, object]:
+    def audit_view(_actor: Actor = authenticated_actor) -> dict[str, object]:
         return {"events": [
             {"request_id": event.request_id, "actor": event.actor, "action": event.action, "base_commit": event.base_commit, "targets": list(event.targets)}
             for event in audits.list()
         ]}
 
     @app.get("/api/v1/jobs/{job_id}", response_model=JobResponse)
-    def job_view(job_id: str, _actor: Actor = Depends(actor)) -> JobResponse:
+    def job_view(job_id: str, _actor: Actor = authenticated_actor) -> JobResponse:
         try:
             job = jobs.get(job_id)
         except KeyError:
@@ -335,7 +384,7 @@ def create_app(
         return JobResponse(id=str(job.id), state=str(job.state))
 
     @app.get("/api/v1/jobs/{job_id}/logs")
-    def job_log_list(job_id: str, authenticated: Actor = Depends(actor)) -> dict[str, object]:
+    def job_log_list(job_id: str, authenticated: Actor = authenticated_actor) -> dict[str, object]:
         if authenticated.role not in {"operator", "administrator"}:
             raise HTTPException(status_code=403, detail="insufficient role")
         if job_logs is None:
@@ -347,7 +396,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="job not found") from None
 
     @app.get("/api/v1/jobs/{job_id}/logs/{digest}")
-    def job_log_content(job_id: str, digest: str, authenticated: Actor = Depends(actor)) -> Response:
+    def job_log_content(job_id: str, digest: str, authenticated: Actor = authenticated_actor) -> Response:
         if authenticated.role not in {"operator", "administrator"}:
             raise HTTPException(status_code=403, detail="insufficient role")
         if job_logs is None:
@@ -364,21 +413,22 @@ def create_app(
 def production_app() -> FastAPI:
     from datetime import UTC, datetime
 
+    from sqlalchemy import func, select
+
     from .audit import SqlAuditStore
-    from .db import build_engine, session_factory
-    from .jobs import JobService
-    from .offline import OnlineLock
-    from .settings import Settings
-    from .repository import RepositoryService
-    from .proposals import ProposalService
+    from .code_host import RepositoryCodeHost
     from .dashboard import DashboardService
+    from .db import build_engine, session_factory
+    from .git_policy import GitPolicy, PolicyStore
+    from .jobs import JobService
+    from .logging import JobLogStore
     from .metrics import MetricsRegistry
     from .models import Job
-    from .logging import JobLogStore
-    from .code_host import RepositoryCodeHost
-    from .git_policy import GitPolicy, PolicyStore
+    from .offline import OnlineLock
+    from .proposals import ProposalService
     from .reconcile import ChangeService, Reconciler, RepositoryDefinitions
-    from sqlalchemy import func, select
+    from .repository import RepositoryService
+    from .settings import Settings
 
     settings = Settings.from_env_and_secrets()
     sessions = session_factory(build_engine(settings.database_url))

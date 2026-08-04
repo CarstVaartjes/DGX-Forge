@@ -4,7 +4,7 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 
 
 def _config(database_url: str) -> Config:
@@ -122,3 +122,51 @@ def test_enrollment_migration_is_reversible_and_preserves_model_parity(tmp_path:
     engine = create_engine(database)
     with engine.connect() as connection:
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
+
+
+def test_certificate_rotation_migration_backfills_active_generation_and_is_reversible(
+    tmp_path: Path,
+) -> None:
+    database = f"sqlite:///{tmp_path / 'control.sqlite'}"
+    engine = create_engine(database)
+    upgrade_to("0004_agent_enrollment", database)
+    with engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO agent_nodes (node_id,state,capabilities) "
+            "VALUES ('spk_0123456789abcdef0123456789abcdef','active','[]')"
+        ))
+        connection.execute(text(
+            "INSERT INTO agent_certificates "
+            "(serial,node_id,not_before,not_after,fingerprint,revoked_at) VALUES "
+            "('serial-1','spk_0123456789abcdef0123456789abcdef',"
+            "'2026-08-03 00:00:00','2026-08-04 00:00:00','fingerprint-1',"
+            "'2026-08-04 00:00:00'),"
+            "('serial-2','spk_0123456789abcdef0123456789abcdef',"
+            "'2026-08-04 00:00:00','2026-08-05 00:00:00','fingerprint-2',NULL)"
+        ))
+
+    upgrade_to("head", database)
+    columns = {column["name"] for column in inspect(engine).get_columns("agent_certificates")}
+    assert {
+        "state", "generation", "certificate_pem", "chain_pem",
+        "csr_public_key_fingerprint",
+    } <= columns
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT serial,state,generation FROM agent_certificates "
+            "ORDER BY generation"
+        )).all() == [
+            ("serial-1", "active", 1),
+            ("serial-2", "active", 2),
+        ]
+
+    downgrade_to("0004_agent_enrollment", database)
+    downgraded = {column["name"] for column in inspect(engine).get_columns("agent_certificates")}
+    assert not {
+        "state", "generation", "certificate_pem", "chain_pem",
+        "csr_public_key_fingerprint",
+    } & downgraded
+    with engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT serial FROM agent_certificates ORDER BY serial"
+        )).scalars().all() == ["serial-1", "serial-2"]

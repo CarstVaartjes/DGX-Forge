@@ -1,26 +1,31 @@
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime, timedelta
 import base64
 import hashlib
 import shutil
 import subprocess
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
+from dgx_control.enrollment import EnrollmentDenied, EnrollmentService
+from dgx_control.models import (
+    AgentCertificate,
+    AgentEnrollment,
+    AgentEnrollmentGrant,
+    AgentNode,
+    Base,
+)
+from dgx_control.pki import CertificateAuthority, IssuedCertificate
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
-
-from dgx_control.enrollment import EnrollmentDenied, EnrollmentService
-from dgx_control.models import AgentCertificate, AgentEnrollment, AgentEnrollmentGrant, AgentNode, Base
-from dgx_control.pki import CertificateAuthority, IssuedCertificate
-
 
 NODE_ID = "spk_0123456789abcdef0123456789abcdef"
 OTHER_NODE_ID = "spk_fedcba9876543210fedcba9876543210"
@@ -155,10 +160,10 @@ def test_grant_is_single_use_and_requires_administrator_approval(service) -> Non
     assert "token" not in repr(grant)
     pending = enrollment.submit(grant.token, request, evidence(request))
     assert pending.state == "pending-approval"
-    with pytest.raises(EnrollmentDenied, match="consumed"):
-        enrollment.submit(grant.token, request, evidence(request))
+    assert enrollment.submit(grant.token, request, evidence(request)) == pending
 
     issued = enrollment.approve(pending.id, "admin")
+    assert enrollment.submit(grant.token, request, evidence(request)) == issued
 
     assert issued.node_id == NODE_ID
     assert len(authority.calls) == 1
@@ -226,7 +231,7 @@ def test_identifiable_grant_is_consumed_when_csr_validation_fails(service, inval
         assert session.scalar(select(func.count()).select_from(AgentEnrollment)) == 0
 
 
-def test_sqlite_simultaneous_replay_has_exactly_one_submit_winner(service) -> None:
+def test_sqlite_simultaneous_exact_replay_is_idempotent(service) -> None:
     enrollment, _, _, _ = service
     request = csr()
     grant = enrollment.create(NODE_ID, "admin", 600)
@@ -242,8 +247,29 @@ def test_sqlite_simultaneous_replay_has_exactly_one_submit_winner(service) -> No
     with ThreadPoolExecutor(max_workers=4) as pool:
         results = list(pool.map(lambda _: submit(), range(4)))
 
-    assert sum(not isinstance(result, Exception) for result in results) == 1
-    assert sum(isinstance(result, EnrollmentDenied) and "consumed" in str(result) for result in results) == 3
+    assert all(result == results[0] for result in results)
+    assert not isinstance(results[0], Exception)
+
+
+def test_consumed_grant_denies_mismatched_replay_without_revealing_certificate(service) -> None:
+    enrollment, _, _, _ = service
+    request = csr()
+    grant = enrollment.create(NODE_ID, "admin", 600)
+    pending = enrollment.submit(grant.token, request, evidence(request))
+
+    changed_evidence = evidence(request) | {"boot_id": "different-boot"}
+    with pytest.raises(EnrollmentDenied, match="does not match") as mismatch:
+        enrollment.submit(grant.token, request, changed_evidence)
+    assert "certificate-" not in str(mismatch.value)
+    with pytest.raises(EnrollmentDenied, match="does not match"):
+        alternate = csr()
+        enrollment.submit(grant.token, alternate, evidence(alternate))
+
+    issued = enrollment.approve(pending.id, "admin")
+    assert enrollment.submit(grant.token, request, evidence(request)) == issued
+    with pytest.raises(EnrollmentDenied, match="does not match") as approved_mismatch:
+        enrollment.submit(grant.token, request, changed_evidence)
+    assert issued.certificate_pem.decode() not in str(approved_mismatch.value)
 
 
 def test_approval_and_rejection_are_attributed_idempotent_and_conflicting(service) -> None:
@@ -270,22 +296,53 @@ def test_approval_and_rejection_are_attributed_idempotent_and_conflicting(servic
         enrollment.approve(rejected.id, "admin-c")
 
 
-def test_renewal_rotates_certificate_for_same_node_and_rejects_bad_serial_csr_or_retired_identity(service) -> None:
-    enrollment, sessions, clock, authority = service
+def test_rejected_exact_enrollment_replay_is_terminal(service) -> None:
+    enrollment, _, _, _ = service
+    request = csr()
+    grant = enrollment.create(NODE_ID, "admin", 600)
+    pending = enrollment.submit(grant.token, request, evidence(request))
+    enrollment.reject(pending.id, "admin", "identity not approved")
+
+    with pytest.raises(EnrollmentDenied, match="rejected"):
+        enrollment.submit(grant.token, request, evidence(request))
+
+
+def test_renewal_stages_once_then_activation_atomically_retires_older_identity(service) -> None:
+    enrollment, sessions, _clock, authority = service
     pending = enroll(enrollment)
     issued = enrollment.approve(pending.id, "admin")
     renewed_csr = csr()
 
     renewed = enrollment.renew(NODE_ID, issued.serial, renewed_csr)
+    repeated = enrollment.renew(NODE_ID, issued.serial, renewed_csr)
 
     assert renewed.node_id == NODE_ID
     assert renewed.serial != issued.serial
+    assert repeated == renewed
+    assert len(authority.calls) == 2
     assert authority.calls[-1][1] == x509.load_pem_x509_csr(renewed_csr).public_bytes(
         serialization.Encoding.PEM
     )
     with sessions() as session:
         original = session.get(AgentCertificate, issued.serial)
-        assert original is not None and original.revoked_at is not None
+        staged = session.get(AgentCertificate, renewed.serial)
+        assert original is not None and original.revoked_at is None and original.state == "active"
+        assert original.generation == 1
+        assert staged is not None and staged.revoked_at is None and staged.state == "staged"
+        assert staged.generation == 2
+    with pytest.raises(EnrollmentDenied, match="staged|rotation"):
+        enrollment.renew(NODE_ID, issued.serial, csr())
+    with pytest.raises(EnrollmentDenied, match="active"):
+        enrollment.renew(NODE_ID, renewed.serial, csr())
+
+    enrollment.activate(NODE_ID, renewed.serial, renewed.generation)
+    enrollment.activate(NODE_ID, renewed.serial, renewed.generation)
+
+    with sessions() as session:
+        original = session.get(AgentCertificate, issued.serial)
+        active = session.get(AgentCertificate, renewed.serial)
+        assert original is not None and original.revoked_at is not None and original.state == "revoked"
+        assert active is not None and active.revoked_at is None and active.state == "active"
     with pytest.raises(EnrollmentDenied, match="serial"):
         enrollment.renew(OTHER_NODE_ID, renewed.serial, csr(OTHER_NODE_ID))
     with pytest.raises(EnrollmentDenied, match="CSR"):
@@ -296,6 +353,38 @@ def test_renewal_rotates_certificate_for_same_node_and_rejects_bad_serial_csr_or
         node.state = "retired"
     with pytest.raises(EnrollmentDenied, match="retired|revoked"):
         enrollment.renew(NODE_ID, renewed.serial, csr())
+
+
+def test_sqlite_simultaneous_exact_renewal_issues_one_staged_generation(
+    service,
+) -> None:
+    enrollment, _, _, _ = service
+    issued = enrollment.approve(enroll(enrollment).id, "admin")
+    renewed_csr = csr()
+    authority = PausingAuthority()
+    authority._serial = 1
+    enrollment._authority = authority
+    results: list[object] = []
+
+    def renew() -> None:
+        try:
+            results.append(enrollment.renew(NODE_ID, issued.serial, renewed_csr))
+        except (EnrollmentDenied, SQLAlchemyError) as error:
+            results.append(error)
+
+    first = threading.Thread(target=renew)
+    second = threading.Thread(target=renew)
+    first.start()
+    assert authority.entered.wait(timeout=5)
+    second.start()
+    time.sleep(0.2)
+    authority.release.set()
+    first.join(timeout=5)
+    second.join(timeout=5)
+
+    assert results == [results[0], results[0]]
+    assert isinstance(results[0], IssuedCertificate)
+    assert len(authority.calls) == 1
 
 
 def test_revoked_identity_denies_renewal_immediately(service) -> None:
@@ -317,6 +406,7 @@ def test_local_revocation_precedes_remote_and_retry_calls_only_unconfirmed_seria
         session.add(AgentCertificate(
             serial="serial-2", node_id=NODE_ID, fingerprint="fingerprint-2",
             not_before=clock.now, not_after=clock.now + timedelta(hours=24),
+            generation=2,
         ))
     authority.revoke_failures.add("serial-2")
 
@@ -360,7 +450,7 @@ def postgres_engine() -> Engine:
             try:
                 with engine.connect():
                     break
-            except Exception:
+            except SQLAlchemyError:
                 time.sleep(0.1)
         else:
             pytest.skip("disposable PostgreSQL did not become ready")
@@ -370,7 +460,7 @@ def postgres_engine() -> Engine:
         subprocess.run(["docker", "stop", container], check=False, capture_output=True)
 
 
-def test_postgres_separate_services_have_exactly_one_replay_winner(postgres_engine: Engine) -> None:
+def test_postgres_separate_services_return_one_idempotent_exact_replay(postgres_engine: Engine) -> None:
     Base.metadata.drop_all(postgres_engine)
     Base.metadata.create_all(postgres_engine)
     clock = Clock()
@@ -392,8 +482,8 @@ def test_postgres_separate_services_have_exactly_one_replay_winner(postgres_engi
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(submit, (first, second)))
 
-    assert sum(not isinstance(result, Exception) for result in results) == 1
-    assert sum(isinstance(result, EnrollmentDenied) and "consumed" in str(result) for result in results) == 1
+    assert all(result == results[0] for result in results)
+    assert not isinstance(results[0], Exception)
 
 
 def test_postgres_approval_persists_node_before_certificate(postgres_engine: Engine) -> None:
