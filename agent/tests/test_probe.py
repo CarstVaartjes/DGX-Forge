@@ -1190,6 +1190,43 @@ def test_process_request_cannot_enable_shell_stdin_or_inherited_descriptors(tmp_
         os.close(descriptor)
 
 
+def test_process_request_rejects_duplicate_or_reserved_additional_descriptors(tmp_path) -> None:
+    executable = tmp_path / "tool"
+    digest = _executable(executable)
+    executable_fd = open_verified_executable(
+        executable, digest, _test_only_allow_unprivileged=True
+    )
+    assert executable_fd is not None
+    extra_fd = os.memfd_create("extra", os.MFD_CLOEXEC)
+    try:
+        for additional in (
+            (executable_fd,),
+            (extra_fd, extra_fd),
+        ):
+            with pytest.raises(ProbeCollectorError):
+                ProcessRequest.fixed(
+                    argv=(str(executable),),
+                    cwd=tmp_path,
+                    timeout_seconds=1,
+                    output_limit_bytes=1024,
+                    executable_fd=executable_fd,
+                    additional_fds=additional,
+                )
+        with pytest.raises(ProbeCollectorError):
+            ProcessRequest.fixed(
+                argv=(str(executable),),
+                cwd=tmp_path,
+                timeout_seconds=1,
+                output_limit_bytes=1024,
+                executable_fd=executable_fd,
+                support_archive_fd=extra_fd,
+                additional_fds=(extra_fd,),
+            )
+    finally:
+        os.close(extra_fd)
+        os.close(executable_fd)
+
+
 def test_verified_descriptor_execution_resists_path_swap(tmp_path) -> None:
     executable = tmp_path / "fixed-tool"
     digest = _executable(executable, b"#!/bin/sh\nprintf trusted\n")

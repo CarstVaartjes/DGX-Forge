@@ -4,6 +4,7 @@ set -eu
 : "${DGX_CONTROL_HOSTNAME:?set DGX_CONTROL_HOSTNAME}"
 : "${DGX_AGENT_ENROLL_HOSTNAME:?set DGX_AGENT_ENROLL_HOSTNAME}"
 : "${DGX_AGENT_HOSTNAME:?set DGX_AGENT_HOSTNAME}"
+: "${DGX_REGISTRY_HOSTNAME:?set DGX_REGISTRY_HOSTNAME}"
 
 normalize_hostname() {
   hostname=$1
@@ -39,10 +40,14 @@ normalize_hostname() {
 control_hostname=$(normalize_hostname "$DGX_CONTROL_HOSTNAME")
 enrollment_hostname=$(normalize_hostname "$DGX_AGENT_ENROLL_HOSTNAME")
 agent_hostname=$(normalize_hostname "$DGX_AGENT_HOSTNAME")
+registry_hostname=$(normalize_hostname "$DGX_REGISTRY_HOSTNAME")
 
 if [ "$control_hostname" = "$enrollment_hostname" ] \
   || [ "$control_hostname" = "$agent_hostname" ] \
-  || [ "$enrollment_hostname" = "$agent_hostname" ]; then
+  || [ "$control_hostname" = "$registry_hostname" ] \
+  || [ "$enrollment_hostname" = "$agent_hostname" ] \
+  || [ "$enrollment_hostname" = "$registry_hostname" ] \
+  || [ "$agent_hostname" = "$registry_hostname" ]; then
   echo "DGX Caddy SNI hostnames must be distinct" >&2
   exit 64
 fi

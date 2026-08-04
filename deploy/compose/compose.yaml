@@ -1,4 +1,4 @@
-name: dgx-forge-control
+name: ${COMPOSE_PROJECT_NAME:-dgx-forge-control}
 
 x-bounded-logging: &bounded-logging
   driver: local
@@ -160,9 +160,30 @@ services:
       DGX_CONTROL_HOSTNAME: ${DGX_CONTROL_HOSTNAME:?set Caddy control hostname}
       DGX_AGENT_ENROLL_HOSTNAME: ${DGX_AGENT_ENROLL_HOSTNAME:?set Caddy enrollment hostname}
       DGX_AGENT_HOSTNAME: ${DGX_AGENT_HOSTNAME:?set Caddy agent hostname}
+      DGX_REGISTRY_HOSTNAME: ${DGX_REGISTRY_HOSTNAME:?set Caddy registry hostname}
     secrets: [agent-client-ca, agent-proxy-auth]
-    networks: [ingress, agent-proxy]
-    depends_on: [control-api]
+    networks: [ingress, agent-proxy, registry-edge]
+    depends_on:
+      control-api: {condition: service_started}
+      registry: {condition: service_healthy}
+
+  registry:
+    image: ${REGISTRY_IMAGE:-registry:3.1.1@sha256:1be55279f18a2fe1a74edf2664cac61c1bea305b7b4642dab412e7affdcb3e33}
+    restart: unless-stopped
+    logging: *bounded-logging
+    read_only: true
+    environment:
+      OTEL_TRACES_EXPORTER: none
+    volumes:
+      - ./registry/config.yml:/etc/distribution/config.yml:ro
+      - registry-data:/var/lib/registry
+    tmpfs: [/tmp]
+    networks: [registry-edge, registry-publisher]
+    healthcheck:
+      test: [CMD-SHELL, "wget -q --spider http://127.0.0.1:5000/v2/ || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
 secrets:
   database-url:
@@ -196,6 +217,10 @@ networks:
   application: {internal: true}
   data: {internal: true}
   cluster-egress: {}
+  registry-edge: {internal: true}
+  # No standing service joins this network. A Docker-daemon administrator may
+  # attach a digest-pinned one-shot ORAS publisher as documented in registry/README.md.
+  registry-publisher: {internal: true}
 
 volumes:
   postgres-data: {}
@@ -204,3 +229,4 @@ volumes:
   caddy-config: {}
   prometheus-data: {}
   grafana-data: {}
+  registry-data: {}

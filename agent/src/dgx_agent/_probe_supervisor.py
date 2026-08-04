@@ -111,17 +111,18 @@ def _report(descriptor: int, *fields: object) -> None:
 
 def _guard(argv: list[str]) -> int:
     """Keep an authenticated subreaper alive around the untrusted tool."""
-    if len(argv) < 10:
+    if len(argv) < 11:
         return 126
     gate_fd = int(argv[2])
     result_fd = int(argv[3])
     executable_fd = int(argv[4])
     support_fd = int(argv[5])
-    absolute_deadline = float(argv[6])
-    expected_parent = int(argv[7])
-    cwd = argv[8]
-    tool_argv = tuple(argv[9:])
-    inherited = (executable_fd,) if support_fd < 0 else (executable_fd, support_fd)
+    additional_fds = tuple(int(value) for value in argv[6].split(",") if value)
+    absolute_deadline = float(argv[7])
+    expected_parent = int(argv[8])
+    cwd = argv[9]
+    tool_argv = tuple(argv[10:])
+    inherited = ((executable_fd,) if support_fd < 0 else (executable_fd, support_fd)) + additional_fds
     execution_deadline = absolute_deadline - _CLEANUP_RESERVE_SECONDS
     _set_subreaper()
     signal.signal(signal.SIGTERM, _request_stop)
@@ -185,16 +186,18 @@ def _guard(argv: list[str]) -> int:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) < 8:
+    if len(argv) < 9:
         return 126
     status_fd = int(argv[1])
     acknowledgement_fd = int(argv[2])
     executable_fd = int(argv[3])
     support_fd = int(argv[4])
-    absolute_deadline = float(argv[5])
-    cwd = argv[6]
-    tool_argv = tuple(argv[7:])
-    inherited = (executable_fd,) if support_fd < 0 else (executable_fd, support_fd)
+    additional_raw = argv[5]
+    additional_fds = tuple(int(value) for value in additional_raw.split(",") if value)
+    absolute_deadline = float(argv[6])
+    cwd = argv[7]
+    tool_argv = tuple(argv[8:])
+    inherited = ((executable_fd,) if support_fd < 0 else (executable_fd, support_fd)) + additional_fds
     _set_subreaper()
     signal.signal(signal.SIGTERM, _request_stop)
     signal.signal(signal.SIGINT, _request_stop)
@@ -219,6 +222,7 @@ def main(argv: list[str]) -> int:
                 str(guardian_status_write),
                 str(executable_fd),
                 str(support_fd),
+                additional_raw,
                 repr(absolute_deadline),
                 str(os.getpid()),
                 cwd,

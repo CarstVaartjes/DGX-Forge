@@ -11,6 +11,7 @@ def _environment() -> dict[str, str]:
     return os.environ | {
         "POSTGRES_IMAGE": "postgres:17@sha256:" + "a" * 64,
         "CADDY_IMAGE": "caddy:2@sha256:" + "b" * 64,
+        "REGISTRY_IMAGE": "registry:3@sha256:" + "9" * 64,
         "CONTROL_IMAGE": "example/control:1@sha256:" + "c" * 64,
         "LITELLM_IMAGE": "example/litellm:1@sha256:" + "d" * 64,
         "PROMETHEUS_IMAGE": "prom/prometheus:1@sha256:" + "e" * 64,
@@ -40,6 +41,7 @@ def _environment() -> dict[str, str]:
         "DGX_CONTROL_HOSTNAME": "control.test.example",
         "DGX_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
         "DGX_AGENT_HOSTNAME": "agents.test.example",
+        "DGX_REGISTRY_HOSTNAME": "registry.test.example",
         "DGX_AGENT_PROXY_AUTH": "test-proxy-secret",
     }
 
@@ -60,6 +62,7 @@ def _adapted_caddy(environment: dict[str, str]) -> dict:
             "-e", f"DGX_CONTROL_HOSTNAME={environment['DGX_CONTROL_HOSTNAME']}",
             "-e", f"DGX_AGENT_ENROLL_HOSTNAME={environment['DGX_AGENT_ENROLL_HOSTNAME']}",
             "-e", f"DGX_AGENT_HOSTNAME={environment['DGX_AGENT_HOSTNAME']}",
+            "-e", f"DGX_REGISTRY_HOSTNAME={environment['DGX_REGISTRY_HOSTNAME']}",
             "-e", "DGX_AGENT_PROXY_AUTH=test-proxy-secret",
             "caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb",
             "caddy", "adapt", "--config", "-", "--adapter", "caddyfile",
@@ -77,6 +80,11 @@ def _entrypoint_result(
     secret_source: str | None = None,
     entrypoint_arguments: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
+    environment = environment | {
+        "DGX_REGISTRY_HOSTNAME": environment.get(
+            "DGX_REGISTRY_HOSTNAME", "registry.test.example"
+        )
+    }
     command = ["docker", "run", "--rm"]
     for name, value in environment.items():
         command.extend(("-e", f"{name}={value}"))
@@ -178,7 +186,7 @@ def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents(
     client_auth = next(
         policy["client_authentication"]
         for policy in server["tls_connection_policies"]
-        if policy.get("match") == {"sni": ["agents.test.example"]}
+        if "agents.test.example" in policy.get("match", {}).get("sni", [])
     )
     assert client_auth["mode"] == "require_and_verify"
     assert client_auth["ca"] == {"provider": "file", "pem_files": ["/run/secrets/agent-client-ca"]}
@@ -296,7 +304,7 @@ def test_rendered_production_boundary_has_only_caddy_public_and_step_ca_private(
     rendered = _rendered()
     services = rendered["services"]
     assert {name for name, service in services.items() if service.get("ports")} == {"caddy"}
-    assert set(services["caddy"]["networks"]) == {"agent-proxy", "ingress"}
+    assert set(services["caddy"]["networks"]) == {"agent-proxy", "ingress", "registry-edge"}
     assert set(services["control-api"]["networks"]) == {"agent-proxy", "application", "ca", "data"}
     assert rendered["networks"]["agent-proxy"]["internal"] is True
     assert "step-ca" in services

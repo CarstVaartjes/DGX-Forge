@@ -15,7 +15,18 @@ from dgx_agent.operations import (
     OperationRegistry,
     UnsupportedOperation,
 )
+from dgx_agent.releases import (
+    ReleaseDisposition,
+    ReleaseEvidence,
+    ReleaseInspection,
+)
 from dgx_agent.state import AgentStateConflict, AgentStateStore
+from dgx_agent.workloads import (
+    WorkloadAction,
+    WorkloadDisposition,
+    WorkloadEvidence,
+    WorkloadInspection,
+)
 
 
 NODE_ID = "spk_0123456789abcdef0123456789abcdef"
@@ -65,6 +76,43 @@ class RecordingProbe:
         return self.evidence
 
 
+class RecordingReleaseInstaller:
+    def __init__(self, inspection=None) -> None:
+        self.requests = []
+        self.inspection = inspection or ReleaseInspection(ReleaseDisposition.READY)
+
+    def install(self, request, deadline):
+        self.requests.append((request, deadline))
+        return ReleaseEvidence(
+            "installed", request.target_digest, request.oci_manifest_digest,
+            request.adapter_id,
+        )
+
+    def inspect(self, request, deadline):
+        self.requests.append(("inspect", request))
+        return self.inspection
+
+
+class RecordingWorkloads:
+    def __init__(self, inspection=None) -> None:
+        self.requests = []
+        self.inspection = inspection or WorkloadInspection(WorkloadDisposition.READY)
+
+    def execute(self, request, deadline, job_id, operation_id, attempt, fence):
+        self.requests.append((request, deadline, job_id, operation_id, attempt, fence))
+        return WorkloadEvidence(
+            "healthy" if request.action is WorkloadAction.HEALTH else "completed",
+            request.action,
+            request.workload_id,
+            request.release_digest,
+            "8" * 64,
+        )
+
+    def inspect(self, request, deadline, job_id, operation_id, attempt, fence):
+        self.requests.append(("inspect", request))
+        return self.inspection
+
+
 def context(tmp_path) -> OperationContext:
     return OperationContext(
         node_id=NODE_ID,
@@ -87,6 +135,87 @@ def test_unknown_duck_typed_or_known_unimplemented_operation_never_dispatches(tm
             claim(operation=AgentOperation.RELEASE_INSTALL),
             operation_context,
         )
+
+
+def test_release_and_workload_operations_dispatch_only_to_typed_interfaces(tmp_path) -> None:
+    release = RecordingReleaseInstaller()
+    workloads = RecordingWorkloads()
+    release_payload = {
+        "schema_version": 1,
+        "target_name": "spark-runtime-2026-08",
+        "oci_manifest_digest": "sha256:" + "1" * 64,
+        "target_digest": "2" * 64,
+        "provenance_digest": "3" * 64,
+        "adapter_id": "spark-runtime-v1",
+    }
+    release_context = OperationContext(
+        NODE_ID, AgentStateStore(tmp_path / "release-state"), NeverProbe(),
+        release, workloads,
+    )
+
+    installed = OperationRegistry().execute(
+        claim(operation=AgentOperation.RELEASE_INSTALL, payload=release_payload),
+        release_context,
+    )
+
+    assert installed["status"] == "ok"
+    assert installed["evidence"]["release_digest"] == "2" * 64
+    assert len(release.requests) == 1
+
+    operation_payloads = {
+        AgentOperation.WORKLOAD_PREPARE: {"profile_digest": "5" * 64},
+        AgentOperation.WORKLOAD_START: {"preparation_digest": "6" * 64},
+        AgentOperation.WORKLOAD_STOP: {},
+        AgentOperation.WORKLOAD_HEALTH: {},
+        AgentOperation.WORKLOAD_VERIFY: {"expected_digest": "7" * 64},
+    }
+    for index, (operation, extra) in enumerate(operation_payloads.items()):
+        payload = {
+            "schema_version": 1,
+            "workload_id": "deepseek-v4-flash-a",
+            "release_digest": "4" * 64,
+            "adapter_id": "spark-runtime-v1",
+        } | extra
+        operation_context = OperationContext(
+            NODE_ID,
+            AgentStateStore(tmp_path / f"workload-state-{index}"),
+            NeverProbe(),
+            release,
+            workloads,
+        )
+        executed = OperationRegistry().execute(
+            claim(operation=operation, payload=payload), operation_context
+        )
+        assert executed["status"] == "ok"
+
+    assert [item[0].action for item in workloads.requests] == list(WorkloadAction)
+
+
+def test_interrupted_mutation_uses_typed_inspector_and_never_blindly_retries(tmp_path) -> None:
+    payload = {
+        "schema_version": 1,
+        "workload_id": "deepseek-v4-flash-a",
+        "release_digest": "4" * 64,
+        "adapter_id": "spark-runtime-v1",
+        "preparation_digest": "6" * 64,
+    }
+    active = claim(operation=AgentOperation.WORKLOAD_START, payload=payload)
+    state = AgentStateStore(tmp_path / "state")
+    state.begin(active)
+    workloads = RecordingWorkloads(
+        WorkloadInspection(WorkloadDisposition.OPERATOR_INTERVENTION)
+    )
+    operation_context = OperationContext(
+        NODE_ID, state, NeverProbe(), RecordingReleaseInstaller(), workloads
+    )
+
+    inspection = OperationRegistry().inspect(active, operation_context)
+
+    assert inspection.disposition is InspectionDisposition.OPERATOR_INTERVENTION
+    assert workloads.requests[0][0] == "inspect"
+    with pytest.raises(AgentStateConflict):
+        OperationRegistry().execute(active, operation_context)
+    assert [item[0] for item in workloads.requests] == ["inspect", "inspect"]
 
 
 def test_node_probe_rejects_every_nonempty_payload_before_dispatch(tmp_path) -> None:
@@ -262,3 +391,118 @@ def test_unrecognized_exception_error_code_cannot_enter_persisted_result(tmp_pat
 
     assert execution.result.result == {"status": "failed", "error_code": "probe_failed"}
     assert b"secret" not in execution.canonical_result
+
+
+@pytest.mark.parametrize(
+    ("operation", "payload", "expected_code"),
+    [
+        (
+            AgentOperation.RELEASE_INSTALL,
+            {
+                "schema_version": 1,
+                "target_name": "spark-runtime-2026-08",
+                "oci_manifest_digest": "sha256:" + "1" * 64,
+                "target_digest": "2" * 64,
+                "provenance_digest": "3" * 64,
+                "adapter_id": "spark-runtime-v1",
+            },
+            "release_install_failed",
+        ),
+        (
+            AgentOperation.WORKLOAD_HEALTH,
+            {
+                "schema_version": 1,
+                "workload_id": "deepseek-v4-flash-a",
+                "release_digest": "4" * 64,
+                "adapter_id": "spark-runtime-v1",
+            },
+            "workload_failed",
+        ),
+    ],
+)
+def test_release_and_workload_failures_persist_family_code_and_replay_exactly(
+    tmp_path, operation, payload, expected_code
+) -> None:
+    sentinel = "registry-secret-/tmp/output"
+
+    class FailingRelease(RecordingReleaseInstaller):
+        def install(self, request, deadline):
+            raise RuntimeError(sentinel)
+
+    class FailingWorkloads(RecordingWorkloads):
+        def execute(self, request, deadline, job_id, operation_id, attempt, fence):
+            raise RuntimeError(sentinel)
+
+    operation_context = OperationContext(
+        NODE_ID,
+        AgentStateStore(tmp_path / "state"),
+        NeverProbe(),
+        FailingRelease(),
+        FailingWorkloads(),
+    )
+    request = claim(operation=operation, payload=payload)
+    first = OperationRegistry().execute(request, operation_context)
+    replay = OperationRegistry().execute(request, operation_context)
+
+    assert first.result.result == {"status": "failed", "error_code": expected_code}
+    assert sentinel.encode() not in first.canonical_result
+    assert replay.canonical_result == first.canonical_result
+    assert replay.replayed is True
+
+
+def test_expired_active_mutation_can_inspect_and_complete_but_never_retry(tmp_path) -> None:
+    payload = {
+        "schema_version": 1,
+        "workload_id": "deepseek-v4-flash-a",
+        "release_digest": "4" * 64,
+        "adapter_id": "spark-runtime-v1",
+        "preparation_digest": "6" * 64,
+    }
+    active = claim(
+        operation=AgentOperation.WORKLOAD_START,
+        payload=payload,
+        deadline=datetime.now(UTC) + timedelta(milliseconds=30),
+    )
+    state = AgentStateStore(tmp_path / "completed-state")
+    state.begin(active)
+    evidence = WorkloadEvidence(
+        "inspected", WorkloadAction.START, "deepseek-v4-flash-a",
+        "4" * 64, "8" * 64,
+    )
+    workloads = RecordingWorkloads(
+        WorkloadInspection(WorkloadDisposition.COMPLETED, evidence)
+    )
+    operation_context = OperationContext(
+        NODE_ID, state, NeverProbe(), RecordingReleaseInstaller(), workloads
+    )
+    time.sleep(0.04)
+    assert OperationRegistry().inspect(
+        active, operation_context
+    ).disposition is InspectionDisposition.COMPLETED
+    recovered = OperationRegistry().execute(active, operation_context)
+    assert recovered.result.state == "succeeded"
+
+    retry_claim = claim(
+        operation=AgentOperation.WORKLOAD_START,
+        payload=payload,
+        deadline=datetime.now(UTC) + timedelta(milliseconds=30),
+        job_id="55555555-5555-4555-8555-555555555555",
+        operation_id="66666666-6666-4666-8666-666666666666",
+        fence="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    )
+    retry_state = AgentStateStore(tmp_path / "retry-state")
+    retry_state.begin(retry_claim)
+    retry_workloads = RecordingWorkloads(
+        WorkloadInspection(WorkloadDisposition.SAFE_TO_RETRY)
+    )
+    retry_context = OperationContext(
+        NODE_ID, retry_state, NeverProbe(), RecordingReleaseInstaller(),
+        retry_workloads,
+    )
+    time.sleep(0.04)
+    assert OperationRegistry().inspect(
+        retry_claim, retry_context
+    ).disposition is InspectionDisposition.SAFE_TO_RETRY
+    with pytest.raises(AgentProtocolError, match="deadline"):
+        OperationRegistry().execute(retry_claim, retry_context)
+    assert all(item[0] == "inspect" for item in retry_workloads.requests)

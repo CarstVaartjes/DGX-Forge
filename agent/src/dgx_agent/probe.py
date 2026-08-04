@@ -84,6 +84,7 @@ class ProcessRequest:
     stdin_closed: bool = True
     close_fds: bool = True
     new_process_group: bool = True
+    additional_fds: tuple[int, ...] = ()
 
     @classmethod
     def fixed(
@@ -96,6 +97,7 @@ class ProcessRequest:
         executable_fd: int,
         support_archive_fd: int | None = None,
         absolute_deadline: float | None = None,
+        additional_fds: tuple[int, ...] = (),
     ) -> "ProcessRequest":
         if (
             not argv
@@ -132,6 +134,23 @@ class ProcessRequest:
                 os.fstat(support_archive_fd)
             except OSError as error:
                 raise ProbeCollectorError("verified support descriptor is invalid") from error
+        reserved_fds = {executable_fd}
+        if support_archive_fd is not None:
+            reserved_fds.add(support_archive_fd)
+        if (
+            len(additional_fds) > 16
+            or len(set(additional_fds)) != len(additional_fds)
+            or reserved_fds.intersection(additional_fds)
+            or any(
+            not isinstance(value, int) or value < 0 for value in additional_fds
+            )
+        ):
+            raise ProbeCollectorError("additional process descriptors are invalid")
+        try:
+            for value in additional_fds:
+                os.fstat(value)
+        except OSError as error:
+            raise ProbeCollectorError("additional process descriptors are invalid") from error
         now = time.monotonic()
         fixed_deadline = min(
             now + float(timeout_seconds),
@@ -148,13 +167,18 @@ class ProcessRequest:
             executable_fd,
             support_archive_fd,
             fixed_deadline,
+            False,
+            True,
+            True,
+            True,
+            tuple(additional_fds),
         )
 
     @property
     def inherited_fds(self) -> tuple[int, ...]:
         if self.support_archive_fd is None:
-            return (self.executable_fd,)
-        return (self.executable_fd, self.support_archive_fd)
+            return (self.executable_fd, *self.additional_fds)
+        return (self.executable_fd, self.support_archive_fd, *self.additional_fds)
 
 
 @dataclass(frozen=True)
@@ -199,6 +223,7 @@ class BoundedProcessRunner:
                     str(acknowledgement_read),
                     str(request.executable_fd),
                     str(request.support_archive_fd if request.support_archive_fd is not None else -1),
+                    ",".join(str(value) for value in request.additional_fds),
                     repr(deadline),
                     str(request.cwd),
                     *request.argv,
