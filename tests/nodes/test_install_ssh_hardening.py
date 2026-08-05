@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -11,6 +12,10 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "nodes" / "bin" / "install-ssh-hardening"
 DROP_IN = ROOT / "nodes" / "etc" / "ssh" / "sshd_config.d" / "90-dgx-admin.conf"
 FINGERPRINT = "SHA256:test-admin-key"
+LINUX_NODE_RUNTIME = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="SSH hardening runtime is supported only on DGX OS/Linux nodes",
+)
 
 
 @pytest.fixture
@@ -115,6 +120,7 @@ def _run(
     )
 
 
+@LINUX_NODE_RUNTIME
 def test_check_apply_verify_and_second_apply_are_idempotent(
     hardening_host: dict[str, object],
 ) -> None:
@@ -174,6 +180,7 @@ def test_foreign_target_is_refused_and_preserved(
     assert hardening_host["actions"].read_text() == ""
 
 
+@LINUX_NODE_RUNTIME
 def test_rollback_removes_only_matching_managed_drop_in(
     hardening_host: dict[str, object],
 ) -> None:

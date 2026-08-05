@@ -4,10 +4,17 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 PROBE = ROOT / "nodes" / "bin" / "inspect-node-identity"
+LINUX_NODE_RUNTIME = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="identity probe runtime is supported only on DGX OS/Linux nodes",
+)
 
 
 def _identity_environment(tmp_path: Path) -> tuple[dict[str, str], str, str]:
@@ -42,6 +49,7 @@ def _identity_environment(tmp_path: Path) -> tuple[dict[str, str], str, str]:
     return environment, serial, machine_id
 
 
+@LINUX_NODE_RUNTIME
 def test_identity_probe_emits_hashes_and_public_fingerprints_not_raw_identity(
     tmp_path: Path,
 ) -> None:
@@ -68,6 +76,7 @@ def test_identity_probe_emits_hashes_and_public_fingerprints_not_raw_identity(
     assert "private-material" not in completed.stdout
 
 
+@LINUX_NODE_RUNTIME
 def test_identity_probe_marks_invalid_machine_id_for_console_repair(
     tmp_path: Path,
 ) -> None:
