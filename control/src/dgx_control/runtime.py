@@ -83,7 +83,7 @@ class RuntimeHandlers:
         except (OSError, ValueError, json.JSONDecodeError) as error:
             raise ValueError("repository plan is unreadable") from error
         if not isinstance(definition, Mapping):
-            raise ValueError("repository plan must be an object")
+            raise TypeError("repository plan must be an object")
         targets = definition.get("targets")
         if (
             not isinstance(targets, list)
@@ -143,7 +143,7 @@ class RuntimeHandlers:
             raise ValueError("reconciliation workloads and releases differ")
         routes = content["routes"]
         if not isinstance(routes, Mapping):
-            raise ValueError("reconciliation routes are invalid")
+            raise TypeError("reconciliation routes are invalid")
         if self._route_manager is not None:
             self._route_manager.withdraw(request.targets)
         commands = 0

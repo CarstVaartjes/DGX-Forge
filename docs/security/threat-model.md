@@ -31,7 +31,7 @@ Git is desired-state authority. PostgreSQL is operational state only.
 | Backup storage | Database/config/Hermes state copies; backup thief or tampering | Required external authenticated encryption, canonical manifest/checksums, 0600 files, no plaintext production mode; Hermes data/workspaces included and disposable cache omitted | Restore verification before destructive action; Hermes remains stopped pending fresh presence/routes; disposable-host drill | offline and backup/restore tests |
 | Docker service host | All services; host admin, disk loss | Separate least-privilege containers, read-only roots, numeric users, private networks, digest-pinned images, bounded volumes/logs | Supply-chain verification, host-loss restore, alerts | Compose and release acceptance gates |
 | Tailscale gateway recovery | Human ingress identity; stolen OAuth secret, lost state, or stale extra Service | File-backed OAuth client limited to `auth_keys` for `tag:dgx-gateway`, persisted state, exact Service auto-approvals, exact exported three-Service map, HTTPS-only listeners, no wildcard or LAN fallback | Revoke OAuth client/node/tag, verify status and exported map, restore encrypted state or create one reviewed replacement | `deploy/compose/tests/test_tailscale.py`, Tailscale runbook |
-| Hermes Agent | Prompts, sessions, repository credentials and terminal tools; hostile tailnet user, prompt injection, or container escape | Separate tailnet and API identities, read-only root, `no-new-privileges`, empty capability allowlist, no host ports/socket/devices/control networks, three exact networks, fixed local LiteLLM alias, explicit CORS | Revoke user/API/repository credentials, stop service, inspect bounded logs, restore encrypted data/workspaces and require fresh routes | `test_hermes_agent.py`, `hermes-agent-runtime.sh`, Hermes runbook |
+| Hermes Agent | Prompts, sessions, repository credentials and terminal tools; hostile tailnet user, prompt injection, or container escape | Separate tailnet and API identities, read-only root, `no-new-privileges`, exact `CHOWN`, `DAC_OVERRIDE`, `FOWNER`, `SETGID`, and `SETUID` supervisor capability allowlist, no host ports/socket/devices/control networks, three exact networks, fixed local LiteLLM alias, explicit CORS | Revoke user/API/repository credentials, stop service, inspect bounded logs, restore encrypted data/workspaces and require fresh routes | `test_hermes_agent.py`, `hermes-agent-runtime.sh`, Hermes runbook |
 | Hermes host egress | NAS/Spark/control services; malicious tool or prompt-driven network access | One-off script resolves the exact bridge and installs an owned source-bound chain denying management, direct-fabric, metadata, and sibling Docker subnets while preserving DNS/Internet | `--verify`, host firewall audit, stop Hermes on drift; no Docker self-repair privilege | `test_hermes_egress.py`, Hermes runbook |
 
 ## Role matrix
@@ -57,10 +57,14 @@ approved targets.
 Hermes intentionally has terminal and Internet tooling. Prompt injection or a
 malicious repository can therefore alter its persisted state, disclose a
 credential available inside its own container, or act through that credential.
-The empty Linux-capability allowlist, read-only root, network segmentation,
+The minimal supervisor Linux-capability allowlist, read-only root, network segmentation,
 host egress chain, narrow repository credentials, and encrypted recovery limit
 blast radius; they do not make agent-executed code trustworthy. The pinned
-image must pass the runtime harness with no added capability before deployment.
+image must pass the runtime harness with only `CHOWN` for targeted ownership,
+`DAC_OVERRIDE` for the root supervisor to access s6 locks deliberately re-owned
+by the runtime user and inspect owner-only binds, `FOWNER` for fixing s6 runtime
+permissions, and `SETGID`/`SETUID` for the final unprivileged process transition
+before deployment.
 
 An agent security incident has a deliberate recovery boundary: do not reuse an
 enrollment secret or certificate after suspected impersonation, replay, theft,

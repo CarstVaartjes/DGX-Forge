@@ -8,7 +8,6 @@ from collections.abc import Mapping
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 
-
 _WORKLOAD = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
 _POLICY_FIELDS = frozenset({"schema_version", "alias", "local_only", "candidates"})
 _CANDIDATE_FIELDS = frozenset({"workload", "priority", "minimum_maturity"})

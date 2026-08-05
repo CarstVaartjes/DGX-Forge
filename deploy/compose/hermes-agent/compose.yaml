@@ -4,6 +4,8 @@ x-hermes-service: &hermes-service
     dockerfile: Dockerfile
     args:
       HERMES_IMAGE: ${HERMES_IMAGE:-nousresearch/hermes-agent:v2026.7.20@sha256:f7b35053268f532f98955195c909f15a230470fbcbdacaa9fdecb95707dad04a}
+      HERMES_UID: ${HERMES_UID:-1100}
+      HERMES_GID: ${HERMES_GID:-1100}
   image: local/hermes-agent:managed
   logging:
     driver: local
@@ -15,12 +17,13 @@ x-hermes-service: &hermes-service
   security_opt:
     - no-new-privileges:true
   cap_drop: [ALL]
+  cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
   cpus: ${HERMES_CPUS:-4}
   mem_limit: ${HERMES_MEMORY_LIMIT:-8g}
   mem_reservation: ${HERMES_MEMORY_RESERVATION:-4g}
   shm_size: ${HERMES_SHM_SIZE:-2g}
   tmpfs:
-    - /run:size=64m,mode=755
+    - /run:size=64m,mode=755,exec
     - /tmp:size=2g,mode=1777
     - /var/tmp:size=1g,mode=1777
   environment: &hermes-environment
@@ -29,6 +32,7 @@ x-hermes-service: &hermes-service
     API_SERVER_HOST: 0.0.0.0
     API_SERVER_MODEL_NAME: hermes-agent
     HERMES_DASHBOARD: "1"
+    HERMES_DASHBOARD_BASIC_AUTH_USERNAME: hermes
     HERMES_GID: ${HERMES_GID:-1100}
     HERMES_UID: ${HERMES_UID:-1100}
     MESSAGING_CWD: /workspace

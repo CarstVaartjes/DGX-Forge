@@ -24,6 +24,8 @@ case "${API_SERVER_KEY}" in
     *[!A-Za-z0-9_.~-]*) fail ;;
 esac
 export API_SERVER_KEY
+export HERMES_DASHBOARD_BASIC_AUTH_PASSWORD="${API_SERVER_KEY}"
+export HERMES_DASHBOARD_BASIC_AUTH_SECRET="${API_SERVER_KEY}"
 
 if [ "${HERMES_ENTRYPOINT_TEST_ONLY:-0}" = "1" ]; then
     exit 0

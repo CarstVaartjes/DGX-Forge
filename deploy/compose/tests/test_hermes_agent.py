@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[3]
 COMPOSE = ROOT / "deploy/compose"
 HERMES = COMPOSE / "hermes-agent"
@@ -72,17 +71,23 @@ def test_compose_hermes_is_unpublished_bounded_and_segmented() -> None:
     assert service["read_only"] is True
     assert service["security_opt"] == ["no-new-privileges:true"]
     assert service["cap_drop"] == ["ALL"]
+    assert service["cap_add"] == [
+        "CHOWN",
+        "DAC_OVERRIDE",
+        "FOWNER",
+        "SETGID",
+        "SETUID",
+    ]
     assert not service.get("ports")
     assert not service.get("devices")
     assert not service.get("privileged")
-    assert not service.get("cap_add")
     assert "docker.sock" not in json.dumps(service)
     assert service["cpus"] == 4.0
     assert int(service["mem_limit"]) == 8 * 1024**3
     assert int(service["mem_reservation"]) == 4 * 1024**3
     assert int(service["shm_size"]) == 2 * 1024**3
     assert service["tmpfs"] == [
-        "/run:size=64m,mode=755",
+        "/run:size=64m,mode=755,exec",
         "/tmp:size=2g,mode=1777",
         "/var/tmp:size=1g,mode=1777",
     ]
@@ -104,9 +109,12 @@ def test_hermes_uses_only_local_litellm_and_authenticated_gateway() -> None:
     assert environment["API_SERVER_ENABLED"] == "true"
     assert environment["API_SERVER_HOST"] == "0.0.0.0"
     assert environment["HERMES_DASHBOARD"] == "1"
+    assert environment["HERMES_DASHBOARD_BASIC_AUTH_USERNAME"] == "hermes"
     assert environment["MESSAGING_CWD"] == "/workspace"
     assert environment["API_SERVER_CORS_ORIGINS"] == "https://hermes.test.example"
     assert "OPENAI_API_KEY" not in environment
+    assert "HERMES_DASHBOARD_BASIC_AUTH_PASSWORD" not in environment
+    assert "HERMES_DASHBOARD_BASIC_AUTH_SECRET" not in environment
     assert {secret["target"] for secret in service["secrets"]} == {
         "/run/secrets/hermes-api-key"
     }
@@ -142,6 +150,7 @@ def _run_entrypoint(tmp_path: Path, payload: bytes | None, *, symlink: bool = Fa
     return subprocess.run(
         ["sh", str(HERMES / "entrypoint.sh")],
         capture_output=True,
+        check=False,
         text=True,
         env=os.environ | {
             "HERMES_ENTRYPOINT_TEST_ROOT": str(root),
@@ -171,7 +180,7 @@ def test_runtime_harness_covers_security_health_and_persistence() -> None:
     for required in (
         "8642",
         "9119",
-        "API_SERVER_KEY",
+        "hermes-api-key",
         "--force-recreate",
         "ReadonlyRootfs",
         "CapAdd",

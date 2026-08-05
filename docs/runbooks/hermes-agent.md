@@ -31,12 +31,10 @@ sudo install -d -m 0700 -o 1100 -g 1100 \
   /srv/dgx-forge/hermes/data \
   /srv/dgx-forge/hermes/workspaces \
   /srv/dgx-forge/hermes/cache
-sudo install -d -m 0700 /srv/dgx-forge/secrets
-umask 077
-openssl rand -base64 32 | tr '+/' '-_' | tr -d '=\n' \
-  > /srv/dgx-forge/secrets/hermes-api-key
-printf '\n' >> /srv/dgx-forge/secrets/hermes-api-key
-chmod 0600 /srv/dgx-forge/secrets/hermes-api-key
+sudo install -d -m 0700 -o root -g root /srv/dgx-forge/secrets
+sudo sh -c 'umask 077; openssl rand -base64 32 | tr "+/" "-_" | tr -d "=\n" > /srv/dgx-forge/secrets/hermes-api-key; printf "\n" >> /srv/dgx-forge/secrets/hermes-api-key'
+sudo chown root:root /srv/dgx-forge/secrets/hermes-api-key
+sudo chmod 0600 /srv/dgx-forge/secrets/hermes-api-key
 ```
 
 Set these non-secret paths and values in the host-local `.env`:
@@ -48,6 +46,12 @@ HERMES_DATA_ROOT=/srv/dgx-forge/hermes
 HERMES_API_KEY_FILE=/srv/dgx-forge/secrets/hermes-api-key
 HERMES_DASHBOARD_ORIGIN=https://EXACT-SVC-HERMES-DASHBOARD-URL
 ```
+
+The selected UID/GID is baked into the local derived image so the upstream
+supervisor never needs to edit `/etc/passwd` on the read-only root. Rebuild
+`hermes-agent` and `hermes-setup` after changing either value. The external API
+key file must remain root-owned mode `0600`; the supervisor has no reason to
+grant it to the unprivileged Hermes user because PID 1 injects only the value.
 
 The origin is the one exact HTTPS origin shown by Tailscale. Do not use `*`,
 HTTP, or a fallback list.
@@ -116,8 +120,10 @@ docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml \
 Confirm Hermes and LiteLLM are healthy. Serve status must show HTTPS 443 for
 `svc:hermes-dashboard` and `svc:hermes-api`, with exact upstreams
 `hermes-agent:9119` and `hermes-agent:8642`. No LAN client should reach them.
-An authorized tailnet user can open the dashboard, but API calls also require
-the Hermes API key; absent and incorrect keys must fail. A model call must
+An authorized tailnet user reaches the dashboard login and signs in as
+`hermes` with the Hermes API key. API calls require the same key; absent and
+incorrect keys must fail. The key is injected into dashboard authentication by
+PID 1 and is not present in the rendered Compose environment. A model call must
 identify only a selected local workload and never a cloud provider.
 
 The opt-in Docker-host acceptance harness is:
@@ -126,10 +132,11 @@ The opt-in Docker-host acceptance harness is:
 bash deploy/compose/tests/hermes-agent-runtime.sh
 ```
 
-It checks the read-only root, empty capability allowlist, bounded mounts,
-gateway/dashboard health, persistence, and absence of the Docker socket and
-private control networks. Physical tailnet authorization, NAS firewall
-enforcement, and live Spark inference remain deployment acceptance checks.
+It checks the read-only root, exact five-capability supervisor allowlist,
+bounded mounts, gateway/dashboard health, persistence, and absence of the
+Docker socket and private control networks. Physical tailnet authorization,
+NAS firewall enforcement, and live Spark inference remain deployment
+acceptance checks.
 
 ## Backup and recovery
 

@@ -94,6 +94,7 @@ def test_verifier_rejects_floating_hermes_agent_base(tmp_path: Path) -> None:
     result = subprocess.run(
         [SCRIPT, "--root", repository, "--generate"],
         capture_output=True,
+        check=False,
         text=True,
     )
 

@@ -31,7 +31,12 @@ from sqlalchemy.orm import Session, sessionmaker
 from starlette.responses import StreamingResponse
 
 from .agent_jobs import AgentJobService, StaleAgentAttempt
-from .auth import Actor, AgentIdentity, agent_identity_from_scope, agent_source_from_scope
+from .auth import (
+    Actor,
+    AgentIdentity,
+    agent_identity_from_scope,
+    agent_source_from_scope,
+)
 from .enrollment import (
     EnrollmentDenied,
     EnrollmentService,
