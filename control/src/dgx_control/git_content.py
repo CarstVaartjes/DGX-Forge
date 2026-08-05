@@ -26,28 +26,39 @@ def read_commit_file(
         or maximum_bytes <= 0
     ):
         raise ValueError("immutable repository file reference is invalid")
-    try:
-        process = subprocess.run(
-            (
-                "git",
-                "-c",
-                "core.hooksPath=/dev/null",
-                "-c",
-                "protocol.file.allow=never",
-                "-C",
-                str(repository_root),
-                "cat-file",
-                "blob",
-                f"{commit}:{relative_path}",
-            ),
+    base = (
+        "git",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "protocol.file.allow=never",
+        "-C",
+        str(repository_root),
+        "cat-file",
+    )
+    object_reference = f"{commit}:{relative_path}"
+
+    def run(arguments: tuple[str, ...]) -> subprocess.CompletedProcess[bytes]:
+        return subprocess.run(
+            arguments,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=10,
             check=False,
             shell=False,
         )
+
+    try:
+        size_process = run(base + ("-s", object_reference))
+        size_text = size_process.stdout.decode("ascii", "strict").strip()
+        size = int(size_text)
+        if size_process.returncode != 0 or size < 0 or size > maximum_bytes:
+            raise ValueError("immutable repository file is unavailable or oversized")
+        process = run(base + ("blob", object_reference))
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ValueError("immutable repository file cannot be read") from error
-    if process.returncode != 0 or len(process.stdout) > maximum_bytes:
+    except (UnicodeDecodeError, ValueError) as error:
+        raise ValueError("immutable repository file is unavailable or oversized") from error
+    if process.returncode != 0 or len(process.stdout) != size:
         raise ValueError("immutable repository file is unavailable or oversized")
     return process.stdout
