@@ -81,4 +81,6 @@ Independent review of `64e19e9..2e2d2ca` found no Critical, Important, or Minor
 issues and returned Ready: Yes. It independently passed 18 graph/migration tests,
 pinned Ruff, and diff checks, and exercised the real PostgreSQL 17.6 migration path
 from `0005` to `0006` and back with a legacy reconciliation row. The task is
-integrated on `main` at `75619d7`; publication acceptance remains gated on hosted CI.
+integrated on `main` at `75619d7`. Publication is accepted by hosted run
+`30971029113` at `02bb99add6ec97d91e46f681f7fc11b5eb6e0a84`, where Ruff, the
+macOS full Python+Bash suite, and the Ubuntu full Python+Bash suite all passed.

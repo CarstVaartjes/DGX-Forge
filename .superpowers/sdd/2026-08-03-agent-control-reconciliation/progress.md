@@ -5,3 +5,4 @@ Task 1: implementation delivered on feature/reconciliation-graph (canonical clos
 Task 1: complete control regression suite green (300 passed, including PostgreSQL DDL/create-all coverage after correcting the JSON server default to a dialect-safe literal); independent review pending
 Task 1: independently reviewed (0 Critical, 0 Important, 0 Minor; Ready Yes; 18 focused/migration tests, pinned Ruff and diff green; PostgreSQL 17.6 upgrade/downgrade verified with a legacy row)
 Task 1: integrated on main at 75619d7; publication acceptance pending hosted CI
+Task 1: complete and accepted (hosted run 30971029113 at SHA 02bb99add6ec97d91e46f681f7fc11b5eb6e0a84; Ruff, macOS full Python+Bash, and Ubuntu full Python+Bash all passed)
