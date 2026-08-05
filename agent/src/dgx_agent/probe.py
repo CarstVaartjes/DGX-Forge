@@ -13,7 +13,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import MappingProxyType
@@ -537,17 +537,18 @@ class PinnedNodeProbe:
     _monotonic: Callable[[], float] = time.monotonic
     _utcnow: Callable[[], datetime] = lambda: datetime.now(UTC)
 
-    def collect(self, deadline: datetime) -> Mapping[str, Any]:
-        if (
-            not isinstance(deadline, datetime)
-            or deadline.tzinfo is None
-            or deadline.utcoffset() != UTC.utcoffset(deadline)
-        ):
-            raise ProbeDeadlineExceeded("probe deadline is invalid")
-        claim_remaining = (deadline.astimezone(UTC) - self._utcnow()).total_seconds()
-        if claim_remaining <= 0:
-            raise ProbeDeadlineExceeded("probe deadline has elapsed")
-        absolute_deadline = self._monotonic() + min(TOTAL_PROBE_SECONDS, claim_remaining)
+    def collect(
+        self,
+        deadline: datetime | MonotonicDeadline,
+    ) -> Mapping[str, Any]:
+        started = self._monotonic()
+        lease_deadline = self._bind_deadline(deadline, started)
+        hard_deadline = started + TOTAL_PROBE_SECONDS
+
+        def effective_deadline() -> float:
+            return min(hard_deadline, lease_deadline.absolute())
+
+        self._ensure_time(effective_deadline())
 
         descriptors: dict[ToolName, int | None] = {}
         opened: list[int] = []
@@ -558,10 +559,10 @@ class PinnedNodeProbe:
             if self.policy.bundle_root_available():
                 support_archive = open_verified_support_archive(
                     self.policy,
-                    _check_deadline=lambda: self._ensure_time(absolute_deadline),
+                    _check_deadline=lambda: self._ensure_time(effective_deadline()),
                 )
                 opened.append(support_archive)
-                self._ensure_time(absolute_deadline)
+                self._ensure_time(effective_deadline())
                 for tool in self.policy.tools:
                     descriptor = open_verified_executable(
                         tool.executable,
@@ -569,12 +570,14 @@ class PinnedNodeProbe:
                         _test_only_allow_unprivileged=(
                             self.policy._test_only_allow_unprivileged
                         ),
-                        _check_deadline=lambda: self._ensure_time(absolute_deadline),
+                        _check_deadline=lambda: self._ensure_time(
+                            effective_deadline()
+                        ),
                     )
                     descriptors[tool.name] = descriptor
                     if descriptor is not None:
                         opened.append(descriptor)
-                    self._ensure_time(absolute_deadline)
+                    self._ensure_time(effective_deadline())
             else:
                 descriptors.update({tool.name: None for tool in self.policy.tools})
             health_descriptor = open_verified_executable(
@@ -583,12 +586,12 @@ class PinnedNodeProbe:
                 _test_only_allow_unprivileged=(
                     self.policy._test_only_allow_unprivileged
                 ),
-                _check_deadline=lambda: self._ensure_time(absolute_deadline),
+                _check_deadline=lambda: self._ensure_time(effective_deadline()),
             )
             if health_descriptor is None:
                 raise ProbeCollectorError("fixed health collector is unavailable")
             opened.append(health_descriptor)
-            self._ensure_time(absolute_deadline)
+            self._ensure_time(effective_deadline())
 
             aggregate = 0
             health_outcome = self._run(
@@ -596,7 +599,8 @@ class PinnedNodeProbe:
                 Path("/"),
                 self.policy.health.timeout_seconds,
                 self.policy.health.output_limit_bytes,
-                absolute_deadline,
+                hard_deadline,
+                lease_deadline,
                 aggregate,
                 health_descriptor,
                 support_archive_fd=None,
@@ -606,7 +610,7 @@ class PinnedNodeProbe:
             if health_outcome.returncode != 0:
                 raise ProbeCollectorError("fixed health collector failed")
             health = _normalize_health(health_outcome.stdout, self.policy.health.output_limit_bytes)
-            self._ensure_time(absolute_deadline)
+            self._ensure_time(effective_deadline())
 
             tools: dict[str, Mapping[str, Any]] = {}
             for tool in self.policy.tools:
@@ -621,7 +625,8 @@ class PinnedNodeProbe:
                         self.policy.bundle_root,
                         tool.timeout_seconds,
                         tool.output_limit_bytes,
-                        absolute_deadline,
+                        hard_deadline,
+                        lease_deadline,
                         aggregate,
                         descriptor,
                         support_archive_fd=support_archive,
@@ -637,7 +642,7 @@ class PinnedNodeProbe:
                     parsed = parse_tool_document(
                         tool.name, outcome.stdout, limit=tool.output_limit_bytes
                     )
-                    self._ensure_time(absolute_deadline)
+                    self._ensure_time(effective_deadline())
                     item: dict[str, Any] = {
                         "status": "ok" if parsed.ok else "degraded",
                         **provenance,
@@ -654,7 +659,7 @@ class PinnedNodeProbe:
                     }
                 except ProbeDeadlineExceeded as error:
                     aggregate = _add_captured(aggregate, error.captured_bytes)
-                    if absolute_deadline - self._monotonic() <= 0:
+                    if effective_deadline() - self._monotonic() <= 0:
                         raise
                     tools[tool.name.value] = {
                         "status": "degraded", **provenance,
@@ -683,7 +688,7 @@ class PinnedNodeProbe:
         frozen = _freeze(evidence)
         if len(canonical_message({"status": "ok", "evidence": frozen})) > RESULT_LIMIT_BYTES:
             raise ProbeResultLimitExceeded("normalized probe result is too large")
-        self._ensure_time(absolute_deadline)
+        self._ensure_time(effective_deadline())
         return frozen
 
     def _run(
@@ -692,14 +697,18 @@ class PinnedNodeProbe:
         cwd: Path,
         policy_timeout: int,
         policy_output_limit: int,
-        absolute_deadline: float,
+        hard_deadline: float,
+        lease_deadline: MonotonicDeadline,
         aggregate: int,
         executable_fd: int,
         *,
         support_archive_fd: int | None,
         tool_environment: bool,
     ) -> ProcessOutcome:
-        remaining_time = absolute_deadline - self._monotonic()
+        remaining_time = min(
+            hard_deadline,
+            lease_deadline.absolute(),
+        ) - self._monotonic()
         if remaining_time <= 0:
             raise ProbeDeadlineExceeded("probe deadline has elapsed")
         remaining_output = AGGREGATE_OUTPUT_LIMIT_BYTES - aggregate
@@ -708,31 +717,59 @@ class PinnedNodeProbe:
         request = ProcessRequest.fixed(
             argv=argv,
             cwd=cwd,
-            timeout_seconds=min(float(policy_timeout), remaining_time),
+            timeout_seconds=float(policy_timeout),
             output_limit_bytes=min(policy_output_limit, remaining_output),
             executable_fd=executable_fd,
             support_archive_fd=support_archive_fd,
-            absolute_deadline=absolute_deadline,
+            absolute_deadline=hard_deadline,
+            renewable_deadline=lease_deadline,
         )
         if tool_environment:
-            request = ProcessRequest(
-                request.argv,
-                request.cwd,
-                MappingProxyType(
+            request = replace(
+                request,
+                env=MappingProxyType(
                     {
                         **FIXED_PROCESS_ENVIRONMENT,
                         "PYTHONPATH": f"/proc/self/fd/{support_archive_fd}",
                     }
                 ),
-                request.timeout_seconds,
-                request.output_limit_bytes,
-                request.executable_fd,
-                request.support_archive_fd,
-                request.absolute_deadline,
             )
         outcome = self._runner.run(request)
-        self._ensure_time(absolute_deadline)
+        self._ensure_time(min(hard_deadline, lease_deadline.absolute()))
         return outcome
+
+    def _bind_deadline(
+        self,
+        deadline: datetime | MonotonicDeadline,
+        monotonic_now: float,
+    ) -> MonotonicDeadline:
+        if type(deadline) is MonotonicDeadline:
+            wall_deadline = deadline.wall_deadline
+            bound = deadline
+        elif isinstance(deadline, datetime):
+            wall_deadline = deadline
+            if (
+                wall_deadline.tzinfo is None
+                or wall_deadline.utcoffset() != UTC.utcoffset(wall_deadline)
+            ):
+                raise ProbeDeadlineExceeded("probe deadline is invalid")
+            remaining = (
+                wall_deadline.astimezone(UTC) - self._utcnow()
+            ).total_seconds()
+            bound = MonotonicDeadline(
+                wall_deadline,
+                monotonic_now + remaining,
+            )
+        else:
+            raise ProbeDeadlineExceeded("probe deadline is invalid")
+        if (
+            wall_deadline.tzinfo is None
+            or wall_deadline.utcoffset() != UTC.utcoffset(wall_deadline)
+        ):
+            raise ProbeDeadlineExceeded("probe deadline is invalid")
+        if bound.absolute() - monotonic_now <= 0:
+            raise ProbeDeadlineExceeded("probe deadline has elapsed")
+        return bound
 
     def _ensure_time(self, absolute_deadline: float) -> None:
         if self._monotonic() >= absolute_deadline:

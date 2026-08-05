@@ -16,12 +16,14 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 from dgx_agent.client import AgentTransportError, CredentialStore, IssuedCredential
 from dgx_agent.config import AgentConfig
+from dgx_agent.deadlines import MonotonicDeadline
 from dgx_agent.main import (
     Agent,
     ensure_initial_enrollment,
     remove_consumed_enrollment_token,
 )
 from dgx_agent.operations import OperationContext, OperationRegistry
+from dgx_agent.probe import ProbeDeadlineExceeded
 from dgx_agent.readiness import ReadinessError, ReadinessReporter
 from dgx_agent.releases import (
     ReleaseDisposition,
@@ -103,6 +105,21 @@ class FakeControl:
 
 class Probe:
     def collect(self, deadline: datetime) -> dict[str, object]:
+        return {"status": "healthy"}
+
+
+class RenewableDeadlineProbe:
+    def __init__(self) -> None:
+        self.deadlines: list[MonotonicDeadline | datetime] = []
+
+    def collect(
+        self,
+        deadline: datetime | MonotonicDeadline,
+    ) -> dict[str, object]:
+        self.deadlines.append(deadline)
+        if type(deadline) is not MonotonicDeadline:
+            raise ProbeDeadlineExceeded("probe received stale claim deadline")
+        deadline.check()
         return {"status": "healthy"}
 
 
@@ -692,6 +709,49 @@ def test_active_attempt_is_recovered_and_executed_before_any_new_claim(
     assert restarted.results[0]["fence"] == active.fence
     assert state.recover_active() is None
     assert state.recover_pending() is None
+
+
+def test_recovered_probe_uses_latest_persisted_lease_once_without_duplicate(
+    tmp_path: Path,
+) -> None:
+    state = AgentStateStore(tmp_path / "state")
+    active = probe_claim(deadline=datetime.now(UTC) - timedelta(seconds=1))
+    state.begin(active)
+    extended_deadline = datetime.now(UTC) + timedelta(seconds=30)
+    state.heartbeat(
+        AgentProgress(
+            schema_version=active.schema_version,
+            job_id=active.job_id,
+            operation_id=active.operation_id,
+            attempt=active.attempt,
+            fence=active.fence,
+            node_id=active.node_id,
+            deadline=extended_deadline,
+            progress={"phase": "recovering"},
+        )
+    )
+    probe = RenewableDeadlineProbe()
+    control = FakeControl()
+    context = OperationContext(node_id=NODE_ID, state=state, probe=probe)
+    agent = Agent(control, OperationRegistry(), context)
+
+    agent.run_once()
+
+    assert control.claim_calls == 0
+    assert len(control.results) == 1
+    assert control.results[0]["state"] == "succeeded"
+    assert len(probe.deadlines) == 1
+    received = probe.deadlines[0]
+    assert isinstance(received, MonotonicDeadline)
+    assert received.wall_deadline == extended_deadline
+    assert state.recover_active() is None
+    assert state.recover_pending() is None
+
+    agent.run_once()
+
+    assert control.claim_calls == 1
+    assert len(control.results) == 1
+    assert len(probe.deadlines) == 1
 
 
 def test_expired_active_attempt_persists_and_replays_exact_failure_before_new_claim(

@@ -28,6 +28,7 @@ from dgx_agent.nvidia_tools import (
 from dgx_agent.probe import (
     AGGREGATE_OUTPUT_LIMIT_BYTES,
     FIXED_PROCESS_ENVIRONMENT,
+    TOTAL_PROBE_SECONDS,
     BoundedProcessRunner,
     PinnedNodeProbe,
     ProbeCollectorError,
@@ -261,6 +262,93 @@ def test_probe_invocation_is_entirely_fixed_by_installed_policy(tmp_path) -> Non
     assert b"artifact" not in rendered
 
 
+def test_probe_renewal_after_start_reaches_health_and_tool_processes(
+    tmp_path: Path,
+) -> None:
+    policy, _ = installed_policy(tmp_path)
+    started = time.monotonic()
+
+    class Clock:
+        value = started
+
+        def __call__(self) -> float:
+            return self.value
+
+    clock = Clock()
+    lease = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(milliseconds=100),
+        started + 0.1,
+    )
+    base = successful_runner(policy)
+
+    class RenewingRunner(RecordingRunner):
+        def run(self, request: ProcessRequest) -> ProcessOutcome:
+            outcome = super().run(request)
+            if len(self.requests) == 1:
+                clock.value = started + 0.2
+                lease.extend(datetime.now(UTC) + timedelta(seconds=30))
+            return outcome
+
+    runner = RenewingRunner(base.outcomes)
+
+    evidence = PinnedNodeProbe(
+        policy,
+        _runner=runner,
+        _monotonic=clock,
+    ).collect(lease)
+
+    assert evidence["dgx_forge"]["identity"] == {"uptime_seconds": 123}
+    assert clock.value > started + 0.1
+    assert all(request.renewable_deadline is lease for request in runner.requests)
+    tool_requests = [
+        request for request in runner.requests if "PYTHONPATH" in request.env
+    ]
+    assert tool_requests
+    assert all(request.renewable_deadline is lease for request in tool_requests)
+
+
+def test_probe_renewal_never_extends_fixed_fifteen_second_total_cap(
+    tmp_path: Path,
+) -> None:
+    policy, _ = installed_policy(tmp_path)
+    started = time.monotonic()
+
+    class Clock:
+        value = started
+
+        def __call__(self) -> float:
+            return self.value
+
+    clock = Clock()
+    lease = MonotonicDeadline(
+        datetime.now(UTC) + timedelta(minutes=1),
+        started + 60.0,
+    )
+    base = successful_runner(policy)
+
+    class CapCrossingRunner(RecordingRunner):
+        def run(self, request: ProcessRequest) -> ProcessOutcome:
+            outcome = super().run(request)
+            clock.value = started + 16.0
+            return outcome
+
+    runner = CapCrossingRunner(base.outcomes)
+
+    with pytest.raises(ProbeDeadlineExceeded):
+        PinnedNodeProbe(
+            policy,
+            _runner=runner,
+            _monotonic=clock,
+        ).collect(lease)
+
+    assert len(runner.requests) == 1
+    assert runner.requests[0].renewable_deadline is lease
+    assert runner.requests[0].absolute_deadline is not None
+    assert started < runner.requests[0].absolute_deadline <= (
+        started + TOTAL_PROBE_SECONDS
+    )
+
+
 def test_existing_collector_is_normalized_to_compatible_fabric_runtime_evidence(tmp_path) -> None:
     policy, _ = installed_policy(tmp_path)
     evidence = PinnedNodeProbe(policy, _runner=successful_runner(policy)).collect(
@@ -429,15 +517,17 @@ def test_probe_rejects_expired_deadline_without_verifying_or_running(tmp_path) -
     assert runner.requests == []
 
 
-def test_early_claim_deadline_bounds_every_process_timeout(tmp_path) -> None:
+def test_early_claim_deadline_is_shared_by_every_process(tmp_path) -> None:
     policy, _ = installed_policy(tmp_path)
     runner = successful_runner(policy)
+    deadline = datetime.now(UTC) + timedelta(milliseconds=500)
 
-    PinnedNodeProbe(policy, _runner=runner).collect(
-        datetime.now(UTC) + timedelta(milliseconds=500)
-    )
+    PinnedNodeProbe(policy, _runner=runner).collect(deadline)
 
-    assert all(0 < request.timeout_seconds <= 0.5 for request in runner.requests)
+    leases = [request.renewable_deadline for request in runner.requests]
+    assert leases and all(lease is leases[0] for lease in leases)
+    assert leases[0] is not None and leases[0].wall_deadline == deadline
+    assert 0 < leases[0].remaining() <= 0.5
 
 
 def test_broken_runner_cannot_return_last_tool_success_after_total_deadline(

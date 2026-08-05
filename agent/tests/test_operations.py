@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
+from dgx_agent.deadlines import MonotonicDeadline
 from dgx_agent.operations import (
     InspectionDisposition,
     OperationContext,
@@ -69,7 +70,7 @@ class RecordingProbe:
     def __init__(self, evidence=None, error: Exception | None = None) -> None:
         self.evidence = evidence or {"platform": {"status": "ok"}}
         self.error = error
-        self.deadlines: list[datetime] = []
+        self.deadlines: list[datetime | MonotonicDeadline] = []
 
     def collect(self, deadline):
         self.deadlines.append(deadline)
@@ -330,6 +331,8 @@ def test_success_is_canonical_persisted_and_replayed_without_recollection(tmp_pa
     assert second.canonical_result == first.canonical_result
     assert second.replayed is True
     assert len(probe.deadlines) == 1
+    assert isinstance(probe.deadlines[0], MonotonicDeadline)
+    assert probe.deadlines[0].wall_deadline == request.deadline
 
 
 def test_terminal_result_replays_after_deadline_without_local_execution(tmp_path) -> None:

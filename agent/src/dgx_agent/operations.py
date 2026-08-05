@@ -43,7 +43,10 @@ class UnsupportedOperation(AgentProtocolError):
 
 
 class NodeProbe(Protocol):
-    def collect(self, deadline: datetime) -> Mapping[str, object]: ...
+    def collect(
+        self,
+        deadline: datetime | MonotonicDeadline,
+    ) -> Mapping[str, object]: ...
 
 
 class ReleaseInstallerBoundary(Protocol):
@@ -325,7 +328,7 @@ def _execute_request(
     deadline: MonotonicDeadline,
 ) -> Mapping[str, object]:
     if request is None:
-        return context.probe.collect(claim.deadline)
+        return context.probe.collect(deadline)
     if isinstance(request, ReleaseRequest):
         assert context.releases is not None
         return context.releases.install(
