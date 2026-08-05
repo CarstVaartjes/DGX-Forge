@@ -124,6 +124,9 @@ jobs:
     name: Publish public container images
     needs: [lint, generated-clients, test, release-metadata]
     runs-on: ubuntu-latest
+    concurrency:
+      group: dgx-forge-container-publication
+      cancel-in-progress: false
     permissions:
       contents: read
       packages: write

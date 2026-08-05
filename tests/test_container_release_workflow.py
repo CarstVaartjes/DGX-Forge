@@ -113,6 +113,17 @@ def test_publisher_needs_every_ci_gate_and_alone_can_write_packages() -> None:
     assert workflow().count("contents: write") == 1
 
 
+def test_all_container_publications_are_serialized_without_cancellation() -> None:
+    publisher = job("publish-images")
+
+    assert "concurrency:\n      group: dgx-forge-container-publication" in publisher
+    assert "cancel-in-progress: false" in publisher
+    assert publisher.index("concurrency:") < publisher.index(
+        "Refuse an existing release version"
+    )
+    assert workflow().count("group: dgx-forge-container-publication") == 1
+
+
 def test_publisher_uses_pinned_docker_actions_and_exact_artifacts() -> None:
     text = workflow()
     for action in (

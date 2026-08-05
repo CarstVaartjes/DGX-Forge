@@ -34,7 +34,7 @@ sudo install -d -m 0700 -o 1100 -g 1100 \
 sudo install -d -m 0700 -o root -g root /srv/dgx-forge/secrets
 sudo sh -c 'umask 077; openssl rand -base64 32 | tr "+/" "-_" | tr -d "=\n" > /srv/dgx-forge/secrets/hermes-api-key; printf "\n" >> /srv/dgx-forge/secrets/hermes-api-key'
 sudo chown root:root /srv/dgx-forge/secrets/hermes-api-key
-sudo chmod 0600 /srv/dgx-forge/secrets/hermes-api-key
+sudo chmod 0400 /srv/dgx-forge/secrets/hermes-api-key
 ```
 
 Set these non-secret paths and values in the host-local `.env`:
@@ -52,7 +52,7 @@ official releases require `1100:1100`. They are not freely selectable runtime
 settings, and operators must not rebuild an official release to change them.
 The wrapper's fixed identity lets the upstream supervisor run without editing
 `/etc/passwd` on the read-only root. The external API key file must remain
-root-owned mode `0600`; the supervisor has no reason to grant it to the
+root-owned mode `0400`; the supervisor has no reason to grant it to the
 unprivileged Hermes user because PID 1 injects only the value.
 
 The origin is the one exact HTTPS origin shown by Tailscale. Do not use `*`,

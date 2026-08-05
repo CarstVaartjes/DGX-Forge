@@ -4,7 +4,8 @@ For a NAS production deployment, begin with the authoritative
 [NAS pull-only Compose deployment guide](../../deploy/compose/README.md). It
 covers release-image assets, site-local `.env` and secrets, Tailscale-only
 access, the production step-ca overlay, startup, and rollback. This runbook
-contains the control-plane initialization steps that follow that guide.
+provides control-plane context, but the NAS guide owns the executable bootstrap
+sequence so pull-only operators have one source of truth.
 
 The control plane runs on any Docker Compose-capable Linux machine. The first
 host may be a NAS, but the configuration has no NAS vendor dependency.
@@ -38,23 +39,22 @@ identity: authenticated agent presence supplies the current validated address.
 
    Spaces, internal line breaks, padding, and other punctuation are rejected
    by both Caddy and the control API.
-3. Create the repository and state paths with `bin/dgx-control-offline init`.
-4. Start PostgreSQL only, export the `DGX_*_FILE` settings, and run
-   `bin/dgx-control-offline migrate`.
-5. Run `bin/dgx-control-offline create-admin --subject ADMIN_ID` while the API
-   and worker remain stopped.
-6. Start the recommended production provider and check `/api/v1/healthz`
-   through the `svc:dgx-forge` Tailscale Service:
-
-   ```bash
-   cd deploy/compose
-   docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml up -d
-   ```
+3. Run the exact Compose one-shot commands in
+   [Preflight and first start](../../deploy/compose/README.md#preflight-and-first-start).
+   That authoritative sequence initializes the named `/state` volume for UID
+   10001, starts PostgreSQL alone, and runs offline init, migration, and
+   administrator creation from the pulled control image before the first full
+   `up -d`. Do not install or invoke a host-local control launcher on a
+   pull-only NAS, and do not skip or reorder those commands.
+4. After the guide's first full production start, check `/api/v1/healthz`
+   through the `svc:dgx-forge` Tailscale Service.
 
    The base file deliberately has no CA provider selection, so it is not a
    runnable production configuration. For local bootstrap or development,
    use the built-in provider instead; it does not require any `STEP_CA_*` or
-   `AGENT_CA_CREDENTIAL_FILE` values:
+   `AGENT_CA_CREDENTIAL_FILE` values. Apply the same ordered Compose bootstrap
+   from the authoritative guide with `compose.builtin-ca.yaml` substituted for
+   `compose.step-ca.yaml`:
 
    ```bash
    cd deploy/compose

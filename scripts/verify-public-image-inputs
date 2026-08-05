@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import re
+import stat
 import sys
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath
 
 INPUTS = (
     "pyproject.toml",
@@ -74,6 +76,10 @@ PATTERNS = {
     "model-api-key": rb"sk-[A-Za-z0-9]{32,}",
 }
 
+MAX_ARCHIVE_FILES = 10_000
+MAX_ARCHIVE_MEMBER_BYTES = 32 * 1024 * 1024
+MAX_ARCHIVE_TOTAL_BYTES = 128 * 1024 * 1024
+
 
 def files_in(path: Path) -> list[Path]:
     if path.is_symlink():
@@ -105,6 +111,81 @@ def dockerignored(path: Path, root: Path) -> bool:
     )
 
 
+def scan_content(
+    display: str,
+    content: bytes,
+    patterns: dict[str, re.Pattern[bytes]],
+    findings: list[tuple[str, str]],
+) -> None:
+    for name, pattern in patterns.items():
+        if pattern.search(content):
+            findings.append((display, name))
+
+
+def scan_wheel(
+    path: Path,
+    display: str,
+    patterns: dict[str, re.Pattern[bytes]],
+    findings: list[tuple[str, str]],
+) -> None:
+    """Scan a wheel's uncompressed regular files without trusting the archive."""
+    try:
+        with zipfile.ZipFile(path) as archive:
+            members = archive.infolist()
+            if len(members) > MAX_ARCHIVE_FILES:
+                findings.append((display, "archive-too-many-files"))
+                return
+
+            seen: set[str] = set()
+            total_bytes = 0
+            for member in members:
+                member_name = member.filename
+                member_path = PurePosixPath(member_name)
+                member_display = f"{display}!/{member_name}"
+                if (
+                    not member_name
+                    or member_name in seen
+                    or member_path.is_absolute()
+                    or ".." in member_path.parts
+                    or "\\" in member_name
+                    or (member_path.parts and member_path.parts[0].endswith(":"))
+                ):
+                    findings.append((member_display, "archive-unsafe-path"))
+                    continue
+                seen.add(member_name)
+                if member.flag_bits & 0x1:
+                    findings.append((member_display, "archive-encrypted"))
+                    continue
+
+                mode = (member.external_attr >> 16) & 0xFFFF
+                file_type = stat.S_IFMT(mode)
+                if file_type not in (0, stat.S_IFREG, stat.S_IFDIR):
+                    findings.append((member_display, "archive-special-file"))
+                    continue
+                if member.is_dir():
+                    continue
+                if member.file_size > MAX_ARCHIVE_MEMBER_BYTES:
+                    findings.append((member_display, "archive-member-too-large"))
+                    continue
+                total_bytes += member.file_size
+                if total_bytes > MAX_ARCHIVE_TOTAL_BYTES:
+                    findings.append((display, "archive-too-large"))
+                    return
+
+                try:
+                    with archive.open(member) as source:
+                        content = source.read(MAX_ARCHIVE_MEMBER_BYTES + 1)
+                except (OSError, RuntimeError, zipfile.BadZipFile):
+                    findings.append((member_display, "archive-invalid"))
+                    continue
+                if len(content) > MAX_ARCHIVE_MEMBER_BYTES:
+                    findings.append((member_display, "archive-member-too-large"))
+                    continue
+                scan_content(member_display, content, patterns, findings)
+    except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile):
+        findings.append((display, "archive-invalid"))
+
+
 def main(argv: list[str]) -> int:
     root = Path(argv[1]).resolve() if len(argv) == 2 else Path(__file__).resolve().parents[1]
     patterns = {name: re.compile(pattern) for name, pattern in PATTERNS.items()}
@@ -124,9 +205,9 @@ def main(argv: list[str]) -> int:
             if not path.is_file():
                 continue
             content = path.read_bytes()
-            for name, pattern in patterns.items():
-                if pattern.search(content):
-                    findings.append((display, name))
+            scan_content(display, content, patterns, findings)
+            if path.suffix == ".whl":
+                scan_wheel(path, display, patterns, findings)
 
     if findings:
         for path, name in findings:

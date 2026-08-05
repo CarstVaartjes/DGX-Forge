@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -96,3 +97,53 @@ def test_dockerignored_web_outputs_are_not_scanned(
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == "public image inputs: PASS\n"
+
+
+def wheel_path(repository: Path) -> Path:
+    path = repository / "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
+    path.parent.mkdir(parents=True)
+    return path
+
+
+def test_secret_in_compressed_wheel_member_is_rejected(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    value = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    with zipfile.ZipFile(wheel_path(repository), "w", zipfile.ZIP_DEFLATED) as wheel:
+        wheel.writestr("dgx_agent_protocol/leak.py", f'SECRET = "{value}"\n')
+
+    result = run(repository)
+
+    assert result.returncode == 1
+    assert "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl!/" in result.stderr
+    assert "dgx_agent_protocol/leak.py: github-token" in result.stderr
+    assert value not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    ("member", "reason"),
+    (
+        ("../escape.py", "archive-unsafe-path"),
+        ("folder\\escape.py", "archive-unsafe-path"),
+    ),
+)
+def test_unsafe_wheel_member_is_rejected(
+    tmp_path: Path, member: str, reason: str
+) -> None:
+    repository = tmp_path / "repository"
+    with zipfile.ZipFile(wheel_path(repository), "w") as wheel:
+        wheel.writestr(member, "safe = True\n")
+
+    result = run(repository)
+
+    assert result.returncode == 1
+    assert reason in result.stderr
+
+
+def test_malformed_wheel_is_rejected(tmp_path: Path) -> None:
+    repository = tmp_path / "repository"
+    wheel_path(repository).write_bytes(b"not a wheel")
+
+    result = run(repository)
+
+    assert result.returncode == 1
+    assert "archive-invalid" in result.stderr

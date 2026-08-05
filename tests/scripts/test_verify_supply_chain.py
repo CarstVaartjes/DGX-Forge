@@ -135,6 +135,29 @@ def test_verifier_reports_missing_or_malformed_build_bases_as_json(
     assert f"{name} digest-pinned build base is missing or invalid" in payload["errors"]
 
 
+@pytest.mark.parametrize("value", (None, [], {}))
+def test_verifier_reports_non_string_runtime_images_as_json(
+    tmp_path: Path, value: object
+) -> None:
+    repository = _copy(tmp_path)
+    lock_path = repository / "deploy/compose/images.lock.json"
+    lock = json.loads(lock_path.read_text())
+    lock["images"]["caddy"] = value
+    lock_path.write_text(json.dumps(lock))
+
+    result = subprocess.run(
+        [SCRIPT, "--root", repository, "--json"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert "caddy image is not pinned by digest" in payload["errors"]
+
+
 def test_image_lock_contains_the_pinned_hermes_build_base() -> None:
     lock = json.loads((ROOT / "deploy/compose/images.lock.json").read_text())
 

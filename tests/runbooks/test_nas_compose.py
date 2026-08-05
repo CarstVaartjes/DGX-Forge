@@ -6,6 +6,8 @@ ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_README = ROOT / "deploy/compose/README.md"
 ENVIRONMENT = ROOT / "deploy/compose/.env.example"
 SUPPLY_CHAIN = ROOT / "docs/runbooks/supply-chain.md"
+CONTROL_BOOTSTRAP = ROOT / "docs/runbooks/control-plane-bootstrap.md"
+HERMES_RUNBOOK = ROOT / "docs/runbooks/hermes-agent.md"
 PRODUCTION_FILE_VARIABLES = (
     "DATABASE_URL_FILE",
     "POSTGRES_PASSWORD_FILE",
@@ -114,3 +116,24 @@ def test_supply_chain_describes_three_target_release_or_nonpublishing_diagnostic
     ):
         assert required in text
     assert "Publish both immutable control images" not in text
+
+
+def test_pull_only_bootstrap_delegates_to_the_compose_sequence() -> None:
+    text = CONTROL_BOOTSTRAP.read_text()
+
+    assert "../../deploy/compose/README.md#preflight-and-first-start" in text
+    assert "initializes the named `/state` volume for UID" in text
+    assert "offline init, migration, and" in text
+    assert "before the first full" in text
+    assert "Do not install or invoke a host-local control launcher" in text
+    assert "bin/dgx-control-offline" not in text
+
+
+def test_hermes_secret_mode_matches_the_authoritative_nas_guide() -> None:
+    runbook = HERMES_RUNBOOK.read_text()
+    guide = COMPOSE_README.read_text()
+
+    assert "chmod 0400 /srv/dgx-forge/secrets/hermes-api-key" in runbook
+    assert "root-owned mode `0400`" in runbook
+    assert "`root:root 0400`" in guide
+    assert "root-owned mode `0600`" not in runbook
