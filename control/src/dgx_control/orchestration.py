@@ -437,6 +437,44 @@ def validate_persisted_resolved_plan(
         payload = payloads[node.operation_id]
         if not isinstance(payload, Mapping) or _digest(payload) != node.payload_digest:
             raise ValueError("persisted resolved plan operation payload digest is invalid")
+    stop_nodes = tuple(
+        node for node in nodes if node.kind == AgentOperation.WORKLOAD_STOP.value
+    )
+    install_nodes = tuple(
+        node for node in nodes if node.kind == AgentOperation.RELEASE_INSTALL.value
+    )
+    gate_nodes = tuple(
+        node
+        for node in nodes
+        if node.kind == AgentOperation.NODE_PROBE.value
+        or node.workload_id == "node-gate"
+    )
+    if any(
+        node.kind != AgentOperation.NODE_PROBE.value
+        or node.workload_id != "node-gate"
+        for node in gate_nodes
+    ):
+        raise ValueError("persisted resolved plan node gate identity is invalid")
+    required_gate_targets = {
+        node.node_id for node in (*stop_nodes, *install_nodes)
+    }
+    actual_gate_targets = {node.node_id for node in gate_nodes}
+    if (
+        len(gate_nodes) != len(actual_gate_targets)
+        or actual_gate_targets != required_gate_targets
+    ):
+        raise ValueError("persisted resolved plan node gate targets are invalid")
+    stop_ids = tuple(sorted(node.operation_id for node in stop_nodes))
+    gate_ids = tuple(sorted(node.operation_id for node in gate_nodes))
+    for gate in gate_nodes:
+        if (
+            payloads[gate.operation_id]
+            != {"require_active_nvidia_compute_processes": 0}
+            or gate.dependencies != stop_ids
+        ):
+            raise ValueError("persisted resolved plan node gate barrier is invalid")
+    if any(node.dependencies != gate_ids for node in install_nodes):
+        raise ValueError("persisted resolved plan install gate barrier is invalid")
     return (
         OperationGraph(
             reconciliation_id,

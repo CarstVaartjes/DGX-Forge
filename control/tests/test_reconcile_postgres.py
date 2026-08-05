@@ -36,10 +36,10 @@ class DesiredPlanner:
     def resolve(self, commit, profile_id, observations):
         payload = {}
         operation = OperationNode(
-            "model:probe",
+            "model:health",
             NODE_ID,
             "model",
-            "node.probe",
+            "workload.health",
             (),
             None,
             hashlib.sha256(canonical_message(payload)).hexdigest(),
@@ -59,7 +59,7 @@ class DesiredPlanner:
                 (operation,),
                 "c" * 64,
             ),
-            operation_payloads={"model:probe": payload},
+            operation_payloads={"model:health": payload},
             agent_protocol_range=(1, 1),
         )
 

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 from copy import deepcopy
 from datetime import UTC, datetime
 
 import pytest
+from dgx_agent_protocol import canonical_message
+from dgx_control.desired_state import durable_desired_state_observations
 from dgx_control.models import Base, Reconciliation
 from dgx_control.orchestration import ReconciliationOrchestrator
 from sqlalchemy import create_engine, select
@@ -12,6 +15,157 @@ from sqlalchemy.orm import sessionmaker
 NODE_A = "spk_" + "a" * 32
 NODE_B = "spk_" + "b" * 32
 BASE_COMMIT = "a" * 40
+
+
+def _digest(document: object) -> str:
+    return hashlib.sha256(canonical_message(document)).hexdigest()
+
+
+def _persisted_gate_plan() -> tuple[dict[str, object], dict[str, object], str, str]:
+    stop_payload: dict[str, object] = {}
+    gate_payload = {"require_active_nvidia_compute_processes": 0}
+    install_payload: dict[str, object] = {}
+    nodes: list[dict[str, object]] = []
+    for suffix, node_id in (("a", NODE_A), ("b", NODE_B)):
+        nodes.append(
+            {
+                "operation_id": f"old:{suffix}:stop",
+                "node_id": node_id,
+                "workload_id": "old",
+                "kind": "workload.stop",
+                "dependencies": [],
+                "compensation_kind": None,
+                "payload_digest": _digest(stop_payload),
+            }
+        )
+    stop_ids = ["old:a:stop", "old:b:stop"]
+    for suffix, node_id in (("a", NODE_A), ("b", NODE_B)):
+        nodes.append(
+            {
+                "operation_id": f"gate:{suffix}",
+                "node_id": node_id,
+                "workload_id": "node-gate",
+                "kind": "node.probe",
+                "dependencies": stop_ids,
+                "compensation_kind": None,
+                "payload_digest": _digest(gate_payload),
+            }
+        )
+    gate_ids = ["gate:a", "gate:b"]
+    for suffix, node_id in (("a", NODE_A), ("b", NODE_B)):
+        nodes.append(
+            {
+                "operation_id": f"new:{suffix}:install",
+                "node_id": node_id,
+                "workload_id": "new",
+                "kind": "release.install",
+                "dependencies": gate_ids,
+                "compensation_kind": None,
+                "payload_digest": _digest(install_payload),
+            }
+        )
+    graph: dict[str, object] = {
+        "schema_version": 1,
+        "base_commit": BASE_COMMIT,
+        "targets": [NODE_A, NODE_B],
+        "nodes": nodes,
+    }
+    payloads = {
+        "old:a:stop": stop_payload,
+        "old:b:stop": stop_payload,
+        "gate:a": gate_payload,
+        "gate:b": gate_payload,
+        "new:a:install": install_payload,
+        "new:b:install": install_payload,
+    }
+    resolved: dict[str, object] = {
+        "commit": BASE_COMMIT,
+        "targets": [NODE_A, NODE_B],
+        "placements": {},
+        "routes": {},
+        "releases": {},
+        "workload_groups": {},
+        "input_digests": {"fleet": "f" * 64},
+        "operation_graph": graph,
+        "operation_payloads": payloads,
+        "agent_protocol_range": [1, 1],
+    }
+    return graph, resolved, _digest(graph), _digest(resolved)
+
+
+def _corrupt_persisted_plan(
+    corruption: str,
+) -> tuple[dict[str, object], dict[str, object], str, str, int | None]:
+    graph, resolved, _, _ = _persisted_gate_plan()
+    graph = deepcopy(graph)
+    resolved = deepcopy(resolved)
+    nodes = graph["nodes"]
+    payloads = resolved["operation_payloads"]
+    assert isinstance(nodes, list) and isinstance(payloads, dict)
+    by_id = {node["operation_id"]: node for node in nodes}
+    completion_generation: int | None = 1
+    if corruption == "empty-gate-payload":
+        payloads["gate:a"] = {}
+        by_id["gate:a"]["payload_digest"] = _digest({})
+    elif corruption == "missing-gate":
+        nodes.remove(by_id["gate:b"])
+        payloads.pop("gate:b")
+        for install_id in ("new:a:install", "new:b:install"):
+            by_id[install_id]["dependencies"] = ["gate:a"]
+    elif corruption == "partial-gate-stops":
+        by_id["gate:a"]["dependencies"] = ["old:a:stop"]
+    elif corruption == "partial-install-gates":
+        by_id["new:a:install"]["dependencies"] = ["gate:a"]
+    elif corruption == "duplicate-gate-target":
+        duplicate = deepcopy(by_id["gate:a"])
+        duplicate["operation_id"] = "gate:a:duplicate"
+        nodes.insert(nodes.index(by_id["new:a:install"]), duplicate)
+        payloads["gate:a:duplicate"] = deepcopy(payloads["gate:a"])
+        for install_id in ("new:a:install", "new:b:install"):
+            by_id[install_id]["dependencies"].append("gate:a:duplicate")
+    elif corruption == "extra-gate-target":
+        extra = deepcopy(by_id["gate:a"])
+        extra["operation_id"] = "gate:extra"
+        extra["node_id"] = "spk_" + "c" * 32
+        graph["targets"].append(extra["node_id"])
+        resolved["targets"].append(extra["node_id"])
+        nodes.insert(nodes.index(by_id["new:a:install"]), extra)
+        payloads["gate:extra"] = deepcopy(payloads["gate:a"])
+        for install_id in ("new:a:install", "new:b:install"):
+            by_id[install_id]["dependencies"].append("gate:extra")
+    elif corruption == "ordinary-probe":
+        ordinary = deepcopy(by_id["gate:a"])
+        ordinary["operation_id"] = "model:probe"
+        ordinary["workload_id"] = "model"
+        ordinary["dependencies"] = []
+        nodes.insert(nodes.index(by_id["new:a:install"]), ordinary)
+        payloads["model:probe"] = deepcopy(payloads["gate:a"])
+    elif corruption == "reserved-gate-nonprobe":
+        reserved = deepcopy(by_id["gate:a"])
+        reserved["operation_id"] = "gate:health"
+        reserved["kind"] = "workload.health"
+        reserved["dependencies"] = []
+        nodes.insert(nodes.index(by_id["new:a:install"]), reserved)
+        payloads["gate:health"] = deepcopy(payloads["gate:a"])
+    else:
+        health_payload: dict[str, object] = {}
+        health = {
+            "operation_id": "model:health",
+            "node_id": NODE_A,
+            "workload_id": "model",
+            "kind": "workload.health",
+            "dependencies": [],
+            "compensation_kind": None,
+            "payload_digest": _digest(health_payload),
+        }
+        graph["targets"] = [NODE_A]
+        graph["nodes"] = [health]
+        resolved["targets"] = [NODE_A]
+        resolved["operation_payloads"] = {"model:health": health_payload}
+        resolved.pop("workload_groups")
+        completion_generation = None
+    resolved["operation_graph"] = graph
+    return graph, resolved, _digest(graph), _digest(resolved), completion_generation
 
 
 def distributed_plan() -> dict[str, object]:
@@ -162,6 +316,53 @@ def test_zero_compute_gate_is_the_only_cross_workload_barrier(planner) -> None:
 
     assert graph.dependencies("node:gate") == ("old:stop",)
     assert graph.dependencies("new:install") == ("node:gate",)
+
+
+@pytest.mark.parametrize("consumer", ("restart", "replay"))
+@pytest.mark.parametrize(
+    "corruption",
+    (
+        "empty-gate-payload",
+        "missing-gate",
+        "partial-gate-stops",
+        "partial-install-gates",
+        "duplicate-gate-target",
+        "extra-gate-target",
+        "ordinary-probe",
+        "reserved-gate-nonprobe",
+        "nonmutating-missing-workload-groups",
+    ),
+)
+def test_persisted_plan_consumers_reject_semantic_gate_and_nonmutating_corruption(
+    planner, consumer: str, corruption: str
+) -> None:
+    orchestrator, sessions = planner
+    graph, resolved, graph_digest, plan_digest, completion_generation = (
+        _corrupt_persisted_plan(corruption)
+    )
+    with sessions.begin() as session:
+        session.add(
+            Reconciliation(
+                id=f"{consumer}-{corruption}",
+                base_commit=BASE_COMMIT,
+                status="succeeded",
+                summary={},
+                graph=graph,
+                graph_digest=graph_digest,
+                plan_digest=plan_digest,
+                resolved_plan=resolved,
+                current_phase="completed",
+                route_withdrawal_generation=0,
+                completion_generation=completion_generation,
+                created_at=datetime(2026, 8, 3, tzinfo=UTC),
+            )
+        )
+
+    with pytest.raises((TypeError, ValueError), match="persisted resolved plan"):
+        if consumer == "restart":
+            orchestrator.resolved_plan(plan_digest)
+        else:
+            durable_desired_state_observations(sessions)
 
 
 @pytest.mark.parametrize(

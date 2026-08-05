@@ -172,10 +172,10 @@ class DesiredPlanner:
         node_id = "spk_" + "1" * 32
         payload = {}
         operation = OperationNode(
-            "model:probe",
+            "model:health",
             node_id,
             "model",
-            "node.probe",
+            "workload.health",
             (),
             None,
             hashlib.sha256(canonical_message(payload)).hexdigest(),
@@ -196,7 +196,7 @@ class DesiredPlanner:
             workload_groups={},
             input_digests={"fleet": "f" * 64},
             operation_graph=graph,
-            operation_payloads={"model:probe": payload},
+            operation_payloads={"model:health": payload},
             agent_protocol_range=(1, 1),
         )
 

@@ -469,23 +469,49 @@ def _accepted_current_workloads(
         for item in all_reconciliations
         if item.status == "succeeded" and item.current_phase == "completed"
     )
+    validated_plans: dict[
+        str, tuple[OperationGraph, Mapping[str, object]] | None
+    ] = {}
     for reconciliation in completed:
-        raw_nodes = reconciliation.graph.get("nodes")
-        if (
-            reconciliation.completion_generation is None
-            and isinstance(raw_nodes, list)
-            and any(
-                isinstance(node, Mapping)
-                and node.get("kind")
-                in {
-                    AgentOperation.WORKLOAD_START.value,
-                    AgentOperation.WORKLOAD_STOP.value,
-                }
-                for node in raw_nodes
+        resolved = reconciliation.resolved_plan
+        if resolved is not None:
+            validated_plan = validate_persisted_resolved_plan(
+                reconciliation_id=reconciliation.id,
+                base_commit=reconciliation.base_commit,
+                graph_document=reconciliation.graph,
+                graph_digest=reconciliation.graph_digest,
+                plan_digest=reconciliation.plan_digest,
+                resolved_document=resolved,
+                route_withdrawal_generation=(
+                    reconciliation.route_withdrawal_generation
+                ),
             )
-        ):
+            validated_plans[reconciliation.id] = validated_plan
+            raw_nodes = validated_plan[0].document["nodes"]
+        else:
+            graph_document = _mapping(
+                reconciliation.graph, "completed reconciliation graph"
+            )
+            raw_nodes = graph_document.get("nodes")
+            if not isinstance(raw_nodes, list):
+                raise TypeError("completed reconciliation operation evidence is invalid")
+            validated_plans[reconciliation.id] = None
+        mutates_workloads = any(
+            isinstance(node, Mapping)
+            and node.get("kind")
+            in {
+                AgentOperation.WORKLOAD_START.value,
+                AgentOperation.WORKLOAD_STOP.value,
+            }
+            for node in raw_nodes
+        )
+        if reconciliation.completion_generation is None and mutates_workloads:
             raise ValueError(
                 "completed workload reconciliation lacks causal completion generation"
+            )
+        if resolved is None and mutates_workloads:
+            raise ValueError(
+                "completed reconciliation lacks persisted workload group contract"
             )
     reconciliations = tuple(
         sorted(
@@ -525,39 +551,10 @@ def _accepted_current_workloads(
         return {}
     current: dict[str, dict[str, CurrentWorkloadState]] = {}
     for reconciliation in reconciliations:
-        resolved = reconciliation.resolved_plan
-        graph_document = _mapping(
-            reconciliation.graph, "completed reconciliation graph"
-        )
-        raw_nodes = graph_document.get("nodes")
-        if not isinstance(raw_nodes, list):
-            raise TypeError("completed reconciliation operation evidence is invalid")
-        mutates_workloads = any(
-            isinstance(node, Mapping)
-            and node.get("kind")
-            in {
-                AgentOperation.WORKLOAD_START.value,
-                AgentOperation.WORKLOAD_STOP.value,
-            }
-            for node in raw_nodes
-        )
-        if not isinstance(resolved, Mapping):
-            if not mutates_workloads:
-                continue
-            raise ValueError(
-                "completed reconciliation lacks persisted workload group contract"
-            )
-        if not mutates_workloads and "workload_groups" not in resolved:
+        validated_plan = validated_plans[reconciliation.id]
+        if validated_plan is None:
             continue
-        validated_graph, resolved = validate_persisted_resolved_plan(
-            reconciliation_id=reconciliation.id,
-            base_commit=reconciliation.base_commit,
-            graph_document=reconciliation.graph,
-            graph_digest=reconciliation.graph_digest,
-            plan_digest=reconciliation.plan_digest,
-            resolved_document=resolved,
-            route_withdrawal_generation=reconciliation.route_withdrawal_generation,
-        )
+        validated_graph, resolved = validated_plan
         raw_nodes = validated_graph.document["nodes"]
         desired_groups = _persisted_workload_groups(
             _mapping(resolved["workload_groups"], "persisted workload groups")
