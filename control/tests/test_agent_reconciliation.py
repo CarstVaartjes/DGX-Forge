@@ -801,3 +801,46 @@ def test_partial_start_failure_compensates_accepted_starts_in_reverse_order(
         assert compensations[0].graph_operation_id == (
             f"model:{NODE_A}:workload.start"
         )
+
+
+def test_cancellation_after_mutation_enters_compensation(tmp_path) -> None:
+    service, sessions, queue, reconciliation_id, job_id = _compensation_fixture(
+        tmp_path
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    worker = queue.claim(NODE_A, "serial-a", 30)
+    assert worker is not None
+    queue.succeed(worker, _workload_result("start"))
+
+    service.request_cancel(reconciliation_id, "operator cancelled")
+
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        assert stored is not None and stored.current_phase == "compensating"
+        assert stored.status == "running"
+        assert job is not None and job.state == "running"
+
+
+def test_uncertain_mutation_waits_for_operator_without_unlocking_dependents(
+    tmp_path,
+) -> None:
+    service, sessions, queue, reconciliation_id, job_id = _compensation_fixture(
+        tmp_path
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    worker = queue.claim(NODE_A, "serial-a", 30)
+    assert worker is not None
+
+    queue.wait_for_operator(worker, "mutation-uncertain")
+
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        operations = list(session.scalars(select(AgentOperation)))
+        assert stored is not None
+        assert stored.current_phase == "waiting-for-operator"
+        assert job is not None and job.state == "waiting-for-operator"
+        assert len(operations) == 1

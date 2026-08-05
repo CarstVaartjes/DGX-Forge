@@ -36,6 +36,7 @@ from .route_runtime import (
     AcceptedEndpointEvidence,
     ActivationMarker,
     RouteBundleRequest,
+    endpoint_evidence_digest,
 )
 
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -673,12 +674,20 @@ class AgentReconciliationService:
             ):
                 raise ValueError("accepted route lacks exact verify evidence")
             address, observed_at = self._endpoint_resolver(node_id)
+            endpoint_digest = endpoint_evidence_digest(
+                node_id=node_id,
+                address=address,
+                observed_at=observed_at,
+                operation_id=operation_id,
+                verify_evidence_digest=projection.evidence_digest,
+            )
             endpoints[node_id] = AcceptedEndpointEvidence(
                 node_id,
                 address,
                 observed_at,
                 operation_id,
                 projection.evidence_digest,
+                endpoint_digest,
             )
         return RouteBundleRequest(
             reconciliation.id,
