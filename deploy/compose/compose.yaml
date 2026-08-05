@@ -40,9 +40,13 @@ services:
         os.makedirs('/routes/generations', mode=0o700, exist_ok=True);
         os.chmod('/routes/generations', 0o700);
         os.chown('/routes/generations', 10001, 10001);
-        os.chown('/routes', 10001, 10001)
+        os.chown('/routes', 10001, 10001);
+        os.makedirs('/supervisor', mode=0o750, exist_ok=True);
+        os.chmod('/supervisor', 0o750);
+        os.chown('/supervisor', 10002, 10001)
     volumes:
       - route-publications:/routes
+      - litellm-supervisor-state:/supervisor
 
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929}
@@ -100,6 +104,7 @@ services:
       - ${REPOSITORY_PATH:?set repository path}:/repository
       - control-state:/state
       - route-publications:/routes
+      - litellm-supervisor-state:/supervisor:ro
     tmpfs: [/tmp]
     networks: [application, data, cluster-egress]
     depends_on:
@@ -112,12 +117,16 @@ services:
     logging: *bounded-logging
     entrypoint: [/app/dgx-entrypoint]
     read_only: true
+    user: "10002:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     secrets: [litellm-master-key, litellm-upstream-key, litellm-database-url]
     volumes:
       - ./litellm/bootstrap-config.json:/app/bootstrap-config.json:ro
       - ./litellm/entrypoint.sh:/app/dgx-entrypoint:ro
       - ./litellm/config_supervisor.py:/app/config-supervisor.py:ro
       - route-publications:/routes:ro
+      - litellm-supervisor-state:/supervisor:rw
     tmpfs: [/tmp]
     networks: [data, ingress, cluster-egress]
     depends_on:
@@ -258,6 +267,7 @@ volumes:
   control-state: {}
   caddy-data: {}
   caddy-config: {}
+  litellm-supervisor-state: {}
   prometheus-data: {}
   grafana-data: {}
   registry-data: {}

@@ -44,13 +44,26 @@ class Worker:
         self._handlers = dict(handlers)
         self._logs = logs
         self._reconciliations = reconciliations
+        self._reconciliation_turn = True
 
     def run_once(self) -> bool:
-        if self._reconciliations is not None and self._reconciliations.tick():
-            return True
+        reconciliation_attempted = False
+        if self._reconciliations is not None and self._reconciliation_turn:
+            self._reconciliation_turn = False
+            reconciliation_attempted = True
+            if self._reconciliations.tick():
+                return True
         attempt = self._jobs.claim(self._worker_id, 30)
         if attempt is None:
+            if (
+                self._reconciliations is not None
+                and not self._reconciliation_turn
+                and not reconciliation_attempted
+            ):
+                self._reconciliation_turn = True
+                return self._reconciliations.tick()
             return False
+        self._reconciliation_turn = True
         if self._logs is not None:
             self._logs.save(attempt.job_id, f"job {attempt.kind} attempt {attempt.attempt} started".encode())
         handler = self._handlers.get(attempt.kind)
@@ -89,7 +102,11 @@ if __name__ == "__main__":
     from .logging import JobLogStore
     from .offline import OnlineLock
     from .presence import AgentPresenceService, ManagementAddressPolicy
-    from .route_runtime import AtomicRouteBundlePublisher
+    from .repository import RepositoryService
+    from .route_runtime import (
+        AtomicRouteBundlePublisher,
+        FileSupervisorAcknowledger,
+    )
     from .runtime import RuntimeHandlers
     from .settings import Settings
 
@@ -102,7 +119,7 @@ if __name__ == "__main__":
         forbidden_cidrs=settings.direct_fabric_cidrs,
     )
     presence = AgentPresenceService(sessions, address_policy, clock=clock)
-    agent_jobs = AgentJobService(sessions, clock=clock)
+    repository = RepositoryService(settings.repository_path)
 
     def endpoint(session, node_id: str) -> tuple[str, datetime]:
         observation = presence.latest_in_session(
@@ -110,18 +127,6 @@ if __name__ == "__main__":
         )
         return observation.address, observation.observed_at
 
-    reconciliations = AgentReconciliationService(
-        sessions,
-        agent_jobs=agent_jobs,
-        publisher=AtomicRouteBundlePublisher(
-            Path("/routes"),
-            management_policy=address_policy,
-            clock=clock,
-            maximum_lease_seconds=300,
-        ),
-        endpoint_resolver=endpoint,
-        clock=clock,
-    )
     if settings.git_signing_key_path is None:
         raise RuntimeError("production Git signing key is unavailable")
     code_host = RepositoryCodeHost(
@@ -134,9 +139,36 @@ if __name__ == "__main__":
         protected_branch=settings.deployment_branch,
         required_checks=settings.required_checks,
     )
+    commit_eligible = lambda commit: policy.eligible(commit).ok
+    current_commit = lambda: repository.head(settings.deployment_branch)
+    agent_jobs = AgentJobService(
+        sessions,
+        clock=clock,
+        commit_eligible=commit_eligible,
+        current_commit=current_commit,
+    )
+    reconciliations = AgentReconciliationService(
+        sessions,
+        agent_jobs=agent_jobs,
+        publisher=AtomicRouteBundlePublisher(
+            Path("/routes"),
+            management_policy=address_policy,
+            clock=clock,
+            maximum_lease_seconds=300,
+            await_supervisor_ack=FileSupervisorAcknowledger(
+                Path("/supervisor/ack.json"),
+                clock=clock,
+            ),
+        ),
+        endpoint_resolver=endpoint,
+        clock=clock,
+        commit_eligible=commit_eligible,
+        current_commit=current_commit,
+    )
     runtime = RuntimeHandlers(
         settings.repository_path,
-        eligible=lambda commit: policy.eligible(commit).ok,
+        eligible=commit_eligible,
+        current_commit=current_commit,
     )
     worker = Worker(
         jobs, os.environ.get("HOSTNAME", "control-worker"), runtime.registry(),

@@ -16,7 +16,6 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from .logging import redact_text
 from .models import Reconciliation, ReconciliationCompletionGeneration
 
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
@@ -276,16 +275,9 @@ class ReconciliationOrchestrator:
             )
 
     def cancel(self, reconciliation_id: str, reason: str) -> None:
-        if not isinstance(reason, str) or not reason.strip():
-            raise ValueError("cancellation reason is required")
-        safe_reason = redact_text(reason.strip())[:1024]
-        with self._sessions.begin() as session:
-            stored = self._stored(session, reconciliation_id)
-            if stored.status in _TERMINAL_STATUSES:
-                raise ValueError("reconciliation is terminal")
-            stored.status = "cancelled"
-            stored.current_phase = "cancelled"
-            stored.terminal_reason = safe_reason
+        raise RuntimeError(
+            "direct cancellation is disabled; use durable cancellation intent"
+        )
 
     @staticmethod
     def _stored(session: Session, reconciliation_id: str) -> Reconciliation:

@@ -43,8 +43,17 @@ _SAFE_AUTOMATIC_RECLAIM = frozenset({
     AgentOperation.WORKLOAD_HEALTH.value,
     AgentOperation.WORKLOAD_VERIFY.value,
 })
+_MUTATING_OPERATIONS = frozenset(
+    {
+        AgentOperation.RELEASE_INSTALL.value,
+        AgentOperation.WORKLOAD_PREPARE.value,
+        AgentOperation.WORKLOAD_START.value,
+        AgentOperation.WORKLOAD_STOP.value,
+    }
+)
 _TERMINAL_PARENT_STATES = frozenset({"succeeded", "failed", "waiting-for-operator", "expired"})
 _RETRY_DISPOSITION = "retry"
+_DATABASE_REPOLL_SECONDS = 0.25
 _IMPLEMENTED_CAPABILITIES = frozenset(
     {
         AgentOperation.NODE_PROBE.value,
@@ -79,15 +88,21 @@ class AgentJobService:
         clock: Callable[[], datetime],
         result_consumer: ResultConsumer | None = None,
         contact_consumer: ContactConsumer | None = None,
+        commit_eligible: Callable[[str], bool] | None = None,
+        current_commit: Callable[[], str] | None = None,
     ) -> None:
         if result_consumer is not None and not callable(result_consumer):
             raise TypeError("agent result consumer must be callable")
         if contact_consumer is not None and not callable(contact_consumer):
             raise TypeError("agent contact consumer must be callable")
+        if (commit_eligible is None) != (current_commit is None):
+            raise ValueError("reconciliation commit authority is incomplete")
         self._sessions = sessions
         self._clock = clock
         self._result_consumer = result_consumer
         self._contact_consumer = contact_consumer
+        self._commit_eligible = commit_eligible
+        self._current_commit = current_commit
         self._configuration_lock = threading.Lock()
         self._started = False
         # SQLite ignores row locks. This only prevents same-service test races;
@@ -258,7 +273,7 @@ class AgentJobService:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return None
-                self._available.wait(remaining)
+                self._available.wait(min(remaining, _DATABASE_REPOLL_SECONDS))
 
     def _claim_once(
         self,
@@ -270,6 +285,21 @@ class AgentJobService:
         source: AgentSource | None,
     ) -> AgentClaim | None:
         with self._claim_lock, self._sessions.begin() as session:
+            reconciliation_hint = session.scalar(
+                select(StoredOperation.id)
+                .join(Job, Job.id == StoredOperation.parent_job_id)
+                .where(
+                    StoredOperation.node_id == node_id,
+                    Job.reconciliation_id.is_not(None),
+                    StoredOperation.state.in_(
+                        {"queued", "running", "waiting-for-operator"}
+                    ),
+                )
+                .order_by(StoredOperation.created_at, StoredOperation.id)
+                .limit(1)
+            )
+            if reconciliation_hint is not None:
+                self._lock_reconciliation_targets(session, reconciliation_hint)
             identity = self._lock_identity(session, node_id, certificate_serial)
             now = self._clock()
             if identity is None or not self._identity_is_active(*identity, now):
@@ -309,6 +339,8 @@ class AgentJobService:
             )
             operation = session.scalars(statement).first()
             if operation is None:
+                return None
+            if not self._claim_has_authority(session, operation, now):
                 return None
             if operation.current_attempt:
                 previous = session.scalar(
@@ -353,6 +385,190 @@ class AgentJobService:
                 payload=operation.payload,
                 deadline=deadline,
             )
+
+    def _claim_has_authority(
+        self,
+        session: Session,
+        operation: StoredOperation,
+        now: datetime,
+    ) -> bool:
+        job = session.scalar(
+            select(Job)
+            .where(Job.id == operation.parent_job_id)
+            .with_for_update(of=Job)
+        )
+        if job is None:
+            raise ValueError("agent operation lacks its parent job")
+        if job.reconciliation_id is None:
+            if (
+                job.state == "waiting-for-operator"
+                and operation.state == "waiting-for-operator"
+                and operation.retry_disposition == _RETRY_DISPOSITION
+                and operation.retry_disposition_attempt == operation.current_attempt
+            ):
+                job.state = "queued"
+                job.status_reason = None
+                job.updated_at = now
+                return True
+            return job.state not in _TERMINAL_PARENT_STATES
+        reconciliation = session.scalar(
+            select(Reconciliation)
+            .where(Reconciliation.id == job.reconciliation_id)
+            .with_for_update(of=Reconciliation)
+        )
+        projection = session.scalar(
+            select(ReconciliationOperation)
+            .where(
+                ReconciliationOperation.reconciliation_id
+                == job.reconciliation_id,
+                ReconciliationOperation.agent_operation_id == operation.id,
+            )
+            .with_for_update(of=ReconciliationOperation)
+        )
+        if reconciliation is None or projection is None:
+            raise ValueError("agent operation lacks reconciliation authority")
+        expected_phase = (
+            "compensating" if projection.role == "compensation" else "dispatching"
+        )
+        if (
+            job.state == "running"
+            and reconciliation.status == "running"
+            and reconciliation.current_phase == expected_phase
+            and projection.state in {"queued", "running"}
+            and self._continuous_authority_reason(
+                session, reconciliation, job, operation
+            )
+            is None
+        ):
+            return True
+        self._quiesce_reconciliation_operations(
+            session,
+            reconciliation.id,
+            now,
+        )
+        reason = "reconciliation execution authority is no longer eligible"
+        reconciliation.current_phase = "waiting-for-operator"
+        reconciliation.status = "failed"
+        reconciliation.terminal_reason = reason
+        job.state = "waiting-for-operator"
+        job.status_reason = reason
+        job.updated_at = now
+        return False
+
+    def _continuous_authority_reason(
+        self,
+        session: Session,
+        reconciliation: Reconciliation,
+        job: Job,
+        operation: StoredOperation,
+    ) -> str | None:
+        if self._commit_eligible is None or self._current_commit is None:
+            return None
+        try:
+            if (
+                not self._commit_eligible(reconciliation.base_commit)
+                or self._current_commit() != reconciliation.base_commit
+            ):
+                return "reconciliation commit is no longer eligible"
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return "reconciliation commit eligibility is unavailable"
+        document = reconciliation.resolved_plan
+        if not isinstance(document, Mapping):
+            return "reconciliation plan authority is unavailable"
+        protocol = document.get("agent_protocol_range")
+        targets = document.get("targets")
+        if (
+            not isinstance(protocol, list)
+            or len(protocol) != 2
+            or not all(
+                isinstance(value, int) and not isinstance(value, bool)
+                for value in protocol
+            )
+            or not isinstance(targets, list)
+            or targets != job.targets
+            or operation.base_commit != reconciliation.base_commit
+        ):
+            return "reconciliation plan authority is invalid"
+        nodes = list(
+            session.scalars(
+                select(AgentNode)
+                .where(AgentNode.node_id.in_(targets))
+                .order_by(AgentNode.node_id)
+            )
+        )
+        if [node.node_id for node in nodes] != sorted(targets):
+            return "reconciliation target set is unavailable"
+        if any(
+            node.state != "active"
+            or node.revoked_at is not None
+            or not isinstance(node.protocol_version, int)
+            or isinstance(node.protocol_version, bool)
+            or not protocol[0] <= node.protocol_version <= protocol[1]
+            or not isinstance(node.capabilities, list)
+            or set(node.capabilities) != _IMPLEMENTED_CAPABILITIES
+            for node in nodes
+        ):
+            return "reconciliation target agent is incompatible"
+        return None
+
+    @staticmethod
+    def _quiesce_reconciliation_operations(
+        session: Session,
+        reconciliation_id: str,
+        now: datetime,
+    ) -> None:
+        projections = list(
+            session.scalars(
+                select(ReconciliationOperation)
+                .where(
+                    ReconciliationOperation.reconciliation_id == reconciliation_id
+                )
+                .order_by(
+                    ReconciliationOperation.graph_operation_id,
+                    ReconciliationOperation.role,
+                )
+                .with_for_update(of=ReconciliationOperation)
+            )
+        )
+        for projection in projections:
+            if projection.state == "planned":
+                projection.state = "failed"
+                continue
+            if projection.agent_operation_id is None:
+                continue
+            candidate = session.scalar(
+                select(StoredOperation)
+                .where(StoredOperation.id == projection.agent_operation_id)
+                .with_for_update(of=StoredOperation)
+            )
+            if candidate is None:
+                raise ValueError("reconciliation operation projection is incomplete")
+            if candidate.state == "queued":
+                candidate.state = "failed"
+                projection.state = "failed"
+                candidate.updated_at = now
+                continue
+            if candidate.state != "running":
+                continue
+            attempt = session.scalar(
+                select(AgentOperationAttempt)
+                .where(
+                    AgentOperationAttempt.operation_id == candidate.id,
+                    AgentOperationAttempt.attempt == candidate.current_attempt,
+                )
+                .with_for_update(of=AgentOperationAttempt)
+            )
+            if attempt is None or attempt.state != "running":
+                raise ValueError("running reconciliation operation lacks its attempt")
+            terminal = (
+                "waiting-for-operator"
+                if candidate.kind in _MUTATING_OPERATIONS
+                else "failed"
+            )
+            candidate.state = terminal
+            attempt.state = terminal
+            projection.state = terminal
+            candidate.updated_at = now
 
     def heartbeat(
         self,

@@ -184,6 +184,37 @@ class ReconciliationOperation(Base):
     compensated_graph_operation_id: Mapped[str | None] = mapped_column(String(128))
 
 
+class ReconciliationCancellation(Base):
+    """Durable operator intent advanced independently of process lifetime."""
+
+    __tablename__ = "reconciliation_cancellations"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('requested', 'withdrawal-pending', 'withdrawn', "
+            "'processing', 'compensating', 'completed', "
+            "'waiting-for-operator')",
+            name="ck_reconciliation_cancellations_state",
+        ),
+        CheckConstraint(
+            "length(reason) BETWEEN 1 AND 1024",
+            name="ck_reconciliation_cancellations_reason_length",
+        ),
+    )
+    reconciliation_id: Mapped[str] = mapped_column(
+        ForeignKey("reconciliations.id", ondelete="CASCADE"), primary_key=True
+    )
+    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(String(200), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
 class RoutePublication(Base):
     __tablename__ = "route_publications"
     __table_args__ = (
@@ -243,6 +274,33 @@ class RoutePublication(Base):
     activation_marker_digest: Mapped[str | None] = mapped_column(String(64))
     lease_issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RoutePublicationOwner(Base):
+    """Singleton authority for the one global LiteLLM activation marker."""
+
+    __tablename__ = "route_publication_owner"
+    __table_args__ = (
+        CheckConstraint(
+            "singleton_id = 1",
+            name="ck_route_publication_owner_singleton",
+        ),
+        CheckConstraint(
+            "owner_generation >= 0",
+            name="ck_route_publication_owner_generation",
+        ),
+    )
+    singleton_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    reconciliation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("reconciliations.id", ondelete="SET NULL"),
+        unique=True,
+    )
+    owner_generation: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class User(Base):

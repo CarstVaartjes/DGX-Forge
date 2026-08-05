@@ -54,6 +54,19 @@ class Reconciler:
         )()
 
 
+class Cancellations:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def enqueue_cancel(self, reconciliation_id, reason, *, actor, request_id):
+        self.calls.append((reconciliation_id, reason, actor, request_id))
+        return type(
+            "Cancellation",
+            (),
+            {"reconciliation_id": reconciliation_id, "state": "requested"},
+        )()
+
+
 def test_admin_proposal_returns_canonical_patch_and_digest() -> None:
     codec = TokenCodec(b"k" * 32)
     app = create_app(
@@ -109,6 +122,57 @@ def test_reconciliation_plan_requires_an_explicit_repository_profile() -> None:
     assert client.post(
         "/api/v1/reconciliations/plan", headers=headers, json={"commit": "a" * 40}
     ).status_code == 422
+
+
+def test_reconciliation_cancellation_is_rbac_guarded_and_audited() -> None:
+    codec = TokenCodec(b"k" * 32)
+    audits = MemoryAuditStore()
+    cancellations = Cancellations()
+    app = create_app(
+        jobs=Jobs(),
+        tokens=codec,
+        audits=audits,
+        fleet=dict,
+        admin=AdminServices(
+            Repository(), Proposals(), None, Reconciler(), cancellations
+        ),
+        now=lambda: 10,
+    )
+    client = TestClient(app)
+    reconciliation_id = "11111111-1111-4111-8111-111111111111"
+    request_id = "22222222-2222-4222-8222-222222222222"
+    operator = codec.issue(Actor("operator", "operator"), ttl_seconds=100, now=0)
+    viewer = codec.issue(Actor("viewer", "viewer"), ttl_seconds=100, now=0)
+
+    denied = client.post(
+        f"/api/v1/reconciliations/{reconciliation_id}/cancel",
+        headers={"Authorization": f"Bearer {viewer}"},
+        json={"reason": "operator requested rollback"},
+    )
+    response = client.post(
+        f"/api/v1/reconciliations/{reconciliation_id}/cancel",
+        headers={
+            "Authorization": f"Bearer {operator}",
+            "X-Request-ID": request_id,
+        },
+        json={"reason": "operator requested rollback"},
+    )
+
+    assert denied.status_code == 403
+    assert response.status_code == 202
+    assert response.json() == {
+        "reconciliation_id": reconciliation_id,
+        "state": "requested",
+    }
+    assert cancellations.calls == [
+        (
+            reconciliation_id,
+            "operator requested rollback",
+            "operator",
+            request_id,
+        )
+    ]
+    assert audits.for_request(request_id).action == "reconciliation.cancel.request"
 
 
 @pytest.mark.parametrize(

@@ -156,6 +156,168 @@ def test_supervisor_falls_back_when_manifest_or_marker_is_not_exact(
     assert module._selected(now=now) == bootstrap
 
 
+def test_supervisor_ack_binds_a_live_child_to_the_exact_activation_request(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+    _generated, _bootstrap, _directory = _bundle(
+        module,
+        tmp_path,
+        now=now - timedelta(seconds=1),
+        expires_at=now + timedelta(seconds=120),
+    )
+    module.ACK_ROOT = tmp_path / "supervisor"
+    module.ACK = module.ACK_ROOT / "ack.json"
+
+    class Child:
+        pid = 123
+
+        @staticmethod
+        def poll():
+            return None
+
+    request = module._active_request(now=now)
+    assert request is not None
+    module._write_ack(request, Child(), now=now)
+
+    ack = json.loads(module.ACK.read_bytes())
+    assert ack == {
+        "acknowledged_at": now.isoformat(),
+        "activation_sha256": hashlib.sha256(
+            module.ACTIVATION.read_bytes()
+        ).hexdigest(),
+        "child_pid": 123,
+        "expires_at": (now + timedelta(seconds=120)).isoformat(),
+        "generation": 1,
+        "litellm_sha256": hashlib.sha256(
+            request.config.read_bytes()
+        ).hexdigest(),
+        "schema_version": 1,
+        "state": "published",
+    }
+    assert module.ACK.read_bytes() == (
+        json.dumps(ack, sort_keys=True, separators=(",", ":")) + "\n"
+    ).encode()
+
+
+def test_live_supervisor_removes_ack_when_the_acknowledged_child_crashes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _module()
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+    _bundle(
+        module,
+        tmp_path,
+        now=now - timedelta(seconds=1),
+        expires_at=now + timedelta(seconds=120),
+    )
+    module.ACK_ROOT = tmp_path / "supervisor"
+    module.ACK = module.ACK_ROOT / "ack.json"
+    request = module._active_request(now=now)
+    assert request is not None
+
+    class CrashedChild:
+        pid = 321
+        returncode = 17
+
+        def __init__(self) -> None:
+            self.polls = 0
+
+        def poll(self):
+            self.polls += 1
+            return None if self.polls == 1 else self.returncode
+
+    child = CrashedChild()
+    monkeypatch.setattr(module, "_active_request", lambda **_kwargs: request)
+    monkeypatch.setattr(module, "_await_healthy", lambda _child: True)
+    monkeypatch.setattr(module.subprocess, "Popen", lambda *_args, **_kwargs: child)
+    monkeypatch.setattr(module.signal, "signal", lambda *_args: None)
+
+    assert module.main() == 17
+    assert not module.ACK.exists()
+
+
+def test_live_supervisor_stops_published_child_at_exact_lease_expiry(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    module = _module()
+    issued_at = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+    expires_at = issued_at + timedelta(seconds=120)
+    generated, bootstrap, _directory = _bundle(
+        module,
+        tmp_path,
+        now=issued_at,
+        expires_at=expires_at,
+    )
+    module.ACK_ROOT = tmp_path / "supervisor"
+    module.ACK = module.ACK_ROOT / "ack.json"
+    original_active_request = module._active_request
+    original_selected = module._selected
+    requests = iter(
+        (
+            original_active_request(now=issued_at),
+            original_active_request(now=expires_at),
+        )
+    )
+    assert original_active_request(now=issued_at) is not None
+    assert original_active_request(now=expires_at) is None
+    assert original_selected(now=expires_at) == bootstrap
+
+    class LiveChild:
+        pid = 654
+        returncode = None
+
+        def __init__(self) -> None:
+            self.terminated = False
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self) -> None:
+            self.terminated = True
+            self.returncode = 0
+
+        def wait(self, timeout=None):
+            del timeout
+            return self.returncode
+
+    class BootstrapCrash:
+        pid = 987
+        returncode = 23
+
+        @staticmethod
+        def poll():
+            return 23
+
+    published_child = LiveChild()
+    bootstrap_child = BootstrapCrash()
+    children = iter((published_child, bootstrap_child))
+    commands: list[list[str]] = []
+
+    def spawn(command, **_kwargs):
+        commands.append(command)
+        return next(children)
+
+    monkeypatch.setattr(module, "_active_request", lambda **_kwargs: next(requests))
+    monkeypatch.setattr(
+        module,
+        "_selected",
+        lambda **_kwargs: bootstrap,
+    )
+    monkeypatch.setattr(module, "_await_healthy", lambda _child: True)
+    monkeypatch.setattr(module.subprocess, "Popen", spawn)
+    monkeypatch.setattr(module.signal, "signal", lambda *_args: None)
+    monkeypatch.setattr(module.time, "sleep", lambda _seconds: None)
+
+    assert module.main() == 23
+    assert published_child.terminated is True
+    assert commands[0][2] == str(generated)
+    assert commands[1][2] == str(bootstrap)
+    assert not module.ACK.exists()
+
 def test_compose_mounts_one_read_only_route_volume_and_starts_bounded_supervisor() -> (
     None
 ):
@@ -213,3 +375,14 @@ def test_compose_initializes_route_volume_for_unprivileged_control_worker() -> N
         "condition": "service_completed_successfully",
         "required": True,
     }
+    litellm = services["litellm"]
+    assert litellm["user"] == "10002:10001"
+    assert litellm["cap_drop"] == ["ALL"]
+    assert litellm["security_opt"] == ["no-new-privileges:true"]
+    assert litellm["read_only"] is True
+    assert "litellm-supervisor-state:/supervisor:rw" in (
+        ROOT / "deploy/compose/compose.yaml"
+    ).read_text()
+    assert "litellm-supervisor-state:/supervisor:ro" in (
+        ROOT / "deploy/compose/compose.yaml"
+    ).read_text()

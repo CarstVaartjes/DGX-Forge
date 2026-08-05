@@ -530,14 +530,13 @@ def _accepted_current_workloads(
     ):
         raise ValueError("completed reconciliation generation is invalid")
     accepted_ids = {item.id for item in completed}
-    unaccepted_job_ids = {
-        job.id
-        for job in jobs
-        if job.payload.get("reconciliation_id")
-        in {item.id for item in all_reconciliations if item.id not in accepted_ids}
+    accepted_job_ids = {
+        job.id for job in jobs if job.reconciliation_id in accepted_ids
     }
+    reconcile_job_ids = {job.id for job in jobs}
     if any(
-        operation.parent_job_id in unaccepted_job_ids
+        operation.parent_job_id in reconcile_job_ids
+        and operation.parent_job_id not in accepted_job_ids
         and operation.state == "succeeded"
         and operation.kind
         in {
@@ -562,7 +561,7 @@ def _accepted_current_workloads(
         matched_jobs = [
             job
             for job in jobs
-            if job.payload.get("reconciliation_id") == reconciliation.id
+            if job.reconciliation_id == reconciliation.id
         ]
         if len(matched_jobs) != 1 or matched_jobs[0].state != "succeeded":
             raise ValueError("completed reconciliation lacks exact operation evidence")

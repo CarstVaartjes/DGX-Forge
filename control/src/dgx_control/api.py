@@ -51,9 +51,17 @@ class AdminServices:
     proposals: Any
     changes: Any | None
     reconciler: Any | None
+    cancellations: Any | None = None
 
 
-def build_agent_services(settings: Any, sessions: Any, clock: Callable[[], Any]) -> AgentApiServices:
+def build_agent_services(
+    settings: Any,
+    sessions: Any,
+    clock: Callable[[], Any],
+    *,
+    commit_eligible: Callable[[str], bool] | None = None,
+    current_commit: Callable[[], str] | None = None,
+) -> AgentApiServices:
     """Construct the fail-closed production agent runtime from one provider."""
     from .agent_jobs import AgentJobService
     from .enrollment import EnrollmentService
@@ -98,7 +106,12 @@ def build_agent_services(settings: Any, sessions: Any, clock: Callable[[], Any])
         ),
         clock=clock,
     )
-    operations = AgentJobService(sessions, clock=clock)
+    operations = AgentJobService(
+        sessions,
+        clock=clock,
+        commit_eligible=commit_eligible,
+        current_commit=current_commit,
+    )
     operations.set_contact_consumer(presence.observe_in_session)
     return AgentApiServices(
         enrollment=EnrollmentService(sessions, authority, clock=clock),
@@ -170,6 +183,11 @@ class ReconciliationPlanRequest(BaseModel):
 class ReconciliationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     plan_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ReconciliationCancelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    reason: str = Field(min_length=1, max_length=1024)
 
 
 def create_app(
@@ -403,6 +421,51 @@ def create_app(
                 status_code=404, detail="reconciliation plan is unavailable"
             ) from None
 
+    @app.post(
+        "/api/v1/reconciliations/{reconciliation_id}/cancel",
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    def cancel_reconciliation(
+        reconciliation_id: str,
+        body: ReconciliationCancelRequest,
+        request: Request,
+        authenticated: Actor = authenticated_actor,
+    ) -> dict[str, str]:
+        route = "/api/v1/reconciliations/{reconciliation_id}/cancel"
+        require_mutation_role(authenticated, route)
+        if admin is None or admin.cancellations is None:
+            raise HTTPException(
+                status_code=503, detail="reconciliation cancellation unavailable"
+            )
+        try:
+            cancellation = admin.cancellations.enqueue_cancel(
+                reconciliation_id,
+                body.reason,
+                actor=authenticated.subject,
+                request_id=request.state.request_id,
+            )
+        except KeyError:
+            raise HTTPException(
+                status_code=404, detail="reconciliation is unavailable"
+            ) from None
+        except ValueError:
+            raise HTTPException(
+                status_code=409, detail="reconciliation cannot be cancelled"
+            ) from None
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                authenticated.subject,
+                "reconciliation.cancel.request",
+                None,
+                (),
+            )
+        )
+        return {
+            "reconciliation_id": cancellation.reconciliation_id,
+            "state": cancellation.state,
+        }
+
     @app.post("/api/v1/jobs", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
     def enqueue(body: JobRequest, request: Request, authenticated: Actor = authenticated_actor) -> JobResponse:
         require_mutation_role(authenticated, "/api/v1/jobs")
@@ -519,12 +582,22 @@ def production_app() -> FastAPI:
     dashboard = DashboardService(repository, sessions)
     metrics = MetricsRegistry()
     operational_metrics = OperationalMetricsCollector(metrics, sessions, clock=clock)
-    agent_services = build_agent_services(settings, sessions, clock)
-    bind_reconciliation_result_consumer(
+    commit_eligible = lambda commit: git_policy.eligible(commit).ok
+    current_commit = lambda: repository.head(settings.deployment_branch)
+    agent_services = build_agent_services(
+        settings,
+        sessions,
+        clock,
+        commit_eligible=commit_eligible,
+        current_commit=current_commit,
+    )
+    reconciliation_cancellations = bind_reconciliation_result_consumer(
         sessions,
         operations=agent_services.operations,
         presence=agent_services.presence,
         clock=clock,
+        commit_eligible=commit_eligible,
+        current_commit=current_commit,
     )
     def refresh_metrics() -> None:
         operational_metrics.refresh()
@@ -551,7 +624,13 @@ def production_app() -> FastAPI:
         tokens=TokenCodec(settings.token_signing_key),
         audits=SqlAuditStore(sessions, clock),
         fleet=dashboard.fleet,
-        admin=AdminServices(repository, proposals, changes, reconciler),
+        admin=AdminServices(
+            repository,
+            proposals,
+            changes,
+            reconciler,
+            reconciliation_cancellations,
+        ),
         metrics=metrics,
         metrics_token=settings.metrics_token,
         metrics_refresh=refresh_metrics,

@@ -16,6 +16,7 @@ from dgx_control.models import (
     Base,
     Job,
     Reconciliation,
+    ReconciliationOperation,
 )
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -350,15 +351,32 @@ def test_linked_reconciliation_job_bypasses_generic_parent_terminalization(
     """First-wave completion must not mark an orchestrated parent terminal."""
     sessions, clock = queue
     parent_id = _parent_id(sessions)
-    _link_reconciliation(sessions, clock, parent_id)
+    reconciliation_id = _link_reconciliation(sessions, clock, parent_id)
     service = AgentJobService(sessions, clock=clock)
-    service.enqueue(
+    operation = service.enqueue(
         parent_id,
         NODE_ID,
         "workload.stop",
         COMMIT,
         {"workload_id": "model"},
     )
+    with sessions.begin() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        parent = session.get(Job, parent_id)
+        assert reconciliation is not None and parent is not None
+        reconciliation.status = "running"
+        reconciliation.current_phase = "dispatching"
+        parent.state = "running"
+        session.add(
+            ReconciliationOperation(
+                reconciliation_id=reconciliation_id,
+                graph_operation_id="model:stop",
+                role="primary",
+                agent_operation_id=operation.id,
+                expected_payload_digest=operation.payload_digest,
+                state="queued",
+            )
+        )
     claim = _claim(service)
 
     service.record_result(
@@ -373,7 +391,7 @@ def test_linked_reconciliation_job_bypasses_generic_parent_terminalization(
         parent = session.get(Job, parent_id)
         operation = session.get(AgentOperation, claim.operation_id)
         assert operation is not None and operation.state == "succeeded"
-        assert parent is not None and parent.state == "queued"
+        assert parent is not None and parent.state == "running"
 
 
 def test_generic_worker_claim_skips_jobs_linked_to_reconciliation(queue) -> None:

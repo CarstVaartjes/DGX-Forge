@@ -156,7 +156,9 @@ def _assert_execution_cycle(database: str) -> None:
     database_inspector = inspect(engine)
     assert {
         "agent_presence",
+        "reconciliation_cancellations",
         "reconciliation_operations",
+        "route_publication_owner",
         "route_publications",
     } <= set(database_inspector.get_table_names())
     assert "reconciliation_id" in {
@@ -197,6 +199,29 @@ def _assert_execution_cycle(database: str) -> None:
         "activation_marker_digest",
         "lease_issued_at",
         "lease_expires_at",
+    }
+    cancellation_columns = {
+        column["name"]
+        for column in database_inspector.get_columns("reconciliation_cancellations")
+    }
+    assert cancellation_columns == {
+        "reconciliation_id",
+        "state",
+        "reason",
+        "actor",
+        "request_id",
+        "requested_at",
+        "updated_at",
+    }
+    owner_columns = {
+        column["name"]
+        for column in database_inspector.get_columns("route_publication_owner")
+    }
+    assert owner_columns == {
+        "singleton_id",
+        "reconciliation_id",
+        "owner_generation",
+        "updated_at",
     }
     presence_columns = {
         column["name"]
@@ -269,13 +294,32 @@ def _assert_execution_cycle(database: str) -> None:
                 }
             },
         )
+        connection.execute(
+            text(
+                "INSERT INTO reconciliation_cancellations "
+                "(reconciliation_id,state,reason,actor,request_id,"
+                "requested_at,updated_at) VALUES "
+                "('legacy-reconciliation','requested','operator request',"
+                "'operator','22222222-2222-4222-8222-222222222222',"
+                "'2026-08-05 00:01:00+00','2026-08-05 00:01:00+00')"
+            )
+        )
+        connection.execute(
+            text(
+                "UPDATE route_publication_owner SET "
+                "reconciliation_id='legacy-reconciliation',owner_generation=7,"
+                "updated_at='2026-08-05 00:01:00+00' WHERE singleton_id=1"
+            )
+        )
     _assert_legacy_rows(engine)
 
     command.downgrade(config, "0008_resolved_plan")
     database_inspector = inspect(engine)
     assert not {
         "agent_presence",
+        "reconciliation_cancellations",
         "reconciliation_operations",
+        "route_publication_owner",
         "route_publications",
     } & set(database_inspector.get_table_names())
     assert "reconciliation_id" not in {
@@ -293,8 +337,17 @@ def _assert_execution_cycle(database: str) -> None:
             text("SELECT count(*) FROM route_publications")
         ).scalar_one() == 0
         assert connection.execute(
+            text("SELECT count(*) FROM reconciliation_cancellations")
+        ).scalar_one() == 0
+        assert connection.execute(
             text("SELECT count(*) FROM agent_presence")
         ).scalar_one() == 0
+        assert connection.execute(
+            text(
+                "SELECT reconciliation_id,owner_generation "
+                "FROM route_publication_owner WHERE singleton_id=1"
+            )
+        ).one() == (None, 0)
         assert connection.execute(
             text("SELECT reconciliation_id FROM jobs WHERE id='legacy-job'")
         ).scalar_one() is None
@@ -315,9 +368,12 @@ def test_execution_models_expose_durable_links_and_bounded_fields() -> None:
     from dgx_control import models
 
     assert hasattr(models, "ReconciliationOperation")
+    assert hasattr(models, "ReconciliationCancellation")
     assert hasattr(models, "RoutePublication")
+    assert hasattr(models, "RoutePublicationOwner")
     assert hasattr(models, "AgentPresence")
     assert models.Job.__table__.c.reconciliation_id.unique
+    assert models.Job.__table__.c.reconciliation_id.foreign_keys
 
     operation = models.ReconciliationOperation.__table__
     assert operation.c.reconciliation_id.foreign_keys
@@ -338,6 +394,19 @@ def test_execution_models_expose_durable_links_and_bounded_fields() -> None:
     assert publication.c.state.type.length == 32
     assert publication.c.generation.unique
     assert "activation_marker" in publication.c
+
+    cancellation = models.ReconciliationCancellation.__table__
+    assert cancellation.c.reconciliation_id.primary_key
+    assert cancellation.c.reconciliation_id.foreign_keys
+    assert cancellation.c.request_id.unique
+    assert cancellation.c.state.type.length == 32
+    assert cancellation.c.actor.type.length == 200
+
+    owner = models.RoutePublicationOwner.__table__
+    assert owner.c.singleton_id.primary_key
+    assert owner.c.reconciliation_id.foreign_keys
+    assert owner.c.reconciliation_id.unique
+    assert owner.c.owner_generation.type.python_type is int
 
     presence = models.AgentPresence.__table__
     assert presence.c.node_id.primary_key
@@ -373,6 +442,24 @@ def test_sqlite_rejects_execution_states_outside_closed_sets(
                 "INSERT INTO route_publications "
                 "(reconciliation_id,state,plan_digest) VALUES "
                 f"('legacy-reconciliation','arbitrary','{'1' * 64}')"
+            )
+        )
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO reconciliation_cancellations "
+                "(reconciliation_id,state,reason,actor,request_id,"
+                "requested_at,updated_at) VALUES "
+                "('legacy-reconciliation','arbitrary','operator request',"
+                "'operator','22222222-2222-4222-8222-222222222222',"
+                "'2026-08-05 00:01:00+00','2026-08-05 00:01:00+00')"
+            )
+        )
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE route_publication_owner SET singleton_id=2 "
+                "WHERE singleton_id=1"
             )
         )
     engine.dispose()

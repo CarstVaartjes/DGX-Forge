@@ -13,15 +13,19 @@ from typing import Any
 
 from dgx_agent_protocol import AgentResult, canonical_message
 from sqlalchemy import or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from .logging import redact_text
 from .models import (
     AgentNode,
     AgentOperationAttempt,
     Job,
     Reconciliation,
+    ReconciliationCancellation,
     ReconciliationOperation,
     RoutePublication,
+    RoutePublicationOwner,
 )
 from .models import (
     AgentOperation as StoredAgentOperation,
@@ -54,6 +58,26 @@ _MUTATIONS = frozenset(
         "workload.prepare",
         "workload.start",
         "workload.stop",
+    }
+)
+_AGENT_CAPABILITIES = frozenset(
+    {
+        "node.probe",
+        "release.install",
+        "workload.health",
+        "workload.prepare",
+        "workload.start",
+        "workload.stop",
+        "workload.verify",
+    }
+)
+_ACTIVE_CANCELLATION_STATES = frozenset(
+    {
+        "requested",
+        "withdrawal-pending",
+        "withdrawn",
+        "processing",
+        "compensating",
     }
 )
 
@@ -206,15 +230,21 @@ class AgentReconciliationService:
         endpoint_resolver: Callable[[Session, str], tuple[str, datetime]],
         clock: Callable[[], datetime],
         publication_lease_seconds: int = 60,
+        commit_eligible: Callable[[str], bool] | None = None,
+        current_commit: Callable[[], str] | None = None,
     ) -> None:
         if not 1 <= publication_lease_seconds <= 300:
             raise ValueError("reconciliation publication lease is invalid")
+        if (commit_eligible is None) != (current_commit is None):
+            raise ValueError("reconciliation commit authority is incomplete")
         self._sessions = sessions
         self._agent_jobs = agent_jobs
         self._publisher = publisher
         self._endpoint_resolver = endpoint_resolver
         self._clock = clock
         self._publication_lease_seconds = publication_lease_seconds
+        self._commit_eligible = commit_eligible
+        self._current_commit = current_commit
         # SQLite ignores row locks; PostgreSQL remains the production arbiter.
         self._tick_lock = threading.RLock()
 
@@ -230,6 +260,11 @@ class AgentReconciliationService:
             if job.base_commit != reconciliation.base_commit:
                 raise ValueError("reconciliation job base commit does not match")
             self._require_active_targets(session, graph)
+            authority_reason = self._continuous_authority_reason(
+                session, reconciliation, graph, _document
+            )
+            if authority_reason is not None:
+                raise ValueError(authority_reason)
             job.reconciliation_id = reconciliation.id
             job.state = "running"
             job.updated_at = self._clock()
@@ -243,11 +278,65 @@ class AgentReconciliationService:
             if candidate is None:
                 return False
             notify = False
+            advanced = False
             with self._sessions.begin() as session:
                 reconciliation, job, graph, document = self._locked_context(
                     session, candidate
                 )
                 phase = reconciliation.current_phase
+                cancellation = self._cancellation(session, reconciliation.id)
+                if cancellation is not None:
+                    cancellation_advanced = self._advance_cancellation(
+                        session,
+                        reconciliation,
+                        job,
+                        graph,
+                        cancellation,
+                    )
+                    if cancellation_advanced is not None:
+                        return cancellation_advanced
+                if phase in {"failed", "cancelled", "waiting-for-operator"}:
+                    return False
+                if self._sweep_expired_mutations(
+                    session, reconciliation, job, graph
+                ):
+                    return True
+                authority_reason = self._continuous_authority_reason(
+                    session, reconciliation, graph, document
+                )
+                if authority_reason is not None:
+                    owns_publication = self._owns_publication(
+                        session,
+                        reconciliation,
+                        may_supersede=False,
+                    )
+                    if (
+                        owns_publication
+                        and phase == "completed"
+                        and self._publisher is not None
+                    ):
+                        publication = self._publication(session, reconciliation.id)
+                        marker = self._publisher.withdraw(
+                            reconciliation_id=reconciliation.id,
+                            plan_digest=self._plan_digest(reconciliation),
+                            targets=graph.targets,
+                            reason="reconciliation authority lost",
+                        )
+                        self._store_marker(publication, marker, "routes-withdrawn")
+                    self._quiesce_for_unavailable_target(
+                        session,
+                        reconciliation,
+                        job,
+                        graph,
+                        authority_reason,
+                    )
+                    return True
+                if not self._owns_publication(
+                    session,
+                    reconciliation,
+                    may_supersede=phase == "planned",
+                ):
+                    return False
                 if phase == "planned":
                     if job.base_commit != reconciliation.base_commit:
                         raise ValueError("reconciliation job base commit does not match")
@@ -402,9 +491,10 @@ class AgentReconciliationService:
                     return False
                 else:
                     raise ValueError("reconciliation execution phase is invalid")
+                advanced = notify or reconciliation.current_phase != phase
             if notify:
                 self._agent_jobs.notify_available()
-            return True
+            return advanced
 
     def consume_result(
         self,
@@ -461,6 +551,33 @@ class AgentReconciliationService:
         )
         if reconciliation.current_phase != expected_phase:
             raise ValueError("agent result is invalid for reconciliation phase")
+        authority_reason = self._continuous_authority_reason(
+            session, reconciliation, graph, document
+        )
+        if authority_reason is not None:
+            terminal = (
+                "waiting-for-operator"
+                if operation.kind in _MUTATIONS
+                else "failed"
+            )
+            attempt.state = terminal
+            operation.state = terminal
+            operation.updated_at = self._clock()
+            projection.state = terminal
+            self._quiesce_pending(
+                session,
+                reconciliation,
+                graph,
+                self._projections(session, reconciliation.id, "primary"),
+            )
+            self._quiesce_pending(
+                session,
+                reconciliation,
+                graph,
+                self._projections(session, reconciliation.id, "compensation"),
+            )
+            self._wait_for_operator(reconciliation, job, authority_reason)
+            return
         now = self._clock()
         if message.state == "succeeded":
             result_digest, evidence_digest = accepted_result_digests(
@@ -481,22 +598,117 @@ class AgentReconciliationService:
         projection.result_digest = _digest(message.result)
         reason = self._result_reason(message)
         if projection.role == "compensation" or message.state == "waiting-for-operator":
+            self._quiesce_pending(
+                session,
+                reconciliation,
+                graph,
+                self._projections(session, reconciliation.id, "primary"),
+            )
+            self._quiesce_pending(
+                session,
+                reconciliation,
+                graph,
+                self._projections(session, reconciliation.id, "compensation"),
+            )
             self._wait_for_operator(reconciliation, job, reason)
             return
         self._handle_primary_failure(session, reconciliation, job, graph, node, reason)
 
     def request_cancel(self, reconciliation_id: str, reason: str) -> None:
-        if not isinstance(reason, str) or not reason.strip():
-            raise ValueError("cancellation reason is required")
+        self.enqueue_cancel(
+            reconciliation_id,
+            reason,
+            actor="internal-cancellation-adapter",
+            request_id=str(uuid.uuid4()),
+        )
+        for _ in range(3):
+            if not self.tick(reconciliation_id):
+                break
+
+    def enqueue_cancel(
+        self,
+        reconciliation_id: str,
+        reason: str,
+        *,
+        actor: str,
+        request_id: str,
+    ) -> ReconciliationCancellation:
+        """Commit idempotent cancellation intent before any external effect."""
+
+        if (
+            not isinstance(reason, str)
+            or not reason.strip()
+            or not isinstance(actor, str)
+            or not actor.strip()
+        ):
+            raise ValueError("cancellation reason and actor are required")
+        try:
+            canonical_request_id = str(uuid.UUID(request_id))
+        except (AttributeError, TypeError, ValueError):
+            raise ValueError("cancellation request ID is invalid") from None
+        if canonical_request_id != request_id:
+            raise ValueError("cancellation request ID is invalid")
         with self._sessions.begin() as session:
-            reconciliation, job, graph, _document = self._locked_context(
+            existing = session.scalar(
+                select(ReconciliationCancellation)
+                .where(
+                    ReconciliationCancellation.reconciliation_id
+                    == reconciliation_id
+                )
+                .with_for_update(of=ReconciliationCancellation)
+            )
+            if existing is not None:
+                return existing
+            reconciliation, _job, _graph, _document = self._locked_context(
                 session, reconciliation_id
             )
-            projections = self._projections(session, reconciliation.id, "primary")
-            compensations = self._projections(
-                session, reconciliation.id, "compensation"
+            if reconciliation.current_phase in {"failed", "cancelled"}:
+                raise ValueError("reconciliation is terminal")
+            now = self._clock()
+            cancellation = ReconciliationCancellation(
+                reconciliation_id=reconciliation.id,
+                state="requested",
+                reason=self._safe_reason(reason.strip()),
+                actor=actor.strip()[:200],
+                request_id=request_id,
+                requested_at=now,
+                updated_at=now,
             )
-            if reconciliation.current_phase == "completed":
+            session.add(cancellation)
+            session.flush()
+            return cancellation
+
+    def _advance_cancellation(
+        self,
+        session: Session,
+        reconciliation: Reconciliation,
+        job: Job,
+        graph: OperationGraph,
+        cancellation: ReconciliationCancellation,
+    ) -> bool | None:
+        now = self._clock()
+        if cancellation.state == "requested":
+            owns_publication = self._owns_publication(
+                session,
+                reconciliation,
+                may_supersede=False,
+            )
+            cancellation.state = (
+                "withdrawal-pending"
+                if reconciliation.current_phase == "completed" and owns_publication
+                else "processing"
+            )
+            cancellation.updated_at = now
+            return True
+        if cancellation.state == "withdrawal-pending":
+            owns_publication = self._owns_publication(
+                session,
+                reconciliation,
+                may_supersede=False,
+            )
+            if owns_publication:
+                if self._publisher is None:
+                    raise RuntimeError("route publisher is unavailable")
                 publication = self._publication(session, reconciliation.id)
                 marker = self._publisher.withdraw(
                     reconciliation_id=reconciliation.id,
@@ -505,76 +717,119 @@ class AgentReconciliationService:
                     reason="reconciliation cancellation",
                 )
                 self._store_marker(publication, marker, "routes-withdrawn")
-            if reconciliation.current_phase == "waiting-for-operator":
-                self._quiesce_pending(session, reconciliation, graph, projections)
-                self._quiesce_pending(session, reconciliation, graph, compensations)
-                return
-            unsafe_mutation = any(
-                self._graph_node(graph, row.graph_operation_id).kind in _MUTATIONS
-                and row.state
-                in {
-                    "failed",
-                    "running",
-                    "succeeded",
-                    "uncertain",
-                    "waiting-for-operator",
-                }
-                for row in projections
-            ) or any(
-                row.state
-                in {
-                    "failed",
-                    "running",
-                    "succeeded",
-                    "uncertain",
-                    "waiting-for-operator",
-                }
-                for row in compensations
-            )
-            uncertain = self._quiesce_pending(
-                session,
-                reconciliation,
-                graph,
-                projections,
-            )
-            uncertain = (
-                self._quiesce_pending(
-                    session,
-                    reconciliation,
-                    graph,
-                    compensations,
-                )
-                or uncertain
-            )
-            mutated = [
-                row
-                for row in projections
-                if row.state == "accepted"
-                and self._graph_node(graph, row.graph_operation_id).kind in _MUTATIONS
-            ]
-            reconciliation.terminal_reason = reason.strip()[:1024]
-            if uncertain or unsafe_mutation:
-                self._wait_for_operator(
-                    reconciliation,
-                    job,
-                    "cancellation interrupted a running mutation",
-                )
-            elif any(
-                self._graph_node(graph, row.graph_operation_id).compensation_kind
-                for row in mutated
-            ):
-                reconciliation.current_phase = "compensating"
-                reconciliation.status = "running"
-            elif mutated:
-                self._wait_for_operator(
-                    reconciliation, job, "cancellation requires operator recovery"
-                )
+                cancellation.state = "withdrawn"
             else:
-                reconciliation.current_phase = "cancelled"
-                reconciliation.status = "cancelled"
-                job.state = "failed"
-                job.status_reason = "reconciliation cancelled before mutation"
-                job.updated_at = self._clock()
+                cancellation.state = "processing"
+            cancellation.updated_at = now
+            return True
+        if cancellation.state == "withdrawn":
+            cancellation.state = "processing"
+            cancellation.updated_at = now
+            self._apply_cancellation(
+                session, reconciliation, job, graph, cancellation
+            )
+            return True
+        if cancellation.state == "processing":
+            self._apply_cancellation(
+                session, reconciliation, job, graph, cancellation
+            )
+            return True
+        if cancellation.state == "compensating":
+            if reconciliation.current_phase == "failed":
+                cancellation.state = "completed"
+            elif reconciliation.current_phase == "waiting-for-operator":
+                cancellation.state = "waiting-for-operator"
+            else:
+                return None
+            cancellation.updated_at = now
+            return True
+        return None
+
+    def _apply_cancellation(
+        self,
+        session: Session,
+        reconciliation: Reconciliation,
+        job: Job,
+        graph: OperationGraph,
+        cancellation: ReconciliationCancellation,
+    ) -> None:
+        projections = self._projections(session, reconciliation.id, "primary")
+        compensations = self._projections(
+            session, reconciliation.id, "compensation"
+        )
+        if reconciliation.current_phase == "waiting-for-operator":
+            self._quiesce_pending(session, reconciliation, graph, projections)
+            self._quiesce_pending(session, reconciliation, graph, compensations)
+            cancellation.state = "waiting-for-operator"
+            cancellation.updated_at = self._clock()
+            return
+        unsafe_mutation = any(
+            self._graph_node(graph, row.graph_operation_id).kind in _MUTATIONS
+            and row.state
+            in {
+                "failed",
+                "running",
+                "succeeded",
+                "uncertain",
+                "waiting-for-operator",
+            }
+            for row in projections
+        ) or any(
+            row.state
+            in {
+                "failed",
+                "running",
+                "succeeded",
+                "uncertain",
+                "waiting-for-operator",
+            }
+            for row in compensations
+        )
+        uncertain = self._quiesce_pending(
+            session, reconciliation, graph, projections
+        )
+        uncertain = (
+            self._quiesce_pending(
+                session, reconciliation, graph, compensations
+            )
+            or uncertain
+        )
+        mutated = [
+            row
+            for row in projections
+            if row.state == "accepted"
+            and self._graph_node(graph, row.graph_operation_id).kind in _MUTATIONS
+        ]
+        reconciliation.terminal_reason = cancellation.reason
+        if uncertain or unsafe_mutation:
+            self._wait_for_operator(
+                reconciliation,
+                job,
+                "cancellation interrupted a running mutation",
+            )
+            cancellation.state = "waiting-for-operator"
+        elif any(
+            self._graph_node(graph, row.graph_operation_id).compensation_kind
+            for row in mutated
+        ):
+            reconciliation.current_phase = "compensating"
+            reconciliation.status = "running"
+            job.state = "running"
+            job.updated_at = self._clock()
+            cancellation.state = "compensating"
+        elif mutated:
+            self._wait_for_operator(
+                reconciliation, job, "cancellation requires operator recovery"
+            )
+            cancellation.state = "waiting-for-operator"
+        else:
+            reconciliation.current_phase = "cancelled"
+            reconciliation.status = "cancelled"
+            job.state = "failed"
+            job.status_reason = "reconciliation cancelled before mutation"
+            job.updated_at = self._clock()
+            cancellation.state = "completed"
+        cancellation.updated_at = self._clock()
 
     def _candidate_id(self) -> str | None:
         with self._sessions() as session:
@@ -584,6 +839,11 @@ class AgentReconciliationService:
                 .outerjoin(
                     RoutePublication,
                     RoutePublication.reconciliation_id == Reconciliation.id,
+                )
+                .outerjoin(
+                    ReconciliationCancellation,
+                    ReconciliationCancellation.reconciliation_id
+                    == Reconciliation.id,
                 )
                 .where(
                     or_(
@@ -598,18 +858,83 @@ class AgentReconciliationService:
                                 "compensating",
                             }
                         ),
-                        (
-                            (Reconciliation.current_phase == "completed")
-                            & (
-                                RoutePublication.lease_expires_at
-                                <= self._clock() + timedelta(seconds=30)
-                            )
+                        Reconciliation.current_phase == "completed",
+                        ReconciliationCancellation.state.in_(
+                            _ACTIVE_CANCELLATION_STATES
                         ),
                     )
                 )
-                .order_by(Reconciliation.created_at, Reconciliation.id)
+                .order_by(Reconciliation.created_at.desc(), Reconciliation.id.desc())
                 .limit(1)
             )
+
+    def _owns_publication(
+        self,
+        session: Session,
+        reconciliation: Reconciliation,
+        *,
+        may_supersede: bool,
+    ) -> bool:
+        """Lock and enforce the sole global activation-marker owner."""
+
+        statement = (
+            select(RoutePublicationOwner)
+            .where(RoutePublicationOwner.singleton_id == 1)
+            .with_for_update(of=RoutePublicationOwner)
+        )
+        owner = session.scalar(statement)
+        if owner is None:
+            try:
+                with session.begin_nested():
+                    session.add(
+                        RoutePublicationOwner(
+                            singleton_id=1,
+                            reconciliation_id=None,
+                            owner_generation=0,
+                        )
+                    )
+                    session.flush()
+            except IntegrityError:
+                pass
+            owner = session.scalar(statement)
+        if owner is None:
+            raise RuntimeError("route publication owner is unavailable")
+        if owner.reconciliation_id is None:
+            latest_completed = session.scalar(
+                select(Reconciliation.id)
+                .where(
+                    Reconciliation.status == "succeeded",
+                    Reconciliation.current_phase == "completed",
+                    Reconciliation.completion_generation.is_not(None),
+                )
+                .order_by(
+                    Reconciliation.completion_generation.desc(),
+                    Reconciliation.id.desc(),
+                )
+                .limit(1)
+            )
+            owner.reconciliation_id = latest_completed
+        if owner.reconciliation_id == reconciliation.id:
+            return True
+        current = (
+            None
+            if owner.reconciliation_id is None
+            else session.get(Reconciliation, owner.reconciliation_id)
+        )
+        candidate_order = (_aware(reconciliation.created_at), reconciliation.id)
+        current_order = (
+            None
+            if current is None
+            else (_aware(current.created_at), current.id)
+        )
+        if current_order is not None and (
+            not may_supersede or candidate_order <= current_order
+        ):
+            return False
+        owner.reconciliation_id = reconciliation.id
+        owner.owner_generation += 1
+        owner.updated_at = self._clock()
+        return True
 
     def _locked_context(
         self,
@@ -663,6 +988,65 @@ class AgentReconciliationService:
             node.state == "active" and node.revoked_at is None for node in nodes
         )
 
+    def _continuous_authority_reason(
+        self,
+        session: Session,
+        reconciliation: Reconciliation,
+        graph: OperationGraph,
+        document: Mapping[str, object],
+    ) -> str | None:
+        if self._commit_eligible is None or self._current_commit is None:
+            return None
+        try:
+            if not self._commit_eligible(reconciliation.base_commit):
+                return "reconciliation commit is no longer eligible"
+            if self._current_commit() != reconciliation.base_commit:
+                return "reconciliation commit is no longer current"
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return "reconciliation commit eligibility is unavailable"
+        protocol = document.get("agent_protocol_range")
+        if (
+            not isinstance(protocol, list)
+            or len(protocol) != 2
+            or not all(
+                isinstance(value, int) and not isinstance(value, bool)
+                for value in protocol
+            )
+        ):
+            return "reconciliation protocol authority is invalid"
+        nodes = list(
+            session.scalars(
+                select(AgentNode)
+                .where(AgentNode.node_id.in_(graph.targets))
+                .order_by(AgentNode.node_id)
+            )
+        )
+        if [node.node_id for node in nodes] != list(graph.targets):
+            return "reconciliation target set is unavailable"
+        if any(
+            node.state != "active"
+            or node.revoked_at is not None
+            or not isinstance(node.protocol_version, int)
+            or isinstance(node.protocol_version, bool)
+            or not protocol[0] <= node.protocol_version <= protocol[1]
+            or not isinstance(node.capabilities, list)
+            or set(node.capabilities) != _AGENT_CAPABILITIES
+            for node in nodes
+        ):
+            return "reconciliation target agent is incompatible"
+        try:
+            for node_id in graph.targets:
+                address, observed_at = self._endpoint_resolver(session, node_id)
+                if (
+                    not isinstance(address, str)
+                    or not address
+                    or not isinstance(observed_at, datetime)
+                ):
+                    return "reconciliation management address is invalid"
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return "reconciliation management address is unavailable"
+        return None
+
     @classmethod
     def _require_active_targets(
         cls, session: Session, graph: OperationGraph
@@ -700,6 +1084,19 @@ class AgentReconciliationService:
         if publication is None:
             raise ValueError("reconciliation route withdrawal is not durable")
         return publication
+
+    @staticmethod
+    def _cancellation(
+        session: Session, reconciliation_id: str
+    ) -> ReconciliationCancellation | None:
+        return session.scalar(
+            select(ReconciliationCancellation)
+            .where(
+                ReconciliationCancellation.reconciliation_id
+                == reconciliation_id
+            )
+            .with_for_update(of=ReconciliationCancellation)
+        )
 
     @staticmethod
     def _projections(
@@ -1052,6 +1449,67 @@ class AgentReconciliationService:
             operation.updated_at = now
         return uncertain_mutation
 
+    def _sweep_expired_mutations(
+        self,
+        session: Session,
+        reconciliation: Reconciliation,
+        job: Job,
+        graph: OperationGraph,
+    ) -> bool:
+        """Project expired mutation leases without requiring another claim."""
+
+        primary = self._projections(session, reconciliation.id, "primary")
+        compensation = self._projections(
+            session, reconciliation.id, "compensation"
+        )
+        now = self._clock()
+        expired = False
+        for projection in (*primary, *compensation):
+            if projection.state != "queued" or projection.agent_operation_id is None:
+                continue
+            operation = session.scalar(
+                select(StoredAgentOperation)
+                .where(StoredAgentOperation.id == projection.agent_operation_id)
+                .with_for_update(of=StoredAgentOperation)
+            )
+            if (
+                operation is None
+                or operation.state != "running"
+                or operation.kind not in _MUTATIONS
+            ):
+                continue
+            attempt = session.scalar(
+                select(AgentOperationAttempt)
+                .where(
+                    AgentOperationAttempt.operation_id == operation.id,
+                    AgentOperationAttempt.attempt == operation.current_attempt,
+                )
+                .with_for_update(of=AgentOperationAttempt)
+            )
+            if (
+                attempt is None
+                or attempt.state != "running"
+                or _aware(attempt.lease_deadline) > _aware(now)
+            ):
+                continue
+            attempt.state = "expired"
+            operation.state = "waiting-for-operator"
+            operation.retry_disposition = None
+            operation.retry_disposition_attempt = None
+            operation.updated_at = now
+            projection.state = "waiting-for-operator"
+            expired = True
+        if not expired:
+            return False
+        self._quiesce_pending(session, reconciliation, graph, primary)
+        self._quiesce_pending(session, reconciliation, graph, compensation)
+        self._wait_for_operator(
+            reconciliation,
+            job,
+            "mutating agent operation lease expired with uncertain outcome",
+        )
+        return True
+
     def _quiesce_for_unavailable_target(
         self,
         session: Session,
@@ -1084,19 +1542,24 @@ class AgentReconciliationService:
     def _wait_for_operator(
         self, reconciliation: Reconciliation, job: Job, reason: str
     ) -> None:
+        safe_reason = self._safe_reason(reason)
         reconciliation.current_phase = "waiting-for-operator"
         reconciliation.status = "failed"
-        reconciliation.terminal_reason = reason[:1024]
+        reconciliation.terminal_reason = safe_reason
         job.state = "waiting-for-operator"
-        job.status_reason = reason[:1024]
+        job.status_reason = safe_reason
         job.updated_at = self._clock()
 
     @staticmethod
-    def _result_reason(message: AgentResult) -> str:
+    def _safe_reason(reason: str) -> str:
+        return redact_text(reason)[:1024]
+
+    @classmethod
+    def _result_reason(cls, message: AgentResult) -> str:
         reason = message.result.get("reason")
         if not isinstance(reason, str):
             reason = message.result.get("error_code")
-        return reason[:1024] if isinstance(reason, str) and reason else "agent operation failed"
+        return cls._safe_reason(reason if isinstance(reason, str) and reason else "agent operation failed")
 
 
 def bind_reconciliation_result_consumer(
@@ -1106,6 +1569,8 @@ def bind_reconciliation_result_consumer(
     presence: Any,
     clock: Callable[[], datetime],
     maximum_presence_age_seconds: int = 300,
+    commit_eligible: Callable[[str], bool] | None = None,
+    current_commit: Callable[[], str] | None = None,
 ) -> AgentReconciliationService:
     """Bind the API's result queue to the same durable execution projection."""
 
@@ -1126,6 +1591,8 @@ def bind_reconciliation_result_consumer(
         publisher=None,
         endpoint_resolver=endpoint,
         clock=clock,
+        commit_eligible=commit_eligible,
+        current_commit=current_commit,
     )
     operations.set_result_consumer(service.consume_result)
     return service

@@ -29,7 +29,14 @@ from dgx_control.models import (
     Observation,
     Reconciliation,
 )
+from dgx_control.presence import ManagementAddressPolicy
 from dgx_control.repository import RepositoryService
+from dgx_control.route_runtime import (
+    AcceptedEndpointEvidence,
+    AtomicRouteBundlePublisher,
+    RouteBundleRequest,
+    endpoint_evidence_digest,
+)
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -437,6 +444,52 @@ def test_resolves_one_two_and_sixteen_nodes_from_exact_repository_objects(
         and len(node.payload_digest) == 64
         for node in plan.operation_graph.nodes
     )
+
+
+def test_planner_route_publishes_with_the_exact_canonical_quota_digest(
+    tmp_path: Path,
+) -> None:
+    """Adding file-format whitespace to quota hashing rejects real planner output."""
+    repository, commit, _documents = _repository(tmp_path, 1)
+    plan = _resolve(repository, commit, _observations(1))
+    node_id = _node_id(0)
+    operation_id = f"model:{node_id}:workload.verify"
+    verify_digest = "e" * 64
+    address = "10.0.0.42"
+    reconciliation_id = str(uuid.uuid4())
+    evidence_digest = endpoint_evidence_digest(
+        node_id=node_id,
+        address=address,
+        observed_at=NOW,
+        operation_id=operation_id,
+        verify_evidence_digest=verify_digest,
+    )
+    request = RouteBundleRequest(
+        reconciliation_id=reconciliation_id,
+        plan_digest=plan.digest,
+        evidence_set_digest="f" * 64,
+        routes=plan.routes,
+        endpoints={
+            node_id: AcceptedEndpointEvidence(
+                node_id=node_id,
+                address=address,
+                observed_at=NOW,
+                operation_id=operation_id,
+                verify_evidence_digest=verify_digest,
+                evidence_digest=evidence_digest,
+            )
+        },
+        expires_at=NOW + timedelta(seconds=120),
+    )
+
+    marker = AtomicRouteBundlePublisher(
+        tmp_path / "route-runtime",
+        management_policy=ManagementAddressPolicy.parse("10.0.0.0/24"),
+        clock=lambda: NOW,
+    ).publish(request)
+
+    assert marker.reconciliation_id == reconciliation_id
+    assert marker.plan_digest == plan.digest
 
 
 def test_every_emitted_payload_is_accepted_by_the_exact_agent_parser(
@@ -1534,7 +1587,8 @@ def test_durable_projection_derives_occupancy_from_completed_start_evidence(
                 base_commit="a" * 40,
                 targets=[node_id],
                 payload_digest="e" * 64,
-                payload={"reconciliation_id": "reconciliation"},
+                payload={"reconciliation_id": "forged-json-hint"},
+                reconciliation_id="reconciliation",
                 current_attempt=1,
                 created_at=NOW - timedelta(seconds=4),
                 updated_at=NOW - timedelta(seconds=3),
@@ -1768,7 +1822,8 @@ def test_durable_projection_fails_closed_on_unaccepted_successful_mutation(
                 base_commit="a" * 40,
                 targets=[node_id],
                 payload_digest="e" * 64,
-                payload={"reconciliation_id": "failed-reconciliation"},
+                payload={"reconciliation_id": "forged-json-hint"},
+                reconciliation_id="failed-reconciliation",
                 current_attempt=1,
                 created_at=NOW,
                 updated_at=NOW,

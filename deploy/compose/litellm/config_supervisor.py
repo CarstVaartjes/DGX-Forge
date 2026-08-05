@@ -5,10 +5,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import signal
 import subprocess
+import tempfile
 import time
+import urllib.error
+import urllib.request
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -17,8 +21,12 @@ ROOT = Path("/routes")
 ACTIVATION = ROOT / "activation.json"
 GENERATIONS = ROOT / "generations"
 BOOTSTRAP = Path("/app/bootstrap-config.json")
+ACK_ROOT = Path("/supervisor")
+ACK = ACK_ROOT / "ack.json"
 POLL_SECONDS = 2
 TERMINATE_SECONDS = 30
+STARTUP_SECONDS = 30
+HEALTH_TIMEOUT_SECONDS = 3
 MAXIMUM_LEASE = timedelta(seconds=300)
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _DIRECTORY = re.compile(r"[0-9]{8}-[0-9a-f]{64}\Z")
@@ -37,6 +45,18 @@ _MARKER_FIELDS = {
     "manifest_sha256",
 }
 _MANIFEST_FIELDS = _MARKER_FIELDS - {"directory", "manifest_sha256"}
+
+
+class ActiveRequest:
+    def __init__(
+        self,
+        config: Path,
+        marker: dict[str, object],
+        activation_sha256: str,
+    ) -> None:
+        self.config = config
+        self.marker = marker
+        self.activation_sha256 = activation_sha256
 
 
 def _parse_timestamp(value: object) -> datetime | None:
@@ -59,7 +79,7 @@ def _digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _active_config(*, now: datetime) -> Path | None:
+def _active_request(*, now: datetime) -> ActiveRequest | None:
     if (
         ACTIVATION.is_symlink()
         or not ACTIVATION.is_file()
@@ -149,7 +169,16 @@ def _active_config(*, now: datetime) -> Path | None:
         or (marker["state"] == "maintenance" and config_document["model_list"] != [])
     ):
         return None
-    return config
+    return ActiveRequest(
+        config=config,
+        marker=marker,
+        activation_sha256=hashlib.sha256(activation_content).hexdigest(),
+    )
+
+
+def _active_config(*, now: datetime) -> Path | None:
+    request = _active_request(now=now)
+    return None if request is None else request.config
 
 
 def _selected(*, now: datetime | None = None) -> Path:
@@ -167,6 +196,66 @@ def _selected(*, now: datetime | None = None) -> Path:
     return BOOTSTRAP
 
 
+def _atomic_write(target: Path, content: bytes) -> None:
+    target.parent.mkdir(mode=0o750, exist_ok=True)
+    if target.parent.is_symlink() or not target.parent.is_dir() or target.is_symlink():
+        raise RuntimeError("LiteLLM acknowledgement path is unsafe")
+    descriptor, temporary_raw = tempfile.mkstemp(
+        prefix=f".{target.name}-", dir=target.parent
+    )
+    temporary = Path(temporary_raw)
+    try:
+        os.fchmod(descriptor, 0o640)
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(content)
+            output.flush()
+            os.fsync(output.fileno())
+        os.replace(temporary, target)
+        directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _write_ack(
+    request: ActiveRequest,
+    child: subprocess.Popen[bytes],
+    *,
+    now: datetime,
+) -> None:
+    if child.poll() is not None or not isinstance(child.pid, int) or child.pid <= 0:
+        raise RuntimeError("LiteLLM process is not live")
+    marker = request.marker
+    acknowledgement = {
+        "acknowledged_at": now.astimezone(UTC).isoformat(),
+        "activation_sha256": request.activation_sha256,
+        "child_pid": child.pid,
+        "expires_at": marker["expires_at"],
+        "generation": marker["generation"],
+        "litellm_sha256": marker["litellm_sha256"],
+        "schema_version": 1,
+        "state": marker["state"],
+    }
+    _atomic_write(ACK, _encoded(acknowledgement))
+
+
+def _clear_ack() -> None:
+    if ACK.is_symlink():
+        raise RuntimeError("LiteLLM acknowledgement path is unsafe")
+    try:
+        ACK.unlink()
+    except FileNotFoundError:
+        return
+    directory = os.open(ACK.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(directory)
+    finally:
+        os.close(directory)
+
+
 def _stop(child: subprocess.Popen[bytes]) -> None:
     if child.poll() is not None:
         return
@@ -176,6 +265,28 @@ def _stop(child: subprocess.Popen[bytes]) -> None:
     except subprocess.TimeoutExpired:
         child.kill()
         child.wait()
+
+
+def _healthy(child: subprocess.Popen[bytes]) -> bool:
+    if child.poll() is not None:
+        return False
+    try:
+        with urllib.request.urlopen(
+            "http://127.0.0.1:4000/health/liveliness",
+            timeout=HEALTH_TIMEOUT_SECONDS,
+        ) as response:
+            return response.status == 200
+    except (OSError, urllib.error.URLError):
+        return False
+
+
+def _await_healthy(child: subprocess.Popen[bytes]) -> bool:
+    deadline = time.monotonic() + STARTUP_SECONDS
+    while child.poll() is None and time.monotonic() < deadline:
+        if _healthy(child):
+            return True
+        time.sleep(POLL_SECONDS)
+    return False
 
 
 def main() -> int:
@@ -190,7 +301,8 @@ def main() -> int:
 
     signal.signal(signal.SIGTERM, request_stop)
     signal.signal(signal.SIGINT, request_stop)
-    selected = _selected()
+    request = _active_request(now=datetime.now(UTC))
+    selected = request.config if request is not None else _selected()
     while not stopping:
         active_digest = _digest(selected)
         child = subprocess.Popen(
@@ -205,20 +317,41 @@ def main() -> int:
             ],
             stdin=subprocess.DEVNULL,
         )
+        if not _await_healthy(child):
+            _clear_ack()
+            _stop(child)
+            return 1
+        if request is None:
+            _clear_ack()
+        else:
+            _write_ack(request, child, now=datetime.now(UTC))
         reload_requested = False
         while child.poll() is None and not stopping:
             time.sleep(POLL_SECONDS)
-            candidate = _selected()
+            candidate_request = _active_request(now=datetime.now(UTC))
+            candidate = (
+                candidate_request.config
+                if candidate_request is not None
+                else _selected()
+            )
             if candidate != selected or _digest(candidate) != active_digest:
                 reload_requested = True
+                _clear_ack()
                 _stop(child)
                 selected = candidate
+                request = candidate_request
                 break
+            if candidate_request is None or not _healthy(child):
+                _clear_ack()
+            else:
+                _write_ack(candidate_request, child, now=datetime.now(UTC))
         if stopping:
+            _clear_ack()
             _stop(child)
             return 0
         if reload_requested:
             continue
+        _clear_ack()
         return int(child.returncode or 1)
     return 0
 

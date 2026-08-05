@@ -7,7 +7,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from dgx_agent_protocol import canonical_message
+from dgx_agent_protocol import AgentResult, canonical_message
 from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
 from dgx_control.agent_reconciliation import (
     AgentReconciliationService,
@@ -16,18 +16,23 @@ from dgx_control.agent_reconciliation import (
     compensation_order,
     ready_operation_ids,
 )
+from dgx_control.auth import AgentIdentity, AgentSource
 from dgx_control.models import (
     AgentCertificate,
     AgentNode,
     AgentOperation,
     AgentOperationAttempt,
+    AgentPresence,
     Base,
     Job,
     Reconciliation,
+    ReconciliationCancellation,
     ReconciliationOperation,
     RoutePublication,
+    RoutePublicationOwner,
 )
 from dgx_control.orchestration import OperationNode
+from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
 from dgx_control.route_runtime import ActivationMarker
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
@@ -35,6 +40,15 @@ from sqlalchemy.orm import sessionmaker
 NODE_A = "spk_" + "a" * 32
 NODE_B = "spk_" + "b" * 32
 BASE_COMMIT = "a" * 40
+AGENT_CAPABILITIES = (
+    "node.probe",
+    "release.install",
+    "workload.health",
+    "workload.prepare",
+    "workload.start",
+    "workload.stop",
+    "workload.verify",
+)
 
 
 def _digest(value: object) -> str:
@@ -45,6 +59,17 @@ def _json_digest(value: object) -> str:
     return hashlib.sha256(
         json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def _wave_targets(count: int) -> tuple[str, ...]:
+    if count not in {1, 2, 16}:
+        raise ValueError("durable wave fixture supports only the acceptance matrix")
+    first = int("a" * 32, 16)
+    return tuple("spk_" + f"{first + index:032x}" for index in range(count))
+
+
+def _wave_serial(index: int) -> str:
+    return "serial-a" if index == 0 else f"serial-wave-{index}"
 
 
 def _node(
@@ -339,6 +364,7 @@ def _execution_fixture(
     routes: dict[str, object] | None = None,
     attach_job: bool = True,
     clock=None,
+    target_count: int = 1,
 ):
     engine = create_engine(
         f"sqlite:///{tmp_path / f'execution-{uuid.uuid4()}.sqlite'}",
@@ -354,31 +380,37 @@ def _execution_fixture(
     }
     if operation_kind == "workload.verify":
         payload["expected_digest"] = "e" * 64
-    operation = {
-        "operation_id": f"model:{NODE_A}:{operation_kind}",
-        "node_id": NODE_A,
-        "workload_id": "model",
-        "kind": operation_kind,
-        "dependencies": [],
-        "compensation_kind": None,
-        "payload_digest": _digest(payload),
-    }
+    targets = _wave_targets(target_count)
+    operations = [
+        {
+            "operation_id": f"model:{node_id}:{operation_kind}",
+            "node_id": node_id,
+            "workload_id": "model",
+            "kind": operation_kind,
+            "dependencies": [],
+            "compensation_kind": None,
+            "payload_digest": _digest(payload),
+        }
+        for node_id in targets
+    ]
     graph = {
         "schema_version": 1,
         "base_commit": BASE_COMMIT,
-        "targets": [NODE_A],
-        "nodes": [operation],
+        "targets": list(targets),
+        "nodes": operations,
     }
     resolved = {
         "commit": BASE_COMMIT,
-        "targets": [NODE_A],
+        "targets": list(targets),
         "placements": {},
         "routes": routes or {},
         "releases": {},
         "workload_groups": {},
         "input_digests": {"fleet": "f" * 64},
         "operation_graph": graph,
-        "operation_payloads": {operation["operation_id"]: payload},
+        "operation_payloads": {
+            operation["operation_id"]: payload for operation in operations
+        },
         "agent_protocol_range": [1, 1],
     }
     reconciliation_id = str(uuid.uuid4())
@@ -386,16 +418,18 @@ def _execution_fixture(
     now = datetime(2026, 8, 5, tzinfo=UTC)
     clock = clock or (lambda: now)
     with sessions.begin() as session:
-        session.add(AgentNode(node_id=NODE_A, state="active", capabilities=[]))
-        session.add(
-            AgentCertificate(
-                serial="serial-a",
-                node_id=NODE_A,
-                not_before=now - timedelta(minutes=1),
-                not_after=now + timedelta(hours=1),
-                fingerprint="fingerprint-a",
+        for index, node_id in enumerate(targets):
+            serial = _wave_serial(index)
+            session.add(AgentNode(node_id=node_id, state="active", capabilities=[]))
+            session.add(
+                AgentCertificate(
+                    serial=serial,
+                    node_id=node_id,
+                    not_before=now - timedelta(minutes=1),
+                    not_after=now + timedelta(hours=1),
+                    fingerprint=f"fingerprint-{serial}",
+                )
             )
-        )
         session.add(
             Reconciliation(
                 id=reconciliation_id,
@@ -419,7 +453,7 @@ def _execution_fixture(
                 state="queued",
                 actor="operator",
                 base_commit=BASE_COMMIT,
-                targets=[NODE_A],
+                targets=list(targets),
                 payload_digest=_digest({}),
                 payload={},
                 current_attempt=0,
@@ -475,6 +509,51 @@ def test_withdrawal_is_durable_before_any_agent_operation(tmp_path) -> None:
         assert projections[0].agent_operation_id == operations[0].id
         assert projections[0].state == "queued"
     assert queue.notifications == 1
+
+
+def test_authenticated_presence_contact_cannot_create_publication_authority(
+    tmp_path,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'presence-boundary.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 8, 5, tzinfo=UTC)
+    with sessions.begin() as session:
+        session.add(AgentNode(node_id=NODE_A, state="active", capabilities=[]))
+        session.add(
+            AgentCertificate(
+                serial="presence-serial",
+                node_id=NODE_A,
+                not_before=now - timedelta(minutes=1),
+                not_after=now + timedelta(hours=1),
+                fingerprint="presence-fingerprint",
+            )
+        )
+    presence = AgentPresenceService(
+        sessions,
+        ManagementAddressPolicy.parse("192.0.2.0/24"),
+        clock=lambda: now,
+    )
+
+    presence.observe(
+        AgentSource(
+            AgentIdentity(
+                NODE_A,
+                "presence-serial",
+                "presence-fingerprint",
+                True,
+            ),
+            "192.0.2.10",
+        )
+    )
+
+    with sessions() as session:
+        assert session.scalar(select(func.count()).select_from(AgentPresence)) == 1
+        assert session.scalar(select(func.count()).select_from(Reconciliation)) == 0
+        assert session.scalar(select(func.count()).select_from(RoutePublication)) == 0
+        assert session.scalar(
+            select(func.count()).select_from(RoutePublicationOwner)
+        ) == 0
 
 
 def test_withdrawal_failure_inserts_zero_agent_operations(tmp_path) -> None:
@@ -610,6 +689,103 @@ def _health_result(*, action: str = "health") -> dict[str, object]:
     }
 
 
+@pytest.mark.parametrize("target_count", (1, 2, 16))
+def test_durable_one_two_sixteen_node_wave_resumes_every_normal_phase(
+    tmp_path,
+    target_count: int,
+) -> None:
+    targets = _wave_targets(target_count)
+    quota = {"requests_per_minute": 20, "tokens_per_minute": 1000}
+    route = {
+        "workload_id": "model",
+        "nodes": list(targets),
+        "entrypoint_node_id": NODE_A,
+        "scheme": "http",
+        "port": 8000,
+        "path": "/v1",
+        "quota": quota,
+        "quota_digest": _json_digest(quota),
+    }
+    _service, sessions, queue, publisher, reconciliation_id, _job_id = (
+        _execution_fixture(
+            tmp_path,
+            real_queue=True,
+            operation_kind="workload.verify",
+            routes={"model": route},
+            target_count=target_count,
+        )
+    )
+    now = datetime(2026, 8, 5, tzinfo=UTC)
+
+    def restarted() -> AgentReconciliationService:
+        return AgentReconciliationService(
+            sessions,
+            agent_jobs=queue,
+            publisher=publisher,
+            endpoint_resolver=lambda _session, _node: ("192.0.2.10", now),
+            clock=lambda: now,
+        )
+
+    observed: list[str] = []
+    for expected_phase in (
+        "planned",
+        "withdrawal-pending",
+        "routes-withdrawn",
+        "dispatching",
+    ):
+        with sessions() as session:
+            reconciliation = session.get(Reconciliation, reconciliation_id)
+            assert reconciliation is not None
+            assert reconciliation.current_phase == expected_phase
+            observed.append(reconciliation.current_phase)
+        assert restarted().tick(reconciliation_id) is True
+
+    assert restarted().tick(reconciliation_id) is False
+    with sessions() as session:
+        assert session.scalar(select(func.count()).select_from(AgentOperation)) == (
+            target_count
+        )
+        assert session.scalar(
+            select(func.count()).select_from(ReconciliationOperation)
+        ) == target_count
+
+    for index, node_id in enumerate(_wave_targets(target_count)):
+        claim = queue.claim(node_id, _wave_serial(index), 30)
+        assert claim is not None
+        queue.succeed(claim, _health_result(action="verify"))
+
+    for expected_phase in (
+        "dispatching",
+        "accepting",
+        "publication-pending",
+    ):
+        with sessions() as session:
+            reconciliation = session.get(Reconciliation, reconciliation_id)
+            assert reconciliation is not None
+            assert reconciliation.current_phase == expected_phase
+            observed.append(reconciliation.current_phase)
+        assert restarted().tick(reconciliation_id) is True
+
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "completed"
+        assert session.scalar(select(func.count()).select_from(AgentOperation)) == (
+            target_count
+        )
+        assert session.scalar(
+            select(func.count()).select_from(ReconciliationOperation)
+        ) == target_count
+    assert set(observed) == {
+        "planned",
+        "withdrawal-pending",
+        "routes-withdrawn",
+        "dispatching",
+        "accepting",
+        "publication-pending",
+    }
+
+
 def test_first_completed_wave_is_accepted_without_terminalizing_parent(tmp_path) -> None:
     service, sessions, queue, _publisher, reconciliation_id, job_id = (
         _execution_fixture(tmp_path, real_queue=True)
@@ -730,7 +906,12 @@ def test_complete_graph_publishes_exact_bundle_then_terminalizes_parent(tmp_path
         assert stored.completion_generation == 1
 
 
-def _compensation_fixture(tmp_path, *, parallel_starts: bool = False):
+def _compensation_fixture(
+    tmp_path,
+    *,
+    parallel_starts: bool = False,
+    authority: dict[str, object] | None = None,
+):
     engine = create_engine(
         f"sqlite:///{tmp_path / 'compensation.sqlite'}",
         connect_args={"check_same_thread": False},
@@ -789,7 +970,16 @@ def _compensation_fixture(tmp_path, *, parallel_starts: bool = False):
     job_id = str(uuid.uuid4())
     with sessions.begin() as session:
         for node_id, serial in ((NODE_A, "serial-a"), (NODE_B, "serial-b")):
-            session.add(AgentNode(node_id=node_id, state="active", capabilities=[]))
+            session.add(
+                AgentNode(
+                    node_id=node_id,
+                    state="active",
+                    protocol_version=1 if authority is not None else None,
+                    capabilities=(
+                        list(AGENT_CAPABILITIES) if authority is not None else []
+                    ),
+                )
+            )
             session.add(
                 AgentCertificate(
                     serial=serial,
@@ -830,13 +1020,38 @@ def _compensation_fixture(tmp_path, *, parallel_starts: bool = False):
                 updated_at=now,
             )
         )
-    queue = AgentJobService(sessions, clock=lambda: now)
+    queue = AgentJobService(
+        sessions,
+        clock=lambda: now,
+        commit_eligible=(
+            None
+            if authority is None
+            else lambda _commit: bool(authority["eligible"])
+        ),
+        current_commit=(
+            None if authority is None else lambda: str(authority["commit"])
+        ),
+    )
+
+    def endpoint(_session, _node):
+        if authority is not None and not authority["address_fresh"]:
+            raise ValueError("management address presence is stale")
+        return "192.0.2.10", now
+
     service = AgentReconciliationService(
         sessions,
         agent_jobs=queue,
         publisher=FakePublisher(),
-        endpoint_resolver=lambda _session, _node: ("192.0.2.10", now),
+        endpoint_resolver=endpoint,
         clock=lambda: now,
+        commit_eligible=(
+            None
+            if authority is None
+            else lambda _commit: bool(authority["eligible"])
+        ),
+        current_commit=(
+            None if authority is None else lambda: str(authority["commit"])
+        ),
     )
     service.attach_job(reconciliation_id, job_id)
     queue.set_result_consumer(service.consume_result)
@@ -854,6 +1069,144 @@ def _workload_result(action: str) -> dict[str, object]:
             "evidence_digest": "e" * 64,
         },
     }
+
+
+def _continuous_authority() -> dict[str, object]:
+    return {
+        "eligible": True,
+        "commit": BASE_COMMIT,
+        "address_fresh": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (("protocol_version", 2), ("capabilities", ["workload.start"])),
+)
+def test_claim_fails_closed_when_agent_no_longer_matches_persisted_plan(
+    tmp_path,
+    field: str,
+    value: object,
+) -> None:
+    authority = _continuous_authority()
+    service, sessions, queue, reconciliation_id, job_id = _compensation_fixture(
+        tmp_path, authority=authority
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    with sessions.begin() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        setattr(node, field, value)
+
+    assert queue.claim(NODE_A, "serial-a", 30) is None
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "waiting-for-operator"
+        assert job is not None and job.state == "waiting-for-operator"
+
+
+@pytest.mark.parametrize("authority_field", ("eligible", "commit", "address_fresh"))
+def test_result_fails_closed_when_continuous_authority_is_lost(
+    tmp_path,
+    authority_field: str,
+) -> None:
+    authority = _continuous_authority()
+    service, sessions, queue, reconciliation_id, job_id = _compensation_fixture(
+        tmp_path, authority=authority
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    claim = queue.claim(NODE_A, "serial-a", 30)
+    assert claim is not None
+    authority[authority_field] = (
+        "b" * 40 if authority_field == "commit" else False
+    )
+
+    queue.succeed(claim, _workload_result("start"))
+
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        operation = session.get(AgentOperation, claim.operation_id)
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "waiting-for-operator"
+        assert job is not None and job.state == "waiting-for-operator"
+        assert operation is not None and operation.state == "waiting-for-operator"
+
+
+@pytest.mark.parametrize(
+    "lost_authority",
+    (
+        "eligible",
+        "commit",
+        "address_fresh",
+        "protocol_version",
+        "capabilities",
+        "revoked",
+    ),
+)
+def test_completed_owner_is_withdrawn_immediately_when_authority_is_lost(
+    tmp_path,
+    lost_authority: str,
+) -> None:
+    authority = _continuous_authority()
+    service, sessions, _queue, reconciliation_id, job_id = _compensation_fixture(
+        tmp_path, authority=authority
+    )
+    assert service.tick(reconciliation_id) is True
+    with sessions.begin() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        publication = session.get(RoutePublication, reconciliation_id)
+        assert reconciliation is not None and job is not None
+        assert publication is not None
+        reconciliation.current_phase = "completed"
+        reconciliation.status = "succeeded"
+        reconciliation.completion_generation = 1
+        job.state = "succeeded"
+        publication.state = "completed"
+        publication.lease_issued_at = datetime(2026, 8, 5, tzinfo=UTC)
+        publication.lease_expires_at = datetime(2026, 8, 5, 0, 5, tzinfo=UTC)
+        if lost_authority == "protocol_version":
+            node = session.get(AgentNode, NODE_A)
+            assert node is not None
+            node.protocol_version = 2
+        elif lost_authority == "capabilities":
+            node = session.get(AgentNode, NODE_A)
+            assert node is not None
+            node.capabilities = ["workload.start"]
+        elif lost_authority == "revoked":
+            node = session.get(AgentNode, NODE_A)
+            assert node is not None
+            node.revoked_at = datetime(2026, 8, 5, tzinfo=UTC)
+    if lost_authority in {"eligible", "address_fresh"}:
+        authority[lost_authority] = False
+    elif lost_authority == "commit":
+        authority["commit"] = "b" * 40
+
+    assert service.tick() is True
+
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        publication = session.get(RoutePublication, reconciliation_id)
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "waiting-for-operator"
+        assert job is not None and job.state == "waiting-for-operator"
+        assert publication is not None and publication.state == "routes-withdrawn"
+
+
+def test_tick_reports_false_while_dispatched_work_has_not_changed(tmp_path) -> None:
+    service, _sessions, _queue, _publisher, reconciliation_id, _job_id = (
+        _execution_fixture(tmp_path)
+    )
+    for _ in range(4):
+        assert service.tick(reconciliation_id) is True
+
+    assert service.tick(reconciliation_id) is False
 
 
 def test_partial_start_failure_compensates_accepted_starts_in_reverse_order(
@@ -911,6 +1264,62 @@ def test_partial_start_failure_compensates_accepted_starts_in_reverse_order(
         )
 
 
+def test_restart_resumes_compensating_without_duplicate_stop(tmp_path) -> None:
+    service, sessions, queue, reconciliation_id, _job_id = _compensation_fixture(
+        tmp_path
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    worker = queue.claim(NODE_A, "serial-a", 30)
+    assert worker is not None
+    queue.succeed(worker, _workload_result("start"))
+    service.tick(reconciliation_id)
+    entrypoint = queue.claim(NODE_B, "serial-b", 30)
+    assert entrypoint is not None
+    queue.fail(entrypoint, "start-failed")
+
+    restarted_queue = AgentJobService(
+        sessions,
+        clock=lambda: datetime(2026, 8, 5, tzinfo=UTC),
+    )
+
+    def restarted() -> AgentReconciliationService:
+        return AgentReconciliationService(
+            sessions,
+            agent_jobs=restarted_queue,
+            publisher=service._publisher,
+            endpoint_resolver=lambda _session, _node: (
+                "192.0.2.10",
+                datetime(2026, 8, 5, tzinfo=UTC),
+            ),
+            clock=lambda: datetime(2026, 8, 5, tzinfo=UTC),
+        )
+
+    result_consumer = restarted()
+    restarted_queue.set_result_consumer(result_consumer.consume_result)
+    assert restarted().tick(reconciliation_id) is True
+    assert restarted().tick(reconciliation_id) is False
+
+    with sessions() as session:
+        stops = list(
+            session.scalars(
+                select(AgentOperation).where(
+                    AgentOperation.kind == "workload.stop"
+                )
+            )
+        )
+        assert len(stops) == 1
+
+    compensation = restarted_queue.claim(NODE_A, "serial-a", 30)
+    assert compensation is not None
+    restarted_queue.succeed(compensation, _workload_result("stop"))
+    assert restarted().tick(reconciliation_id) is True
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "failed"
+
+
 def test_cancellation_after_mutation_enters_compensation(tmp_path) -> None:
     service, sessions, queue, reconciliation_id, job_id = _compensation_fixture(
         tmp_path
@@ -929,6 +1338,191 @@ def test_cancellation_after_mutation_enters_compensation(tmp_path) -> None:
         assert stored is not None and stored.current_phase == "compensating"
         assert stored.status == "running"
         assert job is not None and job.state == "running"
+
+
+def test_cancellation_compensation_converges_after_service_restart(tmp_path) -> None:
+    service, sessions, queue, reconciliation_id, _job_id = _compensation_fixture(
+        tmp_path
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    worker = queue.claim(NODE_A, "serial-a", 30)
+    assert worker is not None
+    queue.succeed(worker, _workload_result("start"))
+    service.enqueue_cancel(
+        reconciliation_id,
+        "operator cancelled",
+        actor="operator",
+        request_id="11111111-1111-4111-8111-111111111111",
+    )
+    assert service.tick(reconciliation_id) is True
+    assert service.tick(reconciliation_id) is True
+    assert service.tick(reconciliation_id) is True
+    compensation = queue.claim(NODE_A, "serial-a", 30)
+    assert compensation is not None
+    assert compensation.operation.value == "workload.stop"
+    queue.succeed(compensation, _workload_result("stop"))
+    assert service.tick(reconciliation_id) is True
+
+    restarted = AgentReconciliationService(
+        sessions,
+        agent_jobs=queue,
+        publisher=service._publisher,
+        endpoint_resolver=lambda _session, _node: (
+            "192.0.2.10",
+            datetime(2026, 8, 5, tzinfo=UTC),
+        ),
+        clock=lambda: datetime(2026, 8, 5, tzinfo=UTC),
+    )
+    assert restarted.tick() is True
+    with sessions() as session:
+        cancellation = session.get(ReconciliationCancellation, reconciliation_id)
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        assert cancellation is not None and cancellation.state == "completed"
+        assert reconciliation is not None and reconciliation.current_phase == "failed"
+
+
+def test_api_enqueued_cancellation_converges_from_operator_wait(tmp_path) -> None:
+    service, sessions, queue, reconciliation_id, _job_id = _compensation_fixture(
+        tmp_path
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    worker = queue.claim(NODE_A, "serial-a", 30)
+    assert worker is not None
+    queue.wait_for_operator(worker, "mutation outcome is uncertain")
+    service.enqueue_cancel(
+        reconciliation_id,
+        "operator cancelled",
+        actor="operator",
+        request_id="11111111-1111-4111-8111-111111111111",
+    )
+
+    assert service.tick() is True
+    assert service.tick() is True
+    with sessions() as session:
+        cancellation = session.get(ReconciliationCancellation, reconciliation_id)
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        assert cancellation is not None
+        assert cancellation.state == "waiting-for-operator"
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "waiting-for-operator"
+
+
+def test_cancellation_intent_is_durable_idempotent_and_redacted_before_effects(
+    tmp_path,
+) -> None:
+    service, sessions, _queue, reconciliation_id, _job_id = _compensation_fixture(
+        tmp_path
+    )
+    publisher = service._publisher
+    first_request = "11111111-1111-4111-8111-111111111111"
+    second_request = "22222222-2222-4222-8222-222222222222"
+
+    first = service.enqueue_cancel(
+        reconciliation_id,
+        "Authorization: Bearer exposed-token password=hunter2",
+        actor="operator",
+        request_id=first_request,
+    )
+    second = service.enqueue_cancel(
+        reconciliation_id,
+        "a different duplicate reason",
+        actor="operator",
+        request_id=second_request,
+    )
+
+    assert first.reconciliation_id == reconciliation_id
+    assert first.state == "requested"
+    assert second.request_id == first_request
+    assert publisher.withdrawals == 0
+    with sessions() as session:
+        rows = list(session.scalars(select(ReconciliationCancellation)))
+        assert len(rows) == 1
+        assert rows[0].state == "requested"
+        assert rows[0].reason == (
+            "Authorization: <redacted> password=<redacted>"
+        )
+
+
+def test_completed_cancellation_recovers_after_withdrawal_crash(tmp_path) -> None:
+    service, sessions, queue, reconciliation_id, job_id = _compensation_fixture(
+        tmp_path
+    )
+    publisher = service._publisher
+    assert service.tick(reconciliation_id) is True
+    with sessions.begin() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        publication = session.get(RoutePublication, reconciliation_id)
+        assert reconciliation is not None and job is not None
+        assert publication is not None
+        reconciliation.current_phase = "completed"
+        reconciliation.status = "succeeded"
+        reconciliation.completion_generation = 1
+        job.state = "succeeded"
+        publication.state = "completed"
+        publication.lease_issued_at = datetime(2026, 8, 5, tzinfo=UTC)
+        publication.lease_expires_at = datetime(
+            2026, 8, 5, 0, 1, tzinfo=UTC
+        )
+    service.enqueue_cancel(
+        reconciliation_id,
+        "operator requested rollback",
+        actor="operator",
+        request_id="11111111-1111-4111-8111-111111111111",
+    )
+
+    assert service.tick(reconciliation_id) is True
+    with sessions() as session:
+        cancellation = session.get(ReconciliationCancellation, reconciliation_id)
+        assert cancellation is not None
+        assert cancellation.state == "withdrawal-pending"
+    publisher.fail_withdrawal = True
+    with pytest.raises(RuntimeError, match="withdrawal failed"):
+        service.tick(reconciliation_id)
+    with sessions() as session:
+        cancellation = session.get(ReconciliationCancellation, reconciliation_id)
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        assert cancellation is not None
+        assert cancellation.state == "withdrawal-pending"
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "completed"
+
+    publisher.fail_withdrawal = False
+    restarted = AgentReconciliationService(
+        sessions,
+        agent_jobs=queue,
+        publisher=publisher,
+        endpoint_resolver=lambda _session, _node: (
+            "192.0.2.10",
+            datetime(2026, 8, 5, tzinfo=UTC),
+        ),
+        clock=lambda: datetime(2026, 8, 5, tzinfo=UTC),
+    )
+    assert restarted.tick(reconciliation_id) is True
+    resumed_from_withdrawn = AgentReconciliationService(
+        sessions,
+        agent_jobs=queue,
+        publisher=publisher,
+        endpoint_resolver=lambda _session, _node: (
+            "192.0.2.10",
+            datetime(2026, 8, 5, tzinfo=UTC),
+        ),
+        clock=lambda: datetime(2026, 8, 5, tzinfo=UTC),
+    )
+    assert resumed_from_withdrawn.tick(reconciliation_id) is True
+
+    with sessions() as session:
+        cancellation = session.get(ReconciliationCancellation, reconciliation_id)
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        publication = session.get(RoutePublication, reconciliation_id)
+        assert cancellation is not None and cancellation.state == "completed"
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "cancelled"
+        assert job is not None and job.state == "failed"
+        assert publication is not None and publication.state == "routes-withdrawn"
 
 
 def test_cancellation_quiesces_an_in_flight_mutation(tmp_path) -> None:
@@ -1094,6 +1688,43 @@ def test_uncertain_mutation_waits_for_operator_without_unlocking_dependents(
         assert stored.current_phase == "waiting-for-operator"
         assert job is not None and job.state == "waiting-for-operator"
         assert len(operations) == 1
+
+
+def test_agent_supplied_reason_is_redacted_before_terminal_persistence(
+    tmp_path,
+) -> None:
+    service, sessions, queue, reconciliation_id, job_id = _compensation_fixture(
+        tmp_path
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    claim = queue.claim(NODE_A, "serial-a", 30)
+    assert claim is not None
+
+    queue.record_result(
+        AgentResult(
+            schema_version=1,
+            job_id=claim.job_id,
+            operation_id=claim.operation_id,
+            attempt=claim.attempt,
+            fence=claim.fence,
+            node_id=claim.node_id,
+            deadline=claim.deadline,
+            state="waiting-for-operator",
+            result={
+                "reason": "Authorization: Bearer exposed-token password=hunter2"
+            },
+        )
+    )
+
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        assert reconciliation is not None and job is not None
+        assert reconciliation.terminal_reason == (
+            "Authorization: <redacted> password=<redacted>"
+        )
+        assert job.status_reason == reconciliation.terminal_reason
 
 
 def test_api_result_consumer_is_bound_once_to_durable_execution(tmp_path) -> None:

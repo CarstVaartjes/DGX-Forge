@@ -8,10 +8,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from dgx_agent_protocol import canonical_message
 from dgx_control.presence import ManagementAddressPolicy
 from dgx_control.route_runtime import (
     AcceptedEndpointEvidence,
     AtomicRouteBundlePublisher,
+    FileSupervisorAcknowledger,
     RouteBundleRequest,
     RouteRuntimeError,
 )
@@ -37,7 +39,12 @@ def _routes() -> dict[str, object]:
                 "tokens_per_minute": 10_000,
             },
             "quota_digest": hashlib.sha256(
-                b'{"requests_per_minute":30,"tokens_per_minute":10000}\n'
+                canonical_message(
+                    {
+                        "requests_per_minute": 30,
+                        "tokens_per_minute": 10_000,
+                    }
+                )
             ).hexdigest(),
         }
     }
@@ -242,6 +249,80 @@ def test_concurrent_same_publication_is_one_idempotent_generation(
     assert markers[0] == markers[1]
     assert markers[0].generation == 1
     assert len(list((tmp_path / "runtime/generations").iterdir())) == 1
+
+
+def test_every_publication_waits_for_an_exact_live_supervisor_ack(
+    tmp_path: Path,
+) -> None:
+    acknowledged = []
+    publisher = _publisher(
+        tmp_path,
+        await_supervisor_ack=acknowledged.append,
+    )
+
+    first = publisher.publish(_request())
+    second = publisher.publish(_request())
+
+    assert first == second
+    assert acknowledged == [first, second]
+
+
+def test_control_accepts_only_a_recent_ack_for_the_exact_marker(tmp_path: Path) -> None:
+    marker = _publisher(tmp_path).publish(_request())
+    ack_path = tmp_path / "supervisor/ack.json"
+    ack_path.parent.mkdir()
+    acknowledgement = {
+        "acknowledged_at": NOW.isoformat(),
+        "activation_sha256": marker.digest,
+        "child_pid": 123,
+        "expires_at": marker.expires_at,
+        "generation": marker.generation,
+        "litellm_sha256": marker.litellm_sha256,
+        "schema_version": 1,
+        "state": marker.state,
+    }
+    ack_path.write_bytes(
+        (json.dumps(acknowledgement, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    )
+    FileSupervisorAcknowledger(ack_path, clock=lambda: NOW)(marker)
+
+    acknowledgement["activation_sha256"] = "f" * 64
+    ack_path.write_bytes(
+        (json.dumps(acknowledgement, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    )
+    moments = iter((0.0, 1.0))
+    mismatched = FileSupervisorAcknowledger(
+        ack_path,
+        clock=lambda: NOW,
+        timeout_seconds=0.5,
+        poll_seconds=0.1,
+        monotonic=lambda: next(moments),
+        sleep=lambda _seconds: None,
+    )
+    with pytest.raises(RouteRuntimeError, match="timed out"):
+        mismatched(marker)
+
+
+def test_restart_after_activation_before_ack_reuses_the_exact_request(
+    tmp_path: Path,
+) -> None:
+    def crash_before_ack(_marker):
+        raise RuntimeError("supervisor unavailable")
+
+    with pytest.raises(RouteRuntimeError, match="acknowledgement"):
+        _publisher(
+            tmp_path,
+            await_supervisor_ack=crash_before_ack,
+        ).publish(_request())
+
+    acknowledged = []
+    marker = _publisher(
+        tmp_path,
+        await_supervisor_ack=acknowledged.append,
+    ).publish(_request())
+
+    assert marker.generation == 1
+    assert acknowledged == [marker]
 
 
 def test_multiprocess_publication_is_serialized_to_one_generation(

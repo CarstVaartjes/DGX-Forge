@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -182,7 +183,7 @@ def _system(postgres_engine: Engine, route_root: Path, *, clock=lambda: NOW):
             "path": "/v1",
             "quota": quota,
             "quota_digest": hashlib.sha256(
-                (json.dumps(quota, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                canonical_message(quota)
             ).hexdigest(),
         }
     }
@@ -298,6 +299,66 @@ def _clone_service(system) -> AgentReconciliationService:
         endpoint_resolver=endpoint,
         clock=reconciliations._clock,
     )
+
+
+def _insert_successor(
+    sessions,
+    predecessor_id: str,
+    *,
+    created_at: datetime = NOW + timedelta(seconds=1),
+) -> tuple[str, str]:
+    reconciliation_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+    with sessions.begin() as session:
+        predecessor = session.get(Reconciliation, predecessor_id)
+        assert predecessor is not None and predecessor.resolved_plan is not None
+        resolved = deepcopy(predecessor.resolved_plan)
+        resolved["input_digests"]["fleet"] = "9" * 64
+        plan_digest = _json_digest(resolved)
+        session.add(
+            Reconciliation(
+                id=reconciliation_id,
+                base_commit=predecessor.base_commit,
+                status="planned",
+                summary=deepcopy(predecessor.summary),
+                graph=deepcopy(predecessor.graph),
+                graph_digest=predecessor.graph_digest,
+                plan_digest=plan_digest,
+                resolved_plan=resolved,
+                current_phase="planned",
+                route_withdrawal_generation=0,
+                created_at=created_at,
+            )
+        )
+        session.flush()
+        session.add(
+            Job(
+                id=job_id,
+                request_id=str(uuid.uuid4()),
+                kind="reconcile",
+                state="queued",
+                actor="operator",
+                base_commit=predecessor.base_commit,
+                targets=list(predecessor.graph["targets"]),
+                payload_digest=_digest({}),
+                payload={"reconciliation_id": reconciliation_id},
+                current_attempt=0,
+                created_at=created_at,
+                updated_at=created_at,
+                reconciliation_id=reconciliation_id,
+            )
+        )
+    return reconciliation_id, job_id
+
+
+def _complete(system) -> str:
+    _sessions, operations, reconciliations, reconciliation_id, _job_id, claim = (
+        _claimed(system)
+    )
+    operations.succeed(claim, _verify_result())
+    for _ in range(3):
+        assert reconciliations.tick(reconciliation_id) is True
+    return reconciliation_id
 
 
 def _race(*calls):
@@ -451,7 +512,7 @@ def test_postgres_tick_tick_race_enqueues_one_operation(
         reconciliations.tick(reconciliation_id)
     other = _clone_service(system)
 
-    assert _race(reconciliations.tick, other.tick) == [True, True]
+    assert sorted(_race(reconciliations.tick, other.tick)) == [False, True]
 
     with sessions() as session:
         assert session.scalar(select(func.count()).select_from(AgentOperation)) == 1
@@ -542,11 +603,131 @@ def test_postgres_publication_publication_race_activates_one_bundle(
         assert publication is not None and publication.state == "completed"
 
 
-def _compensation_system(postgres_engine: Engine, route_root: Path):
+def test_postgres_newer_noncompleted_owner_survives_old_completed_restart(
+    postgres_engine: Engine, tmp_path: Path
+) -> None:
+    """Restarting an old completed row must not replace newer maintenance."""
+    route_root = tmp_path / "owner-restart"
+    system = _system(postgres_engine, route_root)
+    sessions, _presence, _operations, reconciliations, old_id, _job_id = system
+    assert _complete(system) == old_id
+    new_id, _new_job_id = _insert_successor(sessions, old_id)
+    assert reconciliations.tick(new_id) is True
+    assert reconciliations.tick(new_id) is True
+    before = json.loads((route_root / "activation.json").read_bytes())
+    assert before["state"] == "maintenance"
+    assert before["reconciliation_id"] == new_id
+
+    restarted = _clone_service(system)
+    assert restarted.tick(old_id) is False
+
+    after = json.loads((route_root / "activation.json").read_bytes())
+    assert after == before
+
+
+def test_postgres_newer_maintenance_wins_completed_owner_critical_section(
+    postgres_engine: Engine, tmp_path: Path
+) -> None:
+    """The target lock must serialize R2 ownership before rejecting R1 renewal."""
+    route_root = tmp_path / "owner-race"
+    system = _system(postgres_engine, route_root)
+    sessions, _presence, _operations, reconciliations, old_id, _job_id = system
+    assert _complete(system) == old_id
+    new_id, _new_job_id = _insert_successor(sessions, old_id)
+    assert reconciliations.tick(new_id) is True
+
+    entered_new_withdrawal = threading.Event()
+    release_new_withdrawal = threading.Event()
+    old_lock_query = threading.Event()
+    inner = reconciliations._publisher
+
+    class BlockingPublisher:
+        def withdraw(self, **kwargs):
+            if kwargs["reconciliation_id"] == new_id:
+                entered_new_withdrawal.set()
+                assert release_new_withdrawal.wait(timeout=5)
+            return inner.withdraw(**kwargs)
+
+        def publish(self, request):
+            return inner.publish(request)
+
+    blocking = BlockingPublisher()
+    reconciliations._publisher = blocking
+    old_service = _clone_service(system)
+    old_service._publisher = blocking
+
+    def observe_old_lock(
+        _conn, _cursor, statement, _parameters, _context, _many
+    ) -> None:
+        if (
+            threading.current_thread().name == "old-publication-owner"
+            and "agent_nodes" in statement
+            and "FOR UPDATE" in statement
+        ):
+            old_lock_query.set()
+
+    outcomes: dict[str, object] = {}
+    event.listen(postgres_engine, "before_cursor_execute", observe_old_lock)
+    try:
+        newer = threading.Thread(
+            target=lambda: outcomes.setdefault("new", reconciliations.tick(new_id)),
+            name="new-publication-owner",
+        )
+        older = threading.Thread(
+            target=lambda: outcomes.setdefault("old", old_service.tick(old_id)),
+            name="old-publication-owner",
+        )
+        newer.start()
+        assert entered_new_withdrawal.wait(timeout=5)
+        older.start()
+        assert old_lock_query.wait(timeout=5)
+        release_new_withdrawal.set()
+        newer.join(timeout=5)
+        older.join(timeout=5)
+    finally:
+        release_new_withdrawal.set()
+        event.remove(postgres_engine, "before_cursor_execute", observe_old_lock)
+
+    assert not newer.is_alive() and not older.is_alive()
+    assert outcomes == {"new": True, "old": False}
+    marker = json.loads((route_root / "activation.json").read_bytes())
+    assert marker["state"] == "maintenance"
+    assert marker["reconciliation_id"] == new_id
+
+
+def test_postgres_old_completed_cancellation_cannot_clobber_newer_owner(
+    postgres_engine: Engine, tmp_path: Path
+) -> None:
+    route_root = tmp_path / "owner-cancellation"
+    system = _system(postgres_engine, route_root)
+    sessions, _presence, _operations, reconciliations, old_id, _job_id = system
+    assert _complete(system) == old_id
+    new_id, _new_job_id = _insert_successor(sessions, old_id)
+    assert reconciliations.tick(new_id) is True
+    assert reconciliations.tick(new_id) is True
+    before = (route_root / "activation.json").read_bytes()
+
+    reconciliations.request_cancel(old_id, "operator cancelled historical plan")
+
+    assert (route_root / "activation.json").read_bytes() == before
+    with sessions() as session:
+        old = session.get(Reconciliation, old_id)
+        assert old is not None and old.current_phase == "cancelled"
+
+
+def _compensation_system(
+    postgres_engine: Engine,
+    route_root: Path,
+    *,
+    parallel: bool = False,
+    clock=lambda: NOW,
+):
     Base.metadata.drop_all(postgres_engine)
     Base.metadata.create_all(postgres_engine)
     sessions = sessionmaker(postgres_engine, expire_on_commit=False)
-    operation_id = f"model:{NODE_A}:workload.start"
+    operation_ids = [f"model:{NODE_A}:workload.start"]
+    if parallel:
+        operation_ids.append(f"model:{NODE_B}:workload.start")
     payload = {
         "schema_version": 1,
         "workload_id": "model",
@@ -561,13 +742,18 @@ def _compensation_system(postgres_engine: Engine, route_root: Path):
         "nodes": [
             {
                 "operation_id": operation_id,
-                "node_id": NODE_A,
+                "node_id": node_id,
                 "workload_id": "model",
                 "kind": "workload.start",
                 "dependencies": [],
                 "compensation_kind": "workload.stop",
                 "payload_digest": _digest(payload),
             }
+            for operation_id, node_id in zip(
+                operation_ids,
+                (NODE_A, NODE_B),
+                strict=False,
+            )
         ],
     }
     resolved = {
@@ -579,12 +765,14 @@ def _compensation_system(postgres_engine: Engine, route_root: Path):
         "workload_groups": {},
         "input_digests": {"fleet": "f" * 64},
         "operation_graph": graph,
-        "operation_payloads": {operation_id: payload},
+        "operation_payloads": {
+            operation_id: payload for operation_id in operation_ids
+        },
         "agent_protocol_range": [1, 1],
     }
     reconciliation_id = str(uuid.uuid4())
     job_id = str(uuid.uuid4())
-    primary_id = str(uuid.uuid4())
+    primary_ids = [str(uuid.uuid4()) for _ in operation_ids]
     with sessions.begin() as session:
         session.add_all(
             [
@@ -646,20 +834,27 @@ def _compensation_system(postgres_engine: Engine, route_root: Path):
             )
         )
         session.flush()
-        session.add(
-            AgentOperation(
-                id=primary_id,
-                parent_job_id=job_id,
-                node_id=NODE_A,
-                kind="workload.start",
-                payload_digest=_digest(payload),
-                payload=payload,
-                base_commit=BASE_COMMIT,
-                state="succeeded",
-                current_attempt=1,
-                created_at=NOW,
-                updated_at=NOW,
-            )
+        session.add_all(
+            [
+                AgentOperation(
+                    id=primary_id,
+                    parent_job_id=job_id,
+                    node_id=node_id,
+                    kind="workload.start",
+                    payload_digest=_digest(payload),
+                    payload=payload,
+                    base_commit=BASE_COMMIT,
+                    state="succeeded",
+                    current_attempt=1,
+                    created_at=NOW,
+                    updated_at=NOW,
+                )
+                for primary_id, node_id in zip(
+                    primary_ids,
+                    (NODE_A, NODE_B),
+                    strict=False,
+                )
+            ]
         )
         session.add(
             RoutePublication(
@@ -670,32 +865,39 @@ def _compensation_system(postgres_engine: Engine, route_root: Path):
             )
         )
         session.flush()
-        session.add(
-            ReconciliationOperation(
-                reconciliation_id=reconciliation_id,
-                graph_operation_id=operation_id,
-                role="primary",
-                agent_operation_id=primary_id,
-                expected_payload_digest=_digest(payload),
-                state="accepted",
-                result_digest="1" * 64,
-                evidence_digest="2" * 64,
-                accepted_at=NOW,
-            )
+        session.add_all(
+            [
+                ReconciliationOperation(
+                    reconciliation_id=reconciliation_id,
+                    graph_operation_id=operation_id,
+                    role="primary",
+                    agent_operation_id=primary_id,
+                    expected_payload_digest=_digest(payload),
+                    state="accepted",
+                    result_digest="1" * 64,
+                    evidence_digest="2" * 64,
+                    accepted_at=NOW,
+                )
+                for operation_id, primary_id in zip(
+                    operation_ids,
+                    primary_ids,
+                    strict=True,
+                )
+            ]
         )
     policy = ManagementAddressPolicy.parse("10.0.0.0/24")
-    queue = AgentJobService(sessions, clock=lambda: NOW)
+    queue = AgentJobService(sessions, clock=clock)
     publisher = AtomicRouteBundlePublisher(
         route_root,
         management_policy=policy,
-        clock=lambda: NOW,
+        clock=clock,
     )
     service = AgentReconciliationService(
         sessions,
         agent_jobs=queue,
         publisher=publisher,
         endpoint_resolver=lambda _session, _node: ("10.0.0.42", NOW),
-        clock=lambda: NOW,
+        clock=clock,
     )
     return sessions, queue, service, reconciliation_id
 
@@ -714,7 +916,7 @@ def test_postgres_compensation_tick_race_enqueues_one_stop(
         clock=lambda: NOW,
     )
 
-    assert _race(service.tick, other.tick) == [True, True]
+    assert sorted(_race(service.tick, other.tick)) == [False, True]
 
     with sessions() as session:
         compensations = list(
@@ -731,6 +933,182 @@ def test_postgres_compensation_tick_race_enqueues_one_stop(
         )
         assert len(compensations) == len(stops) == 1
         assert compensations[0].agent_operation_id == stops[0].id
+
+
+@pytest.mark.parametrize("sibling_state", ["queued", "running"])
+def test_postgres_agent_declared_uncertainty_quiesces_all_primary_siblings(
+    postgres_engine: Engine,
+    tmp_path: Path,
+    sibling_state: str,
+) -> None:
+    sessions, queue, service, reconciliation_id = _compensation_system(
+        postgres_engine,
+        tmp_path / f"declared-uncertainty-{sibling_state}",
+        parallel=True,
+    )
+    queue.set_result_consumer(service.consume_result)
+    with sessions.begin() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        assert reconciliation is not None
+        reconciliation.current_phase = "dispatching"
+        reconciliation.status = "running"
+        reconciliation.terminal_reason = None
+        for projection in session.scalars(
+            select(ReconciliationOperation).where(
+                ReconciliationOperation.role == "primary"
+            )
+        ):
+            operation = session.get(AgentOperation, projection.agent_operation_id)
+            assert operation is not None
+            projection.state = "queued"
+            projection.result_digest = None
+            projection.evidence_digest = None
+            projection.accepted_at = None
+            operation.state = "queued"
+            operation.current_attempt = 0
+
+    declared = queue.claim(NODE_A, "serial-a", 30)
+    assert declared is not None
+    sibling = None
+    if sibling_state == "running":
+        sibling = queue.claim(NODE_B, "serial-b", 30)
+        assert sibling is not None
+
+    queue.wait_for_operator(declared, "mutation outcome requires operator")
+
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        sibling_operation = session.scalar(
+            select(AgentOperation).where(AgentOperation.node_id == NODE_B)
+        )
+        sibling_projection = session.scalar(
+            select(ReconciliationOperation).where(
+                ReconciliationOperation.graph_operation_id
+                == f"model:{NODE_B}:workload.start",
+                ReconciliationOperation.role == "primary",
+            )
+        )
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "waiting-for-operator"
+        expected = "failed" if sibling_state == "queued" else "waiting-for-operator"
+        assert sibling_operation is not None and sibling_operation.state == expected
+        assert sibling_projection is not None and sibling_projection.state == expected
+        if sibling is not None:
+            attempt = session.scalar(
+                select(AgentOperationAttempt).where(
+                    AgentOperationAttempt.operation_id == sibling.operation_id
+                )
+            )
+            assert attempt is not None and attempt.state == "waiting-for-operator"
+
+    assert queue.claim(NODE_B, "serial-b", 30) is None
+    if sibling is not None:
+        with pytest.raises(StaleAgentAttempt):
+            queue.succeed(sibling, _verify_result())
+
+
+def test_postgres_claim_fails_closed_on_authoritative_operator_wait(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    sessions, queue, _service, reconciliation_id = _compensation_system(
+        postgres_engine,
+        tmp_path / "authoritative-claim-phase",
+        parallel=True,
+    )
+    with sessions.begin() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.scalar(
+            select(Job).where(Job.reconciliation_id == reconciliation_id)
+        )
+        assert reconciliation is not None and job is not None
+        reconciliation.current_phase = "waiting-for-operator"
+        reconciliation.status = "failed"
+        job.state = "waiting-for-operator"
+        for projection in session.scalars(
+            select(ReconciliationOperation).where(
+                ReconciliationOperation.role == "primary"
+            )
+        ):
+            operation = session.get(AgentOperation, projection.agent_operation_id)
+            assert operation is not None
+            projection.state = "queued"
+            operation.state = "queued"
+            operation.current_attempt = 0
+
+    assert queue.claim(NODE_B, "serial-b", 30) is None
+    with sessions() as session:
+        operation = session.scalar(
+            select(AgentOperation).where(AgentOperation.node_id == NODE_B)
+        )
+        assert operation is not None and operation.state == "failed"
+
+
+@pytest.mark.parametrize("sibling_state", ["queued", "running"])
+def test_postgres_maintenance_sweeps_unsafe_expiry_without_follow_up_claim(
+    postgres_engine: Engine,
+    tmp_path: Path,
+    sibling_state: str,
+) -> None:
+    current = [NOW]
+    sessions, queue, service, reconciliation_id = _compensation_system(
+        postgres_engine,
+        tmp_path / f"autonomous-expiry-{sibling_state}",
+        parallel=True,
+        clock=lambda: current[0],
+    )
+    queue.set_result_consumer(service.consume_result)
+    with sessions.begin() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        assert reconciliation is not None
+        reconciliation.current_phase = "dispatching"
+        reconciliation.status = "running"
+        reconciliation.terminal_reason = None
+        for projection in session.scalars(
+            select(ReconciliationOperation).where(
+                ReconciliationOperation.role == "primary"
+            )
+        ):
+            operation = session.get(AgentOperation, projection.agent_operation_id)
+            assert operation is not None
+            projection.state = "queued"
+            projection.result_digest = None
+            projection.evidence_digest = None
+            projection.accepted_at = None
+            operation.state = "queued"
+            operation.current_attempt = 0
+
+    expired = queue.claim(NODE_A, "serial-a", 30)
+    assert expired is not None
+    sibling = None
+    if sibling_state == "running":
+        sibling = queue.claim(NODE_B, "serial-b", 30)
+        assert sibling is not None
+    current[0] += timedelta(seconds=31)
+
+    assert service.tick(reconciliation_id) is True
+
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.scalar(
+            select(Job).where(Job.reconciliation_id == reconciliation_id)
+        )
+        expired_attempt = session.scalar(
+            select(AgentOperationAttempt).where(
+                AgentOperationAttempt.operation_id == expired.operation_id
+            )
+        )
+        sibling_operation = session.scalar(
+            select(AgentOperation).where(AgentOperation.node_id == NODE_B)
+        )
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "waiting-for-operator"
+        assert job is not None and job.state == "waiting-for-operator"
+        assert expired_attempt is not None and expired_attempt.state == "expired"
+        expected = "failed" if sibling_state == "queued" else "waiting-for-operator"
+        assert sibling_operation is not None and sibling_operation.state == expected
+
+    assert queue.claim(NODE_B, "serial-b", 30) is None
 
 
 @pytest.mark.parametrize(
@@ -855,7 +1233,7 @@ def test_postgres_stale_completed_candidate_cannot_withdraw_refreshed_lease(
         if (
             threading.current_thread().name == "stale-candidate"
             and "FROM reconciliations JOIN jobs" in statement
-            and "route_publications.lease_expires_at" in statement
+            and "ORDER BY reconciliations.created_at DESC" in statement
             and "FOR UPDATE" not in statement
         ):
             candidate_selected.set()

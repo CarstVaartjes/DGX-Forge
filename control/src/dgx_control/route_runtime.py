@@ -9,6 +9,7 @@ import os
 import re
 import stat
 import tempfile
+import time
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
@@ -16,6 +17,8 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+
+from dgx_agent_protocol import canonical_message
 
 from .presence import ManagementAddressPolicy, PresenceError
 
@@ -49,6 +52,16 @@ _MARKER_FIELDS = {
     "directory",
     "manifest_sha256",
 }
+_ACK_FIELDS = {
+    "acknowledged_at",
+    "activation_sha256",
+    "child_pid",
+    "expires_at",
+    "generation",
+    "litellm_sha256",
+    "schema_version",
+    "state",
+}
 
 
 class RouteRuntimeError(RuntimeError):
@@ -61,6 +74,12 @@ def _encoded(value: Mapping[str, object]) -> bytes:
 
 def _sha256(content: bytes) -> str:
     return hashlib.sha256(content).hexdigest()
+
+
+def _canonical_sha256(value: Mapping[str, object]) -> str:
+    """Hash protocol documents without filesystem-only trailing whitespace."""
+
+    return _sha256(canonical_message(value))
 
 
 def _aware(value: datetime, label: str) -> datetime:
@@ -128,6 +147,86 @@ class ActivationMarker:
         return _sha256(self.canonical_bytes())
 
 
+class FileSupervisorAcknowledger:
+    """Wait for a recent live-process ack bound to one exact marker request."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        clock: Callable[[], datetime],
+        timeout_seconds: float = 30,
+        maximum_ack_age_seconds: float = 5,
+        poll_seconds: float = 0.1,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        if (
+            timeout_seconds <= 0
+            or maximum_ack_age_seconds <= 0
+            or poll_seconds <= 0
+            or poll_seconds > timeout_seconds
+        ):
+            raise RouteRuntimeError("supervisor acknowledgement bounds are invalid")
+        self._path = path
+        self._clock = clock
+        self._timeout_seconds = timeout_seconds
+        self._maximum_age = timedelta(seconds=maximum_ack_age_seconds)
+        self._poll_seconds = poll_seconds
+        self._monotonic = monotonic
+        self._sleep = sleep
+
+    def __call__(self, marker: ActivationMarker) -> None:
+        deadline = self._monotonic() + self._timeout_seconds
+        while True:
+            if self._matches(marker):
+                return
+            if self._monotonic() >= deadline:
+                raise RouteRuntimeError(
+                    "live LiteLLM supervisor acknowledgement timed out"
+                )
+            self._sleep(self._poll_seconds)
+
+    def _matches(self, marker: ActivationMarker) -> bool:
+        path = self._path
+        if path.is_symlink() or not path.is_file() or path.parent.is_symlink():
+            return False
+        try:
+            content = path.read_bytes()
+            raw: Any = json.loads(content)
+        except (OSError, json.JSONDecodeError):
+            return False
+        if (
+            len(content) > 4096
+            or not isinstance(raw, dict)
+            or set(raw) != _ACK_FIELDS
+            or content != _encoded(raw)
+            or raw.get("schema_version") != 1
+            or raw.get("state") != marker.state
+            or raw.get("generation") != marker.generation
+            or raw.get("activation_sha256") != marker.digest
+            or raw.get("litellm_sha256") != marker.litellm_sha256
+            or raw.get("expires_at") != marker.expires_at
+            or isinstance(raw.get("child_pid"), bool)
+            or not isinstance(raw.get("child_pid"), int)
+            or raw["child_pid"] <= 0
+        ):
+            return False
+        try:
+            acknowledged = _parse_time(
+                raw.get("acknowledged_at"), "acknowledgement timestamp"
+            )
+            issued = _parse_time(marker.issued_at, "issued timestamp")
+            expires = _parse_time(marker.expires_at, "expiry timestamp")
+            now = _aware(self._clock(), "supervisor acknowledgement clock")
+        except RouteRuntimeError:
+            return False
+        return (
+            issued <= acknowledged <= now < expires
+            and now - acknowledged <= self._maximum_age
+        )
+
+
 def endpoint_evidence_digest(
     *,
     node_id: str,
@@ -164,6 +263,7 @@ class AtomicRouteBundlePublisher:
         maximum_lease_seconds: int = 300,
         validate_routes: Callable[[bytes], bool] | None = None,
         validate_litellm: Callable[[bytes], bool] | None = None,
+        await_supervisor_ack: Callable[[ActivationMarker], None] | None = None,
     ) -> None:
         if root.is_symlink():
             raise RouteRuntimeError("route runtime root must not be a symlink")
@@ -182,6 +282,19 @@ class AtomicRouteBundlePublisher:
         self._maximum_lease = timedelta(seconds=maximum_lease_seconds)
         self._validate_routes = validate_routes or self._valid_json_mapping
         self._validate_litellm = validate_litellm or self._valid_litellm
+        self._await_supervisor_ack = await_supervisor_ack
+
+    def _require_supervisor_ack(self, marker: ActivationMarker) -> None:
+        if self._await_supervisor_ack is None:
+            return
+        try:
+            self._await_supervisor_ack(marker)
+        except RouteRuntimeError:
+            raise
+        except Exception as error:
+            raise RouteRuntimeError(
+                "live LiteLLM supervisor acknowledgement is unavailable"
+            ) from error
 
     @staticmethod
     def _valid_json_mapping(content: bytes) -> bool:
@@ -354,7 +467,7 @@ class AtomicRouteBundlePublisher:
                 or not 1 <= rpm <= 100_000
                 or not 1 <= tpm <= 100_000_000
                 or _DIGEST.fullmatch(quota_digest) is None
-                or _sha256(_encoded(dict(quota))) != quota_digest
+                or _canonical_sha256(dict(quota)) != quota_digest
             ):
                 raise RouteRuntimeError("route quota or quota digest is invalid")
             host = (
@@ -428,13 +541,14 @@ class AtomicRouteBundlePublisher:
                 and current.litellm_sha256 == _sha256(litellm)
                 and _parse_time(current.expires_at, "expiry timestamp") > issued
             ):
+                self._require_supervisor_ack(current)
                 return current
             generation = (current.generation if current is not None else 0) + 1
             if current is not None:
                 routes, litellm = self._render_routes(
                     generation, request, issued, expires
                 )
-            return self._activate(
+            marker = self._activate(
                 generation=generation,
                 state="published",
                 reconciliation_id=request.reconciliation_id,
@@ -445,6 +559,8 @@ class AtomicRouteBundlePublisher:
                 issued=issued,
                 expires=expires,
             )
+            self._require_supervisor_ack(marker)
+            return marker
 
     def withdraw(
         self,
@@ -499,10 +615,11 @@ class AtomicRouteBundlePublisher:
                 and current.litellm_sha256 == _sha256(empty)
                 and _parse_time(current.expires_at, "expiry timestamp") > issued
             ):
+                self._require_supervisor_ack(current)
                 return current
             generation = (current.generation if current is not None else 0) + 1
             routes = maintenance_routes(generation)
-            return self._activate(
+            marker = self._activate(
                 generation=generation,
                 state="maintenance",
                 reconciliation_id=reconciliation_id,
@@ -513,6 +630,8 @@ class AtomicRouteBundlePublisher:
                 issued=issued,
                 expires=expires,
             )
+            self._require_supervisor_ack(marker)
+            return marker
 
     @contextmanager
     def _locked(self):

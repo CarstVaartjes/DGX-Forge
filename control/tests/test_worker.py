@@ -105,3 +105,32 @@ def test_worker_falls_through_when_no_reconciliation_can_advance(tmp_path) -> No
 
     assert worker.run_once() is True
     assert handled == ["probe"]
+
+
+def test_worker_alternates_busy_reconciliation_and_generic_job_queues(
+    tmp_path,
+) -> None:
+    jobs = _service(tmp_path)
+    jobs.enqueue("probe", "operator", "a" * 40, ["node"], {})
+
+    class Reconciliations:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def tick(self) -> bool:
+            self.calls += 1
+            return True
+
+    reconciliations = Reconciliations()
+    handled = []
+    worker = Worker(
+        jobs,
+        "worker-1",
+        {"probe": lambda request: handled.append(request.kind) or {}},
+        reconciliations=reconciliations,
+    )
+
+    assert worker.run_once() is True
+    assert worker.run_once() is True
+    assert reconciliations.calls == 1
+    assert handled == ["probe"]

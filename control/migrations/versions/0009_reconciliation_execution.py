@@ -134,6 +134,38 @@ def upgrade() -> None:
     )
 
     op.create_table(
+        "reconciliation_cancellations",
+        sa.Column("reconciliation_id", sa.String(length=36), nullable=False),
+        sa.Column("state", sa.String(length=32), nullable=False),
+        sa.Column("reason", sa.Text(), nullable=False),
+        sa.Column("actor", sa.String(length=200), nullable=False),
+        sa.Column("request_id", sa.String(length=36), nullable=False),
+        sa.Column("requested_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint(
+            "state IN ('requested', 'withdrawal-pending', 'withdrawn', "
+            "'processing', 'compensating', 'completed', "
+            "'waiting-for-operator')",
+            name="ck_reconciliation_cancellations_state",
+        ),
+        sa.CheckConstraint(
+            "length(reason) BETWEEN 1 AND 1024",
+            name="ck_reconciliation_cancellations_reason_length",
+        ),
+        sa.ForeignKeyConstraint(
+            ["reconciliation_id"], ["reconciliations.id"], ondelete="CASCADE"
+        ),
+        sa.PrimaryKeyConstraint("reconciliation_id"),
+        sa.UniqueConstraint("request_id"),
+    )
+    op.create_index(
+        "ix_reconciliation_cancellations_state",
+        "reconciliation_cancellations",
+        ["state"],
+        unique=False,
+    )
+
+    op.create_table(
         "route_publications",
         sa.Column("reconciliation_id", sa.String(length=36), nullable=False),
         sa.Column("state", sa.String(length=32), nullable=False),
@@ -204,8 +236,49 @@ def upgrade() -> None:
         unique=False,
     )
 
+    op.create_table(
+        "route_publication_owner",
+        sa.Column("singleton_id", sa.Integer(), nullable=False),
+        sa.Column("reconciliation_id", sa.String(length=36)),
+        sa.Column("owner_generation", sa.BigInteger(), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True)),
+        sa.CheckConstraint(
+            "singleton_id = 1",
+            name="ck_route_publication_owner_singleton",
+        ),
+        sa.CheckConstraint(
+            "owner_generation >= 0",
+            name="ck_route_publication_owner_generation",
+        ),
+        sa.ForeignKeyConstraint(
+            ["reconciliation_id"],
+            ["reconciliations.id"],
+            ondelete="SET NULL",
+        ),
+        sa.PrimaryKeyConstraint("singleton_id"),
+        sa.UniqueConstraint("reconciliation_id"),
+    )
+    op.bulk_insert(
+        sa.table(
+            "route_publication_owner",
+            sa.column("singleton_id", sa.Integer()),
+            sa.column("reconciliation_id", sa.String(length=36)),
+            sa.column("owner_generation", sa.BigInteger()),
+            sa.column("updated_at", sa.DateTime(timezone=True)),
+        ),
+        [
+            {
+                "singleton_id": 1,
+                "reconciliation_id": None,
+                "owner_generation": 0,
+                "updated_at": None,
+            }
+        ],
+    )
+
 
 def downgrade() -> None:
+    op.drop_table("route_publication_owner")
     op.drop_index(
         "ix_route_publications_state", table_name="route_publications"
     )
@@ -213,6 +286,12 @@ def downgrade() -> None:
         "ix_route_publications_generation", table_name="route_publications"
     )
     op.drop_table("route_publications")
+
+    op.drop_index(
+        "ix_reconciliation_cancellations_state",
+        table_name="reconciliation_cancellations",
+    )
+    op.drop_table("reconciliation_cancellations")
 
     op.drop_index(
         "ix_reconciliation_operations_state",
