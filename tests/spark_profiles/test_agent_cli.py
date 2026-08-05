@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import ssl
 import subprocess
 import urllib.error
 import urllib.request
@@ -18,6 +20,8 @@ import pytest
 from spark_profiles import backend, cli, health, switcher
 from spark_profiles.control_client import ControlClient
 
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+REAL_SUBPROCESS_RUN = subprocess.run
 COMMIT = "a" * 40
 PLAN_DIGEST = "b" * 64
 JOB_ID = "11111111-1111-4111-8111-111111111111"
@@ -120,6 +124,7 @@ class ApiFixture:
 @contextmanager
 def control_server(
     *responses: ExpectedResponse,
+    tls_context: ssl.SSLContext | None = None,
 ) -> Iterator[tuple[ApiFixture, str]]:
     fixture = ApiFixture(list(responses))
 
@@ -153,10 +158,14 @@ def control_server(
             pass
 
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    if tls_context is not None:
+        server.socket = tls_context.wrap_socket(server.socket, server_side=True)
     thread = Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield fixture, f"http://127.0.0.1:{server.server_port}"
+        scheme = "https" if tls_context is not None else "http"
+        host = "localhost" if tls_context is not None else "127.0.0.1"
+        yield fixture, f"{scheme}://{host}:{server.server_port}"
     finally:
         server.shutdown()
         thread.join()
@@ -209,6 +218,37 @@ def invoke(client: ControlClient, *argv: str) -> tuple[int, str, str]:
     return result, stdout.getvalue(), stderr.getvalue()
 
 
+def local_tls_context(tmp_path: Path) -> tuple[ssl.SSLContext, Path]:
+    certificate = tmp_path / "control.crt"
+    private_key = tmp_path / "control.key"
+    REAL_SUBPROCESS_RUN(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-keyout",
+            str(private_key),
+            "-out",
+            str(certificate),
+            "-days",
+            "1",
+            "-subj",
+            "/CN=localhost",
+            "-addext",
+            "subjectAltName=DNS:localhost,IP:127.0.0.1",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(certificate, private_key)
+    return context, certificate
+
+
 @pytest.fixture(autouse=True)
 def deny_local_controller(monkeypatch: pytest.MonkeyPatch) -> None:
     def rejected(*args: object, **kwargs: object) -> None:
@@ -220,6 +260,63 @@ def deny_local_controller(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(health.NodeHealthService, "from_repository", rejected)
     monkeypatch.setattr(switcher.ProfileSwitcher, "__init__", rejected)
     monkeypatch.setattr(subprocess, "run", rejected)
+
+
+def test_documented_console_command_runs_from_outside_project_environment(
+    tmp_path: Path,
+) -> None:
+    # Break caught: `uv sync` installs dependencies but no `sparkctl` console
+    # command, so the documented operator journey fails before bounded handling.
+    tls_context, certificate = local_tls_context(tmp_path)
+    token = tmp_path / "control.token"
+    token.write_text("test-control-token\n")
+    token.chmod(0o600)
+    ssh_marker = tmp_path / "ssh-invoked"
+    fake_ssh = tmp_path / "ssh-must-not-run"
+    fake_ssh.write_text('#!/bin/sh\nprintf invoked > "$SPARKCTL_SSH_MARKER"\nexit 99\n')
+    fake_ssh.chmod(0o755)
+    environment = os.environ.copy()
+    environment.pop("VIRTUAL_ENV", None)
+    environment.pop("PYTHONPATH", None)
+    environment.update(
+        {
+            "DGX_CONTROL_URL": "placeholder",
+            "DGX_CONTROL_TOKEN_FILE": str(token),
+            "SPARKCTL_SSH_MARKER": str(ssh_marker),
+            "SPARK_SSH_BIN": str(fake_ssh),
+            "SSL_CERT_FILE": str(certificate),
+        }
+    )
+    with control_server(ExpectedResponse(200, NODES), tls_context=tls_context) as (
+        server,
+        url,
+    ):
+        environment["DGX_CONTROL_URL"] = url
+        completed = REAL_SUBPROCESS_RUN(
+            [
+                "uv",
+                "run",
+                "--project",
+                str(REPOSITORY_ROOT),
+                "sparkctl",
+                "nodes",
+                "status",
+                "--json",
+            ],
+            cwd=tmp_path,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    assert completed.returncode == 0, completed.stderr
+    assert json.loads(completed.stdout) == NODES
+    assert completed.stderr == ""
+    assert server.requests == [
+        RecordedRequest("GET", "/api/v1/nodes/status", None, None)
+    ]
+    assert not ssh_marker.exists()
 
 
 @pytest.mark.parametrize(

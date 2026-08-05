@@ -9,6 +9,9 @@ description = "Developer-machine contracts for DGX Spark workload profiles"
 requires-python = ">=3.12"
 dependencies = ["attrs==26.1.0", "httpx==0.28.1", "jsonschema>=4.23"]
 
+[project.scripts]
+sparkctl = "spark_profiles.cli:main"
+
 [dependency-groups]
 dev = ["pytest==9.1.1"]
 

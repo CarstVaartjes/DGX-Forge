@@ -301,7 +301,7 @@ class _OpenerTransport(httpx.BaseTransport):
                 raise ControlResponseTooLarge(
                     "control API response exceeds safety limit"
                 )
-            response_headers = httpx.Headers(response.headers)  # type: ignore[attr-defined]
+            response_headers = httpx.Headers(response.headers.items())  # type: ignore[attr-defined]
             return httpx.Response(
                 response.status,  # type: ignore[attr-defined]
                 content=content,

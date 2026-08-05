@@ -52,9 +52,9 @@ inspect current node state and preview the exact server reconciliation plan:
 ```bash
 export DGX_CONTROL_URL=https://control.example.invalid
 export DGX_CONTROL_TOKEN_FILE=/run/secrets/dgx-control-token
-bin/sparkctl nodes status --json
-bin/sparkctl validate PROFILE --json
-bin/sparkctl switch PROFILE --json
+uv run --project /path/to/DGX-Forge sparkctl nodes status --json
+uv run --project /path/to/DGX-Forge sparkctl validate PROFILE --json
+uv run --project /path/to/DGX-Forge sparkctl switch PROFILE --json
 ```
 
 `prepare`, `switch`, and `restore-default` are plan-only unless `--apply` is

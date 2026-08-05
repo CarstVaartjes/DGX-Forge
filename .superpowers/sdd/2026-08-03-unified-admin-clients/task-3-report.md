@@ -249,3 +249,110 @@ Self-review confirmed:
   runbook labeling across documents other than the README and `sparkctl`
   runbook. This task made only the production boundary updates required for the
   compatibility launcher.
+
+---
+
+# Fix round 1/5: installed production console journey
+
+## Review finding and implementation
+
+Review found that current production documentation invoked `bin/sparkctl`
+directly after `uv sync`. That repository script uses ambient `python3`, while
+the project did not install a console command, so the documented routine path
+could fail before bounded CLI handling when the ambient interpreter lacked
+`httpx`.
+
+The fix adds the standard project entry point
+`sparkctl = "spark_profiles.cli:main"` and documents the environment-aware form
+`uv run --project /path/to/DGX-Forge sparkctl ...` consistently in README and
+the current runbook. The existing injectable `main(...)` remains the entry
+target; no parallel argument parser or wrapper behavior was added. Explicit
+`bin/sparkctl-legacy` compatibility remains separate.
+
+The outside-environment test also exposed and fixed one real transport defect:
+`urllib` production responses expose headers as `HTTPMessage`, whose iteration
+yields names rather than `(name, value)` pairs. `_OpenerTransport` now adapts
+`response.headers.items()` into `httpx.Headers`, which works for production
+responses and existing injected response doubles.
+
+## Strict TDD evidence
+
+The regression runs the exact documented command from a temporary directory,
+removes `VIRTUAL_ENV` and `PYTHONPATH`, configures the token entirely through
+environment variables, and serves the generated node model from a real local
+HTTPS server with a test CA trusted through `SSL_CERT_FILE`. A sentinel SSH
+binary records any forbidden local fallback.
+
+Initial packaging RED:
+
+```text
+$ uv run pytest \
+  tests/spark_profiles/test_agent_cli.py::test_documented_console_command_runs_from_outside_project_environment -v
+FAILED ... error: Failed to spawn: `sparkctl`
+  Caused by: No such file or directory (os error 2)
+============================== 1 failed in 0.72s ===============================
+```
+
+After adding the entry point, the same boundary progressed to HTTPS and exposed
+the production header adapter rather than passing prematurely:
+
+```text
+FAILED ... returncode 2
+stdout={"error":"control API response does not match the generated schema",...}
+============================== 1 failed in 0.84s ===============================
+```
+
+Root-cause isolation showed `httpx.Headers(response.headers)` raising
+`ValueError` for the real `HTTPMessage`. After the one-line `.items()` boundary
+fix, exact GREEN:
+
+```text
+$ uv run pytest \
+  tests/spark_profiles/test_agent_cli.py::test_documented_console_command_runs_from_outside_project_environment -v
+============================== 1 passed in 0.76s ===============================
+```
+
+The GREEN asserts exit `0`, empty stderr, the exact typed node JSON, one GET to
+`/api/v1/nodes/status`, and no SSH sentinel creation.
+
+## Fresh verification
+
+Focused changed-boundary suites:
+
+```text
+$ uv run pytest tests/spark_profiles/test_agent_cli.py \
+  tests/spark_profiles/test_control_client.py -q
+118 passed in 14.19s
+```
+
+Complete required/adjacent Task 3 suites:
+
+```text
+$ uv run pytest tests/spark_profiles/test_agent_cli.py \
+  tests/spark_profiles/test_control_client.py tests/spark_profiles/test_cli.py \
+  tests/runbooks -q
+187 passed in 29.69s
+```
+
+Static checks:
+
+```text
+$ uvx --from ruff==0.16.1 ruff check .
+All checks passed!
+
+$ uvx --from ruff==0.16.1 ruff format --check \
+  src/spark_profiles/control_client.py tests/spark_profiles/test_agent_cli.py
+2 files already formatted
+
+$ git diff --check
+(no output)
+```
+
+Independent read-only fix review reported no residual Critical or Important
+issues and verdict `Ready to merge — Yes`.
+
+## Fix-round concerns
+
+None new. The deferred Minor launcher docstring remains intentionally unchanged
+for the final review, per fix-round scope. The repository-wide interpreter
+SIGSEGV concern recorded above is unchanged; no broad suite was rerun.
