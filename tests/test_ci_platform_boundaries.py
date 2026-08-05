@@ -9,14 +9,20 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def _named_workflow_steps(job_name: str) -> list[dict[str, str]]:
-    lines = (ROOT / ".github/workflows/ci.yml").read_text().splitlines()
+def _workflow_job_lines(workflow: str, job_name: str) -> list[str]:
+    lines = workflow.splitlines()
     job_start = lines.index(f"  {job_name}:") + 1
     job_lines: list[str] = []
     for line in lines[job_start:]:
         if re.fullmatch(r"  [a-zA-Z0-9_-]+:", line):
             break
         job_lines.append(line)
+    return job_lines
+
+
+def _named_workflow_steps(job_name: str) -> list[dict[str, str]]:
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    job_lines = _workflow_job_lines(workflow, job_name)
 
     steps: list[dict[str, str]] = []
     for line in job_lines:
@@ -52,9 +58,33 @@ def test_full_matrix_installs_locked_javascript_workspaces_before_pytest() -> No
     assert steps.index(web_step) < steps.index(test_step)
 
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-    test_job = workflow.split("  test:\n", 1)[1]
-    assert "          - ubuntu-latest\n" in test_job
-    assert "          - macos-latest\n" in test_job
+    test_job_lines = _workflow_job_lines(workflow, "test")
+    assert "          - ubuntu-latest" in test_job_lines
+    assert "          - macos-latest" in test_job_lines
+
+
+def test_test_matrix_os_assertions_reject_values_from_a_later_job() -> None:
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    matrix = (
+        "        os:\n"
+        "          - ubuntu-latest\n"
+        "          - macos-latest\n"
+    )
+    assert workflow.count(matrix) == 1
+
+    mutated = workflow.replace(matrix, "        os: []\n", 1)
+    mutated += (
+        "\n  later-platform-job:\n"
+        "    strategy:\n"
+        "      matrix:\n"
+        "        os:\n"
+        "          - ubuntu-latest\n"
+        "          - macos-latest\n"
+    )
+
+    test_job_lines = _workflow_job_lines(mutated, "test")
+    assert "          - ubuntu-latest" not in test_job_lines
+    assert "          - macos-latest" not in test_job_lines
 
 
 def test_agent_simulator_preserves_exact_non_linux_boundaries() -> None:
