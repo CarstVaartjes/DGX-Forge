@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Reject recognizable credentials from files copied into public images."""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+
+INPUTS = (
+    "control/Dockerfile",
+    "control/pyproject.toml",
+    "control/src",
+    "control/web/package.json",
+    "control/web/package-lock.json",
+    "control/web/src",
+    "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl",
+    "deploy/compose/hermes-agent/Dockerfile",
+    "deploy/compose/hermes-agent/entrypoint.sh",
+)
+
+PATTERNS = {
+    "private-key": rb"-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----",
+    "github-token": rb"(?:gh[pousr]_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,})",
+    "tailscale-key": rb"tskey-[A-Za-z0-9_-]{10,}",
+    "aws-access-key": rb"AKIA[0-9A-Z]{16}",
+    "model-api-key": rb"sk-[A-Za-z0-9]{32,}",
+}
+
+
+def files_in(path: Path) -> list[Path]:
+    if path.is_symlink():
+        return [path]
+    if path.is_file():
+        return [path]
+    if path.is_dir():
+        return sorted(path.rglob("*"))
+    return []
+
+
+def main(argv: list[str]) -> int:
+    root = Path(argv[1]).resolve() if len(argv) == 2 else Path(__file__).resolve().parents[1]
+    patterns = {name: re.compile(pattern) for name, pattern in PATTERNS.items()}
+    findings: list[tuple[str, str]] = []
+
+    for relative in INPUTS:
+        input_path = root / relative
+        if not input_path.exists() and not input_path.is_symlink():
+            continue
+        for path in files_in(input_path):
+            display = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                findings.append((display, "symlink"))
+                continue
+            if not path.is_file():
+                continue
+            content = path.read_bytes()
+            for name, pattern in patterns.items():
+                if pattern.search(content):
+                    findings.append((display, name))
+
+    if findings:
+        for path, name in findings:
+            print(f"{path}: {name}", file=sys.stderr)
+        return 1
+    print("public image inputs: PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv))
