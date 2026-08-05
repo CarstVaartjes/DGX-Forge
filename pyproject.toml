@@ -7,7 +7,7 @@ name = "spark-profiles"
 version = "0.1.0"
 description = "Developer-machine contracts for DGX Spark workload profiles"
 requires-python = ">=3.12"
-dependencies = ["jsonschema>=4.23"]
+dependencies = ["attrs==26.1.0", "httpx==0.28.1", "jsonschema>=4.23"]
 
 [dependency-groups]
 dev = ["pytest==9.1.1"]
@@ -30,6 +30,7 @@ dev = ["pytest==9.1.1"]
 [tool.ruff]
 required-version = "==0.16.1"
 target-version = "py312"
+extend-exclude = ["src/spark_profiles/generated_control"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]

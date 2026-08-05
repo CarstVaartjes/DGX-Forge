@@ -1,0 +1,9 @@
+{
+  "name": "dgx-forge-openapi-client-toolchain",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  }
+}

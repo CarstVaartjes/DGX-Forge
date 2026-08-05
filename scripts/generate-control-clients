@@ -1,0 +1,118 @@
+#!/usr/bin/env -S uv run --project control --frozen python
+"""Generate the admin-only OpenAPI and pinned upstream language clients.
+
+Generator provenance:
+- openapi-python-client==0.26.2 from control/uv.lock
+- openapi-typescript==7.13.0 from tools/openapi-client/package-lock.json
+
+The TypeScript client transport is intentionally supplied by the separately
+pinned openapi-fetch dependency; this task generates its schema types only.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+from pathlib import Path
+
+from dgx_control.api import create_app
+from dgx_control.audit import MemoryAuditStore
+from dgx_control.auth import TokenCodec
+from dgx_control.operation_api import admin_openapi_schema
+
+ROOT = Path(__file__).resolve().parents[1]
+OPENAPI = ROOT / "control/openapi.json"
+PYTHON_OUTPUT = ROOT / "src/spark_profiles/generated_control"
+TYPESCRIPT_OUTPUT = ROOT / "control/web/src/api/generated.d.ts"
+
+
+class _SchemaJobs:
+    def enqueue(self, *_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("schema application cannot enqueue")
+
+    def get(self, job_id: str) -> object:
+        raise KeyError(job_id)
+
+    def list(self, *, limit: int = 100) -> list[object]:
+        del limit
+        return []
+
+
+def _write_openapi() -> None:
+    app = create_app(
+        jobs=_SchemaJobs(),
+        tokens=TokenCodec(b"schema-only-signing-key-32-bytes!"),
+        audits=MemoryAuditStore(),
+        fleet=lambda: {"commit": "0" * 40, "nodes": []},
+    )
+    document = admin_openapi_schema(app)
+    OPENAPI.write_text(
+        json.dumps(document, sort_keys=True, indent=2) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+
+
+def _run(command: list[str]) -> None:
+    subprocess.run(
+        command,
+        cwd=ROOT,
+        env={
+            **os.environ,
+            "PYTHONHASHSEED": "0",
+            "SOURCE_DATE_EPOCH": "0",
+        },
+        check=True,
+    )
+
+
+def _normalize_generated_text(path: Path) -> None:
+    """Remove generator-only trailing whitespace without changing semantics."""
+    files = sorted(path.rglob("*.py")) if path.is_dir() else [path]
+    for generated_file in files:
+        lines = generated_file.read_text(encoding="utf-8").splitlines()
+        while lines and not lines[-1].strip():
+            lines.pop()
+        generated_file.write_text(
+            "\n".join(line.rstrip() for line in lines) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+
+
+def main() -> None:
+    _write_openapi()
+    _run(
+        [
+            "openapi-python-client",
+            "generate",
+            "--path",
+            str(OPENAPI),
+            "--config",
+            str(ROOT / "control/openapi-python-client.yaml"),
+            "--meta",
+            "none",
+            "--output-path",
+            str(PYTHON_OUTPUT),
+            "--overwrite",
+        ]
+    )
+    _normalize_generated_text(PYTHON_OUTPUT)
+    TYPESCRIPT_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
+    _run(
+        [
+            str(
+                ROOT
+                / "tools/openapi-client/node_modules/.bin/openapi-typescript"
+            ),
+            str(OPENAPI),
+            "--output",
+            str(TYPESCRIPT_OUTPUT),
+        ]
+    )
+    _normalize_generated_text(TYPESCRIPT_OUTPUT)
+
+
+if __name__ == "__main__":
+    main()

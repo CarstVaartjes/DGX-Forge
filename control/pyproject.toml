@@ -22,7 +22,7 @@ dgx-agent-protocol = { path = "../inventory/wheels/dgx_agent_protocol-1.0.0-py3-
 spark-profiles = { path = ".." }
 
 [dependency-groups]
-dev = ["pytest==9.1.1"]
+dev = ["openapi-python-client==0.26.2", "pytest==9.1.1"]
 
 [build-system]
 requires = ["hatchling"]
