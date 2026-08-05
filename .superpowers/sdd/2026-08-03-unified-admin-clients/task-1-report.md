@@ -429,3 +429,100 @@ remains applicable.
 ## Fix-round concerns
 
 None blocking.
+
+## Fix round 2/5: complete bounded-error enumeration
+
+Implementation commit: `a180b27` (`fix: type remaining admin operation errors`).
+
+Root cause: the first fix round added strict bounded errors operation by
+operation, but its expectation tables covered only a subset of admin routes.
+Both planning endpoints share `planned_response()`, which maps an ineligible
+commit to 409, while neither decorator declared 409. The job-log content route
+raises 403/404/503 and uses the shared 401 authentication dependency, while its
+decorator declared no bounded errors. The upstream generator therefore treated
+all five reviewed parser cases as undocumented and returned `None`.
+
+The regression tables now enumerate 401/403/409/503 for both planning
+operations and 401/403/404/503 for job-log content. The decorators declare the
+same strict `BoundedErrorResponse` statuses, and the pinned generator updated
+OpenAPI, TypeScript declarations, and the three Python operation modules.
+
+```text
+$ uv run --project control pytest \
+    control/tests/test_operation_api.py::test_admin_operation_schema_declares_applicable_bounded_errors -q
+1 failed in 0.54s (getJobLog exposed only 200/422)
+
+$ uv run --project control pytest \
+    tests/control/test_openapi_clients.py::test_generated_python_client_parses_documented_operation_errors -q
+1 failed in 0.12s (generated parser returned None)
+
+$ PYTHONPATH=src uv run --project control python -c '<five-case parser matrix>'
+plan_reconciliation:409 -> None
+plan_profile_reconciliation:409 -> None
+get_job_log:403 -> None
+get_job_log:404 -> None
+get_job_log:503 -> None
+AssertionError: untyped generated responses
+
+$ uv run --project control pytest \
+    control/tests/test_operation_api.py::test_admin_operation_schema_declares_applicable_bounded_errors -q
+1 passed in 0.41s
+
+$ uv run --project control pytest \
+    tests/control/test_openapi_clients.py::test_generated_python_client_parses_documented_operation_errors -q
+1 passed in 0.12s
+
+$ PYTHONPATH=src uv run --project control python -c '<five-case parser matrix>'
+plan_reconciliation:409 -> BoundedErrorResponse
+plan_profile_reconciliation:409 -> BoundedErrorResponse
+get_job_log:403 -> BoundedErrorResponse
+get_job_log:404 -> BoundedErrorResponse
+get_job_log:503 -> BoundedErrorResponse
+```
+
+### Fix-round 2 verification
+
+```text
+$ uv run --project control pytest control/tests/test_operation_api.py -q
+10 passed in 1.28s
+
+$ uv run --project control pytest tests/control/test_openapi_clients.py -q
+5 passed in 3.65s
+
+$ npm run build --prefix control/web
+tsc --noEmit && vite build
+24 modules transformed; built successfully in 96ms
+
+$ uvx --from ruff==0.16.1 ruff check .
+All checks passed!
+
+$ git diff --check
+(no output)
+```
+
+The generator suite runs the pinned generator repeatedly, compares tracked
+digests for drift/idempotence, compiles every generated Python module, imports
+the generated client in the root locked environment, and executes the bounded
+error parsers. One earlier parallel verification run encountered a transient
+`openapi-python-client` SIGSEGV during its third generation and temporarily
+left the overwrite target incomplete. A standalone generator run restored the
+tree, and the complete generator suite then passed serially with byte-stable
+artifacts. No production runtime status mapping changed, so no focused runtime
+API test was required.
+
+### Fix-round 2 self-review
+
+- Every bounded status raised by the two planners and job-log content route is
+  now represented in both live and tracked schema expectation matrices.
+- Each requested generated parser case returns `BoundedErrorResponse`; 422
+  remains the framework validation model and was not incorrectly overridden.
+- Only decorators, contract tests, and pinned generated artifacts changed; raw
+  text log success bodies and runtime error behavior are untouched.
+- Generated diffs contain only the expected response declarations, imports,
+  parser branches, and union type expansions.
+- No merge or push was performed.
+
+### Fix-round 2 concerns
+
+No blocking concern. The one generator SIGSEGV was not reproducible serially;
+the fresh complete generator suite passed after restoration.
