@@ -77,6 +77,30 @@ class Reconciliation(Base):
     base_commit: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     summary: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    graph: Mapped[dict[str, object]] = mapped_column(
+        JSON,
+        nullable=False,
+        default=lambda: {
+            "base_commit": "",
+            "nodes": [],
+            "schema_version": 1,
+            "targets": [],
+        },
+        server_default='{"base_commit":"","nodes":[],"schema_version":1,"targets":[]}',
+    )
+    graph_digest: Mapped[str] = mapped_column(
+        String(64),
+        nullable=False,
+        default="5c061eb8dfce0a3f2bcbfbf06cb71d695c33e8f4269e17bfe5cd1cda0054cdc5",
+        server_default="5c061eb8dfce0a3f2bcbfbf06cb71d695c33e8f4269e17bfe5cd1cda0054cdc5",
+    )
+    current_phase: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="legacy", server_default="legacy"
+    )
+    route_withdrawal_generation: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    terminal_reason: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
 
 
