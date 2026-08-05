@@ -1,15 +1,10 @@
-"""Retain bounded CA-revocation evidence independently of agent nodes.
-
-This provisional round-four revision is based on the branch-local 0005 head.
-When rebased onto the reconciliation migrations, reparent and numerically rename
-it after their final head; do not create a parallel production migration head.
-"""
+"""Retain bounded CA-revocation evidence independently of agent nodes."""
 
 import sqlalchemy as sa
 from alembic import op
 
-revision = "round4_issued_revocations"
-down_revision = "0005_certificate_rotation"
+revision = "0007_issued_revocations"
+down_revision = "0006_reconciliation_graph"
 branch_labels = None
 depends_on = None
 

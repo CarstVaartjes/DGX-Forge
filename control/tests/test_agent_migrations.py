@@ -210,7 +210,7 @@ def test_issued_certificate_revocation_evidence_migration_is_bounded_and_reversi
 ) -> None:
     database = f"sqlite:///{tmp_path / 'control.sqlite'}"
     engine = create_engine(database)
-    upgrade_to("0005_certificate_rotation", database)
+    upgrade_to("0006_reconciliation_graph", database)
     assert "agent_issued_certificate_revocations" not in tables(database)
 
     upgrade_to("head", database)
@@ -234,5 +234,5 @@ def test_issued_certificate_revocation_evidence_migration_is_bounded_and_reversi
     }
     assert not {"certificate_pem", "chain_pem", "private_key"} & columns
 
-    downgrade_to("0005_certificate_rotation", database)
+    downgrade_to("0006_reconciliation_graph", database)
     assert "agent_issued_certificate_revocations" not in tables(database)

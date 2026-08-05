@@ -312,14 +312,18 @@ local confirmation committed.
 
 ### Round 4 migration integration
 
-This isolated branch predates the incoming reconciliation migrations. The recovery
-migration therefore uses the non-conflicting provisional revision
-`round4_issued_revocations`, based on this branch's `0005_certificate_rotation` head.
-During linear integration it must be reparented to the final incoming migration head
-and numerically renamed after `0006`/`0007`; it must not be merged as a parallel
-production head. Both the current SQLite chain and an actual PostgreSQL
-upgrade-to-head, downgrade-to-0005, upgrade-to-head sequence pass with exact model
-parity.
+After Source Ready, the five Task 5 commits were rebased onto main
+`4679dc648417d07177cae84d33f195bccf3be7e9`, which contains the accepted Task 1
+reconciliation graph migration. The recovery migration is now the single linear
+file `0007_issued_certificate_revocations.py`, with bounded revision
+`0007_issued_revocations` and
+`down_revision = "0006_reconciliation_graph"`. The previous provisional filename and
+revision no longer exist. SQLite and actual PostgreSQL both exercise the exact
+`0006 -> 0007 -> 0006 -> 0007` boundary with model parity; PostgreSQL additionally
+preserves legacy reconciliation and agent rows and verifies recovery evidence plus
+retire-only trigger behavior across the boundary. The bounded revision fits
+Alembic's standard PostgreSQL version column without altering Alembic's bookkeeping
+schema.
 
 ### Round 4 RED/GREEN evidence
 
@@ -349,5 +353,21 @@ approved-node foreign-key guard and the migrated PostgreSQL retire-only trigger 
 - `promtool` remains unavailable locally; rules retain structural parsing and
   behavioral observability-test coverage.
 
-Round 4's submitted finding is addressed. Independent rereview and linear integration
-with the incoming migration chain remain pending.
+Round 4's submitted finding and mandatory linear migration integration are addressed.
+Independent rereview remains pending.
+
+### Source Ready integration verification
+
+- Alembic reports exactly one head: `0007_issued_revocations`.
+- SQLite head/base reversibility and model parity: **8 passed**.
+- Actual PostgreSQL exact-boundary test: **1 passed**; it preserves legacy
+  reconciliation/agent rows and checks evidence and retire-only trigger behavior over
+  `0006 -> 0007 -> 0006 -> 0007`.
+- Focused migration/enrollment/job/PostgreSQL/API/orchestration suites: **146 passed**.
+- Complete control suite: **323 passed**.
+- `agent/tests/test_client.py`: **39 passed**.
+- Compose observability suite: **8 passed**.
+- Pinned Ruff 0.16.1, direct `py_compile`, dashboard JSON parsing, alert YAML parsing,
+  and `git diff --check` passed.
+- `promtool` remains unavailable locally; the eight observability tests parse and
+  exercise the alert rules.

@@ -758,7 +758,34 @@ def test_postgres_issued_revocation_evidence_migration_chain(
         postgres_engine.url.render_as_string(hide_password=False),
     )
 
-    command.upgrade(config, "head")
+    command.upgrade(config, "0006_reconciliation_graph")
+    assert "agent_issued_certificate_revocations" not in inspect(
+        postgres_engine
+    ).get_table_names()
+    with postgres_engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO reconciliations
+                (id,base_commit,status,summary,created_at)
+            VALUES
+                ('legacy-reconciliation','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                 'queued','{}','2026-08-05 00:00:00+00')
+        """))
+        connection.execute(text("""
+            INSERT INTO agent_nodes (node_id,state,capabilities)
+            VALUES
+                ('spk_0123456789abcdef0123456789abcdef','active','[]'),
+                ('spk_fedcba9876543210fedcba9876543210','active','[]')
+        """))
+        connection.execute(text("""
+            INSERT INTO agent_certificates
+                (serial,node_id,not_before,not_after,fingerprint)
+            VALUES
+                ('legacy-serial','spk_0123456789abcdef0123456789abcdef',
+                 '2026-08-05 00:00:00+00','2026-08-06 00:00:00+00',
+                 'legacy-fingerprint')
+        """))
+
+    command.upgrade(config, "0007_issued_revocations")
     assert "agent_issued_certificate_revocations" in inspect(
         postgres_engine
     ).get_table_names()
@@ -773,22 +800,74 @@ def test_postgres_issued_revocation_evidence_migration_chain(
         assert compare_metadata(
             MigrationContext.configure(connection), Base.metadata
         ) == []
+        assert connection.execute(text(
+            "SELECT status FROM reconciliations "
+            "WHERE id = 'legacy-reconciliation'"
+        )).scalar_one() == "queued"
+        assert connection.execute(text(
+            "SELECT state FROM agent_certificates "
+            "WHERE serial = 'legacy-serial'"
+        )).scalar_one() == "active"
     with postgres_engine.begin() as connection:
-        connection.execute(text(
-            "INSERT INTO agent_nodes (node_id,state,capabilities) "
-            "VALUES ('spk_fedcba9876543210fedcba9876543210','active','[]')"
-        ))
+        connection.execute(text("""
+            INSERT INTO agent_issued_certificate_revocations
+                (serial,node_id,provider_request_id,fingerprint,generation,state,
+                 created_at,updated_at,ca_revoked_at)
+            VALUES
+                ('orphan-serial','spk_ffffffffffffffffffffffffffffffff',
+                 'provider-request','orphan-fingerprint',2,'revocation-pending',
+                 '2026-08-05 00:00:00+00','2026-08-05 00:00:00+00',NULL)
+        """))
+    with postgres_engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT state FROM agent_issued_certificate_revocations "
+            "WHERE serial = 'orphan-serial'"
+        )).scalar_one() == "revocation-pending"
+    with postgres_engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO agent_nodes (node_id,state,capabilities)
+            VALUES ('spk_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee','active','[]')
+        """))
     with pytest.raises(DBAPIError), postgres_engine.begin() as connection:
+        connection.execute(text(
+            "DELETE FROM agent_nodes "
+            "WHERE node_id = 'spk_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'"
+        ))
+
+    command.downgrade(config, "0006_reconciliation_graph")
+    assert "agent_issued_certificate_revocations" not in inspect(
+        postgres_engine
+    ).get_table_names()
+    with postgres_engine.begin() as connection:
         connection.execute(text(
             "DELETE FROM agent_nodes "
             "WHERE node_id = 'spk_fedcba9876543210fedcba9876543210'"
         ))
+    with postgres_engine.connect() as connection:
+        assert connection.execute(text(
+            "SELECT status FROM reconciliations "
+            "WHERE id = 'legacy-reconciliation'"
+        )).scalar_one() == "queued"
+        assert connection.execute(text(
+            "SELECT state FROM agent_certificates "
+            "WHERE serial = 'legacy-serial'"
+        )).scalar_one() == "active"
 
-    command.downgrade(config, "0005_certificate_rotation")
-    assert "agent_issued_certificate_revocations" not in inspect(
-        postgres_engine
-    ).get_table_names()
-    command.upgrade(config, "head")
+    command.upgrade(config, "0007_issued_revocations")
+    with postgres_engine.begin() as connection:
+        connection.execute(text("""
+            INSERT INTO agent_nodes (node_id,state,capabilities)
+            VALUES ('spk_dddddddddddddddddddddddddddddddd','active','[]')
+        """))
+    with pytest.raises(DBAPIError), postgres_engine.begin() as connection:
+        connection.execute(text(
+            "DELETE FROM agent_nodes "
+            "WHERE node_id = 'spk_dddddddddddddddddddddddddddddddd'"
+        ))
+    with postgres_engine.connect() as connection:
+        assert compare_metadata(
+            MigrationContext.configure(connection), Base.metadata
+        ) == []
 
 
 @pytest.mark.parametrize("failure_mode", ("success", "runtime", "system-exit"))
