@@ -1,0 +1,35 @@
+version: 2
+updates:
+  - package-ecosystem: "docker"
+    directories:
+      - "/control"
+      - "/deploy/compose/hermes-agent"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Europe/Amsterdam"
+    labels: ["dependencies", "containers"]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "docker-compose"
+    directories:
+      - "/deploy/compose"
+      - "/deploy/compose/tailscale"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Europe/Amsterdam"
+    labels: ["dependencies", "containers"]
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Europe/Amsterdam"
+    labels: ["dependencies", "github-actions"]
+    open-pull-requests-limit: 5

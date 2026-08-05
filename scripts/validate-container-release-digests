@@ -1,0 +1,32 @@
+#!/usr/bin/env python3
+"""Validate image digests before release assets are created."""
+
+from __future__ import annotations
+
+import os
+import re
+import sys
+
+DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
+DIGEST_VARIABLES = (
+    "CONTROL_API_DIGEST",
+    "CONTROL_WORKER_DIGEST",
+    "HERMES_AGENT_DIGEST",
+)
+
+
+def main() -> int:
+    invalid = [
+        name
+        for name in DIGEST_VARIABLES
+        if DIGEST.fullmatch(os.environ.get(name, "")) is None
+    ]
+    if invalid:
+        for name in invalid:
+            print(f"container release digest is invalid: {name}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

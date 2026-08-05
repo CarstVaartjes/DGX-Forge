@@ -14,6 +14,7 @@ def _environment() -> dict[str, str]:
         "REGISTRY_IMAGE": "registry:3@sha256:" + "9" * 64,
         "CONTROL_API_IMAGE": "example/control-api:1@sha256:" + "c" * 64,
         "CONTROL_WORKER_IMAGE": "example/control-worker:1@sha256:" + "8" * 64,
+        "HERMES_AGENT_IMAGE": "example/hermes:1@sha256:" + "7" * 64,
         "LITELLM_IMAGE": "example/litellm:1@sha256:" + "d" * 64,
         "PROMETHEUS_IMAGE": "prom/prometheus:1@sha256:" + "e" * 64,
         "GRAFANA_IMAGE": "grafana/grafana:1@sha256:" + "f" * 64,

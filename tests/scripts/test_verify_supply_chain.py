@@ -13,6 +13,8 @@ SCRIPT = ROOT / "scripts/verify-supply-chain"
 def _copy(tmp_path: Path) -> Path:
     target = tmp_path / "repo"
     for path in (
+        ".github/workflows/ci.yml",
+        ".github/dependabot.yml",
         "agent/pyproject.toml", "agent/uv.lock", "agent_protocol/pyproject.toml",
         ".dockerignore", "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
         "control/web/package-lock.json", "control/Dockerfile",
@@ -32,6 +34,10 @@ def _copy(tmp_path: Path) -> Path:
         "deploy/compose/litellm/config_supervisor.py",
         "deploy/compose/litellm/entrypoint.sh",
         "deploy/compose/trust/litellm-cosign.pub",
+        "scripts/container-release-metadata",
+        "scripts/refuse-existing-image-version",
+        "scripts/validate-container-release-digests",
+        "scripts/verify-public-image-inputs",
     ):
         destination = target / path
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -102,14 +108,96 @@ def test_verifier_rejects_floating_hermes_agent_base(tmp_path: Path) -> None:
     assert "Hermes" in result.stderr and "digest" in result.stderr
 
 
-def test_image_lock_contains_only_the_pinned_hermes_runtime() -> None:
+@pytest.mark.parametrize("name", ("node", "python", "hermes"))
+@pytest.mark.parametrize("malformed", (False, True))
+def test_verifier_reports_missing_or_malformed_build_bases_as_json(
+    tmp_path: Path, name: str, malformed: bool
+) -> None:
+    repository = _copy(tmp_path)
+    lock_path = repository / "deploy/compose/images.lock.json"
+    lock = json.loads(lock_path.read_text())
+    if malformed:
+        lock["build_bases"][name] = None
+    else:
+        del lock["build_bases"][name]
+    lock_path.write_text(json.dumps(lock))
+
+    result = subprocess.run(
+        [SCRIPT, "--root", repository, "--json"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert f"{name} digest-pinned build base is missing or invalid" in payload["errors"]
+
+
+@pytest.mark.parametrize("value", (None, [], {}))
+def test_verifier_reports_non_string_runtime_images_as_json(
+    tmp_path: Path, value: object
+) -> None:
+    repository = _copy(tmp_path)
+    lock_path = repository / "deploy/compose/images.lock.json"
+    lock = json.loads(lock_path.read_text())
+    lock["images"]["caddy"] = value
+    lock_path.write_text(json.dumps(lock))
+
+    result = subprocess.run(
+        [SCRIPT, "--root", repository, "--json"],
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    payload = json.loads(result.stdout)
+    assert payload["ok"] is False
+    assert "caddy image is not pinned by digest" in payload["errors"]
+
+
+def test_image_lock_contains_the_pinned_hermes_build_base() -> None:
     lock = json.loads((ROOT / "deploy/compose/images.lock.json").read_text())
 
-    assert lock["images"]["hermes-agent"] == (
+    assert lock["build_bases"]["hermes"] == (
         "nousresearch/hermes-agent:v2026.7.20@sha256:"
         "f7b35053268f532f98955195c909f15a230470fbcbdacaa9fdecb95707dad04a"
     )
+    assert "hermes-agent" not in lock["images"]
     assert not any("ai-devbox" in name for name in lock["build_bases"])
+
+
+def test_image_lock_declares_all_three_public_release_artifacts() -> None:
+    lock = json.loads((ROOT / "deploy/compose/images.lock.json").read_text())
+
+    assert lock["release_images"] == [
+        {
+            "context": ".",
+            "dockerfile": "control/Dockerfile",
+            "environment": "CONTROL_API_IMAGE",
+            "package": "dgx-forge-api",
+            "required": True,
+            "target": "api",
+        },
+        {
+            "context": ".",
+            "dockerfile": "control/Dockerfile",
+            "environment": "CONTROL_WORKER_IMAGE",
+            "package": "dgx-forge-worker",
+            "required": True,
+            "target": "worker",
+        },
+        {
+            "context": "deploy/compose/hermes-agent",
+            "dockerfile": "deploy/compose/hermes-agent/Dockerfile",
+            "environment": "HERMES_AGENT_IMAGE",
+            "package": "dgx-forge-hermes",
+            "required": True,
+            "target": "managed",
+        },
+    ]
 
 
 def test_verifier_rejects_stale_sbom_after_lock_change(tmp_path: Path) -> None:
