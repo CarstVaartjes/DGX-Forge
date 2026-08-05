@@ -55,3 +55,5 @@ Cross-cutting CI: fix round 1/5 complete (commit d6ce0bd; both Important finding
 Cross-cutting CI: hosted run 30963128897 (Ruff and Ubuntu full suite green; macOS exposed 19 DGX-installer runtime tests incorrectly executing with a Mach-O interpreter fixture)
 Cross-cutting CI: fix round 2/5 submitted (classify exact Linux/ELF installer runtime coverage while retaining portable installer contracts on macOS; commits d6ce0bd..pending)
 Cross-cutting CI: fix round 2/5 complete (commit 9368f5e; exact 20 Linux runtime / 7 portable classification, 50 focused tests and pinned Ruff green, independent review Ready Yes; hosted rerun pending)
+Cross-cutting CI: complete (hosted run 30963728734 at SHA 010b9cded268355fcef1c52e00c9a4aab7464131; Ruff passed; macOS full Python+Bash passed in 2m8s; Ubuntu full Python+Bash passed in 2m33s)
+Task 5: complete and accepted (hosted run 30963728734 at SHA 010b9cded268355fcef1c52e00c9a4aab7464131 is fully green; local full-root remains separately non-green under the documented physical-hardware diagnosis)

@@ -370,4 +370,22 @@ The current `.venv`, lock, and source dependencies were not changed during this
 investigation. Full-root verification is environment-unstable and explicitly non-green;
 this is not treated as an exemption. Every task-scoped and segmented suite is green.
 
-No push or PR was created. The controller owns publication after independent review.
+## Authoritative hosted CI closure
+
+[GitHub Actions run 30963728734](https://github.com/CarstVaartjes/DGX-Forge/actions/runs/30963728734)
+is the authoritative hosted verification for commit
+`010b9cded268355fcef1c52e00c9a4aab7464131`:
+
+- Ruff passed;
+- the macOS full Python and Bash suite passed in 2m8s;
+- the Ubuntu full Python and Bash suite passed in 2m33s.
+
+This hosted result closes the repository-wide cross-platform gate for Task 5. It is
+separate from, and does not rewrite, the literal local full-root result above. That
+local run remains explicitly non-green because of the shared physical host's rotating
+CPython corruption; physical i9-13900K Vmin-shift degradation remains the leading
+diagnosis for that environment and is not claimed as directly confirmed. Hosted CI
+passed the full suites from the accepted commit without that local hardware failure.
+
+Implementation and review commits were published directly to `main` under the
+pre-release policy; no PR was created.
