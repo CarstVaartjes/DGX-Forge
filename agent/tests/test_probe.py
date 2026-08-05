@@ -5,6 +5,7 @@ import json
 import os
 import signal
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
@@ -14,6 +15,7 @@ from pathlib import Path
 import dgx_agent.probe as probe_module
 import pytest
 from dgx_agent import nvidia_tools
+from dgx_agent.deadlines import MonotonicDeadline
 from dgx_agent.nvidia_tools import (
     NVIDIA_TOOL_NAMES,
     REVIEWED_BUNDLE_SHA256,
@@ -655,6 +657,40 @@ def test_real_runner_kills_process_group_on_timeout(tmp_path) -> None:
         time.sleep(0.02)
     else:
         pytest.fail("timed-out child process group survived")
+
+
+def test_real_runner_observes_renewed_deadline_after_process_start(tmp_path) -> None:
+    script = tmp_path / "renewed.sh"
+    digest = _executable(script, b"#!/bin/sh\nsleep 0.25\n")
+    descriptor = open_verified_executable(
+        script, digest, _test_only_allow_unprivileged=True
+    )
+    assert descriptor is not None
+    initial_wall = datetime.now(UTC) + timedelta(seconds=0.12)
+    lease = MonotonicDeadline.bind(initial_wall)
+    request = ProcessRequest.fixed(
+        argv=(str(script),),
+        cwd=tmp_path,
+        timeout_seconds=1,
+        output_limit_bytes=1024,
+        executable_fd=descriptor,
+        renewable_deadline=lease,
+    )
+
+    def renew() -> None:
+        time.sleep(0.05)
+        lease.extend(datetime.now(UTC) + timedelta(seconds=1))
+
+    renewer = threading.Thread(target=renew)
+    renewer.start()
+    try:
+        outcome = BoundedProcessRunner().run(request)
+    finally:
+        os.close(descriptor)
+    renewer.join(2)
+
+    assert outcome.returncode == 0
+    assert datetime.now(UTC) > initial_wall
 
 
 def test_real_runner_bounds_capture_and_kills_output_flood(tmp_path) -> None:

@@ -9,7 +9,7 @@ import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -55,14 +55,24 @@ def claim(
     )
 
 
-def progress(*, fence: str = FENCE_A, value: int = 1, job_id: str = JOB_ID, deadline: datetime = DEADLINE) -> AgentProgress:
+def progress(
+    *,
+    fence: str = FENCE_A,
+    value: int = 1,
+    job_id: str = JOB_ID,
+    operation_id: str = OPERATION_ID,
+    attempt: int = 1,
+    node_id: str = NODE_ID,
+    schema_version: int = 1,
+    deadline: datetime = DEADLINE,
+) -> AgentProgress:
     return AgentProgress(
-        schema_version=1,
+        schema_version=schema_version,
         job_id=job_id,
-        operation_id=OPERATION_ID,
-        attempt=1,
+        operation_id=operation_id,
+        attempt=attempt,
         fence=fence,
-        node_id=NODE_ID,
+        node_id=node_id,
         deadline=deadline,
         progress={"completed": value},
     )
@@ -568,15 +578,77 @@ def test_schema_missing_progress_nonnegative_check_is_rejected(tmp_path: Path) -
         AgentStateStore(root)
 
 
-def test_progress_and_result_deadline_must_match_claim(tmp_path: Path) -> None:
+def test_heartbeat_accepts_and_persists_nondecreasing_deadline_extensions(
+    tmp_path: Path,
+) -> None:
     store = AgentStateStore(tmp_path / "state")
     store.begin(claim())
-    changed = datetime(2031, 1, 1, tzinfo=UTC)
+    first_deadline = DEADLINE + timedelta(seconds=30)
+    second_deadline = first_deadline + timedelta(seconds=30)
+
+    first = store.heartbeat(progress(value=1, deadline=first_deadline))
+    second_message = progress(value=2, deadline=second_deadline)
+    second = AgentStateStore(tmp_path / "state").heartbeat(second_message)
+
+    assert first.progress is not None and first.progress.deadline == first_deadline
+    assert second.progress == second_message
+    assert second.canonical_progress == canonical_message(second_message)
+    assert AgentStateStore(tmp_path / "state").recover_active() == second
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        progress(deadline=DEADLINE - timedelta(seconds=1)),
+        progress(fence=FENCE_B, deadline=DEADLINE + timedelta(seconds=30)),
+        progress(
+            job_id="33333333-3333-4333-8333-333333333333",
+            deadline=DEADLINE + timedelta(seconds=30),
+        ),
+        progress(attempt=2, deadline=DEADLINE + timedelta(seconds=30)),
+        progress(
+            operation_id="44444444-4444-4444-8444-444444444444",
+            deadline=DEADLINE + timedelta(seconds=30),
+        ),
+        progress(
+            node_id="spk_ffffffffffffffffffffffffffffffff",
+            deadline=DEADLINE + timedelta(seconds=30),
+        ),
+    ],
+)
+def test_heartbeat_rejects_deadline_rollback_or_protocol_identity_change(
+    tmp_path: Path, message: AgentProgress
+) -> None:
+    store = AgentStateStore(tmp_path / "state")
+    store.begin(claim())
+
     with pytest.raises(AgentStateConflict):
-        store.heartbeat(progress(deadline=changed))
-    with pytest.raises(AgentStateConflict):
-        store.finish(result(deadline=changed))
+        store.heartbeat(message)
     assert store.recover_active().progress_sequence == 0
+
+
+def test_heartbeat_rejects_deadline_rollback_relative_to_latest_progress(
+    tmp_path: Path,
+) -> None:
+    store = AgentStateStore(tmp_path / "state")
+    store.begin(claim())
+    latest = DEADLINE + timedelta(seconds=60)
+    store.heartbeat(progress(deadline=latest))
+
+    with pytest.raises(AgentStateConflict):
+        store.heartbeat(progress(deadline=latest - timedelta(seconds=1)))
+    assert store.recover_active().progress_sequence == 1
+
+
+def test_result_deadline_still_must_match_original_claim(tmp_path: Path) -> None:
+    store = AgentStateStore(tmp_path / "state")
+    store.begin(claim())
+    store.heartbeat(progress(deadline=DEADLINE + timedelta(seconds=30)))
+
+    with pytest.raises(AgentStateConflict):
+        store.finish(result(deadline=DEADLINE + timedelta(seconds=30)))
+    finished = store.finish(result())
+    assert finished.result == result()
 
 
 @pytest.mark.parametrize("method", ["heartbeat", "finish", "acknowledge"])

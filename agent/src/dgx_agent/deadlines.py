@@ -1,8 +1,9 @@
-"""One-time binding of an authenticated wall deadline to a monotonic clock."""
+"""Thread-safe binding of an authenticated wall deadline to a monotonic clock."""
 from __future__ import annotations
 
+import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 
@@ -14,6 +15,12 @@ class DeadlineBindingError(ValueError):
 class MonotonicDeadline:
     wall_deadline: datetime
     absolute_monotonic: float
+    _lock: threading.Lock = field(
+        default_factory=threading.Lock,
+        init=False,
+        repr=False,
+        compare=False,
+    )
 
     @classmethod
     def bind(cls, value: datetime | MonotonicDeadline) -> MonotonicDeadline:
@@ -29,8 +36,26 @@ class MonotonicDeadline:
         return cls(value, monotonic_now + remaining)
 
     def remaining(self) -> float:
-        return self.absolute_monotonic - time.monotonic()
+        return self.absolute() - time.monotonic()
+
+    def absolute(self) -> float:
+        with self._lock:
+            return self.absolute_monotonic
 
     def check(self) -> None:
         if self.remaining() <= 0:
             raise DeadlineBindingError("deadline has elapsed")
+
+    def extend(self, value: datetime) -> None:
+        candidate = type(self).bind(value)
+        with self._lock:
+            if value < self.wall_deadline:
+                raise DeadlineBindingError("deadline moved backwards")
+            if value == self.wall_deadline:
+                return
+            object.__setattr__(self, "wall_deadline", value)
+            object.__setattr__(
+                self,
+                "absolute_monotonic",
+                max(self.absolute_monotonic, candidate.absolute_monotonic),
+            )

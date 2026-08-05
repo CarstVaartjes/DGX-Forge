@@ -166,14 +166,22 @@ class AgentStateStore:
         finally:
             connection.close()
 
-    def heartbeat(self, progress: AgentProgress) -> AgentAttemptRecord:
+    def heartbeat(
+        self,
+        progress: AgentProgress,
+        *,
+        allow_terminal_race: bool = False,
+    ) -> AgentAttemptRecord:
         progress_bytes = _canonical(progress, AgentProgress)
         connection = self._connection()
         try:
             connection.execute("BEGIN IMMEDIATE")
             current = _record(_matching_row(connection, progress))
-            _require_protocol_match(current.claim, progress)
+            _require_progress_match(current.claim, current.progress, progress)
             if current.state != "active":
+                if allow_terminal_race and current.result is not None:
+                    connection.commit()
+                    return current
                 raise AgentStateConflict("attempt is not active")
             now = _nondecreasing_timestamp(current.updated_at)
             connection.execute(
@@ -593,13 +601,32 @@ def _matching_row(connection: sqlite3.Connection, message: AgentProgress | Agent
     return row
 
 
-def _require_protocol_match(claim: AgentClaim, message: AgentProgress | AgentResult) -> None:
+def _require_protocol_identity(
+    claim: AgentClaim,
+    message: AgentProgress | AgentResult,
+) -> None:
     if (
         _identity(claim) != _identity(message)
         or claim.fence != message.fence
         or claim.schema_version != message.schema_version
-        or claim.deadline != message.deadline
     ):
+        raise AgentStateConflict("protocol message does not match persisted claim")
+
+
+def _require_progress_match(
+    claim: AgentClaim,
+    latest: AgentProgress | None,
+    progress: AgentProgress,
+) -> None:
+    _require_protocol_identity(claim, progress)
+    earliest = claim.deadline if latest is None else latest.deadline
+    if progress.deadline < earliest:
+        raise AgentStateConflict("heartbeat deadline moved backwards")
+
+
+def _require_protocol_match(claim: AgentClaim, message: AgentProgress | AgentResult) -> None:
+    _require_protocol_identity(claim, message)
+    if claim.deadline != message.deadline:
         raise AgentStateConflict("protocol message does not match persisted claim")
 
 
@@ -691,7 +718,10 @@ def _record(row: sqlite3.Row) -> AgentAttemptRecord:
 
 def _require_stored_protocol_match(claim: AgentClaim, message: AgentProgress | AgentResult) -> None:
     try:
-        _require_protocol_match(claim, message)
+        if isinstance(message, AgentProgress):
+            _require_progress_match(claim, None, message)
+        else:
+            _require_protocol_match(claim, message)
     except AgentStateConflict as error:
         raise AgentStateError("stored protocol identity is invalid") from error
 

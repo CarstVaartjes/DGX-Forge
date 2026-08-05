@@ -206,11 +206,11 @@ class ORASClient:
                     "2",
                 ),
                 cwd=destination,
-                timeout_seconds=min(_MAX_PULL_SECONDS, remaining),
+                timeout_seconds=_MAX_PULL_SECONDS,
                 output_limit_bytes=_OUTPUT_LIMIT,
                 executable_fd=executable_fd,
-                absolute_deadline=fixed_deadline.absolute_monotonic,
                 additional_fds=policy_fds,
+                renewable_deadline=fixed_deadline,
             )
             outcome = self._runner.run(request)
             if outcome.returncode != 0:

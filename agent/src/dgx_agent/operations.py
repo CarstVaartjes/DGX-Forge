@@ -1,7 +1,7 @@
 """Closed dispatch for fenced outbound-agent operations."""
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -132,14 +132,28 @@ class OperationRegistry:
     """A source-defined registry; it deliberately has no plugin discovery."""
 
     def execute(
-        self, claim: AgentClaim, context: OperationContext
+        self,
+        claim: AgentClaim,
+        context: OperationContext,
+        *,
+        on_active: Callable[[], None] | None = None,
+        execution_deadline: MonotonicDeadline | None = None,
     ) -> OperationExecution:
+        active_reported = False
+
+        def report_active() -> None:
+            nonlocal active_reported
+            if not active_reported and on_active is not None:
+                on_active()
+                active_reported = True
+
         request = self._validate(claim, context)
         exact = context.state.lookup_exact(claim)
         if exact is not None and exact.result is not None:
             assert exact.canonical_result is not None
             return OperationExecution(exact.result, exact.canonical_result, True)
         if exact is not None:
+            report_active()
             inspection = _inspect_request(claim, request, context)
             if (
                 inspection.disposition is InspectionDisposition.COMPLETED
@@ -185,7 +199,10 @@ class OperationRegistry:
                     pending.result, pending.canonical_result, True
                 )
         try:
-            execution_deadline = MonotonicDeadline.bind(claim.deadline)
+            if execution_deadline is None:
+                execution_deadline = MonotonicDeadline.bind(claim.deadline)
+            else:
+                execution_deadline.check()
         except Exception as error:
             if exact is None:
                 raise AgentProtocolError("claim deadline has expired") from error
@@ -197,6 +214,7 @@ class OperationRegistry:
                     record.canonical_result,
                     True,
                 )
+            report_active()
             expired = _result(
                 claim,
                 "failed",
@@ -217,6 +235,7 @@ class OperationRegistry:
         if record.result is not None:
             assert record.canonical_result is not None
             return OperationExecution(record.result, record.canonical_result, True)
+        report_active()
         try:
             evidence = _execute_request(
                 claim, request, context, execution_deadline

@@ -197,6 +197,18 @@ def test_heartbeat_persists_canonical_progress_and_renews_lease(service) -> None
     assert dict(progress.progress) == {"phase": "checking"}
 
 
+def test_heartbeat_never_shortens_a_longer_existing_lease(service) -> None:
+    jobs, sessions, clock = service
+    jobs.enqueue(parent(sessions, clock).id, NODE_A, "node.probe", COMMIT, {})
+    claim = jobs.claim(NODE_A, "serial-a", 120)
+    assert claim is not None
+    clock.advance(seconds=10)
+
+    progress = jobs.heartbeat(claim, {"phase": "checking"}, 30)
+
+    assert progress.deadline >= claim.deadline
+
+
 def test_public_fence_string_interface_renews_and_completes(service) -> None:
     jobs, sessions, clock = service
     jobs.enqueue(parent(sessions, clock).id, NODE_A, "node.probe", COMMIT, {})

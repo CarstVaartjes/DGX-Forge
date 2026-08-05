@@ -1171,6 +1171,43 @@ def test_bounded_https_fetcher_accepts_only_exact_tuf_routes_and_deadline() -> N
         with pytest.raises(DownloadError):
             fetcher.download_bytes(url, 64)
 
+
+def test_bounded_https_fetcher_observes_deadline_extension_after_first_fetch() -> None:
+    class Response:
+        status = 200
+
+        def __init__(self):
+            self.parts = [b"signed", b""]
+
+        def read(self, amount):
+            return self.parts.pop(0)
+
+        def release_conn(self):
+            pass
+
+    class Pool:
+        def __init__(self) -> None:
+            self.totals: list[float] = []
+
+        def request(self, *args, **kwargs):
+            self.totals.append(kwargs["timeout"].total)
+            return Response()
+
+    pool = Pool()
+    fetcher = BoundedHTTPSFetcher(
+        "https://control.test.example", ssl.create_default_context(), pool=pool
+    )
+    lease = MonotonicDeadline.bind(datetime.now(UTC) + timedelta(seconds=0.2))
+    fetcher.set_deadline(lease)
+    route = "https://control.test.example/agent/v1/tuf/metadata/timestamp.json"
+
+    assert fetcher.download_bytes(route, 64) == b"signed"
+    lease.extend(datetime.now(UTC) + timedelta(seconds=1))
+    assert fetcher.download_bytes(route, 64) == b"signed"
+
+    assert pool.totals[1] > pool.totals[0] + 0.5
+
+
 def _oras_policy(tmp_path: Path) -> tuple[ORASPolicy, Path]:
     record = tmp_path / "oras-record.json"
     executable = tmp_path / "oras"

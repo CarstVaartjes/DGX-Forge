@@ -238,7 +238,11 @@ class AgentJobService:
             raise ValueError("lease must be positive")
         with self._sessions.begin() as session:
             operation, attempt = self._active(session, fence)
-            deadline = self._clock() + timedelta(seconds=lease_seconds)
+            now = self._clock()
+            deadline = max(
+                _aware(attempt.lease_deadline),
+                _aware(now) + timedelta(seconds=lease_seconds),
+            )
             message = AgentProgress(
                 schema_version=1,
                 job_id=operation.parent_job_id,
@@ -251,7 +255,7 @@ class AgentJobService:
             )
             attempt.progress = _document(message.progress)
             attempt.lease_deadline = deadline
-            operation.updated_at = self._clock()
+            operation.updated_at = now
             return message
 
     def succeed(self, fence: AgentFence, result: Mapping[str, object]) -> None:

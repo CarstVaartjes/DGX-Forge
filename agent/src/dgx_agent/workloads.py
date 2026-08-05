@@ -429,11 +429,11 @@ class WorkloadOperations:
         request_value = ProcessRequest.fixed(
             argv=(f"/proc/self/fd/{executable_fd}", *arguments),
             cwd=Path(f"/proc/self/fd/{release_fd}"),
-            timeout_seconds=min(float(policy.timeout_seconds), remaining),
+            timeout_seconds=float(policy.timeout_seconds),
             output_limit_bytes=policy.output_limit_bytes,
             executable_fd=executable_fd,
-            absolute_deadline=deadline.absolute_monotonic,
             additional_fds=(release_fd,),
+            renewable_deadline=deadline,
         )
         return self._runner.run(request_value)
 

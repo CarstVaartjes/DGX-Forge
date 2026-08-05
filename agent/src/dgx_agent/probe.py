@@ -21,6 +21,7 @@ from typing import Any, Protocol
 
 from dgx_agent_protocol import canonical_message
 
+from .deadlines import MonotonicDeadline
 from .nvidia_tools import (
     InstalledPolicy,
     InstalledPolicyError,
@@ -85,6 +86,7 @@ class ProcessRequest:
     close_fds: bool = True
     new_process_group: bool = True
     additional_fds: tuple[int, ...] = ()
+    renewable_deadline: MonotonicDeadline | None = None
 
     @classmethod
     def fixed(
@@ -98,6 +100,7 @@ class ProcessRequest:
         support_archive_fd: int | None = None,
         absolute_deadline: float | None = None,
         additional_fds: tuple[int, ...] = (),
+        renewable_deadline: MonotonicDeadline | None = None,
     ) -> ProcessRequest:
         if (
             not argv
@@ -152,11 +155,17 @@ class ProcessRequest:
         except OSError as error:
             raise ProbeCollectorError("additional process descriptors are invalid") from error
         now = time.monotonic()
-        fixed_deadline = min(
+        hard_deadline = min(
             now + float(timeout_seconds),
             absolute_deadline if absolute_deadline is not None else math.inf,
         )
-        if not math.isfinite(fixed_deadline) or fixed_deadline <= now:
+        if renewable_deadline is not None:
+            if type(renewable_deadline) is not MonotonicDeadline:
+                raise ProbeDeadlineExceeded("process deadline is invalid")
+            fixed_deadline = min(hard_deadline, renewable_deadline.absolute())
+        else:
+            fixed_deadline = hard_deadline
+        if not math.isfinite(hard_deadline) or fixed_deadline <= now:
             raise ProbeDeadlineExceeded("process deadline has elapsed")
         return cls(
             tuple(argv),
@@ -166,12 +175,13 @@ class ProcessRequest:
             output_limit_bytes,
             executable_fd,
             support_archive_fd,
-            fixed_deadline,
+            hard_deadline,
             False,
             True,
             True,
             True,
             tuple(additional_fds),
+            renewable_deadline,
         )
 
     @property
@@ -204,9 +214,10 @@ class BoundedProcessRunner:
         tool_process_group: int | None = None
         tool_pidfd = -1
         total = 0
-        deadline = request.absolute_deadline
-        if deadline is None:
-            deadline = time.monotonic() + request.timeout_seconds
+        hard_deadline = request.absolute_deadline
+        if hard_deadline is None:
+            hard_deadline = time.monotonic() + request.timeout_seconds
+        deadline = _effective_process_deadline(request, hard_deadline)
         execution_deadline = deadline - _CLEANUP_RESERVE_SECONDS
         if time.monotonic() >= execution_deadline:
             raise ProbeDeadlineExceeded("probe process timed out")
@@ -224,7 +235,7 @@ class BoundedProcessRunner:
                     str(request.executable_fd),
                     str(request.support_archive_fd if request.support_archive_fd is not None else -1),
                     ",".join(str(value) for value in request.additional_fds),
-                    repr(deadline),
+                    repr(hard_deadline),
                     str(request.cwd),
                     *request.argv,
                 ],
@@ -268,6 +279,8 @@ class BoundedProcessRunner:
                 status_eof = False
                 final_status: tuple[str, int] | None = None
                 while selector.get_map():
+                    deadline = _effective_process_deadline(request, hard_deadline)
+                    execution_deadline = deadline - _CLEANUP_RESERVE_SECONDS
                     remaining_time = execution_deadline - time.monotonic()
                     if remaining_time <= 0:
                         raise ProbeDeadlineExceeded(
@@ -358,17 +371,20 @@ class BoundedProcessRunner:
                         raise ProbeCollectorError(
                             "probe supervisor exited unexpectedly"
                         )
-                remaining_time = execution_deadline - time.monotonic()
-                if remaining_time <= 0:
-                    raise ProbeDeadlineExceeded(
-                        "probe process timed out", captured_bytes=total
-                    )
-                try:
-                    returncode = process.wait(timeout=remaining_time)
-                except subprocess.TimeoutExpired as error:
-                    raise ProbeDeadlineExceeded(
-                        "probe process timed out", captured_bytes=total
-                    ) from error
+                returncode = process.poll()
+                while returncode is None:
+                    deadline = _effective_process_deadline(request, hard_deadline)
+                    execution_deadline = deadline - _CLEANUP_RESERVE_SECONDS
+                    remaining_time = execution_deadline - time.monotonic()
+                    if remaining_time <= 0:
+                        raise ProbeDeadlineExceeded(
+                            "probe process timed out", captured_bytes=total
+                        )
+                    try:
+                        returncode = process.wait(timeout=min(remaining_time, 0.1))
+                    except subprocess.TimeoutExpired:
+                        continue
+                deadline = _effective_process_deadline(request, hard_deadline)
                 if time.monotonic() >= deadline:
                     raise ProbeDeadlineExceeded(
                         "probe process timed out", captured_bytes=total
@@ -393,7 +409,7 @@ class BoundedProcessRunner:
             if process is not None:
                 _terminate_group(
                     process,
-                    deadline,
+                    _effective_process_deadline(request, hard_deadline),
                     tool_pidfd,
                 )
             raise
@@ -401,7 +417,7 @@ class BoundedProcessRunner:
             if process is not None:
                 _terminate_group(
                     process,
-                    deadline,
+                    _effective_process_deadline(request, hard_deadline),
                     tool_pidfd,
                 )
             raise ProbeCollectorError("probe process could not be executed") from error
@@ -421,6 +437,16 @@ class BoundedProcessRunner:
                 os.close(acknowledgement_write)
             if tool_pidfd >= 0:
                 os.close(tool_pidfd)
+
+
+def _effective_process_deadline(
+    request: ProcessRequest,
+    hard_deadline: float,
+) -> float:
+    renewable = request.renewable_deadline
+    if renewable is None:
+        return hard_deadline
+    return min(hard_deadline, renewable.absolute())
 
 
 def _parse_supervisor_status_line(

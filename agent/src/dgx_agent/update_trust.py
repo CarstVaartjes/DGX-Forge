@@ -103,7 +103,7 @@ class BoundedHTTPSFetcher(FetcherInterface):
         ):
             raise TUFTrustError("TUF HTTPS timeout is invalid")
         self._origin = canonical
-        self._deadline = float("inf")
+        self._deadline: float | MonotonicDeadline = float("inf")
         self._connect_timeout = connect_timeout
         self._read_timeout = read_timeout
         if credential_provider is not None and (
@@ -127,13 +127,24 @@ class BoundedHTTPSFetcher(FetcherInterface):
             )
         )
 
-    def set_deadline(self, absolute_monotonic: float) -> None:
+    def set_deadline(
+        self,
+        deadline: float | MonotonicDeadline,
+    ) -> None:
+        if type(deadline) is MonotonicDeadline:
+            try:
+                deadline.check()
+            except DeadlineBindingError as error:
+                raise TUFTrustError("TUF fetch deadline has elapsed") from error
+            self._deadline = deadline
+            return
         if (
-            not isinstance(absolute_monotonic, (int, float))
-            or absolute_monotonic <= time.monotonic()
+            not isinstance(deadline, (int, float))
+            or isinstance(deadline, bool)
+            or deadline <= time.monotonic()
         ):
             raise TUFTrustError("TUF fetch deadline has elapsed")
-        self._deadline = float(absolute_monotonic)
+        self._deadline = float(deadline)
 
     def _fetch(self, url: str):
         parsed = urlsplit(url)
@@ -148,7 +159,7 @@ class BoundedHTTPSFetcher(FetcherInterface):
             or not _allowed_tuf_path(path)
         ):
             raise DownloadError("TUF URL is outside the reviewed route")
-        remaining = self._deadline - time.monotonic()
+        remaining = self._remaining()
         if remaining <= 0:
             raise DownloadError("TUF fetch deadline elapsed")
         timeout = urllib3.Timeout(
@@ -205,17 +216,23 @@ class BoundedHTTPSFetcher(FetcherInterface):
             if response.status != 200:
                 raise DownloadHTTPError("TUF HTTPS request failed", response.status)
             while True:
-                if time.monotonic() >= self._deadline:
+                if self._remaining() <= 0:
                     raise DownloadError("TUF fetch deadline elapsed")
                 reader = getattr(response, "read1", response.read)
                 chunk = reader(64 * 1024)
-                if time.monotonic() >= self._deadline:
+                if self._remaining() <= 0:
                     raise DownloadError("TUF fetch deadline elapsed")
                 if not chunk:
                     break
                 yield chunk
         finally:
             response.release_conn()
+
+    def _remaining(self) -> float:
+        deadline = self._deadline
+        if isinstance(deadline, MonotonicDeadline):
+            return deadline.remaining()
+        return deadline - time.monotonic()
 
 
 class TUFReleaseTrust:
@@ -280,8 +297,7 @@ class TUFReleaseTrust:
             fixed_deadline.check()
         except DeadlineBindingError:
             raise TUFTrustError("TUF authorization deadline has elapsed")
-        absolute_deadline = fixed_deadline.absolute_monotonic
-        check_deadline = lambda: _check_deadline(absolute_deadline)
+        check_deadline = fixed_deadline.check
         check_deadline()
         _secure_directory(self._metadata_root, fixed_deadline)
         _secure_directory(self._target_root, fixed_deadline)
@@ -300,7 +316,7 @@ class TUFReleaseTrust:
                 check_deadline()
             except OSError as error:
                 raise TUFTrustError("TUF metadata cache is already in use") from error
-            self._fetcher.set_deadline(absolute_deadline)
+            self._fetcher.set_deadline(fixed_deadline)
             marker = self._metadata_root / _BOOTSTRAP_MARKER
             _remove_stale_entry(marker.with_name(marker.name + ".new"), fixed_deadline)
             _remove_stale_entry(self._metadata_root / ".root-link.new", fixed_deadline)
@@ -963,11 +979,6 @@ def _allowed_tuf_path(path: str) -> bool:
     if path.startswith(targets_prefix):
         return bool(_TARGET_FILE.fullmatch(path[len(targets_prefix) :]))
     return False
-
-
-def _check_deadline(absolute_deadline: float) -> None:
-    if time.monotonic() >= absolute_deadline:
-        raise TUFTrustError("TUF authorization deadline has elapsed")
 
 
 def _tuf_deadline(deadline: MonotonicDeadline | None) -> None:

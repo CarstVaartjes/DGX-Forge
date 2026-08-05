@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import math
 import os
 import random
 import re
@@ -17,7 +18,7 @@ from typing import Protocol
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from dgx_agent_protocol import AgentClaim, AgentResult
+from dgx_agent_protocol import AgentClaim, AgentProgress, AgentResult
 
 from .client import (
     AgentClient,
@@ -28,9 +29,10 @@ from .client import (
     IssuedCredential,
 )
 from .config import DEFAULT_CONFIG_PATH, AgentConfig
+from .deadlines import MonotonicDeadline
 from .nvidia_tools import InstalledPolicy
 from .oci import ORASClient, ORASPolicy
-from .operations import OperationContext, OperationRegistry
+from .operations import OperationContext, OperationExecution, OperationRegistry
 from .probe import PinnedNodeProbe
 from .readiness import ReadinessReporter
 from .releases import ReleaseInstaller
@@ -42,6 +44,8 @@ from .workloads import WorkloadOperations
 
 class AgentControl(Protocol):
     def claim(self) -> AgentClaim | None: ...
+
+    def heartbeat(self, progress: AgentProgress) -> AgentProgress: ...
 
     def result(self, result: AgentResult) -> None: ...
 
@@ -56,6 +60,110 @@ class Interrupt(Protocol):
     def wait(self, timeout: float) -> bool: ...
 
 
+_CONTROL_HEARTBEAT_LEASE_SECONDS = 30.0
+_HEARTBEAT_TRANSPORT_BOUND_SECONDS = 15.0
+_HEARTBEAT_SCHEDULING_MARGIN_SECONDS = 5.0
+_DEFAULT_HEARTBEAT_INTERVAL_SECONDS = 10.0
+_MAX_HEARTBEAT_INTERVAL_SECONDS = (
+    _CONTROL_HEARTBEAT_LEASE_SECONDS
+    - _HEARTBEAT_TRANSPORT_BOUND_SECONDS
+    - _HEARTBEAT_SCHEDULING_MARGIN_SECONDS
+)
+_DEFAULT_HEARTBEAT_JOIN_SECONDS = 20.0
+
+
+class AgentHeartbeatShutdownError(RuntimeError):
+    """The agent cannot safely continue while an old heartbeat may be in flight."""
+
+
+class _ActiveHeartbeat:
+    def __init__(
+        self,
+        client: AgentControl,
+        context: OperationContext,
+        claim: AgentClaim,
+        *,
+        interval_seconds: float,
+        join_seconds: float,
+        wait: Callable[[threading.Event, float], bool],
+        execution_deadline: MonotonicDeadline | None,
+        on_authenticated_exchange: Callable[[], None],
+    ) -> None:
+        self._client = client
+        self._context = context
+        self._claim = claim
+        self._interval_seconds = interval_seconds
+        self._join_seconds = join_seconds
+        self._wait = wait
+        self._execution_deadline = execution_deadline
+        self._on_authenticated_exchange = on_authenticated_exchange
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._error: BaseException | None = None
+
+    def start(self) -> None:
+        if self._thread is not None:
+            raise RuntimeError("heartbeat worker already started")
+        exact = self._context.state.lookup_exact(self._claim)
+        if exact is None or exact.result is not None or exact.state != "active":
+            raise RuntimeError("heartbeat attempt is not durably active")
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"dgx-agent-heartbeat-{self._claim.operation_id[:8]}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        thread = self._thread
+        if thread is None:
+            return
+        self._stop.set()
+        thread.join(self._join_seconds)
+        if thread.is_alive():
+            raise AgentHeartbeatShutdownError("heartbeat worker did not stop")
+        if self._error is not None:
+            raise self._error
+
+    def _run(self) -> None:
+        while True:
+            try:
+                if self._wait(self._stop, self._interval_seconds):
+                    return
+                current = self._context.state.lookup_exact(self._claim)
+                if current is None or current.result is not None:
+                    return
+                deadline = (
+                    current.claim.deadline
+                    if current.progress is None
+                    else current.progress.deadline
+                )
+                request = AgentProgress(
+                    schema_version=self._claim.schema_version,
+                    job_id=self._claim.job_id,
+                    operation_id=self._claim.operation_id,
+                    attempt=self._claim.attempt,
+                    fence=self._claim.fence,
+                    node_id=self._claim.node_id,
+                    deadline=deadline,
+                    progress={"phase": "executing"},
+                )
+                response = self._client.heartbeat(request)
+                persisted = self._context.state.heartbeat(
+                    response,
+                    allow_terminal_race=True,
+                )
+                if persisted.state != "active":
+                    return
+                if self._execution_deadline is not None:
+                    self._execution_deadline.extend(response.deadline)
+                self._on_authenticated_exchange()
+            except BaseException as error:  # noqa: BLE001 - transfer to agent thread
+                self._error = error
+                self._stop.set()
+                return
+
+
 class Agent:
     def __init__(
         self,
@@ -68,9 +176,28 @@ class Agent:
         jitter: Callable[[float], float] | None = None,
         credentials: CredentialStore | None = None,
         on_authenticated_exchange: Callable[[], object] | None = None,
+        heartbeat_interval_seconds: float = _DEFAULT_HEARTBEAT_INTERVAL_SECONDS,
+        heartbeat_join_seconds: float = _DEFAULT_HEARTBEAT_JOIN_SECONDS,
+        heartbeat_wait: Callable[[threading.Event, float], bool] | None = None,
     ) -> None:
         if backoff_min_seconds <= 0 or backoff_max_seconds < backoff_min_seconds:
             raise ValueError("backoff bounds are invalid")
+        try:
+            heartbeat_interval = float(heartbeat_interval_seconds)
+            heartbeat_join = float(heartbeat_join_seconds)
+        except (TypeError, ValueError) as error:
+            raise ValueError("heartbeat bounds are invalid") from error
+        if (
+            isinstance(heartbeat_interval_seconds, bool)
+            or not 0 < heartbeat_interval <= _MAX_HEARTBEAT_INTERVAL_SECONDS
+        ):
+            raise ValueError("heartbeat interval must precede control lease")
+        if (
+            isinstance(heartbeat_join_seconds, bool)
+            or not math.isfinite(heartbeat_join)
+            or heartbeat_join <= 0
+        ):
+            raise ValueError("heartbeat join bound must be positive")
         self._client = client
         self._registry = registry
         self._context = context
@@ -80,14 +207,24 @@ class Agent:
         self._credentials = credentials
         self._on_authenticated_exchange = on_authenticated_exchange or (lambda: None)
         self._authenticated_exchange_reported = False
+        self._authenticated_exchange_lock = threading.Lock()
+        self._heartbeat_interval = heartbeat_interval
+        self._heartbeat_join = heartbeat_join
+        self._heartbeat_wait = heartbeat_wait or (
+            lambda stop, timeout: stop.wait(timeout)
+        )
+        self._heartbeat_shutdown_error: AgentHeartbeatShutdownError | None = None
 
     def _report_authenticated_exchange(self) -> None:
-        if self._authenticated_exchange_reported:
-            return
-        self._on_authenticated_exchange()
-        self._authenticated_exchange_reported = True
+        with self._authenticated_exchange_lock:
+            if self._authenticated_exchange_reported:
+                return
+            self._on_authenticated_exchange()
+            self._authenticated_exchange_reported = True
 
     def run_once(self) -> None:
+        if self._heartbeat_shutdown_error is not None:
+            raise self._heartbeat_shutdown_error
         pending = self._context.state.recover_pending()
         if pending is not None:
             assert pending.result is not None
@@ -95,7 +232,7 @@ class Agent:
             return
         active = self._context.state.recover_active()
         if active is not None:
-            execution = self._registry.execute(active.claim, self._context)
+            execution = self._execute(active.claim)
             self._submit(execution.result)
             return
         if self._credentials is not None:
@@ -105,8 +242,43 @@ class Agent:
             self._report_authenticated_exchange()
             return
         self._report_authenticated_exchange()
-        execution = self._registry.execute(claim, self._context)
+        execution = self._execute(claim)
         self._submit(execution.result)
+
+    def _execute(self, claim: AgentClaim) -> OperationExecution:
+        exact = self._context.state.lookup_exact(claim)
+        latest_deadline = (
+            claim.deadline
+            if exact is None or exact.progress is None
+            else exact.progress.deadline
+        )
+        try:
+            execution_deadline = MonotonicDeadline.bind(latest_deadline)
+        except ValueError:
+            execution_deadline = None
+        heartbeat = _ActiveHeartbeat(
+            self._client,
+            self._context,
+            claim,
+            interval_seconds=self._heartbeat_interval,
+            join_seconds=self._heartbeat_join,
+            wait=self._heartbeat_wait,
+            execution_deadline=execution_deadline,
+            on_authenticated_exchange=self._report_authenticated_exchange,
+        )
+        try:
+            return self._registry.execute(
+                claim,
+                self._context,
+                on_active=heartbeat.start,
+                execution_deadline=execution_deadline,
+            )
+        finally:
+            try:
+                heartbeat.stop()
+            except AgentHeartbeatShutdownError as error:
+                self._heartbeat_shutdown_error = error
+                raise
 
     def run_forever(self, stop: Interrupt) -> None:
         backoff = self._backoff_min
