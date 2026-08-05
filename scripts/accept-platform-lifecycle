@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -123,6 +123,10 @@ pool = "default"
 [endpoints]
 chat = "test-model"
 
+[quotas.chat]
+requests_per_minute = 30
+tokens_per_minute = 10000
+
 [lifecycle]
 start_order = "independent"
 stop_order = "independent"
@@ -225,6 +229,8 @@ def run(host: str, display_name: str) -> dict[str, object]:
             healthy=True,
             memory_available_bytes=1_000,
             disk_available_bytes=2_000,
+            memory_total_bytes=4_000,
+            disk_total_bytes=8_000,
             occupied=False,
             agent_state="active",
             protocol_version=1,
@@ -303,8 +309,14 @@ def run(host: str, display_name: str) -> dict[str, object]:
                 "evidence": {
                     "dgx_forge": {
                         "schema_version": 1,
-                        "memory": {"available_bytes": 1_000},
-                        "storage": {"available_bytes": 2_000},
+                        "memory": {
+                            "available_bytes": 1_000,
+                            "total_bytes": 4_000,
+                        },
+                        "storage": {
+                            "available_bytes": 2_000,
+                            "total_bytes": 8_000,
+                        },
                         "accelerator": {"available": True},
                     },
                     "nvidia": {"tools": {}},
@@ -314,19 +326,97 @@ def run(host: str, display_name: str) -> dict[str, object]:
         claimed += 1
         durable = durable_desired_state_observations(sessions)
         assert len(durable) == 1 and len(durable[0].current_workloads) == 1
-        current = durable[0].current_workloads[0]
+        first_current = durable[0].current_workloads[0]
+        assert first_current.release_digest == "a" * 64
+        now += timedelta(seconds=1)
+
+        manifest_path = repository.root / "manifests/releases/test-model.json"
+        replacement = json.loads(manifest_path.read_text())
+        replacement["release_request"]["target_digest"] = "7" * 64
+        for request_payload in replacement["workload_requests"].values():
+            request_payload["release_digest"] = "7" * 64
+        manifest_path.write_text(
+            json.dumps(replacement, sort_keys=True, separators=(",", ":"))
+        )
+        _git(repository.root, "add", ".")
+        _git(repository.root, "commit", "-qm", "replace release A with B")
+        replacement_commit = _git(repository.root, "rev-parse", "HEAD")
+        replacement_reconciler = Reconciler(
+            Policy(),
+            DesiredStateResolver(repository, clock=lambda: now),
+            jobs=jobs,
+            observations=lambda: durable,
+            orchestrator=orchestrator,
+        )
+        replacement_plan = replacement_reconciler.plan(
+            replacement_commit, "inference"
+        )
+        replacement_job = replacement_reconciler.enqueue(
+            replacement_plan.digest,
+            "administrator",
+            "lifecycle-reconcile-replacement",
+        )
+        assert replacement_plan.operation_graph is not None
+        for graph_node in replacement_plan.operation_graph.nodes:
+            operations.enqueue(
+                str(replacement_job["job_id"]),
+                graph_node.node_id,
+                graph_node.kind,
+                replacement_commit,
+                replacement_plan.operation_payloads[graph_node.operation_id],
+            )
+        replacement_claimed = 0
+        while True:
+            claim = operations.claim(
+                node_id.value, "simulated-certificate", 30
+            )
+            if claim is None:
+                break
+            if claim.operation.value == "release.install":
+                evidence = {
+                    "status": "installed",
+                    "release_digest": claim.payload["target_digest"],
+                    "manifest_digest": claim.payload["oci_manifest_digest"],
+                    "adapter_id": claim.payload["adapter_id"],
+                }
+            else:
+                evidence = {
+                    "status": workload_status[claim.operation.value],
+                    "action": claim.operation.value.removeprefix("workload."),
+                    "workload_id": claim.payload["workload_id"],
+                    "release_digest": claim.payload["release_digest"],
+                    "evidence_digest": "f" * 64,
+                }
+            operations.succeed(claim, {"status": "ok", "evidence": evidence})
+            replacement_claimed += 1
+        for phase in ("routes-withdrawn", "dispatching", "accepting", "completed"):
+            orchestrator.advance(
+                replacement_plan.operation_graph.reconciliation_id, phase
+            )
+        replaced_durable = durable_desired_state_observations(sessions)
+        assert (
+            len(replaced_durable) == 1
+            and len(replaced_durable[0].current_workloads) == 1
+            and replaced_durable[0].current_workloads[0].release_digest == "7" * 64
+        )
+        current = replaced_durable[0].current_workloads[0]
+        claimed += replacement_claimed
         audit.extend(
             (
                 f"plan:{plan.digest}",
                 f"persist:{plan.operation_graph.reconciliation_id}",
+                f"replace-commit:{replacement_commit}",
+                f"replace-plan:{replacement_plan.digest}",
+                f"replace-persist:{replacement_plan.operation_graph.reconciliation_id}",
                 f"claims:{claimed}",
                 "probe:observed",
+                "release:a-to-b",
             )
         )
 
         upstream = f"http://{host}:8000/v1"
         route_publisher = RoutePublisher(workspace / "routes", allowed_upstreams={upstream}, validate=lambda _: True, apply=lambda _: None)
-        candidate = RouteCandidate(commit, "agent", "model-repository/revision", (node_id.value,), {"test-model": upstream}, now)
+        candidate = RouteCandidate(replacement_commit, "agent", "model-repository/revision", (node_id.value,), {"test-model": upstream}, now)
         route_publisher.maintenance((node_id.value,), "reconcile")
         audit.append("routes:maintenance")
         route_publisher.publish(candidate)
@@ -342,11 +432,12 @@ def run(host: str, display_name: str) -> dict[str, object]:
             "schema_version": 1, "environment": "simulated-node-and-code-host", "status": "passed" if ok else "failed",
             "dynamic_input": {"host": host, "display_name": display_name}, "node_id": node_id.value,
             "installation_state": journal.state, "installation_gate_count": len(journal.steps),
-            "proposal_sha256": proposal.sha256, "eligible_commit": commit, "profile_source": "model-repository/revision",
+            "proposal_sha256": proposal.sha256, "eligible_commit": replacement_commit, "profile_source": "model-repository/revision",
             "reconciliation": "succeeded", "route_generation": snapshot.generation, "litellm_generation": generation.generation,
             "planner": "DesiredStateResolver",
-            "persisted_operation_count": len(plan.operation_graph.nodes),
+            "persisted_operation_count": len(plan.operation_graph.nodes) + len(replacement_plan.operation_graph.nodes),
             "claimed_operation_count": claimed,
+            "release_transition": {"from": "a" * 64, "to": "7" * 64},
             "durable_observation": {
                 "current_workload": current.workload_id,
                 "current_release": current.release_digest,

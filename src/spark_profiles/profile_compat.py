@@ -44,5 +44,6 @@ def adapt_legacy_profile(profile: ClusterProfile, fleet: Fleet) -> GenericCluste
     )
     return GenericClusterProfile(
         profile.id, profile.accepted_evidence, tuple(sorted(assigned)),
-        tuple(requirements), MappingProxyType(dict(profile.endpoints)), lifecycle,
+        tuple(requirements), MappingProxyType(dict(profile.endpoints)),
+        MappingProxyType({}), lifecycle,
     )

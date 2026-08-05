@@ -8,6 +8,7 @@ import pytest
 from spark_profiles.contracts import (
     ProfileValidationError,
     load_cluster_profile,
+    load_generic_cluster_profile,
     load_workload,
 )
 
@@ -20,6 +21,83 @@ def write_toml(tmp_path: Path, name: str, content: str) -> Path:
     path = tmp_path / name
     path.write_text(content, encoding="utf-8")
     return path
+
+
+def test_generic_profile_loads_repository_pinned_route_quotas(tmp_path: Path) -> None:
+    path = write_toml(
+        tmp_path,
+        "generic.toml",
+        f'''schema_version = 2
+id = "generic"
+accepted_evidence = "inventory/reports/generic.json"
+workloads = ["model"]
+
+[[requirements]]
+workload = "model"
+definition_hash = "{'a' * 64}"
+node_count = 1
+required_labels = {{}}
+min_memory_bytes = 1
+min_disk_bytes = 1
+exclusive = true
+distributed_supported = false
+
+[endpoints]
+chat = "model"
+
+[quotas.chat]
+requests_per_minute = 30
+tokens_per_minute = 10000
+
+[lifecycle]
+start_order = "independent"
+stop_order = "independent"
+''',
+    )
+
+    profile = load_generic_cluster_profile(path)
+
+    assert profile.quotas == {
+        "chat": {"requests_per_minute": 30, "tokens_per_minute": 10000}
+    }
+
+
+def test_generic_profile_rejects_quota_without_matching_endpoint(
+    tmp_path: Path,
+) -> None:
+    path = write_toml(
+        tmp_path,
+        "mismatch.toml",
+        f'''schema_version = 2
+id = "generic"
+accepted_evidence = "inventory/reports/generic.json"
+workloads = ["model"]
+
+[[requirements]]
+workload = "model"
+definition_hash = "{'a' * 64}"
+node_count = 1
+required_labels = {{}}
+min_memory_bytes = 1
+min_disk_bytes = 1
+exclusive = true
+distributed_supported = false
+
+[endpoints]
+chat = "model"
+
+[quotas.other]
+requests_per_minute = 30
+tokens_per_minute = 10000
+
+[lifecycle]
+start_order = "independent"
+stop_order = "independent"
+''',
+    )
+
+    with pytest.raises(ProfileValidationError, match="exactly match"):
+        load_generic_cluster_profile(path)
 
 
 def test_cluster_profile_requires_both_nodes(tmp_path: Path) -> None:

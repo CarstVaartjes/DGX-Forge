@@ -18,6 +18,7 @@ from .logging import redact_text
 from .models import Job, JobAttempt
 
 _SENSITIVE = re.compile(r"(?i)(password|secret|token|private.?key|authorization)")
+_SAFE_POLICY_FIELDS = frozenset({"tokens_per_minute"})
 _MAX_PAYLOAD = 65_536
 
 
@@ -48,7 +49,7 @@ def _canonical_payload(payload: Mapping[str, object]) -> tuple[dict[str, object]
             for key, child in value.items():
                 if not isinstance(key, str):
                     raise TypeError("job payload keys must be strings")
-                if _SENSITIVE.search(key):
+                if key not in _SAFE_POLICY_FIELDS and _SENSITIVE.search(key):
                     raise ValueError("job payload contains a sensitive field")
                 inspect(child)
         elif isinstance(value, list):

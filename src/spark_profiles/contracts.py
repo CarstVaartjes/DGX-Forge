@@ -148,6 +148,7 @@ class GenericClusterProfile:
     workloads: tuple[str, ...]
     requirements: tuple[PlacementRequirement, ...]
     endpoints: Mapping[str, str]
+    quotas: Mapping[str, Mapping[str, int]]
     lifecycle: LifecycleConstraints
 
 
@@ -314,9 +315,17 @@ def load_generic_cluster_profile(path: Path) -> GenericClusterProfile:
         for item in data["requirements"]
     )
     lifecycle = data["lifecycle"]
+    endpoints = dict(data["endpoints"])
+    quotas = {
+        alias: MappingProxyType(dict(quota))
+        for alias, quota in data["quotas"].items()
+    }
+    if set(quotas) != set(endpoints):
+        raise ProfileValidationError("profile quotas must exactly match endpoints")
     return GenericClusterProfile(
         id=data["id"], accepted_evidence=Path(data["accepted_evidence"]),
         workloads=tuple(data["workloads"]), requirements=requirements,
-        endpoints=MappingProxyType(dict(data["endpoints"])),
+        endpoints=MappingProxyType(endpoints),
+        quotas=MappingProxyType(quotas),
         lifecycle=LifecycleConstraints(lifecycle["start_order"], lifecycle["stop_order"]),
     )

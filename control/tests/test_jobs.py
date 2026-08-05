@@ -73,6 +73,15 @@ def test_payload_is_bounded_and_rejects_credential_fields(service) -> None:
     with pytest.raises(TypeError, match="keys"):
         jobs.enqueue("probe", "admin", "abc", [], {1: "not-a-string-key"})
 
+    accepted = jobs.enqueue(
+        "reconcile",
+        "admin",
+        "abc",
+        ["spk_1"],
+        {"quota": {"tokens_per_minute": 10_000}},
+    )
+    assert accepted.payload == {"quota": {"tokens_per_minute": 10_000}}
+
 
 def test_matching_fence_can_heartbeat_wait_and_fail(service) -> None:
     jobs, _ = service

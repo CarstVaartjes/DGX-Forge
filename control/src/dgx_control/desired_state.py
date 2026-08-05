@@ -73,6 +73,7 @@ class CurrentWorkloadState:
     workload_id: str
     release_digest: str
     adapter_id: str
+    managed: bool = True
 
     def __post_init__(self) -> None:
         if _IDENTIFIER.fullmatch(self.workload_id) is None:
@@ -81,6 +82,8 @@ class CurrentWorkloadState:
             raise ValueError("current workload release digest is invalid")
         if self.adapter_id not in _SUPPORTED_ADAPTERS:
             raise ValueError("current workload adapter is not reviewed")
+        if not isinstance(self.managed, bool):
+            raise TypeError("current workload management state is invalid")
 
 
 @dataclass(frozen=True)
@@ -97,6 +100,8 @@ class DesiredStateObservation:
     protocol_version: int | None
     capabilities: tuple[str, ...]
     current_workloads: tuple[CurrentWorkloadState, ...] = ()
+    memory_total_bytes: int | None = None
+    disk_total_bytes: int | None = None
 
     def __post_init__(self) -> None:
         NodeId.parse(self.node_id)
@@ -127,6 +132,16 @@ class DesiredStateObservation:
         if self.occupied is not bool(current_workloads):
             raise ValueError("node occupancy does not match current workload evidence")
         object.__setattr__(self, "current_workloads", current_workloads)
+        for total, available, field in (
+            (self.memory_total_bytes, self.memory_available_bytes, "memory"),
+            (self.disk_total_bytes, self.disk_available_bytes, "disk"),
+        ):
+            if total is not None and (
+                not isinstance(total, int)
+                or isinstance(total, bool)
+                or total < available
+            ):
+                raise ValueError(f"node {field} total capacity is invalid")
 
 
 class DesiredStateResolver:
@@ -241,6 +256,7 @@ class DesiredStateResolver:
             now=self._clock(),
             ttl=self._observation_ttl,
             desired_workloads=frozenset(workload_ids),
+            desired_releases=releases,
         )
         placements: dict[str, tuple[str, ...]] = {}
         available = placement_observations
@@ -308,11 +324,21 @@ def durable_desired_state_observations(
         payload = _mapping(observation.payload, "health observation")
         memory = payload.get("memory_available_bytes")
         disk = payload.get("disk_available_bytes")
+        memory_total = payload.get("memory_total_bytes")
+        disk_total = payload.get("disk_total_bytes")
         if (
             not isinstance(memory, int)
             or isinstance(memory, bool)
             or not isinstance(disk, int)
             or isinstance(disk, bool)
+            or (
+                memory_total is not None
+                and (not isinstance(memory_total, int) or isinstance(memory_total, bool))
+            )
+            or (
+                disk_total is not None
+                and (not isinstance(disk_total, int) or isinstance(disk_total, bool))
+            )
         ):
             raise TypeError("health observation capacity is invalid")
         observed_at = _aware(observation.observed_at)
@@ -338,6 +364,8 @@ def durable_desired_state_observations(
                         key=lambda item: item.workload_id,
                     )
                 ),
+                memory_total_bytes=cast(int | None, memory_total),
+                disk_total_bytes=cast(int | None, disk_total),
             )
         )
     return tuple(projected)
@@ -680,11 +708,14 @@ def _profile_cross_references(
     profile: Mapping[str, Any], workloads: Mapping[str, Mapping[str, Any]]
 ) -> None:
     endpoints = _mapping(profile["endpoints"], "profile endpoints")
-    if not endpoints or not all(
+    quotas = _mapping(profile["quotas"], "profile quotas")
+    if not all(
         _IDENTIFIER.fullmatch(alias) and workload_id in workloads
         for alias, workload_id in endpoints.items()
     ):
         raise ValueError("profile route reference is invalid")
+    if set(quotas) != set(endpoints):
+        raise ValueError("profile quota reference is invalid")
     selected = set(workloads)
     for workload_id, workload in workloads.items():
         conflicts = set(cast(Sequence[str], workload["conflicts"]))
@@ -703,6 +734,7 @@ def _placement_observations(
     now: datetime,
     ttl: timedelta,
     desired_workloads: frozenset[str],
+    desired_releases: Mapping[str, Mapping[str, Any]],
 ) -> dict[NodeId, NodeObservation]:
     now = _aware(now)
     resolved: dict[NodeId, NodeObservation] = {}
@@ -720,15 +752,39 @@ def _placement_observations(
         capabilities = set(observation.capabilities)
         if not _REQUIRED_CAPABILITIES <= capabilities <= _IMPLEMENTED_CAPABILITIES:
             raise ValueError("agent capabilities are incompatible")
+        managed = bool(observation.current_workloads) and all(
+            item.managed for item in observation.current_workloads
+        )
+        reclaimable = managed and any(
+            item.workload_id not in desired_workloads
+            or item.release_digest
+            != cast(
+                Mapping[str, object],
+                desired_releases[item.workload_id]["release_request"],
+            )["target_digest"]
+            or item.adapter_id
+            != cast(
+                Mapping[str, object],
+                desired_releases[item.workload_id]["release_request"],
+            )["adapter_id"]
+            for item in observation.current_workloads
+        )
+        retained = managed and not reclaimable
+        if (reclaimable or retained) and (
+            observation.memory_total_bytes is None
+            or observation.disk_total_bytes is None
+        ):
+            raise ValueError("reclaimable node total capacity is unavailable")
         resolved[node_id] = NodeObservation(
             node_id,
             observation.healthy,
-            observation.memory_available_bytes,
-            observation.disk_available_bytes,
-            any(
-                item.workload_id not in desired_workloads
-                for item in observation.current_workloads
-            ),
+            cast(int, observation.memory_total_bytes)
+            if managed
+            else observation.memory_available_bytes,
+            cast(int, observation.disk_total_bytes)
+            if managed
+            else observation.disk_available_bytes,
+            observation.occupied and not managed,
         )
     if set(resolved) != set(fleet.nodes):
         raise ValueError("durable observations must exactly cover the fleet")
@@ -745,13 +801,21 @@ def _routes(
         _mapping(profile["endpoints"], "profile endpoints").items()
     ):
         endpoint = cast(Mapping[str, object], releases[workload_id]["endpoint"])
+        quota = _mapping(
+            _mapping(profile["quotas"], "profile quotas")[alias], "profile quota"
+        )
         result[alias] = MappingProxyType(
             {
                 "workload_id": workload_id,
                 "nodes": placements[workload_id],
+                "entrypoint_node_id": placements[workload_id][0],
                 "scheme": endpoint["scheme"],
                 "port": endpoint["port"],
                 "path": endpoint["path"],
+                "quota": MappingProxyType(dict(quota)),
+                "quota_digest": hashlib.sha256(
+                    canonical_message(quota)
+                ).hexdigest(),
             }
         )
     return MappingProxyType(result)
@@ -771,72 +835,75 @@ def _operations(
 ) -> tuple[OperationGraph, Mapping[str, Mapping[str, object]]]:
     nodes: dict[str, OperationNode] = {}
     payloads: dict[str, Mapping[str, object]] = {}
-    for workload_id, targets in sorted(placements.items()):
-        current = {
-            node_id: next(
-                (
-                    item
-                    for item in observations[node_id].current_workloads
-                    if item.workload_id == workload_id
-                ),
-                None,
-            )
-            for node_id in targets
-        }
-        active = {node_id: item for node_id, item in current.items() if item is not None}
-        if active and set(active) != set(targets):
-            raise ValueError("current workload placement drift is uncertain")
-        if len(
-            {(item.release_digest, item.adapter_id) for item in active.values()}
-        ) > 1:
-            raise ValueError("current workload release drift is uncertain")
-        operation_ids: dict[tuple[str, str], str] = {}
+    current = {
+        (item.workload_id, observation.node_id): item
+        for observation in observations.values()
+        for item in observation.current_workloads
+        if item.managed
+    }
+    desired_exact: set[tuple[str, str]] = set()
+    for workload_id, targets in placements.items():
+        release = cast(Mapping[str, object], releases[workload_id]["release_request"])
         for node_id in targets:
-            kinds = _PLANNED_OPERATIONS if active else _PLANNED_OPERATIONS[1:]
-            for kind in kinds:
+            state = current.get((workload_id, node_id))
+            if state is not None and (
+                state.release_digest == release["target_digest"]
+                and state.adapter_id == release["adapter_id"]
+            ):
+                desired_exact.add((workload_id, node_id))
+    teardown = {
+        key: state for key, state in current.items() if key not in desired_exact
+    }
+    stop_ids = {
+        key: f"{key[0]}:{key[1]}:{AgentOperation.WORKLOAD_STOP.value}"
+        for key in teardown
+    }
+    for workload_id in sorted({key[0] for key in teardown}):
+        old_nodes = sorted(node_id for old_id, node_id in teardown if old_id == workload_id)
+        head = old_nodes[0]
+        for node_id in old_nodes:
+            state = teardown[(workload_id, node_id)]
+            operation_id = stop_ids[(workload_id, node_id)]
+            dependencies = ()
+            if node_id != head and lifecycle["stop_order"] == "entrypoint-before-workers":
+                dependencies = (stop_ids[(workload_id, head)],)
+            payload: Mapping[str, object] = MappingProxyType(
+                {
+                    "schema_version": 1,
+                    "workload_id": state.workload_id,
+                    "release_digest": state.release_digest,
+                    "adapter_id": state.adapter_id,
+                }
+            )
+            payloads[operation_id] = payload
+            nodes[operation_id] = OperationNode(
+                operation_id,
+                node_id,
+                workload_id,
+                AgentOperation.WORKLOAD_STOP.value,
+                dependencies,
+                None,
+                _payload_digest(payload),
+            )
+    all_stops = tuple(sorted(stop_ids.values()))
+    for workload_id, targets in sorted(placements.items()):
+        deploy_targets = tuple(
+            node_id for node_id in targets if (workload_id, node_id) not in desired_exact
+        )
+        operation_ids: dict[tuple[str, str], str] = {}
+        for node_id in deploy_targets:
+            for kind in _PLANNED_OPERATIONS[1:]:
                 operation_ids[(node_id, kind)] = f"{workload_id}:{node_id}:{kind}"
         worker_starts = tuple(
             operation_ids[(node_id, AgentOperation.WORKLOAD_START.value)]
-            for node_id in targets[1:]
+            for node_id in deploy_targets
+            if node_id != targets[0]
         )
-        worker_stops = (
-            tuple(
-                operation_ids[(node_id, AgentOperation.WORKLOAD_STOP.value)]
-                for node_id in targets[1:]
-            )
-            if active
-            else ()
-        )
-        for node_id in targets:
-            kinds = _PLANNED_OPERATIONS if active else _PLANNED_OPERATIONS[1:]
-            for kind in kinds:
+        for node_id in deploy_targets:
+            for kind in _PLANNED_OPERATIONS[1:]:
                 operation_id = operation_ids[(node_id, kind)]
-                if kind == AgentOperation.WORKLOAD_STOP.value:
-                    dependencies = ()
-                    if (
-                        node_id != targets[0]
-                        and lifecycle["stop_order"] == "entrypoint-before-workers"
-                    ):
-                        dependencies = (
-                            operation_ids[
-                                (targets[0], AgentOperation.WORKLOAD_STOP.value)
-                            ],
-                        )
-                elif kind == AgentOperation.RELEASE_INSTALL.value:
-                    if not active:
-                        dependencies = ()
-                    elif lifecycle["stop_order"] == "entrypoint-before-workers":
-                        dependencies = worker_stops or (
-                            operation_ids[
-                                (targets[0], AgentOperation.WORKLOAD_STOP.value)
-                            ],
-                        )
-                    else:
-                        dependencies = (
-                            operation_ids[
-                                (node_id, AgentOperation.WORKLOAD_STOP.value)
-                            ],
-                        )
+                if kind == AgentOperation.RELEASE_INSTALL.value:
+                    dependencies = all_stops
                 elif kind == AgentOperation.WORKLOAD_PREPARE.value:
                     dependencies = (
                         operation_ids[(node_id, AgentOperation.RELEASE_INSTALL.value)],
@@ -863,16 +930,6 @@ def _operations(
                         Mapping[str, object],
                         releases[workload_id]["release_request"],
                     )
-                elif kind == AgentOperation.WORKLOAD_STOP.value:
-                    current_state = active[node_id]
-                    payload = MappingProxyType(
-                        {
-                            "schema_version": 1,
-                            "workload_id": current_state.workload_id,
-                            "release_digest": current_state.release_digest,
-                            "adapter_id": current_state.adapter_id,
-                        }
-                    )
                 else:
                     requests = cast(
                         Mapping[str, Mapping[str, object]],
@@ -894,7 +951,16 @@ def _operations(
                     payload_digest=_payload_digest(payload),
                 )
     ordered = _topological(nodes)
-    targets = tuple(sorted({node.node_id for node in ordered}))
+    targets = tuple(
+        sorted(
+            {node.node_id for node in ordered}
+            | {
+                node_id
+                for workload_targets in placements.values()
+                for node_id in workload_targets
+            }
+        )
+    )
     graph_document = {
         "schema_version": 1,
         "base_commit": commit,

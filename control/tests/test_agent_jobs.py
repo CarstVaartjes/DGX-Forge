@@ -36,6 +36,27 @@ PROBE_RESULT = {
 }
 
 
+@pytest.mark.parametrize("total", [999, -1, True, "4000"])
+def test_probe_total_capacity_must_be_bounded_and_cover_available(
+    total: object,
+) -> None:
+    result = {
+        "status": "ok",
+        "evidence": {
+            "dgx_forge": {
+                "schema_version": 1,
+                "memory": {"available_bytes": 1_000, "total_bytes": total},
+                "storage": {"available_bytes": 2_000, "total_bytes": 8_000},
+                "accelerator": {"available": True},
+            },
+            "nvidia": {"tools": {}},
+        },
+    }
+
+    with pytest.raises(ValueError, match="capacity"):
+        AgentJobService._probe_health(result)
+
+
 class Clock:
     def __init__(self) -> None:
         self.now = datetime(2026, 8, 3, tzinfo=UTC)

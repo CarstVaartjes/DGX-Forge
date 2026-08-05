@@ -51,7 +51,7 @@ def test_v2_schemas_have_no_spark_named_properties() -> None:
 def test_generic_admission_reserves_exclusive_nodes_across_requirements() -> None:
     subject = legacy_fleet()
     requirement = lambda name: PlacementRequirement(name, "a" * 64, 1, {}, 1, 1, True, False, False)
-    profile = GenericClusterProfile("two", Path("evidence"), ("a", "b"), (requirement("a"), requirement("b")), {}, LifecycleConstraints("independent", "independent"))
+    profile = GenericClusterProfile("two", Path("evidence"), ("a", "b"), (requirement("a"), requirement("b")), {}, {}, LifecycleConstraints("independent", "independent"))
     topology = {"schema_version": 1, "nodes": [node.value for node in subject.nodes], "links": []}
     observations = tuple(NodeObservation(node, True, 10, 10, False) for node in subject.nodes)
     report, plans = check_generic_admission(profile, subject, topology, observations)

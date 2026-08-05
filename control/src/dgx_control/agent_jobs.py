@@ -468,6 +468,8 @@ class AgentJobService:
         disk_available = (
             storage.get("available_bytes") if isinstance(storage, Mapping) else None
         )
+        memory_total = memory.get("total_bytes") if isinstance(memory, Mapping) else None
+        disk_total = storage.get("total_bytes") if isinstance(storage, Mapping) else None
         accelerator_available = (
             accelerator.get("available")
             if isinstance(accelerator, Mapping)
@@ -480,6 +482,22 @@ class AgentJobService:
             or not isinstance(disk_available, int)
             or isinstance(disk_available, bool)
             or not 0 <= disk_available <= 2**63 - 1
+            or (
+                memory_total is not None
+                and (
+                    not isinstance(memory_total, int)
+                    or isinstance(memory_total, bool)
+                    or not memory_available <= memory_total <= 2**63 - 1
+                )
+            )
+            or (
+                disk_total is not None
+                and (
+                    not isinstance(disk_total, int)
+                    or isinstance(disk_total, bool)
+                    or not disk_available <= disk_total <= 2**63 - 1
+                )
+            )
             or not isinstance(accelerator_available, bool)
         ):
             raise ValueError("successful node probe capacity is invalid")
@@ -500,6 +518,10 @@ class AgentJobService:
             "memory_available_bytes": memory_available,
             "disk_available_bytes": disk_available,
         }
+        if memory_total is not None:
+            observation["memory_total_bytes"] = memory_total
+        if disk_total is not None:
+            observation["disk_total_bytes"] = disk_total
         if len(canonical_message(observation)) > 1024:
             raise ValueError("node probe health observation is too large")
         return observation

@@ -61,8 +61,8 @@ PROBE_RESULT = {
     "evidence": {
         "dgx_forge": {
             "schema_version": 1,
-            "memory": {"available_bytes": 1_000},
-            "storage": {"available_bytes": 2_000},
+            "memory": {"available_bytes": 1_000, "total_bytes": 4_000},
+            "storage": {"available_bytes": 2_000, "total_bytes": 8_000},
             "accelerator": {"available": True},
         },
         "nvidia": {"tools": {}},
@@ -519,7 +519,9 @@ def test_exact_fenced_probe_success_writes_bounded_durable_health(agent_system) 
         assert observations[0].observed_at.replace(tzinfo=UTC) == clock.now
         assert observations[0].payload == {
             "disk_available_bytes": 2_000,
+            "disk_total_bytes": 8_000,
             "memory_available_bytes": 1_000,
+            "memory_total_bytes": 4_000,
             "status": "healthy",
         }
 
