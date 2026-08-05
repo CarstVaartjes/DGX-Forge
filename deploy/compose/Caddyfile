@@ -43,6 +43,16 @@
 	handle /v1/* {
 		reverse_proxy litellm:4000
 	}
+	@litellm_repository_authority {
+		method POST PUT PATCH DELETE
+		path /litellm/model /litellm/model/* /litellm/model_group /litellm/model_group/* /litellm/config /litellm/config/*
+	}
+	handle @litellm_repository_authority {
+		respond 403
+	}
+	handle_path /litellm/* {
+		reverse_proxy litellm:4000
+	}
 	handle /grafana/* {
 		reverse_proxy grafana:3000
 	}

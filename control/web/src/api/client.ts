@@ -15,11 +15,11 @@ import type {
 } from "./types";
 
 function csrfToken(): string | undefined {
-  return document.cookie
+  const cookie = document.cookie
     .split(";")
     .map(value => value.trim())
-    .find(value => value.startsWith("dgx_csrf="))
-    ?.split("=", 2)[1];
+    .find(value => value.startsWith("dgx_csrf="));
+  return cookie?.slice(cookie.indexOf("=") + 1);
 }
 
 function resultData<T>(result: {data?: T; response: Response}): T {
@@ -71,9 +71,10 @@ export class ApiClient implements ControlApi {
     return resultData(await this.generated.GET("/api/v1/agents/enrollments"));
   }
 
-  async createEnrollmentGrant(nodeId: string, ttlSeconds: number): Promise<EnrollmentGrantResponse> {
+  async createEnrollmentGrant(nodeId: string, ttlSeconds: number, signal?: AbortSignal): Promise<EnrollmentGrantResponse> {
     return resultData(await this.generated.POST("/api/v1/agents/enrollments/grants", {
       body: {node_id: nodeId, ttl_seconds: ttlSeconds},
+      signal,
     }));
   }
 

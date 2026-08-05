@@ -134,6 +134,11 @@ services:
     user: "10002:10001"
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
+    environment:
+      DISABLE_ADMIN_UI: "False"
+      LITELLM_UI_PATH: /tmp/litellm-ui
+      SERVER_ROOT_PATH: /litellm
+      STORE_MODEL_IN_DB: "False"
     secrets: [litellm-master-key, litellm-upstream-key, litellm-database-url]
     volumes:
       - ./litellm/bootstrap-config.json:/app/bootstrap-config.json:ro

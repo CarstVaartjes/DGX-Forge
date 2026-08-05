@@ -20,7 +20,7 @@ export interface ControlApi {
   reconcile(digest: string): Promise<Record<string, unknown>>;
   agents(): Promise<AgentsResponse>;
   enrollments(): Promise<EnrollmentListResponse>;
-  createEnrollmentGrant(nodeId: string, ttlSeconds: number): Promise<EnrollmentGrantResponse>;
+  createEnrollmentGrant(nodeId: string, ttlSeconds: number, signal?: AbortSignal): Promise<EnrollmentGrantResponse>;
   approveEnrollment(enrollmentId: string): Promise<EnrollmentDecisionResponse>;
   rejectEnrollment(enrollmentId: string, reason: string): Promise<EnrollmentDecisionResponse>;
   revokeAgentNode(nodeId: string): Promise<void>;

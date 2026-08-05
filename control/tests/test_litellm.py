@@ -38,6 +38,17 @@ def test_rendered_config_contains_secret_references_not_values(tmp_path: Path) -
     assert decoded["model_list"][0]["model_name"] == "deepseek"
 
 
+def test_rendered_config_enables_ui_without_database_model_authority(
+    tmp_path: Path,
+) -> None:
+    publisher = LiteLlmPublisher(tmp_path, validate=lambda _: True, apply=lambda _: None)
+
+    config = json.loads(publisher.render(_snapshot(), _policy()))
+
+    assert config["general_settings"]["disable_admin_ui"] is False
+    assert config["general_settings"]["store_model_in_db"] is False
+
+
 def test_apply_is_atomic_and_retains_previous_generation(tmp_path: Path) -> None:
     applied = []
     publisher = LiteLlmPublisher(tmp_path, validate=lambda content: b"deepseek" in content, apply=lambda content: applied.append(content))

@@ -2,6 +2,8 @@ import {ApiClient} from "./client";
 
 afterEach(() => {
   document.cookie = "dgx_csrf=; Max-Age=0; path=/";
+  document.cookie = "other_cookie=; Max-Age=0; path=/";
+  document.cookie = "third_cookie=; Max-Age=0; path=/";
   vi.unstubAllGlobals();
 });
 
@@ -41,3 +43,30 @@ it("adds the session CSRF token to generated enrollment mutations", async () => 
   expect(captured!.headers.get("X-CSRF-Token")).toBe("csrf-value");
   expect(captured!.credentials).toBe("same-origin");
 });
+
+it.each(["nonce=", "nonce==", "nonce=middle=="]) (
+  "preserves the complete padded CSRF cookie value %s among multiple cookies",
+  async csrfValue => {
+    // Break caught: splitting every '=' silently truncates padded CSRF tokens.
+    document.cookie = "other_cookie=other-value; path=/";
+    document.cookie = `dgx_csrf=${csrfValue}; path=/`;
+    document.cookie = "third_cookie=third-value; path=/";
+    let captured: Request | undefined;
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      captured = input as Request;
+      return new Response(JSON.stringify({
+        expires_at: "2026-08-05T10:15:00Z",
+        id: "grant-001",
+        node_id: "spk_0123456789abcdef0123456789abcdef",
+        token: "g".repeat(48),
+      }), {headers: {"Content-Type": "application/json"}, status: 201});
+    });
+
+    await new ApiClient().createEnrollmentGrant(
+      "spk_0123456789abcdef0123456789abcdef",
+      300,
+    );
+
+    expect(captured!.headers.get("X-CSRF-Token")).toBe(csrfValue);
+  },
+);

@@ -119,8 +119,9 @@ class LiteLlmPublisher:
         document = {
             "general_settings": {
                 "database_url": "os.environ/LITELLM_DATABASE_URL",
-                "disable_admin_ui": True,
+                "disable_admin_ui": False,
                 "master_key": "os.environ/LITELLM_MASTER_KEY",
+                "store_model_in_db": False,
             },
             "litellm_settings": {
                 "drop_params": True,
@@ -174,8 +175,9 @@ class LiteLlmPublisher:
         document = {
             "general_settings": {
                 "database_url": "os.environ/LITELLM_DATABASE_URL",
-                "disable_admin_ui": True,
+                "disable_admin_ui": False,
                 "master_key": "os.environ/LITELLM_MASTER_KEY",
+                "store_model_in_db": False,
             },
             "litellm_settings": {
                 "drop_params": True,

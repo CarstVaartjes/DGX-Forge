@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useId, useState} from "react";
+import {useCallback, useEffect, useId, useRef, useState} from "react";
 import type {
   AgentSummary,
   ControlApi,
@@ -20,6 +20,68 @@ function sameOriginPath(configured: string | undefined, fallback: string): strin
 
 function valueOrDash(value: string | number | null | undefined): string {
   return value === null || value === undefined || value === "" ? "—" : String(value);
+}
+
+const AGENT_PAGE_SIZE = 20;
+const CAPABILITY_PAGE_SIZE = 3;
+const MAX_CAPABILITY_LENGTH = 80;
+
+function boundedText(value: string): string {
+  return value.length > MAX_CAPABILITY_LENGTH
+    ? `${value.slice(0, MAX_CAPABILITY_LENGTH)}…`
+    : value;
+}
+
+function certificateSnapshot(agent: AgentSummary): string {
+  return [agent.node_id, agent.state, agent.certificate_expires_at, agent.protocol_version].join("\u0000");
+}
+
+function enrollmentEvidenceSnapshot(enrollment: EnrollmentSummary): string {
+  return [
+    enrollment.id,
+    enrollment.node_id,
+    enrollment.state,
+    enrollment.host_key_fingerprint,
+    enrollment.hardware_fingerprint,
+    enrollment.agent_digest,
+    enrollment.csr_public_key_fingerprint,
+    enrollment.boot_id,
+    enrollment.created_at,
+    enrollment.certificate_fingerprint,
+    enrollment.certificate_serial,
+  ].join("\u0000");
+}
+
+function Capabilities({agent}: {agent: AgentSummary}) {
+  const [page, setPage] = useState(0);
+  const pageCount = Math.max(1, Math.ceil(agent.capabilities.length / CAPABILITY_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount - 1);
+  const start = safePage * CAPABILITY_PAGE_SIZE;
+  const visible = agent.capabilities.slice(start, start + CAPABILITY_PAGE_SIZE);
+  const end = start + visible.length;
+
+  if (agent.capabilities.length === 0) return <>—</>;
+
+  return <div className="capability-list">
+    <span role="status" aria-label={`Capability result count for ${agent.node_id}`}>
+      Capabilities {start + 1}–{end} of {agent.capabilities.length}
+    </span>
+    <span>{visible.map(boundedText).join(", ")}</span>
+    {pageCount > 1 && <div className="pagination">
+      <button
+        type="button"
+        aria-label={`Previous capabilities for ${agent.node_id}`}
+        disabled={safePage === 0}
+        onClick={() => setPage(current => Math.max(0, current - 1))}
+      >Previous</button>
+      <button
+        type="button"
+        aria-label={`Next capabilities for ${agent.node_id}`}
+        disabled={safePage === pageCount - 1}
+        onClick={() => setPage(current => Math.min(pageCount - 1, current + 1))}
+      >Next</button>
+    </div>}
+  </div>;
 }
 
 function CertificateControls({agent, onRevoke}: {agent: AgentSummary; onRevoke(nodeId: string): Promise<void>}) {
@@ -59,8 +121,13 @@ export function AgentsPage({api}: {api: ControlApi}) {
   const [error, setError] = useState("");
   const [status, setStatus] = useState("");
   const [grant, setGrant] = useState<EnrollmentGrantResponse>();
+  const [grantPending, setGrantPending] = useState(false);
   const [grantNodeId, setGrantNodeId] = useState("");
   const [grantTtl, setGrantTtl] = useState("300");
+  const [agentPage, setAgentPage] = useState(0);
+  const [dataRevision, setDataRevision] = useState(0);
+  const grantRequest = useRef<{controller: AbortController; id: number} | undefined>(undefined);
+  const grantRequestId = useRef(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -72,8 +139,10 @@ export function AgentsPage({api}: {api: ControlApi}) {
         api.fleet(),
       ]);
       setAgents(agentResult.agents);
+      setAgentPage(0);
       setEnrollments(enrollmentResult.enrollments);
       setFleet(fleetResult);
+      setDataRevision(current => current + 1);
     } catch (value) {
       setError(value instanceof Error ? value.message : "Unable to load agent data");
     } finally {
@@ -82,6 +151,11 @@ export function AgentsPage({api}: {api: ControlApi}) {
   }, [api]);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => () => {
+    grantRequestId.current += 1;
+    grantRequest.current?.controller.abort();
+    grantRequest.current = undefined;
+  }, []);
 
   async function mutate(action: () => Promise<void>) {
     setError("");
@@ -94,12 +168,31 @@ export function AgentsPage({api}: {api: ControlApi}) {
 
   async function createGrant(event: React.FormEvent) {
     event.preventDefault();
-    setGrant(undefined);
-    await mutate(async () => {
-      const created = await api.createEnrollmentGrant(grantNodeId, Number(grantTtl));
+    if (grantPending || grant) return;
+    const controller = new AbortController();
+    const requestId = ++grantRequestId.current;
+    grantRequest.current = {controller, id: requestId};
+    setGrantPending(true);
+    setError("");
+    setStatus("");
+    try {
+      const created = await api.createEnrollmentGrant(
+        grantNodeId,
+        Number(grantTtl),
+        controller.signal,
+      );
+      if (requestId !== grantRequestId.current) return;
       setGrant(created);
       setStatus(`One-time grant created for ${created.node_id}`);
-    });
+    } catch (value) {
+      if (requestId !== grantRequestId.current || controller.signal.aborted) return;
+      setError(value instanceof Error ? value.message : "Enrollment grant creation failed");
+    } finally {
+      if (requestId === grantRequestId.current) {
+        grantRequest.current = undefined;
+        setGrantPending(false);
+      }
+    }
   }
 
   async function approve(enrollmentId: string) {
@@ -135,13 +228,22 @@ export function AgentsPage({api}: {api: ControlApi}) {
   }
 
   function refresh() {
+    grantRequestId.current += 1;
+    grantRequest.current?.controller.abort();
+    grantRequest.current = undefined;
+    setGrantPending(false);
     setGrant(undefined);
     setStatus("");
     void load();
   }
 
   const compatibility = new Map(fleet?.nodes.map(node => [node.id, node.compatibility]));
-  const litellmPath = sameOriginPath(import.meta.env.VITE_LITELLM_ADMIN_PATH, "/ui/");
+  const agentPageCount = Math.max(1, Math.ceil(agents.length / AGENT_PAGE_SIZE));
+  const safeAgentPage = Math.min(agentPage, agentPageCount - 1);
+  const agentStart = safeAgentPage * AGENT_PAGE_SIZE;
+  const visibleAgents = agents.slice(agentStart, agentStart + AGENT_PAGE_SIZE);
+  const agentEnd = agentStart + visibleAgents.length;
+  const litellmPath = sameOriginPath(import.meta.env.VITE_LITELLM_ADMIN_PATH, "/litellm/ui/");
   const grafanaPath = sameOriginPath(import.meta.env.VITE_GRAFANA_PATH, "/grafana/");
 
   return <>
@@ -172,8 +274,9 @@ export function AgentsPage({api}: {api: ControlApi}) {
         <label>Grant lifetime in seconds
           <input required min="1" max="600" type="number" value={grantTtl} onChange={event => setGrantTtl(event.target.value)}/>
         </label>
-        <button type="submit">Create one-time grant</button>
+        <button type="submit" disabled={grantPending || Boolean(grant)}>Create one-time grant</button>
       </form>
+      {grantPending && <p role="status" aria-label="Enrollment grant request">Creating one-time enrollment grant…</p>}
       {grant && <div className="grant-secret" role="status" aria-label="One-time enrollment grant">
         <strong>Copy this token now. It will not be shown again.</strong>
         <code>{grant.token}</code>
@@ -184,6 +287,11 @@ export function AgentsPage({api}: {api: ControlApi}) {
 
     <section aria-labelledby="agents-heading">
       <h3 id="agents-heading">Enrolled agents</h3>
+      <p role="status" aria-label="Agent result count">
+        {agents.length === 0
+          ? "Showing agents 0 of 0"
+          : `Showing agents ${agentStart + 1}–${agentEnd} of ${agents.length}`}
+      </p>
       <div className="table-scroll"><table aria-label="Enrolled agents">
         <caption>Current bounded agent and certificate status</caption>
         <thead><tr>
@@ -194,22 +302,47 @@ export function AgentsPage({api}: {api: ControlApi}) {
           <th scope="col">Compatibility</th>
           <th scope="col">Capabilities</th>
         </tr></thead>
-        <tbody>{agents.map(agent => <tr key={agent.node_id}>
+        <tbody>{visibleAgents.map(agent => <tr key={agent.node_id}>
           <th scope="row"><code>{agent.node_id}</code></th>
           <td><span className="status">{agent.state}</span><small>Protocol {valueOrDash(agent.protocol_version)}</small></td>
           <td>{valueOrDash(agent.last_seen_at)}<small>{agent.stale ? "Stale" : `${valueOrDash(agent.last_seen_age_seconds)} seconds ago`}</small></td>
           <td>{valueOrDash(agent.certificate_expires_at)}</td>
           <td>{compatibility.get(agent.node_id) ?? "unknown"}</td>
-          <td>{agent.capabilities.length ? agent.capabilities.join(", ") : "—"}</td>
+          <td><Capabilities agent={agent}/></td>
         </tr>)}</tbody>
       </table></div>
+      {agentPageCount > 1 && <div className="pagination">
+        <button
+          type="button"
+          aria-label="Previous agent page"
+          disabled={safeAgentPage === 0}
+          onClick={() => setAgentPage(current => Math.max(0, current - 1))}
+        >Previous agents</button>
+        <button
+          type="button"
+          aria-label="Next agent page"
+          disabled={safeAgentPage === agentPageCount - 1}
+          onClick={() => setAgentPage(current => Math.min(agentPageCount - 1, current + 1))}
+        >Next agents</button>
+      </div>}
       {!loading && agents.length === 0 && <p>No enrolled agents.</p>}
-      {agents.map(agent => <CertificateControls key={agent.node_id} agent={agent} onRevoke={revoke}/>)}
+      {visibleAgents
+        .filter(agent => agent.state !== "revoked" && Boolean(agent.certificate_expires_at))
+        .map(agent => <CertificateControls
+          key={`${dataRevision}:${certificateSnapshot(agent)}`}
+          agent={agent}
+          onRevoke={revoke}
+        />)}
     </section>
 
     <section aria-labelledby="enrollment-heading">
       <h3 id="enrollment-heading">Enrollment evidence</h3>
-      {enrollments.map(item => <EnrollmentReview key={item.id} enrollment={item} onApprove={approve} onReject={reject}/>)}
+      {enrollments.map(item => <EnrollmentReview
+        key={`${dataRevision}:${enrollmentEvidenceSnapshot(item)}`}
+        enrollment={item}
+        onApprove={approve}
+        onReject={reject}
+      />)}
       {!loading && enrollments.length === 0 && <p>No enrollment records.</p>}
     </section>
   </>;

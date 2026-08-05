@@ -1,4 +1,4 @@
-import {render, screen, within} from "@testing-library/react";
+import {fireEvent, render, screen, waitFor, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type {components} from "../api/generated";
 import {ApiClient} from "../api/client";
@@ -80,7 +80,7 @@ const fleet: Fleet = {
   ],
 };
 
-type CapturedRequest = {body: unknown; method: string; path: string};
+type CapturedRequest = {body: unknown; method: string; path: string; signal: AbortSignal};
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -89,7 +89,12 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
-function installApiFake() {
+function installApiFake(options: {
+  agents?: Agent[];
+  enrollments?: Enrollment[];
+  fleet?: Fleet;
+  grantResponse?: Promise<Response>;
+} = {}) {
   const requests: CapturedRequest[] = [];
   const decisions = new Map<string, "approved" | "rejected">();
 
@@ -97,17 +102,17 @@ function installApiFake() {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
     const body = request.body ? await request.clone().json() : undefined;
-    requests.push({body, method: request.method, path: url.pathname});
+    requests.push({body, method: request.method, path: url.pathname, signal: request.signal});
 
     if (request.method === "GET" && url.pathname === "/api/v1/agents") {
-      return jsonResponse({agents: [agent]});
+      return jsonResponse({agents: options.agents ?? [agent]});
     }
     if (request.method === "GET" && url.pathname === "/api/v1/fleet") {
-      return jsonResponse(fleet);
+      return jsonResponse(options.fleet ?? fleet);
     }
     if (request.method === "GET" && url.pathname === "/api/v1/agents/enrollments") {
       return jsonResponse({
-        enrollments: [
+        enrollments: options.enrollments ?? [
           {
             ...enrollment,
             state: decisions.get(enrollmentId) ?? enrollment.state,
@@ -121,6 +126,7 @@ function installApiFake() {
       });
     }
     if (request.method === "POST" && url.pathname === "/api/v1/agents/enrollments/grants") {
+      if (options.grantResponse) return options.grantResponse;
       return jsonResponse(
         {expires_at: "2026-08-05T10:15:00Z", id: "grant-001", node_id: nodeId, token: grantToken},
         201,
@@ -141,6 +147,12 @@ function installApiFake() {
   });
 
   return requests;
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>(fulfill => { resolve = fulfill; });
+  return {promise, resolve};
 }
 
 afterEach(() => {
@@ -207,6 +219,7 @@ it("keeps fleet and enrollment evidence semantic, bounded, and secret-free", asy
   const litellm = screen.getByRole("link", {name: /LiteLLM Admin UI.*keys, teams, and spend/i});
   const grafana = screen.getByRole("link", {name: /Grafana.*fleet dashboards/i});
   expect(new URL(litellm.getAttribute("href")!, location.origin).origin).toBe(location.origin);
+  expect(new URL(litellm.getAttribute("href")!, location.origin).pathname).toBe("/litellm/ui/");
   expect(new URL(grafana.getAttribute("href")!, location.origin).origin).toBe(location.origin);
   expect(screen.getByText(/Model definitions remain repository-backed/)).toBeVisible();
 });
@@ -232,11 +245,122 @@ it("shows a grant token only for its creation response and clears it before relo
     body: {node_id: nodeId, ttl_seconds: 300},
     method: "POST",
     path: "/api/v1/agents/enrollments/grants",
+    signal: expect.any(AbortSignal),
   });
 
   await user.click(screen.getByRole("button", {name: "Refresh agent data"}));
   expect(screen.queryByText(grantToken)).not.toBeInTheDocument();
   expect(screen.queryByText(leakedListToken)).not.toBeInTheDocument();
+});
+
+it("allows only one pending grant request and preserves its one display lifecycle", async () => {
+  // Break caught: overlapping responses could replace a token before the administrator copied it.
+  const pending = deferred<Response>();
+  const requests = installApiFake({grantResponse: pending.promise});
+  render(<AgentsPage api={new ApiClient()}/>);
+  const user = userEvent.setup();
+
+  await screen.findByRole("table", {name: "Enrolled agents"});
+  await user.type(screen.getByLabelText("Grant node ID"), nodeId);
+  const create = screen.getByRole("button", {name: "Create one-time grant"});
+  await user.click(create);
+
+  expect(create).toBeDisabled();
+  expect(screen.getByRole("status", {name: "Enrollment grant request"})).toHaveTextContent(/creating/i);
+  fireEvent.submit(create.closest("form")!);
+  await waitFor(() => expect(
+    requests.filter(request => request.path.endsWith("/grants")),
+  ).toHaveLength(1));
+
+  pending.resolve(jsonResponse(
+    {expires_at: "2026-08-05T10:15:00Z", id: "grant-001", node_id: nodeId, token: grantToken},
+    201,
+  ));
+  expect(await screen.findByText(grantToken)).toBeVisible();
+  expect(create).toBeDisabled();
+  await user.click(screen.getByRole("button", {name: "Dismiss token"}));
+  expect(screen.queryByText(grantToken)).not.toBeInTheDocument();
+  expect(create).toBeEnabled();
+});
+
+it("aborts and invalidates a pending grant when refreshed", async () => {
+  // Break caught: a late response after refresh could resurrect a one-time token from stale state.
+  const pending = deferred<Response>();
+  const requests = installApiFake({grantResponse: pending.promise});
+  render(<AgentsPage api={new ApiClient()}/>);
+  const user = userEvent.setup();
+
+  await screen.findByRole("table", {name: "Enrolled agents"});
+  await user.type(screen.getByLabelText("Grant node ID"), nodeId);
+  await user.click(screen.getByRole("button", {name: "Create one-time grant"}));
+  await waitFor(() => expect(
+    requests.filter(request => request.path.endsWith("/grants")),
+  ).toHaveLength(1));
+  const grantRequest = requests.find(request => request.path.endsWith("/grants"))!;
+
+  await user.click(screen.getByRole("button", {name: "Refresh agent data"}));
+  expect(grantRequest.signal.aborted).toBe(true);
+  pending.resolve(jsonResponse(
+    {expires_at: "2026-08-05T10:15:00Z", id: "grant-001", node_id: nodeId, token: grantToken},
+    201,
+  ));
+  await waitFor(() => expect(screen.queryByText(grantToken)).not.toBeInTheDocument());
+});
+
+it("aborts a pending grant when the agents page unmounts", async () => {
+  // Break caught: an unmounted page could leave a secret-bearing request active without a display owner.
+  const pending = deferred<Response>();
+  const requests = installApiFake({grantResponse: pending.promise});
+  const view = render(<AgentsPage api={new ApiClient()}/>);
+  const user = userEvent.setup();
+
+  await screen.findByRole("table", {name: "Enrolled agents"});
+  await user.type(screen.getByLabelText("Grant node ID"), nodeId);
+  await user.click(screen.getByRole("button", {name: "Create one-time grant"}));
+  await waitFor(() => expect(
+    requests.filter(request => request.path.endsWith("/grants")),
+  ).toHaveLength(1));
+  const grantRequest = requests.find(request => request.path.endsWith("/grants"))!;
+
+  view.unmount();
+
+  expect(grantRequest.signal.aborted).toBe(true);
+});
+
+it("renders oversized agent and capability collections in reachable bounded chunks", async () => {
+  // Break caught: mapping whole collections directly can create unbounded DOM/text output.
+  const agents = Array.from({length: 45}, (_, index): Agent => ({
+    ...agent,
+    capabilities: Array.from(
+      {length: 8},
+      (_unused, capabilityIndex) => capabilityIndex === 0
+        ? `cap-${index}-${"x".repeat(10_000)}`
+        : `cap-${index}-${capabilityIndex}`,
+    ),
+    node_id: `spk_${index.toString(16).padStart(32, "0")}`,
+  }));
+  installApiFake({agents, enrollments: [], fleet: {...fleet, nodes: []}});
+  render(<AgentsPage api={new ApiClient()}/>);
+  const user = userEvent.setup();
+
+  const table = await screen.findByRole("table", {name: "Enrolled agents"});
+  expect(screen.getByRole("status", {name: "Agent result count"})).toHaveTextContent("Showing agents 1–20 of 45");
+  expect(within(table).getAllByRole("row")).toHaveLength(21);
+  expect(within(table).getByText(agents[0].node_id)).toBeVisible();
+  expect(within(table).queryByText(agents[20].node_id)).not.toBeInTheDocument();
+  expect(screen.queryByText(agents[0].capabilities[0])).not.toBeInTheDocument();
+  expect(screen.getByRole("status", {name: `Capability result count for ${agents[0].node_id}`})).toHaveTextContent("Capabilities 1–3 of 8");
+
+  await user.click(screen.getByRole("button", {name: `Next capabilities for ${agents[0].node_id}`}));
+  expect(screen.getByRole("status", {name: `Capability result count for ${agents[0].node_id}`})).toHaveTextContent("Capabilities 4–6 of 8");
+  await user.click(screen.getByRole("button", {name: "Next agent page"}));
+  expect(screen.getByRole("status", {name: "Agent result count"})).toHaveTextContent("Showing agents 21–40 of 45");
+  expect(within(table).getByText(agents[20].node_id)).toBeVisible();
+  expect(within(table).queryByText(agents[0].node_id)).not.toBeInTheDocument();
+  await user.click(screen.getByRole("button", {name: "Next agent page"}));
+  expect(screen.getByRole("status", {name: "Agent result count"})).toHaveTextContent("Showing agents 41–45 of 45");
+  expect(within(table).getByText(agents[44].node_id)).toBeVisible();
+  expect(screen.getAllByRole("region", {name: /Certificate controls for/})).toHaveLength(5);
 });
 
 it("requires keyboard-operable evidence confirmation before approval", async () => {
@@ -256,8 +380,44 @@ it("requires keyboard-operable evidence confirmation before approval", async () 
   approve.focus();
   await user.keyboard("{Enter}");
 
-  expect(await screen.findByRole("status")).toHaveTextContent(`Enrollment for ${nodeId} approved`);
+  expect(await screen.findByText(`Enrollment for ${nodeId} approved`)).toBeVisible();
   expect(requests.some(request => request.method === "POST" && request.path.endsWith("/approve"))).toBe(true);
+});
+
+it("clears destructive confirmations when refreshed evidence or certificate state is loaded", async () => {
+  // Break caught: confirmations from one reviewed snapshot could authorize a later, different snapshot.
+  const refreshedFingerprint = "SHA256:refreshed-host-key-evidence";
+  const enrollments = [{...enrollment}];
+  installApiFake({agents: [{...agent}], enrollments});
+  render(<AgentsPage api={new ApiClient()}/>);
+  const user = userEvent.setup();
+
+  const review = await screen.findByRole("region", {name: `Enrollment evidence for ${nodeId}`});
+  const approval = within(review).getByRole("checkbox", {name: /compared all fingerprints/i});
+  const reason = within(review).getByLabelText("Rejection reason");
+  const rejectionConfirmation = within(review).getByLabelText(`Type ${nodeId} to confirm rejection`);
+  await user.click(approval);
+  await user.type(reason, "Stale reason");
+  await user.type(rejectionConfirmation, nodeId);
+
+  const certificate = screen.getByRole("region", {name: `Certificate controls for ${nodeId}`});
+  const revocationConfirmation = within(certificate).getByLabelText(
+    `Type ${nodeId} to confirm certificate revocation`,
+  );
+  await user.type(revocationConfirmation, nodeId);
+  enrollments[0] = {...enrollments[0], host_key_fingerprint: refreshedFingerprint};
+
+  await user.click(screen.getByRole("button", {name: "Refresh agent data"}));
+
+  expect(await screen.findByText(refreshedFingerprint)).toBeVisible();
+  const refreshedReview = screen.getByRole("region", {name: `Enrollment evidence for ${nodeId}`});
+  expect(within(refreshedReview).getByRole("checkbox", {name: /compared all fingerprints/i})).not.toBeChecked();
+  expect(within(refreshedReview).getByLabelText("Rejection reason")).toHaveValue("");
+  expect(within(refreshedReview).getByLabelText(`Type ${nodeId} to confirm rejection`)).toHaveValue("");
+  const refreshedCertificate = screen.getByRole("region", {name: `Certificate controls for ${nodeId}`});
+  expect(within(refreshedCertificate).getByLabelText(
+    `Type ${nodeId} to confirm certificate revocation`,
+  )).toHaveValue("");
 });
 
 it("requires exact typed administrator confirmation for rejection and certificate revocation", async () => {
@@ -275,7 +435,7 @@ it("requires exact typed administrator confirmation for rejection and certificat
   await user.type(within(review).getByLabelText(`Type ${nodeId} to confirm rejection`), nodeId.slice(-1));
   expect(reject).toBeEnabled();
   await user.click(reject);
-  expect(await screen.findByRole("status")).toHaveTextContent(`Enrollment for ${nodeId} rejected`);
+  expect(await screen.findByText(`Enrollment for ${nodeId} rejected`)).toBeVisible();
 
   const revokeRegion = screen.getByRole("region", {name: `Certificate controls for ${nodeId}`});
   expect(within(revokeRegion).getByRole("alert")).toHaveTextContent(/immediately disconnects.*cannot be undone/i);
@@ -283,7 +443,8 @@ it("requires exact typed administrator confirmation for rejection and certificat
   await user.type(within(revokeRegion).getByLabelText(`Type ${nodeId} to confirm certificate revocation`), nodeId);
   expect(revoke).toBeEnabled();
   await user.click(revoke);
-  expect(await screen.findByRole("status")).toHaveTextContent(`Certificate for ${nodeId} revoked`);
+  expect(await screen.findByText(`Certificate for ${nodeId} revoked`)).toBeVisible();
+  expect(screen.queryByRole("region", {name: `Certificate controls for ${nodeId}`})).not.toBeInTheDocument();
 
   expect(requests.find(request => request.path.endsWith("/reject"))?.body).toEqual({
     reason: "Inventory evidence does not match",

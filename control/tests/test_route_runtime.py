@@ -149,6 +149,8 @@ def test_bundle_stages_structured_routes_litellm_and_manifest_before_one_marker(
         "rpm": 30,
         "tpm": 10_000,
     }
+    assert config["general_settings"]["disable_admin_ui"] is False
+    assert config["general_settings"]["store_model_in_db"] is False
     assert activation == {
         **manifest,
         "directory": marker.directory,

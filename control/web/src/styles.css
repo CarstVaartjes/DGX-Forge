@@ -32,6 +32,8 @@ code{color:#9bd7ff}
 .native-links,.review-card,.certificate-controls,.grant-secret{margin:1.25rem 0;padding:1rem;background:#0e1924;border:1px solid #263747;border-radius:.6rem}
 .native-links a{color:#9bd7ff}
 .table-scroll{overflow-x:auto}
+.pagination{display:flex;gap:.5rem;margin:.5rem 0}
+.capability-list{display:grid;gap:.4rem;min-width:18rem}
 .evidence-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:.75rem;margin:1rem 0}
 .evidence-grid div{min-width:0}
 .evidence-grid dt{color:#8fa4b7;font-size:.85rem}
