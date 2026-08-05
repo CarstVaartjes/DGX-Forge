@@ -31,6 +31,9 @@ from .models import (
 from .models import AgentOperation as StoredOperation
 
 AgentFence = str | AgentClaim | AgentProgress | AgentResult
+ResultConsumer = Callable[
+    [Session, StoredOperation, AgentOperationAttempt, AgentResult], None
+]
 _SAFE_AUTOMATIC_RECLAIM = frozenset({
     AgentOperation.NODE_PROBE.value,
     AgentOperation.WORKLOAD_HEALTH.value,
@@ -70,9 +73,11 @@ class AgentJobService:
         sessions: sessionmaker[Session],
         *,
         clock: Callable[[], datetime],
+        result_consumer: ResultConsumer | None = None,
     ) -> None:
         self._sessions = sessions
         self._clock = clock
+        self._result_consumer = result_consumer
         # SQLite ignores row locks. This only prevents same-service test races;
         # PostgreSQL correctness is provided by the database locks below.
         self._claim_lock = threading.RLock()
@@ -86,12 +91,37 @@ class AgentJobService:
         base_commit: str,
         payload: Mapping[str, object],
     ) -> StoredOperation:
+        with self._sessions.begin() as session:
+            stored = self.enqueue_in_session(
+                session,
+                parent_job_id,
+                node_id,
+                operation,
+                base_commit,
+                payload,
+                operation_id=str(uuid.uuid4()),
+            )
+        self.notify_available()
+        return stored
+
+    def enqueue_in_session(
+        self,
+        session: Session,
+        parent_job_id: str,
+        node_id: str,
+        operation: str,
+        base_commit: str,
+        payload: Mapping[str, object],
+        *,
+        operation_id: str,
+    ) -> StoredOperation:
+        """Attach a caller-identified operation to the caller's transaction."""
         now = self._clock()
         protocol_operation = AgentOperation(operation)
         validated = AgentClaim(
             schema_version=1,
             job_id=parent_job_id,
-            operation_id=str(uuid.uuid4()),
+            operation_id=operation_id,
             attempt=1,
             fence=str(uuid.uuid4()),
             node_id=node_id,
@@ -114,31 +144,34 @@ class AgentJobService:
             created_at=now,
             updated_at=now,
         )
-        with self._sessions.begin() as session:
-            node = session.scalar(
-                select(AgentNode)
-                .where(AgentNode.node_id == node_id)
-                .with_for_update(of=AgentNode)
-            )
-            if node is None:
-                raise KeyError(node_id)
-            if node.state != "active" or node.revoked_at is not None:
-                raise ValueError("agent operation node must be active")
-            parent = session.scalar(
-                select(Job).where(Job.id == parent_job_id).with_for_update(of=Job)
-            )
-            if parent is None:
-                raise KeyError(parent_job_id)
-            if parent.state in _TERMINAL_PARENT_STATES:
-                raise ValueError("cannot enqueue an agent operation beneath a terminal parent")
-            if parent.base_commit != base_commit:
-                raise ValueError("agent operation base commit must match its parent")
-            if node_id not in parent.targets:
-                raise ValueError("agent operation node must be a parent target")
-            session.add(stored)
+        node = session.scalar(
+            select(AgentNode)
+            .where(AgentNode.node_id == node_id)
+            .with_for_update(of=AgentNode)
+        )
+        if node is None:
+            raise KeyError(node_id)
+        if node.state != "active" or node.revoked_at is not None:
+            raise ValueError("agent operation node must be active")
+        parent = session.scalar(
+            select(Job).where(Job.id == parent_job_id).with_for_update(of=Job)
+        )
+        if parent is None:
+            raise KeyError(parent_job_id)
+        if parent.state in _TERMINAL_PARENT_STATES:
+            raise ValueError("cannot enqueue an agent operation beneath a terminal parent")
+        if parent.base_commit != base_commit:
+            raise ValueError("agent operation base commit must match its parent")
+        if node_id not in parent.targets:
+            raise ValueError("agent operation node must be a parent target")
+        session.add(stored)
+        session.flush()
+        return stored
+
+    def notify_available(self) -> None:
+        """Wake long polls after a caller-managed enqueue transaction commits."""
         with self._available:
             self._available.notify_all()
-        return stored
 
     def claim(
         self,
@@ -313,6 +346,15 @@ class AgentJobService:
     def wait_for_operator(self, fence: AgentFence, reason: str) -> None:
         self._finish(fence, "waiting-for-operator", result=None, reason=reason)
 
+    def record_result(self, message: AgentResult) -> None:
+        """Persist one exact agent result and consume it in the same transaction."""
+        self._finish(
+            message,
+            message.state,
+            result=message.result,
+            reason=None,
+        )
+
     def _finish(
         self,
         fence: AgentFence,
@@ -324,7 +366,19 @@ class AgentJobService:
         with self._sessions.begin() as session:
             operation, attempt = self._active(session, fence)
             now = self._clock()
-            if result is not None:
+            if isinstance(fence, AgentResult):
+                if fence.state != state or (
+                    result is not None
+                    and _document(fence.result) != _document(result)
+                ):
+                    raise ValueError("agent result does not match requested completion")
+                message = fence
+            else:
+                canonical_result = (
+                    result
+                    if result is not None
+                    else {"reason": self._reason(reason)}
+                )
                 message = AgentResult(
                     schema_version=1,
                     job_id=operation.parent_job_id,
@@ -334,31 +388,34 @@ class AgentJobService:
                     node_id=operation.node_id,
                     deadline=_aware(attempt.lease_deadline),
                     state=state,
-                    result=result,
+                    result=canonical_result,
                 )
-                attempt.result = _document(message.result)
-                if operation.kind == AgentOperation.NODE_PROBE.value:
-                    health = self._probe_health(message.result)
-                    if (
-                        operation.payload
-                        == {"require_active_nvidia_compute_processes": 0}
-                        and health["active_nvidia_compute_processes"] != 0
-                    ):
-                        raise ValueError("node probe compute gate is unsatisfied")
-                    session.add(
-                        Observation(
-                            node_id=operation.node_id,
-                            kind="health",
-                            payload=health,
-                            observed_at=now,
-                        )
+            attempt.result = _document(message.result)
+            if (
+                result is not None
+                and state == "succeeded"
+                and operation.kind == AgentOperation.NODE_PROBE.value
+            ):
+                health = self._probe_health(message.result)
+                if (
+                    operation.payload
+                    == {"require_active_nvidia_compute_processes": 0}
+                    and health["active_nvidia_compute_processes"] != 0
+                ):
+                    raise ValueError("node probe compute gate is unsatisfied")
+                session.add(
+                    Observation(
+                        node_id=operation.node_id,
+                        kind="health",
+                        payload=health,
+                        observed_at=now,
                     )
-            else:
-                safe_reason = self._reason(reason)
-                attempt.result = {"reason": safe_reason}
+                )
             attempt.state = state
             operation.state = state
             operation.updated_at = now
+            if self._result_consumer is not None:
+                self._result_consumer(session, operation, attempt, message)
             self._aggregate_parent(session, operation.parent_job_id)
 
     def _active(
@@ -612,6 +669,8 @@ class AgentJobService:
         )
         if job is None:
             raise KeyError(parent_job_id)
+        if job.reconciliation_id is not None:
+            return
         operations = list(session.scalars(
             select(StoredOperation)
             .where(StoredOperation.parent_job_id == parent_job_id)
@@ -643,7 +702,9 @@ class AgentJobService:
             )
             if attempt is not None and attempt.result is not None:
                 reason = attempt.result.get("reason")
+                if not isinstance(reason, str):
+                    reason = attempt.result.get("error_code")
                 if isinstance(reason, str):
-                    job.status_reason = reason
+                    job.status_reason = redact_text(reason)[:1024]
                     return
         job.status_reason = None

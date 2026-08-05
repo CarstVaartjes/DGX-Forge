@@ -851,7 +851,7 @@ def test_staged_certificate_can_only_activate_and_activation_is_idempotent_after
         assert new is not None and new.state == "active" and new.revoked_at is None
 
 
-def test_failed_result_maps_stable_error_code_to_bounded_failure_reason(agent_system) -> None:
+def test_failed_result_preserves_canonical_evidence_and_maps_parent_reason(agent_system) -> None:
     client, services, _, clock = agent_system
     services.operations.enqueue(
         parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {}
@@ -877,7 +877,9 @@ def test_failed_result_maps_stable_error_code_to_bounded_failure_reason(agent_sy
     assert response.status_code == 204
     with services.sessions() as session:
         attempt = session.query(AgentOperationAttempt).filter_by(fence=claim["fence"]).one()
-        assert attempt.result == {"reason": "probe_failed"}
+        parent_job = session.get(Job, claim["job_id"])
+        assert attempt.result == {"status": "failed", "error_code": "probe_failed"}
+        assert parent_job is not None and parent_job.status_reason == "probe_failed"
 
 
 def test_agent_validation_errors_are_canonical_json(agent_system) -> None:

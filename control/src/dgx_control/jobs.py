@@ -196,6 +196,7 @@ class JobService:
             statement = (
                 select(Job)
                 .where(
+                    Job.reconciliation_id.is_(None),
                     or_(
                         Job.state == "queued",
                         Job.id.in_(

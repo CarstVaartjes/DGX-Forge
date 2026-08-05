@@ -711,9 +711,7 @@ def install_agent_routes(
             raise HTTPException(status_code=422, detail=str(error)) from None
         _body_node_matches(message.node_id, identity)
         try:
-            if message.state == "succeeded":
-                required.operations.succeed(message, message.result)
-            elif message.state == "failed":
+            if message.state == "failed":
                 error_code = message.result.get("error_code")
                 if (
                     message.result.get("status") != "failed"
@@ -721,9 +719,7 @@ def install_agent_routes(
                     or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error_code) is None
                 ):
                     raise ValueError("stable failure error code is required")
-                required.operations.fail(message, error_code)
-            else:
-                required.operations.wait_for_operator(message, str(message.result.get("reason", "")))
+            required.operations.record_result(message)
         except (StaleAgentAttempt, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from None
         return Response(status_code=status.HTTP_204_NO_CONTENT)
