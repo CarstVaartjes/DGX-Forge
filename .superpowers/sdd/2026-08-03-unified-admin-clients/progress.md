@@ -29,3 +29,4 @@ Task 4: initial implementation delivered (commit d3ea844; 9 web tests, productio
 Task 4: fix round 1/5 (3 addressed, 2 open — non-capability agent/fleet strings remain unbounded; refresh leaves stale confirmations actionable until a successful reload; commits d3ea844..a7c14fe)
 Task 4: fix round 2/5 (2 addressed, 0 open — all rendered agent-summary strings are explicitly bounded; pending and failed refresh immediately invalidate and disable confirmations; commits a7c14fe..309fa8c)
 Task 4: complete (commits 8520220..309fa8c; task review clean after two fix rounds; fresh controller verification and publication acceptance pending)
+Task 4: complete and accepted (integrated and pushed on main at 847eaad147aa8b929fae5cebed6720c30ab62599; hosted run 31024518824 passed Ruff, generated-client verification, macOS full Python/Bash, and Ubuntu full Python/Bash)
