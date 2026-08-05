@@ -256,50 +256,42 @@ class Reconciler:
                 raise ValueError("desired-state planning requires durable observations")
             plan = self._planner.resolve(commit, profile_id, current)
             if self._orchestrator is not None:
-                loaded = self._orchestrator.resolved_plan(plan.digest)
-                if loaded is not None:
-                    plan = self._restore_plan(plan.digest, *loaded)
-                else:
-                    provisional = plan.operation_graph
-                    if provisional is None:
-                        raise ValueError("resolved desired state lacks an operation graph")
-                    graph = self._orchestrator.plan(
-                        {
-                            "base_commit": provisional.base_commit,
-                            "targets": list(provisional.targets),
-                            "route_withdrawal_generation": 0,
-                            "operations": [
-                                node.to_document() for node in provisional.nodes
-                            ],
-                        }
-                    )
-                    plan = resolved_reconciliation_plan(
-                        commit=plan.commit,
-                        targets=plan.targets,
-                        placements=plan.placements,
-                        routes=plan.routes,
-                        releases=plan.releases,
-                        input_digests=plan.input_digests,
-                        operation_graph=graph,
-                        operation_payloads=plan.operation_payloads,
-                        agent_protocol_range=plan.agent_protocol_range or (1, 1),
-                    )
-                    content, _ = _plan_content(
-                        plan.commit,
-                        {
-                            "targets": list(plan.targets),
-                            "placements": plan.placements,
-                            "routes": plan.routes,
-                            "releases": plan.releases,
-                            "input_digests": plan.input_digests,
-                            "operation_graph": graph,
-                            "operation_payloads": plan.operation_payloads,
-                            "agent_protocol_range": plan.agent_protocol_range,
-                        },
-                    )
-                    self._orchestrator.store_resolved_plan(
-                        graph, plan.digest, cast_mapping(_jsonable(content))
-                    )
+                provisional = plan.operation_graph
+                if provisional is None:
+                    raise ValueError("resolved desired state lacks an operation graph")
+                graph_plan = {
+                    "base_commit": provisional.base_commit,
+                    "targets": list(provisional.targets),
+                    "route_withdrawal_generation": 0,
+                    "operations": [node.to_document() for node in provisional.nodes],
+                }
+                content, _ = _plan_content(
+                    plan.commit,
+                    {
+                        "targets": list(plan.targets),
+                        "placements": plan.placements,
+                        "routes": plan.routes,
+                        "releases": plan.releases,
+                        "input_digests": plan.input_digests,
+                        "operation_graph": provisional,
+                        "operation_payloads": plan.operation_payloads,
+                        "agent_protocol_range": plan.agent_protocol_range,
+                    },
+                )
+                graph = self._orchestrator.get_or_create_resolved_plan(
+                    graph_plan, plan.digest, cast_mapping(_jsonable(content))
+                )
+                plan = resolved_reconciliation_plan(
+                    commit=plan.commit,
+                    targets=plan.targets,
+                    placements=plan.placements,
+                    routes=plan.routes,
+                    releases=plan.releases,
+                    input_digests=plan.input_digests,
+                    operation_graph=graph,
+                    operation_payloads=plan.operation_payloads,
+                    agent_protocol_range=plan.agent_protocol_range or (1, 1),
+                )
         self._plans[plan.digest] = plan
         return plan
 

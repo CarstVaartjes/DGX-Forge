@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -12,11 +13,20 @@ from pathlib import Path
 import pytest
 from dgx_agent_protocol import canonical_message
 from dgx_control.desired_state import (
+    CurrentWorkloadState,
     DesiredStateObservation,
     DesiredStateResolver,
     durable_desired_state_observations,
 )
-from dgx_control.models import AgentNode, Base, Observation
+from dgx_control.models import (
+    AgentNode,
+    AgentOperation,
+    AgentOperationAttempt,
+    Base,
+    Job,
+    Observation,
+    Reconciliation,
+)
 from dgx_control.repository import RepositoryService
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -110,12 +120,15 @@ stop_order = "{stop_order}"
 
 
 def _workload_toml(
-    *, definition_hash: str = DEFINITION_HASH, distributed_supported: bool = True
+    *,
+    definition_hash: str = DEFINITION_HASH,
+    distributed_supported: bool = True,
+    adapter: str = "spark-runtime-v1",
 ) -> str:
     distributed = str(distributed_supported).lower()
     return f'''schema_version = 2
 id = "model"
-adapter = "repository-agent"
+adapter = "{adapter}"
 definition_hash = "{definition_hash}"
 conflicts = []
 distributed_supported = {distributed}
@@ -144,6 +157,7 @@ def _release(
     *,
     definition_hash: str = DEFINITION_HASH,
     operations: tuple[str, ...] = REQUIRED_CAPABILITIES,
+    adapter: str = "spark-runtime-v1",
 ) -> dict[str, object]:
     requests: dict[str, dict[str, object]] = {}
     for operation in operations:
@@ -154,7 +168,7 @@ def _release(
             "schema_version": 1,
             "workload_id": "model",
             "release_digest": "a" * 64,
-            "adapter_id": "repository-agent",
+            "adapter_id": adapter,
         }
         if action == "prepare":
             request["profile_digest"] = "c" * 64
@@ -170,10 +184,10 @@ def _release(
         "release_request": {
             "schema_version": 1,
             "target_name": "model",
-            "oci_manifest_digest": "sha256:" + "a" * 64,
+            "oci_manifest_digest": "sha256:" + "9" * 64,
             "target_digest": "a" * 64,
             "provenance_digest": "b" * 64,
-            "adapter_id": "repository-agent",
+            "adapter_id": adapter,
         },
         "workload_requests": requests,
         "endpoint": {"scheme": "http", "port": 8000, "path": "/v1"},
@@ -190,6 +204,7 @@ def _repository(
     release_hash: str = DEFINITION_HASH,
     operations: tuple[str, ...] = REQUIRED_CAPABILITIES,
     workload_distributed_supported: bool = True,
+    workload_adapter: str = "spark-runtime-v1",
 ) -> tuple[RepositoryService, str, dict[str, bytes]]:
     root = tmp_path / "repository"
     root.mkdir(parents=True)
@@ -208,9 +223,14 @@ def _repository(
         "config/workloads/model.toml": _workload_toml(
             definition_hash=workload_hash,
             distributed_supported=workload_distributed_supported,
+            adapter=workload_adapter,
         ).encode(),
         "manifests/releases/model.json": json.dumps(
-            _release(definition_hash=release_hash, operations=operations),
+            _release(
+                definition_hash=release_hash,
+                operations=operations,
+                adapter=workload_adapter,
+            ),
             sort_keys=True,
             separators=(",", ":"),
         ).encode(),
@@ -278,12 +298,11 @@ def test_resolves_one_two_and_sixteen_nodes_from_exact_repository_objects(
         for path, content in sorted(documents.items())
     }
     assert plan.operation_graph.reconciliation_id
-    assert len(plan.operation_graph.nodes) == count * 6
+    assert len(plan.operation_graph.nodes) == count * 5
     assert {node.kind for node in plan.operation_graph.nodes} == {
         "release.install",
         "workload.prepare",
         "workload.start",
-        "workload.stop",
         "workload.health",
         "workload.verify",
     }
@@ -319,9 +338,151 @@ def test_every_emitted_payload_is_accepted_by_the_exact_agent_parser(
         sys.path.remove(str(agent_source))
 
 
+def test_generated_workload_graph_executes_through_production_agent_boundaries(
+    tmp_path: Path,
+) -> None:
+    repository, commit, _ = _repository(tmp_path / "repository", 1)
+    plan = _resolve(repository, commit, _observations(1))
+    agent_source = Path(__file__).parents[2] / "agent" / "src"
+    sys.path.insert(0, str(agent_source))
+    try:
+        from dgx_agent.operations import OperationContext, OperationRegistry
+        from dgx_agent.releases import ReleaseDescriptor
+        from dgx_agent.state import AgentStateStore
+        from dgx_agent.workloads import CompiledAdapterPolicy, WorkloadOperations
+        from dgx_agent_protocol import AgentClaim, AgentOperation
+
+        release_digest = "a" * 64
+        release_root = tmp_path / "releases" / release_digest
+        executable = release_root / "bin/runtime-adapter"
+        executable.parent.mkdir(parents=True)
+        executable.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            "statuses = {'prepare': 'prepared', 'start': 'started', "
+            "'stop': 'stopped', 'health': 'healthy', 'verify': 'verified'}\n"
+            "print(json.dumps({'schema_version': 1, "
+            "'status': statuses[sys.argv[1]], 'evidence_digest': '8' * 64, "
+            "'job_id': sys.argv[sys.argv.index('--job-id') + 1], "
+            "'operation_id': sys.argv[sys.argv.index('--operation-id') + 1], "
+            "'attempt': int(sys.argv[sys.argv.index('--attempt') + 1]), "
+            "'fence': sys.argv[sys.argv.index('--fence') + 1]}))\n"
+        )
+        executable.chmod(0o500)
+        descriptor = ReleaseDescriptor.parse(
+            {
+                "schema_version": 1,
+                "target_name": "model",
+                "target_digest": release_digest,
+                "target_length": executable.stat().st_size,
+                "registry_origin": "https://registry.example.invalid",
+                "repository": "dgx/releases",
+                "oci_manifest_digest": "sha256:" + "9" * 64,
+                "provenance_digest": "b" * 64,
+                "adapter_id": "spark-runtime-v1",
+                "adapter_version": "1.0.0",
+                "architecture": "linux-arm64",
+                "agent_min_version": "0.1.0",
+                "agent_max_version": "0.1.0",
+                "protocol_min_version": 1,
+                "protocol_max_version": 1,
+                "members": [
+                    {
+                        "path": "bin/runtime-adapter",
+                        "sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
+                        "size": executable.stat().st_size,
+                        "mode": 0o500,
+                        "uid": os.geteuid(),
+                        "gid": os.getegid(),
+                    }
+                ],
+            }
+        )
+        (release_root / ".install-receipt.json").write_text(
+            json.dumps(
+                {"schema_version": 1, "release": descriptor.to_mapping()},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+        (release_root / ".install-receipt.json").chmod(0o400)
+
+        class Trust:
+            def authorize(self, request, deadline):
+                return descriptor
+
+        workloads = WorkloadOperations._for_test(
+            tmp_path / "releases",
+            {
+                "spark-runtime-v1": CompiledAdapterPolicy(
+                    "spark-runtime-v1",
+                    "bin/runtime-adapter",
+                    2,
+                    64 * 1024,
+                    allow_unprivileged_test_files=True,
+                )
+            },
+            Trust(),
+        )
+
+        class NeverProbe:
+            def collect(self, deadline):
+                raise AssertionError("workload graph reached probe dispatch")
+
+        registry = OperationRegistry()
+        statuses = []
+        for index, node in enumerate(plan.operation_graph.nodes):
+            if not node.kind.startswith("workload."):
+                continue
+            payload = plan.operation_payloads[node.operation_id]
+            claim = AgentClaim(
+                schema_version=1,
+                job_id=str(uuid.uuid4()),
+                operation_id=str(uuid.uuid4()),
+                attempt=1,
+                fence=str(uuid.uuid4()),
+                node_id=node.node_id,
+                operation=AgentOperation(node.kind),
+                base_commit=commit,
+                payload_digest=node.payload_digest,
+                payload=payload,
+                deadline=datetime.now(UTC) + timedelta(seconds=5),
+            )
+            executed = registry.execute(
+                claim,
+                OperationContext(
+                    node.node_id,
+                    AgentStateStore(tmp_path / f"agent-state-{index}"),
+                    NeverProbe(),
+                    workloads=workloads,
+                ),
+            )
+            assert executed.result.state == "succeeded"
+            statuses.append(executed["evidence"]["status"])
+        assert statuses == ["prepared", "started", "healthy", "verified"]
+    finally:
+        sys.path.remove(str(agent_source))
+
+
 def test_start_and_stop_dependencies_follow_lifecycle_order(tmp_path: Path) -> None:
     repository, commit, _ = _repository(tmp_path, 2)
-    plan = _resolve(repository, commit, _observations(2))
+    plan = _resolve(
+        repository,
+        commit,
+        tuple(
+            replace(
+                observation,
+                occupied=True,
+                current_workloads=(
+                    CurrentWorkloadState(
+                        "model", "8" * 64, "spark-runtime-v1"
+                    ),
+                ),
+            )
+            for observation in _observations(2)
+        ),
+    )
     head, worker = plan.targets
     graph = plan.operation_graph
 
@@ -336,6 +497,43 @@ def test_start_and_stop_dependencies_follow_lifecycle_order(tmp_path: Path) -> N
     assert graph.dependencies(f"model:{head}:release.install") == (
         f"model:{worker}:workload.stop",
     )
+    assert plan.operation_payloads[f"model:{head}:workload.stop"] == {
+        "schema_version": 1,
+        "workload_id": "model",
+        "release_digest": "8" * 64,
+        "adapter_id": "spark-runtime-v1",
+    }
+
+
+def test_fresh_deploy_omits_stop_and_upgrade_stops_only_current_release(
+    tmp_path: Path,
+) -> None:
+    repository, commit, _ = _repository(tmp_path, 1)
+    fresh = _resolve(repository, commit, _observations(1))
+    assert "workload.stop" not in {node.kind for node in fresh.operation_graph.nodes}
+
+    current = replace(
+        _observations(1)[0],
+        occupied=True,
+        current_workloads=(
+            CurrentWorkloadState("model", "8" * 64, "spark-runtime-v1"),
+        ),
+    )
+    upgrade = _resolve(repository, commit, (current,))
+    stop = next(
+        node for node in upgrade.operation_graph.nodes if node.kind == "workload.stop"
+    )
+    assert upgrade.operation_payloads[stop.operation_id]["release_digest"] == "8" * 64
+    assert upgrade.operation_payloads[stop.operation_id]["release_digest"] != "a" * 64
+
+
+def test_rejects_unreviewed_workload_adapter(tmp_path: Path) -> None:
+    repository, commit, _ = _repository(
+        tmp_path, 1, workload_adapter="repository-agent"
+    )
+
+    with pytest.raises(ValueError, match="reviewed adapter"):
+        _resolve(repository, commit, _observations(1))
 
 
 def test_rejects_distributed_profile_when_workload_disallows_distribution(
@@ -515,7 +713,6 @@ def test_durable_projection_joins_latest_health_with_agent_compatibility(
                         "status": "healthy",
                         "memory_available_bytes": 1_000,
                         "disk_available_bytes": 2_000,
-                        "occupied": False,
                     },
                     observed_at=NOW - timedelta(seconds=2),
                 ),
@@ -535,3 +732,227 @@ def test_durable_projection_joins_latest_health_with_agent_compatibility(
             capabilities=REQUIRED_CAPABILITIES,
         ),
     )
+
+
+def test_durable_projection_derives_occupancy_from_completed_start_evidence(
+    tmp_path: Path,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'active.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine)
+    node_id = _node_id(0)
+    payload = {
+        "schema_version": 1,
+        "workload_id": "model",
+        "release_digest": "8" * 64,
+        "adapter_id": "spark-runtime-v1",
+        "preparation_digest": "c" * 64,
+    }
+    payload_digest = hashlib.sha256(canonical_message(payload)).hexdigest()
+    graph_node = {
+        "operation_id": "model:node:workload.start",
+        "node_id": node_id,
+        "workload_id": "model",
+        "kind": "workload.start",
+        "dependencies": [],
+        "compensation_kind": "workload.stop",
+        "payload_digest": payload_digest,
+    }
+    with sessions.begin() as session:
+        session.add(
+            AgentNode(
+                node_id=node_id,
+                state="active",
+                protocol_version=1,
+                capabilities=list(REQUIRED_CAPABILITIES),
+                last_seen_at=NOW - timedelta(seconds=1),
+            )
+        )
+        session.add(
+            Observation(
+                node_id=node_id,
+                kind="health",
+                payload={
+                    "status": "healthy",
+                    "memory_available_bytes": 1_000,
+                    "disk_available_bytes": 2_000,
+                },
+                observed_at=NOW - timedelta(seconds=2),
+            )
+        )
+        session.add(
+            Reconciliation(
+                id="reconciliation",
+                base_commit="a" * 40,
+                status="succeeded",
+                summary={},
+                graph={
+                    "schema_version": 1,
+                    "base_commit": "a" * 40,
+                    "targets": [node_id],
+                    "nodes": [graph_node],
+                },
+                graph_digest="d" * 64,
+                current_phase="completed",
+                created_at=NOW - timedelta(seconds=4),
+            )
+        )
+        session.add(
+            Job(
+                id="job",
+                request_id="request",
+                kind="reconcile",
+                state="succeeded",
+                actor="administrator",
+                base_commit="a" * 40,
+                targets=[node_id],
+                payload_digest="e" * 64,
+                payload={"reconciliation_id": "reconciliation"},
+                current_attempt=1,
+                created_at=NOW - timedelta(seconds=4),
+                updated_at=NOW - timedelta(seconds=3),
+            )
+        )
+        session.add(
+            AgentOperation(
+                id="operation",
+                parent_job_id="job",
+                node_id=node_id,
+                kind="workload.start",
+                payload_digest=payload_digest,
+                payload=payload,
+                base_commit="a" * 40,
+                state="succeeded",
+                current_attempt=1,
+                created_at=NOW - timedelta(seconds=4),
+                updated_at=NOW - timedelta(seconds=3),
+            )
+        )
+        session.add(
+            AgentOperationAttempt(
+                id="attempt",
+                operation_id="operation",
+                attempt=1,
+                fence="fence",
+                lease_deadline=NOW,
+                agent_certificate_serial="serial",
+                state="succeeded",
+                result={
+                    "status": "ok",
+                    "evidence": {
+                        "status": "started",
+                        "action": "start",
+                        "workload_id": "model",
+                        "release_digest": "8" * 64,
+                        "evidence_digest": "f" * 64,
+                    },
+                },
+            )
+        )
+
+    projected = durable_desired_state_observations(sessions)
+    assert projected[0].occupied is True
+    assert projected[0].current_workloads == (
+        CurrentWorkloadState("model", "8" * 64, "spark-runtime-v1"),
+    )
+
+
+def test_durable_projection_fails_closed_on_completed_graph_without_operation_evidence(
+    tmp_path: Path,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'drift.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine)
+    node_id = _node_id(0)
+    with sessions.begin() as session:
+        session.add(
+            Reconciliation(
+                id="reconciliation",
+                base_commit="a" * 40,
+                status="succeeded",
+                summary={},
+                graph={
+                    "schema_version": 1,
+                    "base_commit": "a" * 40,
+                    "targets": [node_id],
+                    "nodes": [
+                        {
+                            "operation_id": "missing",
+                            "node_id": node_id,
+                            "workload_id": "model",
+                            "kind": "workload.start",
+                            "dependencies": [],
+                            "compensation_kind": "workload.stop",
+                            "payload_digest": "d" * 64,
+                        }
+                    ],
+                },
+                graph_digest="d" * 64,
+                current_phase="completed",
+                created_at=NOW,
+            )
+        )
+
+    with pytest.raises(ValueError, match="operation evidence"):
+        durable_desired_state_observations(sessions)
+
+
+def test_durable_projection_fails_closed_on_unaccepted_successful_mutation(
+    tmp_path: Path,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'unaccepted.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine)
+    node_id = _node_id(0)
+    with sessions.begin() as session:
+        session.add(
+            Reconciliation(
+                id="failed-reconciliation",
+                base_commit="a" * 40,
+                status="failed",
+                summary={},
+                graph={
+                    "schema_version": 1,
+                    "base_commit": "a" * 40,
+                    "targets": [node_id],
+                    "nodes": [],
+                },
+                graph_digest="d" * 64,
+                current_phase="failed",
+                created_at=NOW,
+            )
+        )
+        session.add(
+            Job(
+                id="failed-job",
+                request_id="failed-request",
+                kind="reconcile",
+                state="failed",
+                actor="administrator",
+                base_commit="a" * 40,
+                targets=[node_id],
+                payload_digest="e" * 64,
+                payload={"reconciliation_id": "failed-reconciliation"},
+                current_attempt=1,
+                created_at=NOW,
+                updated_at=NOW,
+            )
+        )
+        session.add(
+            AgentOperation(
+                id="unaccepted-start",
+                parent_job_id="failed-job",
+                node_id=node_id,
+                kind="workload.start",
+                payload_digest="f" * 64,
+                payload={},
+                base_commit="a" * 40,
+                state="succeeded",
+                current_attempt=1,
+                created_at=NOW,
+                updated_at=NOW,
+            )
+        )
+
+    with pytest.raises(ValueError, match="unaccepted workload mutation"):
+        durable_desired_state_observations(sessions)

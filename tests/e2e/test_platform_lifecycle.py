@@ -26,6 +26,14 @@ def test_repository_to_running_profile_and_safe_withdrawal(tmp_path: Path) -> No
     assert report["dynamic_input"] == {"host": "dynamic.example", "display_name": "dynamic-spark"}
     assert report["installation_gate_count"] == 7
     assert report["profile_source"] == "model-repository/revision"
+    assert report["planner"] == "DesiredStateResolver"
+    assert report["persisted_operation_count"] == 5
+    assert report["claimed_operation_count"] == 6
+    assert report["durable_observation"] == {
+        "current_release": "a" * 64,
+        "current_workload": "test-model",
+        "occupied": True,
+    }
     assert report["served_status"] == 200
     assert report["withdrawn_status"] == 503
     assert report["code_host_pr_merge_exercised"] is False

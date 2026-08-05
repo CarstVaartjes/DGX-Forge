@@ -499,7 +499,6 @@ class AgentJobService:
             "status": status,
             "memory_available_bytes": memory_available,
             "disk_available_bytes": disk_available,
-            "occupied": False,
         }
         if len(canonical_message(observation)) > 1024:
             raise ValueError("node probe health observation is too large")

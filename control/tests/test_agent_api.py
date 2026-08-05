@@ -520,7 +520,6 @@ def test_exact_fenced_probe_success_writes_bounded_durable_health(agent_system) 
         assert observations[0].payload == {
             "disk_available_bytes": 2_000,
             "memory_available_bytes": 1_000,
-            "occupied": False,
             "status": "healthy",
         }
 

@@ -13,6 +13,7 @@ from typing import Any
 
 from dgx_agent_protocol import AgentOperation
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from .logging import redact_text
@@ -166,16 +167,7 @@ class ReconciliationOrchestrator:
     ) -> None:
         """Attach the complete immutable plan to its accepted graph row."""
 
-        if _DIGEST.fullmatch(plan_digest) is None:
-            raise ValueError("resolved plan digest is invalid")
-        encoded = json.dumps(
-            document, sort_keys=True, separators=(",", ":")
-        ).encode()
-        if len(encoded) > 1_048_576:
-            raise ValueError("resolved reconciliation plan is too large")
-        if hashlib.sha256(encoded).hexdigest() != plan_digest:
-            raise ValueError("resolved plan content does not match its digest")
-        stored_document = json.loads(encoded)
+        stored_document = _resolved_document(plan_digest, document)
         with self._sessions.begin() as session:
             stored = self._stored(session, graph.reconciliation_id)
             if stored.graph_digest != graph.digest or stored.graph != graph.document:
@@ -189,6 +181,68 @@ class ReconciliationOrchestrator:
                 return
             stored.plan_digest = plan_digest
             stored.resolved_plan = stored_document
+
+    def get_or_create_resolved_plan(
+        self,
+        graph_plan: Mapping[str, Any],
+        plan_digest: str,
+        document: Mapping[str, object],
+    ) -> OperationGraph:
+        """Atomically persist or return the exact plan identified by its digest."""
+
+        base_commit, targets, generation, nodes = _parse_plan(graph_plan)
+        graph_document = _graph_document(base_commit, targets, nodes)
+        graph_digest = _digest(graph_document)
+        stored_document = _resolved_document(plan_digest, document)
+        if stored_document.get("operation_graph") != graph_document:
+            raise ValueError("resolved plan graph does not match operation graph")
+
+        candidate = Reconciliation(
+            id=str(uuid.uuid4()),
+            base_commit=base_commit,
+            status="planned",
+            summary={
+                "operation_count": len(nodes),
+                "target_count": len(targets),
+            },
+            graph=graph_document,
+            graph_digest=graph_digest,
+            plan_digest=plan_digest,
+            resolved_plan=stored_document,
+            current_phase="planned",
+            route_withdrawal_generation=generation,
+            terminal_reason=None,
+            created_at=self._clock(),
+        )
+        with self._sessions.begin() as session:
+            try:
+                with session.begin_nested():
+                    session.add(candidate)
+                    session.flush()
+                accepted = candidate
+            except IntegrityError:
+                accepted = session.scalar(
+                    select(Reconciliation).where(
+                        Reconciliation.plan_digest == plan_digest
+                    )
+                )
+                if accepted is None:
+                    raise
+            if (
+                accepted.base_commit != base_commit
+                or accepted.graph != graph_document
+                or accepted.graph_digest != graph_digest
+                or accepted.route_withdrawal_generation != generation
+                or accepted.resolved_plan != stored_document
+            ):
+                raise ValueError("plan digest identifies different persisted content")
+            return OperationGraph(
+                accepted.id,
+                accepted.base_commit,
+                targets,
+                nodes,
+                accepted.graph_digest,
+            )
 
     def resolved_plan(
         self, plan_digest: str
@@ -263,6 +317,19 @@ class ReconciliationOrchestrator:
         if stored is None:
             raise KeyError("unknown reconciliation")
         return stored
+
+
+def _resolved_document(
+    plan_digest: str, document: Mapping[str, object]
+) -> dict[str, object]:
+    if not isinstance(plan_digest, str) or _DIGEST.fullmatch(plan_digest) is None:
+        raise ValueError("resolved plan digest is invalid")
+    encoded = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+    if len(encoded) > 1_048_576:
+        raise ValueError("resolved reconciliation plan is too large")
+    if hashlib.sha256(encoded).hexdigest() != plan_digest:
+        raise ValueError("resolved plan content does not match its digest")
+    return json.loads(encoded)
 
 
 def _parse_plan(

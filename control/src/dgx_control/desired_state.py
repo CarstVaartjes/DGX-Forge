@@ -24,7 +24,14 @@ from spark_profiles.placement import (
     PlacementRequirement,
 )
 
-from .models import AgentNode, Observation
+from .models import (
+    AgentNode,
+    AgentOperationAttempt,
+    Job,
+    Observation,
+    Reconciliation,
+)
+from .models import AgentOperation as StoredOperation
 from .orchestration import OperationGraph, OperationNode
 
 if TYPE_CHECKING:
@@ -48,6 +55,7 @@ _REQUIRED_CAPABILITIES = frozenset(
 _IMPLEMENTED_CAPABILITIES = _REQUIRED_CAPABILITIES | {
     AgentOperation.NODE_PROBE.value
 }
+_SUPPORTED_ADAPTERS = frozenset({"spark-runtime-v1"})
 _PLANNED_OPERATIONS = (
     AgentOperation.WORKLOAD_STOP.value,
     AgentOperation.RELEASE_INSTALL.value,
@@ -56,6 +64,23 @@ _PLANNED_OPERATIONS = (
     AgentOperation.WORKLOAD_HEALTH.value,
     AgentOperation.WORKLOAD_VERIFY.value,
 )
+
+
+@dataclass(frozen=True)
+class CurrentWorkloadState:
+    """Accepted durable evidence for one currently active workload."""
+
+    workload_id: str
+    release_digest: str
+    adapter_id: str
+
+    def __post_init__(self) -> None:
+        if _IDENTIFIER.fullmatch(self.workload_id) is None:
+            raise ValueError("current workload ID is invalid")
+        if _DIGEST.fullmatch(self.release_digest) is None:
+            raise ValueError("current workload release digest is invalid")
+        if self.adapter_id not in _SUPPORTED_ADAPTERS:
+            raise ValueError("current workload adapter is not reviewed")
 
 
 @dataclass(frozen=True)
@@ -71,6 +96,7 @@ class DesiredStateObservation:
     agent_state: str
     protocol_version: int | None
     capabilities: tuple[str, ...]
+    current_workloads: tuple[CurrentWorkloadState, ...] = ()
 
     def __post_init__(self) -> None:
         NodeId.parse(self.node_id)
@@ -93,6 +119,14 @@ class DesiredStateObservation:
         ):
             raise ValueError("agent capabilities are invalid")
         object.__setattr__(self, "capabilities", capabilities)
+        current_workloads = tuple(self.current_workloads)
+        if len({item.workload_id for item in current_workloads}) != len(
+            current_workloads
+        ):
+            raise ValueError("current workload evidence is duplicate")
+        if self.occupied is not bool(current_workloads):
+            raise ValueError("node occupancy does not match current workload evidence")
+        object.__setattr__(self, "current_workloads", current_workloads)
 
 
 class DesiredStateResolver:
@@ -162,6 +196,8 @@ class DesiredStateResolver:
             _schema(workload, "workload-v2.schema.json", "workload")
             if workload.get("id") != workload_id:
                 raise ValueError("profile workload reference does not match its path")
+            if workload.get("adapter") not in _SUPPORTED_ADAPTERS:
+                raise ValueError("workload adapter is not in the reviewed adapter registry")
             workload_hash = cast(str, workload["definition_hash"])
             if requirements[workload_id].definition_hash != workload_hash:
                 raise ValueError("profile definition hash does not match workload")
@@ -198,11 +234,13 @@ class DesiredStateResolver:
             )
         _profile_cross_references(profile, workloads)
 
+        observation_values = tuple(observations)
         placement_observations = _placement_observations(
-            observations,
+            observation_values,
             fleet=fleet,
             now=self._clock(),
             ttl=self._observation_ttl,
+            desired_workloads=frozenset(workload_ids),
         )
         placements: dict[str, tuple[str, ...]] = {}
         available = placement_observations
@@ -222,6 +260,7 @@ class DesiredStateResolver:
             placements=placements,
             releases=releases,
             lifecycle=_mapping(profile["lifecycle"], "profile lifecycle"),
+            observations={item.node_id: item for item in observation_values},
         )
         input_digests = {
             path: document.sha256 for path, document in sorted(documents.items())
@@ -257,6 +296,7 @@ def durable_desired_state_observations(
                 .order_by(Observation.observed_at.desc(), Observation.id)
             )
         )
+        current = _accepted_current_workloads(session)
     latest: dict[str, Observation] = {}
     for observation in health:
         latest.setdefault(observation.node_id, observation)
@@ -268,13 +308,11 @@ def durable_desired_state_observations(
         payload = _mapping(observation.payload, "health observation")
         memory = payload.get("memory_available_bytes")
         disk = payload.get("disk_available_bytes")
-        occupied = payload.get("occupied")
         if (
             not isinstance(memory, int)
             or isinstance(memory, bool)
             or not isinstance(disk, int)
             or isinstance(disk, bool)
-            or not isinstance(occupied, bool)
         ):
             raise TypeError("health observation capacity is invalid")
         observed_at = _aware(observation.observed_at)
@@ -290,13 +328,160 @@ def durable_desired_state_observations(
                 healthy=payload.get("status") in {"healthy", "warning"},
                 memory_available_bytes=memory,
                 disk_available_bytes=disk,
-                occupied=occupied,
+                occupied=bool(current.get(agent.node_id)),
                 agent_state=state,
                 protocol_version=agent.protocol_version,
                 capabilities=tuple(sorted(agent.capabilities)),
+                current_workloads=tuple(
+                    sorted(
+                        current.get(agent.node_id, {}).values(),
+                        key=lambda item: item.workload_id,
+                    )
+                ),
             )
         )
     return tuple(projected)
+
+
+def _accepted_current_workloads(
+    session: Session,
+) -> dict[str, dict[str, CurrentWorkloadState]]:
+    """Replay accepted start/stop evidence from completed reconciliations."""
+
+    all_reconciliations = tuple(
+        session.scalars(
+            select(Reconciliation)
+            .order_by(Reconciliation.created_at, Reconciliation.id)
+        )
+    )
+    jobs = tuple(session.scalars(select(Job).where(Job.kind == "reconcile")))
+    operations = tuple(session.scalars(select(StoredOperation)))
+    attempts = tuple(session.scalars(select(AgentOperationAttempt)))
+    operations_by_job: dict[str, list[StoredOperation]] = {}
+    for operation in operations:
+        operations_by_job.setdefault(operation.parent_job_id, []).append(operation)
+    attempts_by_operation = {
+        (attempt.operation_id, attempt.attempt): attempt for attempt in attempts
+    }
+    reconciliations = tuple(
+        item
+        for item in all_reconciliations
+        if item.status == "succeeded" and item.current_phase == "completed"
+    )
+    accepted_ids = {item.id for item in reconciliations}
+    unaccepted_job_ids = {
+        job.id
+        for job in jobs
+        if job.payload.get("reconciliation_id")
+        in {item.id for item in all_reconciliations if item.id not in accepted_ids}
+    }
+    if any(
+        operation.parent_job_id in unaccepted_job_ids
+        and operation.state == "succeeded"
+        and operation.kind
+        in {
+            AgentOperation.WORKLOAD_START.value,
+            AgentOperation.WORKLOAD_STOP.value,
+        }
+        for operation in operations
+    ):
+        raise ValueError("unaccepted workload mutation makes current state uncertain")
+    if not reconciliations:
+        return {}
+    current: dict[str, dict[str, CurrentWorkloadState]] = {}
+    for reconciliation in reconciliations:
+        matched_jobs = [
+            job
+            for job in jobs
+            if job.payload.get("reconciliation_id") == reconciliation.id
+        ]
+        if len(matched_jobs) != 1 or matched_jobs[0].state != "succeeded":
+            raise ValueError("completed reconciliation lacks exact operation evidence")
+        job = matched_jobs[0]
+        graph = _mapping(reconciliation.graph, "completed reconciliation graph")
+        raw_nodes = graph.get("nodes")
+        if not isinstance(raw_nodes, list):
+            raise TypeError("completed reconciliation operation evidence is invalid")
+        stored = list(operations_by_job.get(job.id, ()))
+        if len(stored) != len(raw_nodes):
+            raise ValueError("completed reconciliation lacks exact operation evidence")
+        for raw_node in raw_nodes:
+            node = _mapping(raw_node, "completed reconciliation operation")
+            node_id = node.get("node_id")
+            workload_id = node.get("workload_id")
+            kind = node.get("kind")
+            payload_digest = node.get("payload_digest")
+            matches = [
+                operation
+                for operation in stored
+                if operation.node_id == node_id
+                and operation.kind == kind
+                and operation.payload_digest == payload_digest
+            ]
+            if len(matches) != 1:
+                raise ValueError("completed reconciliation lacks exact operation evidence")
+            operation = matches[0]
+            stored.remove(operation)
+            try:
+                exact_payload_digest = hashlib.sha256(
+                    canonical_message(operation.payload)
+                ).hexdigest()
+            except (TypeError, ValueError) as error:
+                raise ValueError(
+                    "completed reconciliation operation payload is invalid"
+                ) from error
+            attempt = attempts_by_operation.get(
+                (operation.id, operation.current_attempt)
+            )
+            if (
+                operation.base_commit != reconciliation.base_commit
+                or exact_payload_digest != operation.payload_digest
+                or operation.state != "succeeded"
+                or attempt is None
+                or attempt.state != "succeeded"
+                or not isinstance(attempt.result, Mapping)
+                or attempt.result.get("status") != "ok"
+            ):
+                raise ValueError("completed reconciliation operation evidence is invalid")
+            if kind not in {
+                AgentOperation.WORKLOAD_START.value,
+                AgentOperation.WORKLOAD_STOP.value,
+            }:
+                continue
+            payload = _mapping(operation.payload, "accepted workload payload")
+            evidence = _mapping(
+                attempt.result.get("evidence"), "accepted workload evidence"
+            )
+            action = cast(str, kind).removeprefix("workload.")
+            expected_status = "started" if action == "start" else "stopped"
+            if (
+                node_id != operation.node_id
+                or workload_id != payload.get("workload_id")
+                or evidence.get("action") != action
+                or evidence.get("status") != expected_status
+                or evidence.get("workload_id") != workload_id
+                or evidence.get("release_digest") != payload.get("release_digest")
+                or not _valid_digest(evidence.get("evidence_digest"))
+                or hashlib.sha256(canonical_message(payload)).hexdigest()
+                != operation.payload_digest
+            ):
+                raise ValueError("completed reconciliation workload evidence is invalid")
+            state = CurrentWorkloadState(
+                cast(str, workload_id),
+                cast(str, payload.get("release_digest")),
+                cast(str, payload.get("adapter_id")),
+            )
+            node_state = current.setdefault(cast(str, node_id), {})
+            existing = node_state.get(state.workload_id)
+            if action == "start":
+                if existing is not None:
+                    raise ValueError("completed reconciliation workload drift is uncertain")
+                node_state[state.workload_id] = state
+            else:
+                if existing != state:
+                    raise ValueError("completed reconciliation workload drift is uncertain")
+                del node_state[state.workload_id]
+    return current
 
 
 def _mapping(value: object, field: str) -> Mapping[str, Any]:
@@ -431,8 +616,6 @@ def _release(
         or not isinstance(release_request.get("provenance_digest"), str)
         or _DIGEST.fullmatch(cast(str, release_request["provenance_digest"])) is None
         or release_request.get("adapter_id") != adapter_id
-        or release_request["oci_manifest_digest"]
-        != "sha256:" + cast(str, release_request["target_digest"])
     ):
         raise ValueError("release request is invalid")
     workload_requests = _mapping(
@@ -519,6 +702,7 @@ def _placement_observations(
     fleet: Fleet,
     now: datetime,
     ttl: timedelta,
+    desired_workloads: frozenset[str],
 ) -> dict[NodeId, NodeObservation]:
     now = _aware(now)
     resolved: dict[NodeId, NodeObservation] = {}
@@ -541,7 +725,10 @@ def _placement_observations(
             observation.healthy,
             observation.memory_available_bytes,
             observation.disk_available_bytes,
-            observation.occupied,
+            any(
+                item.workload_id not in desired_workloads
+                for item in observation.current_workloads
+            ),
         )
     if set(resolved) != set(fleet.nodes):
         raise ValueError("durable observations must exactly cover the fleet")
@@ -580,24 +767,49 @@ def _operations(
     placements: Mapping[str, tuple[str, ...]],
     releases: Mapping[str, Mapping[str, Any]],
     lifecycle: Mapping[str, Any],
+    observations: Mapping[str, DesiredStateObservation],
 ) -> tuple[OperationGraph, Mapping[str, Mapping[str, object]]]:
     nodes: dict[str, OperationNode] = {}
     payloads: dict[str, Mapping[str, object]] = {}
     for workload_id, targets in sorted(placements.items()):
+        current = {
+            node_id: next(
+                (
+                    item
+                    for item in observations[node_id].current_workloads
+                    if item.workload_id == workload_id
+                ),
+                None,
+            )
+            for node_id in targets
+        }
+        active = {node_id: item for node_id, item in current.items() if item is not None}
+        if active and set(active) != set(targets):
+            raise ValueError("current workload placement drift is uncertain")
+        if len(
+            {(item.release_digest, item.adapter_id) for item in active.values()}
+        ) > 1:
+            raise ValueError("current workload release drift is uncertain")
         operation_ids: dict[tuple[str, str], str] = {}
         for node_id in targets:
-            for kind in _PLANNED_OPERATIONS:
+            kinds = _PLANNED_OPERATIONS if active else _PLANNED_OPERATIONS[1:]
+            for kind in kinds:
                 operation_ids[(node_id, kind)] = f"{workload_id}:{node_id}:{kind}"
         worker_starts = tuple(
             operation_ids[(node_id, AgentOperation.WORKLOAD_START.value)]
             for node_id in targets[1:]
         )
-        worker_stops = tuple(
-            operation_ids[(node_id, AgentOperation.WORKLOAD_STOP.value)]
-            for node_id in targets[1:]
+        worker_stops = (
+            tuple(
+                operation_ids[(node_id, AgentOperation.WORKLOAD_STOP.value)]
+                for node_id in targets[1:]
+            )
+            if active
+            else ()
         )
         for node_id in targets:
-            for kind in _PLANNED_OPERATIONS:
+            kinds = _PLANNED_OPERATIONS if active else _PLANNED_OPERATIONS[1:]
+            for kind in kinds:
                 operation_id = operation_ids[(node_id, kind)]
                 if kind == AgentOperation.WORKLOAD_STOP.value:
                     dependencies = ()
@@ -611,7 +823,9 @@ def _operations(
                             ],
                         )
                 elif kind == AgentOperation.RELEASE_INSTALL.value:
-                    if lifecycle["stop_order"] == "entrypoint-before-workers":
+                    if not active:
+                        dependencies = ()
+                    elif lifecycle["stop_order"] == "entrypoint-before-workers":
                         dependencies = worker_stops or (
                             operation_ids[
                                 (targets[0], AgentOperation.WORKLOAD_STOP.value)
@@ -648,6 +862,16 @@ def _operations(
                     payload = cast(
                         Mapping[str, object],
                         releases[workload_id]["release_request"],
+                    )
+                elif kind == AgentOperation.WORKLOAD_STOP.value:
+                    current_state = active[node_id]
+                    payload = MappingProxyType(
+                        {
+                            "schema_version": 1,
+                            "workload_id": current_state.workload_id,
+                            "release_digest": current_state.release_digest,
+                            "adapter_id": current_state.adapter_id,
+                        }
                     )
                 else:
                     requests = cast(

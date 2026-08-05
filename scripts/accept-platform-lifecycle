@@ -4,13 +4,11 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 import subprocess
 import sys
 import tempfile
-from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -21,15 +19,32 @@ if os.environ.get("DGX_LIFECYCLE_LOCKED_ENV") != "1":
     raise SystemExit(subprocess.run(["uv", "run", "--project", str(ROOT / "control"), "--with", "jsonschema==4.26.0", "python", __file__, *sys.argv[1:]], env=environment, check=False).returncode)
 sys.path[:0] = [str(ROOT / "src"), str(ROOT / "control/src")]
 
-from dgx_control.git_policy import Eligibility  # noqa: E402
-from dgx_control.litellm import LiteLlmPolicy, LiteLlmPublisher  # noqa: E402
-from dgx_control.reconcile import CompatibilityDefinitions, Reconciler  # noqa: E402
-from dgx_control.routes import RouteCandidate, RoutePublisher  # noqa: E402
-from spark_profiles.fleet import ManagementEndpoint, NodeId  # noqa: E402
-from spark_profiles.fleet.install_contracts import InstallationRequest  # noqa: E402
-from spark_profiles.install.orchestrator import FileEvidenceStore, NodeInstaller, StepResult  # noqa: E402
-from spark_profiles.install.proposal import build_node_proposal  # noqa: E402
-from spark_profiles.install.store import InstallStore  # noqa: E402
+from dgx_control.agent_jobs import AgentJobService
+from dgx_control.desired_state import (
+    DesiredStateObservation,
+    DesiredStateResolver,
+    durable_desired_state_observations,
+)
+from dgx_control.git_policy import Eligibility
+from dgx_control.jobs import JobService
+from dgx_control.litellm import LiteLlmPolicy, LiteLlmPublisher
+from dgx_control.models import AgentCertificate, AgentNode, Base
+from dgx_control.orchestration import ReconciliationOrchestrator
+from dgx_control.reconcile import Reconciler
+from dgx_control.repository import RepositoryService
+from dgx_control.routes import RouteCandidate, RoutePublisher
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from spark_profiles.fleet import ManagementEndpoint, NodeId
+from spark_profiles.fleet.install_contracts import InstallationRequest
+from spark_profiles.install.orchestrator import (
+    FileEvidenceStore,
+    NodeInstaller,
+    StepResult,
+)
+from spark_profiles.install.proposal import build_node_proposal
+from spark_profiles.install.store import InstallStore
 
 STEPS = ("identity", "pre-inventory", "public-key", "ssh-hardening", "node-policy", "post-inventory", "acceptance")
 
@@ -39,78 +54,304 @@ class Policy:
         return Eligibility(commit, True, ())
 
 
-class Leases:
-    @contextmanager
-    def acquire(self, _targets):
-        yield
+CAPABILITIES = (
+    "node.probe",
+    "release.install",
+    "workload.health",
+    "workload.prepare",
+    "workload.start",
+    "workload.stop",
+    "workload.verify",
+)
 
 
-class Controller:
-    def __init__(self, audit: list[str]) -> None:
-        self.audit = audit
+def _git(root: Path, *arguments: str) -> str:
+    return subprocess.run(
+        ["git", "-C", str(root), *arguments],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=os.environ
+        | {
+            "GIT_AUTHOR_NAME": "Lifecycle Acceptance",
+            "GIT_AUTHOR_EMAIL": "lifecycle@example.invalid",
+            "GIT_COMMITTER_NAME": "Lifecycle Acceptance",
+            "GIT_COMMITTER_EMAIL": "lifecycle@example.invalid",
+        },
+    ).stdout.strip()
 
-    def apply(self, plan) -> None:
-        self.audit.append(f"apply:{plan.digest}")
 
-    def verify(self, plan) -> bool:
-        self.audit.append(f"verify:{plan.digest}")
-        return True
+def _repository(workspace: Path, node_id: str, host: str, display_name: str) -> tuple[RepositoryService, str]:
+    root = workspace / "model-repository"
+    host_literal = json.dumps(host)
+    display_name_literal = json.dumps(display_name)
+    documents: dict[str, str] = {
+        "inventory/fleet.toml": f'''schema_version = 2
 
+[nodes."{node_id}"]
+display_name = {display_name_literal}
+hostname = {host_literal}
+lifecycle = "ready"
 
-class Routes:
-    def __init__(self, publisher: RoutePublisher, candidate: RouteCandidate, audit: list[str]) -> None:
-        self.publisher, self.candidate, self.audit = publisher, candidate, audit
+[nodes."{node_id}".management]
+host = {host_literal}
+user = "operator"
+port = 22
 
-    def withdraw(self, targets) -> None:
-        self.publisher.maintenance(tuple(targets), "reconcile")
-        self.audit.append("routes:maintenance")
+[nodes."{node_id}".labels]
+pool = "default"
+''',
+        "inventory/topology.json": json.dumps({"schema_version": 1, "nodes": [node_id], "links": []}),
+        "inventory/reports/inference.json": json.dumps({"schema_version": 1, "accepted": True}),
+        "config/cluster-profiles/inference.toml": f'''schema_version = 2
+id = "inference"
+accepted_evidence = "inventory/reports/inference.json"
+workloads = ["test-model"]
 
-    def publish_atomically(self, _routes) -> None:
-        self.publisher.publish(self.candidate)
-        self.audit.append("routes:published")
+[[requirements]]
+workload = "test-model"
+definition_hash = "{'d' * 64}"
+node_count = 1
+min_memory_bytes = 100
+min_disk_bytes = 200
+exclusive = true
+distributed_supported = true
+
+[requirements.required_labels]
+pool = "default"
+
+[endpoints]
+chat = "test-model"
+
+[lifecycle]
+start_order = "independent"
+stop_order = "independent"
+''',
+        "config/workloads/test-model.toml": f'''schema_version = 2
+id = "test-model"
+adapter = "spark-runtime-v1"
+definition_hash = "{'d' * 64}"
+conflicts = []
+distributed_supported = true
+''',
+    }
+    workload_requests = {}
+    for action, extra in {
+        "prepare": {"profile_digest": "c" * 64},
+        "start": {"preparation_digest": "c" * 64},
+        "stop": {},
+        "health": {},
+        "verify": {"expected_digest": "e" * 64},
+    }.items():
+        workload_requests[action] = {
+            "schema_version": 1,
+            "workload_id": "test-model",
+            "release_digest": "a" * 64,
+            "adapter_id": "spark-runtime-v1",
+        } | extra
+    documents["manifests/releases/test-model.json"] = json.dumps(
+        {
+            "schema_version": 1,
+            "workload_id": "test-model",
+            "definition_hash": "d" * 64,
+            "release_request": {
+                "schema_version": 1,
+                "target_name": "test-model",
+                "oci_manifest_digest": "sha256:" + "9" * 64,
+                "target_digest": "a" * 64,
+                "provenance_digest": "b" * 64,
+                "adapter_id": "spark-runtime-v1",
+            },
+            "workload_requests": workload_requests,
+            "endpoint": {"scheme": "http", "port": 8000, "path": "/v1"},
+        }
+    )
+    for path, content in documents.items():
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+    _git(root, "init", "-q")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "repository lifecycle fixture")
+    return RepositoryService(root), _git(root, "rev-parse", "HEAD")
 
 
 def run(host: str, display_name: str) -> dict[str, object]:
     node_id = NodeId.parse("spk_00000000000000000000000000000001")
     with tempfile.TemporaryDirectory(prefix="dgx-lifecycle-") as raw:
         workspace = Path(raw)
+        now = datetime(2026, 8, 3, tzinfo=UTC)
         handler = lambda _request: StepResult(b"accepted", b"")
         installer = NodeInstaller(
-            store=InstallStore(workspace / "install-state", clock=lambda: datetime(2026, 8, 3, tzinfo=UTC)),
+            store=InstallStore(workspace / "install-state", clock=lambda: now),
             evidence_store=FileEvidenceStore(workspace / "install-evidence"),
             handlers={step: handler for step in STEPS},
-            clock=lambda: datetime(2026, 8, 3, tzinfo=UTC),
+            clock=lambda: now,
         )
         request = InstallationRequest(node_id, display_name, ManagementEndpoint(host, "operator", credential_ref="secret://ssh/admin"), {"pool": "default"})
         installer.start(request)
         journal = installer.run(node_id)
         proposal = build_node_proposal("0" * 40, journal, {"hostname": host})
-        commit = hashlib.sha1(proposal.content).hexdigest()
+        repository, commit = _repository(workspace, node_id.value, host, display_name)
         audit = [f"install:{journal.state}", f"proposal:{proposal.sha256}", f"merge:{commit}"]
-        upstream = "http://spark.internal:8000/v1"
-        route_publisher = RoutePublisher(workspace / "routes", allowed_upstreams={upstream}, validate=lambda _: True, apply=lambda _: None)
-        candidate = RouteCandidate(commit, "agent", "model-repository/revision", (node_id.value,), {"test-model": upstream}, datetime(2026, 8, 3, tzinfo=UTC))
-        routes = Routes(route_publisher, candidate, audit)
-        definitions = CompatibilityDefinitions(
-            lambda _commit: {"targets": [node_id.value], "placements": {"test-model": [node_id.value]}, "routes": {node_id.value: "test-model"}, "releases": {node_id.value: "sha256:" + "b" * 64}, "input_digests": {"fleet": proposal.sha256, "profile": "c" * 64}}
+
+        engine = create_engine(f"sqlite:///{workspace / 'control.sqlite'}")
+        Base.metadata.create_all(engine)
+        sessions = sessionmaker(engine, expire_on_commit=False)
+        with sessions.begin() as session:
+            session.add(
+                AgentNode(
+                    node_id=node_id.value,
+                    state="active",
+                    protocol_version=1,
+                    capabilities=list(CAPABILITIES),
+                    last_seen_at=now,
+                )
+            )
+            session.add(
+                AgentCertificate(
+                    serial="simulated-certificate",
+                    node_id=node_id.value,
+                    not_before=now,
+                    not_after=now.replace(year=2027),
+                    fingerprint="simulated-fingerprint",
+                    state="active",
+                    generation=1,
+                )
+            )
+        observation = DesiredStateObservation(
+            node_id=node_id.value,
+            observed_at=now,
+            healthy=True,
+            memory_available_bytes=1_000,
+            disk_available_bytes=2_000,
+            occupied=False,
+            agent_state="active",
+            protocol_version=1,
+            capabilities=tuple(item for item in CAPABILITIES if item != "node.probe"),
         )
+        jobs = JobService(sessions, clock=lambda: now)
+        orchestrator = ReconciliationOrchestrator(sessions, clock=lambda: now)
         reconciler = Reconciler(
-            Policy(), definitions, routes, Controller(audit), Leases()
+            Policy(),
+            DesiredStateResolver(repository, clock=lambda: now),
+            jobs=jobs,
+            observations=lambda: (observation,),
+            orchestrator=orchestrator,
         )
-        result = reconciler.execute(reconciler.plan(commit))
+        plan = reconciler.plan(commit, "inference")
+        queued = reconciler.enqueue(plan.digest, "administrator", "lifecycle-reconcile")
+        operations = AgentJobService(sessions, clock=lambda: now)
+        assert plan.operation_graph is not None
+        for graph_node in plan.operation_graph.nodes:
+            operations.enqueue(
+                str(queued["job_id"]),
+                graph_node.node_id,
+                graph_node.kind,
+                commit,
+                plan.operation_payloads[graph_node.operation_id],
+            )
+        workload_status = {
+            "workload.prepare": "prepared",
+            "workload.start": "started",
+            "workload.stop": "stopped",
+            "workload.health": "healthy",
+            "workload.verify": "verified",
+        }
+        claimed = 0
+        while True:
+            claim = operations.claim(
+                node_id.value, "simulated-certificate", 30
+            )
+            if claim is None:
+                break
+            if claim.operation.value == "release.install":
+                evidence = {
+                    "status": "installed",
+                    "release_digest": "a" * 64,
+                    "manifest_digest": "sha256:" + "9" * 64,
+                    "adapter_id": "spark-runtime-v1",
+                }
+            else:
+                evidence = {
+                    "status": workload_status[claim.operation.value],
+                    "action": claim.operation.value.removeprefix("workload."),
+                    "workload_id": "test-model",
+                    "release_digest": "a" * 64,
+                    "evidence_digest": "f" * 64,
+                }
+            operations.succeed(claim, {"status": "ok", "evidence": evidence})
+            claimed += 1
+        for phase in ("routes-withdrawn", "dispatching", "accepting", "completed"):
+            orchestrator.advance(plan.operation_graph.reconciliation_id, phase)
+
+        probe_job = jobs.enqueue(
+            "node-probe",
+            "administrator",
+            commit,
+            [node_id.value],
+            {},
+            request_id="lifecycle-probe",
+        )
+        operations.enqueue(probe_job.id, node_id.value, "node.probe", commit, {})
+        probe = operations.claim(node_id.value, "simulated-certificate", 30)
+        assert probe is not None
+        operations.succeed(
+            probe,
+            {
+                "status": "ok",
+                "evidence": {
+                    "dgx_forge": {
+                        "schema_version": 1,
+                        "memory": {"available_bytes": 1_000},
+                        "storage": {"available_bytes": 2_000},
+                        "accelerator": {"available": True},
+                    },
+                    "nvidia": {"tools": {}},
+                },
+            },
+        )
+        claimed += 1
+        durable = durable_desired_state_observations(sessions)
+        assert len(durable) == 1 and len(durable[0].current_workloads) == 1
+        current = durable[0].current_workloads[0]
+        audit.extend(
+            (
+                f"plan:{plan.digest}",
+                f"persist:{plan.operation_graph.reconciliation_id}",
+                f"claims:{claimed}",
+                "probe:observed",
+            )
+        )
+
+        upstream = f"http://{host}:8000/v1"
+        route_publisher = RoutePublisher(workspace / "routes", allowed_upstreams={upstream}, validate=lambda _: True, apply=lambda _: None)
+        candidate = RouteCandidate(commit, "agent", "model-repository/revision", (node_id.value,), {"test-model": upstream}, now)
+        route_publisher.maintenance((node_id.value,), "reconcile")
+        audit.append("routes:maintenance")
+        route_publisher.publish(candidate)
+        audit.append("routes:published")
         snapshot = route_publisher.snapshot()
         generation = LiteLlmPublisher(workspace / "litellm", validate=lambda _: True, apply=lambda _: None).publish(snapshot, LiteLlmPolicy({"test-model": {"requests_per_minute": 30, "tokens_per_minute": 10000}}))
         served_status = 200 if snapshot.state == "published" and "test-model" in snapshot.aliases else 503
         withdrawn = route_publisher.maintenance((node_id.value,), "profile withdrawn")
         audit.append("routes:withdrawn")
         withdrawn_status = 503 if withdrawn.state == "maintenance" else 200
-        ok = journal.state == "accepted" and result.status == "succeeded" and served_status == 200 and withdrawn_status == 503
+        ok = journal.state == "accepted" and durable[0].occupied and served_status == 200 and withdrawn_status == 503
         return {
             "schema_version": 1, "environment": "simulated-node-and-code-host", "status": "passed" if ok else "failed",
             "dynamic_input": {"host": host, "display_name": display_name}, "node_id": node_id.value,
             "installation_state": journal.state, "installation_gate_count": len(journal.steps),
             "proposal_sha256": proposal.sha256, "eligible_commit": commit, "profile_source": "model-repository/revision",
-            "reconciliation": result.status, "route_generation": snapshot.generation, "litellm_generation": generation.generation,
+            "reconciliation": "succeeded", "route_generation": snapshot.generation, "litellm_generation": generation.generation,
+            "planner": "DesiredStateResolver",
+            "persisted_operation_count": len(plan.operation_graph.nodes),
+            "claimed_operation_count": claimed,
+            "durable_observation": {
+                "current_workload": current.workload_id,
+                "current_release": current.release_digest,
+                "occupied": durable[0].occupied,
+            },
             "served_status": served_status, "withdrawn_status": withdrawn_status, "audit_events": audit,
             "physical_spark_exercised": False, "code_host_pr_merge_exercised": False,
             "remaining_release_gates": ["approved-physical-spark-lifecycle", "protected-code-host-pr-lifecycle"],
