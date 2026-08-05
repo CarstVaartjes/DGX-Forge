@@ -47,6 +47,20 @@ _FAULTS = (
     "failed-activation",
     "stale-fence",
 )
+_BAD_ARTIFACT_TRANSITIONS = (
+    "candidate-staged:B:generation-1",
+    "artifact-validation-rejected:B:generation-1",
+    "candidate-cleared:B:generation-1",
+)
+_FAILED_ACTIVATION_TRANSITIONS = (
+    "candidate-staged:B:generation-1",
+    "artifact-validated:B:generation-1",
+    "activation-attempted:A->B:generation-1",
+    "active-switched:A->B:generation-1",
+    "readiness-failed:B:generation-1",
+    "active-restored:B->A:generation-1",
+    "candidate-cleared:B:generation-1",
+)
 
 
 class SimulationError(RuntimeError):
@@ -127,24 +141,39 @@ class _ReleaseHost:
     """In-memory A/B release effect boundary used by the real registry."""
 
     def __init__(self, fault: str | None = None) -> None:
-        self.active_digest = _BASE_RELEASE
+        self.slots: dict[str, str | None] = {"A": _BASE_RELEASE, "B": None}
+        self.active_slot = "A"
+        self.previous_slot: str | None = None
+        self.pending_slot: str | None = None
+        self.pending_generation = 0
+        self.transition_history: list[str] = []
         self.install_calls = 0
         self.durable_mutations = 0
         self._fault = fault
 
+    @property
+    def active_digest(self) -> str:
+        digest = self.slots[self.active_slot]
+        if digest is None:
+            raise SimulationError("simulated active slot is empty")
+        return digest
+
     def install(self, request: ReleaseRequest, deadline) -> ReleaseEvidence:
         self.install_calls += 1
-        previous = self.active_digest
+        self._stage(request)
         if self._fault == "bad-artifact":
-            self.active_digest = previous
+            self._record("artifact-validation-rejected", self.pending_slot)
+            self._clear_candidate()
             raise ReleaseInstallError("simulated artifact validation failure")
+        self._record("artifact-validated", self.pending_slot)
+        self._activate_candidate()
         if self._fault == "failed-activation":
-            # The candidate occupies the inactive slot, then health validation
-            # fails before the active-slot pointer is committed.
-            self.active_digest = previous
+            self._record("readiness-failed", self.active_slot)
+            self._restore_previous()
+            self._clear_candidate()
             raise ReleaseInstallError("simulated activation failure")
-        self.active_digest = request.target_digest
-        self.durable_mutations += 1
+        self._record("readiness-passed", self.active_slot)
+        self._commit_candidate()
         return self._evidence(request, "installed")
 
     def inspect(self, request: ReleaseRequest, deadline) -> ReleaseInspection:
@@ -156,8 +185,65 @@ class _ReleaseHost:
         return ReleaseInspection(ReleaseDisposition.READY)
 
     def activate_before_crash(self, request: ReleaseRequest) -> None:
-        self.active_digest = request.target_digest
+        self._stage(request)
+        self._record("artifact-validated", self.pending_slot)
+        self._activate_candidate()
+        self._record("readiness-passed", self.active_slot)
+        self._commit_candidate()
+
+    def _stage(self, request: ReleaseRequest) -> None:
+        if self.pending_slot is not None:
+            raise SimulationError("simulated candidate is already pending")
+        candidate = "B" if self.active_slot == "A" else "A"
+        self.pending_generation += 1
+        self.pending_slot = candidate
+        self.slots[candidate] = request.target_digest
+        self._record("candidate-staged", candidate)
+
+    def _activate_candidate(self) -> None:
+        if self.pending_slot is None:
+            raise SimulationError("simulated candidate is not pending")
+        previous = self.active_slot
+        candidate = self.pending_slot
+        self.previous_slot = previous
+        self._record("activation-attempted", f"{previous}->{candidate}")
+        self.active_slot = candidate
         self.durable_mutations += 1
+        self._record("active-switched", f"{previous}->{candidate}")
+
+    def _restore_previous(self) -> None:
+        if self.previous_slot is None:
+            raise SimulationError("simulated previous slot is unavailable")
+        failed = self.active_slot
+        restored = self.previous_slot
+        self.active_slot = restored
+        self.previous_slot = None
+        self.durable_mutations += 1
+        self._record("active-restored", f"{failed}->{restored}")
+
+    def _clear_candidate(self) -> None:
+        if self.pending_slot is None:
+            raise SimulationError("simulated candidate is not pending")
+        candidate = self.pending_slot
+        if candidate == self.active_slot:
+            raise SimulationError("simulated active candidate cannot be cleared")
+        self.slots[candidate] = None
+        self.pending_slot = None
+        self._record("candidate-cleared", candidate)
+
+    def _commit_candidate(self) -> None:
+        if self.pending_slot != self.active_slot:
+            raise SimulationError("simulated active candidate does not match pending")
+        candidate = self.pending_slot
+        self.pending_slot = None
+        self._record("candidate-committed", candidate)
+
+    def _record(self, action: str, subject: str | None) -> None:
+        if subject is None:
+            raise SimulationError("simulated transition subject is unavailable")
+        self.transition_history.append(
+            f"{action}:{subject}:generation-{self.pending_generation}"
+        )
 
     @staticmethod
     def _evidence(request: ReleaseRequest, status: str) -> ReleaseEvidence:
@@ -236,7 +322,17 @@ def simulate_agent_lifecycle(*, nodes: int, seed: int = 20260803) -> dict[str, A
     node_ids = tuple(_node_id(seed, index) for index in range(nodes))
     transport = _InMemoryTransport(node_ids, seed)
     counts = {
-        "bad-artifact": {"injected": 0, "rollbacks": 0},
+        "bad-artifact": {
+            "artifact_rejections": 0,
+            "candidate_activations": 0,
+            "candidate_cleanups": 0,
+            "injected": 0,
+            "pending_candidates_after_fault": 0,
+            "rollbacks": 0,
+            "safe_outcomes": 0,
+            "transition_sequence": [],
+            "transition_sequence_mismatches": 0,
+        },
         "bad-certificate": {
             "injected": 0,
             "rejections": 0,
@@ -244,7 +340,18 @@ def simulate_agent_lifecycle(*, nodes: int, seed: int = 20260803) -> dict[str, A
         },
         "crash": {"injected": 0, "recoveries": 0},
         "disconnect": {"injected": 0, "recoveries": 0},
-        "failed-activation": {"injected": 0, "rollbacks": 0},
+        "failed-activation": {
+            "activation_failures": 0,
+            "candidate_activations": 0,
+            "candidate_cleanups": 0,
+            "injected": 0,
+            "pending_candidates_after_fault": 0,
+            "readiness_failures": 0,
+            "rollbacks": 0,
+            "safe_outcomes": 0,
+            "transition_sequence": [],
+            "transition_sequence_mismatches": 0,
+        },
         "stale-fence": {
             "injected": 0,
             "claim_rejections": 0,
@@ -424,21 +531,56 @@ def simulate_agent_lifecycle(*, nodes: int, seed: int = 20260803) -> dict[str, A
                     context=fault_context,
                 )
                 fault_context.state.acknowledge(outcome.result)
-                if (
+                history = tuple(fault_host.transition_history)
+                _observe_transition_sequence(counts[fault], history)
+                failed_safely = (
                     outcome.result.state == "failed"
                     and outcome.result.result.get("error_code")
                     == "release_install_failed"
                     and fault_host.active_digest == _BASE_RELEASE
-                ):
-                    counts[fault]["rollbacks"] += 1
+                    and fault_host.active_slot == "A"
+                    and fault_host.slots["B"] is None
+                )
+                counts[fault]["pending_candidates_after_fault"] += int(
+                    fault_host.pending_slot is not None
+                )
+                counts[fault]["candidate_activations"] += history.count(
+                    "active-switched:A->B:generation-1"
+                )
+                counts[fault]["candidate_cleanups"] += history.count(
+                    "candidate-cleared:B:generation-1"
+                )
+                counts[fault]["rollbacks"] += history.count(
+                    "active-restored:B->A:generation-1"
+                )
+                if fault == "bad-artifact":
+                    counts[fault]["artifact_rejections"] += history.count(
+                        "artifact-validation-rejected:B:generation-1"
+                    )
+                    transition_ok = history == _BAD_ARTIFACT_TRANSITIONS
+                else:
+                    counts[fault]["activation_failures"] += int(
+                        outcome.result.state == "failed"
+                    )
+                    counts[fault]["readiness_failures"] += history.count(
+                        "readiness-failed:B:generation-1"
+                    )
+                    transition_ok = history == _FAILED_ACTIVATION_TRANSITIONS
+                counts[fault]["safe_outcomes"] += int(
+                    failed_safely and transition_ok
+                )
 
     faults = {
         fault: {"evidence_kind": "simulated", **counts[fault]} for fault in _FAULTS
     }
     invariants = {
-        "bad_update_rollbacks": (
-            counts["bad-artifact"]["rollbacks"]
-            + counts["failed-activation"]["rollbacks"]
+        "artifact_rejections_without_activation": counts["bad-artifact"][
+            "safe_outcomes"
+        ],
+        "bad_update_rollbacks": counts["failed-activation"]["rollbacks"],
+        "bad_update_safe_outcomes": (
+            counts["bad-artifact"]["safe_outcomes"]
+            + counts["failed-activation"]["safe_outcomes"]
         ),
         "crash_recoveries": counts["crash"]["recoveries"],
         "cross_node_claims_accepted": cross_node_claims_accepted,
@@ -471,9 +613,16 @@ def lifecycle_evidence_passes(report: Mapping[str, Any]) -> bool:
         return False
     expected_faults = {
         "bad-artifact": {
+            "artifact_rejections": nodes,
+            "candidate_activations": 0,
+            "candidate_cleanups": nodes,
             "evidence_kind": "simulated",
             "injected": nodes,
-            "rollbacks": nodes,
+            "pending_candidates_after_fault": 0,
+            "rollbacks": 0,
+            "safe_outcomes": nodes,
+            "transition_sequence": list(_BAD_ARTIFACT_TRANSITIONS),
+            "transition_sequence_mismatches": 0,
         },
         "bad-certificate": {
             "durable_mutations": 0,
@@ -492,9 +641,17 @@ def lifecycle_evidence_passes(report: Mapping[str, Any]) -> bool:
             "recoveries": nodes,
         },
         "failed-activation": {
+            "activation_failures": nodes,
+            "candidate_activations": nodes,
+            "candidate_cleanups": nodes,
             "evidence_kind": "simulated",
             "injected": nodes,
+            "pending_candidates_after_fault": 0,
+            "readiness_failures": nodes,
             "rollbacks": nodes,
+            "safe_outcomes": nodes,
+            "transition_sequence": list(_FAILED_ACTIVATION_TRANSITIONS),
+            "transition_sequence_mismatches": 0,
         },
         "stale-fence": {
             "claim_rejections": nodes,
@@ -505,7 +662,9 @@ def lifecycle_evidence_passes(report: Mapping[str, Any]) -> bool:
         },
     }
     expected_invariants = {
-        "bad_update_rollbacks": nodes * 2,
+        "artifact_rejections_without_activation": nodes,
+        "bad_update_rollbacks": nodes,
+        "bad_update_safe_outcomes": nodes * 2,
         "crash_recoveries": nodes,
         "cross_node_claims_accepted": 0,
         "duplicate_mutations": 0,
@@ -520,6 +679,21 @@ def lifecycle_evidence_passes(report: Mapping[str, Any]) -> bool:
         and report.get("faults") == expected_faults
         and report.get("invariants") == expected_invariants
     )
+
+
+def _observe_transition_sequence(
+    evidence: dict[str, Any], history: tuple[str, ...]
+) -> None:
+    observed = evidence["transition_sequence"]
+    if not isinstance(observed, list):
+        raise SimulationError("simulated transition evidence is invalid")
+    if not observed:
+        observed.extend(history)
+    elif observed != list(history):
+        mismatches = evidence["transition_sequence_mismatches"]
+        if not isinstance(mismatches, int) or isinstance(mismatches, bool):
+            raise SimulationError("simulated transition mismatch count is invalid")
+        evidence["transition_sequence_mismatches"] = mismatches + 1
 
 
 def _context(

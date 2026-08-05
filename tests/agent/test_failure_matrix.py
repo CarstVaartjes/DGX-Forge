@@ -30,9 +30,20 @@ def test_failure_matrix_preserves_agent_lifecycle_invariants(nodes: int) -> None
     assert report["seed"] == 20260803
     assert report["faults"] == {
         "bad-artifact": {
+            "artifact_rejections": nodes,
+            "candidate_activations": 0,
+            "candidate_cleanups": nodes,
             "evidence_kind": "simulated",
             "injected": nodes,
-            "rollbacks": nodes,
+            "pending_candidates_after_fault": 0,
+            "rollbacks": 0,
+            "safe_outcomes": nodes,
+            "transition_sequence": [
+                "candidate-staged:B:generation-1",
+                "artifact-validation-rejected:B:generation-1",
+                "candidate-cleared:B:generation-1",
+            ],
+            "transition_sequence_mismatches": 0,
         },
         "bad-certificate": {
             "durable_mutations": 0,
@@ -51,9 +62,25 @@ def test_failure_matrix_preserves_agent_lifecycle_invariants(nodes: int) -> None
             "recoveries": nodes,
         },
         "failed-activation": {
+            "activation_failures": nodes,
+            "candidate_activations": nodes,
+            "candidate_cleanups": nodes,
             "evidence_kind": "simulated",
             "injected": nodes,
+            "pending_candidates_after_fault": 0,
+            "readiness_failures": nodes,
             "rollbacks": nodes,
+            "safe_outcomes": nodes,
+            "transition_sequence": [
+                "candidate-staged:B:generation-1",
+                "artifact-validated:B:generation-1",
+                "activation-attempted:A->B:generation-1",
+                "active-switched:A->B:generation-1",
+                "readiness-failed:B:generation-1",
+                "active-restored:B->A:generation-1",
+                "candidate-cleared:B:generation-1",
+            ],
+            "transition_sequence_mismatches": 0,
         },
         "stale-fence": {
             "claim_rejections": nodes,
@@ -66,7 +93,9 @@ def test_failure_matrix_preserves_agent_lifecycle_invariants(nodes: int) -> None
 
     invariants = report["invariants"]
     assert invariants == {
-        "bad_update_rollbacks": nodes * 2,
+        "artifact_rejections_without_activation": nodes,
+        "bad_update_rollbacks": nodes,
+        "bad_update_safe_outcomes": nodes * 2,
         "crash_recoveries": nodes,
         "cross_node_claims_accepted": 0,
         "duplicate_mutations": 0,
@@ -79,8 +108,10 @@ def test_failure_matrix_preserves_agent_lifecycle_invariants(nodes: int) -> None
 @pytest.mark.parametrize(
     ("fault", "counter", "regressed_value"),
     [
+        ("bad-artifact", "rollbacks", 1),
         ("bad-certificate", "rejections", 0),
         ("bad-certificate", "durable_mutations", 1),
+        ("failed-activation", "rollbacks", 0),
         ("stale-fence", "claim_rejections", 0),
         ("stale-fence", "durable_mutations", 1),
     ],

@@ -26,7 +26,8 @@ The simulator injects disconnect, process crash, stale fence, bad artifact, bad
 certificate, and failed activation without SSH, shelling into a Spark, or opening a
 worker-side listener. Across both covered fleet sizes it requires zero duplicate
 mutations, zero cross-node claims accepted, zero stale results accepted, reconnect and
-crash recovery for every node, and rollback for both bad-update paths.
+crash recovery for every node, safe artifact rejection before activation, and an
+explicit restore transition after failed activation.
 
 ## Deterministic fault matrix
 
@@ -37,14 +38,15 @@ For `N = 1` and `N = 16`, the accepted report requires:
 | disconnect | `N` injections and `N` reconnect recoveries, with one durable mutation per claim |
 | crash | `N` injections and `N` replay recoveries, without repeating the already durable mutation |
 | stale fence | `N` claim rejections, `N` result rejections, and zero durable mutations |
-| bad artifact | `N` validation failures and `N` rollbacks to the prior active digest |
+| bad artifact | `N` staged-candidate validation rejections, `N` candidate cleanups, zero candidate activations, and zero rollbacks |
 | bad certificate | `N` authentication rejections and zero state or release mutations |
-| failed activation | `N` activation failures and `N` rollbacks before active-pointer commit |
+| failed activation | `N` candidate activations, `N` readiness failures, `N` explicit restores to slot A, and `N` candidate cleanups |
 
-The aggregate invariants additionally require `2N` bad-update rollbacks, `N` crash
-recoveries, `N` reconnect recoveries, and zero duplicate mutations, accepted
-cross-node claims, or accepted stale results. Node IDs, claims, fences, digests, and
-timestamps are derived deterministically from the supplied seed.
+The aggregate invariants require `2N` safe bad-update outcomes: `N` artifact
+rejections without activation and `N` actual activation rollbacks. They additionally
+require `N` crash recoveries, `N` reconnect recoveries, and zero duplicate mutations,
+accepted cross-node claims, or accepted stale results. Node IDs, claims, fences,
+digests, and timestamps are derived deterministically from the supplied seed.
 
 ## Real and simulated boundary
 
@@ -53,7 +55,13 @@ scenario uses the production `AgentStateStore` against a temporary durable state
 and the production `OperationRegistry` for typed claim validation, dispatch, replay,
 and result handling. The transport, certificate authority decision, inventory probe,
 and A/B release-host effects are deliberately represented in memory so all faults are
-repeatable and require no remote machine. The report therefore always states:
+repeatable and require no remote machine. The in-memory A/B boundary records slot A/B
+contents, the stable active and previous slot, pending slot and generation, and the
+ordered transition history. Artifact rejection stages then cleans the inactive
+candidate without switching the active slot. Failed activation stages and validates
+the candidate, switches to it, observes simulated readiness failure, explicitly
+restores the previous active slot, and clears the failed candidate. The report
+therefore always states:
 
 - `evidence_kind: simulated`;
 - `environment: deterministic-in-memory-transport`;
@@ -95,10 +103,25 @@ The first independent review found two Important issues:
 The scoped independent rereview found both Important issues addressed, no remaining
 Critical/Important/Minor findings, and returned **Ready: Yes**.
 
+## Complete-plan review correction
+
+A later independent review across all six runtime tasks found that the earlier
+`rollbacks` evidence overclaimed the bad-artifact scenario: leaving the active digest
+unchanged was not a rollback transition. The correction was developed from a RED
+behavioral matrix that required exact per-fault transition evidence. Bad-artifact
+evidence now reports validation rejection and candidate cleanup with zero activation
+and zero rollback. Failed activation now records a distinct, explicit A/B-like
+candidate activation, readiness failure, restore of the previous active slot, and
+candidate cleanup. `bad_update_rollbacks` therefore means only real simulated restore
+transitions (`N`), while `bad_update_safe_outcomes` gates both safe paths (`2N`).
+
+This remains an in-memory effect model. It does not claim physical slot switching,
+systemd supervisor behavior, or installed-host rollback evidence.
+
 ## Verification evidence
 
-- The one- and sixteen-node fault matrix, evaluator regressions, deterministic encoding,
-  CLI, and installer combination completed as `38 passed`:
+- The corrected one- and sixteen-node fault matrix, evaluator regressions,
+  deterministic encoding, CLI, and installer combination completed as `40 passed`:
   `uv run pytest tests/agent/test_failure_matrix.py
   tests/nodes/test_install_dgx_agent.py -q`.
 - The agent suite completed as `514 passed, 1 deselected`. The one deselected test was
@@ -115,5 +138,7 @@ Critical/Important/Minor findings, and returned **Ready: Yes**.
   `All checks passed!`; direct `py_compile` of the simulator, failure-matrix test,
   and acceptance script exited zero; and `git diff --check` was clean.
 
-Task 6 is complete and accepted at source commit
-`b5c00e8255dd6037374182c46ce4b6896392ef59`.
+The initial Task 6 implementation was accepted at source commit
+`b5c00e8255dd6037374182c46ce4b6896392ef59`. This complete-plan review correction is
+implemented on `fix/runtime-simulator-rollback` and awaits independent rereview and
+integration; this report does not claim that later acceptance in advance.
