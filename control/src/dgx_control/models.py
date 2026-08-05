@@ -163,6 +163,23 @@ class AgentCertificateRotation(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class AgentIssuedCertificateRevocation(Base):
+    """Node-independent recovery evidence for a post-issuance CA revocation."""
+
+    __tablename__ = "agent_issued_certificate_revocations"
+    serial: Mapped[str] = mapped_column(String(128), primary_key=True)
+    node_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    provider_request_id: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False
+    )
+    fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    ca_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class AgentEnrollmentGrant(Base):
     __tablename__ = "agent_enrollment_grants"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))

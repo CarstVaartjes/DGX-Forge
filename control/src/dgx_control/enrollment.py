@@ -25,6 +25,7 @@ from .models import (
     AgentCertificateRotation,
     AgentEnrollment,
     AgentEnrollmentGrant,
+    AgentIssuedCertificateRevocation,
     AgentNode,
 )
 from .pki import CertificateAuthority, IssuedCertificate
@@ -432,9 +433,13 @@ class EnrollmentService:
                 .with_for_update(of=AgentNode)
             )
             if node is None:
-                raise EnrollmentDenied(
-                    "certificate rotation node disappeared; manual recovery required"
+                self._record_orphan_revocation(
+                    session,
+                    issued,
+                    claim,
+                    now,
                 )
+                return "revocation-pending"
             certificates = list(session.scalars(
                 select(AgentCertificate)
                 .where(AgentCertificate.node_id == claim.node_id)
@@ -492,6 +497,41 @@ class EnrollmentService:
             session.delete(intent)
             session.flush()
             return "staged"
+
+    @staticmethod
+    def _record_orphan_revocation(
+        session: Session,
+        issued: IssuedCertificate,
+        claim: _RotationClaim,
+        now: datetime,
+    ) -> None:
+        evidence = session.scalar(
+            select(AgentIssuedCertificateRevocation)
+            .where(AgentIssuedCertificateRevocation.serial == issued.serial)
+            .with_for_update(of=AgentIssuedCertificateRevocation)
+        )
+        if evidence is not None:
+            if (
+                evidence.node_id != claim.node_id
+                or evidence.provider_request_id != claim.provider_request_id
+                or evidence.fingerprint != issued.fingerprint
+                or evidence.generation != claim.generation
+            ):
+                raise EnrollmentDenied(
+                    "issued-certificate revocation evidence conflicts; manual recovery required"
+                )
+            return
+        session.add(AgentIssuedCertificateRevocation(
+            serial=issued.serial,
+            node_id=claim.node_id,
+            provider_request_id=claim.provider_request_id,
+            fingerprint=issued.fingerprint,
+            generation=claim.generation,
+            state="revocation-pending",
+            created_at=now,
+            updated_at=now,
+        ))
+        session.flush()
 
     def _revoke_denied_rotation(
         self,
@@ -609,22 +649,41 @@ class EnrollmentService:
             node = session.scalar(
                 select(AgentNode).where(AgentNode.node_id == node_id).with_for_update(of=AgentNode)
             )
-            if node is None:
-                raise EnrollmentDenied("node identity does not exist")
-            certificates = list(session.scalars(
-                select(AgentCertificate)
-                .where(AgentCertificate.node_id == node_id)
-                .order_by(AgentCertificate.serial)
-                .with_for_update(of=AgentCertificate)
+            certificates: list[AgentCertificate] = []
+            if node is not None:
+                certificates = list(session.scalars(
+                    select(AgentCertificate)
+                    .where(AgentCertificate.node_id == node_id)
+                    .order_by(AgentCertificate.serial)
+                    .with_for_update(of=AgentCertificate)
+                ))
+                session.scalar(
+                    select(AgentCertificateRotation)
+                    .where(AgentCertificateRotation.node_id == node_id)
+                    .with_for_update(of=AgentCertificateRotation)
+                )
+            orphan_evidence = list(session.scalars(
+                select(AgentIssuedCertificateRevocation)
+                .where(AgentIssuedCertificateRevocation.node_id == node_id)
+                .order_by(AgentIssuedCertificateRevocation.serial)
+                .with_for_update(of=AgentIssuedCertificateRevocation)
             ))
-            session.scalar(
-                select(AgentCertificateRotation)
-                .where(AgentCertificateRotation.node_id == node_id)
-                .with_for_update(of=AgentCertificateRotation)
+            if node is None and not orphan_evidence:
+                raise EnrollmentDenied("node identity does not exist")
+            if node is not None:
+                node.state = "retired"
+                node.revoked_at = node.revoked_at or now
+            serials = [
+                certificate.serial
+                for certificate in certificates
+                if certificate.ca_revoked_at is None
+            ]
+            serials.extend(
+                evidence.serial
+                for evidence in orphan_evidence
+                if evidence.ca_revoked_at is None
             )
-            node.state = "retired"
-            node.revoked_at = node.revoked_at or now
-            serials = [certificate.serial for certificate in certificates if certificate.ca_revoked_at is None]
+            serials = list(dict.fromkeys(serials))
             for certificate in certificates:
                 certificate.state = "revoked"
                 certificate.revoked_at = certificate.revoked_at or now
@@ -652,6 +711,18 @@ class EnrollmentService:
                 .with_for_update(of=AgentNode)
             )
             if node is None:
+                evidence = session.scalar(
+                    select(AgentIssuedCertificateRevocation)
+                    .where(
+                        AgentIssuedCertificateRevocation.serial == serial,
+                        AgentIssuedCertificateRevocation.node_id == node_id,
+                    )
+                    .with_for_update(of=AgentIssuedCertificateRevocation)
+                )
+                if evidence is not None:
+                    evidence.state = "revoked"
+                    evidence.updated_at = now
+                    evidence.ca_revoked_at = evidence.ca_revoked_at or now
                 return
             certificate = session.scalar(
                 select(AgentCertificate)
@@ -666,11 +737,23 @@ class EnrollmentService:
                 .where(AgentCertificateRotation.node_id == node_id)
                 .with_for_update(of=AgentCertificateRotation)
             )
-            if certificate is None:
-                return
-            certificate.ca_revoked_at = certificate.ca_revoked_at or now
+            evidence = session.scalar(
+                select(AgentIssuedCertificateRevocation)
+                .where(
+                    AgentIssuedCertificateRevocation.serial == serial,
+                    AgentIssuedCertificateRevocation.node_id == node_id,
+                )
+                .with_for_update(of=AgentIssuedCertificateRevocation)
+            )
+            if certificate is not None:
+                certificate.ca_revoked_at = certificate.ca_revoked_at or now
+            if evidence is not None:
+                evidence.state = "revoked"
+                evidence.updated_at = now
+                evidence.ca_revoked_at = evidence.ca_revoked_at or now
             if (
-                intent is not None
+                certificate is not None
+                and intent is not None
                 and intent.state == "revocation-pending"
                 and certificate.generation == intent.generation
             ):

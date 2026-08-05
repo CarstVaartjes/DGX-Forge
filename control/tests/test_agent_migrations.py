@@ -203,3 +203,36 @@ def test_certificate_rotation_migration_backfills_active_generation_and_is_rever
 
     with engine.connect() as connection:
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
+
+
+def test_issued_certificate_revocation_evidence_migration_is_bounded_and_reversible(
+    tmp_path: Path,
+) -> None:
+    database = f"sqlite:///{tmp_path / 'control.sqlite'}"
+    engine = create_engine(database)
+    upgrade_to("0005_certificate_rotation", database)
+    assert "agent_issued_certificate_revocations" not in tables(database)
+
+    upgrade_to("head", database)
+    assert "agent_issued_certificate_revocations" in tables(database)
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns(
+            "agent_issued_certificate_revocations"
+        )
+    }
+    assert columns == {
+        "serial",
+        "node_id",
+        "provider_request_id",
+        "fingerprint",
+        "generation",
+        "state",
+        "created_at",
+        "updated_at",
+        "ca_revoked_at",
+    }
+    assert not {"certificate_pem", "chain_pem", "private_key"} & columns
+
+    downgrade_to("0005_certificate_rotation", database)
+    assert "agent_issued_certificate_revocations" not in tables(database)

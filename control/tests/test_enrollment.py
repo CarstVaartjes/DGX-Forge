@@ -9,8 +9,13 @@ import time
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.autogenerate import compare_metadata
+from alembic.config import Config
+from alembic.migration import MigrationContext
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
@@ -25,13 +30,14 @@ from dgx_control.models import (
     AgentCertificateRotation,
     AgentEnrollment,
     AgentEnrollmentGrant,
+    AgentIssuedCertificateRevocation,
     AgentNode,
     Base,
 )
 from dgx_control.pki import CertificateAuthority, IssuedCertificate
-from sqlalchemy import create_engine, event, func, select
+from sqlalchemy import create_engine, delete, event, func, inspect, select, text
 from sqlalchemy.engine import Engine
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import DBAPIError, IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
 
 NODE_ID = "spk_0123456789abcdef0123456789abcdef"
@@ -719,6 +725,143 @@ def test_postgres_retirement_wins_completed_rotation_and_reconciles_issued_seria
             intent = session.get(AgentCertificateRotation, NODE_ID)
             assert issued is not None and issued.ca_revoked_at is not None
             assert intent is not None and intent.state == "revoked"
+
+
+def test_postgres_approved_node_cannot_be_deleted_while_certificate_exists(
+    postgres_engine: Engine,
+) -> None:
+    Base.metadata.drop_all(postgres_engine)
+    Base.metadata.create_all(postgres_engine)
+    clock = Clock()
+    sessions = sessionmaker(postgres_engine, expire_on_commit=False)
+    enrollment = EnrollmentService(sessions, RecordingAuthority(), clock=clock)
+    enrollment.approve(enroll(enrollment).id, "admin")
+
+    with pytest.raises(IntegrityError), sessions.begin() as session:
+        session.execute(delete(AgentNode).where(AgentNode.node_id == NODE_ID))
+
+    with sessions() as session:
+        assert session.get(AgentNode, NODE_ID) is not None
+
+
+def test_postgres_issued_revocation_evidence_migration_chain(
+    postgres_engine: Engine,
+) -> None:
+    Base.metadata.drop_all(postgres_engine)
+    with postgres_engine.begin() as connection:
+        connection.execute(text("DROP TABLE IF EXISTS alembic_version"))
+    root = Path(__file__).resolve().parents[1]
+    config = Config(root / "alembic.ini")
+    config.set_main_option("script_location", str(root / "migrations"))
+    config.set_main_option(
+        "sqlalchemy.url",
+        postgres_engine.url.render_as_string(hide_password=False),
+    )
+
+    command.upgrade(config, "head")
+    assert "agent_issued_certificate_revocations" in inspect(
+        postgres_engine
+    ).get_table_names()
+    columns = {
+        column["name"]
+        for column in inspect(postgres_engine).get_columns(
+            "agent_issued_certificate_revocations"
+        )
+    }
+    assert not {"certificate_pem", "chain_pem", "private_key"} & columns
+    with postgres_engine.connect() as connection:
+        assert compare_metadata(
+            MigrationContext.configure(connection), Base.metadata
+        ) == []
+    with postgres_engine.begin() as connection:
+        connection.execute(text(
+            "INSERT INTO agent_nodes (node_id,state,capabilities) "
+            "VALUES ('spk_fedcba9876543210fedcba9876543210','active','[]')"
+        ))
+    with pytest.raises(DBAPIError), postgres_engine.begin() as connection:
+        connection.execute(text(
+            "DELETE FROM agent_nodes "
+            "WHERE node_id = 'spk_fedcba9876543210fedcba9876543210'"
+        ))
+
+    command.downgrade(config, "0005_certificate_rotation")
+    assert "agent_issued_certificate_revocations" not in inspect(
+        postgres_engine
+    ).get_table_names()
+    command.upgrade(config, "head")
+
+
+@pytest.mark.parametrize("failure_mode", ("success", "runtime", "system-exit"))
+def test_postgres_missing_node_after_completed_rotation_retains_recovery_evidence(
+    postgres_engine: Engine,
+    failure_mode: str,
+) -> None:
+    Base.metadata.drop_all(postgres_engine)
+    Base.metadata.create_all(postgres_engine)
+    clock = Clock()
+    sessions = sessionmaker(postgres_engine, expire_on_commit=False)
+    initial = EnrollmentService(sessions, RecordingAuthority(), clock=clock)
+    source = initial.approve(enroll(initial).id, "admin")
+    authority = CompletedRenewalAuthority(
+        crash_new_revocation=failure_mode == "system-exit"
+    )
+    authority._serial = 1
+    if failure_mode == "runtime":
+        authority.revoke_failures.add("serial-2")
+    rotating = EnrollmentService(sessions, authority, clock=clock)
+    reconciling = EnrollmentService(sessions, authority, clock=clock)
+    results: list[object] = []
+
+    def renew() -> None:
+        try:
+            results.append(rotating.renew(NODE_ID, source.serial, csr()))
+        except BaseException as error:  # noqa: BLE001 - deliberate process-death regression
+            results.append(error)
+
+    renewer = threading.Thread(target=renew, name="renewer")
+    renewer.start()
+    assert authority.completed.wait(timeout=5)
+    with sessions.begin() as session:
+        session.execute(
+            delete(AgentCertificate).where(AgentCertificate.node_id == NODE_ID)
+        )
+        session.execute(delete(AgentNode).where(AgentNode.node_id == NODE_ID))
+    authority.release.set()
+    renewer.join(timeout=5)
+
+    assert not renewer.is_alive()
+    assert len(results) == 1
+    if failure_mode == "success":
+        assert isinstance(results[0], EnrollmentDenied)
+    elif failure_mode == "runtime":
+        assert isinstance(results[0], RenewalIssuanceUncertain)
+    else:
+        assert isinstance(results[0], SystemExit)
+    assert authority.revocations == ["serial-2"]
+    with sessions() as session:
+        evidence = session.get(AgentIssuedCertificateRevocation, "serial-2")
+        assert evidence is not None
+        assert evidence.node_id == NODE_ID
+        assert evidence.provider_request_id == authority.renew_request_ids[0]
+        assert evidence.fingerprint == "fingerprint-2"
+        assert evidence.generation == 2
+        assert evidence.state == (
+            "revoked" if failure_mode == "success" else "revocation-pending"
+        )
+        if failure_mode == "success":
+            assert evidence.ca_revoked_at is not None
+        else:
+            assert evidence.ca_revoked_at is None
+
+    if failure_mode != "success":
+        authority.revoke_failures.clear()
+        reconciling.revoke_node(NODE_ID, "admin")
+        reconciling.revoke_node(NODE_ID, "admin")
+        assert authority.revocations == ["serial-2", "serial-2"]
+        with sessions() as session:
+            evidence = session.get(AgentIssuedCertificateRevocation, "serial-2")
+            assert evidence is not None and evidence.state == "revoked"
+            assert evidence.ca_revoked_at is not None
 
 
 def test_postgres_separate_services_return_one_idempotent_exact_replay(postgres_engine: Engine) -> None:

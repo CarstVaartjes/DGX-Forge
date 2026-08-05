@@ -274,3 +274,80 @@ call.
 
 Round 3's submitted findings are addressed. Independent rereview and integration with
 Tasks 1–4 remain pending.
+
+## Rereview round 4 correction
+
+Round 4 identified the final corrupt-state gap in post-issuance recovery: if all
+dependent rows and then `AgentNode` disappeared after the CA returned a renewal but
+before rotation persistence, `_persist_rotation` raised and uncertainty annotation
+had no surviving node-owned intent to update. The new CA serial was therefore neither
+locally recorded nor explicitly revoked.
+
+The deletion audit found no application or administrator service that deletes
+`AgentNode`; supported lifecycle removal is retirement. The schema's NO ACTION
+foreign keys from approved certificates and agent operations prevent normal deletion,
+and a PostgreSQL regression proves an approved node cannot be deleted while its
+certificate exists. The new migration additionally installs a database trigger that
+rejects every `AgentNode` delete and directs callers to retirement, including nodes
+that currently have no protecting dependent row. Rotation intent is the only
+node-owned identity row with cascade deletion. The missing-node scenario therefore
+requires corruption, migration bypass, or direct removal before the retire-only
+trigger exists, but is handled defensively rather than assumed impossible.
+
+The bounded recovery table `agent_issued_certificate_revocations` is deliberately
+independent of `AgentNode`. Each row is uniquely bounded by CA serial and provider
+request ID and stores only node ID, certificate fingerprint, generation, state, and
+timestamps. It stores no private key, certificate or chain PEM, CSR, token, payload,
+or other unbounded document. Confirmed rows remain as the audit proof that the serial
+was revoked; exceptional pending rows are directly queryable by state and node.
+
+When persistence observes a missing node, it commits `revocation-pending` evidence
+before calling the CA. Successful CA revocation marks that evidence `revoked` with
+`ca_revoked_at`. `RuntimeError` and process death leave the pending row intact. The
+normal administrator `revoke_node` path now reconciles node-independent evidence even
+when the node no longer exists: its first retry calls the CA for each unconfirmed
+serial, while later retries see confirmation and perform no remote call. The CA
+boundary remains idempotent if a process died after the provider acted but before the
+local confirmation committed.
+
+### Round 4 migration integration
+
+This isolated branch predates the incoming reconciliation migrations. The recovery
+migration therefore uses the non-conflicting provisional revision
+`round4_issued_revocations`, based on this branch's `0005_certificate_rotation` head.
+During linear integration it must be reparented to the final incoming migration head
+and numerically renamed after `0006`/`0007`; it must not be merged as a parallel
+production head. Both the current SQLite chain and an actual PostgreSQL
+upgrade-to-head, downgrade-to-0005, upgrade-to-head sequence pass with exact model
+parity.
+
+### Round 4 RED/GREEN evidence
+
+Before production edits, the targeted missing-node recovery suite failed during
+collection because `AgentIssuedCertificateRevocation` did not exist. That structural
+RED captured the underlying defect: there was no node-independent durable location
+for the returned CA serial. A subsequent PostgreSQL migration regression also failed
+because a dependency-free node could still be deleted rather than retired.
+
+After the correction, deterministic PostgreSQL cases pass for immediate CA success,
+provider `RuntimeError`, and `SystemExit`. Each deletes the dependent certificate and
+node only after the CA has completed serial 2 issuance. Success records remote
+confirmation immediately; both failures retain pending evidence, and administrator
+retry confirms the serial exactly once before becoming a no-op. Both the separate
+approved-node foreign-key guard and the migrated PostgreSQL retire-only trigger pass.
+
+### Round 4 correction verification
+
+- Focused migration/enrollment/job/PostgreSQL/API suites: **134 passed**.
+- Complete control suite: **312 passed**.
+- `agent/tests/test_client.py`: **39 passed**.
+- Compose observability suite: **8 passed**.
+- SQLite migration reversibility/model parity and real PostgreSQL
+  upgrade/downgrade/upgrade verification passed.
+- Focused pinned Ruff 0.16.1, direct `py_compile`, JSON parsing, and
+  `git diff --check` passed.
+- `promtool` remains unavailable locally; rules retain structural parsing and
+  behavioral observability-test coverage.
+
+Round 4's submitted finding is addressed. Independent rereview and linear integration
+with the incoming migration chain remain pending.
