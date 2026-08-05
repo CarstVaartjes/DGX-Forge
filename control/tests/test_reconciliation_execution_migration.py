@@ -4,15 +4,20 @@ import shutil
 import subprocess
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import JSON, bindparam, create_engine, inspect, text
+from dgx_control.auth import AgentIdentity, AgentSource
+from dgx_control.models import AgentCertificate, AgentNode
+from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
+from sqlalchemy import JSON, bindparam, create_engine, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.orm import sessionmaker
 
 
 def _config(database_url: str) -> Config:
@@ -381,3 +386,76 @@ def test_postgresql_0008_0009_preservation_cycle(
     postgres_database: str,
 ) -> None:
     _assert_execution_cycle(postgres_database)
+
+
+def test_postgresql_presence_reuses_an_existing_node_lock(
+    postgres_database: str,
+) -> None:
+    command.upgrade(_config(postgres_database), "0009_reconciliation_execution")
+    engine = create_engine(
+        postgres_database,
+        connect_args={"options": "-c lock_timeout=1000ms"},
+    )
+    sessions = sessionmaker(engine, expire_on_commit=False)
+    node_id = "spk_" + "9" * 32
+    now = datetime(2026, 8, 5, 12, tzinfo=UTC)
+    with sessions.begin() as session:
+        session.add(AgentNode(node_id=node_id, state="active", capabilities=[]))
+        session.flush()
+        session.add(
+            AgentCertificate(
+                serial="presence-lock-serial",
+                node_id=node_id,
+                fingerprint="presence-lock-fingerprint",
+                state="active",
+                generation=1,
+                not_before=now - timedelta(minutes=1),
+                not_after=now + timedelta(hours=1),
+            )
+        )
+    service = AgentPresenceService(
+        sessions,
+        ManagementAddressPolicy.parse("10.0.0.0/24"),
+        clock=lambda: now,
+    )
+    service.observe(
+        AgentSource(
+            AgentIdentity(
+                node_id,
+                "presence-lock-serial",
+                "presence-lock-fingerprint",
+                True,
+            ),
+            "10.0.0.42",
+        )
+    )
+
+    with sessions.begin() as session:
+        locked = session.scalar(
+            select(AgentNode)
+            .where(AgentNode.node_id == node_id)
+            .with_for_update(of=AgentNode)
+        )
+        assert locked is not None
+
+        observation = service.latest_in_session(
+            session,
+            node_id,
+            maximum_age_seconds=60,
+        )
+
+        assert observation.address == "10.0.0.42"
+        updated = service.observe_in_session(
+            session,
+            AgentSource(
+                AgentIdentity(
+                    node_id,
+                    "presence-lock-serial",
+                    "presence-lock-fingerprint",
+                    True,
+                ),
+                "10.0.0.43",
+            ),
+        )
+        assert updated.address == "10.0.0.43"
+    engine.dispose()

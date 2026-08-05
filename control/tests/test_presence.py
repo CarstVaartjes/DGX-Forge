@@ -173,3 +173,42 @@ def test_latest_rejects_a_malformed_durable_certificate_binding(
 
     with pytest.raises(PresenceError, match="binding is invalid"):
         service.latest(NODE_ID, maximum_age_seconds=60)
+
+
+def test_latest_in_session_reads_through_the_callers_transaction(
+    presence_system,
+) -> None:
+    sessions, service, source, _ = presence_system
+    service.observe(source)
+
+    with sessions.begin() as session:
+        row = session.get(AgentPresence, NODE_ID)
+        assert row is not None
+        row.management_address = "10.0.0.43"
+        session.flush()
+
+        observed = service.latest_in_session(
+            session,
+            NODE_ID,
+            maximum_age_seconds=60,
+        )
+
+        assert observed.address == "10.0.0.43"
+
+
+def test_observe_in_session_rolls_back_with_the_callers_transaction(
+    presence_system,
+) -> None:
+    sessions, service, source, _ = presence_system
+    session = sessions()
+    transaction = session.begin()
+    try:
+        observed = service.observe_in_session(session, source)
+        assert observed.address == "10.0.0.42"
+        assert session.get(AgentPresence, NODE_ID) is not None
+    finally:
+        transaction.rollback()
+        session.close()
+
+    with sessions() as check:
+        assert check.get(AgentPresence, NODE_ID) is None

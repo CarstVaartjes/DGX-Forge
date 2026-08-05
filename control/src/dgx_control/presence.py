@@ -194,30 +194,36 @@ class AgentPresenceService:
         )
 
     def observe(self, source: AgentSource) -> ManagementAddressObservation:
+        with self._sessions.begin() as session:
+            return self.observe_in_session(session, source)
+
+    def observe_in_session(
+        self,
+        session: Session,
+        source: AgentSource,
+    ) -> ManagementAddressObservation:
+        """Persist presence using a caller-owned, Node-first transaction."""
         now = _utc(self._clock(), label="presence clock")
         address = self.validate(source).management_address
-        with self._sessions.begin() as session:
-            node = self._lock_active_node(session, source.identity.node_id)
-            if node is None:
-                raise PresenceError("agent node is not active")
-            certificate = self._lock_active_certificate(
-                session, source.identity, now
-            )
-            if certificate is None:
-                raise PresenceError("agent certificate is not active")
-            row = session.scalar(
-                select(AgentPresence)
-                .where(AgentPresence.node_id == source.identity.node_id)
-                .with_for_update(of=AgentPresence)
-            )
-            if row is None:
-                row = AgentPresence(node_id=source.identity.node_id)
-                session.add(row)
-            row.certificate_serial = certificate.serial
-            row.certificate_fingerprint = certificate.fingerprint
-            row.management_address = address
-            row.observed_at = now
-            certificate_serial = certificate.serial
+        node = self._lock_active_node(session, source.identity.node_id)
+        if node is None:
+            raise PresenceError("agent node is not active")
+        certificate = self._lock_active_certificate(session, source.identity, now)
+        if certificate is None:
+            raise PresenceError("agent certificate is not active")
+        row = session.scalar(
+            select(AgentPresence)
+            .where(AgentPresence.node_id == source.identity.node_id)
+            .with_for_update(of=AgentPresence)
+        )
+        if row is None:
+            row = AgentPresence(node_id=source.identity.node_id)
+            session.add(row)
+        row.certificate_serial = certificate.serial
+        row.certificate_fingerprint = certificate.fingerprint
+        row.management_address = address
+        row.observed_at = now
+        certificate_serial = certificate.serial
         return ManagementAddressObservation(
             node_id=source.identity.node_id,
             certificate_serial=certificate_serial,
@@ -238,43 +244,55 @@ class AgentPresenceService:
         *,
         maximum_age_seconds: int,
     ) -> ManagementAddressObservation:
+        with self._sessions.begin() as session:
+            return self.latest_in_session(
+                session,
+                node_id,
+                maximum_age_seconds=maximum_age_seconds,
+            )
+
+    def latest_in_session(
+        self,
+        session: Session,
+        node_id: str,
+        *,
+        maximum_age_seconds: int,
+    ) -> ManagementAddressObservation:
+        """Resolve presence using a caller-owned, Node-first transaction."""
         if _NODE_ID.fullmatch(node_id) is None:
             raise PresenceError("node ID is invalid")
         if maximum_age_seconds <= 0:
             raise PresenceError("maximum age must be positive")
         now = _utc(self._clock(), label="presence clock")
-        with self._sessions.begin() as session:
-            row = session.get(AgentPresence, node_id)
-            if row is None:
-                raise PresenceError("management address presence is unavailable")
-            try:
-                identity = AgentIdentity(
-                    node_id=row.node_id,
-                    certificate_serial=row.certificate_serial,
-                    certificate_fingerprint=row.certificate_fingerprint,
-                    verified=True,
-                )
-            except AuthError as error:
-                raise PresenceError(
-                    "presence certificate binding is invalid"
-                ) from error
-            if self._lock_active_node(session, node_id) is None:
-                raise PresenceError("agent node is not active")
-            if self._lock_active_certificate(session, identity, now) is None:
-                raise PresenceError("presence certificate is not active")
-            original_binding = (
-                row.certificate_serial,
-                row.certificate_fingerprint,
+        row = session.get(AgentPresence, node_id)
+        if row is None:
+            raise PresenceError("management address presence is unavailable")
+        try:
+            identity = AgentIdentity(
+                node_id=row.node_id,
+                certificate_serial=row.certificate_serial,
+                certificate_fingerprint=row.certificate_fingerprint,
+                verified=True,
             )
-            session.refresh(row, with_for_update=True)
-            if original_binding != (
-                row.certificate_serial,
-                row.certificate_fingerprint,
-            ):
-                raise PresenceError("presence certificate changed during read")
-            observed_at = _stored_utc(row.observed_at)
-            address = self._policy.validate(row.management_address)
-            certificate_serial = row.certificate_serial
+        except AuthError as error:
+            raise PresenceError("presence certificate binding is invalid") from error
+        if self._lock_active_node(session, node_id) is None:
+            raise PresenceError("agent node is not active")
+        if self._lock_active_certificate(session, identity, now) is None:
+            raise PresenceError("presence certificate is not active")
+        original_binding = (
+            row.certificate_serial,
+            row.certificate_fingerprint,
+        )
+        session.refresh(row, with_for_update=True)
+        if original_binding != (
+            row.certificate_serial,
+            row.certificate_fingerprint,
+        ):
+            raise PresenceError("presence certificate changed during read")
+        observed_at = _stored_utc(row.observed_at)
+        address = self._policy.validate(row.management_address)
+        certificate_serial = row.certificate_serial
         if observed_at > now:
             raise PresenceError("management address presence is in the future")
         if now - observed_at > timedelta(seconds=maximum_age_seconds):
