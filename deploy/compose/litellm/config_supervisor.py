@@ -19,7 +19,7 @@ GENERATIONS = ROOT / "generations"
 BOOTSTRAP = Path("/app/bootstrap-config.json")
 POLL_SECONDS = 2
 TERMINATE_SECONDS = 30
-MAXIMUM_LEASE = timedelta(hours=1)
+MAXIMUM_LEASE = timedelta(seconds=300)
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _DIRECTORY = re.compile(r"[0-9]{8}-[0-9a-f]{64}\Z")
 _MARKER_FIELDS = {

@@ -103,6 +103,21 @@ def test_supervisor_falls_back_for_expired_or_hash_mismatched_bundle(
     assert module._selected(now=now) == bootstrap
 
 
+def test_supervisor_rejects_a_lease_beyond_the_production_bound(
+    tmp_path: Path,
+) -> None:
+    module = _module()
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+    _generated, bootstrap, _directory = _bundle(
+        module,
+        tmp_path,
+        now=now,
+        expires_at=now + timedelta(seconds=301),
+    )
+
+    assert module._selected(now=now) == bootstrap
+
+
 def test_supervisor_falls_back_when_manifest_or_marker_is_not_exact(
     tmp_path: Path,
 ) -> None:
