@@ -19,6 +19,10 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 INSTALLER = ROOT / "nodes/bin/install-dgx-agent"
 NVIDIA_LOCK = ROOT / "nodes/vendor/nvidia-manageability.lock.json"
+ROOT_PYTHON_IMAGE = (
+    "python:3.12-slim-bookworm@sha256:"
+    "d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b"
+)
 
 
 def test_nvidia_lock_binds_exact_archive_license_provenance_and_installed_subset() -> (
@@ -532,6 +536,29 @@ def test_non_ca_x509_certificate_is_rejected_before_target_mutation(
     assert not installer_inputs["host"].exists()
 
 
+def test_ca_der_with_appended_bytes_is_rejected_before_target_mutation(
+    installer_inputs: dict[str, object],
+) -> None:
+    ca = installer_inputs["paths"]["ca"]
+    certificate_der = subprocess.run(
+        ["openssl", "x509", "-in", str(ca), "-outform", "DER"],
+        check=True,
+        capture_output=True,
+    ).stdout
+    ca.write_bytes(
+        b"-----BEGIN CERTIFICATE-----\n"
+        + base64.encodebytes(certificate_der + b"appended-not-der")
+        + b"-----END CERTIFICATE-----\n"
+    )
+    ca.chmod(0o644)
+
+    rejected = _run_installer(installer_inputs)
+
+    assert rejected.returncode != 0
+    assert "public CA certificate is invalid" in rejected.stderr
+    assert not installer_inputs["host"].exists()
+
+
 def test_file_publication_resists_parent_and_temporary_inode_substitution(
     installer_inputs: dict[str, object],
 ) -> None:
@@ -573,6 +600,75 @@ def test_root_publication_rejects_untrusted_existing_parent(
     assert rejected.returncode != 0
     assert "destination ancestry" in rejected.stderr
     assert not (libexec / "dgx-agent-supervisor").exists()
+
+
+def test_production_root_chowns_only_a_new_service_directory() -> None:
+    if shutil.which("docker") is None:
+        pytest.skip("Docker is required for the real-root directory regression")
+    if subprocess.run(["docker", "info"], capture_output=True, check=False).returncode:
+        pytest.skip("Docker daemon is unavailable")
+    if subprocess.run(
+        ["docker", "image", "inspect", ROOT_PYTHON_IMAGE],
+        capture_output=True,
+        check=False,
+    ).returncode:
+        pytest.skip("locked Python image is unavailable")
+    program = """
+import os
+import runpy
+import stat
+from pathlib import Path
+
+installer = runpy.run_path("/installer")
+ensure_directory = installer["_ensure_directory"]
+InstallError = installer["InstallError"]
+
+created = Path("/var/lib/dgx-forge-agent")
+assert ensure_directory(created, 0o700, (998, 998)) is True
+metadata = os.stat(created, follow_symlinks=False)
+assert (metadata.st_uid, metadata.st_gid, stat.S_IMODE(metadata.st_mode)) == (998, 998, 0o700)
+
+preexisting = Path("/var/lib/preexisting-agent")
+preexisting.mkdir(mode=0o755)
+try:
+    ensure_directory(preexisting, 0o700, (998, 998))
+except InstallError:
+    pass
+else:
+    raise AssertionError("pre-existing unsafe service directory was repaired")
+metadata = os.stat(preexisting, follow_symlinks=False)
+assert (metadata.st_uid, metadata.st_gid, stat.S_IMODE(metadata.st_mode)) == (0, 0, 0o755)
+print("new=998:998:0700 preexisting=0:0:0755")
+"""
+
+    result = subprocess.run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--pull",
+            "never",
+            "--network",
+            "none",
+            "--cap-drop",
+            "ALL",
+            "--cap-add",
+            "CHOWN",
+            "--volume",
+            f"{INSTALLER}:/installer:ro",
+            ROOT_PYTHON_IMAGE,
+            "python",
+            "-I",
+            "-c",
+            program,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "new=998:998:0700 preexisting=0:0:0755\n"
 
 
 @pytest.mark.parametrize(

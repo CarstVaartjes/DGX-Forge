@@ -307,7 +307,21 @@ def _certificate_bundle(raw: bytes) -> bytes:
             der = base64.b64decode("".join(match.group(1).split()), validate=True)
         except (binascii.Error, ValueError) as error:
             raise InstallError("public CA certificate is invalid") from error
-        parsed = subprocess.run(
+        canonical = subprocess.run(
+            [
+                "/usr/bin/openssl",
+                "x509",
+                "-inform",
+                "DER",
+                "-outform",
+                "DER",
+            ],
+            input=der,
+            capture_output=True,
+            check=False,
+            env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin"},
+        )
+        constraints = subprocess.run(
             [
                 "/usr/bin/openssl",
                 "x509",
@@ -322,10 +336,15 @@ def _certificate_bundle(raw: bytes) -> bytes:
             check=False,
             env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin"},
         )
-        if parsed.returncode != 0 or not re.fullmatch(
+        if (
+            canonical.returncode != 0
+            or canonical.stdout != der
+            or constraints.returncode != 0
+            or not re.fullmatch(
             rb"X509v3 Basic Constraints:(?: critical)?\n"
             rb"[ \t]+CA:TRUE(?:, pathlen:[0-9]+)?\n?",
-            parsed.stdout,
+                constraints.stdout,
+            )
         ):
             raise InstallError("public CA certificate is invalid")
         certificates += 1
@@ -475,8 +494,11 @@ def _ensure_directory(path: Path, mode: int, owner: Identity) -> bool:
             )
             metadata = os.fstat(child)
             expected_uid, expected_gid = owner if final else (0, 0)
-            allowed_uids = {expected_uid} if final else {0, owner[0]}
-            if _test_root() is not None:
+            if final and created:
+                allowed_uids = {os.geteuid() if _test_root() is not None else 0}
+            else:
+                allowed_uids = {expected_uid} if final else {0, owner[0]}
+            if not final and _test_root() is not None:
                 allowed_uids.add(os.geteuid())
             if (
                 not stat.S_ISDIR(metadata.st_mode)
@@ -484,25 +506,30 @@ def _ensure_directory(path: Path, mode: int, owner: Identity) -> bool:
             ):
                 raise InstallError("destination ancestry is unsafe")
             expected_mode = mode if final else 0o755
-            if final and (metadata.st_uid, metadata.st_gid) != (
-                expected_uid,
-                expected_gid,
-            ):
-                if created and _test_root() is None:
+            if final and created:
+                os.fchmod(child, expected_mode)
+                if _test_root() is None:
                     os.fchown(child, expected_uid, expected_gid)
-                    changed = True
-                elif not created:
-                    raise InstallError("destination ownership is unsafe")
-            if stat.S_IMODE(metadata.st_mode) != expected_mode:
-                if final and created:
-                    os.fchmod(child, expected_mode)
-                    changed = True
-                elif final:
-                    raise InstallError("destination ancestry mode is unsafe")
-                elif stat.S_IMODE(metadata.st_mode) & 0o022 and not (
-                    stat.S_IMODE(metadata.st_mode) & stat.S_ISVTX
+                metadata = os.fstat(child)
+                if (
+                    not stat.S_ISDIR(metadata.st_mode)
+                    or (metadata.st_uid, metadata.st_gid)
+                    != (expected_uid, expected_gid)
+                    or stat.S_IMODE(metadata.st_mode) != expected_mode
                 ):
+                    raise InstallError("created destination directory is unsafe")
+            elif final:
+                if (metadata.st_uid, metadata.st_gid) != (
+                    expected_uid,
+                    expected_gid,
+                ):
+                    raise InstallError("destination ownership is unsafe")
+                if stat.S_IMODE(metadata.st_mode) != expected_mode:
                     raise InstallError("destination ancestry mode is unsafe")
+            elif stat.S_IMODE(metadata.st_mode) & 0o022 and not (
+                stat.S_IMODE(metadata.st_mode) & stat.S_ISVTX
+            ):
+                raise InstallError("destination ancestry mode is unsafe")
             os.close(descriptor)
             descriptor = child
         except Exception:

@@ -237,4 +237,113 @@ production path.
   the supervisor also prepares it before coordinator-initiated start. `PartOf` provides
   restart propagation without an `After`/`Requires` ordering cycle.
 
+## Round 2 rereview closure
+
+The second independent rereview identified two remaining Critical installer gaps. Both
+were reproduced through the production entry point before implementation changed:
+
+- `uv run pytest
+  tests/nodes/test_install_dgx_agent.py::test_ca_der_with_appended_bytes_is_rejected_before_target_mutation
+  -v` was RED because OpenSSL accepted a valid CA DER object followed by
+  `appended-not-der`; the installer returned 0 and published the target. The installer
+  now asks the fixed `/usr/bin/openssl` binary to reserialize each decoded certificate
+  as DER and requires byte-for-byte equality with the complete decoded input before a
+  separate exact `CA:TRUE` BasicConstraints check. The appended-DER regression plus
+  the relabeled-private-key, mixed-block, non-CA, and valid/idempotent controls then
+  passed (`4 passed in 1.20s`). Trailing non-PEM text remains rejected by the existing
+  complete-input parser.
+- `uv run pytest
+  tests/nodes/test_install_dgx_agent.py::test_production_root_chowns_only_a_new_service_directory
+  -v` was RED in a real-root disposable container: the newly created final directory
+  was UID 0 and was rejected as unsafe before `fchown`. The regression uses the locked
+  `python:3.12-slim-bookworm` digest, no network, all capabilities dropped except
+  `CHOWN`, the real installer mounted read-only, and exact `/var/lib` paths. The first
+  implementation reached `fchown` but remained RED because chmod after ownership
+  transfer requires `CAP_FOWNER`; the final order is `fchmod`, `fchown`, fresh
+  `fstat`, then exact UID/GID/mode validation. UID 0 is accepted only for a final
+  directory created by that invocation. A pre-existing root-owned `0755` final
+  directory is rejected and remains byte-for-byte metadata-equivalent. The real-root,
+  unsafe-parent, and idempotence controls then passed (`3 passed in 0.96s`).
+
+Round 2 verification produced the following green evidence:
+
+- final `uv run pytest tests/nodes/test_install_dgx_agent.py -q` ->
+  `25 passed in 8.45s`;
+- `uv run pytest tests/nodes -q` -> `72 passed, 1 skipped in 11.76s`;
+- `uv run --project agent pytest agent/tests -q` -> `515 passed in 56.10s`;
+- `uv run --project agent_protocol pytest agent_protocol/tests -q` ->
+  `321 passed in 0.30s`;
+- `uv run --project control pytest control/tests -q` -> `288 passed in 26.71s`;
+- `uv run pytest deploy/compose/tests -q` -> `22 passed in 7.73s`;
+- both step-ca and built-in-CA `docker compose ... config --quiet` commands using the
+  checked test environment exited 0;
+- `scripts/verify-agent-systemd --json` reported `verify: passed`, with `2.8 OK` and
+  81 assessments for each installed unit;
+- `scripts/verify-supply-chain --json` reported `ok: true`, 6 images, 4 SBOMs, and
+  manifest SHA-256
+  `ef86650a7a23489866111f0e90efc50f80a3c72e73da880ca9c10ba9e4fe0200`;
+- exact `uvx --from ruff==0.16.1 ruff check .` reported `All checks passed!`;
+- repository `compileall`, direct `py_compile` of the installer and privileged entry
+  points, and `git diff --check` all exited 0.
+
+The literal round 2 root gate exposed an unrelated, reproducible native-runtime
+blocker and is not recorded as green or exempted. Multiple `uv run pytest -q` runs
+exited 139 at moving unchanged `jsonschema` validation sites; named crash-point tests
+pass alone, and `tests/spark_profiles` passed `382 passed in 36.59s`. One `-x` run
+instead stopped after 269 passes and one skip because the independent
+`verify-supply-chain` Python subprocess received SIGSEGV; that exact test passed alone.
+`PYTHONMALLOC=debug` reduced the failure outside pytest to repeated unchanged
+`Catalog.load()` calls, without an allocator-guard diagnostic. An ASan-preloaded full
+run passed `681 passed, 1 skipped in 107.89s` with no sanitizer finding, but a following
+literal unsanitized run again exited 139 at 57 percent.
+
+To rule out local environment corruption, a disposable environment was synchronized
+offline and frozen from the exact lock. Its complete dependency versions matched the
+current environment; both `rpds-py` 2026.6.3 extensions had SHA-256
+`8022895ab80b26f9e40fd5160223cfdfb41d421d6fecbc93ef49199c750a45ab`, ELF
+Build ID `f4029b64fa356c6cb3ab7f1e9fd24cc6faf03119`, and identical dynamic-library
+resolution. The minimal `Catalog.load()` loop still exited 139 after 50 completed
+iterations, and the disposable full root suite exited 139 after 63 percent at another
+unchanged schema-validation call. Kernel correlation confirmed the pytest and minimal
+loop SIGSEGV timestamps; available RAM and disk were healthy, no OOM event or
+concurrent pytest process was present, and the captured kernel endpoint was libc's
+signal re-raise rather than the original program counter. An additional disposable
+bisect changed only `rpds-py` to the official 2026.5.1 release immediately preceding
+the 2026.6.x PyO3 update. Its distinct extension had SHA-256
+`04aebfcf037a1c04deadef6c86601fda7cab01fb0c8d3f05f897ffa7b79b4068` and
+Build ID `08fc210e2a2a340e68505fa4c1c74c9e38b69c32`, but the same stress
+segfaulted after 25 completed iterations. Its full root run also exited 139 after 84
+percent, this time while the standard-library AST parser and garbage collector were
+formatting a prior error. This negative bisect rules out the 2026.6.x PyO3 update and
+broadens the observed fatal endpoints beyond `rpds`/`jsonschema`.
+
+The final isolation matrix kept the repository and current environment unchanged. A
+pure-standard-library host process completed 1,000 cycles of SHA-256 hashing and JSON
+loading every checked schema, compiling and AST-parsing the Python sources, and forced
+garbage collection. Separately, the locked `python:3.12-slim-bookworm` image installed
+the frozen runtime export with pip hash enforcement into a Docker-managed volume. The
+test container used CPython 3.12.13, the exact locked `rpds` extension digest above,
+no network, no capabilities, read-only dependency and repository mounts, and no host
+virtual-environment mount. Its first catalog stress completed 175 iterations before an
+internally invalid `Draft202012Validator object is not iterable` TypeError during
+validator construction; a fresh process then exited 139 before iteration 25 in the same
+`ref`/`dynamicRef`/`check_schema` path. This rules out both current-environment
+corruption and host-CPython-3.12.3 specificity, but the container still shares the host
+kernel, CPU, and memory platform.
+
+Fresh-container API controls did not isolate a deterministic validation-library defect.
+For the checked workload schema and a valid catalog instance, direct
+`Draft202012Validator.check_schema` passed 500 iterations, a single reusable validator
+passed 5,000 instance validations after one schema check, convenience
+`jsonschema.validate` passed 500 iterations, and
+`validator_for(schema).check_schema(schema)` passed 500 iterations. Direct schema
+checking of the more complex maturity-evidence schema also passed 500 iterations. The
+leading diagnosis is therefore intermittent shared platform/hardware corruption under
+the cumulative validation workload, not a deterministic source assertion or a proven
+`jsonschema`/`rpds` defect.
+
+The current `.venv`, lock, and source dependencies were not changed during this
+investigation. Full-root verification is environment-unstable and explicitly non-green;
+this is not treated as an exemption. Every task-scoped and segmented suite is green.
+
 No push or PR was created. The controller owns publication after independent review.
