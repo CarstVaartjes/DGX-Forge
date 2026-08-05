@@ -10,6 +10,7 @@ import pwd
 import runpy
 import shutil
 import subprocess
+import sys
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -22,6 +23,10 @@ NVIDIA_LOCK = ROOT / "nodes/vendor/nvidia-manageability.lock.json"
 ROOT_PYTHON_IMAGE = (
     "python:3.12-slim-bookworm@sha256:"
     "d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b"
+)
+LINUX_INSTALLER_RUNTIME = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="agent installation runtime is supported only on DGX OS/Linux nodes",
 )
 
 
@@ -396,6 +401,7 @@ def _run_installer(inputs: dict[str, object], arguments: list[str] | None = None
     )
 
 
+@LINUX_INSTALLER_RUNTIME
 def test_install_is_idempotent_generic_and_retains_license_provenance(
     installer_inputs: dict[str, object],
 ) -> None:
@@ -431,6 +437,7 @@ def test_install_is_idempotent_generic_and_retains_license_provenance(
     assert (host / "var/lib/dgx-forge/release-staging").stat().st_mode & 0o777 == 0o700
 
 
+@LINUX_INSTALLER_RUNTIME
 def test_reinstall_restores_token_without_durable_node_bound_active_identity(
     installer_inputs: dict[str, object],
 ) -> None:
@@ -449,6 +456,7 @@ def test_reinstall_restores_token_without_durable_node_bound_active_identity(
     )
 
 
+@LINUX_INSTALLER_RUNTIME
 def test_reinstall_suppresses_token_only_for_durable_node_bound_active_identity(
     installer_inputs: dict[str, object],
 ) -> None:
@@ -476,6 +484,7 @@ def test_reinstall_suppresses_token_only_for_durable_node_bound_active_identity(
     assert not installed_token.exists()
 
 
+@LINUX_INSTALLER_RUNTIME
 def test_private_key_or_mixed_ca_input_is_rejected_before_target_mutation(
     installer_inputs: dict[str, object],
 ) -> None:
@@ -500,6 +509,7 @@ def test_private_key_or_mixed_ca_input_is_rejected_before_target_mutation(
     assert not installer_inputs["host"].exists()
 
 
+@LINUX_INSTALLER_RUNTIME
 def test_non_ca_x509_certificate_is_rejected_before_target_mutation(
     installer_inputs: dict[str, object], tmp_path: Path
 ) -> None:
@@ -536,6 +546,7 @@ def test_non_ca_x509_certificate_is_rejected_before_target_mutation(
     assert not installer_inputs["host"].exists()
 
 
+@LINUX_INSTALLER_RUNTIME
 def test_ca_der_with_appended_bytes_is_rejected_before_target_mutation(
     installer_inputs: dict[str, object],
 ) -> None:
@@ -559,6 +570,7 @@ def test_ca_der_with_appended_bytes_is_rejected_before_target_mutation(
     assert not installer_inputs["host"].exists()
 
 
+@LINUX_INSTALLER_RUNTIME
 def test_file_publication_resists_parent_and_temporary_inode_substitution(
     installer_inputs: dict[str, object],
 ) -> None:
@@ -588,6 +600,7 @@ def test_file_publication_resists_parent_and_temporary_inode_substitution(
             break
 
 
+@LINUX_INSTALLER_RUNTIME
 def test_root_publication_rejects_untrusted_existing_parent(
     installer_inputs: dict[str, object],
 ) -> None:
@@ -671,6 +684,7 @@ print("new=998:998:0700 preexisting=0:0:0755")
     assert result.stdout == "new=998:998:0700 preexisting=0:0:0755\n"
 
 
+@LINUX_INSTALLER_RUNTIME
 @pytest.mark.parametrize(
     "stage",
     ["create", "write", "file-fsync", "tree-fsync", "rename", "parent-fsync"],
@@ -691,6 +705,7 @@ def test_abandoned_publication_crash_boundaries_recover_bounded_exact_staging(
     assert not list(installer_inputs["host"].rglob("*.new"))
 
 
+@LINUX_INSTALLER_RUNTIME
 def test_missing_unit_fails_before_target_mutation_and_both_units_are_enabled(
     installer_inputs: dict[str, object], tmp_path: Path
 ) -> None:
@@ -769,19 +784,24 @@ def test_account_contract_rejects_root_wrong_home_group_and_admin_membership() -
         validate(valid, primary, {"dgx-agent", "docker"})
 
 
-def test_installer_locks_before_account_resolution_and_concurrent_first_install(
-    installer_inputs: dict[str, object],
-) -> None:
+def test_installer_locks_before_account_resolution() -> None:
     source = INSTALLER.read_text()
     assert source.index("fcntl.flock(lock_fd") < source.index(
         "service_owner = _service_identity()"
     )
+
+
+@LINUX_INSTALLER_RUNTIME
+def test_concurrent_first_install_is_serialized(
+    installer_inputs: dict[str, object],
+) -> None:
     with ThreadPoolExecutor(max_workers=2) as pool:
         results = list(pool.map(lambda _: _run_installer(installer_inputs), range(2)))
     assert sorted(result.returncode for result in results) in ([0, 1], [0, 0])
     assert _run_installer(installer_inputs).returncode == 0
 
 
+@LINUX_INSTALLER_RUNTIME
 def test_reinstall_rejects_unexpected_symlink_inside_immutable_tree(
     installer_inputs: dict[str, object],
 ) -> None:
@@ -797,6 +817,7 @@ def test_reinstall_rejects_unexpected_symlink_inside_immutable_tree(
     assert second.returncode != 0
 
 
+@LINUX_INSTALLER_RUNTIME
 def test_distinct_explicit_node_ids_generate_distinct_configs(
     installer_inputs: dict[str, object], tmp_path: Path
 ) -> None:
@@ -821,6 +842,7 @@ def test_distinct_explicit_node_ids_generate_distinct_configs(
     assert first_config["node_id"] != second_config["node_id"]
 
 
+@LINUX_INSTALLER_RUNTIME
 def test_installer_never_copies_admin_ca_ssh_or_old_node_private_keys(
     installer_inputs: dict[str, object], tmp_path: Path
 ) -> None:
@@ -845,7 +867,7 @@ def test_installer_never_copies_admin_ca_ssh_or_old_node_private_keys(
     )
 
 
-def test_symlink_input_wrong_architecture_and_extra_archive_member_fail_closed(
+def test_symlink_input_fails_closed(
     installer_inputs: dict[str, object], tmp_path: Path
 ) -> None:
     arguments = list(installer_inputs["arguments"])
@@ -855,8 +877,13 @@ def test_symlink_input_wrong_architecture_and_extra_archive_member_fail_closed(
     arguments[site_index] = str(site_link)
     linked = _run_installer(installer_inputs, arguments)
     assert linked.returncode != 0
+    assert "site configuration cannot be read safely" in linked.stderr
     assert not installer_inputs["host"].exists()
 
+
+def test_wrong_architecture_fails_closed(
+    installer_inputs: dict[str, object],
+) -> None:
     site = installer_inputs["paths"]["site"]
     site_document = json.loads(site.read_text())
     site_document["architecture"] = (
@@ -865,12 +892,14 @@ def test_symlink_input_wrong_architecture_and_extra_archive_member_fail_closed(
     site.write_bytes(_canonical(site_document))
     wrong_arch = _run_installer(installer_inputs)
     assert wrong_arch.returncode != 0
+    assert "site architecture does not match this node" in wrong_arch.stderr
     assert not installer_inputs["host"].exists()
 
-    site_document["architecture"] = (
-        "aarch64" if platform.machine() in {"aarch64", "arm64"} else "x86_64"
-    )
-    site.write_bytes(_canonical(site_document))
+
+@LINUX_INSTALLER_RUNTIME
+def test_extra_archive_member_fails_closed(
+    installer_inputs: dict[str, object],
+) -> None:
     bundle = installer_inputs["paths"]["bundle"]
     with zipfile.ZipFile(bundle, "a") as archive:
         archive.writestr("extra", b"extra")
@@ -880,4 +909,5 @@ def test_symlink_input_wrong_architecture_and_extra_archive_member_fail_closed(
     fake_lock.write_bytes(_canonical(lock))
     extra = _run_installer(installer_inputs)
     assert extra.returncode != 0
+    assert "NVIDIA bundle member set is not reviewed" in extra.stderr
     assert not installer_inputs["host"].exists()
