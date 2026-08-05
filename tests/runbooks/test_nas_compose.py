@@ -60,12 +60,9 @@ def test_nas_compose_readme_is_the_complete_operator_entry_point() -> None:
         "65534:65534",
         "1100:1100",
         "control.dgx-forge.lan is not a LAN-accessible human endpoint",
-        "setfacl -R -m u:10001:rwX",
-        "setfacl -m d:u:10001:rwx",
+        "setfacl -R -m u:\"$operator_user\":rwX,u:10001:rwX,m::rwX",
+        "d:u:\"$operator_user\":rwx,d:u:10001:rwx,d:m::rwx",
         "CONTROL_API writes `.git`",
-        "--user 0:0 --entrypoint /bin/sh control-api",
-        "chown 10001:10001 /state",
-        "chmod 0700 /state",
     ):
         assert required in text
     for variable in PRODUCTION_FILE_VARIABLES:
@@ -76,9 +73,16 @@ def test_nas_compose_readme_is_the_complete_operator_entry_point() -> None:
     )[0]
     command_block = first_start.split("```bash", 1)[1].split("```", 1)[0]
     normalized = " ".join(command_block.replace("\\\n", " ").split())
+    state_initializer = normalized.split("run --rm --no-deps ", 1)[1].split(
+        " docker compose --env-file", 1
+    )[0]
+    assert state_initializer == (
+        "--cap-add CHOWN --user 0:0 --entrypoint /bin/sh control-api "
+        "-c 'chmod 0700 /state && chown 10001:10001 /state'"
+    )
     steps = (
         "config --quiet",
-        "--user 0:0 --entrypoint /bin/sh control-api",
+        state_initializer,
         "up -d postgres",
         "control-api -m dgx_control.offline --state-path /state init --repository /repository",
         "control-api -m dgx_control.offline --state-path /state migrate",

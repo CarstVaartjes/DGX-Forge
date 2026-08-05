@@ -51,21 +51,23 @@ and then try to edit its root-owned result.
 
 `control-api` mounts this checkout read-write as UID `10001:10001` and
 CONTROL_API writes `.git` for signed repository administration. Preserve
-operator administration while granting that exact UID recursive read/write/
-traverse access now and on all future files and directories:
+operator administration while granting both the named operator and UID 10001
+recursive read/write/traverse access now and on all future files and
+directories. The access-control masks keep both named-user entries effective:
 
 ```bash
-sudo setfacl -R -m u:10001:rwX /srv/dgx-forge/repository
-sudo find /srv/dgx-forge/repository -type d -exec \
-  setfacl -m d:u:10001:rwx {} +
+sudo setfacl -R -m u:"$operator_user":rwX,u:10001:rwX,m::rwX /srv/dgx-forge/repository
+sudo find /srv/dgx-forge/repository -type d -exec setfacl -m \
+  u:"$operator_user":rwx,u:10001:rwx,m::rwx,d:u:"$operator_user":rwx,d:u:10001:rwx,d:m::rwx {} +
 sudo getfacl /srv/dgx-forge/repository /srv/dgx-forge/repository/.git
 ```
 
-Reapply the two `setfacl` commands after a checkout replacement or restore; do
-not replace this with `chown -R 10001`, which would remove the operator's
-administrative ownership. The secrets, Hermes data, and step-ca directories
-stay administrator-owned and are prepared with the consumer-specific ownership
-below.
+The first command repairs existing operator- or UID-10001-created entries; the
+default ACLs on every directory make the rule bidirectional for future files.
+Reapply both commands after a checkout replacement or restore. Do not replace
+this with `chown -R 10001`, which would remove the operator's administrative
+ownership. The secrets, Hermes data, and step-ca directories stay
+administrator-owned and are prepared with the consumer-specific ownership below.
 
 Reserve a host management-LAN address and put it in the host-local `.env`:
 
@@ -283,8 +285,8 @@ cd /srv/dgx-forge/repository/deploy/compose
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml pull
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml config --quiet
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml run --rm --no-deps \
-  --user 0:0 --entrypoint /bin/sh control-api \
-  -c 'chown 10001:10001 /state && chmod 0700 /state'
+  --cap-add CHOWN --user 0:0 --entrypoint /bin/sh control-api \
+  -c 'chmod 0700 /state && chown 10001:10001 /state'
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml up -d postgres
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml run --rm --no-deps \
   --entrypoint python control-api -m dgx_control.offline --state-path /state \
@@ -300,11 +302,14 @@ docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml ps
 
 In short, the required preflight sequence is `docker compose pull`, then
 `docker compose config --quiet`, then the root one-off that initializes the
-Compose-managed `control-state` volume to `10001:10001` mode `0700`, then
+Compose-managed `control-state` volume to mode `0700` and owner `10001:10001`, then
 PostgreSQL-only `up -d postgres`, offline init/migration/administrator creation,
 before the first full `up -d`. The root one-off attaches the named volume through
 the same Compose project and service definition, so it does not guess a raw
-Docker volume name. The later one-shot commands run as the production
+Docker volume name. It uses the supported `docker compose run --cap-add CHOWN`
+override because the normal control-api service drops every capability; `chmod`
+runs first while root owns a fresh volume, and `CHOWN` is the only capability
+added. The later one-shot commands run as the production
 control-api UID and read the same Compose secrets as the service; API and worker
 remain stopped. After Docker creates its bridge, apply and verify the Hermes host-egress rule as
 documented in [Hermes Agent](../../docs/runbooks/hermes-agent.md). Check the
