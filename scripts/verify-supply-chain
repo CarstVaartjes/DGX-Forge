@@ -71,7 +71,7 @@ def protocol_version(lock: bytes) -> str:
         raise ValueError("control and agent must resolve the verified protocol wheel")
     version = packages[0].get("version")
     if not isinstance(version, str):
-        raise ValueError("protocol lock has no version")
+        raise TypeError("protocol lock has no version")
     return version
 
 
@@ -175,6 +175,8 @@ def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
         "inventory/sbom/control-web.spdx.json": spdx("control-web", web_lock, packages_web(web_lock)),
     }
     input_paths = (
+        ".github/workflows/ci.yml",
+        ".github/dependabot.yml",
         "agent/pyproject.toml", "agent/uv.lock", "agent_protocol/pyproject.toml",
         "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
         ".dockerignore", "control/web/package-lock.json", "control/Dockerfile",
@@ -194,6 +196,10 @@ def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
         "deploy/compose/litellm/config_supervisor.py",
         "deploy/compose/litellm/entrypoint.sh",
         "deploy/compose/trust/litellm-cosign.pub",
+        "scripts/container-release-metadata",
+        "scripts/refuse-existing-image-version",
+        "scripts/validate-container-release-digests",
+        "scripts/verify-public-image-inputs",
     )
     manifest = {
         "schema_version": 2,
@@ -210,7 +216,7 @@ def image_errors(root: Path) -> list[str]:
     errors: list[str] = []
     try:
         lock = json.loads((root / "deploy/compose/images.lock.json").read_bytes())
-    except Exception:
+    except (OSError, ValueError):
         return ["image lock is unreadable"]
     compose_paths = (
         "deploy/compose/compose.yaml",
@@ -221,24 +227,49 @@ def image_errors(root: Path) -> list[str]:
         compose = "\n".join((root / path).read_text() for path in compose_paths)
     except OSError:
         return ["included Compose image definitions are missing"]
-    for name, reference in {**lock.get("images", {}), **lock.get("build_bases", {})}.items():
-        if not isinstance(reference, str) or IMAGE.fullmatch(reference) is None:
+    images = lock.get("images", {})
+    if not isinstance(images, dict):
+        errors.append("image lock images mapping is invalid")
+        images = {}
+    build_bases = lock.get("build_bases", {})
+    if not isinstance(build_bases, dict):
+        errors.append("image lock build_bases mapping is invalid")
+        build_bases = {}
+    for name, reference in {**images, **build_bases}.items():
+        if not isinstance(reference, str):
             errors.append(f"{name} image is not pinned by digest")
-        if name in lock.get("images", {}) and reference not in compose:
+            continue
+        if IMAGE.fullmatch(reference) is None:
+            errors.append(f"{name} image is not pinned by digest")
+        if name in images and reference not in compose:
             errors.append(f"{name} Compose default is not the locked digest-pinned image")
     if re.search(r"(?m)^\s*image:\s*[^$\n]*(?::latest|:main|:edge)(?:\s|$)", compose):
         errors.append("Compose contains a floating image tag without digest")
     releases = lock.get("release_images", [])
     expected_releases = [
         {
+            "context": ".",
+            "dockerfile": "control/Dockerfile",
             "environment": "CONTROL_API_IMAGE",
+            "package": "dgx-forge-api",
             "required": True,
             "target": "api",
         },
         {
+            "context": ".",
+            "dockerfile": "control/Dockerfile",
             "environment": "CONTROL_WORKER_IMAGE",
+            "package": "dgx-forge-worker",
             "required": True,
             "target": "worker",
+        },
+        {
+            "context": "deploy/compose/hermes-agent",
+            "dockerfile": "deploy/compose/hermes-agent/Dockerfile",
+            "environment": "HERMES_AGENT_IMAGE",
+            "package": "dgx-forge-hermes",
+            "required": True,
+            "target": "managed",
         },
     ]
     if releases != expected_releases or any(
@@ -246,15 +277,29 @@ def image_errors(root: Path) -> list[str]:
         for release in expected_releases
     ):
         errors.append(
-            "control API and worker release images must be explicitly "
+            "API, worker, and Hermes release images must be explicitly "
             "digest-pinned at deployment"
         )
+    for release in expected_releases:
+        context = root / release["context"]
+        dockerfile_path = root / release["dockerfile"]
+        if not context.is_dir() or not dockerfile_path.is_file():
+            errors.append(
+                f"{release['package']} release build context or Dockerfile is missing"
+            )
     dockerfile = (root / "control/Dockerfile").read_text()
     hermes_dockerfile = (root / "deploy/compose/hermes-agent/Dockerfile").read_text()
-    build_dockerfiles = dockerfile
-    for name, reference in lock.get("build_bases", {}).items():
-        if reference not in build_dockerfiles:
-            errors.append(f"{name} digest-pinned build base is absent from Dockerfiles")
+    for name in ("node", "python"):
+        reference = build_bases.get(name)
+        if not isinstance(reference, str):
+            errors.append(f"{name} digest-pinned build base is missing or invalid")
+        elif reference not in dockerfile:
+            errors.append(f"{name} digest-pinned build base is absent from control Dockerfile")
+    hermes_reference = build_bases.get("hermes")
+    if not isinstance(hermes_reference, str):
+        errors.append("hermes digest-pinned build base is missing or invalid")
+    elif hermes_reference not in hermes_dockerfile:
+        errors.append("hermes digest-pinned build base is absent from Hermes Dockerfile")
     if "ARG NODE_IMAGE" not in dockerfile or "ARG PYTHON_IMAGE" not in dockerfile:
         errors.append("control build bases are not explicit locked arguments")
     if "FROM runtime AS worker" not in dockerfile or "FROM runtime AS api" not in dockerfile:
@@ -266,12 +311,12 @@ def image_errors(root: Path) -> list[str]:
     ):
         errors.append("control image does not install the standalone protocol wheel from root context")
     hermes_base = re.search(r"(?m)^ARG HERMES_IMAGE=(\S+)$", hermes_dockerfile)
-    locked_hermes = lock.get("images", {}).get("hermes-agent")
+    locked_hermes = build_bases.get("hermes")
     if (
         hermes_base is None
         or hermes_base.group(1) != locked_hermes
         or IMAGE.fullmatch(hermes_base.group(1)) is None
-        or "FROM ${HERMES_IMAGE}" not in hermes_dockerfile
+        or "FROM ${HERMES_IMAGE} AS managed" not in hermes_dockerfile
     ):
         errors.append("Hermes build base is not the exact digest-pinned locked image")
     return errors
@@ -313,7 +358,7 @@ def verify(root: Path, generate: bool) -> tuple[list[str], dict[str, object]]:
     errors = image_errors(root)
     try:
         sboms, wheel, manifest = expected(root)
-    except (OSError, ValueError, KeyError, json.JSONDecodeError, subprocess.CalledProcessError, tomllib.TOMLDecodeError) as error:
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError, subprocess.CalledProcessError, tomllib.TOMLDecodeError) as error:
         return [*errors, f"could not generate expected supply-chain evidence: {type(error).__name__}: {error}"], {}
     manifest_path = root / "inventory/sbom/manifest.json"
     if generate:

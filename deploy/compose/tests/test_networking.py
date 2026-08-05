@@ -12,6 +12,7 @@ def _rendered() -> dict:
         "REGISTRY_IMAGE": "registry:3@sha256:" + "9" * 64,
         "CONTROL_API_IMAGE": "example/control-api:1@sha256:" + "c" * 64,
         "CONTROL_WORKER_IMAGE": "example/control-worker:1@sha256:" + "8" * 64,
+        "HERMES_AGENT_IMAGE": "example/hermes:1@sha256:" + "7" * 64,
         "LITELLM_IMAGE": "example/litellm:1@sha256:" + "d" * 64,
         "PROMETHEUS_IMAGE": "prom/prometheus:1@sha256:" + "e" * 64,
         "GRAFANA_IMAGE": "grafana/grafana:1@sha256:" + "f" * 64,
@@ -149,6 +150,8 @@ def test_tailnet_backends_have_readiness_checks() -> None:
     }
     assert "8642" in json.dumps(services["hermes-agent"]["healthcheck"]["test"])
     assert "9119" in json.dumps(services["hermes-agent"]["healthcheck"]["test"])
+    assert services["hermes-agent"]["environment"]["HERMES_UID"] == "1100"
+    assert services["hermes-agent"]["environment"]["HERMES_GID"] == "1100"
 
 
 def test_litellm_routes_use_a_dedicated_atomic_config_volume() -> None:

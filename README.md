@@ -89,6 +89,7 @@ reconciled by the repository-less worker.
 ## Documentation
 
 - [Architecture overview](docs/architecture-overview.md)
+- [NAS pull-only Compose deployment](deploy/compose/README.md)
 - [Control-plane bootstrap](docs/runbooks/control-plane-bootstrap.md)
 - [`sparkctl` runbook](docs/runbooks/sparkctl.md)
 - [Inventory runbook](docs/runbooks/inventory.md)

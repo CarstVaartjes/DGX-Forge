@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-compose_dir="$(cd -- "${script_dir}/.." && pwd)"
+compose_root="$(cd -- "${script_dir}/.." && pwd)"
 runtime_root="$(mktemp -d /tmp/dgx-hermes-agent.XXXXXX)"
 runtime_uid="$(id -u)"
 runtime_gid="$(id -g)"
@@ -10,8 +10,8 @@ project="dgx-hermes-runtime-${RANDOM}-$$"
 api_key_file="${runtime_root}/hermes-api-key"
 
 cleanup() {
-    docker compose --project-name "${project}" --env-file "${compose_dir}/tests/test.env" \
-        -f "${compose_dir}/compose.yaml" -f "${compose_dir}/compose.step-ca.yaml" \
+    docker compose --project-name "${project}" --env-file "${compose_root}/tests/test.env" \
+        -f "${compose_root}/compose.yaml" -f "${compose_root}/compose.step-ca.yaml" \
         down --remove-orphans >/dev/null 2>&1 || true
     docker run --rm --entrypoint chown \
         --mount "type=bind,source=${runtime_root},target=/runtime" \
@@ -32,15 +32,19 @@ chmod 600 "${api_key_file}"
 export HERMES_DATA_ROOT="${runtime_root}"
 export HERMES_API_KEY_FILE="${api_key_file}"
 export HERMES_DASHBOARD_ORIGIN="https://hermes.runtime.invalid"
+docker build \
+    --file "${compose_root}/hermes-agent/Dockerfile" \
+    --tag local/hermes-agent:managed \
+    "${compose_root}/hermes-agent"
+export HERMES_AGENT_IMAGE=local/hermes-agent:managed
 
 compose=(
     docker compose --project-name "${project}"
-    --env-file "${compose_dir}/tests/test.env"
-    -f "${compose_dir}/compose.yaml"
-    -f "${compose_dir}/compose.step-ca.yaml"
+    --env-file "${compose_root}/tests/test.env"
+    -f "${compose_root}/compose.yaml"
+    -f "${compose_root}/compose.step-ca.yaml"
 )
 
-"${compose[@]}" build hermes-agent
 docker run --rm --entrypoint chown \
     --mount "type=bind,source=${api_key_file},target=/run-key" \
     local/hermes-agent:managed 0:0 /run-key

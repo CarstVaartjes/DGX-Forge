@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import re
+import sys
+from collections.abc import Sequence
+
+TAG = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+COMMIT = re.compile(r"^[0-9a-f]{40}$")
+PACKAGES = (
+    ("api_image", "ghcr.io/carstvaartjes/dgx-forge-api"),
+    ("worker_image", "ghcr.io/carstvaartjes/dgx-forge-worker"),
+    ("hermes_image", "ghcr.io/carstvaartjes/dgx-forge-hermes"),
+)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if len(arguments) != 3:
+        print("release metadata is invalid", file=sys.stderr)
+        return 64
+    ref_type, ref_name, commit = arguments
+    match = TAG.fullmatch(ref_name)
+    if ref_type != "tag" or match is None or COMMIT.fullmatch(commit) is None:
+        print("release metadata is invalid", file=sys.stderr)
+        return 64
+    print(f"version={ref_name[1:]}")
+    print(f"commit_tag=sha-{commit}")
+    for name, image in PACKAGES:
+        print(f"{name}={image}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

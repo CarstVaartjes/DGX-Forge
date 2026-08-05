@@ -95,3 +95,181 @@ jobs:
         run: docker compose version
       - name: Run Python and Bash tests
         run: uv run --python 3.12 --frozen --with pytest==9.1.1 pytest
+
+  release-metadata:
+    name: Validate container release tag
+    if: >-
+      vars.DGX_CONTAINER_RELEASES_ENABLED == 'true' &&
+      github.event_name == 'push' &&
+      github.ref_type == 'tag' &&
+      startsWith(github.ref_name, 'v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.release.outputs.version }}
+      commit_tag: ${{ steps.release.outputs.commit_tag }}
+      api_image: ${{ steps.release.outputs.api_image }}
+      worker_image: ${{ steps.release.outputs.worker_image }}
+      hermes_image: ${{ steps.release.outputs.hermes_image }}
+    steps:
+      - name: Check out tagged commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Validate release metadata
+        id: release
+        run: >-
+          scripts/container-release-metadata
+          "$GITHUB_REF_TYPE" "$GITHUB_REF_NAME" "$GITHUB_SHA"
+          >> "$GITHUB_OUTPUT"
+
+  publish-images:
+    name: Publish public container images
+    needs: [lint, generated-clients, test, release-metadata]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: dgx-forge-container-publication
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      api_digest: ${{ steps.api.outputs.digest }}
+      worker_digest: ${{ steps.worker.outputs.digest }}
+      hermes_digest: ${{ steps.hermes.outputs.digest }}
+    steps:
+      - name: Check out tagged commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Verify public image inputs
+        run: scripts/verify-public-image-inputs
+      - name: Verify supply-chain evidence
+        run: scripts/verify-supply-chain --json
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Refuse an existing release version
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+          CONTROL_API_IMAGE: ${{ needs.release-metadata.outputs.api_image }}
+          CONTROL_WORKER_IMAGE: ${{ needs.release-metadata.outputs.worker_image }}
+          HERMES_AGENT_IMAGE: ${{ needs.release-metadata.outputs.hermes_image }}
+        run: |
+          scripts/refuse-existing-image-version \
+            "$RELEASE_VERSION" \
+            "$CONTROL_API_IMAGE" \
+            "$CONTROL_WORKER_IMAGE" \
+            "$HERMES_AGENT_IMAGE"
+      - name: Build and push API image
+        id: api
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: control/Dockerfile
+          target: api
+          platforms: linux/amd64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: |
+            ${{ needs.release-metadata.outputs.api_image }}:${{ needs.release-metadata.outputs.version }}
+            ${{ needs.release-metadata.outputs.api_image }}:${{ needs.release-metadata.outputs.commit_tag }}
+            ${{ needs.release-metadata.outputs.api_image }}:latest
+          labels: |
+            org.opencontainers.image.title=dgx-forge-api
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.release-metadata.outputs.version }}
+      - name: Build and push worker image
+        id: worker
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: control/Dockerfile
+          target: worker
+          platforms: linux/amd64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: |
+            ${{ needs.release-metadata.outputs.worker_image }}:${{ needs.release-metadata.outputs.version }}
+            ${{ needs.release-metadata.outputs.worker_image }}:${{ needs.release-metadata.outputs.commit_tag }}
+            ${{ needs.release-metadata.outputs.worker_image }}:latest
+          labels: |
+            org.opencontainers.image.title=dgx-forge-worker
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.release-metadata.outputs.version }}
+      - name: Build and push Hermes image
+        id: hermes
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: deploy/compose/hermes-agent
+          file: deploy/compose/hermes-agent/Dockerfile
+          target: managed
+          platforms: linux/amd64
+          push: true
+          sbom: true
+          provenance: mode=max
+          tags: |
+            ${{ needs.release-metadata.outputs.hermes_image }}:${{ needs.release-metadata.outputs.version }}
+            ${{ needs.release-metadata.outputs.hermes_image }}:${{ needs.release-metadata.outputs.commit_tag }}
+            ${{ needs.release-metadata.outputs.hermes_image }}:latest
+          labels: |
+            org.opencontainers.image.title=dgx-forge-hermes
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ needs.release-metadata.outputs.version }}
+      - name: Write digest-pinned image summary
+        shell: bash
+        run: |
+          {
+            echo '```dotenv'
+            printf '%s\n' \
+              "CONTROL_API_IMAGE=${{ needs.release-metadata.outputs.api_image }}:${{ needs.release-metadata.outputs.version }}@${{ steps.api.outputs.digest }}" \
+              "CONTROL_WORKER_IMAGE=${{ needs.release-metadata.outputs.worker_image }}:${{ needs.release-metadata.outputs.version }}@${{ steps.worker.outputs.digest }}" \
+              "HERMES_AGENT_IMAGE=${{ needs.release-metadata.outputs.hermes_image }}:${{ needs.release-metadata.outputs.version }}@${{ steps.hermes.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  release-manifest:
+    name: Publish container release manifest
+    needs: [release-metadata, publish-images]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out tagged commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Create digest-pinned image environment
+        env:
+          CONTROL_API_IMAGE: ${{ needs.release-metadata.outputs.api_image }}:${{ needs.release-metadata.outputs.version }}
+          CONTROL_WORKER_IMAGE: ${{ needs.release-metadata.outputs.worker_image }}:${{ needs.release-metadata.outputs.version }}
+          HERMES_AGENT_IMAGE: ${{ needs.release-metadata.outputs.hermes_image }}:${{ needs.release-metadata.outputs.version }}
+          CONTROL_API_DIGEST: ${{ needs.publish-images.outputs.api_digest }}
+          CONTROL_WORKER_DIGEST: ${{ needs.publish-images.outputs.worker_digest }}
+          HERMES_AGENT_DIGEST: ${{ needs.publish-images.outputs.hermes_digest }}
+        run: |
+          scripts/validate-container-release-digests
+          printf '%s\n' \
+            "CONTROL_API_IMAGE=$CONTROL_API_IMAGE@$CONTROL_API_DIGEST" \
+            "CONTROL_WORKER_IMAGE=$CONTROL_WORKER_IMAGE@$CONTROL_WORKER_DIGEST" \
+            "HERMES_AGENT_IMAGE=$HERMES_AGENT_IMAGE@$HERMES_AGENT_DIGEST" \
+            > dgx-forge-images.env
+          sha256sum dgx-forge-images.env > dgx-forge-images.env.sha256
+      - name: Create public GitHub Release
+        run: >-
+          gh release create "$GITHUB_REF_NAME"
+          dgx-forge-images.env dgx-forge-images.env.sha256
+          --repo "$GITHUB_REPOSITORY"
+          --verify-tag
+          --title "DGX-Forge ${{ needs.release-metadata.outputs.version }}"
+          --generate-notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
