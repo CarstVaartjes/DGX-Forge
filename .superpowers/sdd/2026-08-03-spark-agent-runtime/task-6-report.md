@@ -142,6 +142,8 @@ The initial Task 6 implementation was accepted at source commit
 `b5c00e8255dd6037374182c46ce4b6896392ef59`. This complete-plan review correction is
 integrated on `main` at `f386942dbe8982cf8ae20aa89e63610f7f29bc86`. Its independent
 scoped rereview found no Critical, Important, or Minor issues and returned
-**Ready: Yes**. This scoped acceptance does not replace the pending final integrated
-whole-plan rereview, and the simulation boundaries and physical-host disclaimers above
-remain unchanged.
+**Ready: Yes**. That is the scoped Task 6 acceptance. The later exact integrated
+whole-plan rereview at `b79296ae21ff717a4c38d577d407dbe690b942a5` found no
+Critical, Important, or Minor issues and returned **Plan Ready: Yes**. Publication
+acceptance remains separate and awaits hosted CI for that final integrated commit; the
+simulation boundaries and physical-host disclaimers above remain unchanged.
