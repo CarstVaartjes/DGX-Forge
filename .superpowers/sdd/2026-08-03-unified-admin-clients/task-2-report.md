@@ -534,7 +534,7 @@ $ git diff --check
 Self-review confirmed no generated source edits, no mutation replay, no token
 path reopen after validation, mandatory typed status mapping before body parsing,
 and bounded remote text on the exception surfaces covered by this task. The
-pre-existing unrelated `progress.md` modification remains unstaged. The prior
+controller-owned progress-ledger modification remains unstaged. The prior
 out-of-scope legacy CLI/jsonschema SIGSEGV concern above is unchanged; scoped
 and adjacent verification are green.
 
@@ -692,7 +692,7 @@ Self-review confirmed one opener boundary for generated and preserved methods,
 one safe default production opener, no mutation replay, fail-closed missing
 no-follow support, typed status mapping across recursive decoder failures, and
 token/certificate redaction before exception storage or display. No generated
-source was edited. The pre-existing unrelated `progress.md` modification remains
+source was edited. The controller-owned progress-ledger modification remains
 unstaged, and the previously reported out-of-scope legacy CLI/jsonschema SIGSEGV
 concern is unchanged.
 
@@ -765,6 +765,6 @@ $ git diff --check
 Self-review confirmed timeout observations are copied before sanitization,
 generated/caller objects remain unchanged, every timeout construction path
 passes token context, certificate assignment labels are covered exactly, and no
-generated source or deferred polling parameter was changed. The pre-existing
-unrelated `progress.md` modification remains unstaged; the previously reported
+generated source or deferred polling parameter was changed. The controller-owned
+progress-ledger modification remains unstaged; the previously reported
 legacy CLI/jsonschema SIGSEGV concern is unchanged.
