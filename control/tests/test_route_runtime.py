@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -42,7 +43,26 @@ def _routes() -> dict[str, object]:
     }
 
 
-def _request(*, address: str = "10.0.0.42") -> RouteBundleRequest:
+def _endpoint_digest(
+    *, address: str, observed_at: datetime, verify_evidence_digest: str
+) -> str:
+    content = {
+        "address": address,
+        "node_id": NODE,
+        "observed_at": observed_at.isoformat(),
+        "operation_id": f"model:{NODE}:workload.verify",
+        "schema_version": 1,
+        "verify_evidence_digest": verify_evidence_digest,
+    }
+    return hashlib.sha256(
+        (json.dumps(content, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+
+
+def _request(
+    *, address: str = "10.0.0.42", observed_at: datetime = NOW
+) -> RouteBundleRequest:
+    verify_evidence_digest = "c" * 64
     return RouteBundleRequest(
         reconciliation_id=RECONCILIATION_ID,
         plan_digest=PLAN_DIGEST,
@@ -52,9 +72,14 @@ def _request(*, address: str = "10.0.0.42") -> RouteBundleRequest:
             NODE: AcceptedEndpointEvidence(
                 node_id=NODE,
                 address=address,
-                observed_at=NOW,
+                observed_at=observed_at,
                 operation_id=f"model:{NODE}:workload.verify",
-                evidence_digest="c" * 64,
+                verify_evidence_digest=verify_evidence_digest,
+                evidence_digest=_endpoint_digest(
+                    address=address,
+                    observed_at=observed_at,
+                    verify_evidence_digest=verify_evidence_digest,
+                ),
             )
         },
         expires_at=NOW + timedelta(seconds=150),
@@ -92,13 +117,18 @@ def test_bundle_stages_structured_routes_litellm_and_manifest_before_one_marker(
         "routes": {
             "chat": {
                 "address": "10.0.0.42",
-                "evidence_digest": "c" * 64,
+                "evidence_digest": _endpoint_digest(
+                    address="10.0.0.42",
+                    observed_at=NOW,
+                    verify_evidence_digest="c" * 64,
+                ),
                 "node_id": NODE,
                 "observed_at": NOW.isoformat(),
                 "operation_id": f"model:{NODE}:workload.verify",
                 "path": "/v1",
                 "port": 8000,
                 "scheme": "http",
+                "verify_evidence_digest": "c" * 64,
             }
         },
         "schema_version": 1,
@@ -145,6 +175,38 @@ def test_routes_are_derived_only_from_exact_entrypoint_and_bounded_address_evide
     assert not (tmp_path / "runtime/activation.json").exists()
 
 
+def test_address_cannot_be_relabelled_with_an_accepted_endpoint_digest(
+    tmp_path: Path,
+) -> None:
+    request = _request()
+    original = request.endpoints[NODE]
+    relabelled = original.__class__(
+        node_id=NODE,
+        address="10.0.0.43",
+        observed_at=original.observed_at,
+        operation_id=original.operation_id,
+        verify_evidence_digest=original.verify_evidence_digest,
+        evidence_digest=original.evidence_digest,
+    )
+
+    with pytest.raises(RouteRuntimeError, match="binding"):
+        _publisher(tmp_path).publish(
+            request.__class__(**{**request.__dict__, "endpoints": {NODE: relabelled}})
+        )
+
+
+def test_route_lease_cannot_outlive_endpoint_freshness(tmp_path: Path) -> None:
+    request = _request(observed_at=NOW - timedelta(seconds=299))
+
+    with pytest.raises(RouteRuntimeError, match="freshness"):
+        _publisher(tmp_path).publish(request)
+
+
+def test_runtime_rejects_a_side_effecting_pre_marker_apply_hook(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="apply"):
+        _publisher(tmp_path, apply=lambda _directory: None)
+
+
 def test_explicit_entrypoint_is_authoritative_even_when_nodes_have_another_order(
     tmp_path: Path,
 ) -> None:
@@ -180,6 +242,30 @@ def test_concurrent_same_publication_is_one_idempotent_generation(
     assert markers[0] == markers[1]
     assert markers[0].generation == 1
     assert len(list((tmp_path / "runtime/generations").iterdir())) == 1
+
+
+def test_multiprocess_publication_is_serialized_to_one_generation(
+    tmp_path: Path,
+) -> None:
+    context = multiprocessing.get_context("fork")
+    barrier = context.Barrier(2)
+    results = context.Queue()
+
+    def publish() -> None:
+        barrier.wait(timeout=5)
+        marker = _publisher(tmp_path).publish(_request())
+        results.put((marker.generation, marker.digest))
+
+    processes = [context.Process(target=publish) for _ in range(2)]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=10)
+
+    assert [process.exitcode for process in processes] == [0, 0]
+    receipts = [results.get(timeout=2) for _ in processes]
+    assert receipts[0] == receipts[1]
+    assert receipts[0][0] == 1
 
 
 def test_validation_or_activation_failure_retains_previous_exact_marker(

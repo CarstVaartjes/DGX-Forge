@@ -87,6 +87,7 @@ class AcceptedEndpointEvidence:
     address: str
     observed_at: datetime
     operation_id: str
+    verify_evidence_digest: str
     evidence_digest: str
 
 
@@ -127,6 +128,30 @@ class ActivationMarker:
         return _sha256(self.canonical_bytes())
 
 
+def endpoint_evidence_digest(
+    *,
+    node_id: str,
+    address: str,
+    observed_at: datetime,
+    operation_id: str,
+    verify_evidence_digest: str,
+) -> str:
+    """Bind authenticated presence to the exact accepted verify evidence."""
+
+    return _sha256(
+        _encoded(
+            {
+                "address": address,
+                "node_id": node_id,
+                "observed_at": observed_at.astimezone(UTC).isoformat(),
+                "operation_id": operation_id,
+                "schema_version": 1,
+                "verify_evidence_digest": verify_evidence_digest,
+            }
+        )
+    )
+
+
 class AtomicRouteBundlePublisher:
     """Stage a complete bundle and replace its sole activation marker last."""
 
@@ -139,7 +164,6 @@ class AtomicRouteBundlePublisher:
         maximum_lease_seconds: int = 300,
         validate_routes: Callable[[bytes], bool] | None = None,
         validate_litellm: Callable[[bytes], bool] | None = None,
-        apply: Callable[[Path], None] | None = None,
     ) -> None:
         if root.is_symlink():
             raise RouteRuntimeError("route runtime root must not be a symlink")
@@ -158,7 +182,6 @@ class AtomicRouteBundlePublisher:
         self._maximum_lease = timedelta(seconds=maximum_lease_seconds)
         self._validate_routes = validate_routes or self._valid_json_mapping
         self._validate_litellm = validate_litellm or self._valid_litellm
-        self._apply = apply or (lambda _directory: None)
 
     @staticmethod
     def _valid_json_mapping(content: bytes) -> bool:
@@ -236,6 +259,7 @@ class AtomicRouteBundlePublisher:
         generation: int,
         request: RouteBundleRequest,
         now: datetime,
+        expires: datetime,
     ) -> tuple[bytes, bytes]:
         if not request.routes:
             raise RouteRuntimeError("published routes must not be empty")
@@ -277,6 +301,7 @@ class AtomicRouteBundlePublisher:
             if (
                 _OPERATION.fullmatch(evidence.operation_id) is None
                 or evidence.operation_id != expected_operation
+                or _DIGEST.fullmatch(evidence.verify_evidence_digest) is None
                 or _DIGEST.fullmatch(evidence.evidence_digest) is None
             ):
                 raise RouteRuntimeError(
@@ -293,6 +318,17 @@ class AtomicRouteBundlePublisher:
                 raise RouteRuntimeError(
                     f"management address evidence is invalid: {error}"
                 ) from error
+            expected_endpoint_digest = endpoint_evidence_digest(
+                node_id=node_id,
+                address=address,
+                observed_at=observed,
+                operation_id=evidence.operation_id,
+                verify_evidence_digest=evidence.verify_evidence_digest,
+            )
+            if evidence.evidence_digest != expected_endpoint_digest:
+                raise RouteRuntimeError("endpoint evidence binding is invalid")
+            if expires > observed + self._maximum_lease:
+                raise RouteRuntimeError("route lease exceeds endpoint freshness")
             if (
                 scheme not in {"http", "https"}
                 or isinstance(port, bool)
@@ -337,6 +373,7 @@ class AtomicRouteBundlePublisher:
                 "path": path,
                 "port": port,
                 "scheme": scheme,
+                "verify_evidence_digest": evidence.verify_evidence_digest,
             }
             models.append(
                 {
@@ -380,7 +417,7 @@ class AtomicRouteBundlePublisher:
                 verify_lease=False,
             )
             generation = current.generation if current is not None else 1
-            routes, litellm = self._render_routes(generation, request, issued)
+            routes, litellm = self._render_routes(generation, request, issued, expires)
             if (
                 current is not None
                 and current.state == "published"
@@ -394,7 +431,9 @@ class AtomicRouteBundlePublisher:
                 return current
             generation = (current.generation if current is not None else 0) + 1
             if current is not None:
-                routes, litellm = self._render_routes(generation, request, issued)
+                routes, litellm = self._render_routes(
+                    generation, request, issued, expires
+                )
             return self._activate(
                 generation=generation,
                 state="published",
@@ -536,7 +575,6 @@ class AtomicRouteBundlePublisher:
             self._stage(directory, "routes.json", routes)
             self._stage(directory, "litellm.json", litellm)
             self._stage(directory, "manifest.json", manifest)
-            self._apply(directory)
         except RouteRuntimeError:
             raise
         except Exception as error:

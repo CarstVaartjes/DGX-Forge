@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
+import subprocess
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -153,3 +155,40 @@ def test_compose_mounts_one_read_only_route_volume_and_starts_bounded_supervisor
     assert "POLL_SECONDS = 2" in source
     assert "TERMINATE_SECONDS = 30" in source
     assert "shell=True" not in source
+
+
+def test_compose_initializes_route_volume_for_unprivileged_control_worker() -> None:
+    environment = os.environ.copy()
+    for line in (ROOT / "deploy/compose/tests/test.env").read_text().splitlines():
+        name, value = line.split("=", 1)
+        environment[name] = value
+    rendered = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(ROOT / "deploy/compose/compose.yaml"),
+            "config",
+            "--format",
+            "json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+    services = json.loads(rendered.stdout)["services"]
+    initializer = services["route-publication-init"]
+
+    assert initializer["network_mode"] == "none"
+    assert initializer["user"] == "0:0"
+    assert initializer["cap_drop"] == ["ALL"]
+    assert set(initializer["cap_add"]) == {"CHOWN", "FOWNER"}
+    assert services["control-worker"]["depends_on"]["route-publication-init"] == {
+        "condition": "service_completed_successfully",
+        "required": True,
+    }
+    assert services["litellm"]["depends_on"]["route-publication-init"] == {
+        "condition": "service_completed_successfully",
+        "required": True,
+    }

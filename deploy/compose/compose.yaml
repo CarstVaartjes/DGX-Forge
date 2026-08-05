@@ -18,6 +18,29 @@ x-control-environment: &control-environment
   DGX_REQUIRED_CHECKS: ${REQUIRED_CHECKS:-}
 
 services:
+  route-publication-init:
+    image: ${CONTROL_IMAGE:?set a digest-pinned control image}
+    restart: "no"
+    logging: *bounded-logging
+    user: "0:0"
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: [no-new-privileges:true]
+    command:
+      - python
+      - -c
+      - >-
+        import os;
+        os.makedirs('/routes/generations', mode=0o700, exist_ok=True);
+        os.chmod('/routes', 0o700);
+        os.chmod('/routes/generations', 0o700);
+        os.chown('/routes', 10001, 10001);
+        os.chown('/routes/generations', 10001, 10001)
+    volumes:
+      - route-publications:/routes
+
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929}
     restart: unless-stopped
@@ -78,6 +101,7 @@ services:
     networks: [application, data, cluster-egress]
     depends_on:
       postgres: {condition: service_healthy}
+      route-publication-init: {condition: service_completed_successfully}
 
   litellm:
     image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.82.3-stable@sha256:b959a1816fa454a14d2842242d0fa1cd0d39f96fc94d3a1f4e1de4e48e2398c6}
@@ -95,6 +119,7 @@ services:
     networks: [data, ingress, cluster-egress]
     depends_on:
       postgres: {condition: service_healthy}
+      route-publication-init: {condition: service_completed_successfully}
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=3)"]
       interval: 15s
