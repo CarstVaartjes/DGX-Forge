@@ -375,7 +375,12 @@ def test_claim_uses_fixed_mtls_post_and_parses_canonical_protocol_claim(
     assert request.path == "/agent/v1/claim"
     assert request.headers["content-type"] == "application/json"
     assert request.body == canonical_message(
-        {"lease_seconds": 30, "node_id": NODE_ID, "wait_seconds": 1}
+        {
+            "lease_seconds": 30,
+            "node_id": NODE_ID,
+            "protocol_version": 1,
+            "wait_seconds": 1,
+        }
     )
 
 

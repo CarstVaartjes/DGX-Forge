@@ -26,6 +26,7 @@ from dgx_control.api import create_app
 from dgx_control.audit import MemoryAuditStore
 from dgx_control.auth import Actor, TokenCodec
 from dgx_control.enrollment import EnrollmentDenied, EnrollmentService
+from dgx_control.metrics import MetricsRegistry, OperationalMetricsCollector
 from dgx_control.models import (
     AgentCertificate,
     AgentCertificateRotation,
@@ -301,6 +302,206 @@ def test_verified_identity_cannot_claim_other_node(agent_system) -> None:
     client, _, _, _ = agent_system
     response = client.post("/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a"), json={"node_id": NODE_B})
     assert response.status_code == 403
+
+
+def test_authenticated_claim_records_protocol_contact_for_metrics(agent_system) -> None:
+    client, services, _, clock = agent_system
+    clock.now += timedelta(seconds=15)
+
+    response = client.post(
+        "/agent/v1/claim",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json={
+            "lease_seconds": 30,
+            "node_id": NODE_A,
+            "protocol_version": 1,
+            "wait_seconds": 0,
+        },
+    )
+
+    assert response.status_code == 204
+    with services.sessions() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
+        assert node.protocol_version == 1
+    metrics = MetricsRegistry()
+    OperationalMetricsCollector(metrics, services.sessions, clock=clock).refresh()
+    rendered = metrics.render()
+    assert f'dgx_agent_last_seen_age_seconds{{node_id="{NODE_A}"}} 0' in rendered
+    assert (
+        f'dgx_agent_version_compatibility{{node_id="{NODE_A}",version_bucket="supported"}} 1'
+        in rendered
+    )
+
+
+def test_authenticated_heartbeat_records_contact_after_exact_fence_validation(
+    agent_system,
+) -> None:
+    client, services, _, clock = agent_system
+    services.operations.enqueue(
+        parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {}
+    )
+    claim = client.post(
+        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
+    ).json()
+    with services.sessions.begin() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        node.last_seen_at = None
+        node.protocol_version = None
+    clock.now += timedelta(seconds=5)
+    progress = {
+        key: claim[key]
+        for key in (
+            "schema_version",
+            "job_id",
+            "operation_id",
+            "attempt",
+            "fence",
+            "node_id",
+            "deadline",
+        )
+    } | {"progress": {"phase": "checking"}}
+
+    response = client.post(
+        "/agent/v1/heartbeat",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json=progress,
+    )
+
+    assert response.status_code == 200
+    with services.sessions() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
+        assert node.protocol_version == 1
+
+
+def test_authenticated_result_records_contact_after_exact_fence_validation(
+    agent_system,
+) -> None:
+    client, services, _, clock = agent_system
+    services.operations.enqueue(
+        parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {}
+    )
+    claim = client.post(
+        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
+    ).json()
+    with services.sessions.begin() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        node.last_seen_at = None
+        node.protocol_version = None
+    clock.now += timedelta(seconds=5)
+    result = {
+        key: claim[key]
+        for key in (
+            "schema_version",
+            "job_id",
+            "operation_id",
+            "attempt",
+            "fence",
+            "node_id",
+            "deadline",
+        )
+    } | {"state": "succeeded", "result": {"healthy": True}}
+
+    response = client.post(
+        "/agent/v1/result",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json=result,
+    )
+
+    assert response.status_code == 204
+    with services.sessions() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
+        assert node.protocol_version == 1
+
+
+def test_untrusted_and_stale_requests_do_not_record_agent_contact(agent_system) -> None:
+    client, services, _, clock = agent_system
+    untrusted = client.post(
+        "/agent/v1/claim",
+        json={
+            "lease_seconds": 30,
+            "node_id": NODE_A,
+            "protocol_version": 1,
+            "wait_seconds": 0,
+        },
+    )
+    assert untrusted.status_code == 401
+    with services.sessions() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        assert node.last_seen_at is None
+        assert node.protocol_version is None
+
+    services.operations.enqueue(
+        parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {}
+    )
+    claim = client.post(
+        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
+    ).json()
+    with services.sessions.begin() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        node.last_seen_at = None
+        node.protocol_version = None
+    stale = {
+        key: claim[key]
+        for key in (
+            "schema_version",
+            "job_id",
+            "operation_id",
+            "attempt",
+            "node_id",
+            "deadline",
+        )
+    } | {
+        "fence": str(uuid.uuid4()),
+        "state": "succeeded",
+        "result": {"healthy": True},
+    }
+
+    rejected = client.post(
+        "/agent/v1/result",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json=stale,
+    )
+
+    assert rejected.status_code == 409
+    with services.sessions() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        assert node.last_seen_at is None
+        assert node.protocol_version is None
+
+
+def test_boolean_protocol_advertisement_is_rejected_without_recording_contact(
+    agent_system,
+) -> None:
+    client, services, _, _ = agent_system
+
+    response = client.post(
+        "/agent/v1/claim",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json={
+            "lease_seconds": 30,
+            "node_id": NODE_A,
+            "protocol_version": True,
+            "wait_seconds": 0,
+        },
+    )
+
+    assert response.status_code == 422
+    with services.sessions() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        assert node.last_seen_at is None
+        assert node.protocol_version is None
 
 
 @pytest.mark.parametrize("mutation", ("revoked", "retired", "expired", "fingerprint"))

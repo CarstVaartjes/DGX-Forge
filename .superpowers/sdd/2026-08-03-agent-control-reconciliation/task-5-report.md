@@ -86,3 +86,65 @@ After the minimum implementation, the same focused commands completed as 3 passe
 
 Task 5 implementation is complete for its scoped interfaces. Independent review and
 integration with Tasks 1–4 remain pending.
+
+## Independent review correction
+
+The initial independent review found two Important issues and one Minor issue:
+
+1. Enrollment left `AgentNode.last_seen_at` and `protocol_version` unset, while the
+   authenticated claim, heartbeat, and result paths only read identity state. The
+   operational projection therefore rendered real production nodes with no last-seen
+   series and the `incompatible` version bucket.
+2. The stale-agent rule filtered the missing-series branch to active nodes but allowed
+   an old last-seen series for a retired node to fire.
+3. The standard node-exporter and DCGM panels displayed the transport-oriented
+   `instance` label rather than the stable `node_id` identity.
+
+The correction adds protocol version 1 to the real agent claim request. The control
+claim model accepts a strict positive integer version and rejects booleans. After the
+API has authenticated the certificate and bound the body to that identity,
+`AgentJobService.claim` records contact in the same transaction as its active
+certificate check and claim decision. Heartbeat and result record contact only after
+the exact operation, attempt, fence, lease, certificate, and node have passed `_active`
+validation, in the same transaction as progress/result persistence. The stored
+last-seen timestamp never moves backward. Unauthenticated requests, invalid protocol
+advertisements, cross-node bodies, and stale fences do not update either field.
+
+The corrected `SparkAgentStale` expression builds the old-age and active-without-series
+candidates, then applies an outer `and on(node_id)` active-state filter. Its behavioral
+test parses that structure and evaluates active/retired stale, fresh, and never-seen
+fixtures; only active-stale and active-never nodes fire. The standard exporter legends
+now use `{{node_id}}`, retaining bounded `{{gpu}}` for DCGM series.
+
+### Correction RED/GREEN evidence
+
+Before the correction's production edits:
+
+- The exact agent-client claim test failed because `protocol_version` was absent.
+- Four selected production API tests completed as 3 failed and 1 passed: claim rejected
+  the new version field, valid heartbeat/result calls left both durable fields unset,
+  and the existing unauthenticated/stale non-update behavior remained intact.
+- Two selected observability tests failed because the alert had no outer active-state
+  join and both exporter legends used `instance`.
+- A follow-up strict-type regression failed because Pydantic coerced boolean `true` to
+  protocol version 1 and recorded contact.
+
+The same regressions then passed as 1 agent-client, 4 production-path, 2 observability,
+and 1 strict-type test.
+
+### Correction verification
+
+- `agent/tests/test_client.py`: **39 passed**.
+- Focused control API/job/metrics/dashboard suites: **84 passed**.
+- Complete control suite: **297 passed**.
+- Compose observability suite: **8 passed**.
+- Focused pinned Ruff, direct `py_compile`, JSON validation, and diff checks passed.
+- The first complete-control attempt recorded 296 passes and one existing Docker image
+  build failure while pip fetched dependencies. Replaying the exact pinned Docker build
+  succeeded, and the immediate complete-control rerun passed all 297 tests.
+- `promtool` is not installed locally, so the existing limitation remains: the rule is
+  structurally parsed and behaviorally exercised in Python, but no local Prometheus
+  binary check is claimed.
+
+The correction addresses all submitted findings. Independent rereview remains pending,
+as does integration with Tasks 1–4.

@@ -122,6 +122,7 @@ class AgentJobService:
         certificate_serial: str,
         lease_seconds: int,
         wait_seconds: float = 0,
+        protocol_version: int | None = None,
     ) -> AgentClaim | None:
         if (
             not node_id.strip()
@@ -129,12 +130,25 @@ class AgentJobService:
             or lease_seconds <= 0
             or isinstance(wait_seconds, bool)
             or not 0 <= wait_seconds <= 60
+            or (
+                protocol_version is not None
+                and (
+                    isinstance(protocol_version, bool)
+                    or not isinstance(protocol_version, int)
+                    or not 1 <= protocol_version <= 2_147_483_647
+                )
+            )
         ):
             raise ValueError("node, certificate, and positive lease are required")
         deadline = time.monotonic() + wait_seconds
         with self._available:
             while True:
-                claim = self._claim_once(node_id, certificate_serial, lease_seconds)
+                claim = self._claim_once(
+                    node_id,
+                    certificate_serial,
+                    lease_seconds,
+                    protocol_version,
+                )
                 if claim is not None:
                     return claim
                 remaining = deadline - time.monotonic()
@@ -147,11 +161,13 @@ class AgentJobService:
         node_id: str,
         certificate_serial: str,
         lease_seconds: int,
+        protocol_version: int | None,
     ) -> AgentClaim | None:
         now = self._clock()
         with self._claim_lock, self._sessions.begin() as session:
             if self._active_certificate(session, node_id, certificate_serial, now) is None:
                 return None
+            self._record_contact(session, node_id, now, protocol_version)
             expired_attempt = select(AgentOperationAttempt.id).where(
                 AgentOperationAttempt.operation_id == StoredOperation.id,
                 AgentOperationAttempt.attempt == StoredOperation.current_attempt,
@@ -335,7 +351,34 @@ class AgentJobService:
             or self._active_certificate(session, operation.node_id, attempt.agent_certificate_serial, now) is None
         ):
             raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
+        self._record_contact(
+            session,
+            operation.node_id,
+            now,
+            None if isinstance(fence, str) else fence.schema_version,
+        )
         return operation, attempt
+
+    @staticmethod
+    def _record_contact(
+        session: Session,
+        node_id: str,
+        now: datetime,
+        protocol_version: int | None,
+    ) -> None:
+        node = session.scalar(
+            select(AgentNode)
+            .where(AgentNode.node_id == node_id)
+            .with_for_update(of=AgentNode)
+        )
+        if node is None:
+            raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
+        current = None if node.last_seen_at is None else _aware(node.last_seen_at)
+        observed = _aware(now)
+        if current is None or observed > current:
+            node.last_seen_at = observed
+        if protocol_version is not None:
+            node.protocol_version = protocol_version
 
     @staticmethod
     def _fence_token(fence: AgentFence) -> str:

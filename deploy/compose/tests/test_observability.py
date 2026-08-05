@@ -1,4 +1,5 @@
 import json
+import re
 from pathlib import Path
 
 from deploy.compose.tests.test_networking import _rendered
@@ -81,6 +82,76 @@ def test_agent_alerts_use_bounded_operational_metrics() -> None:
     for alert_name, metric in expected_metrics.items():
         assert metric in alerts[alert_name]["expr"]
         assert alerts[alert_name]["annotations"]["runbook_url"].startswith("https://")
+
+
+def test_stale_agent_alert_semantics_exclude_inactive_nodes_from_every_branch() -> None:
+    document = json.loads((ROOT / "deploy/compose/prometheus/alerts.yaml").read_text())
+    alert = next(
+        rule
+        for group in document["groups"]
+        for rule in group["rules"]
+        if rule["alert"] == "SparkAgentStale"
+    )
+    expression = alert["expr"]
+    outer = re.fullmatch(
+        r'\((?P<candidates>.+)\) and on\(node_id\) '
+        r'dgx_agent_state\{state="(?P<outer_state>[^"]+)"\} == 1',
+        expression,
+    )
+    assert outer is not None
+    candidates = outer.group("candidates")
+    old_age = re.search(
+        r"dgx_agent_last_seen_age_seconds > (?P<threshold>[0-9]+)", candidates
+    )
+    missing = re.search(
+        r'dgx_agent_state\{state="(?P<missing_state>[^"]+)"\} '
+        r"unless on\(node_id\) dgx_agent_last_seen_age_seconds",
+        candidates,
+    )
+    assert old_age is not None and missing is not None
+
+    states = {
+        "active-stale": "active",
+        "retired-stale": "retired",
+        "active-fresh": "active",
+        "active-never": "active",
+        "retired-never": "retired",
+    }
+    last_seen_ages = {
+        "active-stale": 500,
+        "retired-stale": 500,
+        "active-fresh": 30,
+    }
+    threshold = int(old_age.group("threshold"))
+    candidate_nodes = {
+        node_id for node_id, age in last_seen_ages.items() if age > threshold
+    } | {
+        node_id
+        for node_id, state in states.items()
+        if state == missing.group("missing_state") and node_id not in last_seen_ages
+    }
+    firing = {
+        node_id
+        for node_id in candidate_nodes
+        if states[node_id] == outer.group("outer_state")
+    }
+
+    assert missing.group("missing_state") == "active"
+    assert outer.group("outer_state") == "active"
+    assert firing == {"active-stale", "active-never"}
+
+
+def test_standard_exporter_legends_use_stable_node_identity() -> None:
+    dashboard = json.loads(
+        (ROOT / "deploy/compose/grafana/dashboards/fleet.json").read_text()
+    )
+    targets = {
+        panel["title"]: panel["targets"][0]
+        for panel in dashboard["panels"]
+    }
+
+    assert targets["Available host memory"]["legendFormat"] == "{{node_id}}"
+    assert targets["GPU utilization"]["legendFormat"] == "{{node_id}} GPU {{gpu}}"
 
 
 def test_every_service_has_bounded_logging() -> None:

@@ -139,6 +139,7 @@ class ClaimRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     lease_seconds: int = Field(default=30, ge=1, le=300)
     node_id: str | None = Field(default=None, pattern=r"^spk_[0-9a-f]{32}$")
+    protocol_version: int = Field(default=1, ge=1, le=2_147_483_647, strict=True)
     wait_seconds: int = Field(default=0, ge=0, le=60)
 
 
@@ -676,6 +677,7 @@ def install_agent_routes(
                 identity.certificate_serial,
                 body.lease_seconds,
                 body.wait_seconds,
+                body.protocol_version,
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None

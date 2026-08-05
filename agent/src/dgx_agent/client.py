@@ -32,6 +32,7 @@ from dgx_agent_protocol import (
 )
 
 MAX_BODY_BYTES = 64 * 1024
+_PROTOCOL_VERSION = 1
 _JSON_CONTENT_TYPE = re.compile(r"application/json(?:;\s*charset=utf-8)?\Z")
 _DNS_HOST = re.compile(
     r"(?=.{1,253}\Z)"
@@ -1214,6 +1215,7 @@ class AgentClient:
             {
                 "lease_seconds": self._lease_seconds,
                 "node_id": self._node_id,
+                "protocol_version": _PROTOCOL_VERSION,
                 "wait_seconds": self._long_poll_seconds,
             },
             use_client_identity=True,
