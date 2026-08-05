@@ -346,16 +346,25 @@ API results do not establish a deterministic source assertion or a proven
 Post-commit controller diagnostics further isolated the shared platform. Two verified
 `stress-ng` runs completed successfully: all 16 workers under `--cpu 16 --cpu-method
 all` for 120 seconds, and all four workers under `--vm 4 --vm-bytes 1G --vm-method
-all` for 120 seconds. During the memory stress, however, WSL kernel 6.6.87.2 emitted
+all` for 120 seconds. The host BIOS is current with Intel microcode revision `0x12F`,
+and Windows reported zero WHEA records. These negative diagnostics and green stress
+tests do not exclude physical CPU degradation, particularly for bursty light-load
+failures. During the memory stress, WSL kernel 6.6.87.2 also emitted
 `BUG: using __this_cpu_add() in preemptible code` at
-`mem_cgroup_charge_statistics`. A fresh literal full-root run then again exited 139,
-this time at 63 percent in unchanged `jsonschema` meta-validation. The environment is
-WSL 2.6.3.0 with kernel 6.6.87.2. Official `microsoft/WSL#41019` (2026-07-07)
-documents the same rotating SIGSEGV/impossible-exception pattern across CPython builds
-and Docker on this i9-13900K processor class, with clean debug-allocator evidence and
-a kernel-only A/B between affected versions and 6.6.114.1. The leading diagnosis is
-therefore intermittent WSL/shared-platform corruption under the cumulative validation
-workload; hardware is not fully excluded.
+`mem_cgroup_charge_statistics`. That warning is a real local kernel defect, but no
+causal relation to the Python failures has been established. A fresh literal full-root
+run again exited 139, this time at 63 percent in unchanged `jsonschema`
+meta-validation. The environment is WSL 2.6.3.0 with kernel 6.6.87.2.
+
+The later record in `microsoft/WSL#41019` corrects its original kernel hypothesis.
+Reporter comment `4908569316` states that the kernel A/B was confounded by
+time-clustered failure storms; Microsoft member comment `4909181156` says the pattern
+looked like bad hardware. Reporter comment `4928291559` gives the final diagnosis as
+physical Vmin-shift voltage degradation of the i9-13900K. That issue documents the same
+rotating SIGSEGV/impossible-exception pattern across CPython builds and Docker, with a
+clean debug allocator and green in-guest stress tests. Given the matching processor
+class and failure pattern, physical i9-13900K Vmin-shift degradation is the leading
+diagnosis for this environment, though it has not been directly confirmed on this host.
 
 The current `.venv`, lock, and source dependencies were not changed during this
 investigation. Full-root verification is environment-unstable and explicitly non-green;
