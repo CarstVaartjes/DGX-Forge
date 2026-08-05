@@ -1,6 +1,6 @@
 include:
   - tailscale/compose.yaml
-  - ai-devbox/compose.yaml
+  - hermes-agent/compose.yaml
 
 name: ${COMPOSE_PROJECT_NAME:-dgx-forge-control}
 
@@ -118,7 +118,7 @@ services:
       - ./litellm/config_supervisor.py:/app/config-supervisor.py:ro
       - litellm-routes:/routes:ro
     tmpfs: [/tmp]
-    networks: [data, ingress, cluster-egress]
+    networks: [data, ingress, cluster-egress, hermes-inference]
     depends_on:
       postgres: {condition: service_healthy}
       litellm-routes-init: {condition: service_completed_successfully}

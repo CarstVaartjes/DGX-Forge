@@ -46,10 +46,11 @@ def _rendered() -> dict:
         "DGX_BACKEND_PORT": "8443",
         "TAILSCALE_OAUTH_CLIENT_ID_FILE": "/dev/null",
         "TAILSCALE_OAUTH_CLIENT_SECRET_FILE": "/dev/null",
-        "AI_DEVBOX_UID": "1100",
-        "AI_DEVBOX_GID": "1100",
-        "AI_DEVBOX_DATA_ROOT": "/srv/dgx-forge/ai-devbox",
-        "AI_DEVBOX_AUTHORIZED_KEYS_FILE": "/srv/dgx-forge/secrets/ai-devbox-authorized-keys",
+        "HERMES_UID": "1100",
+        "HERMES_GID": "1100",
+        "HERMES_DATA_ROOT": "/srv/dgx-forge/hermes",
+        "HERMES_API_KEY_FILE": "/dev/null",
+        "HERMES_DASHBOARD_ORIGIN": "https://hermes.test.example",
     }
     result = subprocess.run(
         ["docker", "compose", "-f", str(root / "deploy/compose/compose.yaml"), "-f", str(root / "deploy/compose/compose.step-ca.yaml"), "config", "--format", "json"],
@@ -90,7 +91,12 @@ def test_database_has_only_data_network_and_ingress_is_segmented() -> None:
     assert set(services["registry"]["networks"]) == {"registry-edge", "registry-publisher"}
     assert set(services["control-worker"]["networks"]) == {"application", "cluster-egress", "data"}
     assert set(services["control-api"]["networks"]) == {"agent-proxy", "application", "ca", "data"}
-    assert set(services["litellm"]["networks"]) == {"cluster-egress", "data", "ingress"}
+    assert set(services["litellm"]["networks"]) == {
+        "cluster-egress",
+        "data",
+        "hermes-inference",
+        "ingress",
+    }
     assert set(services["prometheus"]["networks"]) == {"application"}
 
 
@@ -101,10 +107,13 @@ def test_tailnet_backends_have_readiness_checks() -> None:
         "CMD-SHELL",
         "wget -q -O /dev/null http://127.0.0.1:8080/healthz",
     ]
-    assert services["ai-devbox"]["healthcheck"]["test"] == [
-        "CMD-SHELL",
-        "ssh-keyscan -T 3 -p 22 127.0.0.1 >/dev/null 2>&1",
-    ]
+    assert set(services["hermes-agent"]["networks"]) == {
+        "hermes-egress",
+        "hermes-inference",
+        "tailnet-hermes-edge",
+    }
+    assert "8642" in json.dumps(services["hermes-agent"]["healthcheck"]["test"])
+    assert "9119" in json.dumps(services["hermes-agent"]["healthcheck"]["test"])
 
 
 def test_litellm_routes_use_a_dedicated_atomic_config_volume() -> None:

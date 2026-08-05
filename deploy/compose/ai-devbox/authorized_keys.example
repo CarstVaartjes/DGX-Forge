@@ -1,2 +1,0 @@
-# Copy one or more complete OpenSSH public-key lines into the external file
-# configured by AI_DEVBOX_AUTHORIZED_KEYS_FILE. Never place a private key here.
