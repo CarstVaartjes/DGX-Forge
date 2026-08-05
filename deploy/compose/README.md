@@ -33,13 +33,19 @@ plugin, `curl`, `sha256sum`, local DNS, and persistent storage. Keep the
 repository checkout and host-local configuration outside Git, for example:
 
 ```bash
-sudo install -d -m 0750 /srv/dgx-forge
-sudo git clone https://github.com/CarstVaartjes/DGX-Forge.git /srv/dgx-forge/repository
+sudo install -d -m 0750 -o "$USER" -g "$USER" /srv/dgx-forge
+git clone https://github.com/CarstVaartjes/DGX-Forge.git /srv/dgx-forge/repository
 sudo install -d -m 0700 /srv/dgx-forge/secrets /srv/dgx-forge/hermes /srv/dgx-forge/step-ca
 cd /srv/dgx-forge/repository/deploy/compose
 cp .env.example .env
 chmod 0600 .env
 ```
+
+The deployment operator owns the checkout, so the unprivileged `cp`, later
+reviewed `git` updates, and edits to `.env` work. Do not use `sudo git clone`
+and then try to edit its root-owned result. The secrets, Hermes data, and
+step-ca directories stay administrator-owned and are prepared with the
+consumer-specific ownership below.
 
 Reserve a host management-LAN address and put it in the host-local `.env`:
 
@@ -60,6 +66,11 @@ CIDRs (preferably reserved Spark leases). Human control, Grafana, inference,
 and Hermes have no LAN or WAN access: use the exact Tailscale Services in
 [the Tailscale runbook](../../docs/runbooks/tailscale.md). There is no LAN
 fallback for tailnet-only access.
+
+`control.dgx-forge.lan is not a LAN-accessible human endpoint`: do not create a
+general-purpose LAN record or firewall rule for it. Human control reaches the
+Tailscale `svc:dgx-forge` Service; the only published NAS LAN listener is the
+Spark-restricted TCP 8443 backend.
 
 ## Get a complete release image set
 
@@ -138,6 +149,21 @@ For the production `compose.step-ca.yaml` overlay set
 `STEP_CA_PASSWORD_FILE`. `AGENT_INTERMEDIATE_KEY_FILE` is development-only for
 the mutually exclusive built-in CA overlay.
 
+### Required secret-file paths
+
+Set every required secret path in `.env`; these are paths only, never values:
+`DATABASE_URL_FILE`, `POSTGRES_PASSWORD_FILE`, `TOKEN_SIGNING_KEY_FILE`,
+`METRICS_TOKEN_FILE`, `GIT_SIGNING_KEY_FILE`, `WORKER_API_TOKEN_FILE`,
+`LITELLM_MASTER_KEY_FILE`, `LITELLM_UPSTREAM_KEY_FILE`,
+`LITELLM_DATABASE_URL_FILE`, `GRAFANA_ADMIN_PASSWORD_FILE`,
+`AGENT_CLIENT_CA_FILE`, `AGENT_INTERMEDIATE_CERTIFICATE_FILE`,
+`AGENT_PROXY_AUTH_FILE`, `AGENT_CA_CREDENTIAL_FILE`,
+`AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE`, `STEP_CA_ROOT_CERTIFICATE_FILE`,
+`STEP_CA_INTERMEDIATE_KEY_FILE`, `STEP_CA_PASSWORD_FILE`,
+`TAILSCALE_OAUTH_CLIENT_ID_FILE`, `TAILSCALE_OAUTH_CLIENT_SECRET_FILE`, and
+`HERMES_API_KEY_FILE`. The development-only built-in overlay additionally needs
+`AGENT_INTERMEDIATE_KEY_FILE`.
+
 ### Tailscale and Hermes
 
 Set `TAILSCALE_OAUTH_CLIENT_ID_FILE` and
@@ -150,24 +176,61 @@ their Compose defaults unless the host is deliberately sized differently.
 
 ## Secret files
 
-Create regular files under `/srv/dgx-forge/secrets`, owned by `root:root` and
-mode `0600` unless a PKI generator specifies a stricter mode. Create parent
-directories mode `0700`. Use one value per file, with a final newline only
-where the consumer format permits it; never export a secret into `.env`, shell
-history, or a Compose command line.
+Create regular files under `/srv/dgx-forge/secrets` and parent directories mode
+`0700`. Compose bind-backs each secret file, so host ownership and mode must
+allow the **actual consuming container UID** to read it. Do not use a blanket
+`root:root 0600` rule: it prevents the explicitly non-root API, worker,
+LiteLLM, Prometheus, and Grafana services from reading their secret mounts.
 
-| Consumer | Files and required content |
-| --- | --- |
-| PostgreSQL/control API/worker | `database-url` (database URL), `postgres-password` (password), `token-signing-key`, `metrics-token`, `worker-api-token` (un-padded base64url, 32+ characters), and `git-signing-key` (private SSH signing key). |
-| LiteLLM/Grafana | `litellm-master-key`, `litellm-upstream-key`, `litellm-database-url`, and `grafana-admin-password`, each as the service's single secret value. |
-| Caddy and agent PKI | `agent-client-ca` and `agent-intermediate-certificate` (PEM certificates), `agent-proxy-auth` (un-padded base64url token, 32+ characters), `agent-ca-credential` (provisioner credential), `agent-ca-public.jwk` (public JWK), `step-ca-root-certificate` (PEM), `step-ca-intermediate-key` (encrypted private key), and `step-ca-password` (single password). |
-| Tailscale | `tailscale-oauth-client-id` and `tailscale-oauth-client-secret`, one OAuth value in each file; these are not GitHub credentials. |
-| Hermes | `hermes-api-key`, one 32+ character API key using only `A-Z`, `a-z`, `0-9`, `_`, `.`, `~`, or `-`. |
+The Compose service users are `10001:10001` for control-api and control-worker,
+`10002:10001` for LiteLLM, `65534:65534` for Prometheus, and `472:472` for
+Grafana. The pinned step-ca image runs as `1000:1000` (`step`); Hermes' managed
+process is fixed at `1100:1100`. PostgreSQL, Caddy, Tailscale, and the Hermes
+entrypoint use their image startup identity and can read a `root:root 0400`
+secret before dropping privileges. Re-check these identities after changing an
+image pin with `docker image inspect IMAGE --format '{{.Config.User}}'` and,
+for the pinned step-ca image, `docker run --rm --entrypoint id STEP_CA_IMAGE`.
 
-The secret file owner must remain the service administrator (`root:root`);
-containers receive Docker Compose secrets rather than a writable host secret
-directory. Prepare and protect the offline root separately: its private key
-never enters this NAS.
+For a secret with one non-root consumer, use its exact owner and mode `0400`.
+For a secret shared by different UIDs, retain `root:root 0400` and grant only
+the listed service UIDs read access with POSIX ACLs. For example, the metrics
+token is read by both control-api (`10001`) and Prometheus (`65534`):
+
+```bash
+sudo chown root:root /srv/dgx-forge/secrets/metrics-token
+sudo chmod 0400 /srv/dgx-forge/secrets/metrics-token
+sudo setfacl -m u:10001:r,u:65534:r /srv/dgx-forge/secrets/metrics-token
+sudo getfacl /srv/dgx-forge/secrets/metrics-token
+```
+
+Use one value per file, with a final newline only where the consumer format
+permits it; never export a secret into `.env`, shell history, or a Compose
+command line.
+
+| `.env` path key → file | Consumer UID(s), host ownership/mode | Required content |
+| --- | --- | --- |
+| `DATABASE_URL_FILE` → `database-url` | `10001:10001`, `10001:10001 0400` | PostgreSQL URL. |
+| `POSTGRES_PASSWORD_FILE` → `postgres-password` | PostgreSQL startup, `root:root 0400` | One PostgreSQL password. |
+| `TOKEN_SIGNING_KEY_FILE` → `token-signing-key` | API `10001:10001`, `10001:10001 0400` | At least 32 bytes. |
+| `METRICS_TOKEN_FILE` → `metrics-token` | API `10001`, Prometheus `65534`; `root:root 0400` plus ACLs | At least 16 non-whitespace characters. |
+| `GIT_SIGNING_KEY_FILE` → `git-signing-key` | API `10001:10001`, `10001:10001 0400` | Private SSH signing key. |
+| `WORKER_API_TOKEN_FILE` → `worker-api-token` | API/worker `10001:10001`, `10001:10001 0400` | One unpadded base64url token, at least 32 characters. |
+| `LITELLM_MASTER_KEY_FILE`, `LITELLM_UPSTREAM_KEY_FILE`, `LITELLM_DATABASE_URL_FILE` → matching `litellm-*` files | LiteLLM `10002:10001`, `10002:10001 0400` | Respectively the master key, dedicated upstream key, and PostgreSQL URL. |
+| `GRAFANA_ADMIN_PASSWORD_FILE` → `grafana-admin-password` | Grafana `472:472`, `472:472 0400` | One Grafana administrator password. |
+| `AGENT_CLIENT_CA_FILE` → `agent-client-ca` | API `10001` and Caddy startup; `root:root 0400` plus ACL `u:10001:r` | PEM trust bundle. |
+| `AGENT_INTERMEDIATE_CERTIFICATE_FILE` → `agent-intermediate-certificate` | API `10001`, step-ca `1000`; `root:root 0400` plus `u:10001:r,u:1000:r` ACLs | PEM intermediate certificate. |
+| `AGENT_PROXY_AUTH_FILE` → `agent-proxy-auth` | API `10001` and Caddy startup; `root:root 0400` plus ACL `u:10001:r` | One unpadded base64url token, at least 32 characters. |
+| `AGENT_CA_CREDENTIAL_FILE` → `agent-ca-credential` | API `10001:10001`, `10001:10001 0400` | Private provisioner credential. |
+| `AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE` → `agent-ca-public.jwk` | API `10001`, step-ca `1000`; `root:root 0400` plus `u:10001:r,u:1000:r` ACLs | Public provisioner JWK. |
+| `STEP_CA_ROOT_CERTIFICATE_FILE` → `step-ca-root-certificate` | API `10001`, step-ca `1000`; `root:root 0400` plus `u:10001:r,u:1000:r` ACLs | PEM root certificate. |
+| `STEP_CA_INTERMEDIATE_KEY_FILE`, `STEP_CA_PASSWORD_FILE` → `step-ca-intermediate-key`, `step-ca-password` | step-ca `1000:1000`, `1000:1000 0400` | Encrypted intermediate private key and its one password. |
+| Development-only `AGENT_INTERMEDIATE_KEY_FILE` → `agent-intermediate-key` | API `10001:10001`, `10001:10001 0400` | Built-in CA intermediate private key; never combine this overlay with step-ca. |
+| `TAILSCALE_OAUTH_CLIENT_ID_FILE`, `TAILSCALE_OAUTH_CLIENT_SECRET_FILE` → matching `tailscale-oauth-*` files | Tailscale startup, `root:root 0400` | One OAuth client ID or secret; neither is a GitHub credential. |
+| `HERMES_API_KEY_FILE` → `hermes-api-key` | Hermes entrypoint then managed `1100:1100`; `root:root 0400` | One 32+ character key using only `A-Z`, `a-z`, `0-9`, `_`, `.`, `~`, or `-`. |
+
+The offline root private key never enters this NAS. The generated PKI paths and
+permissions in [agent PKI](../../docs/runbooks/agent-pki.md) remain authoritative
+for the step-ca material.
 
 ## Bootstrap the production step-ca overlay
 
@@ -183,7 +246,9 @@ tailnet policy, and exact Services. Do this in order:
 3. Complete Tailscale policy and OAuth secret setup; do not enable a LAN
    fallback.
 4. Copy the verified complete three-image release set into `.env`.
-5. Pull, render, and start the base file with the one production overlay.
+5. Pull and render the complete production plan, then initialize PostgreSQL,
+   migrate, and create the first administrator while API and worker are stopped.
+6. Start the complete project with the one production overlay.
 
 The base file deliberately selects no CA provider. Select exactly one overlay:
 `compose.step-ca.yaml` for production, or the built-in CA overlay for local
@@ -197,17 +262,25 @@ Run the production commands exactly from the Compose directory:
 cd /srv/dgx-forge/repository/deploy/compose
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml pull
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml config --quiet
+docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml up -d postgres
+docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml run --rm --no-deps \
+  --entrypoint python control-api -m dgx_control.offline --state-path /state \
+  init --repository /repository
+docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml run --rm --no-deps \
+  --entrypoint python control-api -m dgx_control.offline --state-path /state migrate
+docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml run --rm --no-deps \
+  --entrypoint python control-api -m dgx_control.offline --state-path /state \
+  create-admin --subject ADMIN_ID
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml up -d
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml ps
 ```
 
 In short, the required preflight sequence is `docker compose pull`, then
-`docker compose config --quiet`, before `up -d`; the commands above include the
-required environment file and production overlay for each invocation.
-
-Before the first full start, follow the migration and admin steps in
-[control-plane bootstrap](../../docs/runbooks/control-plane-bootstrap.md).
-After Docker creates its bridge, apply and verify the Hermes host-egress rule as
+`docker compose config --quiet`, then PostgreSQL-only `up -d postgres`, offline
+migration and administrator creation, before the first full `up -d`. The
+one-shot commands use the production control-api image so it reads the same
+Compose secrets as the service; API and worker remain stopped. After Docker
+creates its bridge, apply and verify the Hermes host-egress rule as
 documented in [Hermes Agent](../../docs/runbooks/hermes-agent.md). Check the
 Tailscale Service status and verify that ordinary LAN clients cannot reach human
 or Hermes endpoints.

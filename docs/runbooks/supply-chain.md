@@ -56,26 +56,27 @@ access. Regeneration is an explicit reviewed operation:
 scripts/verify-supply-chain --generate --json
 ```
 
-At image publication, build from the repository root so the control image can
-build and install the standalone protocol wheel:
+## Local diagnostic builds
+
+The following are **local diagnostic only** builds. They are not an image
+publication procedure: do not log in to a registry, tag a GHCR name, or push.
+Exercise all three release targets together from the tagged source candidate:
 
 ```bash
-docker build --file control/Dockerfile \
-  --target api \
-  --build-arg NODE_IMAGE="$(jq -r '.build_bases.node' deploy/compose/images.lock.json)" \
-  --build-arg PYTHON_IMAGE="$(jq -r '.build_bases.python' deploy/compose/images.lock.json)" \
-  --tag dgx-control-api:local .
-docker build --file control/Dockerfile \
-  --target worker \
-  --build-arg NODE_IMAGE="$(jq -r '.build_bases.node' deploy/compose/images.lock.json)" \
-  --build-arg PYTHON_IMAGE="$(jq -r '.build_bases.python' deploy/compose/images.lock.json)" \
-  --tag dgx-control-worker:local .
+docker buildx build --platform linux/amd64 --load \
+  --file control/Dockerfile --target api --tag dgx-forge-api:release-dry-run .
+docker buildx build --platform linux/amd64 --load \
+  --file control/Dockerfile --target worker --tag dgx-forge-worker:release-dry-run .
+docker buildx build --platform linux/amd64 --load \
+  --file deploy/compose/hermes-agent/Dockerfile --target managed \
+  --tag dgx-forge-hermes:release-dry-run deploy/compose/hermes-agent
 ```
 
-Publish both immutable control images, record their registry digests as
-`CONTROL_API_IMAGE` and `CONTROL_WORKER_IMAGE`, generate image/filesystem SBOMs
-with Syft for both targets, scan them with the
-release-approved scanner, and sign each with Cosign. LiteLLM signatures use the
-checked-in key copied from immutable upstream commit
+After future deliberate enablement, the tag-triggered GitHub Actions workflow
+is the only publication procedure. It builds all three targets, verifies their
+inputs, emits SBOM and provenance, resolves all three digests, and creates the
+checksum-protected three-reference release asset. It never treats one or two
+images as a releasable publication. LiteLLM signatures use the checked-in key
+copied from immutable upstream commit
 `0112e53046018d726492c814b3644b7d376029d0`; verify the locked digest, never a
 mutable tag. Store scan/signature attestations with the release evidence.

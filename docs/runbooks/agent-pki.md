@@ -16,8 +16,12 @@ leeway, and binds token subject/SANs to the signed CSR.
 Use two physically separate locations. `OFFLINE_PKI_DIR` is removable media on
 an offline workstation. `PKI_SECRET_DIR` and `STEP_CA_DATA_DIR` are on the NAS.
 Compose bind-backed secret uid/gid/mode behavior is not portable, so set and
-verify host ownership explicitly for UID 10001 (control-api) and the UID used by
-the pinned step-ca image.
+verify host ownership explicitly. The Compose control-api runs as `10001:10001`
+and the pinned step-ca image runs as `1000:1000` (`step`); do not apply a
+blanket `root:root 0600` policy to files those services must read. Use the
+consumer-specific ownership, mode, and ACL table in the authoritative
+[NAS pull-only Compose deployment guide](../../deploy/compose/README.md),
+including root-owned shared files with ACLs for `10001` and `1000`.
 
 ```sh
 OFFLINE_PKI_DIR=/media/offline/dgx-forge-pki
@@ -106,7 +110,10 @@ mv "$PKI_SECRET_DIR/agent-ca-credential.with-kid" "$PKI_SECRET_DIR/agent-ca-cred
 jq --slurpfile key "$PKI_SECRET_DIR/agent-ca-public.jwk" \
   '.authority.provisioners[0].key=$key[0]' deploy/compose/step-ca/ca.json \
   > "$STEP_CA_DATA_DIR/ca.json"
-chmod 600 "$PKI_SECRET_DIR/agent-ca-credential" "$STEP_CA_DATA_DIR/ca.json"
+chown 10001:10001 "$PKI_SECRET_DIR/agent-ca-credential"
+chmod 0400 "$PKI_SECRET_DIR/agent-ca-credential"
+chown 1000:1000 "$STEP_CA_DATA_DIR/ca.json"
+chmod 0400 "$STEP_CA_DATA_DIR/ca.json"
 test "$(jq -r '.authority.provisioners[0].key.kid' "$STEP_CA_DATA_DIR/ca.json")" = "$AGENT_CA_PROVISIONER_KID"
 ```
 
