@@ -12,6 +12,7 @@ from dgx_control.agent_jobs import AgentJobService
 from dgx_control.agent_reconciliation import (
     AgentReconciliationService,
     accepted_result_digests,
+    bind_reconciliation_result_consumer,
     compensation_order,
     ready_operation_ids,
 )
@@ -860,3 +861,30 @@ def test_uncertain_mutation_waits_for_operator_without_unlocking_dependents(
         assert stored.current_phase == "waiting-for-operator"
         assert job is not None and job.state == "waiting-for-operator"
         assert len(operations) == 1
+
+
+def test_api_result_consumer_is_bound_once_to_durable_execution(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'binding.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine, expire_on_commit=False)
+
+    class Operations:
+        consumer = None
+
+        def set_result_consumer(self, consumer) -> None:
+            assert self.consumer is None
+            self.consumer = consumer
+
+    class Presence:
+        def latest(self, *_args, **_kwargs):
+            raise AssertionError("result consumption does not resolve routes")
+
+    operations = Operations()
+    service = bind_reconciliation_result_consumer(
+        sessions,
+        operations=operations,
+        presence=Presence(),
+        clock=lambda: datetime(2026, 8, 5, tzinfo=UTC),
+    )
+
+    assert operations.consumer == service.consume_result

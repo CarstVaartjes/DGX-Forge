@@ -873,3 +873,34 @@ class AgentReconciliationService:
         if not isinstance(reason, str):
             reason = message.result.get("error_code")
         return reason[:1024] if isinstance(reason, str) and reason else "agent operation failed"
+
+
+def bind_reconciliation_result_consumer(
+    sessions: sessionmaker[Session],
+    *,
+    operations: Any,
+    presence: Any,
+    clock: Callable[[], datetime],
+    maximum_presence_age_seconds: int = 300,
+) -> AgentReconciliationService:
+    """Bind the API's result queue to the same durable execution projection."""
+
+    if not 1 <= maximum_presence_age_seconds <= 300:
+        raise ValueError("reconciliation presence age is invalid")
+
+    def endpoint(node_id: str) -> tuple[str, datetime]:
+        observation = presence.latest(
+            node_id,
+            maximum_age_seconds=maximum_presence_age_seconds,
+        )
+        return observation.address, observation.observed_at
+
+    service = AgentReconciliationService(
+        sessions,
+        agent_jobs=operations,
+        publisher=None,
+        endpoint_resolver=endpoint,
+        clock=clock,
+    )
+    operations.set_result_consumer(service.consume_result)
+    return service
