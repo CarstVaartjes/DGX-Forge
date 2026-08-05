@@ -719,6 +719,10 @@ class AgentJobService:
             raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
         node, certificate = identity
         self._consume_contact(session, source, node, certificate)
+        self._require_active_reconciliation_authority(
+            session,
+            operation_id,
+        )
         operation = session.scalar(
             select(StoredOperation)
             .where(StoredOperation.id == operation_id)
@@ -747,6 +751,62 @@ class AgentJobService:
             raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
         self._record_contact(node, now, None, None)
         return operation, attempt
+
+    @staticmethod
+    def _require_active_reconciliation_authority(
+        session: Session,
+        operation_id: str,
+    ) -> None:
+        authority = session.execute(
+            select(Job.id, Job.reconciliation_id)
+            .join(StoredOperation, StoredOperation.parent_job_id == Job.id)
+            .where(StoredOperation.id == operation_id)
+        ).one_or_none()
+        if authority is None:
+            raise StaleAgentAttempt(
+                "agent operation lease, certificate, or fence is stale"
+            )
+        job_id, reconciliation_id = authority
+        if reconciliation_id is None:
+            return
+        reconciliation = session.scalar(
+            select(Reconciliation)
+            .where(Reconciliation.id == reconciliation_id)
+            .with_for_update(of=Reconciliation)
+        )
+        job = session.scalar(
+            select(Job)
+            .where(
+                Job.id == job_id,
+                Job.reconciliation_id == reconciliation_id,
+            )
+            .with_for_update(of=Job)
+        )
+        projection = session.scalar(
+            select(ReconciliationOperation)
+            .where(
+                ReconciliationOperation.reconciliation_id == reconciliation_id,
+                ReconciliationOperation.agent_operation_id == operation_id,
+            )
+            .with_for_update(of=ReconciliationOperation)
+        )
+        expected_phase = (
+            None
+            if projection is None
+            else "compensating" if projection.role == "compensation" else "dispatching"
+        )
+        if (
+            reconciliation is None
+            or job is None
+            or projection is None
+            or job.state != "running"
+            or reconciliation.status != "running"
+            or reconciliation.current_phase != expected_phase
+            or projection.state not in {"queued", "running"}
+        ):
+            raise StaleAgentAttempt(
+                "agent operation lease, certificate, or fence is stale"
+            )
 
     @staticmethod
     def _capabilities(
@@ -868,6 +928,11 @@ class AgentJobService:
             raise ValueError("unsafe agent expiry lacks reconciliation authority")
         reason = "mutating agent operation lease expired with uncertain outcome"
         projection.state = "waiting-for-operator"
+        self._quiesce_reconciliation_operations(
+            session,
+            reconciliation.id,
+            now,
+        )
         reconciliation.current_phase = "waiting-for-operator"
         reconciliation.status = "failed"
         reconciliation.terminal_reason = reason

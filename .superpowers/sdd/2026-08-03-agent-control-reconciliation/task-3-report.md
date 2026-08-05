@@ -158,3 +158,77 @@ paths, all control files in isolated interpreters, real PostgreSQL races, migrat
 cycles, Compose, and lifecycle tests completed without a product assertion failure.
 
 No independent readiness claim is made by this implementation report.
+
+## Reset review correction — 2026-08-05
+
+This correction restarted from clean commit
+`2b4a5acd796a3639c730a9df0e93791ae2d7a8e0` and addressed the residual unsafe
+expiry, automatic scheduling, and publication-owner handoff findings. It makes no
+schema change and does not touch the Task 4/19 SSH or cluster-egress boundary.
+
+Claim-triggered expiry now invokes the same whole-reconciliation quiescence used
+by autonomous maintenance, fencing queued and running primary/compensation
+siblings in the expiry transaction. Heartbeat and result paths revalidate the
+locked reconciliation, Job, projection, role phase, and running authority before
+locking and mutating the operation/attempt; rejection rolls authenticated contact,
+progress, result, and projection writes back together.
+
+Automatic maintenance now preflights the exact completed singleton owner, then
+selects one bounded actionable category: a pending handoff, an expired mutation,
+an active cancellation, the current active owner, or a newer plan after a
+completed/terminal owner. It neither scans an unbounded candidate set nor permits
+an automatic or explicit newer plan to preempt an owner with running execution.
+This preserves one transition per worker turn while allowing cancellation and
+unsafe expiry to pass an unrelated reconciliation waiting on an agent.
+
+`withdrawal-pending` is now the durable unacknowledged handoff fence. At most one
+successor intent can be registered. The singleton continues to name the last
+acknowledged marker owner until `AtomicRouteBundlePublisher.withdraw()` returns
+after the exact maintenance acknowledgement; only then are the marker receipt,
+owner generation, owner identity, and `routes-withdrawn` phase committed. A crash
+after activation/acknowledgement but before commit replays the identical marker and
+acknowledgement before transferring once. Predecessor renewal and cancellation
+effects are fenced meanwhile, while authority loss may still fail closed by
+withdrawing the acknowledged predecessor.
+
+Cancellation now defers requested/withdrawal effects behind a pending successor
+until that successor's maintenance marker is acknowledged. A publication-ack crash
+followed by cancellation or authority loss withdraws routes before terminal work.
+After ownership changes, cancellation of a historical accepted mutation quiesces
+any outstanding work and terminalizes without dispatching compensation against
+the successor-owned desired state.
+
+### Reset RED/GREEN evidence
+
+- Whole-reconciliation claim expiry failed because a second mutation remained
+  running; active-phase callback rejection separately failed because heartbeat
+  remained writable. The focused quiescence/phase matrix then passed `23`.
+- The three required automatic-only cases initially failed together with outcomes
+  containing only `False`. Four broader no-op/pending-cancellation cases then
+  failed together, and explicit running-owner preemption returned `True`. The
+  bounded selector/nonpreemption matrix passed `8` after correction.
+- The three primary handoff cases initially failed with early owner transfer, a
+  still-published predecessor after authority loss, and successor ownership after
+  rollback. Additional RED cases proved competing handoff registration,
+  publication-ack crash plus cancellation/authority loss, automatic predecessor
+  cancellation ordering, and historical mutation compensation. All are included
+  in the final `18`-case focused reset set.
+
+### Reset verification
+
+- PostgreSQL reconciliation file: `40 passed in 14.59s`.
+- Exact focused reset selection: `18 passed, 22 deselected in 6.95s`.
+- Core reconciliation, queue, jobs, and worker files: `111 passed in 22.10s`.
+- Every control test file in a separate interpreter: `580 passed` total.
+- Exact reconciliation migration/model cycle: `6 passed in 2.49s`; sole Alembic
+  head: `0009_reconciliation_execution (head)`.
+- Route runtime, LiteLLM supervisor, and lifecycle: `26 passed in 1.68s`; complete
+  Compose suite: `35 passed in 8.87s`.
+- Pinned Ruff `0.16.1`: `All checks passed!`; compileall, rendered Compose JSON,
+  and `git diff --check` passed.
+- Independent semantic rereview found `0 Critical`, `0 Important`, and `0 Minor`
+  findings.
+
+Updated `main` advanced beyond this reset source while the repair was in progress.
+Integration and a fresh post-integration verification/rereview are mandatory. No
+readiness claim is made here.

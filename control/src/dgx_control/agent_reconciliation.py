@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from dgx_agent_protocol import AgentResult, canonical_message
-from sqlalchemy import or_, select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -273,10 +273,32 @@ class AgentReconciliationService:
         """Advance one durable phase and return whether work was available."""
 
         with self._tick_lock:
-            automatically_selected = reconciliation_id is None
-            candidate = reconciliation_id or self._candidate_id()
+            if reconciliation_id is not None:
+                return self._tick_candidate(
+                    reconciliation_id,
+                    automatically_selected=False,
+                )
+            completed_owner = self._completed_owner_id()
+            if completed_owner is not None and self._tick_candidate(
+                completed_owner,
+                automatically_selected=True,
+            ):
+                return True
+            candidate = self._candidate_id()
             if candidate is None:
                 return False
+            return self._tick_candidate(
+                candidate,
+                automatically_selected=True,
+            )
+
+    def _tick_candidate(
+        self,
+        candidate: str,
+        *,
+        automatically_selected: bool,
+    ) -> bool:
+        with self._tick_lock:
             notify = False
             advanced = False
             with self._sessions.begin() as session:
@@ -284,6 +306,24 @@ class AgentReconciliationService:
                     session, candidate
                 )
                 phase = reconciliation.current_phase
+                if phase == "withdrawal-pending":
+                    if not self._owns_publication(
+                        session,
+                        reconciliation,
+                        may_supersede=True,
+                    ):
+                        return False
+                    publication = self._publication(session, reconciliation.id)
+                    marker = self._publisher.withdraw(
+                        reconciliation_id=reconciliation.id,
+                        plan_digest=self._plan_digest(reconciliation),
+                        targets=graph.targets,
+                        reason="reconciliation maintenance",
+                    )
+                    self._transfer_publication_owner(session, reconciliation)
+                    self._store_marker(publication, marker, "routes-withdrawn")
+                    reconciliation.current_phase = "routes-withdrawn"
+                    return True
                 cancellation = self._cancellation(session, reconciliation.id)
                 if cancellation is not None:
                     cancellation_advanced = self._advance_cancellation(
@@ -305,14 +345,18 @@ class AgentReconciliationService:
                     session, reconciliation, graph, document
                 )
                 if authority_reason is not None:
+                    acknowledged_owner = (
+                        self._publication_owner(session).reconciliation_id
+                        == reconciliation.id
+                    )
                     owns_publication = self._owns_publication(
                         session,
                         reconciliation,
                         may_supersede=False,
                     )
                     if (
-                        owns_publication
-                        and phase == "completed"
+                        (owns_publication or acknowledged_owner)
+                        and phase in {"completed", "publication-pending"}
                         and self._publisher is not None
                     ):
                         publication = self._publication(session, reconciliation.id)
@@ -361,16 +405,6 @@ class AgentReconciliationService:
                         self._clock()
                     ) + timedelta(seconds=30):
                         return False
-                if phase == "withdrawal-pending":
-                    marker = self._publisher.withdraw(
-                        reconciliation_id=reconciliation.id,
-                        plan_digest=self._plan_digest(reconciliation),
-                        targets=graph.targets,
-                        reason="reconciliation maintenance",
-                    )
-                    self._store_marker(publication, marker, "routes-withdrawn")
-                    reconciliation.current_phase = "routes-withdrawn"
-                    return True
                 if phase == "routes-withdrawn":
                     if not self._targets_are_active(session, graph):
                         self._quiesce_for_unavailable_target(
@@ -693,9 +727,16 @@ class AgentReconciliationService:
                 reconciliation,
                 may_supersede=False,
             )
+            if (
+                not owns_publication
+                and self._pending_publication_handoff(session) is not None
+            ):
+                return False
             cancellation.state = (
                 "withdrawal-pending"
-                if reconciliation.current_phase == "completed" and owns_publication
+                if reconciliation.current_phase
+                in {"completed", "publication-pending"}
+                and owns_publication
                 else "processing"
             )
             cancellation.updated_at = now
@@ -706,6 +747,11 @@ class AgentReconciliationService:
                 reconciliation,
                 may_supersede=False,
             )
+            if (
+                not owns_publication
+                and self._pending_publication_handoff(session) is not None
+            ):
+                return False
             if owns_publication:
                 if self._publisher is None:
                     raise RuntimeError("route publisher is unavailable")
@@ -757,6 +803,43 @@ class AgentReconciliationService:
         compensations = self._projections(
             session, reconciliation.id, "compensation"
         )
+        if not self._owns_publication(
+            session,
+            reconciliation,
+            may_supersede=False,
+        ):
+            uncertain = self._quiesce_pending(
+                session,
+                reconciliation,
+                graph,
+                projections,
+            )
+            uncertain = (
+                self._quiesce_pending(
+                    session,
+                    reconciliation,
+                    graph,
+                    compensations,
+                )
+                or uncertain
+            )
+            reconciliation.terminal_reason = cancellation.reason
+            if uncertain:
+                self._wait_for_operator(
+                    reconciliation,
+                    job,
+                    "historical cancellation interrupted a running mutation",
+                )
+                cancellation.state = "waiting-for-operator"
+            else:
+                reconciliation.current_phase = "cancelled"
+                reconciliation.status = "cancelled"
+                job.state = "failed"
+                job.status_reason = "historical reconciliation cancelled"
+                job.updated_at = self._clock()
+                cancellation.state = "completed"
+            cancellation.updated_at = self._clock()
+            return
         if reconciliation.current_phase == "waiting-for-operator":
             self._quiesce_pending(session, reconciliation, graph, projections)
             self._quiesce_pending(session, reconciliation, graph, compensations)
@@ -831,40 +914,137 @@ class AgentReconciliationService:
             cancellation.state = "completed"
         cancellation.updated_at = self._clock()
 
+    def _completed_owner_id(self) -> str | None:
+        with self._sessions() as session:
+            owner_id = session.scalar(
+                select(RoutePublicationOwner.reconciliation_id).where(
+                    RoutePublicationOwner.singleton_id == 1
+                )
+            )
+            if owner_id is None:
+                owner_id = session.scalar(
+                    select(Reconciliation.id)
+                    .where(
+                        Reconciliation.status == "succeeded",
+                        Reconciliation.current_phase == "completed",
+                        Reconciliation.completion_generation.is_not(None),
+                    )
+                    .order_by(
+                        Reconciliation.completion_generation.desc(),
+                        Reconciliation.id.desc(),
+                    )
+                    .limit(1)
+                )
+            if owner_id is None:
+                return None
+            return session.scalar(
+                select(Reconciliation.id).where(
+                    Reconciliation.id == owner_id,
+                    Reconciliation.current_phase == "completed",
+                )
+            )
+
     def _candidate_id(self) -> str | None:
         with self._sessions() as session:
-            return session.scalar(
+            pending = session.scalar(
                 select(Reconciliation.id)
-                .join(Job, Job.reconciliation_id == Reconciliation.id)
-                .outerjoin(
+                .join(
                     RoutePublication,
                     RoutePublication.reconciliation_id == Reconciliation.id,
                 )
-                .outerjoin(
+                .where(
+                    Reconciliation.current_phase == "withdrawal-pending",
+                    RoutePublication.state == "withdrawal-pending",
+                )
+                .order_by(Reconciliation.created_at.desc(), Reconciliation.id.desc())
+                .limit(1)
+            )
+            if pending is not None:
+                return pending
+            expired_mutation = session.scalar(
+                select(Reconciliation.id)
+                .join(Job, Job.reconciliation_id == Reconciliation.id)
+                .join(
+                    StoredAgentOperation,
+                    StoredAgentOperation.parent_job_id == Job.id,
+                )
+                .join(
+                    AgentOperationAttempt,
+                    and_(
+                        AgentOperationAttempt.operation_id
+                        == StoredAgentOperation.id,
+                        AgentOperationAttempt.attempt
+                        == StoredAgentOperation.current_attempt,
+                    ),
+                )
+                .where(
+                    StoredAgentOperation.state == "running",
+                    StoredAgentOperation.kind.in_(_MUTATIONS),
+                    AgentOperationAttempt.state == "running",
+                    AgentOperationAttempt.lease_deadline <= self._clock(),
+                )
+                .order_by(Reconciliation.created_at, Reconciliation.id)
+                .limit(1)
+            )
+            if expired_mutation is not None:
+                return expired_mutation
+            cancellation = session.scalar(
+                select(Reconciliation.id)
+                .join(
                     ReconciliationCancellation,
                     ReconciliationCancellation.reconciliation_id
                     == Reconciliation.id,
                 )
                 .where(
+                    ReconciliationCancellation.state.in_(
+                        _ACTIVE_CANCELLATION_STATES
+                    )
+                )
+                .order_by(Reconciliation.created_at, Reconciliation.id)
+                .limit(1)
+            )
+            if cancellation is not None:
+                return cancellation
+            owner_id = session.scalar(
+                select(RoutePublicationOwner.reconciliation_id).where(
+                    RoutePublicationOwner.singleton_id == 1
+                )
+            )
+            owner = None if owner_id is None else session.get(Reconciliation, owner_id)
+            active_owner_phases = {
+                "planned",
+                "routes-withdrawn",
+                "dispatching",
+                "accepting",
+                "publication-pending",
+                "compensating",
+            }
+            if owner is not None and owner.current_phase in active_owner_phases:
+                return owner.id
+            planned = select(Reconciliation.id).where(
+                Reconciliation.current_phase == "planned"
+            )
+            if owner is not None:
+                planned = planned.where(
                     or_(
-                        Reconciliation.current_phase.in_(
-                            {
-                                "planned",
-                                "withdrawal-pending",
-                                "routes-withdrawn",
-                                "dispatching",
-                                "accepting",
-                                "publication-pending",
-                                "compensating",
-                            }
-                        ),
-                        Reconciliation.current_phase == "completed",
-                        ReconciliationCancellation.state.in_(
-                            _ACTIVE_CANCELLATION_STATES
+                        Reconciliation.created_at > owner.created_at,
+                        and_(
+                            Reconciliation.created_at == owner.created_at,
+                            Reconciliation.id > owner.id,
                         ),
                     )
                 )
-                .order_by(Reconciliation.created_at.desc(), Reconciliation.id.desc())
+            candidate = session.scalar(
+                planned.order_by(Reconciliation.created_at, Reconciliation.id).limit(1)
+            )
+            if candidate is not None or owner is not None:
+                return candidate
+            return session.scalar(
+                select(Reconciliation.id)
+                .where(
+                    Reconciliation.current_phase.in_(active_owner_phases),
+                )
+                .order_by(Reconciliation.created_at, Reconciliation.id)
                 .limit(1)
             )
 
@@ -875,8 +1055,39 @@ class AgentReconciliationService:
         *,
         may_supersede: bool,
     ) -> bool:
-        """Lock and enforce the sole global activation-marker owner."""
+        """Authorize marker access without transferring unacknowledged ownership."""
 
+        owner = self._publication_owner(session)
+        pending_id = self._pending_publication_handoff(session)
+        if owner.reconciliation_id == reconciliation.id:
+            return pending_id in {None, reconciliation.id}
+        current = (
+            None
+            if owner.reconciliation_id is None
+            else session.get(Reconciliation, owner.reconciliation_id)
+        )
+        if current is not None and current.current_phase not in {
+            "completed",
+            "failed",
+            "cancelled",
+            "waiting-for-operator",
+        }:
+            return False
+        candidate_order = (_aware(reconciliation.created_at), reconciliation.id)
+        current_order = (
+            None
+            if current is None
+            else (_aware(current.created_at), current.id)
+        )
+        if current_order is not None and (
+            not may_supersede or candidate_order <= current_order
+        ):
+            return False
+        if not may_supersede:
+            return False
+        return pending_id in {None, reconciliation.id}
+
+    def _publication_owner(self, session: Session) -> RoutePublicationOwner:
         statement = (
             select(RoutePublicationOwner)
             .where(RoutePublicationOwner.singleton_id == 1)
@@ -914,27 +1125,47 @@ class AgentReconciliationService:
                 .limit(1)
             )
             owner.reconciliation_id = latest_completed
+        return owner
+
+    @staticmethod
+    def _pending_publication_handoff(session: Session) -> str | None:
+        return session.scalar(
+            select(Reconciliation.id)
+            .join(
+                RoutePublication,
+                RoutePublication.reconciliation_id == Reconciliation.id,
+            )
+            .where(
+                Reconciliation.current_phase == "withdrawal-pending",
+                RoutePublication.state == "withdrawal-pending",
+            )
+            .order_by(Reconciliation.created_at.desc(), Reconciliation.id.desc())
+            .limit(1)
+        )
+
+    def _transfer_publication_owner(
+        self,
+        session: Session,
+        reconciliation: Reconciliation,
+    ) -> None:
+        owner = self._publication_owner(session)
         if owner.reconciliation_id == reconciliation.id:
-            return True
+            return
+        if self._pending_publication_handoff(session) != reconciliation.id:
+            raise ValueError("route publication handoff is no longer authoritative")
         current = (
             None
             if owner.reconciliation_id is None
             else session.get(Reconciliation, owner.reconciliation_id)
         )
-        candidate_order = (_aware(reconciliation.created_at), reconciliation.id)
-        current_order = (
-            None
-            if current is None
-            else (_aware(current.created_at), current.id)
-        )
-        if current_order is not None and (
-            not may_supersede or candidate_order <= current_order
-        ):
-            return False
+        if current is not None and (
+            _aware(reconciliation.created_at),
+            reconciliation.id,
+        ) <= (_aware(current.created_at), current.id):
+            raise ValueError("route publication handoff is stale")
         owner.reconciliation_id = reconciliation.id
         owner.owner_generation += 1
         owner.updated_at = self._clock()
-        return True
 
     def _locked_context(
         self,

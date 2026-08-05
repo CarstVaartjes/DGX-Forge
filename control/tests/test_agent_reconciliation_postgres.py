@@ -27,8 +27,10 @@ from dgx_control.models import (
     Base,
     Job,
     Reconciliation,
+    ReconciliationCancellation,
     ReconciliationOperation,
     RoutePublication,
+    RoutePublicationOwner,
 )
 from dgx_control.pki import CertificateAuthority, IssuedCertificate
 from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
@@ -40,8 +42,18 @@ from sqlalchemy.orm import sessionmaker
 
 NODE_A = "spk_" + "a" * 32
 NODE_B = "spk_" + "b" * 32
+NODE_C = "spk_" + "c" * 32
 BASE_COMMIT = "a" * 40
 NOW = datetime(2026, 8, 5, tzinfo=UTC)
+AGENT_CAPABILITIES = (
+    "node.probe",
+    "release.install",
+    "workload.health",
+    "workload.prepare",
+    "workload.start",
+    "workload.stop",
+    "workload.verify",
+)
 
 
 class RevokingAuthority(CertificateAuthority):
@@ -145,7 +157,13 @@ def _source(address: str) -> AgentSource:
     )
 
 
-def _system(postgres_engine: Engine, route_root: Path, *, clock=lambda: NOW):
+def _system(
+    postgres_engine: Engine,
+    route_root: Path,
+    *,
+    clock=lambda: NOW,
+    await_supervisor_ack=None,
+):
     Base.metadata.drop_all(postgres_engine)
     Base.metadata.create_all(postgres_engine)
     sessions = sessionmaker(postgres_engine, expire_on_commit=False)
@@ -255,6 +273,7 @@ def _system(postgres_engine: Engine, route_root: Path, *, clock=lambda: NOW):
         management_policy=policy,
         clock=clock,
         maximum_lease_seconds=300,
+        await_supervisor_ack=await_supervisor_ack,
     )
     reconciliations = AgentReconciliationService(
         sessions,
@@ -306,6 +325,7 @@ def _insert_successor(
     predecessor_id: str,
     *,
     created_at: datetime = NOW + timedelta(seconds=1),
+    fleet_digest: str = "9" * 64,
 ) -> tuple[str, str]:
     reconciliation_id = str(uuid.uuid4())
     job_id = str(uuid.uuid4())
@@ -313,7 +333,7 @@ def _insert_successor(
         predecessor = session.get(Reconciliation, predecessor_id)
         assert predecessor is not None and predecessor.resolved_plan is not None
         resolved = deepcopy(predecessor.resolved_plan)
-        resolved["input_digests"]["fleet"] = "9" * 64
+        resolved["input_digests"]["fleet"] = fleet_digest
         plan_digest = _json_digest(resolved)
         session.add(
             Reconciliation(
@@ -349,6 +369,77 @@ def _insert_successor(
             )
         )
     return reconciliation_id, job_id
+
+
+def _mark_completed(
+    sessions,
+    reconciliation_id: str,
+    *,
+    owner: bool,
+    now: datetime = NOW,
+) -> None:
+    with sessions.begin() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.scalar(
+            select(Job).where(Job.reconciliation_id == reconciliation_id)
+        )
+        assert reconciliation is not None and job is not None
+        generation = (
+            session.scalar(select(func.max(Reconciliation.completion_generation)))
+            or 0
+        ) + 1
+        reconciliation.current_phase = "completed"
+        reconciliation.status = "succeeded"
+        reconciliation.completion_generation = generation
+        job.state = "succeeded"
+        job.status_reason = None
+        publication = session.get(RoutePublication, reconciliation_id)
+        if publication is None:
+            publication = RoutePublication(
+                reconciliation_id=reconciliation_id,
+                state="completed",
+                generation=None,
+                plan_digest=reconciliation.plan_digest,
+            )
+            session.add(publication)
+        else:
+            publication.state = "completed"
+            publication.generation = None
+        publication.lease_issued_at = now
+        publication.lease_expires_at = now + timedelta(minutes=5)
+        if owner:
+            current_owner = session.get(RoutePublicationOwner, 1)
+            if current_owner is None:
+                session.add(
+                    RoutePublicationOwner(
+                        singleton_id=1,
+                        reconciliation_id=reconciliation_id,
+                        owner_generation=1,
+                        updated_at=now,
+                    )
+                )
+            else:
+                current_owner.reconciliation_id = reconciliation_id
+                current_owner.owner_generation += 1
+                current_owner.updated_at = now
+
+
+def _set_publication_owner(sessions, reconciliation_id: str) -> None:
+    with sessions.begin() as session:
+        owner = session.get(RoutePublicationOwner, 1)
+        if owner is None:
+            session.add(
+                RoutePublicationOwner(
+                    singleton_id=1,
+                    reconciliation_id=reconciliation_id,
+                    owner_generation=1,
+                    updated_at=NOW,
+                )
+            )
+        else:
+            owner.reconciliation_id = reconciliation_id
+            owner.owner_generation += 1
+            owner.updated_at = NOW
 
 
 def _complete(system) -> str:
@@ -431,7 +522,7 @@ def test_postgres_phase_rejection_rolls_back_result_contact_and_projection(
         result=_verify_result(),
     )
 
-    with pytest.raises(ValueError, match="phase"):
+    with pytest.raises(StaleAgentAttempt):
         operations.record_result(message, source=_source("10.0.0.44"))
 
     with sessions() as session:
@@ -625,6 +716,455 @@ def test_postgres_newer_noncompleted_owner_survives_old_completed_restart(
     assert after == before
 
 
+def test_postgres_successor_owner_transfers_only_after_exact_withdrawal_ack(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    route_root = tmp_path / "owner-after-exact-ack"
+    acknowledged = []
+    blocked_reconciliation = [None]
+    ack_entered = threading.Event()
+    release_ack = threading.Event()
+
+    def acknowledge(marker) -> None:
+        acknowledged.append(marker)
+        if (
+            marker.reconciliation_id == blocked_reconciliation[0]
+            and marker.state == "maintenance"
+        ):
+            ack_entered.set()
+            assert release_ack.wait(timeout=5)
+
+    system = _system(
+        postgres_engine,
+        route_root,
+        await_supervisor_ack=acknowledge,
+    )
+    sessions, _presence, _operations, service, old_id, _job_id = system
+    assert _complete(system) == old_id
+    new_id, _new_job_id = _insert_successor(sessions, old_id)
+    with sessions() as session:
+        owner = session.get(RoutePublicationOwner, 1)
+        assert owner is not None and owner.reconciliation_id == old_id
+        old_generation = owner.owner_generation
+    published = (route_root / "activation.json").read_bytes()
+
+    assert service.tick(new_id) is True
+
+    with sessions() as session:
+        owner = session.get(RoutePublicationOwner, 1)
+        successor = session.get(Reconciliation, new_id)
+        publication = session.get(RoutePublication, new_id)
+        assert owner is not None and owner.reconciliation_id == old_id
+        assert owner.owner_generation == old_generation
+        assert successor is not None
+    assert successor.current_phase == "withdrawal-pending"
+    assert publication is not None and publication.state == "withdrawal-pending"
+    assert (route_root / "activation.json").read_bytes() == published
+    assert service.tick(old_id) is False
+    assert (route_root / "activation.json").read_bytes() == published
+
+    blocked_reconciliation[0] = new_id
+    outcomes: list[object] = []
+
+    def withdraw_successor() -> None:
+        try:
+            outcomes.append(service.tick(new_id))
+        except RuntimeError as error:  # pragma: no cover - asserted below
+            outcomes.append(error)
+
+    worker = threading.Thread(target=withdraw_successor)
+    worker.start()
+    assert ack_entered.wait(timeout=5)
+    with sessions() as session:
+        owner = session.get(RoutePublicationOwner, 1)
+        assert owner is not None and owner.reconciliation_id == old_id
+        assert owner.owner_generation == old_generation
+    release_ack.set()
+    worker.join(timeout=5)
+    assert not worker.is_alive()
+    assert outcomes == [True]
+
+    with sessions() as session:
+        owner = session.get(RoutePublicationOwner, 1)
+        successor = session.get(Reconciliation, new_id)
+        publication = session.get(RoutePublication, new_id)
+        assert owner is not None and owner.reconciliation_id == new_id
+        assert owner.owner_generation == old_generation + 1
+        assert successor is not None and successor.current_phase == "routes-withdrawn"
+        assert publication is not None and publication.state == "routes-withdrawn"
+    marker = json.loads((route_root / "activation.json").read_bytes())
+    assert marker["state"] == "maintenance"
+    assert marker["reconciliation_id"] == new_id
+    assert acknowledged[-1].reconciliation_id == new_id
+
+
+def test_postgres_only_one_unacknowledged_publication_handoff_is_registered(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    system = _system(postgres_engine, tmp_path / "one-pending-publication-handoff")
+    sessions, _presence, _operations, service, old_id, _job_id = system
+    assert _complete(system) == old_id
+    first_id, _first_job_id = _insert_successor(sessions, old_id)
+    second_id, _second_job_id = _insert_successor(
+        sessions,
+        old_id,
+        created_at=NOW + timedelta(seconds=2),
+        fleet_digest="8" * 64,
+    )
+
+    assert service.tick(first_id) is True
+    assert service.tick(second_id) is False
+
+    with sessions() as session:
+        owner = session.get(RoutePublicationOwner, 1)
+        first = session.get(Reconciliation, first_id)
+        second = session.get(Reconciliation, second_id)
+        pending = list(
+            session.scalars(
+                select(RoutePublication).where(
+                    RoutePublication.state == "withdrawal-pending"
+                )
+            )
+        )
+        assert owner is not None and owner.reconciliation_id == old_id
+        assert first is not None and first.current_phase == "withdrawal-pending"
+        assert second is not None and second.current_phase == "planned"
+        assert [publication.reconciliation_id for publication in pending] == [first_id]
+
+
+def test_postgres_successor_authority_loss_withdraws_predecessor_before_wait(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    route_root = tmp_path / "authority-loss-during-handoff"
+    acknowledged = []
+    authority = {"eligible": True, "commit": BASE_COMMIT}
+    system = _system(
+        postgres_engine,
+        route_root,
+        await_supervisor_ack=acknowledged.append,
+    )
+    sessions, _presence, _operations, service, old_id, _job_id = system
+    service._commit_eligible = lambda commit: authority["eligible"] and commit == BASE_COMMIT
+    service._current_commit = lambda: authority["commit"]
+    with sessions.begin() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        node.protocol_version = 1
+        node.capabilities = list(AGENT_CAPABILITIES)
+    assert _complete(system) == old_id
+    new_id, _new_job_id = _insert_successor(sessions, old_id)
+    assert service.tick(new_id) is True
+    authority["eligible"] = False
+
+    assert service.tick(new_id) is True
+
+    marker = json.loads((route_root / "activation.json").read_bytes())
+    assert marker["state"] == "maintenance"
+    assert marker["reconciliation_id"] == new_id
+    with sessions() as session:
+        owner = session.get(RoutePublicationOwner, 1)
+        successor = session.get(Reconciliation, new_id)
+        publication = session.get(RoutePublication, new_id)
+        assert owner is not None and owner.reconciliation_id == new_id
+        assert successor is not None and successor.current_phase == "routes-withdrawn"
+        assert publication is not None and publication.state == "routes-withdrawn"
+    assert acknowledged[-1].state == "maintenance"
+    assert acknowledged[-1].reconciliation_id == new_id
+
+    assert service.tick(new_id) is True
+    with sessions() as session:
+        successor = session.get(Reconciliation, new_id)
+        job = session.scalar(select(Job).where(Job.reconciliation_id == new_id))
+        assert successor is not None
+        assert successor.current_phase == "waiting-for-operator"
+        assert job is not None and job.state == "waiting-for-operator"
+    assert json.loads((route_root / "activation.json").read_bytes()) == marker
+
+
+def test_postgres_pending_successor_does_not_block_fail_closed_owner_withdrawal(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    route_root = tmp_path / "pending-successor-owner-authority-loss"
+    acknowledged = []
+    authority = {"eligible": True}
+    system = _system(
+        postgres_engine,
+        route_root,
+        await_supervisor_ack=acknowledged.append,
+    )
+    sessions, _presence, _operations, service, old_id, _job_id = system
+    service._commit_eligible = lambda commit: authority["eligible"] and commit == BASE_COMMIT
+    service._current_commit = lambda: BASE_COMMIT
+    with sessions.begin() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        node.protocol_version = 1
+        node.capabilities = list(AGENT_CAPABILITIES)
+    assert _complete(system) == old_id
+    new_id, _new_job_id = _insert_successor(sessions, old_id)
+    assert service.tick(new_id) is True
+    authority["eligible"] = False
+
+    assert service.tick() is True
+
+    marker = json.loads((route_root / "activation.json").read_bytes())
+    assert marker["state"] == "maintenance"
+    with sessions() as session:
+        old = session.get(Reconciliation, old_id)
+        successor = session.get(Reconciliation, new_id)
+        owner = session.get(RoutePublicationOwner, 1)
+        assert old is not None and old.current_phase == "waiting-for-operator"
+        assert successor is not None
+        assert successor.current_phase == "withdrawal-pending"
+        assert owner is not None and owner.reconciliation_id == old_id
+    assert acknowledged[-1].state == "maintenance"
+
+    assert service.tick() is True
+    marker = json.loads((route_root / "activation.json").read_bytes())
+    assert marker["state"] == "maintenance"
+    assert marker["reconciliation_id"] == new_id
+    with sessions() as session:
+        owner = session.get(RoutePublicationOwner, 1)
+        assert owner is not None and owner.reconciliation_id == new_id
+
+
+def test_postgres_publication_ack_crash_then_authority_loss_withdraws_routes(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    route_root = tmp_path / "publication-ack-crash-authority-loss"
+    acknowledged = []
+    authority = {"eligible": True}
+    system = _system(
+        postgres_engine,
+        route_root,
+        await_supervisor_ack=acknowledged.append,
+    )
+    sessions, _presence, operations, service, reconciliation_id, _job_id = system
+    service._commit_eligible = lambda commit: authority["eligible"] and commit == BASE_COMMIT
+    service._current_commit = lambda: BASE_COMMIT
+    with sessions.begin() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        node.protocol_version = 1
+        node.capabilities = list(AGENT_CAPABILITIES)
+
+    _sessions, operations, service, _reconciliation_id, _job_id, claim = _claimed(
+        system
+    )
+    operations.succeed(claim, _verify_result())
+    assert service.tick(reconciliation_id) is True
+    assert service.tick(reconciliation_id) is True
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        owner = session.get(RoutePublicationOwner, 1)
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "publication-pending"
+        assert owner is not None and owner.reconciliation_id == reconciliation_id
+
+    inner = service._publisher
+
+    class CrashAfterPublishAcknowledgement:
+        def withdraw(self, **kwargs):
+            return inner.withdraw(**kwargs)
+
+        def publish(self, request):
+            inner.publish(request)
+            raise RuntimeError("crash after exact publication acknowledgement")
+
+    service._publisher = CrashAfterPublishAcknowledgement()
+    with pytest.raises(
+        RuntimeError, match="crash after exact publication acknowledgement"
+    ):
+        service.tick(reconciliation_id)
+    published = json.loads((route_root / "activation.json").read_bytes())
+    assert published["state"] == "published"
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        publication = session.get(RoutePublication, reconciliation_id)
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "publication-pending"
+        assert publication is not None and publication.state == "publication-pending"
+
+    service._publisher = inner
+    authority["eligible"] = False
+    assert service.tick(reconciliation_id) is True
+
+    marker = json.loads((route_root / "activation.json").read_bytes())
+    assert marker["state"] == "maintenance"
+    assert marker["reconciliation_id"] == reconciliation_id
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        publication = session.get(RoutePublication, reconciliation_id)
+        job = session.scalar(
+            select(Job).where(Job.reconciliation_id == reconciliation_id)
+        )
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "waiting-for-operator"
+        assert publication is not None and publication.state == "routes-withdrawn"
+        assert job is not None and job.state == "waiting-for-operator"
+    assert acknowledged[-1].state == "maintenance"
+
+
+def test_postgres_publication_ack_crash_then_cancellation_withdraws_first(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    route_root = tmp_path / "publication-ack-crash-cancellation"
+    acknowledged = []
+    system = _system(
+        postgres_engine,
+        route_root,
+        await_supervisor_ack=acknowledged.append,
+    )
+    sessions, _presence, operations, service, reconciliation_id, _job_id = system
+    _sessions, operations, service, _reconciliation_id, _job_id, claim = _claimed(
+        system
+    )
+    operations.succeed(claim, _verify_result())
+    assert service.tick(reconciliation_id) is True
+    assert service.tick(reconciliation_id) is True
+
+    inner = service._publisher
+
+    class CrashAfterPublishAcknowledgement:
+        def withdraw(self, **kwargs):
+            return inner.withdraw(**kwargs)
+
+        def publish(self, request):
+            inner.publish(request)
+            raise RuntimeError("crash after exact publication acknowledgement")
+
+    service._publisher = CrashAfterPublishAcknowledgement()
+    with pytest.raises(
+        RuntimeError, match="crash after exact publication acknowledgement"
+    ):
+        service.tick(reconciliation_id)
+    assert json.loads((route_root / "activation.json").read_bytes())["state"] == (
+        "published"
+    )
+
+    service._publisher = inner
+    service.enqueue_cancel(
+        reconciliation_id,
+        "cancel acknowledged pending publication",
+        actor="administrator",
+        request_id=str(uuid.uuid4()),
+    )
+    assert service.tick(reconciliation_id) is True
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        cancellation = session.get(ReconciliationCancellation, reconciliation_id)
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "publication-pending"
+        assert cancellation is not None and cancellation.state == "withdrawal-pending"
+    assert json.loads((route_root / "activation.json").read_bytes())["state"] == (
+        "published"
+    )
+
+    assert service.tick(reconciliation_id) is True
+    marker = json.loads((route_root / "activation.json").read_bytes())
+    assert marker["state"] == "maintenance"
+    assert marker["reconciliation_id"] == reconciliation_id
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        cancellation = session.get(ReconciliationCancellation, reconciliation_id)
+        publication = session.get(RoutePublication, reconciliation_id)
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "publication-pending"
+        assert cancellation is not None and cancellation.state == "withdrawn"
+        assert publication is not None and publication.state == "routes-withdrawn"
+    assert acknowledged[-1].state == "maintenance"
+
+    assert service.tick(reconciliation_id) is True
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        cancellation = session.get(ReconciliationCancellation, reconciliation_id)
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "cancelled"
+        assert cancellation is not None and cancellation.state == "completed"
+    assert json.loads((route_root / "activation.json").read_bytes()) == marker
+
+
+def test_postgres_successor_withdrawal_crash_restarts_before_owner_transfer(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    route_root = tmp_path / "handoff-crash-before-owner-commit"
+    acknowledged = []
+    system = _system(
+        postgres_engine,
+        route_root,
+        await_supervisor_ack=acknowledged.append,
+    )
+    sessions, _presence, _operations, service, old_id, _job_id = system
+    assert _complete(system) == old_id
+    new_id, _new_job_id = _insert_successor(sessions, old_id)
+    with sessions() as session:
+        owner = session.get(RoutePublicationOwner, 1)
+        assert owner is not None
+        owner_generation = owner.owner_generation
+    assert service.tick(new_id) is True
+    inner = service._publisher
+
+    class CrashAfterAcknowledgement:
+        def withdraw(self, **kwargs):
+            marker = inner.withdraw(**kwargs)
+            if kwargs["reconciliation_id"] == new_id:
+                raise RuntimeError("crash after exact maintenance acknowledgement")
+            return marker
+
+        def publish(self, request):
+            return inner.publish(request)
+
+    service._publisher = CrashAfterAcknowledgement()
+    with pytest.raises(RuntimeError, match="after exact maintenance acknowledgement"):
+        service.tick(new_id)
+
+    maintenance = (route_root / "activation.json").read_bytes()
+    maintenance_marker = json.loads(maintenance)
+    assert maintenance_marker["state"] == "maintenance"
+    assert maintenance_marker["reconciliation_id"] == new_id
+    with sessions() as session:
+        owner = session.get(RoutePublicationOwner, 1)
+        successor = session.get(Reconciliation, new_id)
+        publication = session.get(RoutePublication, new_id)
+        assert owner is not None and owner.reconciliation_id == old_id
+        assert owner.owner_generation == owner_generation
+        assert successor is not None
+        assert successor.current_phase == "withdrawal-pending"
+        assert publication is not None and publication.state == "withdrawal-pending"
+
+    assert service.tick(old_id) is False
+    assert (route_root / "activation.json").read_bytes() == maintenance
+    service._publisher = inner
+    restarted = _clone_service(system)
+
+    assert restarted.tick(new_id) is True
+
+    assert (route_root / "activation.json").read_bytes() == maintenance
+    with sessions() as session:
+        owner = session.get(RoutePublicationOwner, 1)
+        successor = session.get(Reconciliation, new_id)
+        publication = session.get(RoutePublication, new_id)
+        assert owner is not None and owner.reconciliation_id == new_id
+        assert owner.owner_generation == owner_generation + 1
+        assert successor is not None and successor.current_phase == "routes-withdrawn"
+        assert publication is not None and publication.state == "routes-withdrawn"
+        assert publication.activation_marker == maintenance_marker
+    successor_acks = [
+        marker
+        for marker in acknowledged
+        if marker.reconciliation_id == new_id and marker.state == "maintenance"
+    ]
+    assert len(successor_acks) == 2
+    assert successor_acks[0] == successor_acks[1]
+
+
 def test_postgres_newer_maintenance_wins_completed_owner_critical_section(
     postgres_engine: Engine, tmp_path: Path
 ) -> None:
@@ -715,19 +1255,109 @@ def test_postgres_old_completed_cancellation_cannot_clobber_newer_owner(
         assert old is not None and old.current_phase == "cancelled"
 
 
+def test_postgres_predecessor_cancellation_rechecks_pending_successor_before_effect(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    route_root = tmp_path / "pending-owner-cancellation"
+    system = _system(postgres_engine, route_root)
+    sessions, _presence, _operations, service, old_id, _job_id = system
+    assert _complete(system) == old_id
+    service.enqueue_cancel(
+        old_id,
+        "operator cancelled predecessor",
+        actor="administrator",
+        request_id=str(uuid.uuid4()),
+    )
+    assert service.tick(old_id) is True
+    new_id, _new_job_id = _insert_successor(sessions, old_id)
+    assert service.tick(new_id) is True
+    published = (route_root / "activation.json").read_bytes()
+
+    assert service.tick(old_id) is False
+
+    assert (route_root / "activation.json").read_bytes() == published
+    with sessions() as session:
+        cancellation = session.get(ReconciliationCancellation, old_id)
+        owner = session.get(RoutePublicationOwner, 1)
+        assert cancellation is not None
+        assert cancellation.state == "withdrawal-pending"
+        assert owner is not None and owner.reconciliation_id == old_id
+
+    assert service.tick(new_id) is True
+    maintenance = (route_root / "activation.json").read_bytes()
+    for _ in range(3):
+        service.tick(old_id)
+    assert (route_root / "activation.json").read_bytes() == maintenance
+    with sessions() as session:
+        old = session.get(Reconciliation, old_id)
+        owner = session.get(RoutePublicationOwner, 1)
+        assert old is not None and old.current_phase == "cancelled"
+        assert owner is not None and owner.reconciliation_id == new_id
+
+
+def test_postgres_automatic_cancellation_waits_for_pending_successor_withdrawal(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    route_root = tmp_path / "automatic-pending-owner-cancellation"
+    acknowledged = []
+    system = _system(
+        postgres_engine,
+        route_root,
+        await_supervisor_ack=acknowledged.append,
+    )
+    sessions, _presence, _operations, service, old_id, _job_id = system
+    assert _complete(system) == old_id
+    new_id, _new_job_id = _insert_successor(sessions, old_id)
+    assert service.tick(new_id) is True
+    service.enqueue_cancel(
+        old_id,
+        "operator cancelled predecessor during successor handoff",
+        actor="administrator",
+        request_id=str(uuid.uuid4()),
+    )
+
+    assert service.tick() is True
+
+    marker = json.loads((route_root / "activation.json").read_bytes())
+    assert marker["state"] == "maintenance"
+    assert marker["reconciliation_id"] == new_id
+    with sessions() as session:
+        old = session.get(Reconciliation, old_id)
+        cancellation = session.get(ReconciliationCancellation, old_id)
+        owner = session.get(RoutePublicationOwner, 1)
+        successor = session.get(Reconciliation, new_id)
+        assert old is not None and old.current_phase == "completed"
+        assert cancellation is not None and cancellation.state == "requested"
+        assert owner is not None and owner.reconciliation_id == new_id
+        assert successor is not None and successor.current_phase == "routes-withdrawn"
+    assert acknowledged[-1].state == "maintenance"
+
+    outcomes = [service.tick() for _ in range(4)]
+    assert any(outcomes)
+    with sessions() as session:
+        old = session.get(Reconciliation, old_id)
+        cancellation = session.get(ReconciliationCancellation, old_id)
+        assert old is not None and old.current_phase == "cancelled"
+        assert cancellation is not None and cancellation.state == "completed"
+    assert json.loads((route_root / "activation.json").read_bytes()) == marker
+
+
 def _compensation_system(
     postgres_engine: Engine,
     route_root: Path,
     *,
     parallel: bool = False,
+    operation_nodes: tuple[str, ...] | None = None,
     clock=lambda: NOW,
 ):
     Base.metadata.drop_all(postgres_engine)
     Base.metadata.create_all(postgres_engine)
     sessions = sessionmaker(postgres_engine, expire_on_commit=False)
-    operation_ids = [f"model:{NODE_A}:workload.start"]
-    if parallel:
-        operation_ids.append(f"model:{NODE_B}:workload.start")
+    selected_nodes = operation_nodes or ((NODE_A, NODE_B) if parallel else (NODE_A,))
+    target_nodes = tuple(dict.fromkeys((NODE_A, NODE_B, *selected_nodes)))
+    operation_ids = [f"model:{node_id}:workload.start" for node_id in selected_nodes]
     payload = {
         "schema_version": 1,
         "workload_id": "model",
@@ -738,7 +1368,7 @@ def _compensation_system(
     graph = {
         "schema_version": 1,
         "base_commit": BASE_COMMIT,
-        "targets": [NODE_A, NODE_B],
+        "targets": list(target_nodes),
         "nodes": [
             {
                 "operation_id": operation_id,
@@ -749,16 +1379,12 @@ def _compensation_system(
                 "compensation_kind": "workload.stop",
                 "payload_digest": _digest(payload),
             }
-            for operation_id, node_id in zip(
-                operation_ids,
-                (NODE_A, NODE_B),
-                strict=False,
-            )
+            for operation_id, node_id in zip(operation_ids, selected_nodes, strict=True)
         ],
     }
     resolved = {
         "commit": BASE_COMMIT,
-        "targets": [NODE_A, NODE_B],
+        "targets": list(target_nodes),
         "placements": {},
         "routes": {},
         "releases": {},
@@ -775,29 +1401,19 @@ def _compensation_system(
     primary_ids = [str(uuid.uuid4()) for _ in operation_ids]
     with sessions.begin() as session:
         session.add_all(
-            [
-                AgentNode(node_id=NODE_A, state="active", capabilities=[]),
-                AgentNode(node_id=NODE_B, state="active", capabilities=[]),
-            ]
+            AgentNode(node_id=node_id, state="active", capabilities=[])
+            for node_id in target_nodes
         )
         session.flush()
         session.add_all(
-            [
-                AgentCertificate(
-                    serial="serial-a",
-                    node_id=NODE_A,
-                    not_before=NOW - timedelta(minutes=1),
-                    not_after=NOW + timedelta(hours=1),
-                    fingerprint="fingerprint-a",
-                ),
-                AgentCertificate(
-                    serial="serial-b",
-                    node_id=NODE_B,
-                    not_before=NOW - timedelta(minutes=1),
-                    not_after=NOW + timedelta(hours=1),
-                    fingerprint="fingerprint-b",
-                ),
-            ]
+            AgentCertificate(
+                serial=f"serial-{node_id[-1]}",
+                node_id=node_id,
+                not_before=NOW - timedelta(minutes=1),
+                not_after=NOW + timedelta(hours=1),
+                fingerprint=f"fingerprint-{node_id[-1]}",
+            )
+            for node_id in target_nodes
         )
         session.add(
             Reconciliation(
@@ -824,7 +1440,7 @@ def _compensation_system(
                 state="running",
                 actor="operator",
                 base_commit=BASE_COMMIT,
-                targets=[NODE_A, NODE_B],
+                targets=list(target_nodes),
                 payload_digest=_digest({}),
                 payload={},
                 current_attempt=0,
@@ -850,9 +1466,7 @@ def _compensation_system(
                     updated_at=NOW,
                 )
                 for primary_id, node_id in zip(
-                    primary_ids,
-                    (NODE_A, NODE_B),
-                    strict=False,
+                    primary_ids, selected_nodes, strict=True
                 )
             ]
         )
@@ -862,6 +1476,14 @@ def _compensation_system(
                 state="routes-withdrawn",
                 generation=1,
                 plan_digest=_json_digest(resolved),
+            )
+        )
+        session.add(
+            RoutePublicationOwner(
+                singleton_id=1,
+                reconciliation_id=reconciliation_id,
+                owner_generation=1,
+                updated_at=NOW,
             )
         )
         session.flush()
@@ -900,6 +1522,60 @@ def _compensation_system(
         clock=clock,
     )
     return sessions, queue, service, reconciliation_id
+
+
+def test_postgres_historical_mutation_cancellation_does_not_compensate_new_owner(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    route_root = tmp_path / "historical-mutation-cancellation"
+    sessions, _queue, service, old_id = _compensation_system(
+        postgres_engine,
+        route_root,
+    )
+    with sessions.begin() as session:
+        old = session.get(Reconciliation, old_id)
+        job = session.scalar(select(Job).where(Job.reconciliation_id == old_id))
+        publication = session.get(RoutePublication, old_id)
+        assert old is not None and job is not None and publication is not None
+        old.current_phase = "completed"
+        old.status = "succeeded"
+        old.completion_generation = 1
+        old.terminal_reason = None
+        job.state = "succeeded"
+        job.status_reason = None
+        publication.state = "completed"
+        publication.generation = None
+        publication.lease_issued_at = NOW
+        publication.lease_expires_at = NOW + timedelta(minutes=5)
+    new_id, _new_job_id = _insert_successor(sessions, old_id)
+    assert service.tick(new_id) is True
+    assert service.tick(new_id) is True
+    maintenance = (route_root / "activation.json").read_bytes()
+    service.enqueue_cancel(
+        old_id,
+        "cancel historical mutation after successor owns maintenance",
+        actor="administrator",
+        request_id=str(uuid.uuid4()),
+    )
+
+    outcomes = [service.tick() for _ in range(5)]
+
+    assert any(outcomes)
+    with sessions() as session:
+        old = session.get(Reconciliation, old_id)
+        cancellation = session.get(ReconciliationCancellation, old_id)
+        owner = session.get(RoutePublicationOwner, 1)
+        stops = list(
+            session.scalars(
+                select(AgentOperation).where(AgentOperation.kind == "workload.stop")
+            )
+        )
+        assert old is not None and old.current_phase == "cancelled"
+        assert cancellation is not None and cancellation.state == "completed"
+        assert owner is not None and owner.reconciliation_id == new_id
+        assert stops == []
+    assert (route_root / "activation.json").read_bytes() == maintenance
 
 
 def test_postgres_compensation_tick_race_enqueues_one_stop(
@@ -1111,6 +1787,372 @@ def test_postgres_maintenance_sweeps_unsafe_expiry_without_follow_up_claim(
     assert queue.claim(NODE_B, "serial-b", 30) is None
 
 
+def test_postgres_claim_expiry_quiesces_queued_and_running_siblings_and_rejects_callbacks(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    current = [NOW]
+    sessions, queue, _service, reconciliation_id = _compensation_system(
+        postgres_engine,
+        tmp_path / "claim-expiry-whole-reconciliation",
+        operation_nodes=(NODE_A, NODE_B, NODE_C),
+        clock=lambda: current[0],
+    )
+    with sessions.begin() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.scalar(
+            select(Job).where(Job.reconciliation_id == reconciliation_id)
+        )
+        assert reconciliation is not None and job is not None
+        reconciliation.current_phase = "dispatching"
+        reconciliation.status = "running"
+        reconciliation.terminal_reason = None
+        job.state = "running"
+        for projection in session.scalars(
+            select(ReconciliationOperation).where(
+                ReconciliationOperation.role == "primary"
+            )
+        ):
+            operation = session.get(AgentOperation, projection.agent_operation_id)
+            assert operation is not None
+            projection.state = "queued"
+            projection.result_digest = None
+            projection.evidence_digest = None
+            projection.accepted_at = None
+            operation.state = "queued"
+            operation.current_attempt = 0
+
+    expired = queue.claim(NODE_A, "serial-a", 10)
+    running = queue.claim(NODE_B, "serial-b", 60)
+    assert expired is not None and running is not None
+    current[0] += timedelta(seconds=11)
+
+    assert queue.claim(NODE_A, "serial-a", 30) is None
+
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.scalar(
+            select(Job).where(Job.reconciliation_id == reconciliation_id)
+        )
+        operations = {
+            operation.node_id: operation
+            for operation in session.scalars(
+                select(AgentOperation).order_by(AgentOperation.node_id)
+            )
+        }
+        projections = {
+            projection.graph_operation_id: projection
+            for projection in session.scalars(
+                select(ReconciliationOperation).where(
+                    ReconciliationOperation.role == "primary"
+                )
+            )
+        }
+        attempts = {
+            attempt.operation_id: attempt
+            for attempt in session.scalars(select(AgentOperationAttempt))
+        }
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "waiting-for-operator"
+        assert job is not None and job.state == "waiting-for-operator"
+        assert operations[NODE_A].state == "waiting-for-operator"
+        assert attempts[expired.operation_id].state == "expired"
+        assert projections[f"model:{NODE_A}:workload.start"].state == (
+            "waiting-for-operator"
+        )
+        assert operations[NODE_B].state == "waiting-for-operator"
+        assert attempts[running.operation_id].state == "waiting-for-operator"
+        assert projections[f"model:{NODE_B}:workload.start"].state == (
+            "waiting-for-operator"
+        )
+        assert operations[NODE_C].state == "failed"
+        assert projections[f"model:{NODE_C}:workload.start"].state == "failed"
+
+    with pytest.raises(StaleAgentAttempt):
+        queue.heartbeat(running, {"phase": "must-not-persist"}, 60)
+    with pytest.raises(StaleAgentAttempt):
+        queue.succeed(running, {"status": "must-not-persist"})
+    assert queue.claim(NODE_C, "serial-c", 30) is None
+
+    with sessions() as session:
+        attempt = session.scalar(
+            select(AgentOperationAttempt).where(
+                AgentOperationAttempt.operation_id == running.operation_id
+            )
+        )
+        assert attempt is not None
+        assert attempt.progress is None
+        assert attempt.result is None
+
+
+def test_postgres_active_callbacks_reject_authoritative_operator_wait_without_mutation(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    sessions, queue, _service, reconciliation_id = _compensation_system(
+        postgres_engine,
+        tmp_path / "active-callback-authority",
+    )
+    with sessions.begin() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.scalar(
+            select(Job).where(Job.reconciliation_id == reconciliation_id)
+        )
+        projection = session.scalar(
+            select(ReconciliationOperation).where(
+                ReconciliationOperation.role == "primary"
+            )
+        )
+        assert reconciliation is not None and job is not None
+        assert projection is not None
+        operation = session.get(AgentOperation, projection.agent_operation_id)
+        assert operation is not None
+        reconciliation.current_phase = "dispatching"
+        reconciliation.status = "running"
+        reconciliation.terminal_reason = None
+        job.state = "running"
+        projection.state = "queued"
+        projection.result_digest = None
+        projection.evidence_digest = None
+        projection.accepted_at = None
+        operation.state = "queued"
+        operation.current_attempt = 0
+
+    claim = queue.claim(NODE_A, "serial-a", 60)
+    assert claim is not None
+    with sessions.begin() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.scalar(
+            select(Job).where(Job.reconciliation_id == reconciliation_id)
+        )
+        assert reconciliation is not None and job is not None
+        reconciliation.current_phase = "waiting-for-operator"
+        reconciliation.status = "failed"
+        reconciliation.terminal_reason = "authoritative operator wait"
+        job.state = "waiting-for-operator"
+        job.status_reason = "authoritative operator wait"
+
+    with pytest.raises(StaleAgentAttempt):
+        queue.heartbeat(claim, {"phase": "must-not-persist"}, 60)
+    with pytest.raises(StaleAgentAttempt):
+        queue.succeed(claim, {"status": "must-not-persist"})
+
+    with sessions() as session:
+        operation = session.get(AgentOperation, claim.operation_id)
+        attempt = session.scalar(
+            select(AgentOperationAttempt).where(
+                AgentOperationAttempt.operation_id == claim.operation_id
+            )
+        )
+        projection = session.scalar(
+            select(ReconciliationOperation).where(
+                ReconciliationOperation.agent_operation_id == claim.operation_id
+            )
+        )
+        assert operation is not None and operation.state == "running"
+        assert attempt is not None and attempt.state == "running"
+        assert attempt.progress is None
+        assert attempt.result is None
+        assert projection is not None and projection.state == "queued"
+
+
+def test_postgres_automatic_ticks_do_not_starve_older_requested_cancellation(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    system = _system(postgres_engine, tmp_path / "automatic-cancellation-fairness")
+    sessions, _presence, _queue, service, old_id, _old_job_id = system
+    assert _complete(system) == old_id
+    completed_id, _completed_job_id = _insert_successor(sessions, old_id)
+    _mark_completed(sessions, completed_id, owner=True)
+    cancellation = service.enqueue_cancel(
+        old_id,
+        "operator cancelled older reconciliation",
+        actor="administrator",
+        request_id=str(uuid.uuid4()),
+    )
+    assert cancellation.state == "requested"
+
+    outcomes = [service.tick() for _ in range(6)]
+
+    assert any(outcomes)
+    with sessions() as session:
+        old = session.get(Reconciliation, old_id)
+        completed = session.get(Reconciliation, completed_id)
+        stored_cancellation = session.get(ReconciliationCancellation, old_id)
+        assert old is not None and old.current_phase == "cancelled"
+        assert completed is not None and completed.current_phase == "completed"
+        assert stored_cancellation is not None
+        assert stored_cancellation.state == "completed"
+
+
+def test_postgres_automatic_ticks_do_not_starve_older_planned_execution(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    system = _system(postgres_engine, tmp_path / "automatic-execution-fairness")
+    sessions, _presence, _queue, service, execution_id, _job_id = system
+    completed_id, _completed_job_id = _insert_successor(sessions, execution_id)
+    _mark_completed(sessions, completed_id, owner=False)
+    _set_publication_owner(sessions, execution_id)
+
+    outcomes = [service.tick() for _ in range(6)]
+
+    assert any(outcomes)
+    with sessions() as session:
+        execution = session.get(Reconciliation, execution_id)
+        completed = session.get(Reconciliation, completed_id)
+        assert execution is not None
+        assert execution.current_phase == "dispatching"
+        assert completed is not None and completed.current_phase == "completed"
+
+
+def test_postgres_automatic_ticks_skip_stale_planned_before_later_execution(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    system = _system(postgres_engine, tmp_path / "automatic-stale-planned-scan")
+    sessions, _presence, _queue, service, stale_id, _job_id = system
+    completed_id, _completed_job_id = _insert_successor(sessions, stale_id)
+    _mark_completed(sessions, completed_id, owner=True)
+    later_id, _later_job_id = _insert_successor(
+        sessions,
+        stale_id,
+        created_at=NOW + timedelta(seconds=2),
+        fleet_digest="8" * 64,
+    )
+
+    outcomes = [service.tick() for _ in range(4)]
+
+    assert any(outcomes)
+    with sessions() as session:
+        stale = session.get(Reconciliation, stale_id)
+        completed = session.get(Reconciliation, completed_id)
+        later = session.get(Reconciliation, later_id)
+        assert stale is not None and stale.current_phase == "planned"
+        assert completed is not None and completed.current_phase == "completed"
+        assert later is not None and later.current_phase != "planned"
+
+
+def test_postgres_automatic_ticks_scan_past_running_dispatch_for_cancellation(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    system = _system(postgres_engine, tmp_path / "automatic-dispatch-cancel-scan")
+    sessions, _operations, service, old_id, _job_id, claim = _claimed(system)
+    cancellation_id, _cancellation_job_id = _insert_successor(sessions, old_id)
+    service.enqueue_cancel(
+        cancellation_id,
+        "cancel later reconciliation while predecessor waits for an agent",
+        actor="administrator",
+        request_id=str(uuid.uuid4()),
+    )
+
+    assert service.tick() is True
+
+    with sessions() as session:
+        attempt = session.scalar(
+            select(AgentOperationAttempt).where(
+                AgentOperationAttempt.operation_id == claim.operation_id
+            )
+        )
+        cancellation = session.get(ReconciliationCancellation, cancellation_id)
+        assert attempt is not None and attempt.state == "running"
+        assert cancellation is not None and cancellation.state == "processing"
+
+
+def test_postgres_automatic_tick_does_not_preempt_running_owner_with_later_plan(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    system = _system(postgres_engine, tmp_path / "automatic-running-owner-serialization")
+    sessions, operations, service, old_id, _job_id, claim = _claimed(system)
+    later_id, _later_job_id = _insert_successor(sessions, old_id)
+
+    assert service.tick() is False
+    assert service.tick(later_id) is False
+    progress = operations.heartbeat(claim, {"phase": "still-authoritative"}, 60)
+    assert progress.progress == {"phase": "still-authoritative"}
+
+    with sessions() as session:
+        owner = session.get(RoutePublicationOwner, 1)
+        old = session.get(Reconciliation, old_id)
+        later = session.get(Reconciliation, later_id)
+        attempt = session.scalar(
+            select(AgentOperationAttempt).where(
+                AgentOperationAttempt.operation_id == claim.operation_id
+            )
+        )
+        assert owner is not None and owner.reconciliation_id == old_id
+        assert old is not None and old.current_phase == "dispatching"
+        assert later is not None and later.current_phase == "planned"
+        assert attempt is not None and attempt.state == "running"
+
+
+def test_postgres_automatic_ticks_do_not_starve_older_unsafe_expiry(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    current = [NOW]
+    sessions, queue, service, expiry_id = _compensation_system(
+        postgres_engine,
+        tmp_path / "automatic-expiry-fairness",
+        clock=lambda: current[0],
+    )
+    with sessions.begin() as session:
+        reconciliation = session.get(Reconciliation, expiry_id)
+        job = session.scalar(select(Job).where(Job.reconciliation_id == expiry_id))
+        projection = session.scalar(
+            select(ReconciliationOperation).where(
+                ReconciliationOperation.role == "primary"
+            )
+        )
+        assert reconciliation is not None and job is not None
+        assert projection is not None
+        operation = session.get(AgentOperation, projection.agent_operation_id)
+        assert operation is not None
+        reconciliation.current_phase = "dispatching"
+        reconciliation.status = "running"
+        reconciliation.terminal_reason = None
+        job.state = "running"
+        projection.state = "queued"
+        projection.result_digest = None
+        projection.evidence_digest = None
+        projection.accepted_at = None
+        operation.state = "queued"
+        operation.current_attempt = 0
+    claim = queue.claim(NODE_A, "serial-a", 10)
+    assert claim is not None
+    stale_id, _stale_job_id = _insert_successor(
+        sessions,
+        expiry_id,
+        created_at=NOW - timedelta(seconds=1),
+        fleet_digest="8" * 64,
+    )
+    completed_id, _completed_job_id = _insert_successor(sessions, expiry_id)
+    _mark_completed(sessions, completed_id, owner=False)
+    _set_publication_owner(sessions, expiry_id)
+    current[0] += timedelta(seconds=11)
+
+    outcomes = [service.tick() for _ in range(6)]
+
+    assert any(outcomes)
+    with sessions() as session:
+        expiry = session.get(Reconciliation, expiry_id)
+        stale = session.get(Reconciliation, stale_id)
+        completed = session.get(Reconciliation, completed_id)
+        attempt = session.scalar(
+            select(AgentOperationAttempt).where(
+                AgentOperationAttempt.operation_id == claim.operation_id
+            )
+        )
+        assert expiry is not None
+        assert expiry.current_phase == "waiting-for-operator"
+        assert stale is not None and stale.current_phase == "planned"
+        assert completed is not None and completed.current_phase == "completed"
+        assert attempt is not None and attempt.state == "expired"
+
+
 @pytest.mark.parametrize(
     ("role", "operation_state"),
     [
@@ -1232,8 +2274,8 @@ def test_postgres_stale_completed_candidate_cannot_withdraw_refreshed_lease(
     ) -> None:
         if (
             threading.current_thread().name == "stale-candidate"
-            and "FROM reconciliations JOIN jobs" in statement
-            and "ORDER BY reconciliations.created_at DESC" in statement
+            and "FROM reconciliations" in statement
+            and "reconciliations.current_phase" in statement
             and "FOR UPDATE" not in statement
         ):
             candidate_selected.set()

@@ -1577,7 +1577,7 @@ def test_terminal_phase_rejects_late_primary_result_atomically(tmp_path) -> None
         stored.status = "failed"
         job.state = "failed"
 
-    with pytest.raises(ValueError, match="phase"):
+    with pytest.raises(StaleAgentAttempt):
         queue.succeed(claim, _health_result())
 
     with sessions() as session:
