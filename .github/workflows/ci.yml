@@ -62,6 +62,8 @@ jobs:
           enable-cache: true
       - name: Install pinned TypeScript generator
         run: npm ci --prefix tools/openapi-client
+      - name: Install locked admin web dependencies
+        run: npm ci --prefix control/web
       - name: Install standalone Docker Compose
         if: runner.os == 'macOS'
         uses: docker/setup-compose-action@4eb059ff7f16592f9c84d5ca339c53cb7c5064e2 # v2.3.0

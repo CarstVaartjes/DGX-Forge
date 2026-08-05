@@ -22,6 +22,7 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT / "control/src")]
 from dgx_control.agent_jobs import AgentJobService
 from dgx_control.agent_reconciliation import AgentReconciliationService
 from dgx_control.auth import AgentIdentity, AgentSource
+from dgx_control.dashboard import DashboardService
 from dgx_control.desired_state import (
     DesiredStateObservation,
     DesiredStateResolver,
@@ -31,6 +32,7 @@ from dgx_control.git_policy import Eligibility
 from dgx_control.jobs import JobService
 from dgx_control.models import AgentCertificate, AgentNode, Base
 from dgx_control.orchestration import ReconciliationOrchestrator
+from dgx_control.operation_api import fleet_response
 from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
 from dgx_control.reconcile import Reconciler
 from dgx_control.repository import RepositoryService
@@ -315,6 +317,11 @@ def run(host: str, display_name: str) -> dict[str, object]:
         )
         jobs = JobService(sessions, clock=lambda: now)
         orchestrator = ReconciliationOrchestrator(sessions, clock=lambda: now)
+        dashboard = DashboardService(repository, sessions, clock=lambda: now)
+
+        def current_fleet_evidence() -> str:
+            return fleet_response(dashboard.fleet()).evidence_digest
+
         reconciler = Reconciler(
             Policy(),
             DesiredStateResolver(repository, clock=lambda: now),
@@ -322,8 +329,24 @@ def run(host: str, display_name: str) -> dict[str, object]:
             observations=lambda: (observation,),
             orchestrator=orchestrator,
         )
-        plan = reconciler.plan(commit, "inference")
-        queued = reconciler.enqueue(plan.digest, "administrator", "lifecycle-reconcile")
+        initial_fleet_evidence = current_fleet_evidence()
+        plan = reconciler.plan(
+            commit,
+            "inference",
+            fleet_evidence_digest=initial_fleet_evidence,
+        )
+        queued = reconciler.enqueue(
+            plan.digest,
+            "administrator",
+            "lifecycle-reconcile",
+            fleet_evidence_digest=initial_fleet_evidence,
+            current_fleet_evidence=current_fleet_evidence,
+        )
+        assert plan.fleet_evidence_digest == initial_fleet_evidence
+        assert (
+            jobs.get(str(queued["job_id"])).payload["fleet_evidence_digest"]
+            == initial_fleet_evidence
+        )
         assert plan.operation_graph is not None
         management_policy = ManagementAddressPolicy.parse("192.0.2.0/24")
         presence = AgentPresenceService(
@@ -459,13 +482,25 @@ def run(host: str, display_name: str) -> dict[str, object]:
             observations=lambda: durable,
             orchestrator=orchestrator,
         )
+        replacement_fleet_evidence = current_fleet_evidence()
         replacement_plan = replacement_reconciler.plan(
-            replacement_commit, "inference"
+            replacement_commit,
+            "inference",
+            fleet_evidence_digest=replacement_fleet_evidence,
         )
         replacement_job = replacement_reconciler.enqueue(
             replacement_plan.digest,
             "administrator",
             "lifecycle-reconcile-replacement",
+            fleet_evidence_digest=replacement_fleet_evidence,
+            current_fleet_evidence=current_fleet_evidence,
+        )
+        assert replacement_plan.fleet_evidence_digest == replacement_fleet_evidence
+        assert (
+            jobs.get(str(replacement_job["job_id"])).payload[
+                "fleet_evidence_digest"
+            ]
+            == replacement_fleet_evidence
         )
         assert replacement_plan.operation_graph is not None
         current_commit[0] = replacement_commit
@@ -518,6 +553,10 @@ def run(host: str, display_name: str) -> dict[str, object]:
             "planner": "DesiredStateResolver",
             "persisted_operation_count": len(plan.operation_graph.nodes) + len(replacement_plan.operation_graph.nodes),
             "claimed_operation_count": claimed,
+            "fleet_evidence_digests": [
+                initial_fleet_evidence,
+                replacement_fleet_evidence,
+            ],
             "release_transition": {"from": "a" * 64, "to": "7" * 64},
             "durable_observation": {
                 "current_workload": current.workload_id,

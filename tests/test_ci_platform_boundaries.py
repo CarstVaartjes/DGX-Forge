@@ -30,20 +30,31 @@ def _named_workflow_steps(job_name: str) -> list[dict[str, str]]:
     return steps
 
 
-def test_full_matrix_installs_pinned_typescript_generator_before_pytest() -> None:
+def test_full_matrix_installs_locked_javascript_workspaces_before_pytest() -> None:
     steps = _named_workflow_steps("test")
-    install_step = {
+    generator_step = {
         "name": "Install pinned TypeScript generator",
         "run": "npm ci --prefix tools/openapi-client",
+    }
+    web_step = {
+        "name": "Install locked admin web dependencies",
+        "run": "npm ci --prefix control/web",
     }
     test_step = {
         "name": "Run Python and Bash tests",
         "run": "uv run --python 3.12 --frozen --with pytest==9.1.1 pytest",
     }
 
-    assert install_step in steps
+    assert generator_step in steps
+    assert web_step in steps
     assert test_step in steps
-    assert steps.index(install_step) < steps.index(test_step)
+    assert steps.index(generator_step) < steps.index(test_step)
+    assert steps.index(web_step) < steps.index(test_step)
+
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    test_job = workflow.split("  test:\n", 1)[1]
+    assert "          - ubuntu-latest\n" in test_job
+    assert "          - macos-latest\n" in test_job
 
 
 def test_agent_simulator_preserves_exact_non_linux_boundaries() -> None:
