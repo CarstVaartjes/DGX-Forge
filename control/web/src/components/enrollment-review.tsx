@@ -2,6 +2,7 @@ import {useId, useState} from "react";
 import type {EnrollmentSummary} from "../api/types";
 
 type EnrollmentReviewProps = {
+  actionsDisabled?: boolean;
   enrollment: EnrollmentSummary;
   onApprove(enrollmentId: string): Promise<void>;
   onReject(enrollmentId: string, reason: string): Promise<void>;
@@ -11,7 +12,7 @@ function EvidenceItem({label, value}: {label: string; value: string | null | und
   return <div><dt>{label}</dt><dd><code>{value ?? "—"}</code></dd></div>;
 }
 
-export function EnrollmentReview({enrollment, onApprove, onReject}: EnrollmentReviewProps) {
+export function EnrollmentReview({actionsDisabled = false, enrollment, onApprove, onReject}: EnrollmentReviewProps) {
   const headingId = useId();
   const [evidenceConfirmed, setEvidenceConfirmed] = useState(false);
   const [rejectionConfirmation, setRejectionConfirmation] = useState("");
@@ -56,13 +57,14 @@ export function EnrollmentReview({enrollment, onApprove, onReject}: EnrollmentRe
           <input
             type="checkbox"
             checked={evidenceConfirmed}
+            disabled={actionsDisabled}
             onChange={event => setEvidenceConfirmed(event.target.checked)}
           />
           I compared all fingerprints and the agent digest with trusted evidence
         </label>
         <button
           type="button"
-          disabled={!evidenceConfirmed || busy}
+          disabled={actionsDisabled || !evidenceConfirmed || busy}
           onClick={() => void run(() => onApprove(enrollment.id))}
         >Approve enrollment</button>
       </div>
@@ -70,11 +72,16 @@ export function EnrollmentReview({enrollment, onApprove, onReject}: EnrollmentRe
         <h4>Reject</h4>
         <p role="alert">Rejection is an irreversible administrative decision and cannot be undone.</p>
         <label>Rejection reason
-          <input value={rejectionReason} onChange={event => setRejectionReason(event.target.value)}/>
+          <input
+            disabled={actionsDisabled}
+            value={rejectionReason}
+            onChange={event => setRejectionReason(event.target.value)}
+          />
         </label>
         <label>Type {enrollment.node_id} to confirm rejection
           <input
             autoComplete="off"
+            disabled={actionsDisabled}
             value={rejectionConfirmation}
             onChange={event => setRejectionConfirmation(event.target.value)}
           />
@@ -82,7 +89,7 @@ export function EnrollmentReview({enrollment, onApprove, onReject}: EnrollmentRe
         <button
           className="danger"
           type="button"
-          disabled={rejectionConfirmation !== enrollment.node_id || !rejectionReason.trim() || busy}
+          disabled={actionsDisabled || rejectionConfirmation !== enrollment.node_id || !rejectionReason.trim() || busy}
           onClick={() => void run(() => onReject(enrollment.id, rejectionReason.trim()))}
         >Reject enrollment</button>
       </div>

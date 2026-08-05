@@ -94,15 +94,27 @@ function installApiFake(options: {
   enrollments?: Enrollment[];
   fleet?: Fleet;
   grantResponse?: Promise<Response>;
+  refreshError?: Error;
+  refreshGate?: Promise<void>;
 } = {}) {
   const requests: CapturedRequest[] = [];
   const decisions = new Map<string, "approved" | "rejected">();
+  const getCounts = new Map<string, number>();
 
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
     const request = input instanceof Request ? input : new Request(input, init);
     const url = new URL(request.url);
     const body = request.body ? await request.clone().json() : undefined;
     requests.push({body, method: request.method, path: url.pathname, signal: request.signal});
+
+    if (request.method === "GET") {
+      const previousCount = getCounts.get(url.pathname) ?? 0;
+      getCounts.set(url.pathname, previousCount + 1);
+      if (previousCount > 0) {
+        await options.refreshGate;
+        if (options.refreshError) throw options.refreshError;
+      }
+    }
 
     if (request.method === "GET" && url.pathname === "/api/v1/agents") {
       return jsonResponse({agents: options.agents ?? [agent]});
@@ -363,6 +375,44 @@ it("renders oversized agent and capability collections in reachable bounded chun
   expect(screen.getAllByRole("region", {name: /Certificate controls for/})).toHaveLength(5);
 });
 
+it("bounds every generated string displayed in an agent summary row", async () => {
+  // Break caught: a malicious summary response could mount multi-kilobyte state and timestamp strings.
+  const oversizedState = `state-${"s".repeat(10_000)}`;
+  const oversizedLastSeen = `last-seen-${"l".repeat(10_000)}`;
+  const oversizedExpiry = `expiry-${"e".repeat(10_000)}`;
+  const oversizedCompatibility = `compatibility-${"c".repeat(10_000)}`;
+  installApiFake({
+    agents: [{
+      ...agent,
+      certificate_expires_at: oversizedExpiry,
+      last_seen_at: oversizedLastSeen,
+      state: oversizedState,
+    }],
+    fleet: {
+      ...fleet,
+      nodes: [{...fleet.nodes[0], compatibility: oversizedCompatibility}],
+    },
+  });
+  render(<AgentsPage api={new ApiClient()}/>);
+
+  const table = await screen.findByRole("table", {name: "Enrolled agents"});
+  const row = within(table).getByRole("row", {name: new RegExp(nodeId)});
+  const cells = within(row).getAllByRole("cell");
+
+  expect(cells[0]).toHaveTextContent("state-");
+  expect(cells[1]).toHaveTextContent("last-seen-");
+  expect(cells[2]).toHaveTextContent("expiry-");
+  expect(cells[3]).toHaveTextContent("compatibility-");
+  for (const cell of cells.slice(0, 4)) {
+    expect(cell).toHaveTextContent("…");
+    expect(cell.textContent!.length).toBeLessThan(128);
+  }
+  expect(screen.queryByText(oversizedState)).not.toBeInTheDocument();
+  expect(screen.queryByText(oversizedLastSeen)).not.toBeInTheDocument();
+  expect(screen.queryByText(oversizedExpiry)).not.toBeInTheDocument();
+  expect(screen.queryByText(oversizedCompatibility)).not.toBeInTheDocument();
+});
+
 it("requires keyboard-operable evidence confirmation before approval", async () => {
   // Break caught: an enabled approval action could authorize an agent before evidence is compared.
   const requests = installApiFake();
@@ -418,6 +468,68 @@ it("clears destructive confirmations when refreshed evidence or certificate stat
   expect(within(refreshedCertificate).getByLabelText(
     `Type ${nodeId} to confirm certificate revocation`,
   )).toHaveValue("");
+});
+
+it("invalidates and disables confirmations while refresh is pending", async () => {
+  // Break caught: a slow reload could leave confirmations actionable against the pre-refresh snapshot.
+  const refresh = deferred<void>();
+  installApiFake({refreshGate: refresh.promise});
+  render(<AgentsPage api={new ApiClient()}/>);
+  const user = userEvent.setup();
+
+  const review = await screen.findByRole("region", {name: `Enrollment evidence for ${nodeId}`});
+  await user.click(within(review).getByRole("checkbox", {name: /compared all fingerprints/i}));
+  await user.type(within(review).getByLabelText("Rejection reason"), "Stale reason");
+  await user.type(within(review).getByLabelText(`Type ${nodeId} to confirm rejection`), nodeId);
+  const certificate = screen.getByRole("region", {name: `Certificate controls for ${nodeId}`});
+  await user.type(within(certificate).getByLabelText(
+    `Type ${nodeId} to confirm certificate revocation`,
+  ), nodeId);
+
+  await user.click(screen.getByRole("button", {name: "Refresh agent data"}));
+
+  expect(screen.getByText("Loading agent data…")).toBeVisible();
+  const pendingReview = screen.getByRole("region", {name: `Enrollment evidence for ${nodeId}`});
+  expect(within(pendingReview).getByRole("checkbox", {name: /compared all fingerprints/i})).not.toBeChecked();
+  expect(within(pendingReview).getByRole("checkbox", {name: /compared all fingerprints/i})).toBeDisabled();
+  expect(within(pendingReview).getByLabelText("Rejection reason")).toHaveValue("");
+  expect(within(pendingReview).getByRole("button", {name: "Reject enrollment"})).toBeDisabled();
+  const pendingCertificate = screen.getByRole("region", {name: `Certificate controls for ${nodeId}`});
+  expect(within(pendingCertificate).getByLabelText(
+    `Type ${nodeId} to confirm certificate revocation`,
+  )).toHaveValue("");
+  expect(within(pendingCertificate).getByRole("button", {name: "Revoke node certificate"})).toBeDisabled();
+});
+
+it("does not restore confirmations after a failed refresh", async () => {
+  // Break caught: a failed reload could permanently retain actionable pre-refresh confirmations.
+  installApiFake({refreshError: new Error("Refresh unavailable")});
+  render(<AgentsPage api={new ApiClient()}/>);
+  const user = userEvent.setup();
+
+  const review = await screen.findByRole("region", {name: `Enrollment evidence for ${nodeId}`});
+  await user.click(within(review).getByRole("checkbox", {name: /compared all fingerprints/i}));
+  await user.type(within(review).getByLabelText("Rejection reason"), "Stale reason");
+  await user.type(within(review).getByLabelText(`Type ${nodeId} to confirm rejection`), nodeId);
+  const certificate = screen.getByRole("region", {name: `Certificate controls for ${nodeId}`});
+  await user.type(within(certificate).getByLabelText(
+    `Type ${nodeId} to confirm certificate revocation`,
+  ), nodeId);
+
+  await user.click(screen.getByRole("button", {name: "Refresh agent data"}));
+
+  expect(await screen.findByText("Refresh unavailable")).toBeVisible();
+  const failedReview = screen.getByRole("region", {name: `Enrollment evidence for ${nodeId}`});
+  expect(within(failedReview).getByRole("checkbox", {name: /compared all fingerprints/i})).not.toBeChecked();
+  expect(within(failedReview).getByLabelText("Rejection reason")).toHaveValue("");
+  expect(within(failedReview).getByLabelText(`Type ${nodeId} to confirm rejection`)).toHaveValue("");
+  expect(within(failedReview).getByRole("button", {name: "Approve enrollment"})).toBeDisabled();
+  expect(within(failedReview).getByRole("button", {name: "Reject enrollment"})).toBeDisabled();
+  const failedCertificate = screen.getByRole("region", {name: `Certificate controls for ${nodeId}`});
+  expect(within(failedCertificate).getByLabelText(
+    `Type ${nodeId} to confirm certificate revocation`,
+  )).toHaveValue("");
+  expect(within(failedCertificate).getByRole("button", {name: "Revoke node certificate"})).toBeDisabled();
 });
 
 it("requires exact typed administrator confirmation for rejection and certificate revocation", async () => {

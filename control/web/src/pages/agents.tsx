@@ -18,18 +18,28 @@ function sameOriginPath(configured: string | undefined, fallback: string): strin
   }
 }
 
-function valueOrDash(value: string | number | null | undefined): string {
-  return value === null || value === undefined || value === "" ? "—" : String(value);
-}
-
 const AGENT_PAGE_SIZE = 20;
 const CAPABILITY_PAGE_SIZE = 3;
+const MAX_COMPATIBILITY_LENGTH = 64;
 const MAX_CAPABILITY_LENGTH = 80;
+const MAX_MESSAGE_LENGTH = 512;
+const MAX_NODE_ID_LENGTH = 36;
+const MAX_STATE_LENGTH = 64;
+const MAX_TIMESTAMP_LENGTH = 64;
+const MAX_TOKEN_LENGTH = 64;
 
-function boundedText(value: string): string {
-  return value.length > MAX_CAPABILITY_LENGTH
-    ? `${value.slice(0, MAX_CAPABILITY_LENGTH)}…`
+function boundedText(value: string, maxLength: number): string {
+  return value.length > maxLength
+    ? `${value.slice(0, maxLength)}…`
     : value;
+}
+
+function boundedValueOrDash(
+  value: string | number | null | undefined,
+  maxLength: number,
+): string {
+  if (value === null || value === undefined || value === "") return "—";
+  return boundedText(String(value), maxLength);
 }
 
 function certificateSnapshot(agent: AgentSummary): string {
@@ -63,20 +73,20 @@ function Capabilities({agent}: {agent: AgentSummary}) {
   if (agent.capabilities.length === 0) return <>—</>;
 
   return <div className="capability-list">
-    <span role="status" aria-label={`Capability result count for ${agent.node_id}`}>
+    <span role="status" aria-label={`Capability result count for ${boundedText(agent.node_id, MAX_NODE_ID_LENGTH)}`}>
       Capabilities {start + 1}–{end} of {agent.capabilities.length}
     </span>
-    <span>{visible.map(boundedText).join(", ")}</span>
+    <span>{visible.map(value => boundedText(value, MAX_CAPABILITY_LENGTH)).join(", ")}</span>
     {pageCount > 1 && <div className="pagination">
       <button
         type="button"
-        aria-label={`Previous capabilities for ${agent.node_id}`}
+        aria-label={`Previous capabilities for ${boundedText(agent.node_id, MAX_NODE_ID_LENGTH)}`}
         disabled={safePage === 0}
         onClick={() => setPage(current => Math.max(0, current - 1))}
       >Previous</button>
       <button
         type="button"
-        aria-label={`Next capabilities for ${agent.node_id}`}
+        aria-label={`Next capabilities for ${boundedText(agent.node_id, MAX_NODE_ID_LENGTH)}`}
         disabled={safePage === pageCount - 1}
         onClick={() => setPage(current => Math.min(pageCount - 1, current + 1))}
       >Next</button>
@@ -84,10 +94,19 @@ function Capabilities({agent}: {agent: AgentSummary}) {
   </div>;
 }
 
-function CertificateControls({agent, onRevoke}: {agent: AgentSummary; onRevoke(nodeId: string): Promise<void>}) {
+function CertificateControls({
+  agent,
+  disabled,
+  onRevoke,
+}: {
+  agent: AgentSummary;
+  disabled: boolean;
+  onRevoke(nodeId: string): Promise<void>;
+}) {
   const headingId = useId();
   const [confirmation, setConfirmation] = useState("");
   const [busy, setBusy] = useState(false);
+  const displayedNodeId = boundedText(agent.node_id, MAX_NODE_ID_LENGTH);
 
   async function revoke() {
     setBusy(true);
@@ -99,15 +118,21 @@ function CertificateControls({agent, onRevoke}: {agent: AgentSummary; onRevoke(n
   }
 
   return <section className="certificate-controls" role="region" aria-labelledby={headingId}>
-    <h4 id={headingId}>Certificate controls for {agent.node_id}</h4>
+    <h4 id={headingId}>Certificate controls for {displayedNodeId}</h4>
     <p role="alert">Revocation immediately disconnects this node and cannot be undone. A new enrollment is required.</p>
-    <label>Type {agent.node_id} to confirm certificate revocation
-      <input autoComplete="off" value={confirmation} onChange={event => setConfirmation(event.target.value)}/>
+    <label>Type {displayedNodeId} to confirm certificate revocation
+      <input
+        autoComplete="off"
+        disabled={disabled}
+        maxLength={MAX_NODE_ID_LENGTH}
+        value={confirmation}
+        onChange={event => setConfirmation(event.target.value)}
+      />
     </label>
     <button
       className="danger"
       type="button"
-      disabled={confirmation !== agent.node_id || busy}
+      disabled={disabled || confirmation !== agent.node_id || busy}
       onClick={() => void revoke()}
     >Revoke node certificate</button>
   </section>;
@@ -144,7 +169,10 @@ export function AgentsPage({api}: {api: ControlApi}) {
       setFleet(fleetResult);
       setDataRevision(current => current + 1);
     } catch (value) {
-      setError(value instanceof Error ? value.message : "Unable to load agent data");
+      setError(boundedText(
+        value instanceof Error ? value.message : "Unable to load agent data",
+        MAX_MESSAGE_LENGTH,
+      ));
     } finally {
       setLoading(false);
     }
@@ -183,10 +211,13 @@ export function AgentsPage({api}: {api: ControlApi}) {
       );
       if (requestId !== grantRequestId.current) return;
       setGrant(created);
-      setStatus(`One-time grant created for ${created.node_id}`);
+      setStatus(`One-time grant created for ${boundedText(created.node_id, MAX_NODE_ID_LENGTH)}`);
     } catch (value) {
       if (requestId !== grantRequestId.current || controller.signal.aborted) return;
-      setError(value instanceof Error ? value.message : "Enrollment grant creation failed");
+      setError(boundedText(
+        value instanceof Error ? value.message : "Enrollment grant creation failed",
+        MAX_MESSAGE_LENGTH,
+      ));
     } finally {
       if (requestId === grantRequestId.current) {
         grantRequest.current = undefined;
@@ -199,7 +230,7 @@ export function AgentsPage({api}: {api: ControlApi}) {
     await mutate(async () => {
       const decision = await api.approveEnrollment(enrollmentId);
       setEnrollments(current => current.map(item => item.id === decision.id ? {...item, state: decision.state} : item));
-      setStatus(`Enrollment for ${decision.node_id} approved`);
+      setStatus(`Enrollment for ${boundedText(decision.node_id, MAX_NODE_ID_LENGTH)} approved`);
     });
   }
 
@@ -211,7 +242,7 @@ export function AgentsPage({api}: {api: ControlApi}) {
         rejection_reason: reason,
         state: decision.state,
       } : item));
-      setStatus(`Enrollment for ${decision.node_id} rejected`);
+      setStatus(`Enrollment for ${boundedText(decision.node_id, MAX_NODE_ID_LENGTH)} rejected`);
     });
   }
 
@@ -223,11 +254,12 @@ export function AgentsPage({api}: {api: ControlApi}) {
         certificate_expires_at: null,
         state: "revoked",
       } : item));
-      setStatus(`Certificate for ${nodeId} revoked`);
+      setStatus(`Certificate for ${boundedText(nodeId, MAX_NODE_ID_LENGTH)} revoked`);
     });
   }
 
   function refresh() {
+    setDataRevision(current => current + 1);
     grantRequestId.current += 1;
     grantRequest.current?.controller.abort();
     grantRequest.current = undefined;
@@ -255,8 +287,8 @@ export function AgentsPage({api}: {api: ControlApi}) {
       <button type="button" onClick={refresh}>Refresh agent data</button>
     </div>
     {loading && <p role="status">Loading agent data…</p>}
-    {error && <p role="alert">{error}</p>}
-    {status && <p role="status">{status}</p>}
+    {error && <p role="alert">{boundedText(error, MAX_MESSAGE_LENGTH)}</p>}
+    {status && <p role="status">{boundedText(status, MAX_MESSAGE_LENGTH)}</p>}
 
     <section aria-labelledby="native-admin-heading" className="native-links">
       <h3 id="native-admin-heading">Native administration surfaces</h3>
@@ -269,7 +301,12 @@ export function AgentsPage({api}: {api: ControlApi}) {
       <h3 id="grant-heading">Create enrollment grant</h3>
       <form onSubmit={event => void createGrant(event)}>
         <label>Grant node ID
-          <input required value={grantNodeId} onChange={event => setGrantNodeId(event.target.value)}/>
+          <input
+            maxLength={MAX_NODE_ID_LENGTH}
+            required
+            value={grantNodeId}
+            onChange={event => setGrantNodeId(event.target.value)}
+          />
         </label>
         <label>Grant lifetime in seconds
           <input required min="1" max="600" type="number" value={grantTtl} onChange={event => setGrantTtl(event.target.value)}/>
@@ -279,8 +316,8 @@ export function AgentsPage({api}: {api: ControlApi}) {
       {grantPending && <p role="status" aria-label="Enrollment grant request">Creating one-time enrollment grant…</p>}
       {grant && <div className="grant-secret" role="status" aria-label="One-time enrollment grant">
         <strong>Copy this token now. It will not be shown again.</strong>
-        <code>{grant.token}</code>
-        <span>Expires at {grant.expires_at}</span>
+        <code>{boundedText(grant.token, MAX_TOKEN_LENGTH)}</code>
+        <span>Expires at {boundedText(grant.expires_at, MAX_TIMESTAMP_LENGTH)}</span>
         <button type="button" onClick={() => setGrant(undefined)}>Dismiss token</button>
       </div>}
     </section>
@@ -303,11 +340,11 @@ export function AgentsPage({api}: {api: ControlApi}) {
           <th scope="col">Capabilities</th>
         </tr></thead>
         <tbody>{visibleAgents.map(agent => <tr key={agent.node_id}>
-          <th scope="row"><code>{agent.node_id}</code></th>
-          <td><span className="status">{agent.state}</span><small>Protocol {valueOrDash(agent.protocol_version)}</small></td>
-          <td>{valueOrDash(agent.last_seen_at)}<small>{agent.stale ? "Stale" : `${valueOrDash(agent.last_seen_age_seconds)} seconds ago`}</small></td>
-          <td>{valueOrDash(agent.certificate_expires_at)}</td>
-          <td>{compatibility.get(agent.node_id) ?? "unknown"}</td>
+          <th scope="row"><code>{boundedText(agent.node_id, MAX_NODE_ID_LENGTH)}</code></th>
+          <td><span className="status">{boundedText(agent.state, MAX_STATE_LENGTH)}</span><small>Protocol {boundedValueOrDash(agent.protocol_version, MAX_STATE_LENGTH)}</small></td>
+          <td>{boundedValueOrDash(agent.last_seen_at, MAX_TIMESTAMP_LENGTH)}<small>{agent.stale ? "Stale" : `${boundedValueOrDash(agent.last_seen_age_seconds, MAX_TIMESTAMP_LENGTH)} seconds ago`}</small></td>
+          <td>{boundedValueOrDash(agent.certificate_expires_at, MAX_TIMESTAMP_LENGTH)}</td>
+          <td>{boundedText(compatibility.get(agent.node_id) ?? "unknown", MAX_COMPATIBILITY_LENGTH)}</td>
           <td><Capabilities agent={agent}/></td>
         </tr>)}</tbody>
       </table></div>
@@ -331,6 +368,7 @@ export function AgentsPage({api}: {api: ControlApi}) {
         .map(agent => <CertificateControls
           key={`${dataRevision}:${certificateSnapshot(agent)}`}
           agent={agent}
+          disabled={loading}
           onRevoke={revoke}
         />)}
     </section>
@@ -339,6 +377,7 @@ export function AgentsPage({api}: {api: ControlApi}) {
       <h3 id="enrollment-heading">Enrollment evidence</h3>
       {enrollments.map(item => <EnrollmentReview
         key={`${dataRevision}:${enrollmentEvidenceSnapshot(item)}`}
+        actionsDisabled={loading}
         enrollment={item}
         onApprove={approve}
         onReject={reject}
