@@ -19,3 +19,4 @@ Task 5: final exact integration review found 0 Critical, 0 Important, and 0 Mino
 Task 5: complete and accepted (integrated on main at edc8148ee445934133a8e02cb7fda829f658b95b; hosted run 30974905046 passed Ruff in 11s, macOS full Python+Bash in 1m53s, and Ubuntu full Python+Bash in 2m48s)
 Task 3 readiness audit: complete (durable PostgreSQL execution projection and atomic route/LiteLLM publication bundle selected; NAS presence/lease/supervisor primitives reusable only after Task 2; exact task brief and mandatory race/crash matrix recorded)
 Task 3: blocked only on Task 2 acceptance and its explicit entrypoint/quota route contract; no implementation started
+Task 4 readiness audit: complete (production worker image/code/network cutover defined; break-glass and onboarding SSH preserved; implementation waits for accepted Tasks 2 and 3)
