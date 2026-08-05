@@ -9,9 +9,13 @@ import type {
   EnrollmentGrantResponse,
   EnrollmentListResponse,
   FleetResponse,
-  JobSummary,
+  JobDetail,
+  JobResumeResponse,
+  JobsResponse,
   ProposalInput,
   ProposalPreview,
+  ReconciliationAccepted,
+  ReconciliationPlan,
 } from "./types";
 
 function csrfToken(): string | undefined {
@@ -22,8 +26,13 @@ function csrfToken(): string | undefined {
   return cookie?.slice(cookie.indexOf("=") + 1);
 }
 
-function resultData<T>(result: {data?: T; response: Response}): T {
-  if (result.data === undefined) throw new Error(`Control API returned ${result.response.status}`);
+function resultData<T>(result: {data?: T; error?: unknown; response: Response}): T {
+  if (result.data === undefined) {
+    const detail = typeof result.error === "object" && result.error !== null && "detail" in result.error
+      ? String(result.error.detail).slice(0, 256)
+      : "request failed";
+    throw new Error(`Control API returned ${result.response.status}: ${detail}`);
+  }
   return result.data;
 }
 
@@ -98,10 +107,36 @@ export class ApiClient implements ControlApi {
     if (!response.ok) throw new Error(`Control API returned ${response.status}`);
   }
 
+  async planProfile(profileId: string): Promise<ReconciliationPlan> {
+    return resultData(await this.generated.POST("/api/v1/profiles/{profile_id}/plan", {
+      params: {path: {profile_id: profileId}},
+    }));
+  }
+
+  async applyReconciliation(digest: string): Promise<ReconciliationAccepted> {
+    return resultData(await this.generated.POST("/api/v1/reconciliations", {
+      body: {plan_digest: digest},
+    }));
+  }
+
+  async jobs(): Promise<JobsResponse> {
+    return resultData(await this.generated.GET("/api/v1/jobs"));
+  }
+
+  async job(jobId: string): Promise<JobDetail> {
+    return resultData(await this.generated.GET("/api/v1/jobs/{job_id}", {
+      params: {path: {job_id: jobId}},
+    }));
+  }
+
+  async resumeJob(jobId: string): Promise<JobResumeResponse> {
+    return resultData(await this.generated.POST("/api/v1/jobs/{job_id}/resume", {
+      params: {path: {job_id: jobId}},
+    }));
+  }
+
   documents(kind: "models" | "profiles") { return this.request<DocumentList>(`/api/v1/documents?kind=${kind}`); }
-  jobs() { return this.request<{jobs: JobSummary[]}>("/api/v1/jobs"); }
   audit() { return this.request<{events: AuditSummary[]}>("/api/v1/audit"); }
   preview(input: ProposalInput) { return this.request<ProposalPreview>("/api/v1/proposals", {method: "POST", body: JSON.stringify(input)}); }
   submit(digest: string) { return this.request<Record<string, unknown>>("/api/v1/changes", {method: "POST", body: JSON.stringify({proposal_digest: digest})}); }
-  reconcile(digest: string) { return this.request<Record<string, unknown>>("/api/v1/reconciliations", {method: "POST", body: JSON.stringify({plan_digest: digest})}); }
 }

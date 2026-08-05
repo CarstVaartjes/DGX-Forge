@@ -46,6 +46,12 @@ code{color:#9bd7ff}
 .danger{background:#d96a78;color:#180508}
 .grant-secret{display:grid;gap:.75rem;border-color:#71e6b1}
 .grant-secret code{font-size:1.1rem;overflow-wrap:anywhere}
+.reconciliation-workflow,.plan-review,.job-detail,.operation-card{margin:1.25rem 0;padding:1rem;background:#0e1924;border:1px solid #263747;border-radius:.6rem}
+.plan-review section{margin:1.5rem 0}
+.operation-card{background:#0a141e;overflow-wrap:anywhere}
+.operation-card h5{margin-top:0}
+.plan-review code,.job-detail code{overflow-wrap:anywhere}
+progress{width:min(36rem,100%);height:1rem;accent-color:#71e6b1}
 @media(max-width:760px){
   .shell{grid-template-columns:1fr}
   aside{position:static}
