@@ -30,3 +30,9 @@ Task 4: fix round 1/5 (3 addressed, 2 open — non-capability agent/fleet string
 Task 4: fix round 2/5 (2 addressed, 0 open — all rendered agent-summary strings are explicitly bounded; pending and failed refresh immediately invalidate and disable confirmations; commits a7c14fe..309fa8c)
 Task 4: complete (commits 8520220..309fa8c; task review clean after two fix rounds; fresh controller verification and publication acceptance pending)
 Task 4: complete and accepted (integrated and pushed on main at 847eaad147aa8b929fae5cebed6720c30ab62599; hosted run 31024518824 passed Ruff, generated-client verification, macOS full Python/Bash, and Ubuntu full Python/Bash)
+Task 5: active (unified typed plan preview/apply and bounded parent/node job experience; base 311aa315a6f99281e8a17eaf2e651d8ce75f0bcf)
+Task 5: initial implementation delivered (commit 1118821; required Phase 5 27 Python + 27 web tests, build, Playwright, API/generated-client, Ruff, drift, and diff gates reported green; independent review submitted 1 Critical + 4 Important findings)
+Task 5: minor (deferred): render exact route fields and entrypoint node ID instead of fabricating a URL from human display_name
+Task 5: fix round 1/5 (3 addressed, 2 open — fleet evidence is not part of canonical plan/enqueue authority and can race; cursors are unsigned and not bound to filter/job context; commits 1118821..6e9626c)
+Task 5: fix round 2/5 (2 addressed, 0 open — fleet evidence is canonical, persisted, guarded at enqueue, and revalidated before effects; versioned HMAC cursors bind durable query/job/resource context; commits 6e9626c..4b3ac44)
+Task 5: complete (commits 311aa31..4b3ac44; task review clean after two fix rounds; fresh controller verification and publication acceptance pending)
