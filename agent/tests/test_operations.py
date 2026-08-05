@@ -193,7 +193,21 @@ def test_release_and_workload_operations_dispatch_only_to_typed_interfaces(tmp_p
     assert [item[0].action for item in workloads.requests] == list(WorkloadAction)
 
 
-def test_interrupted_mutation_uses_typed_inspector_and_never_blindly_retries(tmp_path) -> None:
+@pytest.mark.parametrize(
+    ("disposition", "expected_reason"),
+    [
+        (WorkloadDisposition.COMPENSATE, "compensation-required"),
+        (
+            WorkloadDisposition.OPERATOR_INTERVENTION,
+            "operator-intervention-required",
+        ),
+    ],
+)
+def test_interrupted_mutation_persists_operator_disposition_and_replays_exactly(
+    tmp_path,
+    disposition: WorkloadDisposition,
+    expected_reason: str,
+) -> None:
     payload = {
         "schema_version": 1,
         "workload_id": "deepseek-v4-flash-a",
@@ -202,22 +216,75 @@ def test_interrupted_mutation_uses_typed_inspector_and_never_blindly_retries(tmp
         "preparation_digest": "6" * 64,
     }
     active = claim(operation=AgentOperation.WORKLOAD_START, payload=payload)
-    state = AgentStateStore(tmp_path / "state")
+    state_root = tmp_path / "state"
+    state = AgentStateStore(state_root)
     state.begin(active)
-    workloads = RecordingWorkloads(
-        WorkloadInspection(WorkloadDisposition.OPERATOR_INTERVENTION)
+    evidence = WorkloadEvidence(
+        "inspected",
+        WorkloadAction.START,
+        "deepseek-v4-flash-a",
+        "4" * 64,
+        "8" * 64,
     )
+    workloads = RecordingWorkloads(WorkloadInspection(disposition, evidence))
     operation_context = OperationContext(
         NODE_ID, state, NeverProbe(), RecordingReleaseInstaller(), workloads
     )
+    registry = OperationRegistry()
 
-    inspection = OperationRegistry().inspect(active, operation_context)
+    recovered = registry.execute(active, operation_context)
 
-    assert inspection.disposition is InspectionDisposition.OPERATOR_INTERVENTION
+    assert recovered.result.state == "waiting-for-operator"
+    assert recovered.result.result == {"reason": expected_reason}
+    assert recovered.result.job_id == active.job_id
+    assert recovered.result.operation_id == active.operation_id
+    assert recovered.result.attempt == active.attempt
+    assert recovered.result.fence == active.fence
+    assert recovered.result.deadline == active.deadline
+    assert recovered.canonical_result == canonical_message(recovered.result)
+    assert recovered.replayed is True
+    assert len(workloads.requests) == 1
     assert workloads.requests[0][0] == "inspect"
+    assert workloads.requests[0][1].action is WorkloadAction.START
+
+    persisted = state.lookup_exact(active)
+    assert persisted is not None
+    assert persisted.result == recovered.result
+    assert persisted.canonical_result == recovered.canonical_result
+    restarted = OperationContext(
+        NODE_ID,
+        AgentStateStore(state_root),
+        NeverProbe(),
+        RecordingReleaseInstaller(),
+        workloads,
+    )
+    replay = registry.execute(active, restarted)
+
+    assert replay.result == recovered.result
+    assert replay.canonical_result == recovered.canonical_result
+    assert replay.replayed is True
+    assert len(workloads.requests) == 1
+    pending = restarted.state.recover_pending()
+    assert pending is not None
+    assert pending.canonical_result == replay.canonical_result
+
+    next_probe = RecordingProbe()
+    next_claim = claim(
+        job_id="33333333-3333-4333-8333-333333333333",
+        operation_id="44444444-4444-4444-8444-444444444444",
+        fence="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    )
+    next_context = OperationContext(NODE_ID, restarted.state, next_probe)
     with pytest.raises(AgentStateConflict):
-        OperationRegistry().execute(active, operation_context)
-    assert [item[0] for item in workloads.requests] == ["inspect", "inspect"]
+        registry.execute(next_claim, next_context)
+    acknowledged = restarted.state.acknowledge(replay.result)
+
+    assert acknowledged.acknowledged_at is not None
+    assert restarted.state.recover_pending() is None
+    followup = registry.execute(next_claim, next_context)
+
+    assert followup.result.state == "succeeded"
+    assert len(next_probe.deadlines) == 1
 
 
 def test_node_probe_rejects_every_nonempty_payload_before_dispatch(tmp_path) -> None:

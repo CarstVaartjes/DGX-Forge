@@ -96,6 +96,12 @@ class InspectionDisposition(StrEnum):
     UNSUPPORTED = "unsupported"
 
 
+_WAITING_REASONS = {
+    InspectionDisposition.COMPENSATE: "compensation-required",
+    InspectionDisposition.OPERATOR_INTERVENTION: "operator-intervention-required",
+}
+
+
 @dataclass(frozen=True)
 class OperationInspection:
     disposition: InspectionDisposition
@@ -145,6 +151,21 @@ class OperationRegistry:
                     {"status": "ok", "evidence": inspection.evidence},
                 )
                 finished = context.state.finish(recovered)
+                assert (
+                    finished.result is not None
+                    and finished.canonical_result is not None
+                )
+                return OperationExecution(
+                    finished.result, finished.canonical_result, True
+                )
+            waiting_reason = _WAITING_REASONS.get(inspection.disposition)
+            if waiting_reason is not None:
+                waiting = _result(
+                    claim,
+                    "waiting-for-operator",
+                    {"reason": waiting_reason},
+                )
+                finished = context.state.finish(waiting)
                 assert (
                     finished.result is not None
                     and finished.canonical_result is not None
