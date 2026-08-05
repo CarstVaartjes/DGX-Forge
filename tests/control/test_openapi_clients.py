@@ -73,7 +73,10 @@ def test_tracked_admin_contract_has_secret_free_decisions_and_typed_errors() -> 
     expected_errors = {
         "applyReconciliation": {"401", "403", "409", "503"},
         "approveAgentEnrollment": {"401", "403", "409", "503"},
+        "getJobLog": {"401", "403", "404", "503"},
         "getPublishedEndpoint": {"401", "404", "503"},
+        "planProfileReconciliation": {"401", "403", "409", "503"},
+        "planReconciliation": {"401", "403", "409", "503"},
         "resumeJob": {"401", "403", "404", "409", "503"},
     }
     for operation_id, statuses in expected_errors.items():
@@ -236,7 +239,10 @@ def test_generated_python_client_parses_documented_operation_errors() -> None:
     client = Client(base_url="https://control.invalid")
     expected = {
         "apply_reconciliation": (401, 403, 409, 503),
+        "get_job_log": (401, 403, 404, 503),
         "get_published_endpoint": (401, 404, 503),
+        "plan_profile_reconciliation": (401, 403, 409, 503),
+        "plan_reconciliation": (401, 403, 409, 503),
         "resume_job": (401, 403, 404, 409, 503),
     }
     for module_name, status_codes in expected.items():

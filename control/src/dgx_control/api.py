@@ -508,7 +508,7 @@ def create_app(
     @app.post(
         "/api/v1/reconciliations/plan",
         response_model=ReconciliationPlanResponse,
-        responses=bounded_error_responses(401, 403, 503),
+        responses=bounded_error_responses(401, 403, 409, 503),
         operation_id="planReconciliation",
     )
     def reconcile_plan(body: ReconciliationPlanRequest, authenticated: Actor = authenticated_actor) -> ReconciliationPlanResponse:
@@ -518,7 +518,7 @@ def create_app(
     @app.post(
         "/api/v1/profiles/{profile_id}/plan",
         response_model=ReconciliationPlanResponse,
-        responses=bounded_error_responses(401, 403, 503),
+        responses=bounded_error_responses(401, 403, 409, 503),
         operation_id="planProfileReconciliation",
     )
     def profile_reconcile_plan(
@@ -724,7 +724,10 @@ def create_app(
         except (KeyError, ValueError):
             raise HTTPException(status_code=404, detail="job not found") from None
 
-    @app.get("/api/v1/jobs/{job_id}/logs/{digest}")
+    @app.get(
+        "/api/v1/jobs/{job_id}/logs/{digest}",
+        responses=bounded_error_responses(401, 403, 404, 503),
+    )
     def job_log_content(job_id: str, digest: str, authenticated: Actor = authenticated_actor) -> Response:
         if authenticated.role not in {"operator", "administrator"}:
             raise HTTPException(status_code=403, detail="insufficient role")
