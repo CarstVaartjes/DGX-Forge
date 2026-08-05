@@ -8,6 +8,7 @@ from dgx_control.auth import (
     AuthError,
     TrustedProxyAgentIdentityMiddleware,
     agent_identity_from_scope,
+    agent_source_from_scope,
 )
 
 NODE = "spk_" + "a" * 32
@@ -40,10 +41,38 @@ def test_non_secret_caller_on_any_network_cannot_populate_agent_scope() -> None:
             (b"x-dgx-agent-fingerprint", b"fingerprint"),
             (b"x-dgx-agent-verified", b"1"),
             (b"x-dgx-agent-proxy-auth", b"wrong-secret"),
+            (b"x-dgx-agent-source", b"10.0.0.42"),
         ),
     }
 
     asyncio.run(middleware(scope, lambda: None, lambda _: None))
 
     assert agent_identity_from_scope(received[0]) is None
+    assert agent_source_from_scope(received[0]) is None
+    assert received[0]["headers"] == ()
+
+
+def test_trusted_proxy_source_is_typed_and_removed_from_headers() -> None:
+    received = []
+
+    async def app(scope, receive, send) -> None:
+        received.append(scope)
+
+    middleware = TrustedProxyAgentIdentityMiddleware(app, trusted_proxy_auth=b"p" * 32)
+    scope = {
+        "type": "http",
+        "path": "/ordinary",
+        "headers": (
+            (b"x-dgx-agent-node", NODE.encode()),
+            (b"x-dgx-agent-serial", b"123"),
+            (b"x-dgx-agent-fingerprint", b"fingerprint"),
+            (b"x-dgx-agent-verified", b"1"),
+            (b"x-dgx-agent-proxy-auth", b"p" * 32),
+            (b"x-dgx-agent-source", b"10.0.0.42"),
+        ),
+    }
+
+    asyncio.run(middleware(scope, lambda: None, lambda _: None))
+
+    assert agent_source_from_scope(received[0]) == "10.0.0.42"
     assert received[0]["headers"] == ()

@@ -19,4 +19,4 @@ read_secret() {
 read_secret LITELLM_MASTER_KEY /run/secrets/litellm-master-key
 read_secret LITELLM_UPSTREAM_KEY /run/secrets/litellm-upstream-key
 read_secret LITELLM_DATABASE_URL /run/secrets/litellm-database-url
-exec litellm --config /app/config.yaml --host 0.0.0.0 --port 4000
+exec python /app/config-supervisor.py

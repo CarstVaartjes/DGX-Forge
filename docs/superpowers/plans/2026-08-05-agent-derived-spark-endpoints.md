@@ -40,7 +40,7 @@
 
 - [ ] **Step 1: Write failing CIDR and observation tests**
 
-Add tests that construct `ManagementAddressPolicy.parse("192.168.10.0/24,10.20.0.0/16", forbidden_cidrs="192.168.200.0/30")`, accept `192.168.10.42`, canonicalize it, and reject `127.0.0.1`, `169.254.1.1`, `224.0.0.1`, `192.168.200.1`, and `192.168.11.1`. Add a database test proving `observe()` updates `AgentNode.last_seen_at`, stores exactly one `Observation(kind="management-address", payload={"address": "192.168.10.42"})`, and `latest()` rejects stale observations.
+Add tests that construct `ManagementAddressPolicy.parse("10.0.0.0/24,10.1.0.0/16", forbidden_cidrs="10.0.0.240/28")`, accept `10.0.0.42`, canonicalize it, and reject `127.0.0.1`, `169.254.1.1`, `224.0.0.1`, `10.0.0.241`, and `10.0.1.1`. Add a database test proving `observe()` updates `AgentNode.last_seen_at`, stores exactly one `Observation(kind="management-address", payload={"address": "10.0.0.42"})`, and `latest()` rejects stale observations.
 
 - [ ] **Step 2: Run the focused tests and verify failure**
 
@@ -94,7 +94,7 @@ git commit -m "feat: record authenticated Spark presence"
 
 - [ ] **Step 1: Rewrite route tests around structured endpoints**
 
-Change `_candidate()` to map aliases to `RouteEndpoint(NODE_ID, "192.168.10.42", 8888, "http", NOW)`. Test acceptance inside `192.168.10.0/24`, and rejection of a different node ID, stale observation, HTTPS when only HTTP is allowed, undeclared port 9999, userinfo, hostname, direct-fabric address, and address outside the CIDR. Assert the stored alias renders as `http://192.168.10.42:8888/v1`.
+Change `_candidate()` to map aliases to `RouteEndpoint(NODE_ID, "10.0.0.42", 8888, "http", NOW)`. Test acceptance inside `10.0.0.0/24`, and rejection of a different node ID, stale observation, HTTPS when only HTTP is allowed, undeclared port 9999, userinfo, hostname, direct-fabric address, and address outside the CIDR. Assert the stored alias renders as `http://10.0.0.42:8888/v1`.
 
 - [ ] **Step 2: Add the address-change fail-closed test**
 

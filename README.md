@@ -80,6 +80,8 @@ running mutating commands such as `prepare` or `switch`.
 - [Direct-fabric runbook](docs/runbooks/fabric.md)
 - [Runtime release runbook](docs/runbooks/runtime-release.md)
 - [Spark agent PKI and recovery runbook](docs/runbooks/agent-pki.md)
+- [Tailnet-only NAS ingress runbook](docs/runbooks/tailscale.md)
+- [AI devbox runbook](docs/runbooks/ai-devbox.md)
 
 ## Security
 

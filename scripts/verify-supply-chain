@@ -179,6 +179,17 @@ def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
         "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
         ".dockerignore", "control/web/package-lock.json", "control/Dockerfile",
         "deploy/compose/compose.yaml", "deploy/compose/images.lock.json",
+        "deploy/compose/Caddyfile", "deploy/compose/caddy/entrypoint.sh",
+        "deploy/compose/tailscale/compose.yaml",
+        "deploy/compose/tailscale/configure.sh",
+        "deploy/compose/tailscale/grants.example.hujson",
+        "deploy/compose/ai-devbox/compose.yaml",
+        "deploy/compose/ai-devbox/Dockerfile",
+        "deploy/compose/ai-devbox/entrypoint.sh",
+        "deploy/compose/ai-devbox/sshd_config",
+        "deploy/compose/litellm/config.yaml",
+        "deploy/compose/litellm/config_supervisor.py",
+        "deploy/compose/litellm/entrypoint.sh",
         "deploy/compose/trust/litellm-cosign.pub",
     )
     manifest = {
@@ -198,7 +209,15 @@ def image_errors(root: Path) -> list[str]:
         lock = json.loads((root / "deploy/compose/images.lock.json").read_bytes())
     except Exception:
         return ["image lock is unreadable"]
-    compose = (root / "deploy/compose/compose.yaml").read_text()
+    compose_paths = (
+        "deploy/compose/compose.yaml",
+        "deploy/compose/tailscale/compose.yaml",
+        "deploy/compose/ai-devbox/compose.yaml",
+    )
+    try:
+        compose = "\n".join((root / path).read_text() for path in compose_paths)
+    except OSError:
+        return ["included Compose image definitions are missing"]
     for name, reference in {**lock.get("images", {}), **lock.get("build_bases", {})}.items():
         if not isinstance(reference, str) or IMAGE.fullmatch(reference) is None:
             errors.append(f"{name} image is not pinned by digest")
@@ -210,6 +229,11 @@ def image_errors(root: Path) -> list[str]:
     if release != {"environment": "CONTROL_IMAGE", "required": True} or "${CONTROL_IMAGE:?" not in compose:
         errors.append("control release image must be explicitly digest-pinned at deployment")
     dockerfile = (root / "control/Dockerfile").read_text()
+    devbox_dockerfile = (root / "deploy/compose/ai-devbox/Dockerfile").read_text()
+    build_dockerfiles = dockerfile + "\n" + devbox_dockerfile
+    for name, reference in lock.get("build_bases", {}).items():
+        if reference not in build_dockerfiles:
+            errors.append(f"{name} digest-pinned build base is absent from Dockerfiles")
     if "ARG NODE_IMAGE" not in dockerfile or "ARG PYTHON_IMAGE" not in dockerfile:
         errors.append("control build bases are not explicit locked arguments")
     if (
@@ -218,6 +242,13 @@ def image_errors(root: Path) -> list[str]:
         or not docker_installs_protocol_wheel(dockerfile)
     ):
         errors.append("control image does not install the standalone protocol wheel from root context")
+    devbox_base = re.search(r"(?m)^ARG UBUNTU_IMAGE=(\S+)$", devbox_dockerfile)
+    if (
+        devbox_base is None
+        or IMAGE.fullmatch(devbox_base.group(1)) is None
+        or "FROM ${UBUNTU_IMAGE}" not in devbox_dockerfile
+    ):
+        errors.append("ai-devbox build base is not an explicit digest-pinned argument")
     return errors
 
 

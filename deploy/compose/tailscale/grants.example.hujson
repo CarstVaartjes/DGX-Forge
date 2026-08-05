@@ -1,0 +1,45 @@
+{
+  "tagOwners": {
+    "tag:dgx-gateway": ["autogroup:admin"]
+  },
+  "groups": {
+    "group:ai-devbox-users": ["replace-with-your-login@github"]
+  },
+  "acls": [],
+  "grants": [
+    {
+      "src": ["autogroup:admin"],
+      "dst": ["svc:dgx-forge"],
+      "ip": ["tcp:443"]
+    },
+    {
+      "src": ["group:ai-devbox-users"],
+      "dst": ["svc:ai-devbox"],
+      "ip": ["tcp:22"]
+    }
+  ],
+  "autoApprovers": {
+    "services": {
+      "svc:dgx-forge": ["tag:dgx-gateway"],
+      "svc:ai-devbox": ["tag:dgx-gateway"]
+    }
+  },
+  "tests": [
+    {
+      "src": "autogroup:admin",
+      "accept": ["svc:dgx-forge:443"]
+    },
+    {
+      "src": "autogroup:member",
+      "deny": ["svc:dgx-forge:443"]
+    },
+    {
+      "src": "replace-with-your-login@github",
+      "accept": ["svc:ai-devbox:22"]
+    },
+    {
+      "src": "autogroup:member",
+      "deny": ["svc:ai-devbox:22"]
+    }
+  ]
+}

@@ -1,0 +1,77 @@
+x-tailscale-logging: &tailscale-logging
+  driver: local
+  options:
+    max-size: 10m
+    max-file: "5"
+
+services:
+  tailscale-gateway:
+    image: ${TAILSCALE_IMAGE:-tailscale/tailscale:v1.98.8@sha256:d54b2e6a9c09f0e5ec52e82b9ad4af3d446b54a7c08075e92f11c39dd410105f}
+    hostname: dgx-forge-gateway
+    restart: unless-stopped
+    logging: *tailscale-logging
+    read_only: true
+    environment:
+      TS_AUTH_ONCE: "true"
+      TS_CLIENT_ID: file:/run/secrets/tailscale-oauth-client-id
+      TS_CLIENT_SECRET: file:/run/secrets/tailscale-oauth-client-secret
+      TS_EXTRA_ARGS: --advertise-tags=tag:dgx-gateway
+      TS_HOSTNAME: dgx-forge-gateway
+      TS_SOCKET: /var/run/tailscale/tailscaled.sock
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "true"
+    secrets:
+      - tailscale-oauth-client-id
+      - tailscale-oauth-client-secret
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - tailscale-socket:/var/run/tailscale
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    networks:
+      - tailnet-web-edge
+      - tailnet-ssh-edge
+    healthcheck:
+      test: [CMD, tailscale, --socket=/var/run/tailscale/tailscaled.sock, status, --json]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  tailscale-configurator:
+    image: ${TAILSCALE_IMAGE:-tailscale/tailscale:v1.98.8@sha256:d54b2e6a9c09f0e5ec52e82b9ad4af3d446b54a7c08075e92f11c39dd410105f}
+    restart: unless-stopped
+    logging: *tailscale-logging
+    read_only: true
+    network_mode: service:tailscale-gateway
+    entrypoint: [/bin/sh, /usr/local/bin/configure-tailscale]
+    volumes:
+      - tailscale-socket:/var/run/tailscale
+      - ./configure.sh:/usr/local/bin/configure-tailscale:ro
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    depends_on:
+      tailscale-gateway:
+        condition: service_healthy
+        restart: true
+      caddy:
+        condition: service_healthy
+        restart: true
+      ai-devbox:
+        condition: service_healthy
+        restart: true
+
+secrets:
+  tailscale-oauth-client-id:
+    file: ${TAILSCALE_OAUTH_CLIENT_ID_FILE:?set Tailscale OAuth client ID secret file}
+  tailscale-oauth-client-secret:
+    file: ${TAILSCALE_OAUTH_CLIENT_SECRET_FILE:?set Tailscale OAuth client secret file}
+
+networks:
+  # This edge also supplies the gateway's required outbound control-plane path.
+  tailnet-web-edge: {}
+  tailnet-ssh-edge:
+    internal: true
+
+volumes:
+  tailscale-state: {}
+  tailscale-socket: {}

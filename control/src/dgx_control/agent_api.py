@@ -31,7 +31,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from starlette.responses import StreamingResponse
 
 from .agent_jobs import AgentJobService, StaleAgentAttempt
-from .auth import Actor, AgentIdentity, agent_identity_from_scope
+from .auth import Actor, AgentIdentity, agent_identity_from_scope, agent_source_from_scope
 from .enrollment import (
     EnrollmentDenied,
     EnrollmentService,
@@ -41,6 +41,7 @@ from .enrollment import (
 )
 from .models import AgentCertificate, AgentEnrollment, AgentNode, AgentOperation
 from .pki import IssuedCertificate
+from .presence import AgentPresenceService, PresenceError
 
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _LIVE_OPERATION_STATES = frozenset({"queued", "running"})
@@ -63,6 +64,7 @@ class AgentApiServices:
     operations: AgentJobService
     sessions: sessionmaker[Session]
     clock: Callable[[], datetime]
+    presence: AgentPresenceService
     artifact_root: Path
     max_artifact_bytes: int = _MAX_ARTIFACT_BYTES
     max_range_bytes: int = _MAX_RANGE_BYTES
@@ -257,6 +259,16 @@ def _authenticated_activation_identity(
 def _body_node_matches(value: str | None, identity: AgentIdentity) -> None:
     if value is not None and value != identity.node_id:
         raise HTTPException(status_code=403, detail="authenticated node identity cannot be overridden")
+
+
+def _observed_agent_source(request: Request) -> str:
+    source = agent_source_from_scope(request.scope)
+    if source is None:
+        raise HTTPException(
+            status_code=422,
+            detail="exactly one proxy-observed agent source is required",
+        )
+    return source
 
 
 _ENROLLMENT_TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z")
@@ -672,6 +684,14 @@ def install_agent_routes(
         required = _require_services(services)
         identity = _authenticated_identity(request, required)
         _body_node_matches(body.node_id, identity)
+        try:
+            required.presence.observe(
+                identity.node_id,
+                _observed_agent_source(request),
+                required.clock(),
+            )
+        except PresenceError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
         try:
             result = required.operations.claim(
                 identity.node_id,

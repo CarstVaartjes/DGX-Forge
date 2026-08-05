@@ -53,7 +53,7 @@ Expected: FAIL because the included Tailscale model does not exist.
 
 - [ ] **Step 3: Resolve and pin the current stable image**
 
-Run `docker buildx imagetools inspect tailscale/tailscale:v1.94.1` and record its linux/arm64-capable manifest-list digest in `.env.example` and `images.lock.json`. Do not use `latest` and do not copy a platform-child digest as the multi-platform pin.
+Resolve `tailscale/tailscale:v1.98.8` and record its linux/arm64-capable manifest-list digest `sha256:d54b2e6a9c09f0e5ec52e82b9ad4af3d446b54a7c08075e92f11c39dd410105f` in `.env.example` and `images.lock.json`. Do not use `latest` and do not copy a platform-child digest as the multi-platform pin.
 
 - [ ] **Step 4: Implement the Tailscale Compose model**
 

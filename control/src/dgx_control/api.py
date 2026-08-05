@@ -58,6 +58,7 @@ def build_agent_services(settings: Any, sessions: Any, clock: Callable[[], Any])
     from .agent_jobs import AgentJobService
     from .enrollment import EnrollmentService
     from .pki import BuiltinCertificateAuthority
+    from .presence import AgentPresenceService, ManagementAddressPolicy
     from .step_ca import StepCertificateAuthority
 
     if settings.agent_runtime != "enabled":
@@ -94,6 +95,13 @@ def build_agent_services(settings: Any, sessions: Any, clock: Callable[[], Any])
         operations=AgentJobService(sessions, clock=clock),
         sessions=sessions,
         clock=clock,
+        presence=AgentPresenceService(
+            sessions,
+            ManagementAddressPolicy.parse(
+                settings.management_cidrs,
+                forbidden_cidrs=settings.direct_fabric_cidrs,
+            ),
+        ),
         artifact_root=settings.agent_artifact_root,
     )
 
@@ -394,6 +402,11 @@ def create_app(
     @app.post("/api/v1/jobs", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
     def enqueue(body: JobRequest, request: Request, authenticated: Actor = authenticated_actor) -> JobResponse:
         require_mutation_role(authenticated, "/api/v1/jobs")
+        if body.kind == "reconcile":
+            raise HTTPException(
+                status_code=400,
+                detail="reconciliation jobs require a repository-derived plan",
+            )
         job = jobs.enqueue(body.kind, authenticated.subject, body.base_commit, body.targets, body.payload, request_id=request.state.request_id)
         audits.append(AuditRecord(request.state.request_id, authenticated.subject, f"job.enqueue:{body.kind}", body.base_commit, tuple(body.targets)))
         return JobResponse(id=str(job.id), state=str(job.state))

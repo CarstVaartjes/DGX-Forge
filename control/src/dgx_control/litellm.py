@@ -42,6 +42,8 @@ class LiteLlmPublisher:
     def render(self, routes: RouteState, policy: LiteLlmPolicy) -> bytes:
         if routes.state != "published" or not routes.aliases:
             raise LiteLlmPolicyError("LiteLLM models require a published route snapshot")
+        if any(not isinstance(value, str) or not value for value in routes.aliases.values()):
+            raise LiteLlmPolicyError("LiteLLM routes must be already-rendered strings")
         models = dict(policy.models)
         unknown = set(models) - set(routes.aliases)
         if unknown:
@@ -80,6 +82,28 @@ class LiteLlmPublisher:
             },
             "model_list": model_list,
             "router_settings": {"enable_pre_call_checks": True, "routing_strategy": "simple-shuffle"},
+        }
+        return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+    @staticmethod
+    def render_empty() -> bytes:
+        document = {
+            "general_settings": {
+                "database_url": "os.environ/LITELLM_DATABASE_URL",
+                "disable_admin_ui": True,
+                "master_key": "os.environ/LITELLM_MASTER_KEY",
+            },
+            "litellm_settings": {
+                "drop_params": True,
+                "failure_callback": [],
+                "set_verbose": False,
+                "success_callback": [],
+            },
+            "model_list": [],
+            "router_settings": {
+                "enable_pre_call_checks": True,
+                "routing_strategy": "simple-shuffle",
+            },
         }
         return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
 

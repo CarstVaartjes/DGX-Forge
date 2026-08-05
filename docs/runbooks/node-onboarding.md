@@ -56,3 +56,21 @@ topology.
 If verification or recovery access fails, stop. Restore access through the
 physical console, inspect the journal, and resume only after the trusted facts
 match again.
+
+## How an accepted Spark appears online
+
+Bootstrap and hardening remain a manual, one-node-at-a-time operation using the
+repository installer above. Acceptance binds the immutable `spk_` node ID to
+its client certificate; it does not trust a hostname or IP address.
+
+After the agent is installed, its normal outbound mTLS claim/long-poll requests
+announce presence to the control plane. Caddy records the direct LAN peer
+address on that authenticated channel, and the control plane accepts it only
+inside `DGX_MANAGEMENT_CIDRS` and outside `DGX_DIRECT_FABRIC_CIDRS`. The address
+is a short-lived observation used for routing, never node identity and never a
+fleet-membership decision.
+
+DHCP reservations are recommended for the NAS and Sparks because they make
+operations easier, but route publication does not depend on hard-coded per-node
+addresses. There is no subnet scan, mDNS trust, SSH discovery, or automatic
+acceptance. An unaccepted machine cannot join merely by appearing on the LAN.

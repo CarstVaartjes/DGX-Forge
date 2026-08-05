@@ -59,3 +59,11 @@ def test_worker_does_not_mask_unexpected_programming_error(tmp_path) -> None:
                 AssertionError("programming defect")
             )},
         ).run_once()
+
+
+def test_worker_runs_route_housekeeping_even_when_queue_is_idle(tmp_path) -> None:
+    jobs = _service(tmp_path)
+    calls = []
+
+    assert Worker(jobs, "worker-1", {}, housekeeping=lambda: calls.append("refresh")).run_once() is False
+    assert calls == ["refresh"]

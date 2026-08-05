@@ -64,8 +64,13 @@ def test_registry_caddy_adapter_has_only_ping_and_digest_pull_proxies() -> None:
         input=(ROOT / "deploy/compose/Caddyfile").read_text(),
     )
     adapted = json.loads(result.stdout)
+    backend = next(
+        server
+        for server in adapted["apps"]["http"]["servers"].values()
+        if any(str(listener).endswith(":8443") for listener in server.get("listen", []))
+    )
     registry_site = next(
-        route for route in adapted["apps"]["http"]["servers"]["srv0"]["routes"]
+        route for route in backend["routes"]
         if route.get("match") == [{"host": ["registry.test.example"]}]
     )
     encoded = json.dumps(registry_site, sort_keys=True)

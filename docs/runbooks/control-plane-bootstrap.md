@@ -3,10 +3,20 @@
 The control plane runs on any Docker Compose-capable Linux machine. The first
 host may be a NAS, but the configuration has no NAS vendor dependency.
 
+Reserve `10.0.0.2` for the NAS. Create local-only DNS records
+`enroll.dgx-forge.lan`, `agents.dgx-forge.lan`, and
+`registry.dgx-forge.lan`, all resolving to `10.0.0.2`. Permit TCP 8443 to that
+address only from the Spark management CIDR `10.0.0.0/24` or its reserved Spark
+leases. Do not expose LAN ports for control, inference, Grafana, or SSH.
+Spark reservations are recommended, but no Spark IP belongs in Compose or fleet
+identity: authenticated agent presence supplies the current validated address.
+
 1. Copy `deploy/compose/.env.example` to a host-local `.env` and replace every
    image placeholder with a verified digest-pinned reference.
-2. Create the database URL, PostgreSQL password, and token-signing-key files
-   outside Git. Restrict them to the service administrator.
+2. Create the database URL, PostgreSQL password, token-signing-key, Tailscale
+   OAuth, and AI devbox authorized-public-key files outside Git. Restrict them
+   to the service administrator. Follow the [Tailscale](tailscale.md) and
+   [AI devbox](ai-devbox.md) runbooks for their exact preparation.
    Generate the Caddy/control proxy-auth secret as an unpadded base64url token
    of at least 32 characters (an optional final CR/LF is accepted):
 
@@ -23,7 +33,7 @@ host may be a NAS, but the configuration has no NAS vendor dependency.
 5. Run `bin/dgx-control-offline create-admin --subject ADMIN_ID` while the API
    and worker remain stopped.
 6. Start the recommended production provider and check `/api/v1/healthz`
-   through Caddy:
+   through the `svc:dgx-forge` Tailscale Service:
 
    ```bash
    cd deploy/compose
@@ -44,6 +54,27 @@ host may be a NAS, but the configuration has no NAS vendor dependency.
    the control API at startup regardless of their order.
 
 The API and worker share one application image but remain separate services.
-PostgreSQL and Caddy are independent containers. Only Caddy publishes a port.
-LiteLLM, Prometheus, and Grafana are added as separate services in the later
-inference/observability phase.
+PostgreSQL, Caddy, LiteLLM, Prometheus, Grafana, Tailscale, and the AI devbox are
+independent containers in this one project. Only Caddy publishes a host port,
+and that is the `10.0.0.2:8443` Spark backend. The Tailscale gateway publishes
+no Docker port and advertises the separate web and SSH named Services.
+
+Caddy receives tailnet web traffic on the private `tailnet-web-edge` network.
+It sends `/v1/*` to `litellm:4000` on the existing internal `ingress` network.
+LiteLLM then reaches only the accepted, fresh agent-derived Spark endpoint via
+`cluster-egress`; Docker routes that connection out through the NAS LAN. Model
+and tensor runtimes remain on the DGX Sparks, and direct-fabric traffic never
+passes through the NAS.
+
+The checked-in LiteLLM file is a fail-closed empty bootstrap. After a successful
+commit-pinned reconciliation, the worker derives the live config from stable
+`spk_` identity, fresh authenticated presence, repository workload ports, and a
+successful upstream probe. The worker writes only to the dedicated
+`litellm-routes` volume; LiteLLM mounts it read-only and reloads by supervised
+process restart. Each generated config has a hash-bound expiry lease. The
+supervisor rejects leases from before its own startup and falls back to the
+empty bootstrap when a lease expires, so a dead worker or restored route volume
+cannot keep an upstream published indefinitely. The worker refreshes the
+generation every 60 seconds, so a DHCP change follows the next authenticated
+observation and stale presence withdraws the route within the 150-second
+window.

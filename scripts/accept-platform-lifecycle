@@ -30,9 +30,15 @@ from dgx_control.jobs import JobService
 from dgx_control.litellm import LiteLlmPolicy, LiteLlmPublisher
 from dgx_control.models import AgentCertificate, AgentNode, Base
 from dgx_control.orchestration import ReconciliationOrchestrator
+from dgx_control.presence import ManagementAddressPolicy
 from dgx_control.reconcile import Reconciler
 from dgx_control.repository import RepositoryService
-from dgx_control.routes import RouteCandidate, RoutePublisher
+from dgx_control.routes import (
+    RouteCandidate,
+    RouteEndpoint,
+    RouteEndpointPolicy,
+    RoutePublisher,
+)
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -198,7 +204,6 @@ def run(host: str, display_name: str) -> dict[str, object]:
         proposal = build_node_proposal("0" * 40, journal, {"hostname": host})
         repository, commit = _repository(workspace, node_id.value, host, display_name)
         audit = [f"install:{journal.state}", f"proposal:{proposal.sha256}", f"merge:{commit}"]
-
         engine = create_engine(f"sqlite:///{workspace / 'control.sqlite'}")
         Base.metadata.create_all(engine)
         sessions = sessionmaker(engine, expire_on_commit=False)
@@ -458,9 +463,30 @@ def run(host: str, display_name: str) -> dict[str, object]:
             )
         )
 
-        upstream = f"http://{host}:8000/v1"
-        route_publisher = RoutePublisher(workspace / "routes", allowed_upstreams={upstream}, validate=lambda _: True, apply=lambda _: None)
-        candidate = RouteCandidate(replacement_commit, "agent", "model-repository/revision", (node_id.value,), {"test-model": upstream}, now)
+        endpoint_policy = RouteEndpointPolicy(
+            management=ManagementAddressPolicy.parse("10.0.0.0/24"),
+            allowed_ports=frozenset({8000}),
+            maximum_age_seconds=150,
+            clock=lambda: now,
+        )
+        route_publisher = RoutePublisher(
+            workspace / "routes",
+            endpoint_policy=endpoint_policy,
+            validate=lambda _: True,
+            apply=lambda _: None,
+        )
+        candidate = RouteCandidate(
+            replacement_commit,
+            "agent",
+            "model-repository/revision",
+            (node_id.value,),
+            {
+                "test-model": RouteEndpoint(
+                    node_id.value, "10.0.0.42", 8000, "http", now
+                )
+            },
+            now,
+        )
         route_publisher.maintenance((node_id.value,), "reconcile")
         audit.append("routes:maintenance")
         route_publisher.publish(candidate)

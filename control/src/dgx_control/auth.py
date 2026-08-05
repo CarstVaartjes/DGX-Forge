@@ -16,6 +16,7 @@ from starlette.responses import Response
 _ROLES = frozenset({"viewer", "operator", "administrator"})
 _AGENT_NODE_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
 _AGENT_IDENTITY_SCOPE_KEY = "dgx.agent_identity"
+_AGENT_SOURCE_SCOPE_KEY = "dgx.agent_source"
 
 MUTATION_ROLES = {
     ("POST", "/api/v1/jobs"): frozenset({"operator", "administrator"}),
@@ -71,6 +72,14 @@ def agent_identity_from_scope(scope: dict[str, Any]) -> AgentIdentity | None:
     return identity
 
 
+def agent_source_from_scope(scope: dict[str, Any]) -> str | None:
+    """Return the proxy-observed peer address from an authenticated scope."""
+    if agent_identity_from_scope(scope) is None:
+        return None
+    source = scope.get(_AGENT_SOURCE_SCOPE_KEY)
+    return source if isinstance(source, str) and source else None
+
+
 class TrustedProxyAgentIdentityMiddleware:
     """Convert forwarded mTLS metadata from configured private peers only.
 
@@ -112,6 +121,7 @@ class TrustedProxyAgentIdentityMiddleware:
         )
         safe_scope = dict(scope)
         safe_scope.pop(_AGENT_IDENTITY_SCOPE_KEY, None)
+        safe_scope.pop(_AGENT_SOURCE_SCOPE_KEY, None)
         safe_scope["headers"] = sanitized
         supplied_proxy_auth = forwarded.get("x-dgx-agent-proxy-auth", "").encode()
         if self._trusted_proxy_auth and hmac.compare_digest(supplied_proxy_auth, self._trusted_proxy_auth) and not duplicate_forwarded_headers:
@@ -122,6 +132,9 @@ class TrustedProxyAgentIdentityMiddleware:
                     certificate_fingerprint=forwarded["x-dgx-agent-fingerprint"],
                     verified=forwarded["x-dgx-agent-verified"] == "1",
                 )
+                source = forwarded.get("x-dgx-agent-source")
+                if source:
+                    safe_scope[_AGENT_SOURCE_SCOPE_KEY] = source
             except (AuthError, KeyError):
                 pass
         path = safe_scope.get("path")
