@@ -165,6 +165,15 @@ Cluster Profile so the abstraction does not hide operational identity.
 
 ## Runtime adapter contract
 
+The generalized workload package system approved on 2026-08-05 owns the common
+acquisition and materialization contract beneath these lifecycle operations.
+Every future adapter receives only verified generation paths and capabilities
+from the package engine. Resumable ranged transfer, durable progress, disk
+reservation, restart recovery, cancellation, partial quarantine, digest/size
+verification, atomic promotion, rollback generations, leases, repair, and
+garbage collection are mandatory shared engine behavior and must not be
+reimplemented by individual model adapters.
+
 Every adapter implements these operations:
 
 ```text
@@ -181,7 +190,11 @@ prepare -> verify -> start -> health -> infer -> stop -> verify-release
 | `stop` | Drain where a gateway exists, terminate within the Model Definition timeout, and retain diagnostic logs. |
 | `verify-release` | Prove processes exited and available memory returned within the configured tolerance. |
 
-The controller treats adapters uniformly but does not translate one model family's internal launch commands into another's. Each adapter remains directly operable over SSH for diagnosis.
+The controller treats adapters uniformly but does not translate one model
+family's internal launch commands into another's. Each adapter may remain
+directly operable by a human over SSH for recovery and diagnosis, but
+production preparation and lifecycle reconciliation use the outbound
+agent/package path and never fall back to SSH.
 
 ## Loader and placement matrix
 

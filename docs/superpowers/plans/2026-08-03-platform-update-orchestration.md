@@ -14,6 +14,11 @@
 - The control plane never replaces itself through an ordinary online API job.
 - Database migrations use expand/contract sequencing and retain old/new service compatibility during rollout.
 - Spark updates use the agent channel when healthy; SSH is recovery-only.
+- The active control generation and every agent report semantic DGX-Forge
+  version, build digest, protocol range, and active A/B slot. Version comparison
+  never relies on container tags or display strings alone.
+- A newer NAS version creates an administrator prompt and preview, never an
+  automatic fleet mutation. Confirmation uses the signed `agent.update` plan.
 - Default rollout is explicit canary, soak, then batches of one; distributed workload availability constrains batches.
 - First failure pauses fan-out and continuing after rollback requires operator approval.
 - This plan updates DGX-Forge application/control/agent artifacts. DGX OS,
@@ -21,6 +26,9 @@
   workflow. The pinned NVIDIA `spark_updatectl.py` may supply reboot readiness,
   next-boot kernel, and rollback evidence, but cannot authorize or transport a
   DGX-Forge release.
+- Workload package releases are governed by the separate generalized workload
+  package plans. This plan must not enumerate or transport Mia, DS4, model,
+  adapter, runtime, environment, image, or checkpoint releases.
 
 ---
 
@@ -36,11 +44,11 @@
 
 **Interfaces:**
 - Produces `PlatformRelease.load(path)`, `compatibility(current)`, and canonical `digest`; `UpdateTrust.refresh()` and `trusted_target(name) -> TargetInfo` use TUF metadata and persisted trusted-root/version state.
-- Manifest binds control images/assets/config version, migration floor/ceiling, agent artifacts by architecture, supervisor/tooling artifacts, protocol ranges, SBOM/provenance, and rollback compatibility.
+- Manifest binds semantic platform version/build digest, control images/assets/config version, migration floor/ceiling, agent artifacts by architecture, supervisor/tooling artifacts, protocol ranges, SBOM/provenance, and rollback compatibility.
 
 - [ ] **Step 1: Write failing manifest validation tests**
 
-Test floating image tags, missing digest/SBOM, overlapping architecture
+Test floating image tags, missing semantic version/build digest, missing digest/SBOM, overlapping architecture
 entries, invalid protocol interval, destructive migration without predecessor
 compatibility, unknown fields, canonical digest under reordered input, expired
 timestamp/snapshot metadata, rollback/freeze/mix-and-match metadata, root rotation,
@@ -125,11 +133,13 @@ git commit -m "feat: update control plane through recoverable generations"
 **Files:**
 - Create: `agent/src/dgx_agent/update.py`
 - Modify: `agent/src/dgx_agent/operations.py`
+- Modify: `agent/src/dgx_agent/client.py`
+- Modify: `agent/src/dgx_agent/readiness.py`
 - Modify: `agent/supervisor/dgx-agent-supervisor`
 - Test: `agent/tests/test_update.py`
 
 **Interfaces:**
-- `AgentUpdater.plan(artifact, release) -> UpdatePlan`, `apply(plan) -> PendingActivation`.
+- `AgentUpdater.plan(artifact, release) -> UpdatePlan`, `apply(plan) -> PendingActivation`; authenticated claim/readiness reports include `platform_version`, `build_digest`, `protocol_version`, and `active_slot`.
 - Supervisor consumes activation request with inactive slot, expected digest, previous slot, deadline, and control readiness marker.
 
 - [ ] **Step 1: Write failing A/B update tests**
@@ -137,7 +147,9 @@ git commit -m "feat: update control plane through recoverable generations"
 Test wrong architecture/signature/digest, insufficient space, incompatible
 protocol, active-slot overwrite attempt, interrupted download, successful
 reconnect marker, crash loop, readiness timeout, automatic rollback, and both
-slots corrupt requiring recovery.
+slots corrupt requiring recovery. Add exact telemetry tests proving the control
+plane receives the running slot's signed build identity rather than a desired
+or downloaded version.
 
 - [ ] **Step 2: Run and observe missing updater**
 
@@ -161,7 +173,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit agent update**
 
 ```bash
-git add agent/src/dgx_agent/update.py agent/src/dgx_agent/operations.py agent/supervisor/dgx-agent-supervisor agent/tests/test_update.py
+git add agent/src/dgx_agent/update.py agent/src/dgx_agent/operations.py agent/src/dgx_agent/client.py agent/src/dgx_agent/readiness.py agent/supervisor/dgx-agent-supervisor agent/tests/test_update.py
 git commit -m "feat: update Spark agents through A/B slots"
 ```
 
@@ -170,16 +182,18 @@ git commit -m "feat: update Spark agents through A/B slots"
 **Files:**
 - Create: `control/src/dgx_control/updates.py`
 - Modify: `control/src/dgx_control/models.py`
-- Create: `control/migrations/versions/0006_update_rollouts.py`
+- Create: `control/migrations/versions/0010_update_rollouts.py`
 - Test: `control/tests/test_updates.py`
 
 **Interfaces:**
-- Produces `UpdatePlanner.plan(release, fleet, topology, active_workloads, agents, policy) -> UpdatePlan` and `UpdateOrchestrator.advance(plan_id)`.
+- Produces `VersionSkewAnalyzer.compare(active_control_generation, agents) -> VersionSkewReport`, `UpdatePlanner.plan(release, fleet, topology, active_workloads, agents, policy) -> UpdatePlan`, and `UpdateOrchestrator.advance(plan_id)`.
 - Policy includes canary node, soak seconds, batch size default 1, minimum distributed replicas, and failure pause.
 
 - [ ] **Step 1: Write failing fan-out tests**
 
-Cover one/two/sixteen nodes, deterministic canary, explicit preferred canary,
+Cover one/two/sixteen nodes, NAS-equal/older/newer comparisons, build-digest
+mismatch at the same semantic version, compatible and incompatible skew,
+deterministic canary, explicit preferred canary,
 retired/offline/incompatible agents, topology where peers cannot share batch,
 distributed workload quorum, pause on first failure, soak clock, rollback,
 operator approval resume, and no hard fleet limit.
@@ -191,7 +205,9 @@ Expected: FAIL importing updates.
 
 - [ ] **Step 3: Implement persisted rollout plans and state machine**
 
-Pin release/commit/fleet/topology/agent input digests. Select one canary, then
+Persist the authenticated running version/build/protocol/slot observation for
+each agent and derive a skew report against the active control generation. Pin
+release/commit/fleet/topology/agent input digests. Select one canary, then
 stable node-ID batches respecting workload availability and topology exclusion.
 Withdraw/drain affected routes before each batch, enqueue `agent.update`, wait
 for reconnect/new version/self-test, enforce soak, restore routes only after
@@ -206,7 +222,7 @@ Expected: PASS; update and profile reconciliation leases cannot overlap a node.
 - [ ] **Step 5: Commit rollout orchestrator**
 
 ```bash
-git add control/src/dgx_control/updates.py control/src/dgx_control/models.py control/migrations/versions/0006_update_rollouts.py control/tests/test_updates.py
+git add control/src/dgx_control/updates.py control/src/dgx_control/models.py control/migrations/versions/0010_update_rollouts.py control/tests/test_updates.py
 git commit -m "feat: roll out Spark agent updates safely"
 ```
 
@@ -217,17 +233,21 @@ git commit -m "feat: roll out Spark agent updates safely"
 - Modify: `src/spark_profiles/control_client.py`
 - Modify: `src/spark_profiles/cli.py`
 - Create: `control/web/src/pages/updates.tsx`
+- Modify: `control/web/src/pages/fleet.tsx`
 - Test: `control/tests/test_update_api.py`
 - Test: `tests/spark_profiles/test_update_cli.py`
 - Test: `control/web/src/pages/updates.test.tsx`
 
 **Interfaces:**
-- API `/api/v1/updates/plan`, `/updates`, `/updates/{id}`, `/updates/{id}/approve-resume`.
+- API `/api/v1/updates/skew`, `/updates/plan`, `/updates`, `/updates/{id}`, `/updates/{id}/approve-resume`.
 - CLI commands exactly match the agent design specification.
 
 - [ ] **Step 1: Write failing equivalence and authorization tests**
 
-Assert CLI/web plan digest equality, plan defaults, operator can plan/apply,
+Assert CLI/web skew and plan digest equality, plan defaults, persistent fleet
+prompt only when the active NAS release is newer or a build digest differs,
+no automatic update from the prompt, exact affected/offline node listing,
+compatible-old operation and incompatible-skew mutation blocking, operator can plan/apply,
 administrator-only resume after rollback, stale digest rejection, audit events,
 and no endpoint accepting a control-host self-update online.
 
@@ -238,9 +258,12 @@ Expected: FAIL with missing routes/commands/page.
 
 - [ ] **Step 3: Implement thin adapters over update services**
 
-Render canary/batches, compatibility, affected workloads/routes, soak, gates,
-and rollback state. Apply requires exact digest. CLI supports `plan`, `apply`,
-and `status`; web adds confirmation and administrator resume. Never expose
+Render a persistent NAS-newer prompt with exact control/agent versions and
+digests, canary/batches, compatibility, affected workloads/routes, offline
+pending nodes, soak, gates, and rollback state. Dismissal is per exact skew
+digest and a changed control or agent observation makes it visible again.
+Apply requires exact digest. CLI supports `skew`, `plan`, `apply`, and `status`;
+web adds confirmation and administrator resume. Never expose
 artifact credentials or agent certificate material.
 
 - [ ] **Step 4: Run interface tests/build**
@@ -251,7 +274,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit update UX**
 
 ```bash
-git add control/src/dgx_control/api.py src/spark_profiles/control_client.py src/spark_profiles/cli.py control/web/src/pages/updates.tsx control/tests/test_update_api.py tests/spark_profiles/test_update_cli.py control/web/src/pages/updates.test.tsx
+git add control/src/dgx_control/api.py src/spark_profiles/control_client.py src/spark_profiles/cli.py control/web/src/pages/updates.tsx control/web/src/pages/fleet.tsx control/tests/test_update_api.py tests/spark_profiles/test_update_cli.py control/web/src/pages/updates.test.tsx
 git commit -m "feat: administer staged platform updates"
 ```
 
@@ -265,7 +288,10 @@ git commit -m "feat: administer staged platform updates"
 - Modify: `schemas/platform-release-evidence.schema.json`
 
 **Interfaces:**
-- Acceptance covers control host old->new->rollback, canary failure, agent A/B rollback, resumed rollout, and final fleet/model verification.
+- Acceptance covers control host old->new->rollback, NAS-newer skew prompt,
+  confirmation-to-signed-plan, compatible rolling operation, incompatible
+  mutation blocking, offline pending nodes, canary failure, agent A/B rollback,
+  resumed rollout, and final fleet/model verification.
 
 - [ ] **Step 1: Write failing aggregate gate test**
 

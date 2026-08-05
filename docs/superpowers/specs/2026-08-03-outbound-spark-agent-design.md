@@ -54,7 +54,8 @@ old agent private key to different hardware or silently reuses an identity.
 The versioned HTTPS protocol provides:
 
 - agent registration, approval status, and certificate renewal;
-- capability and protocol-version advertisement;
+- capability, protocol-version, DGX-Forge semantic version, build digest, and
+  active A/B slot advertisement;
 - node-targeted job claim with attempt fence and lease deadline;
 - heartbeat, bounded progress, cancellation observation, and terminal result;
 - content-addressed artifact retrieval; and
@@ -66,7 +67,8 @@ persists its active attempt before mutation and rejects stale fences, other-node
 targets, unknown fields, expired work, incompatible protocol versions, changed
 payloads, and secret-bearing payload keys.
 
-The agent supports only a compiled registry of typed operations:
+The agent supports only a compiled registry of typed operations. The initial
+legacy lifecycle vocabulary is:
 
 - `node.probe`
 - `release.install`
@@ -78,10 +80,20 @@ The agent supports only a compiled registry of typed operations:
 - `agent.update`
 - `agent.rollback`
 
+The generalized workload package follow-on adds only generic package
+operations (`package.prepare`, `package.activate`, `package.health`,
+`package.stop`, `package.rollback`, `package.remove`, `package.repair`, and
+`package.gc`). This compiled registry is
+the safe operation vocabulary, not a catalog of workload families, model IDs,
+adapter IDs, images, checkpoints, or releases.
+
 There is no arbitrary command, script, shell, environment, filesystem-path, or
 repository-provided command-line operation in the network protocol. Each
-operation validates its own structured inputs and delegates only to installed,
-content-addressed adapters allowed by node policy.
+operation validates its own structured inputs. Workload-specific adapters are
+selected by an independently signed, content-addressed workload release lock
+and execute unprivileged through the compiled package backend and adapter ABI.
+Installing a new adapter, Mia/DS4 version, model, container, environment, or
+checkpoint does not require an agent release when it uses that existing ABI.
 
 ## Control-plane orchestration
 
@@ -167,9 +179,20 @@ once. The first failure pauses the rollout; continuing after rollback requires
 operator approval. Full fleet and representative model acceptance complete the
 release.
 
+After a service-host update, the control plane compares its active platform
+version/build digest with every authenticated agent report. When the NAS is
+newer, the web interface shows a persistent update prompt listing affected
+Sparks, compatibility, active workloads, the proposed canary, batch order, and
+rollback slot. It does not update nodes merely because versions differ.
+Administrator confirmation creates the same signed topology-aware
+`agent.update` plan exposed by the API and CLI. Compatible older agents may
+remain online during the rollout; incompatible skew blocks affected mutations,
+and offline nodes remain explicitly pending.
+
 CLI and web use the same update plan and job APIs. The CLI surface is:
 
 ```text
+sparkctl admin updates skew --json
 sparkctl admin updates plan --release RELEASE --json
 sparkctl admin updates apply --plan-digest DIGEST --json
 sparkctl admin updates status JOB_ID --json
@@ -217,3 +240,9 @@ Small signed runtime and agent artifacts may be served by the control plane;
 model repositories and weights continue to use their defined immutable sources
 and Spark-local caches. The architecture imposes no fixed Spark count, though
 defaults are optimized for small administrator and node populations.
+
+The generalized workload package plane defined in
+`2026-08-05-generalized-workload-package-system-design.md` is independent from
+this platform update plane. `agent.update` updates DGX-Forge itself; it must
+never be used to deliver an ordinary workload family, adapter, runtime,
+container, dependency, or model release.

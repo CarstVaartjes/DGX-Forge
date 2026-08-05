@@ -225,6 +225,20 @@ for runtime HTTPS, dynamic TUF HTTPS snapshots, and every ORAS pull.
 policy. The resulting `OperationContext` always has probe, release, and
 workload handlers in production.
 
+The compiled `spark-runtime-v1` mapping in this Task 5 design is the accepted
+legacy bootstrap policy, not the permanent catalog boundary for Mia, DS4, or
+future models. The approved generalized workload package design replaces that
+catalog role with a compiled generic package operation vocabulary, three typed
+execution backends, sandbox policy, and an unprivileged adapter ABI. A workload
+release lock selects the exact signed adapter digest; the privileged helper
+validates only backend/capability structs and never model, family, adapter, or
+release names.
+
+The stable supervisor remains responsible only for the DGX-Forge agent A/B
+slots. Workload generations, adapters, environments, containers, and model
+artifacts are independently activated by the package engine and cannot replace
+the supervisor or agent executable.
+
 Before an active identity exists, startup uses the installed public CA,
 one-time token, a locally generated Ed25519 key/CSR, fixed enrollment origin,
 and bounded node evidence. Pending approval retries the identical durable CSR.

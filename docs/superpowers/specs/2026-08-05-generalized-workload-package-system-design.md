@@ -676,6 +676,20 @@ Existing reconciliation, agent runtime, model definition, and observability
 plans should consume the generic package identity and lifecycle rather than
 invent parallel per-workload installation flows.
 
+Implementation is decomposed without renumbering the existing roadmap:
+
+- W1–W4: `2026-08-05-generalized-workload-contracts-and-trust.md`;
+- W5–W10: `2026-08-05-spark-workload-package-engine.md`;
+- W11–W16: `2026-08-05-workload-package-control-plane.md`;
+- W17–W20: `2026-08-05-workload-package-migration-acceptance.md`; and
+- ordering/conflict gates: `2026-08-05-generalized-workload-package-roadmap.md`.
+
+The incoming GitHub container-release work remains authoritative for building
+and publishing the three DGX-Forge NAS service images and for pull-only NAS
+Compose deployment. The workload-artifact builder is a separate generic
+workflow for workload payloads; it produces digests, SBOMs, and provenance but
+has no workload TUF key and cannot promote desired state.
+
 ## Primary references
 
 - [OCI content descriptors](https://specs.opencontainers.org/image-spec/descriptor/)

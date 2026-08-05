@@ -22,8 +22,11 @@ the fail-closed adapter and are not advertised as endpoints.
 The source repositories and checkpoint revisions were resolved on 2026-08-03
 from their public upstreams. The approved design remains the authority for
 loader selection and acceptance thresholds. Every definition owns a distinct
-adapter directory and command path; its `paths.scratch` is reserved for that
-model's venv and runtime cache, with no shared generic adapter. The creative
+workload identity and adapter release, but those are signed package data rather
+than a compiled agent catalog. The generic package engine owns verified
+storage, immutable private environments, generations, and the unprivileged
+adapter ABI; model-local cache and scratch semantics remain isolated within the
+declared generation. The creative
 qualification records remain historical evidence: TripoSG is `verified` and
 TokenRig/SkinTokens is `planned` behind its Blender >=4.2 prerequisite, but
 neither is part of the active LLM-only pass.
