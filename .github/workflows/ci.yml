@@ -60,6 +60,8 @@ jobs:
           version: "0.12.1"
           python-version: "3.12"
           enable-cache: true
+      - name: Install pinned TypeScript generator
+        run: npm ci --prefix tools/openapi-client
       - name: Install standalone Docker Compose
         if: runner.os == 'macOS'
         uses: docker/setup-compose-action@4eb059ff7f16592f9c84d5ca339c53cb7c5064e2 # v2.3.0

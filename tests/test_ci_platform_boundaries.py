@@ -1,11 +1,49 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def _named_workflow_steps(job_name: str) -> list[dict[str, str]]:
+    lines = (ROOT / ".github/workflows/ci.yml").read_text().splitlines()
+    job_start = lines.index(f"  {job_name}:") + 1
+    job_lines: list[str] = []
+    for line in lines[job_start:]:
+        if re.fullmatch(r"  [a-zA-Z0-9_-]+:", line):
+            break
+        job_lines.append(line)
+
+    steps: list[dict[str, str]] = []
+    for line in job_lines:
+        name = re.fullmatch(r"      - name: (.+)", line)
+        if name is not None:
+            steps.append({"name": name.group(1)})
+            continue
+        run = re.fullmatch(r"        run: (.+)", line)
+        if run is not None and steps:
+            steps[-1]["run"] = run.group(1)
+    return steps
+
+
+def test_full_matrix_installs_pinned_typescript_generator_before_pytest() -> None:
+    steps = _named_workflow_steps("test")
+    install_step = {
+        "name": "Install pinned TypeScript generator",
+        "run": "npm ci --prefix tools/openapi-client",
+    }
+    test_step = {
+        "name": "Run Python and Bash tests",
+        "run": "uv run --python 3.12 --frozen --with pytest==9.1.1 pytest",
+    }
+
+    assert install_step in steps
+    assert test_step in steps
+    assert steps.index(install_step) < steps.index(test_step)
 
 
 def test_agent_simulator_preserves_exact_non_linux_boundaries() -> None:
