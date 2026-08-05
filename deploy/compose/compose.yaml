@@ -73,6 +73,7 @@ services:
     volumes:
       - ${REPOSITORY_PATH:?set repository path}:/repository
       - control-state:/state
+      - route-publications:/routes
     tmpfs: [/tmp]
     networks: [application, data, cluster-egress]
     depends_on:
@@ -86,8 +87,10 @@ services:
     read_only: true
     secrets: [litellm-master-key, litellm-upstream-key, litellm-database-url]
     volumes:
-      - ./litellm/config.yaml:/app/config.yaml:ro
+      - ./litellm/bootstrap-config.json:/app/bootstrap-config.json:ro
       - ./litellm/entrypoint.sh:/app/dgx-entrypoint:ro
+      - ./litellm/config_supervisor.py:/app/config-supervisor.py:ro
+      - route-publications:/routes:ro
     tmpfs: [/tmp]
     networks: [data, ingress, cluster-egress]
     depends_on:
@@ -230,3 +233,4 @@ volumes:
   prometheus-data: {}
   grafana-data: {}
   registry-data: {}
+  route-publications: {}
