@@ -1,13 +1,23 @@
 from contextlib import contextmanager
+from datetime import UTC, datetime
 
 import pytest
 from dgx_control.git_policy import Eligibility
+from dgx_control.models import Base, Reconciliation
+from dgx_control.orchestration import (
+    OperationGraph,
+    OperationNode,
+    ReconciliationOrchestrator,
+)
 from dgx_control.reconcile import (
     CompatibilityDefinitions,
     IneligibleCommit,
     Reconciler,
     RepositoryDefinitions,
+    resolved_reconciliation_plan,
 )
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
 
 
 class Policy:
@@ -150,3 +160,75 @@ def test_planning_only_reconciler_cannot_execute_in_api_process() -> None:
     plan = reconciler.plan("a" * 40)
     with pytest.raises(RuntimeError, match="worker"):
         reconciler.execute(plan)
+
+
+class DesiredPlanner:
+    def resolve(self, commit, profile_id, observations):
+        assert profile_id == "inference"
+        assert tuple(observations) == ("durable",)
+        node_id = "spk_" + "1" * 32
+        operation = OperationNode(
+            "model:probe",
+            node_id,
+            "model",
+            "node.probe",
+            (),
+            None,
+            "b" * 64,
+        )
+        graph = OperationGraph(
+            "pending",
+            commit,
+            (node_id,),
+            (operation,),
+            "c" * 64,
+        )
+        return resolved_reconciliation_plan(
+            commit=commit,
+            targets=(node_id,),
+            placements={"model": (node_id,)},
+            routes={},
+            releases={},
+            input_digests={"fleet": "f" * 64},
+            operation_graph=graph,
+            operation_payloads={"model:probe": {}},
+            agent_protocol_range=(1, 1),
+        )
+
+
+def test_resolved_plan_digest_survives_process_restart(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'control.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine)
+    clock = lambda: datetime(2026, 8, 5, tzinfo=UTC)
+    first = Reconciler(
+        Policy(),
+        DesiredPlanner(),
+        jobs=Jobs(),
+        observations=lambda: ("durable",),
+        orchestrator=ReconciliationOrchestrator(sessions, clock=clock),
+    )
+
+    planned = first.plan("a" * 40, "inference")
+    assert planned.operation_graph.reconciliation_id != "pending"
+    with sessions() as session:
+        stored = session.scalar(
+            select(Reconciliation).where(
+                Reconciliation.plan_digest == planned.digest
+            )
+        )
+        assert stored is not None
+        assert stored.resolved_plan["operation_graph"] == stored.graph
+
+    jobs = Jobs()
+    restarted = Reconciler(
+        Policy(),
+        DesiredPlanner(),
+        jobs=jobs,
+        observations=lambda: ("durable",),
+        orchestrator=ReconciliationOrchestrator(sessions, clock=clock),
+    )
+    result = restarted.enqueue(planned.digest, "operator", "request")
+
+    assert result["reconciliation_id"] == planned.operation_graph.reconciliation_id
+    assert jobs.call[0][4]["reconciliation_id"] == planned.operation_graph.reconciliation_id

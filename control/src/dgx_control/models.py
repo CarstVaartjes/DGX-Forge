@@ -94,6 +94,10 @@ class Reconciliation(Base):
         default="5c061eb8dfce0a3f2bcbfbf06cb71d695c33e8f4269e17bfe5cd1cda0054cdc5",
         server_default="5c061eb8dfce0a3f2bcbfbf06cb71d695c33e8f4269e17bfe5cd1cda0054cdc5",
     )
+    plan_digest: Mapped[str | None] = mapped_column(
+        String(64), unique=True, index=True
+    )
+    resolved_plan: Mapped[dict[str, object] | None] = mapped_column(JSON)
     current_phase: Mapped[str] = mapped_column(
         String(32), nullable=False, default="legacy", server_default="legacy"
     )

@@ -29,6 +29,18 @@ from sqlalchemy.orm import sessionmaker
 NODE_A = "spk_" + "a" * 32
 NODE_B = "spk_" + "b" * 32
 COMMIT = "a" * 40
+PROBE_RESULT = {
+    "status": "ok",
+    "evidence": {
+        "dgx_forge": {
+            "schema_version": 1,
+            "memory": {"available_bytes": 1_000},
+            "storage": {"available_bytes": 2_000},
+            "accelerator": {"available": True},
+        },
+        "nvidia": {"tools": {}},
+    },
+}
 
 
 class Clock:
@@ -225,7 +237,7 @@ def test_postgres_revocation_serializes_agent_work_and_contact(
                 action_results.append(jobs.heartbeat(claim, {"phase": "checking"}, 60))
             else:
                 assert claim is not None
-                jobs.succeed(claim, {"healthy": True})
+                jobs.succeed(claim, PROBE_RESULT)
                 action_results.append(None)
         except (AssertionError, OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
             action_results.append(error)
@@ -389,7 +401,7 @@ def test_postgres_enqueue_cannot_race_parent_finalization(service, postgres_engi
 
     def finish() -> None:
         try:
-            finishing.succeed(claim.fence, {"healthy": True})
+            finishing.succeed(claim.fence, PROBE_RESULT)
         except (AssertionError, OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
             finish_errors.append(error)
 
@@ -467,7 +479,7 @@ def test_postgres_enqueue_locks_node_before_completion_and_parent_aggregation(
 
     def finish() -> None:
         try:
-            finishing.succeed(claim, {"healthy": True})
+            finishing.succeed(claim, PROBE_RESULT)
         except (AssertionError, OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
             finish_errors.append(error)
 
@@ -530,7 +542,7 @@ def test_postgres_complete_serializes_expired_reclaim_with_identity_lock(
     try:
         def finish() -> None:
             try:
-                completing.succeed(first.fence, {"healthy": True})
+                completing.succeed(first.fence, PROBE_RESULT)
             except (AssertionError, OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
                 errors.append(error)
 
@@ -588,7 +600,7 @@ def test_postgres_concurrent_final_completions_aggregate_parent_once(service, po
     errors: list[Exception] = []
     def complete(service, fence) -> None:
         try:
-            service.succeed(fence, {"healthy": True})
+            service.succeed(fence, PROBE_RESULT)
         except (AssertionError, OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
             errors.append(error)
     try:

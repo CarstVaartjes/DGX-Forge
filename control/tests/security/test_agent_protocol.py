@@ -20,6 +20,18 @@ ROOT = Path(__file__).resolve().parents[3]
 NODE_A = "spk_" + "a" * 32
 NODE_B = "spk_" + "b" * 32
 COMMIT = "a" * 40
+PROBE_RESULT = {
+    "status": "ok",
+    "evidence": {
+        "dgx_forge": {
+            "schema_version": 1,
+            "memory": {"available_bytes": 1_000},
+            "storage": {"available_bytes": 2_000},
+            "accelerator": {"available": True},
+        },
+        "nvidia": {"tools": {}},
+    },
+}
 PROTOCOL_WHEEL = ROOT / "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
 PROTOCOL_WHEEL_HASH = hashlib.sha256(PROTOCOL_WHEEL.read_bytes()).hexdigest()
 
@@ -91,7 +103,7 @@ def test_revoked_certificate_cannot_publish_result(service) -> None:
         certificate.revoked_at = clock.now
 
     with pytest.raises(StaleAgentAttempt):
-        jobs.succeed(claim, {"healthy": True})
+        jobs.succeed(claim, PROBE_RESULT)
 
 
 def test_secret_bearing_payload_is_rejected(service) -> None:
@@ -139,7 +151,7 @@ def test_stale_fence_cannot_publish_success(service) -> None:
     assert jobs.claim(NODE_A, "serial-a", 30) is not None
 
     with pytest.raises(StaleAgentAttempt):
-        jobs.succeed(first, {"healthy": True})
+        jobs.succeed(first, PROBE_RESULT)
 
 
 def test_protocol_has_no_arbitrary_operation_member() -> None:

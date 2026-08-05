@@ -30,6 +30,24 @@ def _copy(tmp_path: Path) -> Path:
     return target
 
 
+def _rewrite_installed_protocol_wheel(
+    dockerfile: Path, replacement: str
+) -> None:
+    """Mutate the wheel argument in the pip step, independent of other inputs."""
+
+    wheel = "/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
+    lines = dockerfile.read_text().splitlines(keepends=True)
+    candidates = [
+        index
+        for index, line in enumerate(lines)
+        if line.lstrip().startswith(wheel) and wheel in line
+    ]
+    assert len(candidates) == 1
+    index = candidates[0]
+    lines[index] = lines[index].replace(wheel, replacement, 1)
+    dockerfile.write_text("".join(lines))
+
+
 def test_verifier_accepts_locked_offline_evidence(tmp_path: Path) -> None:
     repository = _copy(tmp_path)
     result = subprocess.run([SCRIPT, "--root", repository, "--json"], capture_output=True, text=True, check=False)
@@ -136,8 +154,7 @@ def test_verifier_rejects_a_protocol_lock_hash_that_does_not_match_the_wheel(tmp
 def test_verifier_rejects_a_dockerfile_that_copies_but_does_not_install_the_protocol_wheel(tmp_path: Path) -> None:
     repository = _copy(tmp_path)
     dockerfile = repository / "control/Dockerfile"
-    wheel = "/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
-    dockerfile.write_text(dockerfile.read_text().replace(f"    {wheel} .", "    ."))
+    _rewrite_installed_protocol_wheel(dockerfile, "")
 
     result = subprocess.run([SCRIPT, "--root", repository, "--generate"], capture_output=True, text=True, check=False)
 
@@ -168,11 +185,9 @@ def test_verifier_rejects_a_protocol_wheel_mentioned_only_after_a_shell_operator
     repository = _copy(tmp_path)
     dockerfile = repository / "control/Dockerfile"
     wheel = "/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
-    dockerfile.write_text(
-        dockerfile.read_text().replace(
-            f"    {wheel} .",
-            f"    . {operator} test -f {wheel}",
-        )
+    _rewrite_installed_protocol_wheel(
+        dockerfile,
+        f"/spark-profiles . {operator} test -f {wheel} #",
     )
 
     result = subprocess.run([SCRIPT, "--root", repository, "--generate"], capture_output=True, text=True, check=False)

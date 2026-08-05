@@ -41,6 +41,8 @@ from .auth import (
 )
 from .metrics import MetricsRegistry
 from .proposals import DocumentChange
+from .reconcile import IneligibleCommit
+from .repository import RepositoryPolicyError
 
 
 @dataclass(frozen=True)
@@ -344,11 +346,25 @@ def create_app(
         require_mutation_role(authenticated, "/api/v1/reconciliations/plan")
         if admin is None or admin.reconciler is None:
             raise HTTPException(status_code=503, detail="reconciliation unavailable")
-        plan = admin.reconciler.plan(body.commit, body.profile_id)
+        try:
+            plan = admin.reconciler.plan(body.commit, body.profile_id)
+        except IneligibleCommit:
+            raise HTTPException(
+                status_code=409, detail="commit is not eligible"
+            ) from None
+        except RepositoryPolicyError:
+            raise HTTPException(
+                status_code=422, detail="repository desired state is invalid"
+            ) from None
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=422, detail="desired state cannot be planned"
+            ) from None
         return {
             "commit": plan.commit, "digest": plan.digest, "targets": list(plan.targets),
             "placements": dict(plan.placements), "routes": dict(plan.routes),
             "releases": dict(plan.releases), "input_digests": dict(plan.input_digests),
+            "reconciliation_id": plan.operation_graph.reconciliation_id,
             "operation_graph": plan.operation_graph.document,
             "agent_protocol_range": list(plan.agent_protocol_range),
         }
@@ -358,7 +374,22 @@ def create_app(
         require_mutation_role(authenticated, "/api/v1/reconciliations")
         if admin is None or admin.reconciler is None:
             raise HTTPException(status_code=503, detail="reconciliation unavailable")
-        return dict(admin.reconciler.enqueue(body.plan_digest, authenticated.subject, request.state.request_id))
+        try:
+            return dict(
+                admin.reconciler.enqueue(
+                    body.plan_digest,
+                    authenticated.subject,
+                    request.state.request_id,
+                )
+            )
+        except IneligibleCommit:
+            raise HTTPException(
+                status_code=409, detail="commit is not eligible"
+            ) from None
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=404, detail="reconciliation plan is unavailable"
+            ) from None
 
     @app.post("/api/v1/jobs", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
     def enqueue(body: JobRequest, request: Request, authenticated: Actor = authenticated_actor) -> JobResponse:
@@ -432,6 +463,7 @@ def production_app() -> FastAPI:
     from .metrics import MetricsRegistry, OperationalMetricsCollector
     from .models import Job
     from .offline import OnlineLock
+    from .orchestration import ReconciliationOrchestrator
     from .proposals import ProposalService
     from .reconcile import ChangeService, Reconciler
     from .repository import RepositoryService
@@ -464,6 +496,7 @@ def production_app() -> FastAPI:
         DesiredStateResolver(repository, clock=clock),
         jobs=job_service,
         observations=lambda: durable_desired_state_observations(sessions),
+        orchestrator=ReconciliationOrchestrator(sessions, clock=clock),
     )
     dashboard = DashboardService(repository, sessions)
     metrics = MetricsRegistry()

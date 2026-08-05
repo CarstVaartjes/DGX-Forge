@@ -11,7 +11,7 @@ from typing import Any, Protocol
 
 from .git_policy import GitPolicy
 from .jobs import JobService
-from .orchestration import OperationGraph
+from .orchestration import OperationGraph, ReconciliationOrchestrator
 from .proposals import ProposalService
 
 
@@ -203,6 +203,7 @@ class Reconciler:
         *,
         jobs: JobService | None = None,
         observations: Callable[[], Iterable[Any]] | None = None,
+        orchestrator: ReconciliationOrchestrator | None = None,
     ) -> None:
         if not isinstance(planner, CompatibilityDefinitions) and not callable(
             getattr(planner, "resolve", None)
@@ -215,6 +216,7 @@ class Reconciler:
         self._leases = leases
         self._jobs = jobs
         self._observations = observations
+        self._orchestrator = orchestrator
         self._plans: dict[str, ReconciliationPlan] = {}
 
     def _eligible(self, commit: str) -> None:
@@ -253,7 +255,78 @@ class Reconciler:
             if current is None:
                 raise ValueError("desired-state planning requires durable observations")
             plan = self._planner.resolve(commit, profile_id, current)
+            if self._orchestrator is not None:
+                loaded = self._orchestrator.resolved_plan(plan.digest)
+                if loaded is not None:
+                    plan = self._restore_plan(plan.digest, *loaded)
+                else:
+                    provisional = plan.operation_graph
+                    if provisional is None:
+                        raise ValueError("resolved desired state lacks an operation graph")
+                    graph = self._orchestrator.plan(
+                        {
+                            "base_commit": provisional.base_commit,
+                            "targets": list(provisional.targets),
+                            "route_withdrawal_generation": 0,
+                            "operations": [
+                                node.to_document() for node in provisional.nodes
+                            ],
+                        }
+                    )
+                    plan = resolved_reconciliation_plan(
+                        commit=plan.commit,
+                        targets=plan.targets,
+                        placements=plan.placements,
+                        routes=plan.routes,
+                        releases=plan.releases,
+                        input_digests=plan.input_digests,
+                        operation_graph=graph,
+                        operation_payloads=plan.operation_payloads,
+                        agent_protocol_range=plan.agent_protocol_range or (1, 1),
+                    )
+                    content, _ = _plan_content(
+                        plan.commit,
+                        {
+                            "targets": list(plan.targets),
+                            "placements": plan.placements,
+                            "routes": plan.routes,
+                            "releases": plan.releases,
+                            "input_digests": plan.input_digests,
+                            "operation_graph": graph,
+                            "operation_payloads": plan.operation_payloads,
+                            "agent_protocol_range": plan.agent_protocol_range,
+                        },
+                    )
+                    self._orchestrator.store_resolved_plan(
+                        graph, plan.digest, cast_mapping(_jsonable(content))
+                    )
         self._plans[plan.digest] = plan
+        return plan
+
+    def _restore_plan(
+        self,
+        plan_digest: str,
+        graph: OperationGraph,
+        document: Mapping[str, object],
+    ) -> ReconciliationPlan:
+        if document.get("operation_graph") != graph.document:
+            raise ValueError("persisted resolved plan graph is invalid")
+        protocol = document.get("agent_protocol_range")
+        if not isinstance(protocol, list) or len(protocol) != 2:
+            raise ValueError("persisted resolved plan protocol is invalid")
+        plan = resolved_reconciliation_plan(
+            commit=graph.base_commit,
+            targets=tuple(cast_mapping(document)["targets"]),
+            placements=cast_mapping(document["placements"]),
+            routes=cast_mapping(document["routes"]),
+            releases=cast_mapping(document["releases"]),
+            input_digests=cast_mapping(document["input_digests"]),
+            operation_graph=graph,
+            operation_payloads=cast_mapping(document["operation_payloads"]),
+            agent_protocol_range=(protocol[0], protocol[1]),
+        )
+        if plan.digest != plan_digest:
+            raise ValueError("persisted resolved plan content is invalid")
         return plan
 
     def _verify_plan(self, plan: ReconciliationPlan) -> None:
@@ -293,10 +366,16 @@ class Reconciler:
     def enqueue(self, plan_digest: str, actor: str, request_id: str) -> dict[str, object]:
         if self._jobs is None:
             raise RuntimeError("durable reconciliation jobs are unavailable")
-        try:
-            plan = self._plans[plan_digest]
-        except KeyError:
-            raise ValueError("unknown reconciliation plan digest") from None
+        plan = None
+        if self._orchestrator is not None:
+            loaded = self._orchestrator.resolved_plan(plan_digest)
+            if loaded is not None:
+                plan = self._restore_plan(plan_digest, *loaded)
+        if plan is None:
+            try:
+                plan = self._plans[plan_digest]
+            except KeyError:
+                raise ValueError("unknown reconciliation plan digest") from None
         self._verify_plan(plan)
         self._eligible(plan.commit)
         job = self._jobs.enqueue(
@@ -312,6 +391,7 @@ class Reconciler:
                         "operation_graph": plan.operation_graph.document,
                         "operation_payloads": _jsonable(plan.operation_payloads),
                         "agent_protocol_range": list(plan.agent_protocol_range or ()),
+                        "reconciliation_id": plan.operation_graph.reconciliation_id,
                     }
                     if plan.operation_graph is not None
                     else {}
@@ -319,4 +399,7 @@ class Reconciler:
             },
             request_id=request_id,
         )
-        return {"job_id": job.id, "state": job.state, "base_commit": plan.commit}
+        result = {"job_id": job.id, "state": job.state, "base_commit": plan.commit}
+        if plan.operation_graph is not None:
+            result["reconciliation_id"] = plan.operation_graph.reconciliation_id
+        return result

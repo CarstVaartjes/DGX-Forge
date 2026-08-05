@@ -5,7 +5,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import dataclass
 
-from .reconcile import Reconciler
+from .reconcile import CompatibilityDefinitions, Reconciler
 
 
 class _Eligible:
@@ -65,7 +65,12 @@ def simulate(nodes: int, fault: str | None = None) -> AcceptanceResult:
     controller = _Controller(fault)
     reconciler = Reconciler(
         _Eligible(),
-        lambda _commit: {"targets": targets, "routes": {"model": "upstream"}},
+        CompatibilityDefinitions(
+            lambda _commit: {
+                "targets": targets,
+                "routes": {"model": "upstream"},
+            }
+        ),
         routes,
         controller,
         _Leases(),

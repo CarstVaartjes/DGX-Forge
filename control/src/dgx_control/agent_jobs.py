@@ -7,7 +7,7 @@ import json
 import threading
 import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 
 from dgx_agent_protocol import (
@@ -21,7 +21,13 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from .logging import redact_text
-from .models import AgentCertificate, AgentNode, AgentOperationAttempt, Job
+from .models import (
+    AgentCertificate,
+    AgentNode,
+    AgentOperationAttempt,
+    Job,
+    Observation,
+)
 from .models import AgentOperation as StoredOperation
 
 AgentFence = str | AgentClaim | AgentProgress | AgentResult
@@ -32,6 +38,17 @@ _SAFE_AUTOMATIC_RECLAIM = frozenset({
 })
 _TERMINAL_PARENT_STATES = frozenset({"succeeded", "failed", "waiting-for-operator", "expired"})
 _RETRY_DISPOSITION = "retry"
+_IMPLEMENTED_CAPABILITIES = frozenset(
+    {
+        AgentOperation.NODE_PROBE.value,
+        AgentOperation.RELEASE_INSTALL.value,
+        AgentOperation.WORKLOAD_HEALTH.value,
+        AgentOperation.WORKLOAD_PREPARE.value,
+        AgentOperation.WORKLOAD_START.value,
+        AgentOperation.WORKLOAD_STOP.value,
+        AgentOperation.WORKLOAD_VERIFY.value,
+    }
+)
 
 
 class StaleAgentAttempt(RuntimeError):
@@ -130,6 +147,7 @@ class AgentJobService:
         lease_seconds: int,
         wait_seconds: float = 0,
         protocol_version: int | None = None,
+        capabilities: Sequence[str] | None = None,
     ) -> AgentClaim | None:
         if (
             not node_id.strip()
@@ -147,6 +165,7 @@ class AgentJobService:
             )
         ):
             raise ValueError("node, certificate, and positive lease are required")
+        advertised = self._capabilities(capabilities)
         deadline = time.monotonic() + wait_seconds
         with self._available:
             while True:
@@ -155,6 +174,7 @@ class AgentJobService:
                     certificate_serial,
                     lease_seconds,
                     protocol_version,
+                    advertised,
                 )
                 if claim is not None:
                     return claim
@@ -169,6 +189,7 @@ class AgentJobService:
         certificate_serial: str,
         lease_seconds: int,
         protocol_version: int | None,
+        capabilities: tuple[str, ...] | None,
     ) -> AgentClaim | None:
         with self._claim_lock, self._sessions.begin() as session:
             identity = self._lock_identity(session, node_id, certificate_serial)
@@ -176,7 +197,7 @@ class AgentJobService:
             if identity is None or not self._identity_is_active(*identity, now):
                 return None
             node, _certificate = identity
-            self._record_contact(node, now, protocol_version)
+            self._record_contact(node, now, protocol_version, capabilities)
             expired_attempt = select(AgentOperationAttempt.id).where(
                 AgentOperationAttempt.operation_id == StoredOperation.id,
                 AgentOperationAttempt.attempt == StoredOperation.current_attempt,
@@ -302,6 +323,7 @@ class AgentJobService:
     ) -> None:
         with self._sessions.begin() as session:
             operation, attempt = self._active(session, fence)
+            now = self._clock()
             if result is not None:
                 message = AgentResult(
                     schema_version=1,
@@ -315,12 +337,21 @@ class AgentJobService:
                     result=result,
                 )
                 attempt.result = _document(message.result)
+                if operation.kind == AgentOperation.NODE_PROBE.value:
+                    session.add(
+                        Observation(
+                            node_id=operation.node_id,
+                            kind="health",
+                            payload=self._probe_health(message.result),
+                            observed_at=now,
+                        )
+                    )
             else:
                 safe_reason = self._reason(reason)
                 attempt.result = {"reason": safe_reason}
             attempt.state = state
             operation.state = state
-            operation.updated_at = self._clock()
+            operation.updated_at = now
             self._aggregate_parent(session, operation.parent_job_id)
 
     def _active(
@@ -375,14 +406,31 @@ class AgentJobService:
         ):
             raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
         node, _certificate = identity
-        self._record_contact(node, now, None)
+        self._record_contact(node, now, None, None)
         return operation, attempt
+
+    @staticmethod
+    def _capabilities(
+        capabilities: Sequence[str] | None,
+    ) -> tuple[str, ...] | None:
+        if capabilities is None:
+            return None
+        if isinstance(capabilities, (str, bytes)):
+            raise TypeError("agent capabilities are invalid")
+        values = tuple(capabilities)
+        if (
+            len(values) != len(set(values))
+            or set(values) != _IMPLEMENTED_CAPABILITIES
+        ):
+            raise ValueError("agent capabilities are invalid")
+        return tuple(sorted(values))
 
     @staticmethod
     def _record_contact(
         node: AgentNode,
         now: datetime,
         protocol_version: int | None,
+        capabilities: tuple[str, ...] | None,
     ) -> None:
         current = None if node.last_seen_at is None else _aware(node.last_seen_at)
         observed = _aware(now)
@@ -390,6 +438,72 @@ class AgentJobService:
             node.last_seen_at = observed
         if protocol_version is not None:
             node.protocol_version = protocol_version
+        if capabilities is not None:
+            node.capabilities = list(capabilities)
+
+    @staticmethod
+    def _probe_health(result: Mapping[str, object]) -> dict[str, object]:
+        if set(result) != {"status", "evidence"} or result.get("status") != "ok":
+            raise ValueError("successful node probe result is invalid")
+        evidence = result.get("evidence")
+        if not isinstance(evidence, Mapping) or set(evidence) != {
+            "dgx_forge",
+            "nvidia",
+        }:
+            raise ValueError("successful node probe evidence is invalid")
+        health = evidence.get("dgx_forge")
+        nvidia = evidence.get("nvidia")
+        if (
+            not isinstance(health, Mapping)
+            or health.get("schema_version") != 1
+            or not isinstance(nvidia, Mapping)
+        ):
+            raise ValueError("successful node probe evidence is invalid")
+        memory = health.get("memory")
+        storage = health.get("storage")
+        accelerator = health.get("accelerator")
+        memory_available = (
+            memory.get("available_bytes") if isinstance(memory, Mapping) else None
+        )
+        disk_available = (
+            storage.get("available_bytes") if isinstance(storage, Mapping) else None
+        )
+        accelerator_available = (
+            accelerator.get("available")
+            if isinstance(accelerator, Mapping)
+            else False
+        )
+        if (
+            not isinstance(memory_available, int)
+            or isinstance(memory_available, bool)
+            or not 0 <= memory_available <= 2**63 - 1
+            or not isinstance(disk_available, int)
+            or isinstance(disk_available, bool)
+            or not 0 <= disk_available <= 2**63 - 1
+            or not isinstance(accelerator_available, bool)
+        ):
+            raise ValueError("successful node probe capacity is invalid")
+        tools = nvidia.get("tools", {})
+        if not isinstance(tools, Mapping):
+            raise TypeError("successful node probe tool evidence is invalid")
+        warning = any(
+            not isinstance(item, Mapping) or item.get("status") != "ok"
+            for item in tools.values()
+        )
+        status = (
+            "critical"
+            if accelerator_available is False
+            else "warning" if warning else "healthy"
+        )
+        observation: dict[str, object] = {
+            "status": status,
+            "memory_available_bytes": memory_available,
+            "disk_available_bytes": disk_available,
+            "occupied": False,
+        }
+        if len(canonical_message(observation)) > 1024:
+            raise ValueError("node probe health observation is too large")
+        return observation
 
     @staticmethod
     def _fence_token(fence: AgentFence) -> str:

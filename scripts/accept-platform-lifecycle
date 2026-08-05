@@ -23,7 +23,7 @@ sys.path[:0] = [str(ROOT / "src"), str(ROOT / "control/src")]
 
 from dgx_control.git_policy import Eligibility  # noqa: E402
 from dgx_control.litellm import LiteLlmPolicy, LiteLlmPublisher  # noqa: E402
-from dgx_control.reconcile import Reconciler  # noqa: E402
+from dgx_control.reconcile import CompatibilityDefinitions, Reconciler  # noqa: E402
 from dgx_control.routes import RouteCandidate, RoutePublisher  # noqa: E402
 from spark_profiles.fleet import ManagementEndpoint, NodeId  # noqa: E402
 from spark_profiles.fleet.install_contracts import InstallationRequest  # noqa: E402
@@ -91,8 +91,13 @@ def run(host: str, display_name: str) -> dict[str, object]:
         route_publisher = RoutePublisher(workspace / "routes", allowed_upstreams={upstream}, validate=lambda _: True, apply=lambda _: None)
         candidate = RouteCandidate(commit, "agent", "model-repository/revision", (node_id.value,), {"test-model": upstream}, datetime(2026, 8, 3, tzinfo=UTC))
         routes = Routes(route_publisher, candidate, audit)
-        definitions = lambda _commit: {"targets": [node_id.value], "placements": {"test-model": [node_id.value]}, "routes": {node_id.value: "test-model"}, "releases": {node_id.value: "sha256:" + "b" * 64}, "input_digests": {"fleet": proposal.sha256, "profile": "c" * 64}}
-        result = Reconciler(Policy(), definitions, routes, Controller(audit), Leases()).execute(Reconciler(Policy(), definitions, routes, Controller(audit), Leases()).plan(commit))
+        definitions = CompatibilityDefinitions(
+            lambda _commit: {"targets": [node_id.value], "placements": {"test-model": [node_id.value]}, "routes": {node_id.value: "test-model"}, "releases": {node_id.value: "sha256:" + "b" * 64}, "input_digests": {"fleet": proposal.sha256, "profile": "c" * 64}}
+        )
+        reconciler = Reconciler(
+            Policy(), definitions, routes, Controller(audit), Leases()
+        )
+        result = reconciler.execute(reconciler.plan(commit))
         snapshot = route_publisher.snapshot()
         generation = LiteLlmPublisher(workspace / "litellm", validate=lambda _: True, apply=lambda _: None).publish(snapshot, LiteLlmPolicy({"test-model": {"requests_per_minute": 30, "tokens_per_minute": 10000}}))
         served_status = 200 if snapshot.state == "published" and "test-model" in snapshot.aliases else 503

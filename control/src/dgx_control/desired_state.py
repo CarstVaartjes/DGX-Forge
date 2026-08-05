@@ -12,7 +12,7 @@ from importlib import resources
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast
 
-from dgx_agent_protocol import AgentOperation
+from dgx_agent_protocol import AgentOperation, canonical_message
 from jsonschema import ValidationError, validate
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
 _IDENTIFIER = re.compile(r"[a-z0-9][a-z0-9._-]{0,62}\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
-_ARTIFACT = re.compile(r"[^\s]+@sha256:[0-9a-f]{64}\Z")
+_OCI_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SUPPORTED_PROTOCOL_RANGE = (1, 1)
 _REQUIRED_CAPABILITIES = frozenset(
     {
@@ -49,6 +49,7 @@ _IMPLEMENTED_CAPABILITIES = _REQUIRED_CAPABILITIES | {
     AgentOperation.NODE_PROBE.value
 }
 _PLANNED_OPERATIONS = (
+    AgentOperation.WORKLOAD_STOP.value,
     AgentOperation.RELEASE_INSTALL.value,
     AgentOperation.WORKLOAD_PREPARE.value,
     AgentOperation.WORKLOAD_START.value,
@@ -164,12 +165,25 @@ class DesiredStateResolver:
             workload_hash = cast(str, workload["definition_hash"])
             if requirements[workload_id].definition_hash != workload_hash:
                 raise ValueError("profile definition hash does not match workload")
+            distributed_supported = workload["distributed_supported"]
+            if (
+                distributed_supported
+                is not requirements[workload_id].model_supports_distributed
+                or (
+                    requirements[workload_id].node_count > 1
+                    and distributed_supported is not True
+                )
+            ):
+                raise ValueError(
+                    "profile and workload distributed support do not match"
+                )
             release_path = f"manifests/releases/{workload_id}.json"
             release_document = read(release_path)
             release = _release(
                 _mapping(release_document.parsed, "release manifest"),
                 workload_id=workload_id,
                 definition_hash=workload_hash,
+                adapter_id=cast(str, workload["adapter"]),
             )
             workloads[workload_id] = workload
             releases[workload_id] = MappingProxyType(
@@ -177,7 +191,8 @@ class DesiredStateResolver:
                     "manifest_path": release_path,
                     "manifest_sha256": release_document.sha256,
                     "definition_hash": workload_hash,
-                    "artifact": release["artifact"],
+                    "release_request": release["release_request"],
+                    "workload_requests": release["workload_requests"],
                     "endpoint": release["endpoint"],
                 }
             )
@@ -190,14 +205,12 @@ class DesiredStateResolver:
             ttl=self._observation_ttl,
         )
         placements: dict[str, tuple[str, ...]] = {}
-        placement_inputs: dict[str, str] = {}
         available = placement_observations
         planner = PlacementPlanner()
         for workload_id in workload_ids:
             requirement = requirements[workload_id]
             placement = planner.plan(requirement, fleet, topology, available.values())
             placements[workload_id] = tuple(node.value for node in placement.nodes)
-            placement_inputs[workload_id] = placement.input_digest
             if requirement.exclusive:
                 available = dict(available)
                 for node_id in placement.nodes:
@@ -208,7 +221,6 @@ class DesiredStateResolver:
             commit,
             placements=placements,
             releases=releases,
-            placement_inputs=placement_inputs,
             lifecycle=_mapping(profile["lifecycle"], "profile lifecycle"),
         )
         input_digests = {
@@ -376,14 +388,18 @@ def _repository_path(value: object, *, prefix: str) -> str:
 
 
 def _release(
-    document: Mapping[str, Any], *, workload_id: str, definition_hash: str
+    document: Mapping[str, Any],
+    *,
+    workload_id: str,
+    definition_hash: str,
+    adapter_id: str,
 ) -> Mapping[str, Any]:
     if set(document) != {
         "schema_version",
         "workload_id",
         "definition_hash",
-        "artifact",
-        "operations",
+        "release_request",
+        "workload_requests",
         "endpoint",
     } or document.get("schema_version") != 1:
         raise ValueError("release manifest schema is invalid")
@@ -391,26 +407,67 @@ def _release(
         raise ValueError("release workload reference is invalid")
     if document.get("definition_hash") != definition_hash:
         raise ValueError("release definition hash does not match workload")
-    artifact = _mapping(document["artifact"], "release artifact")
+    release_request = _mapping(document["release_request"], "release request")
     if (
-        set(artifact) != {"reference", "sha256"}
-        or not isinstance(artifact.get("reference"), str)
-        or _ARTIFACT.fullmatch(cast(str, artifact["reference"])) is None
-        or not isinstance(artifact.get("sha256"), str)
-        or _DIGEST.fullmatch(cast(str, artifact["sha256"])) is None
-        or not cast(str, artifact["reference"]).endswith(
-            "@sha256:" + cast(str, artifact["sha256"])
+        set(release_request)
+        != {
+            "schema_version",
+            "target_name",
+            "oci_manifest_digest",
+            "target_digest",
+            "provenance_digest",
+            "adapter_id",
+        }
+        or release_request.get("schema_version") != 1
+        or not isinstance(release_request.get("target_name"), str)
+        or _IDENTIFIER.fullmatch(cast(str, release_request["target_name"])) is None
+        or not isinstance(release_request.get("oci_manifest_digest"), str)
+        or _OCI_DIGEST.fullmatch(
+            cast(str, release_request["oci_manifest_digest"])
         )
+        is None
+        or not isinstance(release_request.get("target_digest"), str)
+        or _DIGEST.fullmatch(cast(str, release_request["target_digest"])) is None
+        or not isinstance(release_request.get("provenance_digest"), str)
+        or _DIGEST.fullmatch(cast(str, release_request["provenance_digest"])) is None
+        or release_request.get("adapter_id") != adapter_id
+        or release_request["oci_manifest_digest"]
+        != "sha256:" + cast(str, release_request["target_digest"])
     ):
-        raise ValueError("release artifact is invalid")
-    operations = document["operations"]
-    if (
-        not isinstance(operations, Sequence)
-        or isinstance(operations, (str, bytes))
-        or len(operations) != len(set(operations))
-        or set(operations) != _REQUIRED_CAPABILITIES
-    ):
+        raise ValueError("release request is invalid")
+    workload_requests = _mapping(
+        document["workload_requests"], "workload requests"
+    )
+    expected_actions = {"prepare", "start", "stop", "health", "verify"}
+    if set(workload_requests) != expected_actions:
         raise ValueError("release operations are outside the closed agent registry")
+    parsed_requests: dict[str, Mapping[str, object]] = {}
+    extras = {
+        "prepare": "profile_digest",
+        "start": "preparation_digest",
+        "stop": None,
+        "health": None,
+        "verify": "expected_digest",
+    }
+    common = {
+        "schema_version",
+        "workload_id",
+        "release_digest",
+        "adapter_id",
+    }
+    for action, extra in extras.items():
+        request = _mapping(workload_requests[action], f"workload {action} request")
+        fields = common | ({extra} if extra is not None else set())
+        if (
+            set(request) != fields
+            or request.get("schema_version") != 1
+            or request.get("workload_id") != workload_id
+            or request.get("adapter_id") != adapter_id
+            or request.get("release_digest") != release_request["target_digest"]
+            or (extra is not None and _valid_digest(request.get(extra)) is False)
+        ):
+            raise ValueError(f"workload {action} request is invalid")
+        parsed_requests[action] = MappingProxyType(dict(request))
     endpoint = _mapping(document["endpoint"], "release endpoint")
     if (
         set(endpoint) != {"scheme", "port", "path"}
@@ -425,11 +482,15 @@ def _release(
     return MappingProxyType(
         {
             **document,
-            "artifact": MappingProxyType(dict(artifact)),
-            "operations": tuple(sorted(cast(Sequence[str], operations))),
+            "release_request": MappingProxyType(dict(release_request)),
+            "workload_requests": MappingProxyType(parsed_requests),
             "endpoint": MappingProxyType(dict(endpoint)),
         }
     )
+
+
+def _valid_digest(value: object) -> bool:
+    return isinstance(value, str) and _DIGEST.fullmatch(value) is not None
 
 
 def _profile_cross_references(
@@ -510,9 +571,7 @@ def _routes(
 
 
 def _payload_digest(payload: Mapping[str, object]) -> str:
-    return hashlib.sha256(
-        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    return hashlib.sha256(canonical_message(payload)).hexdigest()
 
 
 def _operations(
@@ -520,7 +579,6 @@ def _operations(
     *,
     placements: Mapping[str, tuple[str, ...]],
     releases: Mapping[str, Mapping[str, Any]],
-    placement_inputs: Mapping[str, str],
     lifecycle: Mapping[str, Any],
 ) -> tuple[OperationGraph, Mapping[str, Mapping[str, object]]]:
     nodes: dict[str, OperationNode] = {}
@@ -534,11 +592,37 @@ def _operations(
             operation_ids[(node_id, AgentOperation.WORKLOAD_START.value)]
             for node_id in targets[1:]
         )
+        worker_stops = tuple(
+            operation_ids[(node_id, AgentOperation.WORKLOAD_STOP.value)]
+            for node_id in targets[1:]
+        )
         for node_id in targets:
             for kind in _PLANNED_OPERATIONS:
                 operation_id = operation_ids[(node_id, kind)]
-                if kind == AgentOperation.RELEASE_INSTALL.value:
-                    dependencies: tuple[str, ...] = ()
+                if kind == AgentOperation.WORKLOAD_STOP.value:
+                    dependencies = ()
+                    if (
+                        node_id != targets[0]
+                        and lifecycle["stop_order"] == "entrypoint-before-workers"
+                    ):
+                        dependencies = (
+                            operation_ids[
+                                (targets[0], AgentOperation.WORKLOAD_STOP.value)
+                            ],
+                        )
+                elif kind == AgentOperation.RELEASE_INSTALL.value:
+                    if lifecycle["stop_order"] == "entrypoint-before-workers":
+                        dependencies = worker_stops or (
+                            operation_ids[
+                                (targets[0], AgentOperation.WORKLOAD_STOP.value)
+                            ],
+                        )
+                    else:
+                        dependencies = (
+                            operation_ids[
+                                (node_id, AgentOperation.WORKLOAD_STOP.value)
+                            ],
+                        )
                 elif kind == AgentOperation.WORKLOAD_PREPARE.value:
                     dependencies = (
                         operation_ids[(node_id, AgentOperation.RELEASE_INSTALL.value)],
@@ -560,18 +644,17 @@ def _operations(
                     dependencies = (
                         operation_ids[(node_id, AgentOperation.WORKLOAD_HEALTH.value)],
                     )
-                payload: Mapping[str, object] = {
-                    "schema_version": 1,
-                    "workload_id": workload_id,
-                    "node_id": node_id,
-                    "operation": kind,
-                    "definition_hash": releases[workload_id]["definition_hash"],
-                    "release_manifest": releases[workload_id]["manifest_path"],
-                    "release_manifest_sha256": releases[workload_id][
-                        "manifest_sha256"
-                    ],
-                    "placement_input_digest": placement_inputs[workload_id],
-                }
+                if kind == AgentOperation.RELEASE_INSTALL.value:
+                    payload = cast(
+                        Mapping[str, object],
+                        releases[workload_id]["release_request"],
+                    )
+                else:
+                    requests = cast(
+                        Mapping[str, Mapping[str, object]],
+                        releases[workload_id]["workload_requests"],
+                    )
+                    payload = requests[kind.removeprefix("workload.")]
                 payloads[operation_id] = MappingProxyType(dict(payload))
                 nodes[operation_id] = OperationNode(
                     operation_id=operation_id,
@@ -598,7 +681,7 @@ def _operations(
         json.dumps(graph_document, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
     return (
-        OperationGraph("", commit, targets, ordered, digest),
+        OperationGraph(f"pending:{digest}", commit, targets, ordered, digest),
         MappingProxyType(dict(sorted(payloads.items()))),
     )
 

@@ -1,9 +1,12 @@
 import base64
 
+import pytest
 from dgx_control.api import AdminServices, SpaFiles, create_app
 from dgx_control.audit import MemoryAuditStore
 from dgx_control.auth import Actor, TokenCodec
 from dgx_control.proposals import ProposalPreview
+from dgx_control.reconcile import IneligibleCommit
+from dgx_control.repository import RepositoryPolicyError
 from fastapi.testclient import TestClient
 
 
@@ -38,7 +41,14 @@ class Reconciler:
                 "routes": {},
                 "releases": {},
                 "input_digests": {},
-                "operation_graph": type("Graph", (), {"document": {"schema_version": 1}})(),
+                "operation_graph": type(
+                    "Graph",
+                    (),
+                    {
+                        "document": {"schema_version": 1},
+                        "reconciliation_id": "reconciliation-1",
+                    },
+                )(),
                 "agent_protocol_range": (1, 1),
             },
         )()
@@ -94,10 +104,79 @@ def test_reconciliation_plan_requires_an_explicit_repository_profile() -> None:
     )
     assert response.status_code == 200
     assert response.json()["agent_protocol_range"] == [1, 1]
+    assert response.json()["reconciliation_id"] == "reconciliation-1"
     assert response.json()["operation_graph"] == {"schema_version": 1}
     assert client.post(
         "/api/v1/reconciliations/plan", headers=headers, json={"commit": "a" * 40}
     ).status_code == 422
+
+
+@pytest.mark.parametrize(
+    ("error", "status_code", "detail"),
+    [
+        (IneligibleCommit("secret detail"), 409, "commit is not eligible"),
+        (
+            RepositoryPolicyError("secret detail"),
+            422,
+            "repository desired state is invalid",
+        ),
+        (ValueError("secret detail"), 422, "desired state cannot be planned"),
+    ],
+)
+def test_expected_planning_rejections_are_stable_bounded_client_errors(
+    error, status_code: int, detail: str
+) -> None:
+    class RejectingReconciler:
+        def plan(self, commit, profile_id):
+            raise error
+
+    codec = TokenCodec(b"k" * 32)
+    app = create_app(
+        jobs=Jobs(),
+        tokens=codec,
+        audits=MemoryAuditStore(),
+        fleet=dict,
+        admin=AdminServices(Repository(), Proposals(), None, RejectingReconciler()),
+        now=lambda: 10,
+    )
+    client = TestClient(app)
+    token = codec.issue(Actor("operator", "operator"), ttl_seconds=100, now=0)
+
+    response = client.post(
+        "/api/v1/reconciliations/plan",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"commit": "a" * 40, "profile_id": "inference"},
+    )
+
+    assert response.status_code == status_code
+    assert response.json() == {"detail": detail}
+    assert "secret" not in response.text
+
+
+def test_unexpected_planning_errors_remain_server_errors() -> None:
+    class BrokenReconciler:
+        def plan(self, commit, profile_id):
+            raise AssertionError("programming defect")
+
+    codec = TokenCodec(b"k" * 32)
+    app = create_app(
+        jobs=Jobs(),
+        tokens=codec,
+        audits=MemoryAuditStore(),
+        fleet=dict,
+        admin=AdminServices(Repository(), Proposals(), None, BrokenReconciler()),
+        now=lambda: 10,
+    )
+    client = TestClient(app, raise_server_exceptions=False)
+    token = codec.issue(Actor("operator", "operator"), ttl_seconds=100, now=0)
+
+    response = client.post(
+        "/api/v1/reconciliations/plan",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"commit": "a" * 40, "profile_id": "inference"},
+    )
+
+    assert response.status_code == 500
 
 
 def test_spa_falls_back_to_index_for_client_routes_but_not_assets(tmp_path) -> None:

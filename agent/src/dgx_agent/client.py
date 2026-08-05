@@ -33,6 +33,15 @@ from dgx_agent_protocol import (
 
 MAX_BODY_BYTES = 64 * 1024
 _PROTOCOL_VERSION = 1
+_CAPABILITIES = (
+    "node.probe",
+    "release.install",
+    "workload.health",
+    "workload.prepare",
+    "workload.start",
+    "workload.stop",
+    "workload.verify",
+)
 _JSON_CONTENT_TYPE = re.compile(r"application/json(?:;\s*charset=utf-8)?\Z")
 _DNS_HOST = re.compile(
     r"(?=.{1,253}\Z)"
@@ -1213,6 +1222,7 @@ class AgentClient:
             self._runtime_origin,
             "/agent/v1/claim",
             {
+                "capabilities": list(_CAPABILITIES),
                 "lease_seconds": self._lease_seconds,
                 "node_id": self._node_id,
                 "protocol_version": _PROTOCOL_VERSION,

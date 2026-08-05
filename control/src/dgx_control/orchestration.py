@@ -158,6 +158,87 @@ class ReconciliationOrchestrator:
             stored.current_phase = phase
             stored.status = "succeeded" if phase == "completed" else "running"
 
+    def store_resolved_plan(
+        self,
+        graph: OperationGraph,
+        plan_digest: str,
+        document: Mapping[str, object],
+    ) -> None:
+        """Attach the complete immutable plan to its accepted graph row."""
+
+        if _DIGEST.fullmatch(plan_digest) is None:
+            raise ValueError("resolved plan digest is invalid")
+        encoded = json.dumps(
+            document, sort_keys=True, separators=(",", ":")
+        ).encode()
+        if len(encoded) > 1_048_576:
+            raise ValueError("resolved reconciliation plan is too large")
+        if hashlib.sha256(encoded).hexdigest() != plan_digest:
+            raise ValueError("resolved plan content does not match its digest")
+        stored_document = json.loads(encoded)
+        with self._sessions.begin() as session:
+            stored = self._stored(session, graph.reconciliation_id)
+            if stored.graph_digest != graph.digest or stored.graph != graph.document:
+                raise ValueError("resolved plan graph does not match persisted graph")
+            if stored.plan_digest is not None:
+                if (
+                    stored.plan_digest != plan_digest
+                    or stored.resolved_plan != stored_document
+                ):
+                    raise ValueError("reconciliation already has a different plan")
+                return
+            stored.plan_digest = plan_digest
+            stored.resolved_plan = stored_document
+
+    def resolved_plan(
+        self, plan_digest: str
+    ) -> tuple[OperationGraph, Mapping[str, object]] | None:
+        """Load and revalidate a complete plan after a process restart."""
+
+        if not isinstance(plan_digest, str) or _DIGEST.fullmatch(plan_digest) is None:
+            return None
+        with self._sessions() as session:
+            stored = session.scalar(
+                select(Reconciliation).where(
+                    Reconciliation.plan_digest == plan_digest
+                )
+            )
+            if stored is None or stored.resolved_plan is None:
+                return None
+            document = json.loads(
+                json.dumps(stored.resolved_plan, sort_keys=True, separators=(",", ":"))
+            )
+            encoded = json.dumps(
+                document, sort_keys=True, separators=(",", ":")
+            ).encode()
+            if hashlib.sha256(encoded).hexdigest() != plan_digest:
+                raise ValueError("persisted resolved plan digest is invalid")
+            graph_document = stored.graph
+            if not isinstance(graph_document, Mapping):
+                raise TypeError("persisted reconciliation graph is invalid")
+            _, targets, _, nodes = _parse_plan(
+                {
+                    "base_commit": graph_document.get("base_commit"),
+                    "targets": graph_document.get("targets"),
+                    "route_withdrawal_generation": stored.route_withdrawal_generation,
+                    "operations": graph_document.get("nodes"),
+                }
+            )
+            expected_graph = _graph_document(stored.base_commit, targets, nodes)
+            if (
+                expected_graph != graph_document
+                or _digest(expected_graph) != stored.graph_digest
+            ):
+                raise ValueError("persisted reconciliation graph digest is invalid")
+            graph = OperationGraph(
+                stored.id,
+                stored.base_commit,
+                targets,
+                nodes,
+                stored.graph_digest,
+            )
+            return graph, document
+
     def cancel(self, reconciliation_id: str, reason: str) -> None:
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("cancellation reason is required")

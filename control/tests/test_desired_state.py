@@ -4,11 +4,13 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from dgx_agent_protocol import canonical_message
 from dgx_control.desired_state import (
     DesiredStateObservation,
     DesiredStateResolver,
@@ -107,13 +109,16 @@ stop_order = "{stop_order}"
 '''
 
 
-def _workload_toml(*, definition_hash: str = DEFINITION_HASH) -> str:
+def _workload_toml(
+    *, definition_hash: str = DEFINITION_HASH, distributed_supported: bool = True
+) -> str:
+    distributed = str(distributed_supported).lower()
     return f'''schema_version = 2
 id = "model"
 adapter = "repository-agent"
 definition_hash = "{definition_hash}"
 conflicts = []
-distributed_supported = true
+distributed_supported = {distributed}
 '''
 
 
@@ -140,15 +145,37 @@ def _release(
     definition_hash: str = DEFINITION_HASH,
     operations: tuple[str, ...] = REQUIRED_CAPABILITIES,
 ) -> dict[str, object]:
+    requests: dict[str, dict[str, object]] = {}
+    for operation in operations:
+        if operation == "release.install":
+            continue
+        action = operation.removeprefix("workload.")
+        request: dict[str, object] = {
+            "schema_version": 1,
+            "workload_id": "model",
+            "release_digest": "a" * 64,
+            "adapter_id": "repository-agent",
+        }
+        if action == "prepare":
+            request["profile_digest"] = "c" * 64
+        elif action == "start":
+            request["preparation_digest"] = "e" * 64
+        elif action == "verify":
+            request["expected_digest"] = "f" * 64
+        requests[action] = request
     return {
         "schema_version": 1,
         "workload_id": "model",
         "definition_hash": definition_hash,
-        "artifact": {
-            "reference": "registry.example.invalid/model@sha256:" + "a" * 64,
-            "sha256": "a" * 64,
+        "release_request": {
+            "schema_version": 1,
+            "target_name": "model",
+            "oci_manifest_digest": "sha256:" + "a" * 64,
+            "target_digest": "a" * 64,
+            "provenance_digest": "b" * 64,
+            "adapter_id": "repository-agent",
         },
-        "operations": list(operations),
+        "workload_requests": requests,
         "endpoint": {"scheme": "http", "port": 8000, "path": "/v1"},
     }
 
@@ -162,6 +189,7 @@ def _repository(
     workload_hash: str = DEFINITION_HASH,
     release_hash: str = DEFINITION_HASH,
     operations: tuple[str, ...] = REQUIRED_CAPABILITIES,
+    workload_distributed_supported: bool = True,
 ) -> tuple[RepositoryService, str, dict[str, bytes]]:
     root = tmp_path / "repository"
     root.mkdir(parents=True)
@@ -178,7 +206,8 @@ def _repository(
             count, definition_hash=requirement_hash
         ).encode(),
         "config/workloads/model.toml": _workload_toml(
-            definition_hash=workload_hash
+            definition_hash=workload_hash,
+            distributed_supported=workload_distributed_supported,
         ).encode(),
         "manifests/releases/model.json": json.dumps(
             _release(definition_hash=release_hash, operations=operations),
@@ -248,11 +277,13 @@ def test_resolves_one_two_and_sixteen_nodes_from_exact_repository_objects(
         path: hashlib.sha256(content).hexdigest()
         for path, content in sorted(documents.items())
     }
-    assert len(plan.operation_graph.nodes) == count * 5
+    assert plan.operation_graph.reconciliation_id
+    assert len(plan.operation_graph.nodes) == count * 6
     assert {node.kind for node in plan.operation_graph.nodes} == {
         "release.install",
         "workload.prepare",
         "workload.start",
+        "workload.stop",
         "workload.health",
         "workload.verify",
     }
@@ -261,6 +292,61 @@ def test_resolves_one_two_and_sixteen_nodes_from_exact_repository_objects(
         and len(node.payload_digest) == 64
         for node in plan.operation_graph.nodes
     )
+
+
+def test_every_emitted_payload_is_accepted_by_the_exact_agent_parser(
+    tmp_path: Path,
+) -> None:
+    repository, commit, _ = _repository(tmp_path, 2)
+    plan = _resolve(repository, commit, _observations(2))
+    agent_source = Path(__file__).parents[2] / "agent" / "src"
+    sys.path.insert(0, str(agent_source))
+    try:
+        from dgx_agent.releases import ReleaseRequest
+        from dgx_agent.workloads import WorkloadAction, WorkloadRequest
+
+        for node in plan.operation_graph.nodes:
+            payload = plan.operation_payloads[node.operation_id]
+            if node.kind == "release.install":
+                ReleaseRequest.parse(payload)
+            else:
+                action = WorkloadAction(node.kind.removeprefix("workload."))
+                WorkloadRequest.parse(action, payload)
+            assert node.payload_digest == hashlib.sha256(
+                canonical_message(payload)
+            ).hexdigest()
+    finally:
+        sys.path.remove(str(agent_source))
+
+
+def test_start_and_stop_dependencies_follow_lifecycle_order(tmp_path: Path) -> None:
+    repository, commit, _ = _repository(tmp_path, 2)
+    plan = _resolve(repository, commit, _observations(2))
+    head, worker = plan.targets
+    graph = plan.operation_graph
+
+    assert graph.dependencies(f"model:{head}:workload.start") == (
+        f"model:{head}:workload.prepare",
+        f"model:{worker}:workload.start",
+    )
+    assert graph.dependencies(f"model:{head}:workload.stop") == ()
+    assert graph.dependencies(f"model:{worker}:workload.stop") == (
+        f"model:{head}:workload.stop",
+    )
+    assert graph.dependencies(f"model:{head}:release.install") == (
+        f"model:{worker}:workload.stop",
+    )
+
+
+def test_rejects_distributed_profile_when_workload_disallows_distribution(
+    tmp_path: Path,
+) -> None:
+    repository, commit, _ = _repository(
+        tmp_path, 2, workload_distributed_supported=False
+    )
+
+    with pytest.raises(ValueError, match="distributed support"):
+        _resolve(repository, commit, _observations(2))
 
 
 def test_reordered_repository_tables_and_observations_keep_placement_and_graph_stable(

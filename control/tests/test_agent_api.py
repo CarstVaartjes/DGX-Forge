@@ -36,16 +36,38 @@ from dgx_control.models import (
     AgentOperationAttempt,
     Base,
     Job,
+    Observation,
 )
 from dgx_control.pki import CertificateAuthority, IssuedCertificate
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 NODE_A = "spk_" + "a" * 32
 NODE_B = "spk_" + "b" * 32
 NODE_C = "spk_" + "c" * 32
+CAPABILITIES = [
+    "node.probe",
+    "release.install",
+    "workload.health",
+    "workload.prepare",
+    "workload.start",
+    "workload.stop",
+    "workload.verify",
+]
+PROBE_RESULT = {
+    "status": "ok",
+    "evidence": {
+        "dgx_forge": {
+            "schema_version": 1,
+            "memory": {"available_bytes": 1_000},
+            "storage": {"available_bytes": 2_000},
+            "accelerator": {"available": True},
+        },
+        "nvidia": {"tools": {}},
+    },
+}
 
 
 class Jobs:
@@ -312,6 +334,7 @@ def test_authenticated_claim_records_protocol_contact_for_metrics(agent_system) 
         "/agent/v1/claim",
         headers=agent_headers(NODE_A, "serial-a"),
         json={
+            "capabilities": CAPABILITIES,
             "lease_seconds": 30,
             "node_id": NODE_A,
             "protocol_version": 1,
@@ -325,6 +348,7 @@ def test_authenticated_claim_records_protocol_contact_for_metrics(agent_system) 
         assert node is not None
         assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
         assert node.protocol_version == 1
+        assert node.capabilities == CAPABILITIES
     metrics = MetricsRegistry()
     OperationalMetricsCollector(metrics, services.sessions, clock=clock).refresh()
     rendered = metrics.render()
@@ -333,6 +357,30 @@ def test_authenticated_claim_records_protocol_contact_for_metrics(agent_system) 
         f'dgx_agent_version_compatibility{{node_id="{NODE_A}",version_bucket="supported"}} 1'
         in rendered
     )
+
+
+def test_unknown_claim_capability_is_rejected_without_contact(agent_system) -> None:
+    client, services, _, _ = agent_system
+
+    response = client.post(
+        "/agent/v1/claim",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json={
+            "capabilities": CAPABILITIES + ["shell.exec"],
+            "lease_seconds": 30,
+            "node_id": NODE_A,
+            "protocol_version": 1,
+            "wait_seconds": 0,
+        },
+    )
+
+    assert response.status_code == 422
+    with services.sessions() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        assert node.capabilities == []
+        assert node.protocol_version is None
+        assert node.last_seen_at is None
 
 
 def test_authenticated_heartbeat_preserves_claim_advertised_protocol_after_exact_fence_validation(
@@ -407,7 +455,7 @@ def test_authenticated_result_preserves_claim_advertised_protocol_after_exact_fe
             "node_id",
             "deadline",
         )
-    } | {"state": "succeeded", "result": {"healthy": True}}
+    } | {"state": "succeeded", "result": PROBE_RESULT}
 
     response = client.post(
         "/agent/v1/result",
@@ -421,6 +469,93 @@ def test_authenticated_result_preserves_claim_advertised_protocol_after_exact_fe
         assert node is not None
         assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
         assert node.protocol_version == 2
+
+
+def test_exact_fenced_probe_success_writes_bounded_durable_health(agent_system) -> None:
+    client, services, _, clock = agent_system
+    services.operations.enqueue(
+        parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {}
+    )
+    claim = client.post(
+        "/agent/v1/claim",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json={
+            "capabilities": CAPABILITIES,
+            "lease_seconds": 30,
+            "node_id": NODE_A,
+            "protocol_version": 1,
+            "wait_seconds": 0,
+        },
+    ).json()
+    clock.now += timedelta(seconds=2)
+    result = {
+        key: claim[key]
+        for key in (
+            "schema_version",
+            "job_id",
+            "operation_id",
+            "attempt",
+            "fence",
+            "node_id",
+            "deadline",
+        )
+    } | {"state": "succeeded", "result": PROBE_RESULT}
+
+    response = client.post(
+        "/agent/v1/result",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json=result,
+    )
+
+    assert response.status_code == 204
+    with services.sessions() as session:
+        observations = list(
+            session.scalars(
+                select(Observation).where(Observation.node_id == NODE_A)
+            )
+        )
+        assert len(observations) == 1
+        assert observations[0].kind == "health"
+        assert observations[0].observed_at.replace(tzinfo=UTC) == clock.now
+        assert observations[0].payload == {
+            "disk_available_bytes": 2_000,
+            "memory_available_bytes": 1_000,
+            "occupied": False,
+            "status": "healthy",
+        }
+
+
+def test_failed_probe_result_never_writes_health_observation(agent_system) -> None:
+    client, services, _, clock = agent_system
+    services.operations.enqueue(
+        parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {}
+    )
+    claim = client.post(
+        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
+    ).json()
+    result = {
+        key: claim[key]
+        for key in (
+            "schema_version",
+            "job_id",
+            "operation_id",
+            "attempt",
+            "fence",
+            "node_id",
+            "deadline",
+        )
+    } | {
+        "state": "failed",
+        "result": {"status": "failed", "error_code": "probe_failed"},
+    }
+
+    assert client.post(
+        "/agent/v1/result",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json=result,
+    ).status_code == 204
+    with services.sessions() as session:
+        assert session.scalar(select(Observation)) is None
 
 
 def test_untrusted_and_stale_requests_do_not_record_agent_contact(agent_system) -> None:

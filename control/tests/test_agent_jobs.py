@@ -22,6 +22,18 @@ from sqlalchemy.orm import sessionmaker
 NODE_A = "spk_" + "a" * 32
 NODE_B = "spk_" + "b" * 32
 COMMIT = "a" * 40
+PROBE_RESULT = {
+    "status": "ok",
+    "evidence": {
+        "dgx_forge": {
+            "schema_version": 1,
+            "memory": {"available_bytes": 1_000},
+            "storage": {"available_bytes": 2_000},
+            "accelerator": {"available": True},
+        },
+        "nvidia": {"tools": {}},
+    },
+}
 
 
 class Clock:
@@ -140,8 +152,8 @@ def test_expired_attempt_cannot_publish_success(service) -> None:
     assert second is not None
 
     with pytest.raises(StaleAgentAttempt):
-        jobs.succeed(first, {"healthy": True})
-    jobs.succeed(second, {"healthy": True})
+        jobs.succeed(first, PROBE_RESULT)
+    jobs.succeed(second, PROBE_RESULT)
 
 
 def test_revoked_expired_or_node_mismatched_certificate_cannot_claim(service) -> None:
@@ -282,7 +294,7 @@ def test_public_fence_string_interface_renews_and_completes(service) -> None:
     assert claim is not None
 
     progress = jobs.heartbeat(claim.fence, {"phase": "checking"}, 60)
-    jobs.succeed(progress.fence, {"healthy": True})
+    jobs.succeed(progress.fence, PROBE_RESULT)
 
     with pytest.raises(StaleAgentAttempt):
         jobs.fail(str(uuid.uuid4()), "unknown fence")
@@ -299,7 +311,7 @@ def test_structured_fence_cannot_update_a_different_operation(service) -> None:
     with pytest.raises(StaleAgentAttempt):
         jobs.heartbeat(forged, {"phase": "forged"}, 30)
     with pytest.raises(StaleAgentAttempt):
-        jobs.succeed(forged, {"healthy": True})
+        jobs.succeed(forged, PROBE_RESULT)
     assert first.operation_id != other_operation.id
 
 
@@ -324,12 +336,12 @@ def test_parent_job_becomes_succeeded_only_after_every_operation_succeeds(servic
 
     first = jobs.claim(NODE_A, "serial-a", 30)
     assert first is not None
-    jobs.succeed(first, {"healthy": True})
+    jobs.succeed(first, PROBE_RESULT)
     assert job_state(sessions, parent_job.id).state == "queued"
 
     second = jobs.claim(NODE_B, "serial-b", 30)
     assert second is not None
-    jobs.succeed(second, {"healthy": True})
+    jobs.succeed(second, PROBE_RESULT)
 
     assert job_state(sessions, parent_job.id).state == "succeeded"
 
@@ -347,7 +359,7 @@ def test_parent_job_fails_when_all_operations_are_terminal_and_one_failed(servic
 
     succeeded = jobs.claim(NODE_B, "serial-b", 30)
     assert succeeded is not None
-    jobs.succeed(succeeded, {"healthy": True})
+    jobs.succeed(succeeded, PROBE_RESULT)
 
     aggregate = job_state(sessions, parent_job.id)
     assert aggregate.state == "failed"
@@ -368,6 +380,6 @@ def test_parent_job_waits_when_all_operations_terminal_without_failures(service)
 
     succeeded = jobs.claim(NODE_B, "serial-b", 30)
     assert succeeded is not None
-    jobs.succeed(succeeded, {"healthy": True})
+    jobs.succeed(succeeded, PROBE_RESULT)
 
     assert job_state(sessions, parent_job.id).state == "waiting-for-operator"
