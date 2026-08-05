@@ -239,8 +239,10 @@ production path.
 
 ## Round 2 rereview closure
 
-The second independent rereview identified two remaining Critical installer gaps. Both
-were reproduced through the production entry point before implementation changed:
+The second independent rereview identified two remaining Critical installer gaps.
+Before implementation changed, the CA defect was reproduced through the production
+entry point and the service-directory defect through a direct `_ensure_directory`
+invocation in a production-equivalent real-root container:
 
 - `uv run pytest
   tests/nodes/test_install_dgx_agent.py::test_ca_der_with_appended_bytes_is_rejected_before_target_mutation
@@ -338,9 +340,22 @@ passed 5,000 instance validations after one schema check, convenience
 `jsonschema.validate` passed 500 iterations, and
 `validator_for(schema).check_schema(schema)` passed 500 iterations. Direct schema
 checking of the more complex maturity-evidence schema also passed 500 iterations. The
-leading diagnosis is therefore intermittent shared platform/hardware corruption under
-the cumulative validation workload, not a deterministic source assertion or a proven
+API results do not establish a deterministic source assertion or a proven
 `jsonschema`/`rpds` defect.
+
+Post-commit controller diagnostics further isolated the shared platform. Two verified
+`stress-ng` runs completed successfully: all 16 workers under `--cpu 16 --cpu-method
+all` for 120 seconds, and all four workers under `--vm 4 --vm-bytes 1G --vm-method
+all` for 120 seconds. During the memory stress, however, WSL kernel 6.6.87.2 emitted
+`BUG: using __this_cpu_add() in preemptible code` at
+`mem_cgroup_charge_statistics`. A fresh literal full-root run then again exited 139,
+this time at 63 percent in unchanged `jsonschema` meta-validation. The environment is
+WSL 2.6.3.0 with kernel 6.6.87.2. Official `microsoft/WSL#41019` (2026-07-07)
+documents the same rotating SIGSEGV/impossible-exception pattern across CPython builds
+and Docker on this i9-13900K processor class, with clean debug-allocator evidence and
+a kernel-only A/B between affected versions and 6.6.114.1. The leading diagnosis is
+therefore intermittent WSL/shared-platform corruption under the cumulative validation
+workload; hardware is not fully excluded.
 
 The current `.venv`, lock, and source dependencies were not changed during this
 investigation. Full-root verification is environment-unstable and explicitly non-green;
