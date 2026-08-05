@@ -39,11 +39,13 @@ class RuntimeHandlers:
         eligible: Callable[[str], bool],
         current_commit: Callable[[], str] | None = None,
         run: Callable[[Sequence[str]], Mapping[str, object]] = run_bounded,
+        route_manager=None,
     ) -> None:
         self._root = repository_root.resolve()
         self._eligible = eligible
         self._current_commit = current_commit or self._resolve_current_commit
         self._run = run
+        self._route_manager = route_manager
 
     def _resolve_current_commit(self) -> str:
         process = subprocess.run(
@@ -54,6 +56,9 @@ class RuntimeHandlers:
         if process.returncode != 0 or re.fullmatch(r"[0-9a-f]{40}", commit) is None:
             raise ValueError("repository checkout commit cannot be resolved")
         return commit
+
+    def current_commit(self) -> str:
+        return self._current_commit()
 
     def registry(self) -> Mapping[str, Callable[[HandlerRequest], Mapping[str, object]]]:
         return {"probe": self.probe, "reconcile": self.reconcile}
@@ -95,6 +100,11 @@ class RuntimeHandlers:
             raise ValueError("reconciliation workloads or releases are invalid")
         if set(workloads) != set(releases):
             raise ValueError("reconciliation workloads and releases differ")
+        routes = content["routes"]
+        if not isinstance(routes, Mapping):
+            raise ValueError("reconciliation routes are invalid")
+        if self._route_manager is not None:
+            self._route_manager.withdraw(request.targets)
         commands = 0
         for workload in sorted(workloads):
             release = releases[workload]
@@ -103,4 +113,11 @@ class RuntimeHandlers:
             self._run((str(self._root / "scripts/deploy-runtime-release"), workload, "--root", str(self._root), "--apply"))
             commands += 1
         self._run((str(self._root / "bin/sparkctl"), "switch", profile, "--json"))
+        if self._route_manager is not None:
+            self._route_manager.publish(
+                commit=request.base_commit,
+                profile=profile,
+                targets=request.targets,
+                routes=routes,
+            )
         return {"commit": request.base_commit, "plan_digest": digest, "commands": commands + 1}

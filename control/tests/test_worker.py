@@ -1,11 +1,10 @@
 from datetime import UTC, datetime
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from dgx_control.jobs import JobService
 from dgx_control.models import Base
 from dgx_control.worker import HandlerRequest, Worker
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 def _service(tmp_path):
@@ -45,3 +44,11 @@ def test_unknown_job_kind_fails_without_execution(tmp_path) -> None:
     job = jobs.enqueue("unknown", "admin", "abc", [], {})
     assert Worker(jobs, "worker-1", {}).run_once()
     assert jobs.get(job.id).state == "failed"
+
+
+def test_worker_runs_route_housekeeping_even_when_queue_is_idle(tmp_path) -> None:
+    jobs = _service(tmp_path)
+    calls = []
+
+    assert Worker(jobs, "worker-1", {}, housekeeping=lambda: calls.append("refresh")).run_once() is False
+    assert calls == ["refresh"]

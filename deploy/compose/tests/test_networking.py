@@ -94,6 +94,43 @@ def test_database_has_only_data_network_and_ingress_is_segmented() -> None:
     assert set(services["prometheus"]["networks"]) == {"application"}
 
 
+def test_tailnet_backends_have_readiness_checks() -> None:
+    services = _rendered()["services"]
+
+    assert services["caddy"]["healthcheck"]["test"] == [
+        "CMD-SHELL",
+        "wget -q -O /dev/null http://127.0.0.1:8080/healthz",
+    ]
+    assert services["ai-devbox"]["healthcheck"]["test"] == [
+        "CMD-SHELL",
+        "ssh-keyscan -T 3 -p 22 127.0.0.1 >/dev/null 2>&1",
+    ]
+
+
+def test_litellm_routes_use_a_dedicated_atomic_config_volume() -> None:
+    services = _rendered()["services"]
+    worker_volumes = {volume["target"]: volume for volume in services["control-worker"]["volumes"]}
+    litellm_volumes = {volume["target"]: volume for volume in services["litellm"]["volumes"]}
+
+    assert worker_volumes["/litellm-routes"]["source"] == "litellm-routes"
+    assert litellm_volumes["/routes"] == {
+        "type": "volume",
+        "source": "litellm-routes",
+        "target": "/routes",
+        "read_only": True,
+        "volume": {},
+    }
+    assert services["control-worker"]["environment"]["DGX_LITELLM_CONFIG_PATH"] == "/litellm-routes/config.yaml"
+    assert "litellm-upstream-key" in {
+        secret["source"] for secret in services["control-worker"]["secrets"]
+    }
+    initializer = services["litellm-routes-init"]
+    assert initializer["network_mode"] == "none"
+    assert initializer["cap_drop"] == ["ALL"]
+    assert set(initializer["cap_add"]) == {"CHOWN", "FOWNER"}
+    assert initializer["security_opt"] == ["no-new-privileges:true"]
+
+
 def test_caddy_disables_admin_and_sets_edge_guards() -> None:
     root = Path(__file__).resolve().parents[3]
     text = (root / "deploy/compose/Caddyfile").read_text()

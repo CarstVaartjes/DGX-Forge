@@ -53,6 +53,11 @@ services:
     networks:
       - tailnet-ssh-edge
       - devbox-egress
+    healthcheck:
+      test: [CMD-SHELL, "ssh-keyscan -T 3 -p 22 127.0.0.1 >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
 networks:
   devbox-egress: {}

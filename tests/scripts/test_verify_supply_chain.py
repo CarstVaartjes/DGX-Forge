@@ -18,11 +18,17 @@ def _copy(tmp_path: Path) -> Path:
         ".dockerignore", "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
         "control/web/package-lock.json", "control/Dockerfile",
         "deploy/compose/compose.yaml", "deploy/compose/images.lock.json",
+        "deploy/compose/Caddyfile", "deploy/compose/caddy/entrypoint.sh",
         "deploy/compose/tailscale/compose.yaml",
+        "deploy/compose/tailscale/configure.sh",
+        "deploy/compose/tailscale/grants.example.hujson",
         "deploy/compose/ai-devbox/compose.yaml",
         "deploy/compose/ai-devbox/Dockerfile",
         "deploy/compose/ai-devbox/entrypoint.sh",
         "deploy/compose/ai-devbox/sshd_config",
+        "deploy/compose/litellm/config.yaml",
+        "deploy/compose/litellm/config_supervisor.py",
+        "deploy/compose/litellm/entrypoint.sh",
         "deploy/compose/trust/litellm-cosign.pub",
     ):
         destination = target / path

@@ -85,6 +85,32 @@ class RouteEndpointPolicy:
         host = f"[{address}]" if isinstance(parsed, ipaddress.IPv6Address) else address
         return f"{endpoint.scheme}://{host}:{endpoint.port}/v1"
 
+    def validate_health(
+        self,
+        health_timestamp: datetime,
+        *,
+        endpoints: tuple[RouteEndpoint, ...],
+    ) -> datetime:
+        if health_timestamp.tzinfo is None or health_timestamp.utcoffset() is None:
+            raise RouteValidationError("route health timestamp must be timezone-aware")
+        now = self.clock()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise RouteValidationError("route endpoint policy clock must be timezone-aware")
+        health = health_timestamp.astimezone(UTC)
+        current = now.astimezone(UTC)
+        if health > current:
+            raise RouteValidationError("route health timestamp is in the future")
+        if current - health > timedelta(seconds=self.maximum_age_seconds):
+            raise RouteValidationError("route health timestamp is stale")
+        if any(
+            endpoint.observed_at.tzinfo is None
+            or endpoint.observed_at.utcoffset() is None
+            or health < endpoint.observed_at.astimezone(UTC)
+            for endpoint in endpoints
+        ):
+            raise RouteValidationError("route health timestamp predates endpoint observation")
+        return health
+
 
 @dataclass(frozen=True)
 class RouteCandidate:
@@ -214,8 +240,6 @@ class RoutePublisher:
             raise RouteValidationError("route candidate identity is invalid")
         if not candidate.node_ids or any(_NODE.fullmatch(node) is None for node in candidate.node_ids):
             raise RouteValidationError("route candidate nodes are invalid")
-        if candidate.health_timestamp.tzinfo is None or candidate.health_timestamp.utcoffset() is None:
-            raise RouteValidationError("route health timestamp must be timezone-aware")
         endpoints = dict(candidate.aliases)
         if not endpoints or any(_NAME.fullmatch(alias) is None for alias in endpoints):
             raise RouteValidationError("route aliases are invalid")
@@ -223,11 +247,15 @@ class RoutePublisher:
             alias: self._endpoint_policy.render(endpoint, node_ids=candidate.node_ids)
             for alias, endpoint in endpoints.items()
         }
+        health_timestamp = self._endpoint_policy.validate_health(
+            candidate.health_timestamp,
+            endpoints=tuple(endpoints.values()),
+        )
         return self._publish_payload({
             "state": "published", "commit": candidate.commit, "profile": candidate.profile,
             "workload": candidate.workload, "node_ids": sorted(set(candidate.node_ids)),
             "aliases": dict(sorted(aliases.items())),
-            "health_timestamp": candidate.health_timestamp.isoformat(), "reason": None,
+            "health_timestamp": health_timestamp.isoformat(), "reason": None,
         })
 
     def transition(self, candidate: RouteCandidate) -> RouteState:

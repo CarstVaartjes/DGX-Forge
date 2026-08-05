@@ -1,5 +1,12 @@
 ARG UBUNTU_IMAGE=ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea
-FROM ${UBUNTU_IMAGE}
+ARG NODE_IMAGE=node:22-bookworm-slim@sha256:f32b81066cde10a75dbac96646099533316d94bac4150c55da1636e1f0ffdc46
+ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.8.14@sha256:f3660c56d5b08d6c516360981bedc439f499b9bf37f46a216018da3777a74011
+ARG RUST_IMAGE=rust:1.89-bookworm@sha256:948f9b08a66e7fe01b03a98ef1c7568292e07ec2e4fe90d88c07bb14563c84ff
+
+FROM ${NODE_IMAGE} AS node-runtime
+FROM ${UV_IMAGE} AS uv-runtime
+FROM ${RUST_IMAGE} AS rust-runtime
+FROM ${UBUNTU_IMAGE} AS runtime
 
 ARG USERNAME=ai-dev
 ARG USER_UID=1100
@@ -23,18 +30,12 @@ RUN apt-get update \
         python-is-python3 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends nodejs \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=node-runtime /usr/local/ /usr/local/
+COPY --from=uv-runtime /uv /uvx /usr/local/bin/
+COPY --from=rust-runtime /usr/local/cargo/ /opt/rust/cargo/
+COPY --from=rust-runtime /usr/local/rustup/ /opt/rust/rustup/
 
-RUN curl -LsSf https://astral.sh/uv/install.sh \
-    | env UV_INSTALL_DIR=/usr/local/bin sh
-
-RUN mkdir -p /opt/rust \
-    && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-        | sh -s -- -y --profile minimal --no-modify-path \
-    && chmod -R a+rX /opt/rust
+RUN chmod -R a+rX /opt/rust
 
 RUN groupadd --gid "${USER_GID}" "${USERNAME}" \
     && useradd \

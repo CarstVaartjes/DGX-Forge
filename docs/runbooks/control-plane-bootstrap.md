@@ -65,3 +65,12 @@ LiteLLM then reaches only the accepted, fresh agent-derived Spark endpoint via
 `cluster-egress`; Docker routes that connection out through the NAS LAN. Model
 and tensor runtimes remain on the DGX Sparks, and direct-fabric traffic never
 passes through the NAS.
+
+The checked-in LiteLLM file is a fail-closed empty bootstrap. After a successful
+commit-pinned reconciliation, the worker derives the live config from stable
+`spk_` identity, fresh authenticated presence, repository workload ports, and a
+successful upstream probe. The worker writes only to the dedicated
+`litellm-routes` volume; LiteLLM mounts it read-only and reloads by supervised
+process restart. The worker refreshes the generation every 60 seconds, so a
+DHCP change follows the next authenticated observation and stale presence
+withdraws the route within the 150-second window.

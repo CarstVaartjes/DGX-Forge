@@ -13,7 +13,6 @@ from dgx_control.routes import (
     RouteValidationError,
 )
 
-
 NODE_ID = "spk_" + "0" * 31 + "1"
 OTHER_NODE_ID = "spk_" + "0" * 31 + "2"
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
@@ -33,6 +32,8 @@ def _endpoint(
 def _candidate(
     endpoint: RouteEndpoint | None = None,
     aliases: tuple[str, ...] = ("deepseek", "reasoning"),
+    *,
+    health_timestamp: datetime = NOW,
 ) -> RouteCandidate:
     selected = endpoint or _endpoint()
     return RouteCandidate(
@@ -41,7 +42,7 @@ def _candidate(
         workload="deepseek",
         node_ids=(NODE_ID,),
         aliases={alias: selected for alias in aliases},
-        health_timestamp=NOW,
+        health_timestamp=health_timestamp,
     )
 
 
@@ -113,6 +114,38 @@ def test_endpoint_policy_rejects_untrusted_routes(
 
     with pytest.raises(RouteValidationError, match=message):
         publisher.publish(_candidate(endpoint))
+
+
+@pytest.mark.parametrize(
+    ("health_timestamp", "message"),
+    (
+        (NOW - timedelta(seconds=151), "stale"),
+        (NOW + timedelta(seconds=1), "future"),
+        (NOW.replace(tzinfo=None), "timezone-aware"),
+    ),
+)
+def test_route_health_must_be_current_for_the_published_generation(
+    tmp_path: Path,
+    health_timestamp: datetime,
+    message: str,
+) -> None:
+    with pytest.raises(RouteValidationError, match=message):
+        _publisher(tmp_path).publish(
+            _candidate(
+                _endpoint(observed_at=NOW - timedelta(seconds=10)),
+                health_timestamp=health_timestamp,
+            )
+        )
+
+
+def test_route_health_must_follow_the_endpoint_observation(tmp_path: Path) -> None:
+    with pytest.raises(RouteValidationError, match="predates"):
+        _publisher(tmp_path).publish(
+            _candidate(
+                _endpoint(observed_at=NOW),
+                health_timestamp=NOW - timedelta(seconds=1),
+            )
+        )
 
 
 def test_invalid_candidate_keeps_explicit_maintenance_routes(tmp_path: Path) -> None:

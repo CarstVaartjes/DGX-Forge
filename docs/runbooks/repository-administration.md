@@ -37,5 +37,32 @@ routes publish atomically. A failed apply, verification, stale lease, revoked
 check, or changed digest fails closed: affected routes remain withdrawn and the
 job/audit records explain the bounded failure.
 
+Each `routes` entry in the commit-pinned reconciliation document names an
+alias, the certificate-bound target identity, and a repository workload. It
+does not contain an address or port:
+
+```json
+{
+  "routes": {
+    "deepseek": {
+      "node_id": "spk_0123456789abcdef0123456789abcdef",
+      "workload": "deepseek-agent-single",
+      "requests_per_minute": 30,
+      "tokens_per_minute": 10000
+    }
+  }
+}
+```
+
+The worker resolves the port from that exact commit's
+`config/workloads/<workload>.toml`, resolves the address from fresh
+certificate-authenticated presence, and probes `/v1/models` with the
+file-backed upstream credential. It then writes a generated JSON-as-YAML config
+to the dedicated `litellm-routes` volume. LiteLLM's in-container supervisor
+restarts the proxy only when that atomic file changes. Every 60 seconds the
+worker repeats presence resolution and the probe; an expired agent observation,
+failed probe, changed checkout, or invalid definition replaces the live config
+with an empty `model_list`.
+
 Never use `dgx-control-offline` for ordinary repository administration. Its
 exclusive lock and stopped-service proof are only for bootstrap and recovery.

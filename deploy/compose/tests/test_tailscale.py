@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import subprocess
 from pathlib import Path
-
 
 ROOT = Path(__file__).resolve().parents[3]
 COMPOSE = ROOT / "deploy/compose"
@@ -91,32 +91,93 @@ def test_configurator_shares_gateway_namespace_and_socket() -> None:
     assert not configurator.get("cap_add")
     volumes = _volume_targets(configurator)
     assert volumes["/var/run/tailscale"]["type"] == "volume"
-    assert volumes["/config"]["read_only"] is True
     assert volumes["/usr/local/bin/configure-tailscale"]["read_only"] is True
+    assert configurator["restart"] == "unless-stopped"
+    assert configurator["depends_on"] == {
+        "ai-devbox": {
+            "condition": "service_healthy",
+            "required": True,
+            "restart": True,
+        },
+        "caddy": {
+            "condition": "service_healthy",
+            "required": True,
+            "restart": True,
+        },
+        "tailscale-gateway": {
+            "condition": "service_healthy",
+            "required": True,
+            "restart": True,
+        },
+    }
 
 
 def test_service_map_and_configurator_are_exact_and_fail_closed() -> None:
-    serve = json.loads((COMPOSE / "tailscale/serve.json").read_text())
-    assert serve == {
-        "version": "0.0.1",
-        "services": {
-            "svc:dgx-forge": {
-                "endpoints": {"tcp:443": "http://caddy:8080"},
-            },
-            "svc:ai-devbox": {
-                "endpoints": {"tcp:22": "tcp://ai-devbox:22"},
-            },
-        },
-    }
     script = COMPOSE / "tailscale/configure.sh"
     subprocess.run(["/bin/sh", "-n", script], check=True)
     text = script.read_text()
-    assert "serve set-config --all /config/serve.json" in text
+    # The configuration-file form cannot distinguish HTTPS termination from a
+    # plaintext listener when its upstream is HTTP (tailscale/tailscale#18381).
+    assert "serve set-config" not in text
+    assert "--service=svc:dgx-forge --https=443 http://caddy:8080" in text
+    assert "--service=svc:ai-devbox --tcp=22 tcp://ai-devbox:22" in text
     assert "serve advertise svc:dgx-forge" in text
     assert "serve advertise svc:ai-devbox" in text
+    assert '"HTTPS":true' in text
+    assert '"HTTP":true' in text
     assert "120" in text
     assert "service-host" in text
     assert "svc:*" not in text
+
+
+def test_configurator_repairs_plaintext_443_and_verifies_https(tmp_path: Path) -> None:
+    socket_path = tmp_path / "tailscaled.sock"
+    daemon_socket = socket.socket(socket.AF_UNIX)
+    daemon_socket.bind(str(socket_path))
+    log = tmp_path / "calls.log"
+    repaired = tmp_path / "repaired"
+    fake = tmp_path / "tailscale"
+    fake.write_text(
+        "#!/bin/sh\n"
+        f"log={log}\n"
+        f"repaired={repaired}\n"
+        "case \"$*\" in\n"
+        "  *\"serve status --json\"*)\n"
+        "    if [ -f \"$repaired\" ]; then\n"
+        "      printf '%s\\n' '{\"Services\":{\"svc:ai-devbox\":{\"TCP\":{\"22\":{\"TCPForward\":\"ai-devbox:22\"}}},\"svc:dgx-forge\":{\"TCP\":{\"443\":{\"HTTPS\":true}}}}}'\n"
+        "    else\n"
+        "      printf '%s\\n' '{\"Services\":{\"svc:ai-devbox\":{\"TCP\":{\"22\":{\"TCPForward\":\"ai-devbox:22\"}}},\"svc:dgx-forge\":{\"TCP\":{\"443\":{\"HTTP\":true}}}}}'\n"
+        "    fi ;;\n"
+        "  *\"--service=svc:dgx-forge --https=443 http://caddy:8080\"*)\n"
+        "    printf '%s\\n' \"$*\" >>\"$log\"; touch \"$repaired\" ;;\n"
+        "  *\"serve --service=svc:ai-devbox --tcp=22 tcp://ai-devbox:22\"*)\n"
+        "    printf '%s\\n' \"$*\" >>\"$log\" ;;\n"
+        "  *\"status --json\"*) printf '%s\\n' '{\"Capabilities\":[\"service-host\"]}' ;;\n"
+        "  *) printf '%s\\n' \"$*\" >>\"$log\" ;;\n"
+        "esac\n"
+    )
+    fake.chmod(0o755)
+    try:
+        result = subprocess.run(
+            ["/bin/sh", COMPOSE / "tailscale/configure.sh"],
+            env=os.environ
+            | {
+                "PATH": f"{tmp_path}:{os.environ['PATH']}",
+                "TS_CONFIGURE_ONCE": "1",
+                "TS_SOCKET_PATH": str(socket_path),
+            },
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    finally:
+        daemon_socket.close()
+
+    assert result.returncode == 0, result.stderr
+    calls = log.read_text()
+    assert "--service=svc:dgx-forge --https=443 http://caddy:8080" in calls
+    assert "--service=svc:ai-devbox --tcp=22 tcp://ai-devbox:22" in calls
+    assert "set-config" not in calls
 
 
 def test_grants_example_is_exact_service_least_privilege() -> None:

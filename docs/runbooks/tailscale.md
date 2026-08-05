@@ -61,6 +61,12 @@ human login and the two exact service auto-approvals restore advertisements.
 Failure to authenticate or approve leaves ingress closed; it never opens a LAN
 fallback.
 
+The configurator remains running as a reconciler. It waits for Caddy and the
+devbox to be healthy, configures the web Service with the explicit
+`--https=443` CLI flag, and refuses a status that reports plaintext HTTP on port
+443. This deliberately avoids the ambiguous Services configuration-file import
+path when the TLS listener proxies to a local HTTP upstream.
+
 ## LAN DNS and firewall
 
 Reserve `10.0.0.2` for the NAS and map these local-only records to it:
@@ -92,8 +98,10 @@ docker compose --env-file .env \
   -f compose.yaml -f compose.step-ca.yaml logs tailscale-configurator
 ```
 
-The status must show the tagged service host and both exact Services. From an
-authorized tailnet device, open the `dgx-forge` Service and connect to
+The status must show `HTTPS: true` for `svc:dgx-forge` port 443, no `HTTP: true`
+on that port, the raw TCP forward for `svc:ai-devbox` port 22, and the tagged
+service-host capability. From an authorized tailnet device, open the
+`dgx-forge` Service and connect to
 `ai-devbox` on TCP 22. Repeat from a tailnet identity outside the SSH group and
 confirm port 22 is denied. From an ordinary LAN client, confirm the human and
 SSH endpoints are unreachable.

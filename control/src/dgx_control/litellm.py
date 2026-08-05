@@ -85,6 +85,28 @@ class LiteLlmPublisher:
         }
         return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
 
+    @staticmethod
+    def render_empty() -> bytes:
+        document = {
+            "general_settings": {
+                "database_url": "os.environ/LITELLM_DATABASE_URL",
+                "disable_admin_ui": True,
+                "master_key": "os.environ/LITELLM_MASTER_KEY",
+            },
+            "litellm_settings": {
+                "drop_params": True,
+                "failure_callback": [],
+                "set_verbose": False,
+                "success_callback": [],
+            },
+            "model_list": [],
+            "router_settings": {
+                "enable_pre_call_checks": True,
+                "routing_strategy": "simple-shuffle",
+            },
+        }
+        return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
     def publish(self, routes: RouteState, policy: LiteLlmPolicy) -> LiteLlmGeneration:
         content = self.render(routes, policy)
         if self._validate(content) is not True:

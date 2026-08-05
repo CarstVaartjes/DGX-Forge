@@ -39,20 +39,26 @@ services:
 
   tailscale-configurator:
     image: ${TAILSCALE_IMAGE:-tailscale/tailscale:v1.98.8@sha256:d54b2e6a9c09f0e5ec52e82b9ad4af3d446b54a7c08075e92f11c39dd410105f}
-    restart: "no"
+    restart: unless-stopped
     logging: *tailscale-logging
     read_only: true
     network_mode: service:tailscale-gateway
     entrypoint: [/bin/sh, /usr/local/bin/configure-tailscale]
     volumes:
       - tailscale-socket:/var/run/tailscale
-      - ./:/config:ro
       - ./configure.sh:/usr/local/bin/configure-tailscale:ro
     tmpfs:
       - /tmp:size=16m,mode=1777
     depends_on:
       tailscale-gateway:
         condition: service_healthy
+        restart: true
+      caddy:
+        condition: service_healthy
+        restart: true
+      ai-devbox:
+        condition: service_healthy
+        restart: true
 
 secrets:
   tailscale-oauth-client-id:

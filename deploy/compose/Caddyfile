@@ -28,6 +28,9 @@
 # listener; Docker does not publish port 8080.
 :8080 {
 	import edge_guards
+	handle /healthz {
+		respond 200
+	}
 
 	@agent_path path /agent/v1/*
 	handle @agent_path {

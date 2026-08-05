@@ -9,7 +9,9 @@ userspace Tailscale node:
 It publishes no Docker host port, routes no LAN subnet, and receives no tunnel
 device or network capability. OAuth client ID and secret values are read from
 Compose secret files. State persists in `tailscale-state`; the configurator
-applies `serve.json` and advertises only the two explicit Services.
+continuously reconciles and advertises only the two explicit Services. It uses
+the explicit `--https=443` CLI form for the web listener and verifies that
+Serve status reports HTTPS, never plaintext HTTP, on port 443.
 
 Before use, define both Services in the Tailscale admin console, apply a
 reviewed version of `grants.example.hujson`, and replace the GitHub-login

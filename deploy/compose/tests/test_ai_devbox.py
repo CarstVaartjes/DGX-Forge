@@ -53,7 +53,14 @@ def test_image_contract_is_hardened_and_home_independent() -> None:
     lowered = dockerfile.lower()
 
     assert "ARG UBUNTU_IMAGE=ubuntu:24.04@sha256:" in dockerfile
-    assert "FROM ${UBUNTU_IMAGE}" in dockerfile
+    assert "ARG NODE_IMAGE=node:22-bookworm-slim@sha256:" in dockerfile
+    assert "ARG UV_IMAGE=ghcr.io/astral-sh/uv:0.8.14@sha256:" in dockerfile
+    assert "ARG RUST_IMAGE=rust:1.89-bookworm@sha256:" in dockerfile
+    assert "FROM ${UBUNTU_IMAGE} AS runtime" in dockerfile
+    assert "COPY --from=node-runtime /usr/local/ /usr/local/" in dockerfile
+    assert "COPY --from=uv-runtime /uv /uvx /usr/local/bin/" in dockerfile
+    assert "COPY --from=rust-runtime /usr/local/cargo/ /opt/rust/cargo/" in dockerfile
+    assert "COPY --from=rust-runtime /usr/local/rustup/ /opt/rust/rustup/" in dockerfile
     assert "ARG USERNAME=ai-dev" in dockerfile
     assert "ARG USER_UID=1100" in dockerfile
     assert "ARG USER_GID=1100" in dockerfile
@@ -64,10 +71,12 @@ def test_image_contract_is_hardened_and_home_independent() -> None:
         "ripgrep",
         "build-essential",
         "python3",
-        "nodejs",
+        "node-runtime",
     ):
         assert package in dockerfile
-    assert "setup_22.x" in dockerfile
+    assert "setup_22.x" not in dockerfile
+    assert "astral.sh/uv/install.sh" not in dockerfile
+    assert "sh.rustup.rs" not in dockerfile
     assert "/usr/local/bin" in dockerfile and "uv" in lowered
     assert "/opt/rust" in dockerfile
     assert "/etc/ai-devbox/skel" in dockerfile

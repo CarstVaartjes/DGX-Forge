@@ -6,18 +6,16 @@ import ipaddress
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TypeAlias
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import AgentNode, Observation
 
-
 _NODE_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
 _MANAGEMENT_ADDRESS_KIND = "management-address"
-_Network: TypeAlias = ipaddress.IPv4Network | ipaddress.IPv6Network
-_Address: TypeAlias = ipaddress.IPv4Address | ipaddress.IPv6Address
+type _Network = ipaddress.IPv4Network | ipaddress.IPv6Network
+type _Address = ipaddress.IPv4Address | ipaddress.IPv6Address
 
 
 class PresenceError(ValueError):
@@ -63,7 +61,7 @@ class ManagementAddressPolicy:
         value: str,
         *,
         forbidden_cidrs: str = "",
-    ) -> "ManagementAddressPolicy":
+    ) -> ManagementAddressPolicy:
         allowed = _parse_networks(value, label="management CIDRs", required=True)
         forbidden = _parse_networks(
             forbidden_cidrs,
@@ -174,6 +172,9 @@ class AgentPresenceService:
         if now.tzinfo is None or now.utcoffset() is None:
             raise PresenceError("current timestamp must include a timezone")
         with self._sessions() as session:
+            node = session.get(AgentNode, node_id)
+            if node is None or node.state != "active" or node.revoked_at is not None:
+                raise PresenceError("agent node is not active")
             observation = session.scalar(
                 select(Observation)
                 .where(

@@ -75,14 +75,35 @@ services:
       <<: *control-environment
       DGX_AGENT_CA_PROVIDER: step-ca
       DGX_AGENT_RUNTIME: disabled
-    secrets: [database-url, token-signing-key, metrics-token, git-signing-key]
+      DGX_LITELLM_CONFIG_PATH: /litellm-routes/config.yaml
+      DGX_LITELLM_UPSTREAM_KEY_FILE: /run/secrets/litellm-upstream-key
+    secrets: [database-url, token-signing-key, metrics-token, git-signing-key, litellm-upstream-key]
     volumes:
       - ${REPOSITORY_PATH:?set repository path}:/repository
       - control-state:/state
+      - litellm-routes:/litellm-routes
     tmpfs: [/tmp]
     networks: [application, data, cluster-egress]
     depends_on:
       postgres: {condition: service_healthy}
+      litellm-routes-init: {condition: service_completed_successfully}
+
+  litellm-routes-init:
+    image: ${CONTROL_IMAGE:?set a digest-pinned control image}
+    restart: "no"
+    logging: *bounded-logging
+    user: "0:0"
+    read_only: true
+    network_mode: none
+    command:
+      - python
+      - -c
+      - "import os; os.chmod('/litellm-routes', 0o750); os.chown('/litellm-routes', 10001, 10001)"
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: [no-new-privileges:true]
+    volumes:
+      - litellm-routes:/litellm-routes
 
   litellm:
     image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.82.3-stable@sha256:b959a1816fa454a14d2842242d0fa1cd0d39f96fc94d3a1f4e1de4e48e2398c6}
@@ -92,12 +113,15 @@ services:
     read_only: true
     secrets: [litellm-master-key, litellm-upstream-key, litellm-database-url]
     volumes:
-      - ./litellm/config.yaml:/app/config.yaml:ro
+      - ./litellm/config.yaml:/app/bootstrap-config.yaml:ro
       - ./litellm/entrypoint.sh:/app/dgx-entrypoint:ro
+      - ./litellm/config_supervisor.py:/app/config-supervisor.py:ro
+      - litellm-routes:/routes:ro
     tmpfs: [/tmp]
     networks: [data, ingress, cluster-egress]
     depends_on:
       postgres: {condition: service_healthy}
+      litellm-routes-init: {condition: service_completed_successfully}
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=3)"]
       interval: 15s
@@ -176,6 +200,11 @@ services:
     depends_on:
       control-api: {condition: service_started}
       registry: {condition: service_healthy}
+    healthcheck:
+      test: [CMD-SHELL, "wget -q -O /dev/null http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
   registry:
     image: ${REGISTRY_IMAGE:-registry:3.1.1@sha256:1be55279f18a2fe1a74edf2664cac61c1bea305b7b4642dab412e7affdcb3e33}
@@ -240,3 +269,4 @@ volumes:
   prometheus-data: {}
   grafana-data: {}
   registry-data: {}
+  litellm-routes: {}

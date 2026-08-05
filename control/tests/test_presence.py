@@ -12,7 +12,6 @@ from dgx_control.presence import (
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-
 NODE_ID = "spk_" + "a" * 32
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
 
@@ -108,3 +107,24 @@ def test_observe_rejects_unknown_or_revoked_nodes(tmp_path) -> None:
         )
     with pytest.raises(PresenceError, match="active"):
         service.observe(NODE_ID, "10.0.0.42", NOW)
+
+
+def test_latest_rejects_a_node_revoked_after_its_observation(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'presence.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine, expire_on_commit=False)
+    with sessions.begin() as session:
+        session.add(AgentNode(node_id=NODE_ID, state="active", capabilities=[]))
+    service = AgentPresenceService(
+        sessions,
+        ManagementAddressPolicy.parse("10.0.0.0/24"),
+    )
+    service.observe(NODE_ID, "10.0.0.42", NOW)
+    with sessions.begin() as session:
+        node = session.get(AgentNode, NODE_ID)
+        assert node is not None
+        node.state = "revoked"
+        node.revoked_at = NOW
+
+    with pytest.raises(PresenceError, match="active"):
+        service.latest(NODE_ID, maximum_age_seconds=150, now=NOW)
