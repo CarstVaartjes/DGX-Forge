@@ -1,37 +1,32 @@
 # Operate tailnet-only NAS ingress
 
-The NAS stack has one containerized Tailscale gateway and no host Tailscale
-dependency. Human control, inference, Grafana, and devbox SSH enter only through
-named Tailscale Services. The only LAN listener is Caddy's Spark backend on the
-reserved NAS address.
+The NAS project contains one userspace Tailscale gateway and has no host
+Tailscale dependency. Human control, inference, Grafana, and Hermes enter only
+through named Tailscale Services. The sole LAN listener is Caddy's restricted
+Spark backend at the reserved NAS address.
 
 ## Identity and access policy
 
-GitHub login works for people. A GitHub-backed Tailscale user is represented in
-policy as `USERNAME@github`; use the exact login shown on the Tailscale Users
-page. This identity grants network reachability only. OpenSSH still requires the
-public key installed for `ai-dev`.
+GitHub login authenticates people to Tailscale. Use the exact
+`USERNAME@github` identity shown on the Tailscale Users page. This identity
+grants network reachability only: it is not the Hermes API key and gives Hermes
+no repository credential.
 
-The gateway never receives a GitHub token. Create a separate Tailscale OAuth
-client under **Trust credentials** with only:
+The gateway never receives a GitHub token. Create a separate OAuth client under
+Trust credentials with only `auth_keys` write scope and `tag:dgx-gateway` as its
+only tag. Define these exact Services in the admin console:
 
-- `auth_keys` write scope; and
-- `tag:dgx-gateway` as its only permitted tag.
+- `svc:dgx-forge`, endpoint `tcp:443`;
+- `svc:hermes-dashboard`, endpoint `tcp:443`; and
+- `svc:hermes-api`, endpoint `tcp:443`.
 
-Define `tag:dgx-gateway`, `svc:dgx-forge` with endpoint `tcp:443`, and
-`svc:ai-devbox` with endpoint `tcp:22` in the admin console. Start from
-`deploy/compose/tailscale/grants.example.hujson`, replace
-`replace-with-your-login@github`, then merge its sections into the tailnet
-policy. Keep the web and SSH grants separate and retain exact
-`autoApprovers.services` entries. Never replace them with `svc:*` or restore the
-default allow-all ACL.
+Merge the reviewed sections of `deploy/compose/tailscale/grants.example.hujson`
+into tailnet policy after replacing the GitHub-login placeholder. Administrators
+reach only the DGX Forge Service through its grant. `group:hermes-users` reaches
+only the two Hermes Services. Auto-approval permits only `tag:dgx-gateway` to
+advertise the three named Services. Never use `svc:*` or an allow-all ACL.
 
-This is raw TCP forwarding to ordinary OpenSSH, not Tailscale SSH. No `ssh`
-policy stanza and no `tailscale up --ssh` setting is required.
-
-## Secret files and startup
-
-On the NAS, write one credential value per regular file:
+## Secrets and unattended startup
 
 ```bash
 umask 077
@@ -43,33 +38,32 @@ printf '%s' 'PASTE_TAILSCALE_CLIENT_SECRET' \
 chmod 0600 /srv/dgx-forge/secrets/tailscale-oauth-client-*
 ```
 
-Do not put either value in `.env`, shell history, Git, or a GitHub secret used by
-the NAS. Set only their file paths in `.env`, then start the one Compose project:
+Set only the file paths in `.env`. Start the complete project:
 
 ```bash
 cd deploy/compose
-docker compose --env-file .env \
-  -f compose.yaml -f compose.step-ca.yaml up -d
-docker compose --env-file .env \
-  -f compose.yaml -f compose.step-ca.yaml ps
+docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml up -d
 ```
 
-The gateway uses persisted state, `TS_AUTH_ONCE=true`, and file-backed OAuth
-credentials. Ordinary restarts retain node identity. If state is absent during
-a clean host rebuild, the scoped OAuth client creates the tagged node without a
-human login and the two exact service auto-approvals restore advertisements.
-Failure to authenticate or approve leaves ingress closed; it never opens a LAN
-fallback.
+Persisted state and `TS_AUTH_ONCE=true` retain node identity. After clean state
+loss, the scoped OAuth client performs unattended tagged enrollment and the
+exact auto-approvals restore advertisements. Authentication or approval failure
+leaves ingress closed; there is no LAN fallback.
 
-The configurator remains running as a reconciler. It waits for Caddy and the
-devbox to be healthy, configures the web Service with the explicit
-`--https=443` CLI flag, and refuses a status that reports plaintext HTTP on port
-443. This deliberately avoids the ambiguous Services configuration-file import
-path when the TLS listener proxies to a local HTTP upstream.
+The configurator waits for Caddy and Hermes health. It resets any missing,
+extra, downgraded, or retargeted Serve map and deterministically creates:
 
-## LAN DNS and firewall
+```text
+svc:dgx-forge         HTTPS 443 -> http://caddy:8080
+svc:hermes-api        HTTPS 443 -> http://hermes-agent:8642
+svc:hermes-dashboard  HTTPS 443 -> http://hermes-agent:9119
+```
 
-Reserve `10.0.0.2` for the NAS and map these local-only records to it:
+All listeners use explicit `--https=443`; plaintext HTTP on 443 is rejected.
+
+## LAN boundary
+
+Reserve `10.0.0.2` for the NAS and resolve these only on the management LAN:
 
 ```text
 enroll.dgx-forge.lan   10.0.0.2
@@ -77,59 +71,43 @@ agents.dgx-forge.lan   10.0.0.2
 registry.dgx-forge.lan 10.0.0.2
 ```
 
-Allow TCP 8443 to `10.0.0.2` only from the Spark management network
-`10.0.0.0/24`, or preferably from the reserved Spark leases within that CIDR.
-Do not allow LAN access to ports 22, 443, or 8080. DHCP reservations remain an
-operational convenience; Spark identity and routing do not depend on a fixed
-address.
+Allow TCP 8443 only from `10.0.0.0/24`, preferably narrowed to reserved Spark
+leases. Do not allow LAN access to human or Hermes endpoints. Spark DHCP
+reservations improve stability, but identity and routing use authenticated
+agent presence rather than a hard-coded address.
 
 ## Verification
 
-Run these checks after startup or policy changes:
-
 ```bash
-docker compose --env-file .env \
-  -f compose.yaml -f compose.step-ca.yaml exec tailscale-gateway \
-  tailscale --socket=/var/run/tailscale/tailscaled.sock status --json
-docker compose --env-file .env \
-  -f compose.yaml -f compose.step-ca.yaml exec tailscale-gateway \
-  tailscale --socket=/var/run/tailscale/tailscaled.sock serve status --json
-docker compose --env-file .env \
-  -f compose.yaml -f compose.step-ca.yaml exec tailscale-gateway \
-  tailscale --socket=/var/run/tailscale/tailscaled.sock serve get-config --all
-docker compose --env-file .env \
-  -f compose.yaml -f compose.step-ca.yaml logs tailscale-configurator
+docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml \
+  exec tailscale-gateway tailscale \
+  --socket=/var/run/tailscale/tailscaled.sock status --json
+docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml \
+  exec tailscale-gateway tailscale \
+  --socket=/var/run/tailscale/tailscaled.sock serve status --json
+docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml \
+  exec tailscale-gateway tailscale \
+  --socket=/var/run/tailscale/tailscaled.sock serve get-config --all
+docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml \
+  logs tailscale-configurator
 ```
 
-The status must show `HTTPS: true` for `svc:dgx-forge` port 443, no `HTTP: true`
-on that port, the raw TCP forward for `svc:ai-devbox` port 22, and the tagged
-service-host capability. The exported config must contain exactly those two
-services and exactly the `http://caddy:8080` and `tcp://ai-devbox:22` upstreams;
-the persistent configurator resets any additional service or endpoint before
-recreating this map. From an authorized tailnet device, open the
-`dgx-forge` Service and connect to
-`ai-devbox` on TCP 22. Repeat from a tailnet identity outside the SSH group and
-confirm port 22 is denied. From an ordinary LAN client, confirm the human and
-SSH endpoints are unreachable.
+Status must report `HTTPS: true` on all three Services and never `HTTP: true`.
+The export must contain exactly the three upstreams above. Test dashboard and
+API reachability as an authorized GitHub-backed user, then confirm a user
+outside `group:hermes-users` is denied. Even an authorized user must supply the
+separate Hermes key to invoke the API. Confirm an ordinary LAN client cannot
+reach either Hermes endpoint.
 
-## Drain, revocation, backup, and recovery
+## Drain, revocation, and recovery
 
-`docker compose down` stops the complete application, including active devbox
-SSH sessions and all tailnet ingress. For planned work, announce the outage,
-save work, stop new jobs, and then bring down the project.
+`docker compose down` stops the entire application and all tailnet ingress. Back
+up `tailscale-state` and the OAuth files with the same encrypted generation as
+the control database and Hermes state. Restore state before startup when
+possible.
 
-Back up the `tailscale-state` Docker volume with the same encrypted,
-authenticated off-host backup set as the control database and devbox state.
-Record the gateway node ID and service status separately without credentials.
-Restore the state volume before startup when possible; this preserves the node
-identity.
-
-If the state cannot be restored, keep the OAuth files in place and recreate the
-project. Verify that exactly one current `tag:dgx-gateway` node advertises both
-Services, then revoke the orphaned prior node. A changed Tailscale node identity
-is expected after state loss; a changed devbox SSH host fingerprint is not.
-
-For compromise, revoke the OAuth client, revoke the gateway node, and remove or
-disable its tag/service approvals. Tailnet ingress stops immediately. Rotate
-the OAuth client and recover through a reviewed policy; never add a temporary
-LAN human listener.
+If state cannot be restored, recreate the project with the OAuth files. Verify
+exactly one current tagged node advertises all three Services and revoke the
+orphan. For compromise, revoke OAuth, the node, and its tag/Service approvals;
+then rotate and recover through reviewed policy. Never add a temporary LAN
+human endpoint.

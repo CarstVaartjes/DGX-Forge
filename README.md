@@ -3,7 +3,7 @@
 The generic Spark platform design and phased implementation plans live in
 [`docs/superpowers/specs/2026-08-03-scalable-spark-platform-control-plane-design.md`](docs/superpowers/specs/2026-08-03-scalable-spark-platform-control-plane-design.md).
 Each Spark is onboarded independently; the Docker-capable service host runs
-separate Caddy, API/worker, PostgreSQL, LiteLLM, Prometheus, and Grafana
+separate Caddy, API/worker, PostgreSQL, LiteLLM, Hermes Agent, Prometheus, and Grafana
 services. Administration is available through both `sparkctl admin` and the
 web UX, with Git-backed fleet, model, and profile definitions.
 
@@ -81,7 +81,7 @@ running mutating commands such as `prepare` or `switch`.
 - [Runtime release runbook](docs/runbooks/runtime-release.md)
 - [Spark agent PKI and recovery runbook](docs/runbooks/agent-pki.md)
 - [Tailnet-only NAS ingress runbook](docs/runbooks/tailscale.md)
-- [AI devbox runbook](docs/runbooks/ai-devbox.md)
+- [Hermes Agent runbook](docs/runbooks/hermes-agent.md)
 
 ## Security
 

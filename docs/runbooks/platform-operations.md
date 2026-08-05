@@ -39,3 +39,14 @@ observation. Route reconciliation enters maintenance before validating and
 publishing that replacement, so the prior address is not retained on failure.
 DHCP reservations remain recommended for operational stability, but neither
 the fleet document nor Compose needs a hard-coded address for each Spark.
+
+## Hermes local-agent selection
+
+Hermes always requests the single alias `hermes-agent` from LiteLLM. The worker
+loads candidate order and maturity at the same immutable commit as active
+reconciliation. It constructs endpoints from authenticated presence and
+repository workload ports; route payloads cannot supply addresses. Only
+accepted, fresh, already-running local workloads are included. A failing
+primary is withdrawn before a later reconciliation can publish a healthy
+secondary. With no eligible candidate, the Hermes alias is omitted while
+unrelated routes remain available. No cloud fallback exists.
