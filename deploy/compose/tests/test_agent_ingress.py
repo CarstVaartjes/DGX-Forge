@@ -12,7 +12,8 @@ def _environment() -> dict[str, str]:
         "POSTGRES_IMAGE": "postgres:17@sha256:" + "a" * 64,
         "CADDY_IMAGE": "caddy:2@sha256:" + "b" * 64,
         "REGISTRY_IMAGE": "registry:3@sha256:" + "9" * 64,
-        "CONTROL_IMAGE": "example/control:1@sha256:" + "c" * 64,
+        "CONTROL_API_IMAGE": "example/control-api:1@sha256:" + "c" * 64,
+        "CONTROL_WORKER_IMAGE": "example/control-worker:1@sha256:" + "8" * 64,
         "LITELLM_IMAGE": "example/litellm:1@sha256:" + "d" * 64,
         "PROMETHEUS_IMAGE": "prom/prometheus:1@sha256:" + "e" * 64,
         "GRAFANA_IMAGE": "grafana/grafana:1@sha256:" + "f" * 64,
@@ -24,6 +25,7 @@ def _environment() -> dict[str, str]:
         "TOKEN_SIGNING_KEY_FILE": "/dev/null",
         "METRICS_TOKEN_FILE": "/dev/null",
         "GIT_SIGNING_KEY_FILE": "/dev/null",
+        "WORKER_API_TOKEN_FILE": "/dev/null",
         "GRAFANA_ADMIN_PASSWORD_FILE": "/dev/null",
         "LITELLM_MASTER_KEY_FILE": "/dev/null",
         "LITELLM_UPSTREAM_KEY_FILE": "/dev/null",
@@ -149,6 +151,7 @@ def _settings_result(rendered: dict, tmp_path: Path) -> subprocess.CompletedProc
         "DGX_AGENT_CA_ROOT_FILE": "test-root-certificate\n",
         "DGX_AGENT_INTERMEDIATE_KEY_FILE": "test-builtin-key\n",
         "DGX_AGENT_PROXY_AUTH_FILE": "A" * 30 + "_-\r\n",
+        "DGX_WORKER_API_TOKEN_FILE": "W" * 32 + "\n",
     }
     for name, value in tuple(control_environment.items()):
         if name not in secret_values:
@@ -428,7 +431,13 @@ def test_rendered_production_boundary_has_only_caddy_public_and_step_ca_private(
         "registry-edge",
         "tailnet-web-edge",
     }
-    assert set(services["control-api"]["networks"]) == {"agent-proxy", "application", "ca", "data"}
+    assert set(services["control-api"]["networks"]) == {
+        "agent-proxy",
+        "application",
+        "ca",
+        "data",
+        "worker-authority",
+    }
     assert rendered["networks"]["agent-proxy"]["internal"] is True
     assert "step-ca" in services
     assert not services["step-ca"].get("ports")

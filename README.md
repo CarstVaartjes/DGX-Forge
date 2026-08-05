@@ -20,8 +20,12 @@ not treated as production-ready until its evidence gates are accepted.
 
 ## Capabilities
 
-- Validate and switch content-addressed cluster profiles with `sparkctl`.
-- Collect live node, NVIDIA, Docker, thermal, and storage health over SSH.
+- Validate and reconcile content-addressed cluster profiles from Git.
+- Execute routine lifecycle and probe operations through outbound, fenced,
+  mutually authenticated Spark agents; the control worker never SSHes to a
+  Spark.
+- Collect durable node, NVIDIA, Docker, thermal, and storage state reported by
+  authenticated agents.
 - Configure and validate the direct RoCE/NCCL fabric between Spark nodes.
 - Build and operate model-specific runtime adapters, including the checked-in
   DeepSeek Mia and DS4 definitions.
@@ -30,7 +34,7 @@ not treated as production-ready until its evidence gates are accepted.
 
 - Python 3.12 or newer
 - [`uv`](https://docs.astral.sh/uv/)
-- SSH access to the DGX Spark hosts configured in `inventory/cluster.toml`
+- SSH access for one-time onboarding and explicit operator recovery only
 - Docker installed and accessible on each DGX Spark host
 
 ## Quick start
@@ -49,14 +53,18 @@ uv run --no-project --with jsonschema -- bin/sparkctl catalog --json
 uv run --no-project --with jsonschema -- bin/sparkctl status --json
 ```
 
-Collect fresh, read-only health data from both configured nodes:
+The old direct health command remains available for explicit break-glass and
+development use:
 
 ```bash
 uv run --no-project --with jsonschema -- bin/sparkctl nodes status --json
 ```
 
-The last command performs live SSH probes. Read the `sparkctl` runbook before
-running mutating commands such as `prepare` or `switch`.
+That command performs live SSH probes and is not the production control-plane
+transport. Routine production work is repository-planned by the API, persisted
+in PostgreSQL, claimed outbound by each Spark agent over mTLS, and reconciled by
+the repository-less worker. Read the `sparkctl` runbook before using any direct
+mutating command such as `prepare` or `switch`.
 
 ## Repository layout
 
@@ -72,6 +80,7 @@ running mutating commands such as `prepare` or `switch`.
 ## Documentation
 
 - [Architecture overview](docs/architecture-overview.md)
+- [Control-plane bootstrap](docs/runbooks/control-plane-bootstrap.md)
 - [`sparkctl` runbook](docs/runbooks/sparkctl.md)
 - [Inventory runbook](docs/runbooks/inventory.md)
 - [Generic fleet migration](docs/runbooks/fleet-migration.md) — generated node

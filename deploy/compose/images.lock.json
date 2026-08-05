@@ -14,10 +14,18 @@
     "node": "node:24-bookworm-slim@sha256:235600a8101ab264e117b1768e925532262668dc9b581ef1dd7d96ced463b8e7",
     "python": "python:3.12-slim-bookworm@sha256:d50fb7611f86d04a3b0471b46d7557818d88983fc3136726336b2a4c657aa30b"
   },
-  "release_image": {
-    "environment": "CONTROL_IMAGE",
-    "required": true
-  },
+  "release_images": [
+    {
+      "environment": "CONTROL_API_IMAGE",
+      "required": true,
+      "target": "api"
+    },
+    {
+      "environment": "CONTROL_WORKER_IMAGE",
+      "required": true,
+      "target": "worker"
+    }
+  ],
   "signatures": {
     "litellm": {
       "key": "deploy/compose/trust/litellm-cosign.pub",

@@ -205,6 +205,9 @@ def create_app(
     agent: AgentApiServices | None = None,
     trusted_agent_proxy_auth: bytes = b"",
     enrollment_rate_limiter: EnrollmentRateLimiter | None = None,
+    worker_authority: Any | None = None,
+    worker_api_token: bytes = b"",
+    generic_jobs_enabled: bool = False,
 ) -> FastAPI:
     app = FastAPI(title="DGX Forge Control", version="1.0", docs_url=None, redoc_url=None)
 
@@ -293,6 +296,14 @@ def create_app(
         services=agent,
         enrollment_rate_limiter=enrollment_rate_limiter,
     )
+    if worker_authority is not None:
+        from .worker_authority import install_worker_authority_routes
+
+        install_worker_authority_routes(
+            app,
+            worker_authority,
+            token=worker_api_token,
+        )
     authenticated_actor = Depends(actor)
 
     @app.get("/api/v1/healthz")
@@ -469,6 +480,11 @@ def create_app(
     @app.post("/api/v1/jobs", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
     def enqueue(body: JobRequest, request: Request, authenticated: Actor = authenticated_actor) -> JobResponse:
         require_mutation_role(authenticated, "/api/v1/jobs")
+        if not generic_jobs_enabled:
+            raise HTTPException(
+                status_code=422,
+                detail="generic jobs are disabled; use an immutable reconciliation plan",
+            )
         if body.kind == "reconcile":
             raise HTTPException(
                 status_code=422,
@@ -539,6 +555,7 @@ def production_app() -> FastAPI:
         durable_desired_state_observations,
     )
     from .git_policy import GitPolicy, PolicyStore
+    from .hermes_routes import RepositoryHermesRoutePolicy
     from .jobs import JobService
     from .logging import JobLogStore
     from .metrics import MetricsRegistry, OperationalMetricsCollector
@@ -549,6 +566,7 @@ def production_app() -> FastAPI:
     from .reconcile import ChangeService, Reconciler
     from .repository import RepositoryService
     from .settings import Settings
+    from .worker_authority import RepositoryAuthorityService
 
     settings = Settings.from_env_and_secrets()
     sessions = session_factory(build_engine(settings.database_url))
@@ -584,6 +602,13 @@ def production_app() -> FastAPI:
     operational_metrics = OperationalMetricsCollector(metrics, sessions, clock=clock)
     commit_eligible = lambda commit: git_policy.eligible(commit).ok
     current_commit = lambda: repository.head(settings.deployment_branch)
+    worker_authority = RepositoryAuthorityService(
+        current_commit=current_commit,
+        commit_eligible=commit_eligible,
+        deployments=RepositoryHermesRoutePolicy(
+            settings.repository_path
+        ).deployments,
+    )
     agent_services = build_agent_services(
         settings,
         sessions,
@@ -637,6 +662,8 @@ def production_app() -> FastAPI:
         job_logs=JobLogStore(settings.state_path / "job-logs"),
         agent=agent_services,
         trusted_agent_proxy_auth=settings.agent_proxy_auth,
+        worker_authority=worker_authority,
+        worker_api_token=settings.worker_api_token,
     )
     web_root = Path(__file__).resolve().parent / "web"
     if web_root.is_dir():

@@ -10,7 +10,7 @@ x-bounded-logging: &bounded-logging
     max-size: 10m
     max-file: "5"
 
-x-control-environment: &control-environment
+x-api-environment: &api-environment
   DGX_DEPLOYMENT_MODE: production
   DGX_DATABASE_URL_FILE: /run/secrets/database-url
   DGX_TOKEN_SIGNING_KEY_FILE: /run/secrets/token-signing-key
@@ -22,10 +22,19 @@ x-control-environment: &control-environment
   DGX_REQUIRED_CHECKS: ${REQUIRED_CHECKS:-}
   DGX_MANAGEMENT_CIDRS: ${DGX_MANAGEMENT_CIDRS:?set trusted Spark management CIDRs}
   DGX_DIRECT_FABRIC_CIDRS: ${DGX_DIRECT_FABRIC_CIDRS:-}
+  DGX_WORKER_API_TOKEN_FILE: /run/secrets/worker-api-token
+
+x-worker-environment: &worker-environment
+  DGX_DEPLOYMENT_MODE: production
+  DGX_DATABASE_URL_FILE: /run/secrets/database-url
+  DGX_WORKER_API_TOKEN_FILE: /run/secrets/worker-api-token
+  DGX_INTERNAL_API_URL: http://control-api:8000
+  DGX_MANAGEMENT_CIDRS: ${DGX_MANAGEMENT_CIDRS:?set trusted Spark management CIDRs}
+  DGX_DIRECT_FABRIC_CIDRS: ${DGX_DIRECT_FABRIC_CIDRS:-}
 
 services:
   route-publication-init:
-    image: ${CONTROL_IMAGE:?set a digest-pinned control image}
+    image: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
     restart: "no"
     logging: *bounded-logging
     user: "0:0"
@@ -70,20 +79,22 @@ services:
       retries: 10
 
   control-api:
-    image: ${CONTROL_IMAGE:?set a digest-pinned control image}
+    image: ${CONTROL_API_IMAGE:?set a digest-pinned control-api image}
     restart: unless-stopped
     logging: *bounded-logging
     command: [python, -m, dgx_control.api]
     read_only: true
     user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     environment:
-      <<: *control-environment
-    secrets: [database-url, token-signing-key, metrics-token, git-signing-key, agent-client-ca, agent-intermediate-certificate, agent-proxy-auth]
+      <<: *api-environment
+    secrets: [database-url, token-signing-key, metrics-token, git-signing-key, agent-client-ca, agent-intermediate-certificate, agent-proxy-auth, worker-api-token]
     volumes:
       - ${REPOSITORY_PATH:?set repository path}:/repository
       - control-state:/state
     tmpfs: [/tmp]
-    networks: [application, data, agent-proxy]
+    networks: [application, data, agent-proxy, worker-authority]
     depends_on:
       postgres: {condition: service_healthy}
     healthcheck:
@@ -93,24 +104,22 @@ services:
       retries: 10
 
   control-worker:
-    image: ${CONTROL_IMAGE:?set a digest-pinned control image}
+    image: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
     restart: unless-stopped
     logging: *bounded-logging
     command: [python, -m, dgx_control.worker]
     read_only: true
     user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     environment:
-      <<: *control-environment
-      DGX_AGENT_CA_PROVIDER: step-ca
-      DGX_AGENT_RUNTIME: disabled
-    secrets: [database-url, token-signing-key, metrics-token, git-signing-key]
+      <<: *worker-environment
+    secrets: [database-url, worker-api-token]
     volumes:
-      - ${REPOSITORY_PATH:?set repository path}:/repository
-      - control-state:/state
       - route-publications:/routes
       - litellm-supervisor-state:/supervisor:ro
     tmpfs: [/tmp]
-    networks: [application, data, cluster-egress]
+    networks: [data, worker-authority]
     depends_on:
       postgres: {condition: service_healthy}
       route-publication-init: {condition: service_completed_successfully}
@@ -263,11 +272,14 @@ secrets:
     file: "${AGENT_INTERMEDIATE_CERTIFICATE_FILE:?set agent intermediate certificate secret file}"
   agent-proxy-auth:
     file: "${AGENT_PROXY_AUTH_FILE:?set agent proxy authentication secret file}"
+  worker-api-token:
+    file: "${WORKER_API_TOKEN_FILE:?set worker API token secret file}"
 
 networks:
   ingress: {}
   agent-proxy: {internal: true}
   application: {internal: true}
+  worker-authority: {internal: true}
   data: {internal: true}
   cluster-egress: {}
   registry-edge: {internal: true}

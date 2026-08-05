@@ -6,9 +6,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from dgx_control.auth import AgentIdentity, AgentSource
+from dgx_control.legacy_route_runtime import ProductionRouteManager, RouteRuntimeError
 from dgx_control.models import AgentCertificate, AgentNode, Base
 from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
-from dgx_control.route_runtime import ProductionRouteManager, RouteRuntimeError
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 

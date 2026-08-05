@@ -2,10 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+from functools import partial
 
 import pytest
-from dgx_control.runtime import RuntimeHandlers
+from dgx_control.legacy_runtime import LegacyRuntimeHandlers
 from dgx_control.worker import HandlerRequest
+
+RuntimeHandlers = partial(
+    LegacyRuntimeHandlers,
+    authorization="explicit-test-only",
+)
 
 
 def _request(payload, *, kind="reconcile"):

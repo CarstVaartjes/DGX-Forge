@@ -10,7 +10,8 @@ def _rendered() -> dict:
         "POSTGRES_IMAGE": "postgres:17@sha256:" + "a" * 64,
         "CADDY_IMAGE": "caddy:2@sha256:" + "b" * 64,
         "REGISTRY_IMAGE": "registry:3@sha256:" + "9" * 64,
-        "CONTROL_IMAGE": "example/control:1@sha256:" + "c" * 64,
+        "CONTROL_API_IMAGE": "example/control-api:1@sha256:" + "c" * 64,
+        "CONTROL_WORKER_IMAGE": "example/control-worker:1@sha256:" + "8" * 64,
         "LITELLM_IMAGE": "example/litellm:1@sha256:" + "d" * 64,
         "PROMETHEUS_IMAGE": "prom/prometheus:1@sha256:" + "e" * 64,
         "GRAFANA_IMAGE": "grafana/grafana:1@sha256:" + "f" * 64,
@@ -20,6 +21,7 @@ def _rendered() -> dict:
         "TOKEN_SIGNING_KEY_FILE": "/dev/null",
         "METRICS_TOKEN_FILE": "/dev/null",
         "GIT_SIGNING_KEY_FILE": "/dev/null",
+        "WORKER_API_TOKEN_FILE": "/dev/null",
         "GRAFANA_ADMIN_PASSWORD_FILE": "/dev/null",
         "LITELLM_MASTER_KEY_FILE": "/dev/null",
         "LITELLM_UPSTREAM_KEY_FILE": "/dev/null",
@@ -89,8 +91,15 @@ def test_database_has_only_data_network_and_ingress_is_segmented() -> None:
     assert set(services["postgres"]["networks"]) == {"data"}
     assert set(services["caddy"]["networks"]) == {"agent-proxy", "ingress", "registry-edge", "tailnet-web-edge"}
     assert set(services["registry"]["networks"]) == {"registry-edge", "registry-publisher"}
-    assert set(services["control-worker"]["networks"]) == {"application", "cluster-egress", "data"}
-    assert set(services["control-api"]["networks"]) == {"agent-proxy", "application", "ca", "data"}
+    assert set(services["control-worker"]["networks"]) == {"data", "worker-authority"}
+    assert set(services["control-api"]["networks"]) == {
+        "agent-proxy",
+        "application",
+        "ca",
+        "data",
+        "worker-authority",
+    }
+    assert _rendered()["networks"]["worker-authority"]["internal"] is True
     assert set(services["litellm"]["networks"]) == {
         "cluster-egress",
         "data",
@@ -105,6 +114,25 @@ def test_database_has_only_data_network_and_ingress_is_segmented() -> None:
         assert services[service]["environment"]["DGX_DIRECT_FABRIC_CIDRS"] == (
             "192.168.100.0/24,192.168.101.0/24"
         )
+
+
+def test_worker_has_a_distinct_minimal_image_and_runtime_boundary() -> None:
+    services = _rendered()["services"]
+    api = services["control-api"]
+    worker = services["control-worker"]
+
+    assert api["image"] != worker["image"]
+    assert api["image"].startswith("example/control-api:")
+    assert worker["image"].startswith("example/control-worker:")
+    worker_secrets = {item["source"] for item in worker["secrets"]}
+    assert worker_secrets == {"database-url", "worker-api-token"}
+    assert {item["target"] for item in worker["volumes"]} == {
+        "/routes",
+        "/supervisor",
+    }
+    assert "DGX_REPOSITORY_PATH" not in worker["environment"]
+    assert "DGX_GIT_SIGNING_KEY_FILE" not in worker["environment"]
+    assert worker["environment"]["DGX_INTERNAL_API_URL"] == "http://control-api:8000"
 
 
 def test_tailnet_backends_have_readiness_checks() -> None:

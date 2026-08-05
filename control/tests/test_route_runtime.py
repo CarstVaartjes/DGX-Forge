@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import multiprocessing
 import threading
@@ -475,3 +476,113 @@ def test_withdrawal_activates_an_empty_fail_closed_bundle(tmp_path: Path) -> Non
     assert routes["targets"] == [NODE]
     assert "bearer-secret" not in routes["reason"]
     assert config["model_list"] == []
+
+
+def test_commit_pinned_hermes_policy_selects_only_accepted_published_routes(
+    tmp_path: Path,
+) -> None:
+    hermes_routes = importlib.import_module("dgx_control.hermes_routes")
+    route_runtime = importlib.import_module("dgx_control.route_runtime")
+    files = {
+        "config/hermes-agent-policy.toml": (
+            b"schema_version = 1\n"
+            b'alias = "hermes-agent"\n'
+            b"local_only = true\n\n"
+            b"[[candidates]]\n"
+            b'workload = "model"\n'
+            b"priority = 1\n"
+            b'minimum_maturity = "accepted"\n'
+        ),
+        "inventory/reports/model-definitions.json": json.dumps(
+            {
+                "definitions": [
+                    {"id": "model", "maturity": "accepted"},
+                    {"id": "planned-model", "maturity": "planned"},
+                ]
+            }
+        ).encode(),
+    }
+    policy = hermes_routes.RepositoryHermesRoutePolicy(
+        tmp_path,
+        repository_reader=lambda _commit, path: files[path],
+    )
+    published = route_runtime.PublishedRoute(
+        alias="chat",
+        workload_id="model",
+        api_base="http://10.0.0.42:8000/v1",
+        requests_per_minute=30,
+        tokens_per_minute=10_000,
+    )
+
+    deployments = policy.deployments("a" * 40, (published,))
+
+    assert len(deployments) == 1
+    assert deployments[0].model_name == "hermes-agent"
+    assert deployments[0].workload == "model"
+    assert deployments[0].priority == 1
+    assert deployments[0].api_base == "http://10.0.0.42:8000/v1"
+
+
+def test_atomic_bundle_includes_commit_pinned_hermes_group_or_fails_closed(
+    tmp_path: Path,
+) -> None:
+    hermes_routes = importlib.import_module("dgx_control.hermes_routes")
+    report = {
+        "definitions": [{"id": "model", "maturity": "accepted"}],
+    }
+    files = {
+        "config/hermes-agent-policy.toml": (
+            b"schema_version = 1\n"
+            b'alias = "hermes-agent"\n'
+            b"local_only = true\n\n"
+            b"[[candidates]]\n"
+            b'workload = "model"\n'
+            b"priority = 1\n"
+            b'minimum_maturity = "accepted"\n'
+        ),
+        "inventory/reports/model-definitions.json": json.dumps(report).encode(),
+    }
+    policy = hermes_routes.RepositoryHermesRoutePolicy(
+        tmp_path,
+        repository_reader=lambda _commit, path: files[path],
+    )
+    request = _request().__class__(
+        **{**_request().__dict__, "base_commit": "a" * 40}
+    )
+    publisher = _publisher(
+        tmp_path,
+        litellm_deployments=policy.deployments,
+    )
+
+    marker = publisher.publish(request)
+    config = json.loads(
+        (
+            tmp_path
+            / "runtime/generations"
+            / marker.directory
+            / "litellm.json"
+        ).read_bytes()
+    )
+
+    assert [row["model_name"] for row in config["model_list"]] == [
+        "chat",
+        "hermes-agent",
+    ]
+    assert config["model_list"][1]["litellm_params"] == {
+        "api_base": "http://10.0.0.42:8000/v1",
+        "api_key": "os.environ/LITELLM_UPSTREAM_KEY",
+        "model": "openai/model",
+        "order": 1,
+        "rpm": 30,
+        "tpm": 10_000,
+    }
+    assert config["router_settings"]["allowed_fails"] == 0
+    assert config["router_settings"]["num_retries"] == 1
+
+    files["inventory/reports/model-definitions.json"] = b'{"definitions":[]}'
+    replacement = request.__class__(
+        **{**request.__dict__, "evidence_set_digest": "d" * 64}
+    )
+    with pytest.raises(RouteRuntimeError, match="Hermes repository policy"):
+        publisher.publish(replacement)
+    assert publisher.inspect(expected=marker) == marker

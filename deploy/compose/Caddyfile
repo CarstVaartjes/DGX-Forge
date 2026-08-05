@@ -36,6 +36,10 @@
 	handle @agent_path {
 		respond 404
 	}
+	@internal_path path /internal/*
+	handle @internal_path {
+		respond 404
+	}
 	handle /v1/* {
 		reverse_proxy litellm:4000
 	}

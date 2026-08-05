@@ -356,12 +356,24 @@ def _assert_execution_cycle(database: str) -> None:
 
 def test_0009_is_the_sole_linear_head() -> None:
     config = _config("sqlite://")
-    heads = ScriptDirectory.from_config(config).get_heads()
+    scripts = ScriptDirectory.from_config(config)
+    heads = scripts.get_heads()
 
     assert heads == ["0009_reconciliation_execution"]
     revision = ScriptDirectory.from_config(config).get_revision(heads[0])
     assert revision is not None
     assert revision.down_revision == "0008_resolved_plan"
+    assert [item.revision for item in reversed(tuple(scripts.walk_revisions()))] == [
+        "0001_operational_state",
+        "0002_agent_operations",
+        "0003_retry_disposition",
+        "0004_agent_enrollment",
+        "0005_certificate_rotation",
+        "0006_reconciliation_graph",
+        "0007_issued_revocations",
+        "0008_resolved_plan",
+        "0009_reconciliation_execution",
+    ]
 
 
 def test_execution_models_expose_durable_links_and_bounded_fields() -> None:

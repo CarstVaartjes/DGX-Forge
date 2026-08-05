@@ -19,12 +19,17 @@ COPY inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl /wheels/
 RUN python -m pip install --no-cache-dir --prefix=/install \
     /wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl /spark-profiles .
 
-FROM ${PYTHON_IMAGE}
+FROM ${PYTHON_IMAGE} AS runtime
+RUN groupadd --gid 10001 control && useradd --uid 10001 --gid 10001 --no-create-home control
+COPY --from=build /install /usr/local
+WORKDIR /srv/dgx-control
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
+
+FROM runtime AS worker
+USER 10001:10001
+
+FROM runtime AS api
 RUN apt-get update \
     && apt-get install --yes --no-install-recommends git openssh-client \
     && rm -rf /var/lib/apt/lists/*
-RUN groupadd --gid 10001 control && useradd --uid 10001 --gid 10001 --no-create-home control
-COPY --from=build /install /usr/local
 USER 10001:10001
-WORKDIR /srv/dgx-control
-ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1

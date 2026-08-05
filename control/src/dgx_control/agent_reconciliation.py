@@ -1263,6 +1263,7 @@ class AgentReconciliationService:
             routes,
             endpoints,
             self._clock() + timedelta(seconds=self._publication_lease_seconds),
+            reconciliation.base_commit,
         )
 
     @staticmethod

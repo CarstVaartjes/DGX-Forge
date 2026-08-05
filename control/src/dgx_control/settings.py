@@ -71,6 +71,7 @@ class Settings:
     repository_path: Path
     state_path: Path
     deployment_mode: str
+    legacy_direct_transport: str
     token_signing_key: bytes
     metrics_token: str
     git_signing_key_path: Path | None
@@ -92,6 +93,7 @@ class Settings:
     agent_ca_max_response_bytes: int
     agent_artifact_root: Path
     agent_proxy_auth: bytes
+    worker_api_token: bytes
     management_cidrs: str
     direct_fabric_cidrs: str
 
@@ -104,6 +106,14 @@ class Settings:
         mode = os.environ.get("DGX_DEPLOYMENT_MODE", "development")
         if mode not in {"development", "test", "production"}:
             raise SettingsError("DGX_DEPLOYMENT_MODE is invalid")
+        legacy_direct_transport = os.environ.get(
+            "DGX_LEGACY_DIRECT_TRANSPORT",
+            "",
+        )
+        if legacy_direct_transport not in {"", "explicit-test-only"}:
+            raise SettingsError("legacy direct transport selector is invalid")
+        if mode == "production" and legacy_direct_transport:
+            raise SettingsError("legacy direct transport is forbidden in production")
         agent_ca_provider = os.environ.get("DGX_AGENT_CA_PROVIDER", "")
         agent_runtime = os.environ.get("DGX_AGENT_RUNTIME", "enabled")
         if agent_runtime not in {"enabled", "disabled"}:
@@ -240,11 +250,16 @@ class Settings:
             _agent_proxy_auth_secret("DGX_AGENT_PROXY_AUTH_FILE", production=True)
             if agent_enabled else b""
         )
+        worker_api_token = (
+            _agent_proxy_auth_secret("DGX_WORKER_API_TOKEN_FILE", production=True)
+            if mode == "production" else b""
+        )
         return cls(
             database_url=database_url,
             repository_path=Path(os.environ.get("DGX_REPOSITORY_PATH", "/srv/dgx-forge/repository")),
             state_path=Path(os.environ.get("DGX_STATE_PATH", "/srv/dgx-forge/state")),
             deployment_mode=mode,
+            legacy_direct_transport=legacy_direct_transport,
             token_signing_key=signing_key,
             metrics_token=metrics_token,
             git_signing_key_path=git_signing_key_path,
@@ -266,6 +281,94 @@ class Settings:
             agent_ca_max_response_bytes=agent_ca_max_response_bytes,
             agent_artifact_root=Path(os.environ.get("DGX_AGENT_ARTIFACT_ROOT", "/state/agent-artifacts")),
             agent_proxy_auth=agent_proxy_auth,
+            worker_api_token=worker_api_token,
+            management_cidrs=management_cidrs,
+            direct_fabric_cidrs=direct_fabric_cidrs,
+        )
+
+
+@dataclass(frozen=True)
+class WorkerSettings:
+    """Minimal production-worker settings without repository or API authority."""
+
+    database_url: str
+    deployment_mode: str
+    internal_api_url: str
+    internal_api_token: bytes
+    internal_api_timeout_seconds: float
+    management_cidrs: str
+    direct_fabric_cidrs: str
+
+    @classmethod
+    def from_env_and_secrets(cls) -> WorkerSettings:
+        mode = os.environ.get("DGX_DEPLOYMENT_MODE", "development")
+        if mode not in {"development", "test", "production"}:
+            raise SettingsError("DGX_DEPLOYMENT_MODE is invalid")
+        legacy = os.environ.get("DGX_LEGACY_DIRECT_TRANSPORT", "")
+        if legacy not in {"", "explicit-test-only"}:
+            raise SettingsError("legacy direct transport selector is invalid")
+        if mode == "production" and legacy:
+            raise SettingsError("legacy direct transport is forbidden in production")
+        database_url = _secret(
+            "DGX_DATABASE_URL_FILE",
+            production=mode == "production",
+        )
+        if urlsplit(database_url).scheme not in {
+            "postgresql",
+            "postgresql+psycopg",
+        }:
+            raise SettingsError("database URL must use PostgreSQL")
+        token = _agent_proxy_auth_secret(
+            "DGX_WORKER_API_TOKEN_FILE",
+            production=mode == "production",
+        )
+        origin = os.environ.get(
+            "DGX_INTERNAL_API_URL",
+            "http://control-api:8000",
+        )
+        parsed = urlsplit(origin)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+            or parsed.username is not None
+            or parsed.password is not None
+        ):
+            raise SettingsError("DGX_INTERNAL_API_URL must be a fixed HTTP origin")
+        origin = origin.rstrip("/")
+        try:
+            timeout = float(os.environ.get("DGX_INTERNAL_API_TIMEOUT_SECONDS", "3"))
+        except ValueError as error:
+            raise SettingsError("internal API timeout must be numeric") from error
+        if not 0 < timeout <= 30:
+            raise SettingsError("internal API timeout must be between zero and 30 seconds")
+        management_cidrs = os.environ.get("DGX_MANAGEMENT_CIDRS", "").strip()
+        direct_fabric_cidrs = os.environ.get(
+            "DGX_DIRECT_FABRIC_CIDRS",
+            "",
+        ).strip()
+        if mode == "production" and not management_cidrs:
+            raise SettingsError("DGX_MANAGEMENT_CIDRS is required in production")
+        if not management_cidrs and direct_fabric_cidrs:
+            raise SettingsError(
+                "DGX_MANAGEMENT_CIDRS is required when direct fabric CIDRs are set"
+            )
+        if management_cidrs:
+            try:
+                ManagementAddressPolicy.parse(
+                    management_cidrs,
+                    forbidden_cidrs=direct_fabric_cidrs,
+                )
+            except PresenceError as error:
+                raise SettingsError(str(error)) from error
+        return cls(
+            database_url=database_url,
+            deployment_mode=mode,
+            internal_api_url=origin,
+            internal_api_token=token,
+            internal_api_timeout_seconds=timeout,
             management_cidrs=management_cidrs,
             direct_fabric_cidrs=direct_fabric_cidrs,
         )

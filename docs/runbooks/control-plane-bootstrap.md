@@ -3,11 +3,15 @@
 The control plane runs on any Docker Compose-capable Linux machine. The first
 host may be a NAS, but the configuration has no NAS vendor dependency.
 
-Reserve `10.0.0.2` for the NAS. Create local-only DNS records
+Choose a stable LAN address for the Docker service host and set it as
+`NAS_LAN_IP` (the variable name is retained for compatibility; the host need
+not be a NAS). Create local-only DNS records
 `enroll.dgx-forge.lan`, `agents.dgx-forge.lan`, and
-`registry.dgx-forge.lan`, all resolving to `10.0.0.2`. Permit TCP 8443 to that
-address only from the Spark management CIDR `10.0.0.0/24` or its reserved Spark
-leases. Do not expose LAN ports for control, inference, Grafana, or Hermes.
+`registry.dgx-forge.lan`, all resolving to that address. Set
+`DGX_MANAGEMENT_CIDRS` to the actual canonical Spark management network(s), and
+permit TCP 8443 to the service-host address only from those networks or the
+reserved Spark leases. Do not expose LAN ports for control, inference, Grafana,
+or Hermes.
 Spark reservations are recommended, but no Spark IP belongs in Compose or fleet
 identity: authenticated agent presence supplies the current validated address.
 
@@ -23,6 +27,7 @@ identity: authenticated agent presence supplies the current validated address.
    ```bash
    umask 077
    openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' > /srv/dgx-forge/secrets/agent-proxy-auth
+   openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' > /srv/dgx-forge/secrets/worker-api-token
    ```
 
    Spaces, internal line breaks, padding, and other punctuation are rejected
@@ -53,7 +58,10 @@ identity: authenticated agent presence supplies the current validated address.
    Select exactly one provider overlay. Combining both overlays is rejected by
    the control API at startup regardless of their order.
 
-The API and worker share one application image but remain separate services.
+The API and worker are separate targets built from the same release commit and
+remain separate services. The API image contains Git/OpenSSH for signed
+repository administration. The worker image contains neither Git nor OpenSSH,
+mounts no repository or Git key, and has no Spark-facing network.
 PostgreSQL, Caddy, LiteLLM, Prometheus, Grafana, Tailscale, and Hermes Agent are
 independent containers in this one project. Only Caddy publishes a host port,
 and that is the `10.0.0.2:8443` Spark backend. The Tailscale gateway publishes
@@ -72,8 +80,13 @@ Hermes reaches LiteLLM only through `hermes-inference` and uses the fixed
 creates the bridge so terminal tools cannot connect directly to Spark
 management/fabric networks or sibling control-plane networks.
 
-The checked-in LiteLLM file is a fail-closed empty bootstrap. After a successful
-commit-pinned reconciliation, the worker derives the live config from stable
+The checked-in LiteLLM file is a fail-closed empty bootstrap. The API retains
+Git authority and evaluates current-head, eligibility, and commit-pinned Hermes
+policy for the repository-less worker over a dedicated internal two-party
+network. Requests and short-lived responses are nonce-bound and HMAC-authenticated
+with the independent `worker-api-token`; Caddy denies every `/internal/*` path.
+After a successful commit-pinned reconciliation, the worker derives the live
+config from stable
 `spk_` identity, fresh authenticated presence, repository workload ports, and a
 successful upstream probe. The worker writes only to the dedicated
 `litellm-routes` volume; LiteLLM mounts it read-only and reloads by supervised

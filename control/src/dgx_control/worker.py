@@ -39,6 +39,7 @@ class Worker:
         logs=None,
         housekeeping: Callable[[], object] | None = None,
         reconciliations=None,
+        quarantine_unlinked: bool = False,
     ) -> None:
         self._jobs = jobs
         self._worker_id = worker_id
@@ -46,6 +47,7 @@ class Worker:
         self._logs = logs
         self._housekeeping = housekeeping
         self._reconciliations = reconciliations
+        self._quarantine_unlinked = quarantine_unlinked
         self._reconciliation_turn = True
 
     def run_once(self) -> bool:
@@ -57,6 +59,20 @@ class Worker:
             reconciliation_attempted = True
             if self._reconciliations.tick():
                 return True
+        if self._quarantine_unlinked:
+            if self._jobs.quarantine_unlinked(
+                "legacy unlinked job requires operator review"
+            ):
+                self._reconciliation_turn = True
+                return True
+            if (
+                self._reconciliations is not None
+                and not self._reconciliation_turn
+                and not reconciliation_attempted
+            ):
+                self._reconciliation_turn = True
+                return self._reconciliations.tick()
+            return False
         attempt = self._jobs.claim(self._worker_id, 30)
         if attempt is None:
             if (
@@ -100,21 +116,16 @@ if __name__ == "__main__":
 
     from .agent_jobs import AgentJobService
     from .agent_reconciliation import AgentReconciliationService
-    from .code_host import RepositoryCodeHost
     from .db import build_engine, session_factory
-    from .git_policy import GitPolicy, PolicyStore
-    from .logging import JobLogStore
-    from .offline import OnlineLock
     from .presence import AgentPresenceService, ManagementAddressPolicy
-    from .repository import RepositoryService
     from .route_runtime import (
         AtomicRouteBundlePublisher,
         FileSupervisorAcknowledger,
     )
-    from .runtime import RuntimeHandlers
-    from .settings import Settings
+    from .settings import WorkerSettings
+    from .worker_authority import HttpWorkerAuthority
 
-    settings = Settings.from_env_and_secrets()
+    settings = WorkerSettings.from_env_and_secrets()
     sessions = session_factory(build_engine(settings.database_url))
     clock = lambda: datetime.now(UTC)
     jobs = JobService(sessions, clock=clock)
@@ -123,7 +134,6 @@ if __name__ == "__main__":
         forbidden_cidrs=settings.direct_fabric_cidrs,
     )
     presence = AgentPresenceService(sessions, address_policy, clock=clock)
-    repository = RepositoryService(settings.repository_path)
 
     def endpoint(session, node_id: str) -> tuple[str, datetime]:
         observation = presence.latest_in_session(
@@ -131,25 +141,16 @@ if __name__ == "__main__":
         )
         return observation.address, observation.observed_at
 
-    if settings.git_signing_key_path is None:
-        raise RuntimeError("production Git signing key is unavailable")
-    code_host = RepositoryCodeHost(
-        settings.repository_path,
-        signing_key=settings.git_signing_key_path,
-        lock_path=settings.state_path / "git-change.lock",
+    authority = HttpWorkerAuthority(
+        settings.internal_api_url,
+        settings.internal_api_token,
+        timeout_seconds=settings.internal_api_timeout_seconds,
     )
-    policy = GitPolicy(
-        PolicyStore(settings.state_path / "git-policy"), code_host,
-        protected_branch=settings.deployment_branch,
-        required_checks=settings.required_checks,
-    )
-    commit_eligible = lambda commit: policy.eligible(commit).ok
-    current_commit = lambda: repository.head(settings.deployment_branch)
+    commit_eligible = authority.eligible
+    current_commit = authority.current_commit
     agent_jobs = AgentJobService(
         sessions,
         clock=clock,
-        commit_eligible=commit_eligible,
-        current_commit=current_commit,
     )
     reconciliations = AgentReconciliationService(
         sessions,
@@ -163,23 +164,20 @@ if __name__ == "__main__":
                 Path("/supervisor/ack.json"),
                 clock=clock,
             ),
+            litellm_deployments=authority.deployments,
         ),
         endpoint_resolver=endpoint,
         clock=clock,
         commit_eligible=commit_eligible,
         current_commit=current_commit,
     )
-    runtime = RuntimeHandlers(
-        settings.repository_path,
-        eligible=commit_eligible,
-        current_commit=current_commit,
-    )
     worker = Worker(
-        jobs, os.environ.get("HOSTNAME", "control-worker"), runtime.registry(),
-        logs=JobLogStore(settings.state_path / "job-logs"),
+        jobs,
+        os.environ.get("HOSTNAME", "control-worker"),
+        {},
         reconciliations=reconciliations,
+        quarantine_unlinked=True,
     )
-    with OnlineLock(settings.state_path / "offline.lock"):
-        while True:
-            if not worker.run_once():
-                time.sleep(1)
+    while True:
+        if not worker.run_once():
+            time.sleep(1)

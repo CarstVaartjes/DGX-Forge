@@ -24,11 +24,18 @@ class Jobs:
         return Enqueued(id=job_id)
 
 
-def _client(role: str):
+def _client(role: str, *, generic_jobs_enabled: bool = True):
     codec = TokenCodec(b"k" * 32)
     audits = MemoryAuditStore()
     jobs = Jobs()
-    app = create_app(jobs=jobs, tokens=codec, audits=audits, fleet=lambda: {"nodes": []}, now=lambda: 10)
+    app = create_app(
+        jobs=jobs,
+        tokens=codec,
+        audits=audits,
+        fleet=lambda: {"nodes": []},
+        now=lambda: 10,
+        generic_jobs_enabled=generic_jobs_enabled,
+    )
     client = TestClient(app)
     token = codec.issue(Actor(role, role), ttl_seconds=1000, now=0)
     return client, {"Authorization": f"Bearer {token}"}, jobs, audits
@@ -71,6 +78,27 @@ def test_generic_job_endpoint_cannot_create_reconciliation_authority() -> None:
             "base_commit": "a" * 40,
             "targets": ["spk_" + "1" * 32],
             "payload": {"reconciliation_id": "attacker-controlled"},
+        },
+    )
+
+    assert response.status_code == 422
+    assert jobs.calls == []
+
+
+def test_production_boundary_rejects_direct_probe_job_submission() -> None:
+    client, headers, jobs, _audits = _client(
+        "administrator",
+        generic_jobs_enabled=False,
+    )
+
+    response = client.post(
+        "/api/v1/jobs",
+        headers=headers,
+        json={
+            "kind": "probe",
+            "base_commit": "a" * 40,
+            "targets": ["spk_" + "1" * 32],
+            "payload": {},
         },
     )
 

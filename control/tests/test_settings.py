@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from dgx_control.settings import Settings, SettingsError
+from dgx_control.settings import Settings, SettingsError, WorkerSettings
 
 
 def test_database_secret_is_read_from_file(tmp_path: Path, monkeypatch) -> None:
@@ -100,6 +100,7 @@ def test_production_agent_boundary_requires_secret_files_and_step_ca(tmp_path: P
         "DGX_AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE": "provider-public-jwk",
         "DGX_AGENT_CA_ROOT_FILE": "root-certificate",
         "DGX_AGENT_PROXY_AUTH_FILE": "p" * 32 + "\r\n",
+        "DGX_WORKER_API_TOKEN_FILE": "w" * 32,
     }
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
     monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
@@ -208,6 +209,7 @@ def test_production_builtin_bootstrap_requires_and_loads_the_mounted_intermediat
         "DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE": "intermediate-certificate",
         "DGX_AGENT_INTERMEDIATE_KEY_FILE": "built-in-key",
         "DGX_AGENT_PROXY_AUTH_FILE": "p" * 32,
+        "DGX_WORKER_API_TOKEN_FILE": "w" * 32,
     }
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
     monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
@@ -227,26 +229,21 @@ def test_production_builtin_bootstrap_requires_and_loads_the_mounted_intermediat
 def test_production_worker_settings_can_explicitly_disable_agent_runtime(tmp_path: Path, monkeypatch) -> None:
     values = {
         "DGX_DATABASE_URL_FILE": "postgresql://db/control",
-        "DGX_TOKEN_SIGNING_KEY_FILE": "k" * 32,
-        "DGX_METRICS_TOKEN_FILE": "m" * 16,
-        "DGX_GIT_SIGNING_KEY_FILE": "git-key",
+        "DGX_WORKER_API_TOKEN_FILE": "w" * 32,
     }
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
-    monkeypatch.setenv("DGX_AGENT_CA_PROVIDER", "step-ca")
-    monkeypatch.setenv("DGX_AGENT_RUNTIME", "disabled")
     for name, value in values.items():
         path = tmp_path / name
         path.write_text(value)
         monkeypatch.setenv(name, str(path))
 
     with pytest.raises(SettingsError, match="DGX_MANAGEMENT_CIDRS"):
-        Settings.from_env_and_secrets()
+        WorkerSettings.from_env_and_secrets()
 
     monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
-    settings = Settings.from_env_and_secrets()
+    settings = WorkerSettings.from_env_and_secrets()
 
-    assert settings.agent_ca_provider == "step-ca"
-    assert settings.agent_proxy_auth == b""
+    assert settings.internal_api_token == b"w" * 32
     assert settings.management_cidrs == "10.0.0.0/24"
 
 
