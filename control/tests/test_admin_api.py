@@ -25,6 +25,25 @@ class Proposals:
         return ProposalPreview(actor, base, b"canonical diff", tuple(change.path for change in changes), ("passed",), "d" * 64)
 
 
+class Reconciler:
+    def plan(self, commit, profile_id):
+        return type(
+            "Plan",
+            (),
+            {
+                "commit": commit,
+                "digest": "d" * 64,
+                "targets": ("spk_" + "1" * 32,),
+                "placements": {"model": ("spk_" + "1" * 32,)},
+                "routes": {},
+                "releases": {},
+                "input_digests": {},
+                "operation_graph": type("Graph", (), {"document": {"schema_version": 1}})(),
+                "agent_protocol_range": (1, 1),
+            },
+        )()
+
+
 def test_admin_proposal_returns_canonical_patch_and_digest() -> None:
     codec = TokenCodec(b"k" * 32)
     app = create_app(
@@ -52,6 +71,33 @@ def test_repository_document_reads_require_authentication() -> None:
     app = create_app(jobs=Jobs(), tokens=codec, audits=MemoryAuditStore(), fleet=dict, admin=AdminServices(Repository(), Proposals(), None, None))
     client = TestClient(app)
     assert client.get("/api/v1/repository", params={"commit": "a" * 40}).status_code == 401
+
+
+def test_reconciliation_plan_requires_an_explicit_repository_profile() -> None:
+    codec = TokenCodec(b"k" * 32)
+    app = create_app(
+        jobs=Jobs(),
+        tokens=codec,
+        audits=MemoryAuditStore(),
+        fleet=dict,
+        admin=AdminServices(Repository(), Proposals(), None, Reconciler()),
+        now=lambda: 10,
+    )
+    client = TestClient(app)
+    token = codec.issue(Actor("operator", "operator"), ttl_seconds=100, now=0)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = client.post(
+        "/api/v1/reconciliations/plan",
+        headers=headers,
+        json={"commit": "a" * 40, "profile_id": "inference"},
+    )
+    assert response.status_code == 200
+    assert response.json()["agent_protocol_range"] == [1, 1]
+    assert response.json()["operation_graph"] == {"schema_version": 1}
+    assert client.post(
+        "/api/v1/reconciliations/plan", headers=headers, json={"commit": "a" * 40}
+    ).status_code == 422
 
 
 def test_spa_falls_back_to_index_for_client_routes_but_not_assets(tmp_path) -> None:

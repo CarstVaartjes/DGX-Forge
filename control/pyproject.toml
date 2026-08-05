@@ -12,12 +12,14 @@ dependencies = [
   "psycopg[binary]==3.2.9",
   "PyJWT==2.13.0",
   "sqlalchemy==2.0.42",
+  "spark-profiles==0.1.0",
   "tomli-w==1.2.0",
   "uvicorn==0.35.0",
 ]
 
 [tool.uv.sources]
 dgx-agent-protocol = { path = "../inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl" }
+spark-profiles = { path = ".." }
 
 [dependency-groups]
 dev = ["pytest==9.1.1"]

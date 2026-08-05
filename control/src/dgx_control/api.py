@@ -150,6 +150,7 @@ class ChangeRequest(BaseModel):
 class ReconciliationPlanRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    profile_id: str = Field(pattern=r"^[a-z0-9][a-z0-9._-]{0,62}$")
 
 
 class ReconciliationRequest(BaseModel):
@@ -343,11 +344,13 @@ def create_app(
         require_mutation_role(authenticated, "/api/v1/reconciliations/plan")
         if admin is None or admin.reconciler is None:
             raise HTTPException(status_code=503, detail="reconciliation unavailable")
-        plan = admin.reconciler.plan(body.commit)
+        plan = admin.reconciler.plan(body.commit, body.profile_id)
         return {
             "commit": plan.commit, "digest": plan.digest, "targets": list(plan.targets),
             "placements": dict(plan.placements), "routes": dict(plan.routes),
             "releases": dict(plan.releases), "input_digests": dict(plan.input_digests),
+            "operation_graph": plan.operation_graph.document,
+            "agent_protocol_range": list(plan.agent_protocol_range),
         }
 
     @app.post("/api/v1/reconciliations", status_code=status.HTTP_202_ACCEPTED)
@@ -419,6 +422,10 @@ def production_app() -> FastAPI:
     from .code_host import RepositoryCodeHost
     from .dashboard import DashboardService
     from .db import build_engine, session_factory
+    from .desired_state import (
+        DesiredStateResolver,
+        durable_desired_state_observations,
+    )
     from .git_policy import GitPolicy, PolicyStore
     from .jobs import JobService
     from .logging import JobLogStore
@@ -426,7 +433,7 @@ def production_app() -> FastAPI:
     from .models import Job
     from .offline import OnlineLock
     from .proposals import ProposalService
-    from .reconcile import ChangeService, Reconciler, RepositoryDefinitions
+    from .reconcile import ChangeService, Reconciler
     from .repository import RepositoryService
     from .settings import Settings
 
@@ -453,7 +460,10 @@ def production_app() -> FastAPI:
     )
     changes = ChangeService(proposals, git_policy)
     reconciler = Reconciler(
-        git_policy, RepositoryDefinitions(repository), jobs=job_service,
+        git_policy,
+        DesiredStateResolver(repository, clock=clock),
+        jobs=job_service,
+        observations=lambda: durable_desired_state_observations(sessions),
     )
     dashboard = DashboardService(repository, sessions)
     metrics = MetricsRegistry()

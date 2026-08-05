@@ -2,7 +2,12 @@ from contextlib import contextmanager
 
 import pytest
 from dgx_control.git_policy import Eligibility
-from dgx_control.reconcile import IneligibleCommit, Reconciler, RepositoryDefinitions
+from dgx_control.reconcile import (
+    CompatibilityDefinitions,
+    IneligibleCommit,
+    Reconciler,
+    RepositoryDefinitions,
+)
 
 
 class Policy:
@@ -38,9 +43,13 @@ def definitions(_commit):
     return {"targets": ["spk_b", "spk_a"], "placements": {"entry": ["spk_a"]}, "routes": {"spk_a": "entry"}, "releases": {"spk_a": "sha256:abc"}, "input_digests": {"fleet": "f" * 64}}
 
 
+def compatibility():
+    return CompatibilityDefinitions(definitions)
+
+
 def test_reconcile_rechecks_commit_eligibility_before_mutation() -> None:
     policy, routes, controller, leases = Policy(), Routes(), Controller(), Leases()
-    reconciler = Reconciler(policy, definitions, routes, controller, leases)
+    reconciler = Reconciler(policy, compatibility(), routes, controller, leases)
     plan = reconciler.plan("a" * 40)
     policy.allowed = False
     with pytest.raises(IneligibleCommit, match="check revoked"):
@@ -50,7 +59,7 @@ def test_reconcile_rechecks_commit_eligibility_before_mutation() -> None:
 
 def test_failed_reconcile_leaves_affected_routes_withdrawn() -> None:
     policy, routes, controller, leases = Policy(), Routes(), Controller(fail=True), Leases()
-    reconciler = Reconciler(policy, definitions, routes, controller, leases)
+    reconciler = Reconciler(policy, compatibility(), routes, controller, leases)
     result = reconciler.execute(reconciler.plan("a" * 40))
     assert result.status == "failed"
     assert routes.state == {"spk_a": "maintenance", "spk_b": "maintenance"}
@@ -63,7 +72,7 @@ def test_reconcile_does_not_mask_unexpected_programming_error() -> None:
         def apply(self, plan):
             raise AssertionError("programming defect")
 
-    reconciler = Reconciler(Policy(), definitions, Routes(), BrokenController(), Leases())
+    reconciler = Reconciler(Policy(), compatibility(), Routes(), BrokenController(), Leases())
 
     with pytest.raises(AssertionError, match="programming defect"):
         reconciler.execute(reconciler.plan("a" * 40))
@@ -71,7 +80,7 @@ def test_reconcile_does_not_mask_unexpected_programming_error() -> None:
 
 def test_successful_plan_is_deterministic_and_publishes_atomically() -> None:
     policy, routes, controller, leases = Policy(), Routes(), Controller(), Leases()
-    reconciler = Reconciler(policy, definitions, routes, controller, leases)
+    reconciler = Reconciler(policy, compatibility(), routes, controller, leases)
     first = reconciler.plan("a" * 40)
     second = reconciler.plan("a" * 40)
     assert first == second and first.targets == ("spk_a", "spk_b")
@@ -89,7 +98,7 @@ class Jobs:
 
 def test_enqueue_pins_plan_commit_and_digest() -> None:
     jobs = Jobs()
-    reconciler = Reconciler(Policy(), definitions, Routes(), Controller(), Leases(), jobs=jobs)
+    reconciler = Reconciler(Policy(), compatibility(), Routes(), Controller(), Leases(), jobs=jobs)
     plan = reconciler.plan("a" * 40)
     result = reconciler.enqueue(plan.digest, "operator", "request")
     assert result == {"job_id": "job", "state": "queued", "base_commit": "a" * 40}
@@ -113,6 +122,11 @@ def test_repository_definitions_reads_commit_pinned_document() -> None:
     assert RepositoryDefinitions(Repository())("a" * 40) == definitions("a" * 40)
 
 
+def test_static_reconciliation_requires_explicit_compatibility_adapter() -> None:
+    with pytest.raises(TypeError, match="planner"):
+        Reconciler(Policy(), definitions)
+
+
 def test_reconciliation_mapping_shapes_raise_type_error() -> None:
     class InvalidRepository:
         def read_document(self, commit, path):
@@ -123,14 +137,16 @@ def test_reconciliation_mapping_shapes_raise_type_error() -> None:
 
     reconciler = Reconciler(
         Policy(),
-        lambda _commit: definitions(_commit) | {"placements": []},
+        CompatibilityDefinitions(
+            lambda _commit: definitions(_commit) | {"placements": []}
+        ),
     )
     with pytest.raises(TypeError, match="placements"):
         reconciler.plan("a" * 40)
 
 
 def test_planning_only_reconciler_cannot_execute_in_api_process() -> None:
-    reconciler = Reconciler(Policy(), definitions, jobs=Jobs())
+    reconciler = Reconciler(Policy(), compatibility(), jobs=Jobs())
     plan = reconciler.plan("a" * 40)
     with pytest.raises(RuntimeError, match="worker"):
         reconciler.execute(plan)

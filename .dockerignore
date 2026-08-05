@@ -1,4 +1,9 @@
 *
+!pyproject.toml
+!src/
+src/*
+!src/spark_profiles/
+!src/spark_profiles/**
 !control/
 !control/Dockerfile
 !control/pyproject.toml
