@@ -12,6 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 NODE_ID = "spk_" + "0" * 31 + "1"
+SECOND_NODE_ID = "spk_" + "0" * 31 + "2"
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
 ROUTES = {
     "deepseek": {
@@ -29,26 +30,62 @@ def _manager(
     probe=lambda _url, _key: None,
     observed_at=NOW,
     clock=lambda: NOW,
+    maturity=None,
+    presence_addresses=None,
 ):
+    maturity = maturity or {
+        "deepseek-agent-dual": "accepted",
+        "deepseek-agent-single": "verified",
+    }
+    presence_addresses = presence_addresses or {NODE_ID: "10.0.0.42"}
     repository = tmp_path / "repository"
-    workload = repository / "config/workloads/deepseek-agent-single.toml"
-    workload.parent.mkdir(parents=True)
-    workload.write_text(
-        'id = "deepseek-agent-single"\n[endpoint]\nhost = "127.0.0.1"\nport = 8888\n'
+    workload_root = repository / "config/workloads"
+    workload_root.mkdir(parents=True)
+    for workload_id in ("deepseek-agent-dual", "deepseek-agent-single"):
+        (workload_root / f"{workload_id}.toml").write_text(
+            f'id = "{workload_id}"\n[endpoint]\nhost = "127.0.0.1"\nport = 8888\n'
+        )
+    (repository / "config/hermes-agent-policy.toml").write_text(
+        "schema_version = 1\n"
+        'alias = "hermes-agent"\n'
+        "local_only = true\n\n"
+        "[[candidates]]\n"
+        'workload = "deepseek-agent-dual"\n'
+        "priority = 1\n"
+        'minimum_maturity = "accepted"\n\n'
+        "[[candidates]]\n"
+        'workload = "deepseek-agent-single"\n'
+        "priority = 2\n"
+        'minimum_maturity = "accepted"\n'
     )
+    report = repository / "inventory/reports/model-definitions.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({
+        "definitions": [
+            {"id": workload_id, "maturity": state}
+            for workload_id, state in maturity.items()
+        ]
+    }))
     fleet = repository / "inventory/fleet.toml"
-    fleet.parent.mkdir(parents=True)
+    fleet.parent.mkdir(parents=True, exist_ok=True)
     fleet.write_text(
-        f'[nodes."{NODE_ID}"]\nlifecycle = "ready"\n'
+        "".join(
+            f'[nodes."{node_id}"]\nlifecycle = "ready"\n'
+            for node_id in presence_addresses
+        )
     )
     engine = create_engine(f"sqlite:///{tmp_path / 'routes.sqlite'}")
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
     with sessions.begin() as session:
-        session.add(AgentNode(node_id=NODE_ID, state="active", capabilities=[]))
+        session.add_all(
+            AgentNode(node_id=node_id, state="active", capabilities=[])
+            for node_id in presence_addresses
+        )
     policy = ManagementAddressPolicy.parse("10.0.0.0/24")
     presence = AgentPresenceService(sessions, policy)
-    presence.observe(NODE_ID, "10.0.0.42", observed_at)
+    for node_id, address in presence_addresses.items():
+        presence.observe(node_id, address, observed_at)
     live = tmp_path / "live/config.yaml"
     manager = ProductionRouteManager(
         repository,
@@ -64,6 +101,29 @@ def _manager(
         repository_reader=lambda _commit, path: (repository / path).read_bytes(),
     )
     return manager, live, presence
+
+
+def _v2_route(workload: str, node_id: str, *, port: int = 9999):
+    quota = {"requests_per_minute": 30, "tokens_per_minute": 10_000}
+    return {
+        "workload_id": workload,
+        "nodes": [node_id],
+        "entrypoint_node_id": node_id,
+        "scheme": "http",
+        "port": port,
+        "path": "/v1",
+        "quota": quota,
+        "quota_digest": hashlib.sha256(
+            json.dumps(quota, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest(),
+    }
+
+
+def _hermes_models(live):
+    return [
+        item for item in json.loads(live.read_bytes())["model_list"]
+        if item["model_name"] == "hermes-agent"
+    ]
 
 
 def test_successful_reconciliation_publishes_probed_presence_route(tmp_path) -> None:
@@ -278,3 +338,127 @@ def test_refresh_withdraws_when_commit_loses_eligibility(tmp_path) -> None:
 
     assert manager.refresh_if_due(lambda: "a" * 40, eligible=lambda _commit: False) is False
     assert json.loads(live.read_bytes())["model_list"] == []
+
+
+def test_dual_candidate_outranks_simultaneously_running_single_candidate(tmp_path) -> None:
+    manager, live, _presence = _manager(
+        tmp_path,
+        maturity={
+            "deepseek-agent-dual": "accepted",
+            "deepseek-agent-single": "accepted",
+        },
+        presence_addresses={NODE_ID: "10.0.0.42", SECOND_NODE_ID: "10.0.0.43"},
+    )
+    manager.publish(
+        commit="a" * 40,
+        profile="mixed",
+        targets=(NODE_ID, SECOND_NODE_ID),
+        routes={
+            "dual": _v2_route("deepseek-agent-dual", NODE_ID),
+            "single": _v2_route("deepseek-agent-single", SECOND_NODE_ID),
+        },
+    )
+
+    assert [item["litellm_params"]["model"] for item in _hermes_models(live)] == [
+        "openai/deepseek-agent-dual",
+        "openai/deepseek-agent-single",
+    ]
+    assert [item["litellm_params"]["order"] for item in _hermes_models(live)] == [1, 2]
+
+
+def test_verified_single_candidate_is_not_added_to_hermes_group(tmp_path) -> None:
+    manager, live, _presence = _manager(tmp_path)
+    manager.publish(
+        commit="a" * 40,
+        profile="agent-single",
+        targets=(NODE_ID,),
+        routes={"deepseek": _v2_route("deepseek-agent-single", NODE_ID)},
+    )
+
+    assert _hermes_models(live) == []
+    assert json.loads(live.read_bytes())["model_list"][0]["model_name"] == "deepseek"
+
+
+def test_mixed_profile_can_publish_an_accepted_single_candidate(tmp_path) -> None:
+    manager, live, _presence = _manager(
+        tmp_path,
+        maturity={
+            "deepseek-agent-dual": "accepted",
+            "deepseek-agent-single": "accepted",
+        },
+    )
+    manager.publish(
+        commit="a" * 40,
+        profile="mixed",
+        targets=(NODE_ID,),
+        routes={"deepseek": _v2_route("deepseek-agent-single", NODE_ID)},
+    )
+
+    assert [item["litellm_params"]["model"] for item in _hermes_models(live)] == [
+        "openai/deepseek-agent-single"
+    ]
+
+
+def test_failed_primary_probe_leaves_only_an_eligible_secondary(tmp_path) -> None:
+    def probe(url, _key):
+        if url.startswith("http://10.0.0.42"):
+            raise OSError("primary refused")
+
+    manager, live, _presence = _manager(
+        tmp_path,
+        probe=probe,
+        maturity={
+            "deepseek-agent-dual": "accepted",
+            "deepseek-agent-single": "accepted",
+        },
+        presence_addresses={NODE_ID: "10.0.0.42", SECOND_NODE_ID: "10.0.0.43"},
+    )
+    routes = {
+        "dual": _v2_route("deepseek-agent-dual", NODE_ID),
+        "single": _v2_route("deepseek-agent-single", SECOND_NODE_ID),
+    }
+    with pytest.raises(RouteRuntimeError, match="probe"):
+        manager.publish(
+            commit="a" * 40,
+            profile="mixed",
+            targets=(NODE_ID, SECOND_NODE_ID),
+            routes=routes,
+        )
+    assert json.loads(live.read_bytes())["model_list"] == []
+
+    manager.publish(
+        commit="a" * 40,
+        profile="mixed",
+        targets=(NODE_ID, SECOND_NODE_ID),
+        routes=routes,
+    )
+    assert [item["litellm_params"]["model"] for item in _hermes_models(live)] == [
+        "openai/deepseek-agent-single"
+    ]
+
+
+def test_no_eligible_candidate_omits_hermes_group_but_keeps_other_routes(tmp_path) -> None:
+    manager, live, _presence = _manager(tmp_path)
+    manager.publish(
+        commit="a" * 40,
+        profile="agent-single",
+        targets=(NODE_ID,),
+        routes={"deepseek": _v2_route("deepseek-agent-single", NODE_ID)},
+    )
+
+    assert [item["model_name"] for item in json.loads(live.read_bytes())["model_list"]] == [
+        "deepseek"
+    ]
+
+
+def test_v2_reconciliation_route_shape_is_normalized_without_trusting_an_address(tmp_path) -> None:
+    manager, live, _presence = _manager(tmp_path)
+    manager.publish(
+        commit="a" * 40,
+        profile="agent-single",
+        targets=(NODE_ID,),
+        routes={"deepseek": _v2_route("deepseek-agent-single", NODE_ID, port=9999)},
+    )
+
+    model = json.loads(live.read_bytes())["model_list"][0]
+    assert model["litellm_params"]["api_base"] == "http://10.0.0.42:8888/v1"

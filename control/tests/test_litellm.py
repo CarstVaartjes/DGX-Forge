@@ -4,7 +4,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from dgx_control.litellm import LiteLlmPolicy, LiteLlmPolicyError, LiteLlmPublisher
+from dgx_control.litellm import (
+    LiteLlmDeployment,
+    LiteLlmPolicy,
+    LiteLlmPolicyError,
+    LiteLlmPublisher,
+)
 from dgx_control.routes import RouteState
 
 
@@ -60,3 +65,85 @@ def test_litellm_accepts_only_already_rendered_route_strings(tmp_path: Path) -> 
             validate=lambda _: True,
             apply=lambda _: None,
         ).render(snapshot, _policy())
+
+
+def test_hermes_group_is_local_ordered_and_retry_bounded(tmp_path: Path) -> None:
+    publisher = LiteLlmPublisher(
+        tmp_path,
+        validate=lambda _: True,
+        apply=lambda _: None,
+    )
+    policy = LiteLlmPolicy(
+        models={"deepseek": {"requests_per_minute": 30, "tokens_per_minute": 10_000}},
+        deployments=(
+            LiteLlmDeployment(
+                "hermes-agent",
+                "deepseek-agent-dual",
+                "http://10.0.0.42:8888/v1",
+                1,
+                20,
+                8_000,
+            ),
+            LiteLlmDeployment(
+                "hermes-agent",
+                "deepseek-agent-single",
+                "http://10.0.0.43:8888/v1",
+                2,
+                30,
+                10_000,
+            ),
+        ),
+    )
+
+    config = json.loads(publisher.render(_snapshot(), policy))
+    hermes = [
+        model for model in config["model_list"]
+        if model["model_name"] == "hermes-agent"
+    ]
+    assert [model["litellm_params"]["model"] for model in hermes] == [
+        "openai/deepseek-agent-dual",
+        "openai/deepseek-agent-single",
+    ]
+    assert [model["litellm_params"]["order"] for model in hermes] == [1, 2]
+    assert [model["litellm_params"]["api_base"] for model in hermes] == [
+        "http://10.0.0.42:8888/v1",
+        "http://10.0.0.43:8888/v1",
+    ]
+    assert all(
+        model["litellm_params"]["api_key"] == "os.environ/LITELLM_UPSTREAM_KEY"
+        for model in hermes
+    )
+    assert config["router_settings"] == {
+        "allowed_fails": 0,
+        "enable_pre_call_checks": True,
+        "num_retries": 1,
+        "retry_policy": {
+            "AuthenticationErrorRetries": 0,
+            "BadRequestErrorRetries": 0,
+            "ContentPolicyViolationErrorRetries": 0,
+            "RateLimitErrorRetries": 1,
+            "TimeoutErrorRetries": 1,
+        },
+        "routing_strategy": "simple-shuffle",
+    }
+    assert b"openai.com" not in publisher.render(_snapshot(), policy)
+
+
+@pytest.mark.parametrize(
+    "deployment",
+    (
+        LiteLlmDeployment("hermes-agent", "cloud", "https://api.openai.com/v1", 1, 1, 1),
+        LiteLlmDeployment("hermes-agent", "host", "http://spark.local:8888/v1", 1, 1, 1),
+        LiteLlmDeployment("other", "local", "http://10.0.0.42:8888/v1", 1, 1, 1),
+    ),
+)
+def test_hermes_deployments_reject_cloud_hosts_and_wrong_alias(
+    tmp_path: Path,
+    deployment: LiteLlmDeployment,
+) -> None:
+    with pytest.raises(LiteLlmPolicyError, match="Hermes"):
+        LiteLlmPublisher(
+            tmp_path,
+            validate=lambda _: True,
+            apply=lambda _: None,
+        ).render(_snapshot(), LiteLlmPolicy(models={}, deployments=(deployment,)))

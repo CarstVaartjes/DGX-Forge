@@ -15,7 +15,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from .git_content import read_commit_file
-from .litellm import LiteLlmGeneration, LiteLlmPolicy, LiteLlmPublisher
+from .hermes_policy import HermesAgentPolicy
+from .litellm import (
+    LiteLlmDeployment,
+    LiteLlmGeneration,
+    LiteLlmPolicy,
+    LiteLlmPublisher,
+)
 from .presence import AgentPresenceService, ManagementAddressPolicy, PresenceError
 from .routes import (
     RouteCandidate,
@@ -35,6 +41,16 @@ _ROUTE_FIELDS = {
     "requests_per_minute",
     "tokens_per_minute",
 }
+_V2_ROUTE_FIELDS = {
+    "workload_id",
+    "nodes",
+    "entrypoint_node_id",
+    "scheme",
+    "port",
+    "path",
+    "quota",
+    "quota_digest",
+}
 
 
 class RouteRuntimeError(RuntimeError):
@@ -45,6 +61,14 @@ class RouteRuntimeError(RuntimeError):
 class RouteRuntimeResult:
     route_state: RouteState
     litellm_generation: LiteLlmGeneration
+
+
+@dataclass(frozen=True)
+class _NormalizedRoute:
+    node_id: str
+    workload: str
+    requests_per_minute: int
+    tokens_per_minute: int
 
 
 class AtomicConfigTarget:
@@ -179,6 +203,7 @@ class ProductionRouteManager:
             lambda commit, path: read_commit_file(repository_root, commit, path)
         )
         self._last_refresh_attempt: datetime | None = None
+        self._failed_hermes_endpoints: set[tuple[str, str, int]] = set()
         self._target = LeasedConfigTarget(live_config, clock=clock)
         self._desired = AtomicConfigTarget(
             state_root / "desired-route.json",
@@ -257,6 +282,97 @@ class ProductionRouteManager:
         ):
             raise RouteRuntimeError("route target is not ready in the accepted fleet")
 
+    @staticmethod
+    def _normalize_route(raw: object, targets: tuple[str, ...]) -> _NormalizedRoute:
+        if not isinstance(raw, Mapping):
+            raise RouteRuntimeError("route fields are invalid")
+        if set(raw) == _ROUTE_FIELDS:
+            node_id = raw.get("node_id")
+            workload = raw.get("workload")
+            rpm = raw.get("requests_per_minute")
+            tpm = raw.get("tokens_per_minute")
+        elif set(raw) == _V2_ROUTE_FIELDS:
+            nodes = raw.get("nodes")
+            node_id = raw.get("entrypoint_node_id")
+            workload = raw.get("workload_id")
+            quota = raw.get("quota")
+            declared_port = raw.get("port")
+            if (
+                not isinstance(nodes, (list, tuple))
+                or not nodes
+                or len(nodes) != len(set(nodes))
+                or any(not isinstance(item, str) or _NODE.fullmatch(item) is None for item in nodes)
+                or node_id not in nodes
+                or any(item not in targets for item in nodes)
+                or raw.get("scheme") != "http"
+                or isinstance(declared_port, bool)
+                or not isinstance(declared_port, int)
+                or not 1 <= declared_port <= 65535
+                or raw.get("path") not in {"/v1", "/v1/"}
+                or not isinstance(quota, Mapping)
+                or set(quota) != {"requests_per_minute", "tokens_per_minute"}
+            ):
+                raise RouteRuntimeError("route fields are invalid")
+            expected_digest = hashlib.sha256(
+                json.dumps(quota, sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest()
+            if raw.get("quota_digest") != expected_digest:
+                raise RouteRuntimeError("route quota digest is invalid")
+            rpm = quota.get("requests_per_minute")
+            tpm = quota.get("tokens_per_minute")
+        else:
+            raise RouteRuntimeError("route fields are invalid")
+        if not isinstance(node_id, str) or _NODE.fullmatch(node_id) is None or node_id not in targets:
+            raise RouteRuntimeError("route node is not a reconciliation target")
+        if not isinstance(workload, str) or _WORKLOAD.fullmatch(workload) is None:
+            raise RouteRuntimeError("route workload is invalid")
+        if (
+            isinstance(rpm, bool)
+            or not isinstance(rpm, int)
+            or not 1 <= rpm <= 100_000
+            or isinstance(tpm, bool)
+            or not isinstance(tpm, int)
+            or not 1 <= tpm <= 100_000_000
+        ):
+            raise RouteRuntimeError("route quota is invalid")
+        return _NormalizedRoute(node_id, workload, rpm, tpm)
+
+    def _hermes_policy(
+        self,
+        commit: str,
+    ) -> tuple[HermesAgentPolicy, Mapping[str, str]]:
+        try:
+            report = json.loads(
+                self._repository_reader(
+                    commit,
+                    "inventory/reports/model-definitions.json",
+                )
+            )
+            definitions = report["definitions"]
+            if not isinstance(definitions, list) or not definitions:
+                raise TypeError
+            maturity: dict[str, str] = {}
+            for row in definitions:
+                if not isinstance(row, Mapping):
+                    raise TypeError
+                workload = row.get("id")
+                state = row.get("maturity")
+                if (
+                    not isinstance(workload, str)
+                    or _WORKLOAD.fullmatch(workload) is None
+                    or not isinstance(state, str)
+                    or workload in maturity
+                ):
+                    raise TypeError
+                maturity[workload] = state
+            policy = HermesAgentPolicy.parse(
+                self._repository_reader(commit, "config/hermes-agent-policy.toml"),
+                known_workloads=frozenset(maturity),
+            )
+        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as error:
+            raise RouteRuntimeError("Hermes repository policy is invalid") from error
+        return policy, maturity
+
     def _publish(
         self,
         *,
@@ -273,6 +389,8 @@ class ProductionRouteManager:
         workloads: set[str] = set()
         ports: set[int] = set()
         observations = []
+        route_workloads: dict[str, str] = {}
+        route_observations = {}
         now = self._clock()
         if now.tzinfo is None or now.utcoffset() is None:
             raise RouteRuntimeError("route clock must be timezone-aware")
@@ -280,16 +398,11 @@ class ProductionRouteManager:
         for alias, raw in sorted(routes.items()):
             if not isinstance(alias, str) or _ALIAS.fullmatch(alias) is None:
                 raise RouteRuntimeError("route alias is invalid")
-            if not isinstance(raw, Mapping) or set(raw) != _ROUTE_FIELDS:
-                raise RouteRuntimeError("route fields are invalid")
-            node_id = raw.get("node_id")
-            workload = raw.get("workload")
-            rpm = raw.get("requests_per_minute")
-            tpm = raw.get("tokens_per_minute")
-            if not isinstance(node_id, str) or _NODE.fullmatch(node_id) is None or node_id not in targets:
-                raise RouteRuntimeError("route node is not a reconciliation target")
-            if not isinstance(workload, str) or _WORKLOAD.fullmatch(workload) is None:
-                raise RouteRuntimeError("route workload is invalid")
+            normalized = self._normalize_route(raw, targets)
+            node_id = normalized.node_id
+            workload = normalized.workload
+            rpm = normalized.requests_per_minute
+            tpm = normalized.tokens_per_minute
             port = self._workload_port(commit, workload)
             try:
                 observation = self._presence.latest(
@@ -313,6 +426,11 @@ class ProductionRouteManager:
             workloads.add(workload)
             ports.add(port)
             observations.append(observation)
+            route_workloads[alias] = workload
+            route_observations[alias] = observation
+        hermes_policy, maturity = self._hermes_policy(commit)
+        eligible_candidates = hermes_policy.eligible(frozenset(workloads), maturity)
+        eligible_workloads = {candidate.workload for candidate in eligible_candidates}
         publisher, endpoint_policy = self._publisher(frozenset(ports))
         try:
             desired = {
@@ -343,13 +461,41 @@ class ProductionRouteManager:
             if address_changed:
                 publisher.maintenance(targets, "route endpoint changed")
 
-            for endpoint in endpoints.values():
+            unavailable_aliases = set()
+            for alias, endpoint in endpoints.items():
                 url = f"http://{endpoint.address}:{endpoint.port}/v1/models"
+                failure_key = (route_workloads[alias], endpoint.address, endpoint.port)
                 try:
                     self._probe(url, self._upstream_key)
                 except Exception as error:
+                    if (
+                        route_workloads[alias] in eligible_workloads
+                        and failure_key in self._failed_hermes_endpoints
+                    ):
+                        unavailable_aliases.add(alias)
+                        continue
+                    if route_workloads[alias] in eligible_workloads:
+                        self._failed_hermes_endpoints.add(failure_key)
                     publisher.maintenance(targets, "route endpoint probe failed")
                     raise RouteRuntimeError("route endpoint probe failed") from error
+                self._failed_hermes_endpoints.discard(failure_key)
+
+            if unavailable_aliases:
+                endpoints = {
+                    alias: endpoint
+                    for alias, endpoint in endpoints.items()
+                    if alias not in unavailable_aliases
+                }
+                quotas = {
+                    alias: quota
+                    for alias, quota in quotas.items()
+                    if alias not in unavailable_aliases
+                }
+                workloads = {route_workloads[alias] for alias in endpoints}
+                observations = [route_observations[alias] for alias in endpoints]
+                if not endpoints:
+                    publisher.maintenance(targets, "no route endpoint passed its probe")
+                    raise RouteRuntimeError("no route endpoint passed its probe")
 
             health_timestamp = self._clock()
             candidate = RouteCandidate(
@@ -371,7 +517,31 @@ class ProductionRouteManager:
                 validate=lambda content: isinstance(json.loads(content).get("model_list"), list),
                 apply=lambda content: self._target.write(content, expires_at=expires_at),
             )
-            generation = litellm.publish(route_state, LiteLlmPolicy(models=quotas))
+            by_workload = {
+                route_workloads[alias]: (endpoint, quotas[alias])
+                for alias, endpoint in endpoints.items()
+            }
+            deployments = tuple(
+                LiteLlmDeployment(
+                    model_name=hermes_policy.alias,
+                    workload=candidate.workload,
+                    api_base=(
+                        f"http://{by_workload[candidate.workload][0].address}:"
+                        f"{by_workload[candidate.workload][0].port}/v1"
+                    ),
+                    priority=candidate.priority,
+                    requests_per_minute=by_workload[candidate.workload][1]["requests_per_minute"],
+                    tokens_per_minute=by_workload[candidate.workload][1]["tokens_per_minute"],
+                )
+                for candidate in hermes_policy.eligible(
+                    frozenset(by_workload),
+                    maturity,
+                )
+            )
+            generation = litellm.publish(
+                route_state,
+                LiteLlmPolicy(models=quotas, deployments=deployments),
+            )
         except (OSError, RouteValidationError, ValueError) as error:
             try:
                 publisher.maintenance(targets, "route publication failed")
