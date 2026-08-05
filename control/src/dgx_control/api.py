@@ -90,19 +90,22 @@ def build_agent_services(settings: Any, sessions: Any, clock: Callable[[], Any])
     else:
         raise RuntimeError("agent CA provider is unavailable")
     settings.agent_artifact_root.mkdir(mode=0o750, parents=True, exist_ok=True)
+    presence = AgentPresenceService(
+        sessions,
+        ManagementAddressPolicy.parse(
+            settings.management_cidrs,
+            forbidden_cidrs=settings.direct_fabric_cidrs,
+        ),
+        clock=clock,
+    )
+    operations = AgentJobService(sessions, clock=clock)
+    operations.set_contact_consumer(presence.observe_in_session)
     return AgentApiServices(
         enrollment=EnrollmentService(sessions, authority, clock=clock),
-        operations=AgentJobService(sessions, clock=clock),
+        operations=operations,
         sessions=sessions,
         clock=clock,
-        presence=AgentPresenceService(
-            sessions,
-            ManagementAddressPolicy.parse(
-                settings.management_cidrs,
-                forbidden_cidrs=settings.direct_fabric_cidrs,
-            ),
-            clock=clock,
-        ),
+        presence=presence,
         artifact_root=settings.agent_artifact_root,
     )
 

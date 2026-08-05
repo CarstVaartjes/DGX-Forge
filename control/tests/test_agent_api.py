@@ -152,14 +152,19 @@ def agent_system(tmp_path):
         for node, serial in ((NODE_A, "serial-a"), (NODE_B, "serial-b")):
             session.add(AgentNode(node_id=node, state="active", capabilities=[]))
             session.add(AgentCertificate(serial=serial, node_id=node, fingerprint=f"fingerprint-{serial}", not_before=clock.now - timedelta(seconds=1), not_after=clock.now + timedelta(hours=1)))
+    presence = AgentPresenceService(
+        sessions,
+        ManagementAddressPolicy.parse("10.0.0.0/24"),
+        clock=clock,
+    )
+    operations = AgentJobService(sessions, clock=clock)
+    operations.set_contact_consumer(presence.observe_in_session)
     services = AgentApiServices(
         enrollment=EnrollmentService(sessions, Authority(), clock=clock),
-        operations=AgentJobService(sessions, clock=clock), sessions=sessions, clock=clock,
-        presence=AgentPresenceService(
-            sessions,
-            ManagementAddressPolicy.parse("10.0.0.0/24"),
-            clock=clock,
-        ),
+        operations=operations,
+        sessions=sessions,
+        clock=clock,
+        presence=presence,
         artifact_root=tmp_path / "artifacts",
     )
     services.artifact_root.mkdir()
@@ -373,6 +378,26 @@ def test_authenticated_claim_persists_certificate_bound_source(agent_system) -> 
         assert presence.observed_at.replace(tzinfo=UTC) == clock.now
 
 
+def test_claim_uses_atomic_presence_consumer_not_post_commit(
+    agent_system,
+    monkeypatch,
+) -> None:
+    client, services, _, _ = agent_system
+
+    def reject_post_commit(_source) -> None:
+        raise AssertionError("presence must be written inside the queue transaction")
+
+    monkeypatch.setattr(services.presence, "observe", reject_post_commit)
+
+    response = client.post(
+        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
+    )
+
+    assert response.status_code == 204
+    with services.sessions() as session:
+        assert session.get(AgentPresence, NODE_A) is not None
+
+
 def test_authenticated_claim_records_protocol_contact_for_metrics(agent_system) -> None:
     client, services, _, clock = agent_system
     clock.now += timedelta(seconds=15)
@@ -433,6 +458,7 @@ def test_unknown_claim_capability_is_rejected_without_contact(agent_system) -> N
 
 def test_authenticated_heartbeat_preserves_claim_advertised_protocol_after_exact_fence_validation(
     agent_system,
+    monkeypatch,
 ) -> None:
     client, services, _, clock = agent_system
     services.operations.enqueue(
@@ -461,6 +487,11 @@ def test_authenticated_heartbeat_preserves_claim_advertised_protocol_after_exact
         )
     } | {"progress": {"phase": "checking"}}
 
+    def reject_post_commit(_source) -> None:
+        raise AssertionError("presence must be written inside the queue transaction")
+
+    monkeypatch.setattr(services.presence, "observe", reject_post_commit)
+
     response = client.post(
         "/agent/v1/heartbeat",
         headers={
@@ -484,6 +515,7 @@ def test_authenticated_heartbeat_preserves_claim_advertised_protocol_after_exact
 
 def test_authenticated_result_preserves_claim_advertised_protocol_after_exact_fence_validation(
     agent_system,
+    monkeypatch,
 ) -> None:
     client, services, _, clock = agent_system
     services.operations.enqueue(
@@ -511,6 +543,11 @@ def test_authenticated_result_preserves_claim_advertised_protocol_after_exact_fe
             "deadline",
         )
     } | {"state": "succeeded", "result": PROBE_RESULT}
+
+    def reject_post_commit(_source) -> None:
+        raise AssertionError("presence must be written inside the queue transaction")
+
+    monkeypatch.setattr(services.presence, "observe", reject_post_commit)
 
     response = client.post(
         "/agent/v1/result",

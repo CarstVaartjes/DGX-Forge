@@ -281,16 +281,6 @@ def _validated_authenticated_source(
         raise HTTPException(status_code=422, detail=str(error)) from None
 
 
-def _persist_authenticated_source(
-    services: AgentApiServices,
-    source: AgentSource,
-) -> None:
-    try:
-        services.presence.observe(source)
-    except PresenceError as error:
-        raise HTTPException(status_code=422, detail=str(error)) from None
-
-
 _ENROLLMENT_TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z")
 _JSON_WHITESPACE = frozenset(b" \t\r\n")
 
@@ -713,10 +703,10 @@ def install_agent_routes(
                 body.wait_seconds,
                 body.protocol_version,
                 body.capabilities,
+                source=source,
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
-        _persist_authenticated_source(required, source)
         return Response(status_code=status.HTTP_204_NO_CONTENT) if result is None else _json_response(_wire(result))
 
     @agent.post("/heartbeat")
@@ -731,10 +721,14 @@ def install_agent_routes(
         _body_node_matches(message.node_id, identity)
         source = _validated_authenticated_source(request, required, identity)
         try:
-            response = required.operations.heartbeat(message, message.progress, 30)
+            response = required.operations.heartbeat(
+                message,
+                message.progress,
+                30,
+                source=source,
+            )
         except (StaleAgentAttempt, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from None
-        _persist_authenticated_source(required, source)
         return _json_response(_wire(response))
 
     @agent.post("/result", status_code=status.HTTP_204_NO_CONTENT)
@@ -757,10 +751,9 @@ def install_agent_routes(
                     or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error_code) is None
                 ):
                     raise ValueError("stable failure error code is required")
-            required.operations.record_result(message)
+            required.operations.record_result(message, source=source)
         except (StaleAgentAttempt, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from None
-        _persist_authenticated_source(required, source)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @agent.post("/renew")
