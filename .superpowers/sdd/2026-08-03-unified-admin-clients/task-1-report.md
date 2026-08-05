@@ -183,3 +183,249 @@ client in the root frozen environment.
 None blocking. TypeScript transport/wrapper integration is intentionally left
 to the later web-client task; this task delivers the pinned generated schema
 types and exact `openapi-fetch` runtime dependency required for that cutover.
+
+---
+
+# Fix round 1/5 — independent review findings
+
+Status: DONE
+
+Implementation commit: `be165f0` — `fix: harden generated admin operation contracts`
+
+## Root causes and fixes
+
+### Certificate-bearing human approval response
+
+Root cause: `approve()` passed the `IssuedCertificate` returned by the
+enrollment service directly to `_issued_response()`. The admin route therefore
+serialized leaf and chain PEM even though the authenticated agent enrollment
+replay path already owns certificate pickup. The generic mapping annotation
+then hid the field names from OpenAPI without changing the live response.
+
+Fix: admin approval now returns the strict three-field
+`EnrollmentDecisionResponse` (`id`, `node_id`, `state`). Certificate material
+remains available only through authenticated `/agent/v1/enroll` replay (and
+authenticated agent renewal). Grant, enrollment-list, and reject responses were
+also made explicit strict models so no human mutation/list response hides fields
+behind `unknown` or an open mapping. The generated admin schema contains no
+`certificate_pem` or `chain_pem`.
+
+RED/GREEN:
+
+```text
+$ uv run --project control pytest \
+    control/tests/test_agent_api.py::test_approved_exact_enrollment_replay_picks_up_certificate_and_mismatch_is_denied -q
+1 failed (human response still contained certificate_pem and chain_pem)
+
+$ uv run --project control pytest \
+    control/tests/test_agent_api.py::test_approved_exact_enrollment_replay_picks_up_certificate_and_mismatch_is_denied -q
+1 passed in 0.54s
+```
+
+The later strict-human-response schema test failed on the generic grant object,
+then passed with the complete agent/API focused suite (`62 passed in 9.64s`).
+
+### Missing human enrollment audits
+
+Root cause: `install_agent_routes()` received only authentication and agent
+services; its mutation handlers had neither the API audit sink nor `Request`
+correlation. All four successful mutations returned without appending.
+
+Fix: the existing audit sink is injected into the human router. Grant creation,
+approval, rejection, and node revocation append stable events after the durable
+mutation succeeds, using the authenticated subject, response request ID, and
+bounded node/enrollment targets. Failure branches return before append.
+
+```text
+$ uv run --project control pytest \
+    control/tests/test_agent_api.py::test_human_enrollment_mutations_audit_only_success_with_request_actor_and_targets -q
+1 failed (MemoryAuditStore.for_request raised KeyError)
+
+$ uv run --project control pytest \
+    control/tests/test_agent_api.py::test_human_enrollment_mutations_audit_only_success_with_request_actor_and_targets -q
+1 passed in 0.58s
+```
+
+The test also proves failed grant validation, unknown approve/reject, and unknown
+revocation leave the audit count unchanged.
+
+### Partial endpoint activation validation
+
+Root cause: the operation projection independently parsed `activation.json` and
+`routes.json`, checked only selected fields, directly indexed `expires_at`, and
+never authenticated `manifest.json` or `litellm.json`. It diverged from the
+publisher's canonical reader and could accept an incomplete generation.
+
+Fix: `route_runtime.verify_active_route_bundle()` is now the public read-only
+authoritative verifier shared with the publisher reader. It enforces exact
+marker shape/canonical bytes, generation-directory/manifest binding, all three
+file digests and exact manifest bytes, route/LiteLLM document validity, and the
+bounded active lease. Endpoint projection consumes its verified route document
+and cross-checks the marker against the durable owner, completed publication,
+reconciliation, every receipt digest, generation, plan/evidence identity, and
+lease timestamps. All verifier failures remain `RuntimeError` subclasses and
+map to bounded 503.
+
+```text
+$ uv run --project control pytest \
+    control/tests/test_operation_api.py::test_durable_projection_reads_only_current_activation_and_hides_agent_secrets -q
+1 failed (missing litellm.json returned 200 instead of 503)
+
+$ uv run --project control pytest \
+    control/tests/test_operation_api.py::test_durable_projection_reads_only_current_activation_and_hides_agent_secrets \
+    control/tests/test_route_runtime.py -q
+19 passed in 0.67s
+```
+
+### Undocumented generated-client errors
+
+Root cause: runtime handlers raised bounded HTTP errors, but their FastAPI
+decorators declared only success models. The upstream generator therefore
+handled only success/422 and returned `None` for 401/403/404/409/503 when
+unexpected-status raising was disabled.
+
+Fix: `BoundedErrorResponse` is strict and caps `detail` at 256 characters.
+Applicable error statuses are declared on reconciliation plan/apply/cancel,
+fleet/nodes, endpoints, agents, jobs/resume/logs, and human enrollment
+operations. Generated Python parsers now return `BoundedErrorResponse` for
+those statuses.
+
+```text
+$ uv run --project control pytest \
+    control/tests/test_operation_api.py::test_admin_operation_schema_declares_applicable_bounded_errors -q
+1 failed (apply documented only 202/422)
+
+$ uv run --project control pytest \
+    control/tests/test_operation_api.py::test_admin_operation_schema_declares_applicable_bounded_errors -q
+1 passed in 0.40s
+```
+
+Extending the same contract to human enrollment operations produced a second
+focused RED (approval documented only 200/422), followed by GREEN (`1 passed in
+0.39s`).
+
+### Unrestricted plan and progress objects
+
+Root cause: `ReconciliationPlanResponse` used four `dict[str, Any]` fields and
+job progress used `dict[str, Any]`; the durable projection copied the stored
+progress document verbatim. Strict top-level models therefore did not protect
+nested browser/client data.
+
+Fix: map-shaped canonical plan JSON is preserved, but its values now use named,
+bounded placement, route/quota, release/request/endpoint, DAG/operation, and
+input-digest models. `plan_response()` explicitly selects every public nested
+field, preserving valid canonical content and the plan digest while dropping
+unknown/private fields. Job progress is the strict bounded `phase` projection;
+both durable reads and response assembly whitelist it.
+
+```text
+$ uv run --project control pytest \
+    control/tests/test_operation_api.py::test_plan_response_whitelists_nested_route_release_and_dag_fields \
+    control/tests/test_operation_api.py::test_job_operation_progress_projects_only_bounded_phase -q
+2 failed (private_evidence crossed both boundaries)
+
+$ uv run --project control pytest \
+    control/tests/test_operation_api.py::test_plan_response_whitelists_nested_route_release_and_dag_fields \
+    control/tests/test_operation_api.py::test_job_operation_progress_projects_only_bounded_phase -q
+2 passed in 0.40s
+```
+
+The canonical/scoped plan byte-equivalence regression remains in the focused
+operation suite and passed.
+
+### Unknown observation metrics crash
+
+Root cause: the dashboard correctly projected missing age as `None`, but the
+production metrics refresh unconditionally evaluated `float(None)` before the
+registry could apply any unknown policy.
+
+Fix: production and tests share `refresh_fleet_metrics()`. The registry accepts
+an optional probe age; readiness and capacity metrics remain present, readiness
+is false for unknown health, and only the probe-age series is omitted until an
+observation exists.
+
+```text
+$ uv run --project control pytest \
+    control/tests/test_metrics.py::test_metrics_endpoint_omits_probe_age_for_unobserved_node -q
+1 failed (refresh_fleet_metrics was absent)
+
+$ uv run --project control pytest control/tests/test_metrics.py -q
+7 passed in 0.40s
+```
+
+## Generated artifact RED/GREEN
+
+The tracked-contract test initially failed because approval still resolved to
+an open `additionalProperties: true` object. After regeneration it verifies
+explicit secret-free human response models, typed applicable errors, named plan
+and progress schemas, and absence of certificate bodies. Generated parser tests
+exercise real 401/403/404/409/503 decoding rather than source text.
+
+```text
+$ uv run --project control pytest \
+    tests/control/test_openapi_clients.py::test_tracked_admin_contract_has_secret_free_decisions_and_typed_errors -q
+1 failed (opaque approval response)
+
+$ uv run --project control pytest tests/control/test_openapi_clients.py -q
+5 passed in 3.65s
+```
+
+The suite runs the pinned upstream generator twice and compares all tracked
+artifact bytes after each run; it also compiles generated Python without
+creating new bytecode, imports it in the root locked environment, and executes
+the generated error parsers.
+
+## Final verification
+
+```text
+$ uv run --project control pytest \
+    control/tests/test_agent_api.py control/tests/test_operation_api.py \
+    control/tests/test_route_runtime.py control/tests/test_dashboard.py \
+    control/tests/test_metrics.py \
+    control/tests/security/test_authorization_matrix.py -q
+101 passed in 10.50s
+
+$ uv run --project control pytest control/tests -q
+689 passed in 90.06s
+
+$ npm run build --prefix control/web
+tsc --noEmit && vite build
+24 modules transformed; built successfully in 97ms
+
+$ uv run --project control pytest tests/control/test_openapi_clients.py -q
+5 passed in 3.65s
+
+$ uvx --from ruff==0.16.1 ruff check .
+All checks passed!
+
+$ git diff --check
+(no output)
+```
+
+One earlier full-suite run recorded `688 passed, 1 failed` when the Docker
+protocol-wheel image build's `pip install` process exited 134. The exact test
+passed immediately in isolation (`1 passed in 4.75s`), and the fresh final full
+suite passed all 689 tests. No Compose mount or production deployment wiring
+changed in this fix round, so the previously green 17-test Compose evidence
+remains applicable.
+
+## Fix-round self-review
+
+- Human admin responses name every enrollment field; certificate/chain bodies
+  are neither represented nor returned, while authenticated agent pickup still
+  passes its exact replay test.
+- Audit append occurs only after successful service mutation; every tested
+  failure path is audit-silent.
+- Endpoint projection performs no network/SSH operation and cannot bypass the
+  canonical route-bundle verifier or durable receipt cross-check.
+- Generated clients distinguish required bounded status outcomes and no longer
+  use unrestricted nested plan/progress objects.
+- Missing health observations cannot crash `/metrics`; the unknown-age omission
+  policy is explicit and tested at the HTTP boundary.
+- Canonical plan/apply/fleet/job behavior, RBAC, CSRF, request IDs, audit storage,
+  secret-free agent list, and generic-enqueue exclusion remain covered.
+- No merge or push was performed.
+
+## Fix-round concerns
+
+None blocking.
