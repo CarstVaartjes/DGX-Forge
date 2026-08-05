@@ -53,6 +53,34 @@ function targetGate(node: NodeSummary | undefined, fleetCommit: string, planComm
   return reasons;
 }
 
+function planIntegrityReasons(
+  plan: ReconciliationPlanModel,
+  fleet: FleetResponse,
+): string[] {
+  const reasons: string[] = [];
+  if (fleet.commit !== plan.commit) reasons.push("fleet commit does not match plan");
+  if (fleet.evidence_digest !== plan.fleet_evidence_digest) reasons.push("fleet evidence does not match plan");
+  const range = plan.agent_protocol_range;
+  if (range.length !== 2
+      || !range.every(value => Number.isInteger(value) && value > 0)
+      || range[0] > range[1]) {
+    reasons.push("agent protocol range is invalid");
+  }
+  if (plan.operation_graph.base_commit !== plan.commit) reasons.push("operation graph commit does not match plan");
+  const targetSet = new Set(plan.targets);
+  const graphTargetSet = new Set(plan.operation_graph.targets);
+  if (targetSet.size !== plan.targets.length) reasons.push("plan targets contain duplicates");
+  if (graphTargetSet.size !== plan.operation_graph.targets.length) reasons.push("operation graph targets contain duplicates");
+  if (plan.targets.length !== plan.operation_graph.targets.length
+      || plan.targets.some((target, index) => plan.operation_graph.targets[index] !== target)) {
+    reasons.push("operation graph targets do not match plan targets");
+  }
+  if (plan.operation_graph.nodes.some(operation => !targetSet.has(operation.node_id))) {
+    reasons.push("operation graph contains a non-target node");
+  }
+  return reasons;
+}
+
 function routeAddress(
   route: ReconciliationPlanModel["routes"][string],
   fleetById: ReadonlyMap<string, NodeSummary>,
@@ -78,9 +106,9 @@ export function ReconciliationPlan({
   const [status, setStatus] = useState("");
   const fleetById = new Map(fleet.nodes.map(node => [node.id, node]));
   const targets = plan.targets.map(nodeId => ({nodeId, node: fleetById.get(nodeId)}));
-  const protocolRangeValid = plan.agent_protocol_range.length === 2
-    && plan.agent_protocol_range.every(value => Number.isFinite(value) && value >= 0);
-  const blocked = !protocolRangeValid
+  const integrityReasons = planIntegrityReasons(plan, fleet);
+  const protocolRangeValid = !integrityReasons.includes("agent protocol range is invalid");
+  const blocked = integrityReasons.length > 0
     || targets.some(({node}) => targetGate(node, fleet.commit, plan.commit).length > 0);
   const operations = plan.operation_graph.nodes;
   const placements = Object.entries(plan.placements);
@@ -94,7 +122,15 @@ export function ReconciliationPlan({
     setError("");
     setStatus("");
     try {
-      const accepted = await api.applyReconciliation(plan.digest);
+      const latestFleet = await api.fleet();
+      if (latestFleet.evidence_digest !== plan.fleet_evidence_digest
+          || planIntegrityReasons(plan, latestFleet).length > 0) {
+        setConfirmation("");
+        setRejected(true);
+        setError("Fleet acceptance evidence changed. Preview a new plan before retrying.");
+        return;
+      }
+      const accepted = await api.applyReconciliation(plan.digest, plan.fleet_evidence_digest);
       setConfirmation("");
       setStatus(`Plan accepted as job ${bounded(accepted.job_id)} (${bounded(accepted.state)}).`);
     } catch (value) {
@@ -118,9 +154,9 @@ export function ReconciliationPlan({
 
     <section aria-labelledby="target-gates-heading">
       <h4 id="target-gates-heading">Affected nodes and acceptance gates</h4>
-      <Pages items={targets} label="affected nodes" render={({nodeId, node}) => {
+      <Pages items={targets} label="affected nodes" render={({nodeId, node}, index) => {
         const reasons = targetGate(node, fleet.commit, plan.commit);
-        return <div className="table-scroll" key={nodeId}><table aria-label={`Acceptance gate for ${bounded(nodeId)}`}>
+        return <div className="table-scroll" key={`${nodeId}-${index}`}><table aria-label={`Acceptance gate for ${bounded(nodeId)}`}>
           <thead><tr><th scope="col">Node</th><th scope="col">Agent compatibility</th><th scope="col">Acceptance gate</th></tr></thead>
           <tbody><tr><th scope="row"><code>{bounded(nodeId)}</code><small>{bounded(node?.display_name ?? "Unknown node")}</small></th><td>{bounded(node?.compatibility ?? "unknown")}</td><td><span className={`status ${reasons.length === 0 ? "good" : "unknown"}`}>{reasons.length === 0 ? "Ready and compatible" : `Blocked: ${reasons.join(", ")}`}</span></td></tr></tbody>
         </table></div>;
@@ -179,7 +215,7 @@ export function ReconciliationPlan({
       <Pages items={inputs} label="input digests" render={([name, inputDigest]) => <p key={name}>{bounded(name)}: <code>{bounded(inputDigest)}</code></p>}/>
     </section>
 
-    {blocked && <p role="alert">This plan cannot be applied because an affected node or agent protocol gate failed closed acceptance checks.</p>}
+    {blocked && <p role="alert">This plan cannot be applied because authoritative plan, fleet, node, or agent protocol acceptance checks failed closed.</p>}
     {error && <p role="alert">{error}</p>}
     {status && <p role="status">{status}</p>}
     <label>Type the exact plan digest to confirm apply

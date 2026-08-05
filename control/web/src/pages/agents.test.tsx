@@ -55,6 +55,7 @@ const enrollment: Enrollment = {
 
 const fleet: Fleet = {
   commit: "a".repeat(40),
+  evidence_digest: "e".repeat(64),
   nodes: [
     {
       agent_last_seen_at: "2026-08-05T09:59:48Z",

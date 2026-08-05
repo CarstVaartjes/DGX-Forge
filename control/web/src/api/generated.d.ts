@@ -517,6 +517,8 @@ export interface components {
         FleetStatusResponse: {
             /** Commit */
             commit: string;
+            /** Evidence Digest */
+            evidence_digest: string;
             /** Nodes */
             nodes: components["schemas"]["NodeStatus"][];
         };
@@ -542,15 +544,23 @@ export interface components {
             id: string;
             /** Kind */
             kind: string;
+            /** Operation Next Cursor */
+            operation_next_cursor?: string | null;
+            /** Operation Total */
+            operation_total: number;
             /** Operations */
             operations: components["schemas"]["JobOperationResponse"][];
             progress: components["schemas"]["JobProgress"];
             /** Reconciliation Id */
-            reconciliation_id: string | null;
+            reconciliation_id?: string | null;
             /** State */
             state: string;
             /** Status Reason */
-            status_reason: string | null;
+            status_reason?: string | null;
+            /** Target Next Cursor */
+            target_next_cursor?: string | null;
+            /** Target Total */
+            target_total: number;
             /** Targets */
             targets: string[];
         };
@@ -615,6 +625,10 @@ export interface components {
         JobsResponse: {
             /** Jobs */
             jobs: components["schemas"]["JobSummary"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /** Total */
+            total: number;
         };
         /** NodeStatus */
         NodeStatus: {
@@ -902,6 +916,8 @@ export interface components {
             commit: string;
             /** Digest */
             digest: string;
+            /** Fleet Evidence Digest */
+            fleet_evidence_digest: string;
             input_digests: components["schemas"]["PlanInputDigests"];
             operation_graph: components["schemas"]["PlanOperationGraph"];
             placements: components["schemas"]["PlanPlacements"];
@@ -914,6 +930,8 @@ export interface components {
         };
         /** ReconciliationRequest */
         ReconciliationRequest: {
+            /** Fleet Evidence Digest */
+            fleet_evidence_digest: string;
             /** Plan Digest */
             plan_digest: string;
         };
@@ -1482,7 +1500,12 @@ export interface operations {
     };
     listJobs: {
         parameters: {
-            query?: never;
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+                status?: string | null;
+                target?: string | null;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -1507,11 +1530,24 @@ export interface operations {
                     "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
         };
     };
     getJob: {
         parameters: {
-            query?: never;
+            query?: {
+                operation_cursor?: string | null;
+                target_cursor?: string | null;
+                limit?: number;
+            };
             header?: never;
             path: {
                 job_id: string;
@@ -1547,13 +1583,13 @@ export interface operations {
                     "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
-            /** @description Validation Error */
+            /** @description Unprocessable Entity */
             422: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
         };

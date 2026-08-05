@@ -32,6 +32,7 @@ PLAN = {
     "agent_protocol_range": [1, 2],
     "commit": COMMIT,
     "digest": PLAN_DIGEST,
+    "fleet_evidence_digest": "e" * 64,
     "input_digests": {"profile": "c" * 64},
     "operation_graph": {
         "base_commit": COMMIT,
@@ -56,15 +57,20 @@ JOB = {
     "current_attempt": 1,
     "id": JOB_ID,
     "kind": "reconcile",
+    "operation_next_cursor": None,
+    "operation_total": 0,
     "operations": [],
     "progress": {"completed": 1, "failed": 0, "running": 0, "total": 1},
     "reconciliation_id": RECONCILIATION_ID,
     "state": "succeeded",
     "status_reason": None,
+    "target_next_cursor": None,
+    "target_total": 1,
     "targets": ["spk_0000000000000000000000000000000a"],
 }
 NODES = {
     "commit": COMMIT,
+    "evidence_digest": "e" * 64,
     "nodes": [
         {
             "agent_last_seen_at": "2026-08-05T12:00:00Z",
@@ -426,7 +432,10 @@ def test_apply_uses_server_digest_and_no_wait_returns_accepted_job(
         RecordedRequest(
             "POST",
             "/api/v1/reconciliations",
-            {"plan_digest": PLAN_DIGEST},
+            {
+                "fleet_evidence_digest": "e" * 64,
+                "plan_digest": PLAN_DIGEST,
+            },
             REQUEST_ID,
         ),
     ]
@@ -465,7 +474,7 @@ def test_apply_waits_by_default_and_wait_flag_is_explicitly_supported(
     assert json.loads(stdout) == JOB
     assert stderr == ""
     assert server.requests[-1] == RecordedRequest(
-        "GET", f"/api/v1/jobs/{JOB_ID}", None, None
+        "GET", f"/api/v1/jobs/{JOB_ID}?limit=20", None, None
     )
 
 

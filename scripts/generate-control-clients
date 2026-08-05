@@ -38,6 +38,10 @@ class _SchemaJobs:
         del limit
         return []
 
+    def list_page(self, *, limit: int = 100, cursor: str | None = None, status: str | None = None, target: str | None = None) -> tuple[list[object], str | None, int]:
+        del limit, cursor, status, target
+        return [], None, 0
+
 
 def _write_openapi() -> None:
     app = create_app(

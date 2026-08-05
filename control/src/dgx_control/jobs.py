@@ -7,11 +7,12 @@ import json
 import re
 import threading
 import uuid
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import or_, select
+from sqlalchemy import String, cast, func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from .logging import redact_text
@@ -187,13 +188,80 @@ class JobService:
             return job
 
     def list(self, *, limit: int = 100) -> list[Job]:
-        if not 1 <= limit <= 500:
+        page, _, _ = self.list_page(limit=limit)
+        return page
+
+    def list_page(
+        self,
+        *,
+        limit: int = 100,
+        cursor: str | None = None,
+        status: str | None = None,
+        target: str | None = None,
+    ) -> tuple[list[Job], str | None, int]:
+        """Return a stable newest-first keyset page and authoritative total."""
+
+        if not 1 <= limit <= 100:
             raise ValueError("job list limit is invalid")
+        if status is not None and not status.strip():
+            raise ValueError("job status is invalid")
+        if target is not None and not target.strip():
+            raise ValueError("job target is invalid")
+        boundary: tuple[datetime, str] | None = None
+        if cursor is not None:
+            try:
+                decoded = json.loads(
+                    urlsafe_b64decode(cursor.encode("ascii") + b"===")
+                )
+                if (
+                    not isinstance(decoded, list)
+                    or len(decoded) != 2
+                    or not all(isinstance(item, str) for item in decoded)
+                ):
+                    raise ValueError
+                boundary = (datetime.fromisoformat(decoded[0]), decoded[1])
+            except (UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+                raise ValueError("job list cursor is invalid") from None
         with self._sessions() as session:
-            jobs = list(session.scalars(select(Job).order_by(Job.created_at.desc()).limit(limit)))
+            filters = []
+            if status is not None:
+                filters.append(Job.state == status)
+            if target is not None:
+                filters.append(cast(Job.targets, String).contains(f'"{target}"'))
+            statement = select(Job).where(*filters)
+            if boundary is not None:
+                created_at, job_id = boundary
+                statement = statement.where(
+                    or_(
+                        Job.created_at < created_at,
+                        (Job.created_at == created_at) & (Job.id < job_id),
+                    )
+                )
+            jobs = list(
+                session.scalars(
+                    statement.order_by(Job.created_at.desc(), Job.id.desc()).limit(
+                        limit + 1
+                    )
+                )
+            )
+            total = int(
+                session.scalar(select(func.count()).select_from(Job).where(*filters))
+                or 0
+            )
+            has_more = len(jobs) > limit
+            jobs = jobs[:limit]
             for job in jobs:
                 session.expunge(job)
-            return jobs
+        next_cursor = None
+        if has_more and jobs:
+            last = jobs[-1]
+            next_cursor = urlsafe_b64encode(
+                json.dumps(
+                    [_aware(last.created_at).isoformat(), last.id],
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).decode("ascii").rstrip("=")
+        return jobs, next_cursor, total
 
     def claim(self, worker_id: str, lease_seconds: int) -> AttemptFence | None:
         if not worker_id.strip() or lease_seconds <= 0:
@@ -339,9 +407,14 @@ class JobService:
 
     def resume(self, job_id: str) -> None:
         with self._sessions.begin() as session:
-            job = session.get(Job, job_id)
-            if job is None or job.state != "waiting-for-operator":
+            result = session.execute(
+                update(Job)
+                .where(Job.id == job_id, Job.state == "waiting-for-operator")
+                .values(
+                    state="queued",
+                    status_reason=None,
+                    updated_at=self._clock(),
+                )
+            )
+            if result.rowcount != 1:
                 raise ValueError("job is not waiting for operator")
-            job.state = "queued"
-            job.status_reason = None
-            job.updated_at = self._clock()

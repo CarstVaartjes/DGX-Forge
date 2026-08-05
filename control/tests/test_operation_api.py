@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
@@ -14,13 +15,15 @@ from dgx_control.auth import Actor, TokenCodec
 from dgx_control.models import (
     AgentCertificate,
     AgentNode,
+    AgentOperation,
     AgentPresence,
     Base,
+    Job,
     Reconciliation,
     RoutePublication,
     RoutePublicationOwner,
 )
-from dgx_control.operation_api import OperationApiServices
+from dgx_control.operation_api import JobProgress, OperationApiServices, OperationPage
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -56,6 +59,10 @@ class Jobs:
 
     def list(self, *, limit=100):
         return []
+
+    def list_page(self, *, limit=100, cursor=None, status=None, target=None):
+        del limit, cursor, status, target
+        return [], None, 0
 
 
 class Repository:
@@ -159,16 +166,25 @@ def test_apply_requires_exact_server_plan_digest() -> None:
     client, operator, _reconciler, audits = _client()
     plan = client.post("/api/v1/profiles/agent/plan", headers=operator)
     assert plan.status_code == 200
+    fleet = client.get("/api/v1/fleet", headers=operator)
+    assert fleet.status_code == 200
+    assert plan.json()["fleet_evidence_digest"] == fleet.json()["evidence_digest"]
 
     stale = client.post(
         "/api/v1/reconciliations",
         headers=operator,
-        json={"plan_digest": "0" * 64},
+        json={
+            "fleet_evidence_digest": plan.json()["fleet_evidence_digest"],
+            "plan_digest": "0" * 64,
+        },
     )
     accepted = client.post(
         "/api/v1/reconciliations",
         headers=operator,
-        json={"plan_digest": plan.json()["digest"]},
+        json={
+            "fleet_evidence_digest": plan.json()["fleet_evidence_digest"],
+            "plan_digest": plan.json()["digest"],
+        },
     )
 
     assert stale.status_code == 409
@@ -178,6 +194,59 @@ def test_apply_requires_exact_server_plan_digest() -> None:
     assert audits.for_request(accepted.headers["x-request-id"]).action == (
         "reconciliation.apply"
     )
+
+
+def test_apply_rejects_live_evidence_changed_after_plan() -> None:
+    fleet_state = {"commit": COMMIT, "nodes": []}
+    client, operator, _reconciler, audits = _client(fleet=lambda: fleet_state)
+    plan = client.post("/api/v1/profiles/agent/plan", headers=operator)
+    assert plan.status_code == 200
+    planned_evidence = plan.json()["fleet_evidence_digest"]
+
+    fleet_state["nodes"] = [
+        {
+            "agent_online": False,
+            "agent_state": "unavailable",
+            "compatibility": "incompatible",
+            "disk_available_bytes": 0,
+            "display_name": "Unavailable",
+            "healthy": False,
+            "hostname": "unavailable.invalid",
+            "id": NODE_ID,
+            "labels": {},
+            "lifecycle": "managed",
+            "memory_available_bytes": 0,
+            "profile": "agent",
+            "stale": True,
+        }
+    ]
+    changed = client.get("/api/v1/fleet", headers=operator).json()
+    assert changed["evidence_digest"] != planned_evidence
+
+    response = client.post(
+        "/api/v1/reconciliations",
+        headers=operator,
+        json={
+            "fleet_evidence_digest": planned_evidence,
+            "plan_digest": plan.json()["digest"],
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "fleet acceptance evidence is stale"}
+    with pytest.raises(KeyError):
+        audits.for_request(response.headers["x-request-id"])
+
+
+def test_fleet_evidence_digest_is_deterministic_over_validated_public_projection() -> None:
+    first_client, operator, *_ = _client()
+    second_client, second_operator, *_ = _client()
+
+    first = first_client.get("/api/v1/fleet", headers=operator).json()
+    second = second_client.get("/api/v1/nodes/status", headers=second_operator).json()
+
+    assert first["evidence_digest"] == second["evidence_digest"]
+    assert len(first["evidence_digest"]) == 64
 
 
 def test_nodes_status_marks_missing_observation_unknown_and_stale() -> None:
@@ -239,12 +308,16 @@ def test_job_status_has_typed_progress_fields_without_payloads() -> None:
         "current_attempt": 1,
         "id": "11111111-1111-4111-8111-111111111111",
         "kind": "reconcile",
-        "operations": [],
+            "operations": [],
+            "operation_next_cursor": None,
+            "operation_total": 0,
         "progress": {"completed": 0, "failed": 0, "running": 0, "total": 0},
         "reconciliation_id": "22222222-2222-4222-8222-222222222222",
         "state": "queued",
         "status_reason": None,
-        "targets": [NODE_ID],
+            "targets": [NODE_ID],
+            "target_next_cursor": None,
+            "target_total": 1,
     }
     encoded = json.dumps(response.json(), sort_keys=True)
     assert "payload" not in encoded
@@ -351,7 +424,9 @@ def test_plan_response_whitelists_nested_route_release_and_dag_fields() -> None:
         agent_protocol_range=(1, 1),
     )
 
-    response = operation_api.plan_response(plan).model_dump(mode="json")
+    response = operation_api.plan_response(
+        plan, fleet_evidence_digest="f" * 64
+    ).model_dump(mode="json")
 
     assert response["placements"] == {"model": [NODE_ID]}
     assert response["routes"]["model"]["quota"] == {
@@ -379,8 +454,7 @@ def test_job_operation_progress_projects_only_bounded_phase() -> None:
     operations = OperationApiServices(
         endpoint=lambda _alias: {},
         agents=lambda: (),
-        job_operations=lambda _job_id: (
-            {
+        job_operations=lambda _job_id, _cursor, _limit: OperationPage(({
                 "attempt": 1,
                 "graph_operation_id": "model:node.probe",
                 "id": "44444444-4444-4444-8444-444444444444",
@@ -392,8 +466,7 @@ def test_job_operation_progress_projects_only_bounded_phase() -> None:
                 },
                 "state": "running",
                 "updated_at": "2026-08-05T12:00:00+00:00",
-            },
-        ),
+            },), None, JobProgress(completed=0, failed=0, running=1, total=1)),
         resume_job=lambda _job_id: None,
     )
     client, operator, _reconciler, _audits = _client(operations=operations)
@@ -619,7 +692,9 @@ def test_operator_resume_is_rbac_guarded_strict_and_audited() -> None:
     services = OperationApiServices(
         endpoint=lambda _alias: {},
         agents=lambda: (),
-        job_operations=lambda _job_id: (),
+        job_operations=lambda _job_id, _cursor, _limit: OperationPage(
+            (), None, JobProgress(completed=0, failed=0, running=0, total=0)
+        ),
         resume_job=resumed.append,
     )
     client, operator, _reconciler, audits = _client(operations=services)
@@ -646,11 +721,115 @@ def test_operator_resume_is_rbac_guarded_strict_and_audited() -> None:
     assert audits.for_request(request_id).action == "job.resume"
 
 
+def test_durable_resume_has_one_atomic_winner(tmp_path) -> None:
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'resume.sqlite'}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine, expire_on_commit=False)
+    job = Job(
+        request_id="33333333-3333-4333-8333-333333333333",
+        kind="reconcile",
+        state="waiting-for-operator",
+        actor="operator",
+        base_commit=COMMIT,
+        targets=[NODE_ID],
+        payload_digest="e" * 64,
+        payload={},
+        current_attempt=1,
+        created_at=now,
+        updated_at=now,
+    )
+    with sessions.begin() as session:
+        session.add(job)
+    services = operation_api.durable_operation_services(
+        sessions, tmp_path / "routes", clock=lambda: now
+    )
+
+    def resume() -> str:
+        try:
+            services.resume_job(job.id)
+            return "won"
+        except ValueError:
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = list(pool.map(lambda _index: resume(), range(8)))
+
+    assert outcomes.count("won") == 1
+    assert outcomes.count("conflict") == 7
+    with sessions() as session:
+        assert session.get(Job, job.id).state == "queued"
+
+
+def test_durable_operation_keyset_pages_are_complete_and_aggregated(tmp_path) -> None:
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+    engine = create_engine(f"sqlite:///{tmp_path / 'operation-pages.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine, expire_on_commit=False)
+    job = Job(
+        request_id="33333333-3333-4333-8333-333333333333",
+        kind="reconcile",
+        state="running",
+        actor="operator",
+        base_commit=COMMIT,
+        targets=[NODE_ID],
+        payload_digest="e" * 64,
+        payload={},
+        current_attempt=1,
+        created_at=now,
+        updated_at=now,
+    )
+    with sessions.begin() as session:
+        session.add(AgentNode(node_id=NODE_ID, state="active", capabilities=[]))
+        session.add(job)
+        session.flush()
+        for index in range(23):
+            session.add(
+                AgentOperation(
+                    parent_job_id=job.id,
+                    node_id=NODE_ID,
+                    kind="node.probe",
+                    payload_digest=f"{index:064x}",
+                    payload={},
+                    base_commit=COMMIT,
+                    state="succeeded" if index < 8 else "queued",
+                    current_attempt=0,
+                    created_at=now + timedelta(seconds=index // 3),
+                    updated_at=now,
+                )
+            )
+    services = operation_api.durable_operation_services(
+        sessions, tmp_path / "routes", clock=lambda: now
+    )
+
+    found: list[str] = []
+    cursor = None
+    while True:
+        page = services.job_operations(job.id, cursor, 7)
+        found.extend(str(item["id"]) for item in page.items)
+        assert page.progress.model_dump() == {
+            "completed": 8,
+            "failed": 0,
+            "running": 15,
+            "total": 23,
+        }
+        cursor = page.next_cursor
+        if cursor is None:
+            break
+
+    assert len(found) == len(set(found)) == 23
+
+
 def test_admin_operation_schema_declares_applicable_bounded_errors() -> None:
     services = OperationApiServices(
         endpoint=lambda _alias: {},
         agents=lambda: (),
-        job_operations=lambda _job_id: (),
+        job_operations=lambda _job_id, _cursor, _limit: OperationPage(
+            (), None, JobProgress(completed=0, failed=0, running=0, total=0)
+        ),
         resume_job=lambda _job_id: None,
     )
     client, _operator, _reconciler, _audits = _client(operations=services)

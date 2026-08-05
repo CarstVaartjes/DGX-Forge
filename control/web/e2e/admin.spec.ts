@@ -2,10 +2,11 @@ import {test, expect} from "@playwright/test";
 
 const commit = "a".repeat(40);
 const digest = "d".repeat(64);
+const evidenceDigest = "e".repeat(64);
 const nodeId = "spk_0123456789abcdef0123456789abcdef";
 
 test("admin shell is keyboard navigable", async ({page}) => {
-  await page.route("**/api/v1/fleet", route => route.fulfill({json: {commit, nodes: []}}));
+  await page.route("**/api/v1/fleet", route => route.fulfill({json: {commit, evidence_digest: evidenceDigest, nodes: []}}));
   await page.route("**/api/v1/documents?kind=profiles", route => route.fulfill({json: {commit, documents: []}}));
   await page.goto("/");
   await expect(page.getByRole("navigation", {name: "Primary"})).toBeVisible();
@@ -18,11 +19,11 @@ test("profile apply confirms and posts the exact server digest", async ({page}) 
   const bodies: unknown[] = [];
   await page.route("**/api/v1/documents?kind=profiles", route => route.fulfill({json: {commit, documents: []}}));
   await page.route("**/api/v1/fleet", route => route.fulfill({json: {
-    commit,
+    commit, evidence_digest: evidenceDigest,
     nodes: [{agent_online: true, agent_state: "active", compatibility: "compatible", disk_available_bytes: 1, display_name: "Compute A", healthy: true, hostname: "hidden.invalid", id: nodeId, labels: {}, lifecycle: "managed", memory_available_bytes: 1, profile: "production", stale: false}],
   }}));
   await page.route("**/api/v1/profiles/production/plan", route => route.fulfill({json: {
-    agent_protocol_range: [3, 4], commit, digest, input_digests: {},
+    agent_protocol_range: [3, 4], commit, digest, fleet_evidence_digest: evidenceDigest, input_digests: {},
     operation_graph: {base_commit: commit, nodes: [], schema_version: 1, targets: [nodeId]},
     placements: {}, reconciliation_id: "reconciliation-1", releases: {}, routes: {}, targets: [nodeId],
   }}));
@@ -39,5 +40,5 @@ test("profile apply confirms and posts the exact server digest", async ({page}) 
   await page.getByRole("button", {name: "Apply exact plan"}).click();
 
   await expect(page.getByRole("status")).toContainText("job-1");
-  expect(bodies).toEqual([{plan_digest: digest}]);
+  expect(bodies).toEqual([{fleet_evidence_digest: evidenceDigest, plan_digest: digest}]);
 });

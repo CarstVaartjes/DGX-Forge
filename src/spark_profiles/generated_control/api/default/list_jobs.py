@@ -9,22 +9,58 @@ from ... import errors
 
 from ...models.bounded_error_response import BoundedErrorResponse
 from ...models.jobs_response import JobsResponse
+from ...types import UNSET, Unset
 from typing import cast
+from typing import cast, Union
+from typing import Union
 
 
 
 def _get_kwargs(
+    *,
+    cursor: Union[None, Unset, str] = UNSET,
+    limit: Union[Unset, int] = 20,
+    status: Union[None, Unset, str] = UNSET,
+    target: Union[None, Unset, str] = UNSET,
 
 ) -> dict[str, Any]:
 
 
 
 
+    params: dict[str, Any] = {}
+
+    json_cursor: Union[None, Unset, str]
+    if isinstance(cursor, Unset):
+        json_cursor = UNSET
+    else:
+        json_cursor = cursor
+    params["cursor"] = json_cursor
+
+    params["limit"] = limit
+
+    json_status: Union[None, Unset, str]
+    if isinstance(status, Unset):
+        json_status = UNSET
+    else:
+        json_status = status
+    params["status"] = json_status
+
+    json_target: Union[None, Unset, str]
+    if isinstance(target, Unset):
+        json_target = UNSET
+    else:
+        json_target = target
+    params["target"] = json_target
+
+
+    params = {k: v for k, v in params.items() if v is not UNSET and v is not None}
 
 
     _kwargs: dict[str, Any] = {
         "method": "get",
         "url": "/api/v1/jobs",
+        "params": params,
     }
 
 
@@ -47,6 +83,13 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
 
         return response_401
 
+    if response.status_code == 422:
+        response_422 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_422
+
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
     else:
@@ -65,9 +108,19 @@ def _build_response(*, client: Union[AuthenticatedClient, Client], response: htt
 def sync_detailed(
     *,
     client: AuthenticatedClient,
+    cursor: Union[None, Unset, str] = UNSET,
+    limit: Union[Unset, int] = 20,
+    status: Union[None, Unset, str] = UNSET,
+    target: Union[None, Unset, str] = UNSET,
 
 ) -> Response[Union[BoundedErrorResponse, JobsResponse]]:
     """ Jobs View
+
+    Args:
+        cursor (Union[None, Unset, str]):
+        limit (Union[Unset, int]):  Default: 20.
+        status (Union[None, Unset, str]):
+        target (Union[None, Unset, str]):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -79,6 +132,10 @@ def sync_detailed(
 
 
     kwargs = _get_kwargs(
+        cursor=cursor,
+limit=limit,
+status=status,
+target=target,
 
     )
 
@@ -91,9 +148,19 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient,
+    cursor: Union[None, Unset, str] = UNSET,
+    limit: Union[Unset, int] = 20,
+    status: Union[None, Unset, str] = UNSET,
+    target: Union[None, Unset, str] = UNSET,
 
 ) -> Optional[Union[BoundedErrorResponse, JobsResponse]]:
     """ Jobs View
+
+    Args:
+        cursor (Union[None, Unset, str]):
+        limit (Union[Unset, int]):  Default: 20.
+        status (Union[None, Unset, str]):
+        target (Union[None, Unset, str]):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -106,15 +173,29 @@ def sync(
 
     return sync_detailed(
         client=client,
+cursor=cursor,
+limit=limit,
+status=status,
+target=target,
 
     ).parsed
 
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
+    cursor: Union[None, Unset, str] = UNSET,
+    limit: Union[Unset, int] = 20,
+    status: Union[None, Unset, str] = UNSET,
+    target: Union[None, Unset, str] = UNSET,
 
 ) -> Response[Union[BoundedErrorResponse, JobsResponse]]:
     """ Jobs View
+
+    Args:
+        cursor (Union[None, Unset, str]):
+        limit (Union[Unset, int]):  Default: 20.
+        status (Union[None, Unset, str]):
+        target (Union[None, Unset, str]):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -126,6 +207,10 @@ async def asyncio_detailed(
 
 
     kwargs = _get_kwargs(
+        cursor=cursor,
+limit=limit,
+status=status,
+target=target,
 
     )
 
@@ -138,9 +223,19 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient,
+    cursor: Union[None, Unset, str] = UNSET,
+    limit: Union[Unset, int] = 20,
+    status: Union[None, Unset, str] = UNSET,
+    target: Union[None, Unset, str] = UNSET,
 
 ) -> Optional[Union[BoundedErrorResponse, JobsResponse]]:
     """ Jobs View
+
+    Args:
+        cursor (Union[None, Unset, str]):
+        limit (Union[Unset, int]):  Default: 20.
+        status (Union[None, Unset, str]):
+        target (Union[None, Unset, str]):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -153,5 +248,9 @@ async def asyncio(
 
     return (await asyncio_detailed(
         client=client,
+cursor=cursor,
+limit=limit,
+status=status,
+target=target,
 
     )).parsed

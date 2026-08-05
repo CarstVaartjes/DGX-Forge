@@ -24,10 +24,12 @@ class FleetStatusResponse:
     """
         Attributes:
             commit (str):
+            evidence_digest (str):
             nodes (list['NodeStatus']):
      """
 
     commit: str
+    evidence_digest: str
     nodes: list['NodeStatus']
 
 
@@ -37,6 +39,8 @@ class FleetStatusResponse:
     def to_dict(self) -> dict[str, Any]:
         from ..models.node_status import NodeStatus
         commit = self.commit
+
+        evidence_digest = self.evidence_digest
 
         nodes = []
         for nodes_item_data in self.nodes:
@@ -50,6 +54,7 @@ class FleetStatusResponse:
 
         field_dict.update({
             "commit": commit,
+            "evidence_digest": evidence_digest,
             "nodes": nodes,
         })
 
@@ -63,6 +68,8 @@ class FleetStatusResponse:
         d = dict(src_dict)
         commit = d.pop("commit")
 
+        evidence_digest = d.pop("evidence_digest")
+
         nodes = []
         _nodes = d.pop("nodes")
         for nodes_item_data in (_nodes):
@@ -75,6 +82,7 @@ class FleetStatusResponse:
 
         fleet_status_response = cls(
             commit=commit,
+            evidence_digest=evidence_digest,
             nodes=nodes,
         )
 

@@ -20,6 +20,7 @@ from dgx_control.models import (
     Base,
     Job,
 )
+from dgx_control.operation_api import durable_operation_services
 from dgx_control.pki import CertificateAuthority, IssuedCertificate
 from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.engine import Engine
@@ -145,6 +146,40 @@ def state(sessions, job_id: str) -> str:
         job = session.get(Job, job_id)
         assert job is not None
         return job.state
+
+
+def test_postgres_resume_transition_has_one_concurrent_winner(
+    service, tmp_path
+) -> None:
+    sessions, clock = service
+    job = parent(sessions, clock)
+    with sessions.begin() as session:
+        durable = session.get(Job, job.id)
+        assert durable is not None
+        durable.state = "waiting-for-operator"
+        durable.status_reason = "operator approval required"
+    first = durable_operation_services(
+        sessions, tmp_path / "routes-a", clock=clock
+    )
+    second = durable_operation_services(
+        sessions, tmp_path / "routes-b", clock=clock
+    )
+    barrier = threading.Barrier(2)
+
+    def resume(services) -> str:
+        barrier.wait()
+        try:
+            services.resume_job(job.id)
+            return "won"
+        except ValueError:
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(resume, (first, second)))
+
+    assert outcomes.count("won") == 1
+    assert outcomes.count("conflict") == 1
+    assert state(sessions, job.id) == "queued"
 
 
 def test_postgres_claim_locks_only_operations_without_nullable_join(service, postgres_engine) -> None:

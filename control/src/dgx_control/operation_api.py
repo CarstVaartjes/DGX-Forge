@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
+from base64 import urlsafe_b64decode, urlsafe_b64encode
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
+from dgx_agent_protocol import canonical_message
 from pydantic import BaseModel, ConfigDict, Field, RootModel
-from sqlalchemy import select
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import (
@@ -58,6 +62,8 @@ _ADMIN_OPERATION_IDS = {
     ("get", "/api/v1/jobs/{job_id}/logs/{digest}"): "getJobLog",
 }
 _HTTP_METHODS = frozenset({"delete", "get", "patch", "post", "put"})
+BoundedIdentifier = Annotated[str, Field(min_length=1, max_length=128)]
+NodeIdentifier = Annotated[str, Field(pattern=NODE_PATTERN)]
 
 
 class OperationProjectionError(RuntimeError):
@@ -181,19 +187,20 @@ class PlanOperation(StrictModel):
 class PlanOperationGraph(StrictModel):
     schema_version: Literal[1]
     base_commit: str = Field(pattern=COMMIT_PATTERN)
-    targets: list[str] = Field(max_length=512)
+    targets: list[NodeIdentifier] = Field(max_length=512)
     nodes: list[PlanOperation] = Field(max_length=4096)
 
 
 class ReconciliationPlanResponse(StrictModel):
     commit: str = Field(pattern=COMMIT_PATTERN)
     digest: str = Field(pattern=DIGEST_PATTERN)
-    targets: list[str]
+    fleet_evidence_digest: str = Field(pattern=DIGEST_PATTERN)
+    targets: list[NodeIdentifier] = Field(max_length=512)
     placements: PlanPlacements
     routes: PlanRoutes
     releases: PlanReleases
     input_digests: PlanInputDigests
-    reconciliation_id: str
+    reconciliation_id: str = Field(min_length=1, max_length=128)
     operation_graph: PlanOperationGraph
     agent_protocol_range: list[int] = Field(min_length=2, max_length=2)
 
@@ -236,11 +243,11 @@ class JobOperationProgress(StrictModel):
 
 
 class JobOperationResponse(StrictModel):
-    id: str
-    graph_operation_id: str | None = None
+    id: str = Field(min_length=1, max_length=128)
+    graph_operation_id: str | None = Field(default=None, max_length=128)
     node_id: str = Field(pattern=NODE_PATTERN)
-    kind: str
-    state: str
+    kind: str = Field(min_length=1, max_length=80)
+    state: str = Field(min_length=1, max_length=80)
     attempt: int = Field(ge=0)
     progress: JobOperationProgress | None = None
     updated_at: str | None = None
@@ -254,15 +261,19 @@ class JobProgress(StrictModel):
 
 
 class JobDetailResponse(StrictModel):
-    id: str
-    state: str
-    kind: str
-    base_commit: str
-    targets: list[str]
+    id: str = Field(min_length=1, max_length=128)
+    state: str = Field(min_length=1, max_length=80)
+    kind: str = Field(min_length=1, max_length=80)
+    base_commit: str = Field(min_length=1, max_length=128)
+    targets: list[BoundedIdentifier] = Field(max_length=100)
+    target_next_cursor: str | None = Field(default=None, max_length=512)
+    target_total: int = Field(ge=0)
     current_attempt: int = Field(ge=0)
-    status_reason: str | None
-    reconciliation_id: str | None
-    operations: list[JobOperationResponse]
+    status_reason: str | None = Field(default=None, max_length=1024)
+    reconciliation_id: str | None = Field(default=None, max_length=128)
+    operations: list[JobOperationResponse] = Field(max_length=100)
+    operation_next_cursor: str | None = Field(default=None, max_length=512)
+    operation_total: int = Field(ge=0)
     progress: JobProgress
 
 
@@ -272,13 +283,15 @@ class JobResumeResponse(StrictModel):
 
 
 class JobSummary(StrictModel):
-    id: str
-    state: str
-    kind: str
+    id: str = Field(min_length=1, max_length=128)
+    state: str = Field(min_length=1, max_length=80)
+    kind: str = Field(min_length=1, max_length=80)
 
 
 class JobsResponse(StrictModel):
-    jobs: list[JobSummary]
+    jobs: list[JobSummary] = Field(max_length=100)
+    next_cursor: str | None = Field(default=None, max_length=512)
+    total: int = Field(ge=0)
 
 
 class JobLogsResponse(StrictModel):
@@ -292,12 +305,23 @@ class OperationApiServices:
 
     endpoint: Callable[[str], Mapping[str, object]]
     agents: Callable[[], Sequence[Mapping[str, object]]]
-    job_operations: Callable[[str], Sequence[Mapping[str, object]]]
+    job_operations: Callable[[str, str | None, int], OperationPage]
     resume_job: Callable[[str], None]
 
 
+@dataclass(frozen=True)
+class OperationPage:
+    items: Sequence[Mapping[str, object]]
+    next_cursor: str | None
+    progress: JobProgress
+
+
 def job_response(
-    job: Any, operations: Sequence[Mapping[str, object]]
+    job: Any,
+    operation_page: OperationPage,
+    *,
+    target_cursor: int,
+    limit: int,
 ) -> JobDetailResponse:
     projected = [
         JobOperationResponse(
@@ -318,30 +342,47 @@ def job_response(
                 else str(item["updated_at"])
             ),
         )
-        for item in operations
+        for item in operation_page.items
     ]
-    states = [item.state for item in projected]
-    terminal = {"succeeded", "accepted", "compensated"}
+    targets = list(job.targets)
+    visible_targets = targets[target_cursor : target_cursor + limit]
+    target_next_cursor = (
+        _encode_offset(target_cursor + limit)
+        if target_cursor + limit < len(targets)
+        else None
+    )
     return JobDetailResponse(
         id=str(job.id),
         state=str(job.state),
         kind=str(job.kind),
         base_commit=str(job.base_commit),
-        targets=list(job.targets),
+        targets=visible_targets,
+        target_next_cursor=target_next_cursor,
+        target_total=len(targets),
         current_attempt=int(job.current_attempt),
         status_reason=job.status_reason,
         reconciliation_id=job.reconciliation_id,
         operations=projected,
-        progress=JobProgress(
-            completed=sum(state in terminal for state in states),
-            failed=sum(state in {"failed", "uncertain"} for state in states),
-            running=sum(
-                state in {"queued", "running", "planned", "compensating"}
-                for state in states
-            ),
-            total=len(states),
-        ),
+        operation_next_cursor=operation_page.next_cursor,
+        operation_total=operation_page.progress.total,
+        progress=operation_page.progress,
     )
+
+
+def _encode_offset(offset: int) -> str:
+    return urlsafe_b64encode(str(offset).encode("ascii")).decode("ascii").rstrip("=")
+
+
+def decode_offset(cursor: str | None) -> int:
+    if cursor is None:
+        return 0
+    try:
+        offset = int(urlsafe_b64decode(cursor.encode("ascii") + b"==="))
+    except (UnicodeError, ValueError):
+        raise ValueError("target cursor is invalid") from None
+    if offset < 0:
+        raise ValueError("target cursor is invalid")
+    return offset
 
 
 def _progress_projection(value: object) -> JobOperationProgress | None:
@@ -532,16 +573,56 @@ class _DurableOperationProjection:
             )
         return projected
 
-    def job_operations(self, job_id: str) -> Sequence[Mapping[str, object]]:
+    def job_operations(
+        self, job_id: str, cursor: str | None, limit: int
+    ) -> OperationPage:
+        if not 1 <= limit <= 100:
+            raise ValueError("operation page limit is invalid")
+        boundary: tuple[datetime, str] | None = None
+        if cursor is not None:
+            try:
+                decoded = json.loads(
+                    urlsafe_b64decode(cursor.encode("ascii") + b"===")
+                )
+                if (
+                    not isinstance(decoded, list)
+                    or len(decoded) != 2
+                    or not all(isinstance(item, str) for item in decoded)
+                ):
+                    raise ValueError
+                boundary = (datetime.fromisoformat(decoded[0]), decoded[1])
+            except (UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+                raise ValueError("operation cursor is invalid") from None
         with self._sessions() as session:
+            statement = select(AgentOperation).where(
+                AgentOperation.parent_job_id == job_id
+            )
+            if boundary is not None:
+                created_at, operation_id = boundary
+                statement = statement.where(
+                    or_(
+                        AgentOperation.created_at > created_at,
+                        (AgentOperation.created_at == created_at)
+                        & (AgentOperation.id > operation_id),
+                    )
+                )
             operations = list(
                 session.scalars(
-                    select(AgentOperation)
-                    .where(AgentOperation.parent_job_id == job_id)
+                    statement
                     .order_by(AgentOperation.created_at, AgentOperation.id)
-                    .limit(1000)
+                    .limit(limit + 1)
                 )
             )
+            has_more = len(operations) > limit
+            operations = operations[:limit]
+            state_counts = {
+                str(state): int(count)
+                for state, count in session.execute(
+                    select(AgentOperation.state, func.count())
+                    .where(AgentOperation.parent_job_id == job_id)
+                    .group_by(AgentOperation.state)
+                )
+            }
             graph_ids = {
                 row.agent_operation_id: row.graph_operation_id
                 for row in session.scalars(
@@ -568,7 +649,7 @@ class _DurableOperationProjection:
                     for operation in operations
                 )
             }
-        return [
+        items = [
             {
                 "attempt": operation.current_attempt,
                 "graph_operation_id": graph_ids.get(operation.id),
@@ -594,17 +675,48 @@ class _DurableOperationProjection:
             }
             for operation in operations
         ]
+        next_cursor = None
+        if has_more and operations:
+            last = operations[-1]
+            next_cursor = urlsafe_b64encode(
+                json.dumps(
+                    [_aware(last.created_at).isoformat(), last.id],
+                    separators=(",", ":"),
+                ).encode("utf-8")
+            ).decode("ascii").rstrip("=")
+        terminal = {"succeeded", "accepted", "compensated"}
+        failed = {"failed", "uncertain"}
+        running = {"queued", "running", "planned", "compensating"}
+        return OperationPage(
+            items=items,
+            next_cursor=next_cursor,
+            progress=JobProgress(
+                completed=sum(state_counts.get(state, 0) for state in terminal),
+                failed=sum(state_counts.get(state, 0) for state in failed),
+                running=sum(state_counts.get(state, 0) for state in running),
+                total=sum(state_counts.values()),
+            ),
+        )
 
     def resume_job(self, job_id: str) -> None:
         with self._sessions.begin() as session:
-            job = session.get(Job, job_id)
-            if job is None:
+            result = session.execute(
+                update(Job)
+                .where(
+                    Job.id == job_id,
+                    Job.state == "waiting-for-operator",
+                )
+                .values(
+                    state="queued",
+                    status_reason=None,
+                    updated_at=self._clock(),
+                )
+            )
+            if result.rowcount == 1:
+                return
+            if session.get(Job, job_id) is None:
                 raise KeyError(job_id)
-            if job.state != "waiting-for-operator":
-                raise ValueError("job is not waiting for operator")
-            job.state = "queued"
-            job.status_reason = None
-            job.updated_at = self._clock()
+            raise ValueError("job is not waiting for operator")
 
 
 def durable_operation_services(
@@ -712,9 +824,26 @@ class NodeStatus(StrictModel):
 class FleetStatusResponse(StrictModel):
     commit: str = Field(pattern=COMMIT_PATTERN)
     nodes: list[NodeStatus]
+    evidence_digest: str = Field(pattern=DIGEST_PATTERN)
 
 
-def plan_response(plan: Any) -> ReconciliationPlanResponse:
+class _FleetEvidence(StrictModel):
+    commit: str = Field(pattern=COMMIT_PATTERN)
+    nodes: list[NodeStatus]
+
+
+def fleet_response(fleet_state: Mapping[str, object]) -> FleetStatusResponse:
+    """Validate and digest the exact public live acceptance evidence."""
+
+    evidence = _FleetEvidence.model_validate(fleet_state)
+    public = evidence.model_dump(mode="json")
+    digest = hashlib.sha256(canonical_message(public)).hexdigest()
+    return FleetStatusResponse(**public, evidence_digest=digest)
+
+
+def plan_response(
+    plan: Any, *, fleet_evidence_digest: str
+) -> ReconciliationPlanResponse:
     """Project an accepted planner result without changing its canonical fields."""
 
     routes = {
@@ -734,6 +863,7 @@ def plan_response(plan: Any) -> ReconciliationPlanResponse:
     return ReconciliationPlanResponse(
         commit=plan.commit,
         digest=plan.digest,
+        fleet_evidence_digest=fleet_evidence_digest,
         targets=list(plan.targets),
         placements=PlanPlacements(root=dict(plan.placements)),
         routes=PlanRoutes(root=routes),

@@ -30,6 +30,7 @@ class ReconciliationPlanResponse:
             agent_protocol_range (list[int]):
             commit (str):
             digest (str):
+            fleet_evidence_digest (str):
             input_digests (PlanInputDigests):
             operation_graph (PlanOperationGraph):
             placements (PlanPlacements):
@@ -42,6 +43,7 @@ class ReconciliationPlanResponse:
     agent_protocol_range: list[int]
     commit: str
     digest: str
+    fleet_evidence_digest: str
     input_digests: 'PlanInputDigests'
     operation_graph: 'PlanOperationGraph'
     placements: 'PlanPlacements'
@@ -68,6 +70,8 @@ class ReconciliationPlanResponse:
 
         digest = self.digest
 
+        fleet_evidence_digest = self.fleet_evidence_digest
+
         input_digests = self.input_digests.to_dict()
 
         operation_graph = self.operation_graph.to_dict()
@@ -91,6 +95,7 @@ class ReconciliationPlanResponse:
             "agent_protocol_range": agent_protocol_range,
             "commit": commit,
             "digest": digest,
+            "fleet_evidence_digest": fleet_evidence_digest,
             "input_digests": input_digests,
             "operation_graph": operation_graph,
             "placements": placements,
@@ -118,6 +123,8 @@ class ReconciliationPlanResponse:
         commit = d.pop("commit")
 
         digest = d.pop("digest")
+
+        fleet_evidence_digest = d.pop("fleet_evidence_digest")
 
         input_digests = PlanInputDigests.from_dict(d.pop("input_digests"))
 
@@ -153,6 +160,7 @@ class ReconciliationPlanResponse:
             agent_protocol_range=agent_protocol_range,
             commit=commit,
             digest=digest,
+            fleet_evidence_digest=fleet_evidence_digest,
             input_digests=input_digests,
             operation_graph=operation_graph,
             placements=placements,

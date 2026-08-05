@@ -512,7 +512,7 @@ class ControlClient:
         )  # type: ignore[return-value]
 
     def apply_plan(
-        self, digest: str, *, request_id: str
+        self, digest: str, fleet_evidence_digest: str, *, request_id: str
     ) -> ReconciliationAcceptedResponse:
         try:
             canonical_request_id = str(uuid.UUID(request_id))
@@ -522,7 +522,10 @@ class ControlClient:
             raise ControlClientError("control mutation request ID is invalid")
         return self._call_generated(
             apply_reconciliation.sync_detailed,
-            body=ReconciliationRequest(plan_digest=digest),
+            body=ReconciliationRequest(
+                plan_digest=digest,
+                fleet_evidence_digest=fleet_evidence_digest,
+            ),
             headers={"X-Request-ID": canonical_request_id},
         )  # type: ignore[return-value]
 

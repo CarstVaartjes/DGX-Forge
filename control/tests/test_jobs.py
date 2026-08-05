@@ -41,6 +41,33 @@ def test_workers_cannot_claim_same_job(service) -> None:
     assert claimed[0].job_id == job.id
 
 
+def test_job_list_keyset_pages_reach_every_job_in_stable_order(service) -> None:
+    jobs, clock = service
+    expected: set[str] = set()
+    for index in range(23):
+        expected.add(
+            jobs.enqueue(
+                "probe", "admin", "a" * 40, [f"spk_{index:032x}"], {}
+            ).id
+        )
+        if index % 3 == 0:
+            clock.now += timedelta(seconds=1)
+
+    found: list[str] = []
+    cursor = None
+    while True:
+        page, cursor, total = jobs.list_page(limit=7, cursor=cursor)
+        found.extend(job.id for job in page)
+        assert total == 23
+        if cursor is None:
+            break
+
+    assert len(found) == len(set(found)) == 23
+    assert set(found) == expected
+    with pytest.raises(ValueError, match="cursor"):
+        jobs.list_page(limit=7, cursor="not-a-cursor")
+
+
 def test_claim_carries_commit_and_targets_to_the_worker(service) -> None:
     jobs, _ = service
     jobs.enqueue("probe", "admin", "a" * 40, ["spk_a", "spk_b"], {})
@@ -147,3 +174,24 @@ def test_matching_fence_can_heartbeat_wait_and_fail(service) -> None:
     assert retry is not None
     jobs.fail(retry, "bounded failure")
     assert jobs.get(retry.job_id).state == "failed"
+
+
+def test_concurrent_operator_resume_has_one_winner(service) -> None:
+    jobs, _ = service
+    jobs.enqueue("install", "operator", "abc", ["spk_1"], {})
+    attempt = jobs.claim("worker", 10)
+    assert attempt is not None
+    jobs.wait_for_operator(attempt, "confirm console fingerprint")
+
+    def resume() -> str:
+        try:
+            jobs.resume(attempt.job_id)
+            return "won"
+        except ValueError:
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        outcomes = list(pool.map(lambda _index: resume(), range(8)))
+
+    assert outcomes.count("won") == 1
+    assert outcomes.count("conflict") == 7

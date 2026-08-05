@@ -45,6 +45,9 @@ class Jobs:
         del limit
         return [self.job]
 
+    def list_page(self, **_kwargs):
+        return [self.job], None, 1
+
 
 class Repository:
     def head(self) -> str:
@@ -203,12 +206,18 @@ def _live_check(token_directory: Path) -> dict[str, object]:
     stale = api.post(
         "/api/v1/reconciliations",
         headers=headers,
-        json={"plan_digest": "0" * 64},
+        json={
+            "fleet_evidence_digest": web_plan["fleet_evidence_digest"],
+            "plan_digest": "0" * 64,
+        },
     )
     accepted = api.post(
         "/api/v1/reconciliations",
         headers=headers,
-        json={"plan_digest": web_plan["digest"]},
+        json={
+            "fleet_evidence_digest": web_plan["fleet_evidence_digest"],
+            "plan_digest": web_plan["digest"],
+        },
     )
     unavailable = api.get("/api/v1/fleet", headers=headers).json()["nodes"][0]
     assert stale.status_code == 409

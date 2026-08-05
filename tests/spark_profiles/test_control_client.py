@@ -28,6 +28,7 @@ from spark_profiles.generated_control.models.reconciliation_plan_response import
 
 COMMIT = "a" * 40
 PLAN_DIGEST = "b" * 64
+FLEET_EVIDENCE_DIGEST = "c" * 64
 JOB_ID = "11111111-1111-4111-8111-111111111111"
 
 
@@ -95,6 +96,7 @@ def plan_payload() -> dict[str, object]:
         "agent_protocol_range": [1, 1],
         "commit": COMMIT,
         "digest": PLAN_DIGEST,
+        "fleet_evidence_digest": FLEET_EVIDENCE_DIGEST,
         "input_digests": {},
         "operation_graph": {
             "base_commit": COMMIT,
@@ -116,11 +118,15 @@ def job_payload(state: str, reason: str | None = None) -> dict[str, object]:
         "current_attempt": 1,
         "id": JOB_ID,
         "kind": "reconcile",
+        "operation_next_cursor": None,
+        "operation_total": 0,
         "operations": [],
         "progress": {"completed": 0, "failed": 0, "running": 0, "total": 0},
         "reconciliation_id": "22222222-2222-4222-8222-222222222222",
         "state": state,
         "status_reason": reason,
+        "target_next_cursor": None,
+        "target_total": 0,
         "targets": [],
     }
 
@@ -159,7 +165,7 @@ def test_operational_methods_use_generated_models_and_exact_routes(
 ) -> None:
     responses = iter(
         [
-            Response({"commit": COMMIT, "nodes": []}),
+            Response({"commit": COMMIT, "nodes": [], "evidence_digest": FLEET_EVIDENCE_DIGEST}),
             Response(plan_payload()),
             Response(
                 {
@@ -198,7 +204,9 @@ def test_operational_methods_use_generated_models_and_exact_routes(
     assert isinstance(client.plan_profile("agent"), ReconciliationPlanResponse)
     assert isinstance(
         client.apply_plan(
-            PLAN_DIGEST, request_id="33333333-3333-4333-8333-333333333333"
+            PLAN_DIGEST,
+            FLEET_EVIDENCE_DIGEST,
+            request_id="33333333-3333-4333-8333-333333333333",
         ),
         ReconciliationAcceptedResponse,
     )
@@ -210,14 +218,17 @@ def test_operational_methods_use_generated_models_and_exact_routes(
         ("GET", "https://control.invalid/api/v1/nodes/status"),
         ("POST", "https://control.invalid/api/v1/profiles/agent/plan"),
         ("POST", "https://control.invalid/api/v1/reconciliations"),
-        ("GET", f"https://control.invalid/api/v1/jobs/{JOB_ID}"),
+        ("GET", f"https://control.invalid/api/v1/jobs/{JOB_ID}?limit=20"),
         ("GET", "https://control.invalid/api/v1/endpoints/model-a"),
         ("GET", "https://control.invalid/api/v1/agents"),
     ]
     assert calls[2][0].headers["X-request-id"] == (
         "33333333-3333-4333-8333-333333333333"
     )
-    assert json.loads(calls[2][0].data) == {"plan_digest": PLAN_DIGEST}
+    assert json.loads(calls[2][0].data) == {
+        "fleet_evidence_digest": FLEET_EVIDENCE_DIGEST,
+        "plan_digest": PLAN_DIGEST,
+    }
 
 
 def test_supplied_opener_is_used_by_generated_and_preserved_methods(
@@ -225,7 +236,7 @@ def test_supplied_opener_is_used_by_generated_and_preserved_methods(
 ) -> None:
     responses = iter(
         [
-            Response({"commit": COMMIT, "nodes": []}),
+            Response({"commit": COMMIT, "nodes": [], "evidence_digest": FLEET_EVIDENCE_DIGEST}),
             Response({"digest": "abc", "patch": "diff"}),
         ]
     )
@@ -430,7 +441,7 @@ def test_oversized_generated_response_is_rejected_before_parsing(
 def test_generated_response_requires_json_content_type(tmp_path: Path) -> None:
     def opener(request, timeout):
         return Response(
-            {"commit": COMMIT, "nodes": []},
+            {"commit": COMMIT, "nodes": [], "evidence_digest": FLEET_EVIDENCE_DIGEST},
             headers={"content-type": "text/html"},
         )
 
@@ -453,7 +464,9 @@ def test_ambiguous_apply_transport_failure_is_not_replayed(
 
     with pytest.raises(control_client.ControlTransportError) as caught:
         client.apply_plan(
-            PLAN_DIGEST, request_id="33333333-3333-4333-8333-333333333333"
+            PLAN_DIGEST,
+            FLEET_EVIDENCE_DIGEST,
+            request_id="33333333-3333-4333-8333-333333333333",
         )
 
     assert len(calls) == 1
@@ -483,6 +496,7 @@ def test_production_boundary_rejects_mutation_redirect_without_forward_or_replay
         if mutation == "apply":
             client.apply_plan(
                 PLAN_DIGEST,
+                FLEET_EVIDENCE_DIGEST,
                 request_id="33333333-3333-4333-8333-333333333333",
             )
         elif mutation == "proposal":
@@ -712,9 +726,9 @@ def test_wait_job_polls_only_get_until_terminal_state(tmp_path: Path) -> None:
 
     assert result.state == "succeeded"
     assert [(request.method, request.full_url) for request in calls] == [
-        ("GET", f"https://control.invalid/api/v1/jobs/{JOB_ID}"),
-        ("GET", f"https://control.invalid/api/v1/jobs/{JOB_ID}"),
-        ("GET", f"https://control.invalid/api/v1/jobs/{JOB_ID}"),
+        ("GET", f"https://control.invalid/api/v1/jobs/{JOB_ID}?limit=20"),
+        ("GET", f"https://control.invalid/api/v1/jobs/{JOB_ID}?limit=20"),
+        ("GET", f"https://control.invalid/api/v1/jobs/{JOB_ID}?limit=20"),
     ]
 
 
@@ -1015,7 +1029,9 @@ def test_apply_rejects_noncanonical_request_id_before_network(
     )
 
     with pytest.raises(ControlClientError, match="request ID"):
-        client.apply_plan(PLAN_DIGEST, request_id="not-a-uuid")
+        client.apply_plan(
+            PLAN_DIGEST, FLEET_EVIDENCE_DIGEST, request_id="not-a-uuid"
+        )
 
 
 class FakeAdminClient:

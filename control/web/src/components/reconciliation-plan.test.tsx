@@ -10,11 +10,13 @@ type Fleet = components["schemas"]["FleetStatusResponse"];
 const nodeId = "spk_0123456789abcdef0123456789abcdef";
 const dependencyId = "stop:model-a:spk_0123456789abcdef0123456789abcdef";
 const digest = "d".repeat(64);
+const evidenceDigest = "f".repeat(64);
 
-const plan: Plan = {
+const plan = {
   agent_protocol_range: [3, 4],
   commit: "a".repeat(40),
   digest,
+  fleet_evidence_digest: evidenceDigest,
   input_digests: {fleet: "b".repeat(64), profile: "c".repeat(64)},
   operation_graph: {
     base_commit: "a".repeat(40),
@@ -70,10 +72,11 @@ const plan: Plan = {
     },
   },
   targets: [nodeId],
-};
+} as Plan;
 
-const readyFleet: Fleet = {
+const readyFleet = {
   commit: plan.commit,
+  evidence_digest: evidenceDigest,
   nodes: [{
     agent_last_seen_at: "2026-08-05T12:00:00Z",
     agent_online: true,
@@ -95,15 +98,16 @@ const readyFleet: Fleet = {
     profile: "profile-a",
     stale: false,
   }],
-};
+} as Fleet;
 
 it("shows the canonical plan evidence and submits only its exact digest after typed confirmation", async () => {
   // Break caught: an operator cannot inspect a placement, stop/start dependency,
   // immutable release, route, compatibility gate, or can apply a different digest.
-  const applied: string[] = [];
+  const applied: [string, string][] = [];
   const api = {
-    applyReconciliation: async (planDigest: string) => {
-      applied.push(planDigest);
+    fleet: async () => readyFleet,
+    applyReconciliation: async (planDigest: string, fleetEvidenceDigest: string) => {
+      applied.push([planDigest, fleetEvidenceDigest]);
       return {base_commit: plan.commit, job_id: "job-1", reconciliation_id: plan.reconciliation_id, state: "queued"};
     },
   } as unknown as ControlApi;
@@ -125,7 +129,7 @@ it("shows the canonical plan evidence and submits only its exact digest after ty
   expect(apply).toBeEnabled();
   await user.click(apply);
 
-  expect(applied).toEqual([digest]);
+  expect(applied).toEqual([[digest, evidenceDigest]]);
   expect(await screen.findByRole("status")).toHaveTextContent("job-1");
 });
 
@@ -161,6 +165,7 @@ it("locks a rejected stale digest until the operator previews a new plan", async
   // Break caught: a 409 leaves the old exact confirmation active and invites
   // repeated mutation attempts against authority the server rejected as stale.
   const api = {
+    fleet: async () => readyFleet,
     applyReconciliation: async () => {
       throw new Error("Control API returned 409: reconciliation plan digest is stale");
     },
@@ -175,4 +180,59 @@ it("locks a rejected stale digest until the operator previews a new plan", async
   expect(await screen.findByRole("alert")).toHaveTextContent(/409/);
   expect(screen.getByRole("alert")).toHaveTextContent(/preview a new plan/i);
   expect(apply).toBeDisabled();
+});
+
+it.each([
+  ["fleet commit mismatch with no targets", {...plan, targets: [], operation_graph: {...plan.operation_graph, targets: []}}, {...readyFleet, commit: "b".repeat(40)}],
+  ["operation graph commit mismatch", {...plan, operation_graph: {...plan.operation_graph, base_commit: "b".repeat(40)}}, readyFleet],
+  ["operation graph target omission", {...plan, operation_graph: {...plan.operation_graph, targets: []}}, readyFleet],
+  ["duplicate authoritative target", {...plan, targets: [nodeId, nodeId], operation_graph: {...plan.operation_graph, targets: [nodeId, nodeId]}}, readyFleet],
+  ["zero protocol lower bound", {...plan, agent_protocol_range: [0, 1]}, readyFleet],
+  ["fractional protocol bound", {...plan, agent_protocol_range: [1.5, 2]}, readyFleet],
+  ["reversed protocol range", {...plan, agent_protocol_range: [4, 3]}, readyFleet],
+])("fails closed for %s", async (_name, candidate, fleet) => {
+  // Break caught: malformed or mixed plan authority becomes applyable when
+  // target-derived checks happen to be empty or otherwise look healthy.
+  render(<ReconciliationPlan api={{} as ControlApi} fleet={fleet as Fleet} plan={candidate as Plan}/>);
+  const user = userEvent.setup();
+
+  await user.type(screen.getByLabelText(/Type the exact plan digest/), digest);
+
+  expect(screen.getByRole("alert")).toHaveTextContent(/cannot be applied/i);
+  expect(screen.getByRole("button", {name: "Apply exact plan"})).toBeDisabled();
+});
+
+it("refreshes and binds live evidence immediately before exact-digest apply", async () => {
+  // Break caught: evidence changes after confirmation and the stale snapshot is
+  // still submitted without a final authoritative refresh.
+  const applied: unknown[] = [];
+  const changedFleet = {...readyFleet, evidence_digest: "9".repeat(64)} as Fleet;
+  const api = {
+    fleet: async () => changedFleet,
+    applyReconciliation: async (...args: unknown[]) => { applied.push(args); throw new Error("must not apply"); },
+  } as unknown as ControlApi;
+  render(<ReconciliationPlan api={api} fleet={readyFleet} plan={plan}/>);
+  const user = userEvent.setup();
+
+  await user.type(screen.getByLabelText(/Type the exact plan digest/), digest);
+  await user.click(screen.getByRole("button", {name: "Apply exact plan"}));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(/evidence changed/i);
+  expect(applied).toEqual([]);
+  expect(screen.getByRole("button", {name: "Apply exact plan"})).toBeDisabled();
+});
+
+it("fails closed when the pre-apply evidence refresh is unavailable", async () => {
+  const api = {
+    fleet: async () => { throw new Error("Control API returned 503"); },
+    applyReconciliation: async () => { throw new Error("must not apply"); },
+  } as unknown as ControlApi;
+  render(<ReconciliationPlan api={api} fleet={readyFleet} plan={plan}/>);
+  const user = userEvent.setup();
+
+  await user.type(screen.getByLabelText(/Type the exact plan digest/), digest);
+  await user.click(screen.getByRole("button", {name: "Apply exact plan"}));
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(/503/);
+  expect(screen.getByRole("button", {name: "Apply exact plan"})).toBeDisabled();
 });

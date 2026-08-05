@@ -17,6 +17,7 @@ from fastapi import (
     Depends,
     FastAPI,
     HTTPException,
+    Query,
     Request,
     Response,
     status,
@@ -57,12 +58,16 @@ from .operation_api import (
     FleetStatusResponse,
     JobDetailResponse,
     JobLogsResponse,
+    JobProgress,
     JobResumeResponse,
     JobsResponse,
     OperationApiServices,
+    OperationPage,
     ReconciliationAcceptedResponse,
     ReconciliationPlanResponse,
     bounded_error_responses,
+    decode_offset,
+    fleet_response,
     job_response,
     plan_response,
 )
@@ -163,6 +168,7 @@ class JobQueue(Protocol):
     def enqueue(self, kind: str, actor: str, base_commit: str, targets: Sequence[str], payload: Mapping[str, object], *, request_id: str) -> Any: ...
     def get(self, job_id: str) -> Any: ...
     def list(self, *, limit: int = 100) -> list[Any]: ...
+    def list_page(self, *, limit: int = 100, cursor: str | None = None, status: str | None = None, target: str | None = None) -> tuple[list[Any], str | None, int]: ...
 
 
 class AuditSink(Protocol):
@@ -233,6 +239,7 @@ class ReconciliationPlanRequest(BaseModel):
 class ReconciliationRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     plan_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    fleet_evidence_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class ReconciliationCancelRequest(BaseModel):
@@ -383,8 +390,8 @@ def create_app(
         responses=bounded_error_responses(401),
         operation_id="getFleetStatus",
     )
-    def fleet_view(_actor: Actor = authenticated_actor) -> Mapping[str, object]:
-        return fleet()
+    def fleet_view(_actor: Actor = authenticated_actor) -> FleetStatusResponse:
+        return fleet_response(fleet())
 
     @app.get(
         "/api/v1/nodes/status",
@@ -392,8 +399,8 @@ def create_app(
         responses=bounded_error_responses(401),
         operation_id="getNodeStatuses",
     )
-    def node_status_view(_actor: Actor = authenticated_actor) -> Mapping[str, object]:
-        return fleet()
+    def node_status_view(_actor: Actor = authenticated_actor) -> FleetStatusResponse:
+        return fleet_response(fleet())
 
     @app.get(
         "/api/v1/endpoints/{alias}",
@@ -491,7 +498,12 @@ def create_app(
         if admin is None or admin.reconciler is None:
             raise HTTPException(status_code=503, detail="reconciliation unavailable")
         try:
-            return plan_response(admin.reconciler.plan(commit, profile_id))
+            planned = admin.reconciler.plan(commit, profile_id)
+            evidence = fleet_response(fleet())
+            return plan_response(
+                planned,
+                fleet_evidence_digest=evidence.evidence_digest,
+            )
         except IneligibleCommit:
             raise HTTPException(
                 status_code=409, detail="commit is not eligible"
@@ -545,6 +557,11 @@ def create_app(
         require_mutation_role(authenticated, "/api/v1/reconciliations")
         if admin is None or admin.reconciler is None:
             raise HTTPException(status_code=503, detail="reconciliation unavailable")
+        current_evidence = fleet_response(fleet()).evidence_digest
+        if current_evidence != body.fleet_evidence_digest:
+            raise HTTPException(
+                status_code=409, detail="fleet acceptance evidence is stale"
+            )
         try:
             result = dict(
                 admin.reconciler.enqueue(
@@ -643,11 +660,37 @@ def create_app(
     @app.get(
         "/api/v1/jobs",
         response_model=JobsResponse,
-        responses=bounded_error_responses(401),
+        responses=bounded_error_responses(401, 422),
         operation_id="listJobs",
     )
-    def jobs_view(_actor: Actor = authenticated_actor) -> dict[str, object]:
-        return {"jobs": [{"id": str(job.id), "state": str(job.state), "kind": str(job.kind)} for job in jobs.list()]}
+    def jobs_view(
+        cursor: str | None = Query(default=None, max_length=512),
+        limit: int = Query(default=20, ge=1, le=100),
+        job_status: str | None = Query(
+            default=None, alias="status", pattern=r"^[a-z][a-z0-9-]{0,31}$"
+        ),
+        target: str | None = Query(
+            default=None, pattern=r"^spk_[0-9a-f]{32}$"
+        ),
+        _actor: Actor = authenticated_actor,
+    ) -> dict[str, object]:
+        try:
+            page, next_cursor, total = jobs.list_page(
+                limit=limit,
+                cursor=cursor,
+                status=job_status,
+                target=target,
+            )
+        except ValueError:
+            raise HTTPException(status_code=422, detail="job cursor is invalid") from None
+        return {
+            "jobs": [
+                {"id": str(job.id), "state": str(job.state), "kind": str(job.kind)}
+                for job in page
+            ],
+            "next_cursor": next_cursor,
+            "total": total,
+        }
 
     @app.get("/api/v1/audit")
     def audit_view(_actor: Actor = authenticated_actor) -> dict[str, object]:
@@ -659,16 +702,34 @@ def create_app(
     @app.get(
         "/api/v1/jobs/{job_id}",
         response_model=JobDetailResponse,
-        responses=bounded_error_responses(401, 404),
+        responses=bounded_error_responses(401, 404, 422),
         operation_id="getJob",
     )
-    def job_view(job_id: str, _actor: Actor = authenticated_actor) -> JobDetailResponse:
+    def job_view(
+        job_id: str,
+        operation_cursor: str | None = Query(default=None, max_length=512),
+        target_cursor: str | None = Query(default=None, max_length=512),
+        limit: int = Query(default=20, ge=1, le=100),
+        _actor: Actor = authenticated_actor,
+    ) -> JobDetailResponse:
         try:
             job = jobs.get(job_id)
         except KeyError:
             raise HTTPException(status_code=404, detail="job not found") from None
-        projected = () if operations is None else operations.job_operations(job_id)
-        return job_response(job, projected)
+        try:
+            projected = (
+                OperationPage((), None, JobProgress(completed=0, failed=0, running=0, total=0))
+                if operations is None
+                else operations.job_operations(job_id, operation_cursor, limit)
+            )
+            return job_response(
+                job,
+                projected,
+                target_cursor=decode_offset(target_cursor),
+                limit=limit,
+            )
+        except ValueError:
+            raise HTTPException(status_code=422, detail="job cursor is invalid") from None
 
     @app.post(
         "/api/v1/jobs/{job_id}/resume",

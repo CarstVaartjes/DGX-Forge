@@ -107,7 +107,7 @@ def test_reconciliation_plan_requires_an_explicit_repository_profile() -> None:
         jobs=Jobs(),
         tokens=codec,
         audits=MemoryAuditStore(),
-        fleet=dict,
+        fleet=lambda: {"commit": "a" * 40, "nodes": []},
         admin=AdminServices(Repository(), Proposals(), None, Reconciler()),
         now=lambda: 10,
     )

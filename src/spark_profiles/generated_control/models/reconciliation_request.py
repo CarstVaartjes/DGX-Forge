@@ -20,9 +20,11 @@ T = TypeVar("T", bound="ReconciliationRequest")
 class ReconciliationRequest:
     """
         Attributes:
+            fleet_evidence_digest (str):
             plan_digest (str):
      """
 
+    fleet_evidence_digest: str
     plan_digest: str
 
 
@@ -30,12 +32,15 @@ class ReconciliationRequest:
 
 
     def to_dict(self) -> dict[str, Any]:
+        fleet_evidence_digest = self.fleet_evidence_digest
+
         plan_digest = self.plan_digest
 
 
         field_dict: dict[str, Any] = {}
 
         field_dict.update({
+            "fleet_evidence_digest": fleet_evidence_digest,
             "plan_digest": plan_digest,
         })
 
@@ -46,9 +51,12 @@ class ReconciliationRequest:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
+        fleet_evidence_digest = d.pop("fleet_evidence_digest")
+
         plan_digest = d.pop("plan_digest")
 
         reconciliation_request = cls(
+            fleet_evidence_digest=fleet_evidence_digest,
             plan_digest=plan_digest,
         )
 

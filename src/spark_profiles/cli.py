@@ -49,7 +49,9 @@ class _RoutineControlClient(Protocol):
 
     def plan_profile(self, profile: str) -> _GeneratedModel: ...
 
-    def apply_plan(self, digest: str, *, request_id: str) -> _GeneratedModel: ...
+    def apply_plan(
+        self, digest: str, fleet_evidence_digest: str, *, request_id: str
+    ) -> _GeneratedModel: ...
 
     def wait_job(
         self, job_id: str, timeout: float, interval: float
@@ -246,7 +248,11 @@ def _routine(
     plan_payload = _model_payload(plan)
     if args.command == "validate" or not args.apply or getattr(args, "dry_run", False):
         return plan_payload
-    accepted = client.apply_plan(plan.digest, request_id=request_id_factory())  # type: ignore[attr-defined]
+    accepted = client.apply_plan(
+        plan.digest,
+        plan.fleet_evidence_digest,  # type: ignore[attr-defined]
+        request_id=request_id_factory(),
+    )
     if not args.wait:
         return _model_payload(accepted)
     result = client.wait_job(

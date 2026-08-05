@@ -20,12 +20,13 @@ export type ProposalPreview = {base_commit: string; digest: string; patch: strin
 export type AuditSummary = {request_id: string; actor: string; action: string; base_commit?: string; targets: string[]};
 export interface ControlApi {
   fleet(): Promise<FleetResponse>; documents(kind: "models" | "profiles"): Promise<DocumentList>;
-  jobs(): Promise<JobsResponse>; job(jobId: string): Promise<JobDetail>;
+  jobs(cursor?: string): Promise<JobsResponse>;
+  job(jobId: string, operationCursor?: string, targetCursor?: string): Promise<JobDetail>;
   resumeJob(jobId: string): Promise<JobResumeResponse>;
   audit(): Promise<{events: AuditSummary[]}>;
   preview(input: ProposalInput): Promise<ProposalPreview>; submit(digest: string): Promise<Record<string, unknown>>;
   planProfile(profileId: string): Promise<ReconciliationPlan>;
-  applyReconciliation(digest: string): Promise<ReconciliationAccepted>;
+  applyReconciliation(digest: string, fleetEvidenceDigest: string): Promise<ReconciliationAccepted>;
   agents(): Promise<AgentsResponse>;
   enrollments(): Promise<EnrollmentListResponse>;
   createEnrollmentGrant(nodeId: string, ttlSeconds: number, signal?: AbortSignal): Promise<EnrollmentGrantResponse>;

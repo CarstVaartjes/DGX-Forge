@@ -113,19 +113,24 @@ export class ApiClient implements ControlApi {
     }));
   }
 
-  async applyReconciliation(digest: string): Promise<ReconciliationAccepted> {
+  async applyReconciliation(digest: string, fleetEvidenceDigest: string): Promise<ReconciliationAccepted> {
     return resultData(await this.generated.POST("/api/v1/reconciliations", {
-      body: {plan_digest: digest},
+      body: {plan_digest: digest, fleet_evidence_digest: fleetEvidenceDigest},
     }));
   }
 
-  async jobs(): Promise<JobsResponse> {
-    return resultData(await this.generated.GET("/api/v1/jobs"));
+  async jobs(cursor?: string): Promise<JobsResponse> {
+    return resultData(await this.generated.GET("/api/v1/jobs", {
+      params: {query: {cursor, limit: 20}},
+    }));
   }
 
-  async job(jobId: string): Promise<JobDetail> {
+  async job(jobId: string, operationCursor?: string, targetCursor?: string): Promise<JobDetail> {
     return resultData(await this.generated.GET("/api/v1/jobs/{job_id}", {
-      params: {path: {job_id: jobId}},
+      params: {
+        path: {job_id: jobId},
+        query: {limit: 20, operation_cursor: operationCursor, target_cursor: targetCursor},
+      },
     }));
   }
 
