@@ -7,7 +7,7 @@ import re
 import threading
 import uuid
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -39,7 +39,9 @@ from .orchestration import (
 from .route_runtime import (
     AcceptedEndpointEvidence,
     ActivationMarker,
+    PublishedRoute,
     RouteBundleRequest,
+    build_published_route,
     endpoint_evidence_digest,
 )
 
@@ -80,6 +82,69 @@ _ACTIVE_CANCELLATION_STATES = frozenset(
         "compensating",
     }
 )
+
+
+@dataclass(frozen=True)
+class ReconciliationAuthorityInput:
+    """Immutable identity and route-policy input safe to attest before locking."""
+
+    reconciliation_id: str
+    base_commit: str
+    plan_digest: str
+    routes: tuple[PublishedRoute, ...]
+
+
+def _published_authority_routes(
+    session: Session,
+    document: Mapping[str, object],
+    endpoint_resolver: Callable[[Session, str], tuple[str, datetime]],
+) -> tuple[PublishedRoute, ...]:
+    routes = document.get("routes")
+    if not isinstance(routes, Mapping):
+        raise TypeError("reconciliation routes are invalid")
+    parsed_routes: list[tuple[str, Mapping[str, object], str]] = []
+    for alias, raw in sorted(routes.items()):
+        if not isinstance(alias, str):
+            raise TypeError("reconciliation route alias is invalid")
+        if not isinstance(raw, Mapping):
+            raise TypeError("reconciliation route is invalid")
+        node_id = raw.get("entrypoint_node_id")
+        if not isinstance(node_id, str):
+            raise TypeError("reconciliation route entrypoint is invalid")
+        parsed_routes.append((alias, raw, node_id))
+    addresses = {
+        node_id: endpoint_resolver(session, node_id)[0]
+        for node_id in sorted({item[2] for item in parsed_routes})
+    }
+    published: list[PublishedRoute] = []
+    for alias, raw, node_id in parsed_routes:
+        address = addresses[node_id]
+        published.append(build_published_route(alias, raw, address))
+    return tuple(published)
+
+
+def load_reconciliation_authority_input(
+    session: Session,
+    reconciliation_id: str,
+    endpoint_resolver: Callable[[Session, str], tuple[str, datetime]],
+) -> ReconciliationAuthorityInput:
+    """Load one snapshot in a DB transaction that must close before HTTP."""
+
+    reconciliation = session.get(Reconciliation, reconciliation_id)
+    if reconciliation is None:
+        raise ValueError("reconciliation does not exist")
+    _graph, document = AgentReconciliationService._validated_plan(reconciliation)
+    published = _published_authority_routes(
+        session,
+        document,
+        endpoint_resolver,
+    )
+    return ReconciliationAuthorityInput(
+        reconciliation_id=reconciliation.id,
+        base_commit=reconciliation.base_commit,
+        plan_digest=AgentReconciliationService._plan_digest(reconciliation),
+        routes=published,
+    )
 
 
 def _digest(document: object) -> str:
@@ -232,11 +297,30 @@ class AgentReconciliationService:
         publication_lease_seconds: int = 60,
         commit_eligible: Callable[[str], bool] | None = None,
         current_commit: Callable[[], str] | None = None,
+        authority_prefetch: Callable[
+            [str, str, str, tuple[PublishedRoute, ...]], None
+        ]
+        | None = None,
+        authority_check: Callable[
+            [str, str, str, tuple[PublishedRoute, ...]], bool
+        ]
+        | None = None,
+        authority_clear: Callable[[], None] | None = None,
     ) -> None:
         if not 1 <= publication_lease_seconds <= 300:
             raise ValueError("reconciliation publication lease is invalid")
         if (commit_eligible is None) != (current_commit is None):
             raise ValueError("reconciliation commit authority is incomplete")
+        if any(
+            callback is not None
+            for callback in (authority_prefetch, authority_check, authority_clear)
+        ) and any(
+            callback is None
+            for callback in (authority_prefetch, authority_check, authority_clear)
+        ):
+            raise ValueError("reconciliation prefetched authority is incomplete")
+        if authority_check is not None and commit_eligible is not None:
+            raise ValueError("reconciliation authority modes are ambiguous")
         self._sessions = sessions
         self._agent_jobs = agent_jobs
         self._publisher = publisher
@@ -245,6 +329,9 @@ class AgentReconciliationService:
         self._publication_lease_seconds = publication_lease_seconds
         self._commit_eligible = commit_eligible
         self._current_commit = current_commit
+        self._authority_prefetch = authority_prefetch
+        self._authority_check = authority_check
+        self._authority_clear = authority_clear
         # SQLite ignores row locks; PostgreSQL remains the production arbiter.
         self._tick_lock = threading.RLock()
 
@@ -274,23 +361,55 @@ class AgentReconciliationService:
 
         with self._tick_lock:
             if reconciliation_id is not None:
+                self._prepare_authority(reconciliation_id)
                 return self._tick_candidate(
                     reconciliation_id,
                     automatically_selected=False,
                 )
             completed_owner = self._completed_owner_id()
-            if completed_owner is not None and self._tick_candidate(
-                completed_owner,
-                automatically_selected=True,
-            ):
-                return True
+            if completed_owner is not None:
+                self._prepare_authority(completed_owner)
+                if self._tick_candidate(
+                    completed_owner,
+                    automatically_selected=True,
+                ):
+                    return True
             candidate = self._candidate_id()
             if candidate is None:
                 return False
+            self._prepare_authority(candidate)
             return self._tick_candidate(
                 candidate,
                 automatically_selected=True,
             )
+
+    def _prepare_authority(self, reconciliation_id: str) -> None:
+        """Perform the only remote authority call before any locked context."""
+
+        if (
+            self._authority_prefetch is None
+            or self._authority_check is None
+            or self._authority_clear is None
+        ):
+            return
+        self._authority_clear()
+        try:
+            with self._sessions() as session:
+                snapshot = load_reconciliation_authority_input(
+                    session,
+                    reconciliation_id,
+                    self._endpoint_resolver,
+                )
+            self._authority_prefetch(
+                snapshot.reconciliation_id,
+                snapshot.base_commit,
+                snapshot.plan_digest,
+                snapshot.routes,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            # The locked tick must still run so an existing publication is
+            # withdrawn through its durable handoff path.
+            return
 
     def _tick_candidate(
         self,
@@ -1226,15 +1345,31 @@ class AgentReconciliationService:
         graph: OperationGraph,
         document: Mapping[str, object],
     ) -> str | None:
-        if self._commit_eligible is None or self._current_commit is None:
+        if self._authority_check is not None:
+            try:
+                if not self._authority_check(
+                    reconciliation.id,
+                    reconciliation.base_commit,
+                    self._plan_digest(reconciliation),
+                    _published_authority_routes(
+                        session,
+                        document,
+                        self._endpoint_resolver,
+                    ),
+                ):
+                    return "reconciliation commit is no longer eligible"
+            except (OSError, RuntimeError, TypeError, ValueError):
+                return "reconciliation commit eligibility is unavailable"
+        elif self._commit_eligible is None or self._current_commit is None:
             return None
-        try:
-            if not self._commit_eligible(reconciliation.base_commit):
-                return "reconciliation commit is no longer eligible"
-            if self._current_commit() != reconciliation.base_commit:
-                return "reconciliation commit is no longer current"
-        except (OSError, RuntimeError, TypeError, ValueError):
-            return "reconciliation commit eligibility is unavailable"
+        else:
+            try:
+                if not self._commit_eligible(reconciliation.base_commit):
+                    return "reconciliation commit is no longer eligible"
+                if self._current_commit() != reconciliation.base_commit:
+                    return "reconciliation commit is no longer current"
+            except (OSError, RuntimeError, TypeError, ValueError):
+                return "reconciliation commit eligibility is unavailable"
         protocol = document.get("agent_protocol_range")
         if (
             not isinstance(protocol, list)

@@ -123,6 +123,87 @@ class PublishedRoute:
     tokens_per_minute: int
 
 
+def build_published_route(
+    alias: object,
+    raw: object,
+    address: object,
+) -> PublishedRoute:
+    """Build the sole canonical repository-policy view of a resolved route."""
+
+    if (
+        not isinstance(alias, str)
+        or _IDENTIFIER.fullmatch(alias) is None
+        or not isinstance(raw, Mapping)
+        or set(raw) != _ROUTE_FIELDS
+    ):
+        raise RouteRuntimeError("route fields do not match the resolved plan")
+    workload_id = raw.get("workload_id")
+    scheme = raw.get("scheme")
+    port = raw.get("port")
+    path = raw.get("path")
+    quota = raw.get("quota")
+    if (
+        not isinstance(workload_id, str)
+        or _IDENTIFIER.fullmatch(workload_id) is None
+        or scheme not in {"http", "https"}
+        or isinstance(port, bool)
+        or not isinstance(port, int)
+        or not 1 <= port <= 65535
+        or not isinstance(path, str)
+        or not path.startswith("/")
+        or "?" in path
+        or "#" in path
+        or "//" in path
+        or "/../" in f"{path}/"
+        or not isinstance(quota, Mapping)
+        or set(quota) != _QUOTA_FIELDS
+    ):
+        raise RouteRuntimeError("route policy input is invalid")
+    rpm = quota.get("requests_per_minute")
+    tpm = quota.get("tokens_per_minute")
+    if (
+        isinstance(rpm, bool)
+        or not isinstance(rpm, int)
+        or not 1 <= rpm <= 100_000
+        or isinstance(tpm, bool)
+        or not isinstance(tpm, int)
+        or not 1 <= tpm <= 100_000_000
+    ):
+        raise RouteRuntimeError("route policy quota is invalid")
+    if not isinstance(address, str):
+        raise RouteRuntimeError("route policy address is invalid")
+    try:
+        parsed_address = ipaddress.ip_address(address)
+    except ValueError as error:
+        raise RouteRuntimeError("route policy address is invalid") from error
+    if parsed_address.compressed != address:
+        raise RouteRuntimeError("route policy address is not canonical")
+    host = (
+        f"[{address}]"
+        if isinstance(parsed_address, ipaddress.IPv6Address)
+        else address
+    )
+    return PublishedRoute(
+        alias=alias,
+        workload_id=workload_id,
+        api_base=f"{scheme}://{host}:{port}{path.rstrip('/')}",
+        requests_per_minute=rpm,
+        tokens_per_minute=tpm,
+    )
+
+
+def published_routes_digest(routes: tuple[PublishedRoute, ...]) -> str:
+    """Hash the exact canonical route-policy input."""
+
+    return hashlib.sha256(
+        json.dumps(
+            [asdict(route) for route in routes],
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    ).hexdigest()
+
+
 @dataclass(frozen=True)
 class RouteBundleRequest:
     reconciliation_id: str
@@ -491,12 +572,8 @@ class AtomicRouteBundlePublisher:
                 or _canonical_sha256(dict(quota)) != quota_digest
             ):
                 raise RouteRuntimeError("route quota or quota digest is invalid")
-            host = (
-                f"[{address}]"
-                if isinstance(ipaddress.ip_address(address), ipaddress.IPv6Address)
-                else address
-            )
-            base = f"{scheme}://{host}:{port}{path.rstrip('/')}"
+            published_route = build_published_route(alias, raw, address)
+            base = published_route.api_base
             exact_endpoints.add(node_id)
             rendered_routes[alias] = {
                 "address": address,
@@ -521,15 +598,7 @@ class AtomicRouteBundlePublisher:
                     },
                 }
             )
-            published_routes.append(
-                PublishedRoute(
-                    alias=alias,
-                    workload_id=workload_id,
-                    api_base=base,
-                    requests_per_minute=rpm,
-                    tokens_per_minute=tpm,
-                )
-            )
+            published_routes.append(published_route)
         if set(request.endpoints) != exact_endpoints:
             raise RouteRuntimeError(
                 "endpoint evidence must exactly cover route entrypoints"

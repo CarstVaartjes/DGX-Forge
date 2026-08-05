@@ -146,8 +146,6 @@ if __name__ == "__main__":
         settings.internal_api_token,
         timeout_seconds=settings.internal_api_timeout_seconds,
     )
-    commit_eligible = authority.eligible
-    current_commit = authority.current_commit
     agent_jobs = AgentJobService(
         sessions,
         clock=clock,
@@ -168,8 +166,9 @@ if __name__ == "__main__":
         ),
         endpoint_resolver=endpoint,
         clock=clock,
-        commit_eligible=commit_eligible,
-        current_commit=current_commit,
+        authority_prefetch=authority.prefetch,
+        authority_check=authority.authorized,
+        authority_clear=authority.clear,
     )
     worker = Worker(
         jobs,

@@ -482,6 +482,105 @@ def _execution_fixture(
     return service, sessions, queue, publisher, reconciliation_id, job_id
 
 
+def test_prefetched_authority_is_fetched_before_locked_identity_check(tmp_path) -> None:
+    _service, sessions, queue, publisher, reconciliation_id, _job_id = (
+        _execution_fixture(tmp_path)
+    )
+    now = datetime(2026, 8, 5, tzinfo=UTC)
+    events: list[str] = []
+    cached: dict[str, object] = {}
+
+    def clear() -> None:
+        events.append("clear")
+        cached.clear()
+
+    def prefetch(reconciliation, commit, plan_digest, routes) -> None:
+        events.append("prefetch")
+        cached.update(
+            reconciliation=reconciliation,
+            commit=commit,
+            plan_digest=plan_digest,
+            routes=routes,
+        )
+
+    def check(reconciliation, commit, plan_digest, routes) -> bool:
+        events.append("locked-check")
+        return cached == {
+            "reconciliation": reconciliation,
+            "commit": commit,
+            "plan_digest": plan_digest,
+            "routes": routes,
+        }
+
+    service = AgentReconciliationService(
+        sessions,
+        agent_jobs=queue,
+        publisher=publisher,
+        endpoint_resolver=lambda _session, _node: ("192.0.2.10", now),
+        clock=lambda: now,
+        authority_prefetch=prefetch,
+        authority_check=check,
+        authority_clear=clear,
+    )
+    original_locked_context = service._locked_context
+
+    def observed_locked_context(*args, **kwargs):
+        events.append("locked-context")
+        return original_locked_context(*args, **kwargs)
+
+    service._locked_context = observed_locked_context
+
+    assert service.tick(reconciliation_id) is True
+    assert events == ["clear", "prefetch", "locked-context", "locked-check"]
+
+
+def test_route_presence_drift_after_prefetch_fails_before_publication(tmp_path) -> None:
+    quota = {"requests_per_minute": 20, "tokens_per_minute": 1000}
+    route = {
+        "workload_id": "model",
+        "nodes": [NODE_A],
+        "entrypoint_node_id": NODE_A,
+        "scheme": "http",
+        "port": 8000,
+        "path": "/v1",
+        "quota": quota,
+        "quota_digest": _json_digest(quota),
+    }
+    _service, sessions, queue, publisher, reconciliation_id, job_id = (
+        _execution_fixture(tmp_path, routes={"model": route})
+    )
+    now = datetime(2026, 8, 5, tzinfo=UTC)
+    address = {"value": "192.0.2.10"}
+    cached_routes: list[object] = []
+
+    def prefetch(_reconciliation, _commit, _plan_digest, routes) -> None:
+        cached_routes[:] = routes
+        address["value"] = "192.0.2.11"
+
+    service = AgentReconciliationService(
+        sessions,
+        agent_jobs=queue,
+        publisher=publisher,
+        endpoint_resolver=lambda _session, _node: (address["value"], now),
+        clock=lambda: now,
+        authority_prefetch=prefetch,
+        authority_check=lambda _id, _commit, _digest, routes: (
+            tuple(cached_routes) == routes
+        ),
+        authority_clear=cached_routes.clear,
+    )
+
+    assert service.tick(reconciliation_id) is True
+
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "waiting-for-operator"
+        assert job is not None and job.state == "waiting-for-operator"
+    assert publisher.publications == []
+
+
 def test_withdrawal_is_durable_before_any_agent_operation(tmp_path) -> None:
     service, sessions, queue, publisher, reconciliation_id, job_id = (
         _execution_fixture(tmp_path)
@@ -1196,6 +1295,59 @@ def test_completed_owner_is_withdrawn_immediately_when_authority_is_lost(
         assert reconciliation is not None
         assert reconciliation.current_phase == "waiting-for-operator"
         assert job is not None and job.state == "waiting-for-operator"
+        assert publication is not None and publication.state == "routes-withdrawn"
+
+
+def test_failed_prefetch_still_withdraws_completed_owner(tmp_path) -> None:
+    authority = _continuous_authority()
+    original, sessions, queue, reconciliation_id, job_id = _compensation_fixture(
+        tmp_path, authority=authority
+    )
+    assert original.tick(reconciliation_id) is True
+    with sessions.begin() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        publication = session.get(RoutePublication, reconciliation_id)
+        assert reconciliation is not None and job is not None
+        assert publication is not None
+        reconciliation.current_phase = "completed"
+        reconciliation.status = "succeeded"
+        reconciliation.completion_generation = 1
+        job.state = "succeeded"
+        publication.state = "completed"
+        publication.lease_issued_at = datetime(2026, 8, 5, tzinfo=UTC)
+        publication.lease_expires_at = datetime(2026, 8, 5, 0, 5, tzinfo=UTC)
+
+    cache = {"available": True}
+
+    def clear() -> None:
+        cache["available"] = False
+
+    def unavailable(*_args) -> None:
+        raise TimeoutError("repository authority unavailable")
+
+    def check(*_args) -> bool:
+        if not cache["available"]:
+            raise RuntimeError("repository authority unavailable")
+        return True
+
+    service = AgentReconciliationService(
+        sessions,
+        agent_jobs=queue,
+        publisher=original._publisher,
+        endpoint_resolver=original._endpoint_resolver,
+        clock=lambda: datetime(2026, 8, 5, tzinfo=UTC),
+        authority_prefetch=unavailable,
+        authority_check=check,
+        authority_clear=clear,
+    )
+
+    assert service.tick() is True
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        publication = session.get(RoutePublication, reconciliation_id)
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "waiting-for-operator"
         assert publication is not None and publication.state == "routes-withdrawn"
 
 

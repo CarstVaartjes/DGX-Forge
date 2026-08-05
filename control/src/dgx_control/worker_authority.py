@@ -11,14 +11,14 @@ import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from typing import Protocol
 
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 
 from .litellm import LiteLlmDeployment, LiteLlmPublisher
-from .route_runtime import PublishedRoute
+from .route_runtime import PublishedRoute, published_routes_digest
 
 _COMMIT = re.compile(r"[0-9a-f]{40,64}\Z")
 _TOKEN = re.compile(rb"[A-Za-z0-9_-]{32,}\Z")
@@ -38,6 +38,13 @@ class DeploymentPolicy(Protocol):
     ) -> tuple[LiteLlmDeployment, ...]: ...
 
 
+class ReconciliationInput(Protocol):
+    def __call__(
+        self,
+        reconciliation_id: str,
+    ) -> tuple[str, str, tuple[PublishedRoute, ...]]: ...
+
+
 class AuthorityRoute(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -52,7 +59,11 @@ class AuthorityRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: int = Field(ge=1, le=1)
+    reconciliation_id: str = Field(
+        pattern=r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    )
     commit: str = Field(pattern=r"^[0-9a-f]{40,64}$")
+    plan_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
     nonce: str = Field(pattern=r"^[0-9a-f]{32,64}$")
     routes: list[AuthorityRoute] = Field(max_length=64)
 
@@ -65,11 +76,13 @@ class RepositoryAuthorityService:
         *,
         current_commit: Callable[[], str],
         commit_eligible: Callable[[str], bool],
+        reconciliation_input: ReconciliationInput,
         deployments: DeploymentPolicy,
         clock: Callable[[], int] = lambda: int(time.time()),
     ) -> None:
         self._current_commit = current_commit
         self._commit_eligible = commit_eligible
+        self._reconciliation_input = reconciliation_input
         self._deployments = deployments
         self._clock = clock
 
@@ -81,15 +94,24 @@ class RepositoryAuthorityService:
 
     def evaluate(
         self,
+        reconciliation_id: str,
         commit: str,
+        plan_digest: str,
         routes: tuple[PublishedRoute, ...],
     ) -> Mapping[str, object]:
         if _COMMIT.fullmatch(commit) is None:
             raise WorkerAuthorityError("repository commit is invalid")
+        expected_commit, expected_plan_digest, expected_routes = (
+            self._reconciliation_input(reconciliation_id)
+        )
+        if (
+            not secrets.compare_digest(expected_commit, commit)
+            or not secrets.compare_digest(expected_plan_digest, plan_digest)
+            or expected_routes != routes
+        ):
+            raise WorkerAuthorityError("reconciliation authority input is invalid")
         current = secrets.compare_digest(self.current(), commit)
         eligible = current and self._commit_eligible(commit) is True
-        current = current and secrets.compare_digest(self.current(), commit)
-        eligible = eligible and current
         deployments: tuple[LiteLlmDeployment, ...] = ()
         if current and eligible and routes:
             deployments = self._deployments(commit, routes)
@@ -97,18 +119,18 @@ class RepositoryAuthorityService:
                 if not isinstance(deployment, LiteLlmDeployment):
                     raise WorkerAuthorityError("repository deployment is invalid")
                 LiteLlmPublisher._validate_hermes_deployment(deployment)
+        current = current and secrets.compare_digest(self.current(), commit)
+        eligible = eligible and current
+        if not eligible:
+            deployments = ()
         return {
             "schema_version": 1,
+            "reconciliation_id": reconciliation_id,
             "commit": commit,
+            "plan_digest": plan_digest,
             "current": current,
             "eligible": eligible,
-            "routes_sha256": hashlib.sha256(
-                json.dumps(
-                    [asdict(route) for route in routes],
-                    sort_keys=True,
-                    separators=(",", ":"),
-                ).encode()
-            ).hexdigest(),
+            "routes_sha256": published_routes_digest(routes),
             "deployments": [asdict(item) for item in deployments],
         }
 
@@ -167,7 +189,12 @@ def install_worker_authority_routes(
         try:
             issued_at = service.issued_at()
             response = {
-                **service.evaluate(body.commit, routes),
+                **service.evaluate(
+                    body.reconciliation_id,
+                    body.commit,
+                    body.plan_digest,
+                    routes,
+                ),
                 "nonce": body.nonce,
                 "issued_at": issued_at,
                 "expires_at": issued_at + _MAX_ATTESTATION_SECONDS,
@@ -217,8 +244,7 @@ class HttpWorkerAuthority:
         self._timeout = timeout_seconds
         self._opener = opener
         self._clock = clock
-        self._cached_commit: str | None = None
-        self._cached_current = False
+        self._cached: _CachedAuthority | None = None
 
     def _request(
         self,
@@ -271,23 +297,24 @@ class HttpWorkerAuthority:
         return parsed
 
     def current_commit(self) -> str:
-        commit = self._cached_commit
-        current = self._cached_current
-        self._cached_commit = None
-        self._cached_current = False
-        if commit is None or not current:
+        cached = self._require_cached()
+        if not cached.current:
             raise WorkerAuthorityError("repository commit is no longer current")
-        return commit
+        return cached.commit
 
     def _evaluate(
         self,
+        reconciliation_id: str,
         commit: str,
+        plan_digest: str,
         routes: tuple[PublishedRoute, ...],
     ) -> Mapping[str, object]:
         nonce = secrets.token_hex(16)
         request_document = {
             "schema_version": 1,
+            "reconciliation_id": reconciliation_id,
             "commit": commit,
+            "plan_digest": plan_digest,
             "nonce": nonce,
             "routes": [asdict(route) for route in routes],
         }
@@ -297,7 +324,9 @@ class HttpWorkerAuthority:
         )
         if set(document) != {
             "schema_version",
+            "reconciliation_id",
             "commit",
+            "plan_digest",
             "nonce",
             "current",
             "eligible",
@@ -315,21 +344,22 @@ class HttpWorkerAuthority:
             unsigned,
             purpose="response",
         )
-        expected_routes_digest = hashlib.sha256(
-            json.dumps(
-                request_document["routes"],
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
+        expected_routes_digest = published_routes_digest(routes)
         now = self._clock()
         if (
             document["schema_version"] != 1
+            or document["reconciliation_id"] != reconciliation_id
             or document["commit"] != commit
+            or document["plan_digest"] != plan_digest
             or document["nonce"] != nonce
             or not isinstance(document["current"], bool)
             or not isinstance(document["eligible"], bool)
             or not isinstance(document["deployments"], list)
+            or (document["eligible"] is True and document["current"] is not True)
+            or (
+                (document["eligible"] is not True or document["current"] is not True)
+                and bool(document["deployments"])
+            )
             or document["routes_sha256"] != expected_routes_digest
             or not isinstance(signature, str)
             or not secrets.compare_digest(signature, expected_signature)
@@ -344,20 +374,15 @@ class HttpWorkerAuthority:
             raise WorkerAuthorityError("worker authority response is invalid")
         return document
 
-    def eligible(self, commit: str) -> bool:
-        document = self._evaluate(commit, ())
-        self._cached_commit = commit
-        self._cached_current = document["current"] is True
-        return document["eligible"] is True
+    def clear(self) -> None:
+        """Discard any prior decision before preparing a new tick."""
 
-    def deployments(
-        self,
-        commit: str,
-        routes: tuple[PublishedRoute, ...],
+        self._cached = None
+
+    @staticmethod
+    def _parse_deployments(
+        document: Mapping[str, object],
     ) -> tuple[LiteLlmDeployment, ...]:
-        document = self._evaluate(commit, routes)
-        if document["current"] is not True or document["eligible"] is not True:
-            raise WorkerAuthorityError("repository authority was lost")
         parsed: list[LiteLlmDeployment] = []
         try:
             for item in document["deployments"]:
@@ -373,8 +398,108 @@ class HttpWorkerAuthority:
                 deployment = LiteLlmDeployment(**item)
                 LiteLlmPublisher._validate_hermes_deployment(deployment)
                 parsed.append(deployment)
-        except (TypeError, ValueError) as error:
-            raise WorkerAuthorityError("worker authority deployments are invalid") from error
-        if len({item.priority for item in parsed}) != len(parsed):
+        except (KeyError, TypeError, ValueError) as error:
+            raise WorkerAuthorityError(
+                "worker authority deployments are invalid"
+            ) from error
+        if (
+            len({item.priority for item in parsed}) != len(parsed)
+            or len({item.workload for item in parsed}) != len(parsed)
+        ):
             raise WorkerAuthorityError("worker authority deployments are ambiguous")
         return tuple(parsed)
+
+    def prefetch(
+        self,
+        reconciliation_id: str,
+        commit: str,
+        plan_digest: str,
+        routes: tuple[PublishedRoute, ...],
+    ) -> None:
+        """Fetch one bounded decision before reconciliation locks are acquired."""
+
+        self.clear()
+        document = self._evaluate(
+            reconciliation_id,
+            commit,
+            plan_digest,
+            routes,
+        )
+        deployments = self._parse_deployments(document)
+        self._cached = _CachedAuthority(
+            reconciliation_id=reconciliation_id,
+            commit=commit,
+            plan_digest=plan_digest,
+            routes_sha256=str(document["routes_sha256"]),
+            current=document["current"] is True,
+            eligible=document["eligible"] is True,
+            expires_at=int(document["expires_at"]),
+            deployments=deployments,
+        )
+
+    def _require_cached(self) -> _CachedAuthority:
+        cached = self._cached
+        now = self._clock()
+        if (
+            cached is None
+            or isinstance(now, bool)
+            or not isinstance(now, int)
+            or not now < cached.expires_at
+        ):
+            self.clear()
+            raise WorkerAuthorityError("worker authority decision is unavailable")
+        return cached
+
+    def authorized(
+        self,
+        reconciliation_id: str,
+        commit: str,
+        plan_digest: str,
+        routes: tuple[PublishedRoute, ...],
+    ) -> bool:
+        cached = self._require_cached()
+        if (
+            not secrets.compare_digest(cached.reconciliation_id, reconciliation_id)
+            or not secrets.compare_digest(cached.commit, commit)
+            or not secrets.compare_digest(cached.plan_digest, plan_digest)
+            or not secrets.compare_digest(
+                cached.routes_sha256,
+                published_routes_digest(routes),
+            )
+        ):
+            raise WorkerAuthorityError("worker authority identity changed")
+        return cached.current and cached.eligible
+
+    def eligible(self, commit: str) -> bool:
+        cached = self._require_cached()
+        if not secrets.compare_digest(cached.commit, commit):
+            raise WorkerAuthorityError("worker authority commit changed")
+        return cached.eligible
+
+    def deployments(
+        self,
+        commit: str,
+        routes: tuple[PublishedRoute, ...],
+    ) -> tuple[LiteLlmDeployment, ...]:
+        cached = self._require_cached()
+        routes_sha256 = published_routes_digest(routes)
+        if (
+            not secrets.compare_digest(cached.commit, commit)
+            or not secrets.compare_digest(cached.routes_sha256, routes_sha256)
+        ):
+            raise WorkerAuthorityError("worker authority route identity changed")
+        if not cached.current or not cached.eligible:
+            raise WorkerAuthorityError("repository authority was lost")
+        return cached.deployments
+
+
+@dataclass(frozen=True)
+class _CachedAuthority:
+    reconciliation_id: str
+    commit: str
+    plan_digest: str
+    routes_sha256: str
+    current: bool
+    eligible: bool
+    expires_at: int
+    deployments: tuple[LiteLlmDeployment, ...]

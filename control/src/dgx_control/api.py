@@ -545,7 +545,10 @@ def production_app() -> FastAPI:
 
     from sqlalchemy import func, select
 
-    from .agent_reconciliation import bind_reconciliation_result_consumer
+    from .agent_reconciliation import (
+        bind_reconciliation_result_consumer,
+        load_reconciliation_authority_input,
+    )
     from .audit import SqlAuditStore
     from .code_host import RepositoryCodeHost
     from .dashboard import DashboardService
@@ -602,19 +605,39 @@ def production_app() -> FastAPI:
     operational_metrics = OperationalMetricsCollector(metrics, sessions, clock=clock)
     commit_eligible = lambda commit: git_policy.eligible(commit).ok
     current_commit = lambda: repository.head(settings.deployment_branch)
-    worker_authority = RepositoryAuthorityService(
-        current_commit=current_commit,
-        commit_eligible=commit_eligible,
-        deployments=RepositoryHermesRoutePolicy(
-            settings.repository_path
-        ).deployments,
-    )
     agent_services = build_agent_services(
         settings,
         sessions,
         clock,
         commit_eligible=commit_eligible,
         current_commit=current_commit,
+    )
+    def reconciliation_authority_input(
+        reconciliation_id: str,
+    ) -> tuple[str, str, tuple[Any, ...]]:
+        def endpoint(session, node_id: str) -> tuple[str, Any]:
+            observation = agent_services.presence.latest_in_session(
+                session,
+                node_id,
+                maximum_age_seconds=300,
+            )
+            return observation.address, observation.observed_at
+
+        with sessions() as session:
+            snapshot = load_reconciliation_authority_input(
+                session,
+                reconciliation_id,
+                endpoint,
+            )
+        return snapshot.base_commit, snapshot.plan_digest, snapshot.routes
+
+    worker_authority = RepositoryAuthorityService(
+        current_commit=current_commit,
+        commit_eligible=commit_eligible,
+        reconciliation_input=reconciliation_authority_input,
+        deployments=RepositoryHermesRoutePolicy(
+            settings.repository_path
+        ).deployments,
     )
     reconciliation_cancellations = bind_reconciliation_result_consumer(
         sessions,

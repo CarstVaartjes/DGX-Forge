@@ -167,31 +167,31 @@ git commit -m "feat: reconcile cluster through outbound agents"
 - Production worker registry contains orchestration/maintenance tasks only and emits agent operations.
 - Legacy runtime requires `DGX_LEGACY_DIRECT_TRANSPORT=explicit-test-only` and is rejected in production mode.
 
-- [ ] **Step 1: Write failing production-boundary tests**
+- [x] **Step 1: Write failing production-boundary tests**
 
 Patch `subprocess.run/Popen` and transport constructors to raise if production
 worker handles probe/reconcile. Assert operations are inserted in the database
 instead. Assert production settings reject the legacy selector and no automatic
 fallback occurs when agents are offline.
 
-- [ ] **Step 2: Run and confirm current SSH subprocess handler fails test**
+- [x] **Step 2: Run and confirm current SSH subprocess handler fails test**
 
 Run: `uv run --project control pytest control/tests/test_production_worker.py control/tests/security/test_no_routine_ssh.py -v`
 Expected: FAIL because `RuntimeHandlers` invokes repository scripts.
 
-- [ ] **Step 3: Wire agent orchestrator and isolate legacy implementation**
+- [x] **Step 3: Wire agent orchestrator and isolate legacy implementation**
 
 Move direct handlers to `legacy_runtime.py`; do not import it from production
 API/worker modules. Production `Worker` advances persisted reconciliations and
 performs housekeeping only. Agent HTTP claims execute node work. Make settings
 reject compatibility transport in `production` deployment mode.
 
-- [ ] **Step 4: Run worker, job, and security suites**
+- [x] **Step 4: Run worker, job, and security suites**
 
 Run: `uv run --project control pytest control/tests/test_production_worker.py control/tests/test_worker.py control/tests/test_jobs.py control/tests/security/test_no_routine_ssh.py -v`
 Expected: PASS.
 
-- [ ] **Step 5: Commit transport cutover**
+- [x] **Step 5: Commit transport cutover**
 
 ```bash
 git add control/src/dgx_control/worker.py control/src/dgx_control/runtime.py control/src/dgx_control/legacy_runtime.py control/src/dgx_control/settings.py control/tests/test_production_worker.py control/tests/security/test_no_routine_ssh.py

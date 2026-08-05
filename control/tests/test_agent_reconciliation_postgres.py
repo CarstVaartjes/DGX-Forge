@@ -320,6 +320,56 @@ def _clone_service(system) -> AgentReconciliationService:
     )
 
 
+def test_postgres_authority_prefetch_runs_after_snapshot_locks_are_released(
+    postgres_engine: Engine,
+    tmp_path: Path,
+) -> None:
+    system = _system(postgres_engine, tmp_path / "authority-prefetch-locks")
+    sessions, _presence, operations, original, reconciliation_id, job_id = system
+    observed = {"unlocked": False}
+
+    def prefetch(*_args) -> None:
+        with sessions.begin() as competing:
+            assert competing.scalar(
+                select(Reconciliation)
+                .where(Reconciliation.id == reconciliation_id)
+                .with_for_update(nowait=True)
+            ) is not None
+            assert competing.scalar(
+                select(Job).where(Job.id == job_id).with_for_update(nowait=True)
+            ) is not None
+            assert competing.scalar(
+                select(AgentNode)
+                .where(AgentNode.node_id == NODE_A)
+                .with_for_update(nowait=True)
+            ) is not None
+            assert competing.scalar(
+                select(AgentCertificate)
+                .where(AgentCertificate.serial == "serial-a")
+                .with_for_update(nowait=True)
+            ) is not None
+            assert competing.scalar(
+                select(AgentPresence)
+                .where(AgentPresence.node_id == NODE_A)
+                .with_for_update(nowait=True)
+            ) is not None
+        observed["unlocked"] = True
+
+    reconciliations = AgentReconciliationService(
+        sessions,
+        agent_jobs=operations,
+        publisher=original._publisher,
+        endpoint_resolver=original._endpoint_resolver,
+        clock=lambda: NOW,
+        authority_prefetch=prefetch,
+        authority_check=lambda *_args: True,
+        authority_clear=lambda: None,
+    )
+
+    assert reconciliations.tick(reconciliation_id) is True
+    assert observed["unlocked"] is True
+
+
 def _insert_successor(
     sessions,
     predecessor_id: str,
