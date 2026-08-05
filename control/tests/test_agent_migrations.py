@@ -63,6 +63,35 @@ def test_current_model_metadata_matches_head_schema(tmp_path: Path) -> None:
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []
 
 
+def test_agent_runtime_identity_migration_is_reversible(tmp_path: Path) -> None:
+    database = f"sqlite:///{tmp_path / 'runtime-identity.sqlite'}"
+    engine = create_engine(database)
+    upgrade_to("0009_reconciliation_execution", database)
+    before = {
+        column["name"]
+        for column in inspect(engine).get_columns("agent_nodes")
+    }
+
+    upgrade_to("0010_agent_runtime_identity", database)
+    after = {
+        column["name"]
+        for column in inspect(engine).get_columns("agent_nodes")
+    }
+    assert after == before | {
+        "active_slot",
+        "agent_sha256",
+        "build_digest",
+        "platform_version",
+        "supervisor_generation",
+    }
+
+    downgrade_to("0009_reconciliation_execution", database)
+    assert {
+        column["name"]
+        for column in inspect(engine).get_columns("agent_nodes")
+    } == before
+
+
 def test_agent_models_capture_fenced_operation_state() -> None:
     from dgx_control.models import (
         AgentCertificate,

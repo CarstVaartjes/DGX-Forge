@@ -24,6 +24,7 @@ from dgx_agent.client import (
     AgentClient,
     AgentPermanentError,
     AgentProtocolResponseError,
+    AgentRuntimeIdentity,
     AgentTransportError,
     CredentialStore,
     CredentialStoreError,
@@ -391,6 +392,36 @@ def test_claim_uses_fixed_mtls_post_and_parses_canonical_protocol_claim(
             "wait_seconds": 1,
         }
     )
+
+
+def test_claim_advertises_verified_running_release_identity(tmp_path: Path) -> None:
+    files = tls_files(tmp_path)
+    identity = AgentRuntimeIdentity(
+        platform_version="1.2.3",
+        build_digest="sha256:" + "b" * 64,
+        active_slot="B",
+        agent_sha256="c" * 64,
+        supervisor_generation=7,
+    )
+    with https_server(files) as server:
+        server.responses.append(
+            ResponseSpec(204, b"", "application/json")
+        )
+        client = AgentClient(
+            f"https://localhost:{server.server_port}",
+            NODE_ID,
+            StaticCredentialProvider(
+                files.ca, files.client_certificate, files.client_key
+            ),
+            connect_timeout=1,
+            read_timeout=1,
+            runtime_identity=identity,
+        )
+
+        assert client.claim() is None
+
+    document = json.loads(server.requests[0].body)
+    assert document["runtime_identity"] == identity.wire()
 
 
 @pytest.mark.parametrize(

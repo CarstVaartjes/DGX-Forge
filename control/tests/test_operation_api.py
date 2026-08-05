@@ -657,9 +657,14 @@ def test_durable_projection_reads_only_current_activation_and_hides_agent_secret
             "certificate_expires_at": (now + timedelta(days=30)).isoformat(),
             "last_seen_age_seconds": 0.0,
             "last_seen_at": now.isoformat(),
-            "node_id": NODE_ID,
-            "protocol_version": 1,
-            "stale": False,
+                "node_id": NODE_ID,
+                "protocol_version": 1,
+                "platform_version": None,
+                "build_digest": None,
+                "active_slot": None,
+                "agent_sha256": None,
+                "supervisor_generation": None,
+                "stale": False,
             "state": "active",
         }
     ]

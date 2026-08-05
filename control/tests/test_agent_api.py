@@ -412,6 +412,13 @@ def test_authenticated_claim_records_protocol_contact_for_metrics(agent_system) 
             "lease_seconds": 30,
             "node_id": NODE_A,
             "protocol_version": 1,
+            "runtime_identity": {
+                "active_slot": "B",
+                "agent_sha256": "c" * 64,
+                "build_digest": "sha256:" + "b" * 64,
+                "platform_version": "1.2.3",
+                "supervisor_generation": 7,
+            },
             "wait_seconds": 0,
         },
     )
@@ -423,6 +430,11 @@ def test_authenticated_claim_records_protocol_contact_for_metrics(agent_system) 
         assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
         assert node.protocol_version == 1
         assert node.capabilities == CAPABILITIES
+        assert node.platform_version == "1.2.3"
+        assert node.build_digest == "sha256:" + "b" * 64
+        assert node.active_slot == "B"
+        assert node.agent_sha256 == "c" * 64
+        assert node.supervisor_generation == 7
     metrics = MetricsRegistry()
     OperationalMetricsCollector(metrics, services.sessions, clock=clock).refresh()
     rendered = metrics.render()

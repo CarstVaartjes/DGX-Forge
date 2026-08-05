@@ -48,6 +48,9 @@ _DNS_HOST = re.compile(
     r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)"
     r"(?:\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?))*\Z"
 )
+_SEMVER = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
+_PREFIXED_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 
 
 class AgentClientError(RuntimeError):
@@ -82,6 +85,50 @@ class CredentialSnapshot:
 
 class CredentialProvider(Protocol):
     def snapshot(self) -> AbstractContextManager[CredentialSnapshot]: ...
+
+
+@dataclass(frozen=True)
+class AgentRuntimeIdentity:
+    platform_version: str
+    build_digest: str
+    active_slot: str
+    agent_sha256: str
+    supervisor_generation: int
+
+    def __post_init__(self) -> None:
+        if (
+            _SEMVER.fullmatch(self.platform_version) is None
+            or _PREFIXED_DIGEST.fullmatch(self.build_digest) is None
+            or self.active_slot not in {"A", "B"}
+            or _DIGEST.fullmatch(self.agent_sha256) is None
+            or isinstance(self.supervisor_generation, bool)
+            or not isinstance(self.supervisor_generation, int)
+            or not 1 <= self.supervisor_generation <= 999_999_999
+        ):
+            raise ValueError("agent runtime identity is invalid")
+
+    @classmethod
+    def from_environment(cls) -> AgentRuntimeIdentity:
+        try:
+            generation = int(os.environ["DGX_AGENT_SUPERVISOR_GENERATION"])
+            return cls(
+                platform_version=os.environ["DGX_AGENT_PLATFORM_VERSION"],
+                build_digest=os.environ["DGX_AGENT_BUILD_DIGEST"],
+                active_slot=os.environ["DGX_AGENT_SUPERVISOR_SLOT"],
+                agent_sha256=os.environ["DGX_AGENT_SUPERVISOR_SHA256"],
+                supervisor_generation=generation,
+            )
+        except (KeyError, ValueError) as error:
+            raise ValueError("verified agent runtime identity is unavailable") from error
+
+    def wire(self) -> dict[str, object]:
+        return {
+            "active_slot": self.active_slot,
+            "agent_sha256": self.agent_sha256,
+            "build_digest": self.build_digest,
+            "platform_version": self.platform_version,
+            "supervisor_generation": self.supervisor_generation,
+        }
 
 
 @dataclass(frozen=True)
@@ -1190,6 +1237,7 @@ class AgentClient:
         long_poll_seconds: int = 30,
         lease_seconds: int = 60,
         max_body_bytes: int = MAX_BODY_BYTES,
+        runtime_identity: AgentRuntimeIdentity | None = None,
     ) -> None:
         self._runtime_origin = _origin(runtime_origin)
         if (
@@ -1216,18 +1264,26 @@ class AgentClient:
         self._long_poll_seconds = long_poll_seconds
         self._lease_seconds = lease_seconds
         self._max_body_bytes = max_body_bytes
+        if runtime_identity is not None and not isinstance(
+            runtime_identity, AgentRuntimeIdentity
+        ):
+            raise ValueError("agent runtime identity is invalid")
+        self._runtime_identity = runtime_identity
 
     def claim(self) -> AgentClaim | None:
+        body: dict[str, object] = {
+            "capabilities": list(_CAPABILITIES),
+            "lease_seconds": self._lease_seconds,
+            "node_id": self._node_id,
+            "protocol_version": _PROTOCOL_VERSION,
+            "wait_seconds": self._long_poll_seconds,
+        }
+        if self._runtime_identity is not None:
+            body["runtime_identity"] = self._runtime_identity.wire()
         response = self._post(
             self._runtime_origin,
             "/agent/v1/claim",
-            {
-                "capabilities": list(_CAPABILITIES),
-                "lease_seconds": self._lease_seconds,
-                "node_id": self._node_id,
-                "protocol_version": _PROTOCOL_VERSION,
-                "wait_seconds": self._long_poll_seconds,
-            },
+            body,
             use_client_identity=True,
             response_timeout=self._read_timeout + self._long_poll_seconds,
         )

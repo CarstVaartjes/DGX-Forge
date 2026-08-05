@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import threading
 import time
 import uuid
@@ -236,6 +237,7 @@ class AgentJobService:
         wait_seconds: float = 0,
         protocol_version: int | None = None,
         capabilities: Sequence[str] | None = None,
+        runtime_identity: Mapping[str, object] | None = None,
         *,
         source: AgentSource | None = None,
     ) -> AgentClaim | None:
@@ -257,6 +259,7 @@ class AgentJobService:
         ):
             raise ValueError("node, certificate, and positive lease are required")
         advertised = self._capabilities(capabilities)
+        running = self._runtime_identity(runtime_identity)
         deadline = time.monotonic() + wait_seconds
         with self._available:
             while True:
@@ -266,6 +269,7 @@ class AgentJobService:
                     lease_seconds,
                     protocol_version,
                     advertised,
+                    running,
                     source,
                 )
                 if claim is not None:
@@ -282,6 +286,7 @@ class AgentJobService:
         lease_seconds: int,
         protocol_version: int | None,
         capabilities: tuple[str, ...] | None,
+        runtime_identity: dict[str, object] | None,
         source: AgentSource | None,
     ) -> AgentClaim | None:
         with self._claim_lock, self._sessions.begin() as session:
@@ -306,7 +311,9 @@ class AgentJobService:
                 return None
             node, certificate = identity
             self._consume_contact(session, source, node, certificate)
-            self._record_contact(node, now, protocol_version, capabilities)
+            self._record_contact(
+                node, now, protocol_version, capabilities, runtime_identity
+            )
             expired_attempt = select(AgentOperationAttempt.id).where(
                 AgentOperationAttempt.operation_id == StoredOperation.id,
                 AgentOperationAttempt.attempt == StoredOperation.current_attempt,
@@ -749,7 +756,7 @@ class AgentJobService:
             or _aware(attempt.lease_deadline) <= _aware(now)
         ):
             raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
-        self._record_contact(node, now, None, None)
+        self._record_contact(node, now, None, None, None)
         return operation, attempt
 
     @staticmethod
@@ -830,6 +837,7 @@ class AgentJobService:
         now: datetime,
         protocol_version: int | None,
         capabilities: tuple[str, ...] | None,
+        runtime_identity: dict[str, object] | None,
     ) -> None:
         current = None if node.last_seen_at is None else _aware(node.last_seen_at)
         observed = _aware(now)
@@ -839,6 +847,51 @@ class AgentJobService:
             node.protocol_version = protocol_version
         if capabilities is not None:
             node.capabilities = list(capabilities)
+        if runtime_identity is not None:
+            node.platform_version = str(runtime_identity["platform_version"])
+            node.build_digest = str(runtime_identity["build_digest"])
+            node.active_slot = str(runtime_identity["active_slot"])
+            node.agent_sha256 = str(runtime_identity["agent_sha256"])
+            node.supervisor_generation = int(
+                runtime_identity["supervisor_generation"]
+            )
+
+    @staticmethod
+    def _runtime_identity(
+        value: Mapping[str, object] | None,
+    ) -> dict[str, object] | None:
+        if value is None:
+            return None
+        if not isinstance(value, Mapping):
+            raise TypeError("agent runtime identity is invalid")
+        document = dict(value)
+        if (
+            set(document)
+            != {
+                "active_slot",
+                "agent_sha256",
+                "build_digest",
+                "platform_version",
+                "supervisor_generation",
+            }
+            or document["active_slot"] not in {"A", "B"}
+            or not isinstance(document["agent_sha256"], str)
+            or re.fullmatch(r"[0-9a-f]{64}", document["agent_sha256"]) is None
+            or not isinstance(document["build_digest"], str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", document["build_digest"])
+            is None
+            or not isinstance(document["platform_version"], str)
+            or re.fullmatch(
+                r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",
+                document["platform_version"],
+            )
+            is None
+            or isinstance(document["supervisor_generation"], bool)
+            or not isinstance(document["supervisor_generation"], int)
+            or not 1 <= document["supervisor_generation"] <= 999_999_999
+        ):
+            raise ValueError("agent runtime identity is invalid")
+        return document
 
     def _consume_contact(
         self,

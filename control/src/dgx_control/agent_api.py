@@ -188,12 +188,24 @@ class EnrollmentListResponse(BaseModel):
     next_cursor: str | None = Field(default=None, max_length=128)
 
 
+class AgentRuntimeIdentityRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    platform_version: str = Field(
+        pattern=r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
+    )
+    build_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    active_slot: str = Field(pattern=r"^[AB]$")
+    agent_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    supervisor_generation: int = Field(ge=1, le=999_999_999, strict=True)
+
+
 class ClaimRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     lease_seconds: int = Field(default=30, ge=1, le=300)
     node_id: str | None = Field(default=None, pattern=r"^spk_[0-9a-f]{32}$")
     protocol_version: int = Field(default=1, ge=1, le=2_147_483_647, strict=True)
     capabilities: list[str] | None = Field(default=None, max_length=16)
+    runtime_identity: AgentRuntimeIdentityRequest | None = None
     wait_seconds: int = Field(default=0, ge=0, le=60)
 
 
@@ -844,6 +856,9 @@ def install_agent_routes(
                 body.wait_seconds,
                 body.protocol_version,
                 body.capabilities,
+                None
+                if body.runtime_identity is None
+                else body.runtime_identity.model_dump(),
                 source=source,
             )
         except ValueError as error:

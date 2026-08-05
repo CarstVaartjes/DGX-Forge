@@ -589,6 +589,11 @@ class _DurableOperationProjection:
                     "last_seen_at": None if last_seen is None else last_seen.isoformat(),
                     "node_id": node.node_id,
                     "protocol_version": node.protocol_version,
+                    "platform_version": node.platform_version,
+                    "build_digest": node.build_digest,
+                    "active_slot": node.active_slot,
+                    "agent_sha256": node.agent_sha256,
+                    "supervisor_generation": node.supervisor_generation,
                     "stale": age is None or age > self._stale_after_seconds,
                     "state": node.state,
                 }

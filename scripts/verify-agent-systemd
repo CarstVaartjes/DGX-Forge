@@ -15,7 +15,10 @@ from pathlib import Path
 UNITS = (
     "dgx-forge-agent.service",
     "dgx-forge-agent-supervisor.service",
+    "dgx-forge-agent-activation.service",
+    "dgx-forge-agent-activation.path",
 )
+SECURITY_UNITS = tuple(name for name in UNITS if name.endswith(".service"))
 SUMMARY = re.compile(
     r"Overall exposure level for ([^:]+): ([0-9]+(?:\.[0-9]+)?) ([A-Z]+)"
 )
@@ -109,8 +112,13 @@ def verify(repository: Path) -> dict[str, object]:
         root = Path(temporary)
         _install(root, repository)
         _verify(root)
-        units = {name: _security(root, name) for name in UNITS}
-    return {"schema_version": 1, "units": units, "verify": "passed"}
+        units = {name: _security(root, name) for name in SECURITY_UNITS}
+    return {
+        "schema_version": 1,
+        "security_units": units,
+        "units": list(UNITS),
+        "verify": "passed",
+    }
 
 
 def main() -> int:
@@ -127,7 +135,7 @@ def main() -> int:
         print(_canonical(report), end="")
     else:
         print("systemd installed-root verification: passed")
-        for name, unit in report["units"].items():
+        for name, unit in report["security_units"].items():
             print(f"{name}: {unit['score']:.1f} {unit['exposure']}")
     return 0
 

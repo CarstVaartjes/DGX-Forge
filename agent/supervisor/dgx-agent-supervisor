@@ -42,6 +42,16 @@ STATE_FIELDS = {
     "rollback_performed",
 }
 READINESS_FIELDS = {"schema_version", "generation", "slot", "sha256"}
+IDENTITY_FIELDS = {"build_digest", "platform_version", "schema_version", "sha256"}
+ACTIVATION_REQUEST_FIELDS = {
+    "build_digest",
+    "platform_version",
+    "previous_slot",
+    "schema_version",
+    "sha256",
+    "size",
+    "target_slot",
+}
 MACHINE = {"x86_64": 62, "aarch64": 183}
 STAGING = re.compile(r"\.state\.[0-9a-f]{24}\.new\Z")
 
@@ -122,6 +132,7 @@ STATE_ROOT = "/var/lib/dgx-forge-agent-supervisor"
 SLOT_ROOT = "/opt/dgx-forge/agent-slots"
 RUNTIME_ROOT = "/run/dgx-forge-agent"
 READINESS_QUARANTINE_ROOT = "/run/dgx-forge-agent-supervisor"
+UPDATE_STAGING_ROOT = "/var/lib/dgx-forge-agent/update-staging"
 
 
 def _canonical(value: object) -> bytes:
@@ -161,6 +172,75 @@ def _decode(raw: bytes, *, readiness: bool = False) -> dict[str, Any]:
     if set(value) != fields:
         raise SupervisorError("JSON fields are invalid")
     return value
+
+
+def _decode_activation_request(raw: bytes) -> dict[str, Any]:
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique,
+            parse_constant=_reject_constant,
+        )
+    except SupervisorError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
+        raise SupervisorError("activation request JSON is invalid") from error
+    if (
+        not isinstance(value, dict)
+        or set(value) != ACTIVATION_REQUEST_FIELDS
+        or _canonical(value) != raw
+        or value["schema_version"] != 1
+        or value["target_slot"] not in SLOTS
+        or value["previous_slot"] not in SLOTS
+        or not isinstance(value["sha256"], str)
+        or DIGEST.fullmatch(value["sha256"]) is None
+        or not isinstance(value["build_digest"], str)
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", value["build_digest"])
+        or not isinstance(value["platform_version"], str)
+        or not re.fullmatch(
+            r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",
+            value["platform_version"],
+        )
+        or isinstance(value["size"], bool)
+        or not isinstance(value["size"], int)
+        or not 64 <= value["size"] <= EXECUTABLE_LIMIT
+    ):
+        raise SupervisorError("activation request is invalid")
+    return value
+
+
+def _decode_slot_identity(raw: bytes, expected_sha256: str) -> dict[str, Any]:
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique,
+            parse_constant=_reject_constant,
+        )
+    except SupervisorError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
+        raise SupervisorError("slot identity JSON is invalid") from error
+    if (
+        not isinstance(value, dict)
+        or set(value) != IDENTITY_FIELDS
+        or _canonical(value) != raw
+        or value["schema_version"] != 1
+        or value["sha256"] != expected_sha256
+        or not isinstance(value["build_digest"], str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", value["build_digest"]) is None
+        or not isinstance(value["platform_version"], str)
+        or re.fullmatch(
+            r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",
+            value["platform_version"],
+        )
+        is None
+    ):
+        raise SupervisorError("slot identity is invalid")
+    return value
+
+
+def _agent_owner() -> int:
+    return _owner() if _test_root() else pwd.getpwnam("dgx-agent").pw_uid
 
 
 def _trusted(metadata: os.stat_result, mode: int, *, regular: bool) -> None:
@@ -488,6 +568,266 @@ def _open_slot(slot: str, expected: str) -> int:
         os.close(parent)
 
 
+def _read_slot_identity(slot: str, expected_sha256: str) -> dict[str, Any]:
+    path = _slot_path(slot).with_name("identity.json")
+    try:
+        parent = _open_directory_ancestry(path.parent)
+    except OSError as error:
+        raise SupervisorError("slot identity root is unavailable") from error
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent,
+        )
+        metadata = os.fstat(descriptor)
+        _trusted(metadata, 0o444, regular=True)
+        if metadata.st_size > 4096:
+            raise SupervisorError("slot identity is too large")
+        raw = os.read(descriptor, 4097)
+        if len(raw) > 4096:
+            raise SupervisorError("slot identity is too large")
+        return _decode_slot_identity(raw, expected_sha256)
+    except SupervisorError:
+        raise
+    except OSError as error:
+        raise SupervisorError("slot identity is unavailable") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent)
+
+
+def _file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        metadata.st_dev,
+        metadata.st_ino,
+        metadata.st_size,
+        metadata.st_mtime_ns,
+        metadata.st_ctime_ns,
+    )
+
+
+def _read_activation_request() -> tuple[int, dict[str, Any], tuple[int, ...]]:
+    path = _path(RUNTIME_ROOT)
+    expected_owner = _agent_owner()
+    try:
+        directory = _open_directory_ancestry(path, final_owner=expected_owner)
+    except (FileNotFoundError, OSError) as error:
+        raise SupervisorError("activation request is unavailable") from error
+    descriptor = -1
+    try:
+        runtime = os.fstat(directory)
+        if (
+            runtime.st_uid != expected_owner
+            or stat.S_IMODE(runtime.st_mode) != 0o700
+        ):
+            raise SupervisorError("activation runtime directory is unsafe")
+        descriptor = os.open(
+            "activation-request.json",
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=directory,
+        )
+        metadata = os.fstat(descriptor)
+        if (
+            metadata.st_uid != expected_owner
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_size > 4096
+        ):
+            raise SupervisorError("activation request path is unsafe")
+        raw = os.read(descriptor, 4097)
+        if len(raw) > 4096:
+            raise SupervisorError("activation request is too large")
+        return directory, _decode_activation_request(raw), _file_identity(metadata)
+    except SupervisorError:
+        os.close(directory)
+        raise
+    except OSError as error:
+        os.close(directory)
+        raise SupervisorError("activation request is unavailable") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _open_staged_candidate(request: dict[str, Any]) -> int:
+    root = _path(UPDATE_STAGING_ROOT)
+    expected_owner = _agent_owner()
+    try:
+        directory = _open_directory_ancestry(root, final_owner=expected_owner)
+    except (FileNotFoundError, OSError) as error:
+        raise SupervisorError("staged candidate is unavailable") from error
+    descriptor = -1
+    try:
+        metadata = os.fstat(directory)
+        if (
+            metadata.st_uid != expected_owner
+            or stat.S_IMODE(metadata.st_mode) != 0o700
+        ):
+            raise SupervisorError("candidate staging directory is unsafe")
+        descriptor = os.open(
+            f"{request['sha256']}.agent",
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=directory,
+        )
+        candidate = os.fstat(descriptor)
+        if (
+            candidate.st_uid != expected_owner
+            or stat.S_IMODE(candidate.st_mode) != 0o500
+            or not stat.S_ISREG(candidate.st_mode)
+            or candidate.st_nlink != 1
+            or candidate.st_size != request["size"]
+        ):
+            raise SupervisorError("staged candidate path is unsafe")
+        return descriptor
+    except SupervisorError:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+    except OSError as error:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise SupervisorError("staged candidate is unavailable") from error
+    finally:
+        os.close(directory)
+
+
+def _write_atomic_at(
+    directory: int, name: str, raw: bytes, *, mode: int, label: str
+) -> None:
+    temporary = f".{name}.{secrets.token_hex(12)}.new"
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            mode,
+            dir_fd=directory,
+        )
+        os.fchmod(descriptor, mode)
+        offset = 0
+        while offset < len(raw):
+            offset += os.write(descriptor, raw[offset:])
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.rename(temporary, name, src_dir_fd=directory, dst_dir_fd=directory)
+        os.fsync(directory)
+    except OSError as error:
+        try:
+            os.unlink(temporary, dir_fd=directory)
+        except OSError:
+            pass
+        raise SupervisorError(f"{label} publication failed") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _install_candidate(request: dict[str, Any]) -> None:
+    source = _open_staged_candidate(request)
+    before = os.fstat(source)
+    target_path = _slot_path(request["target_slot"])
+    _mkdirs(target_path.parent, 0o755)
+    target = _open_directory_ancestry(target_path.parent)
+    temporary = f".dgx-forge-agent.{secrets.token_hex(12)}.new"
+    destination = -1
+    try:
+        destination = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o555,
+            dir_fd=target,
+        )
+        hasher = hashlib.sha256()
+        header = b""
+        total = 0
+        while True:
+            chunk = os.read(source, min(1024 * 1024, request["size"] + 1 - total))
+            if not chunk:
+                break
+            if len(header) < 64:
+                header += chunk[: 64 - len(header)]
+            total += len(chunk)
+            if total > request["size"]:
+                raise SupervisorError("staged candidate size changed")
+            hasher.update(chunk)
+            offset = 0
+            while offset < len(chunk):
+                offset += os.write(destination, chunk[offset:])
+        after = os.fstat(source)
+        if (
+            _file_identity(before) != _file_identity(after)
+            or total != request["size"]
+            or hasher.hexdigest() != request["sha256"]
+        ):
+            raise SupervisorError("staged candidate digest is invalid")
+        _verify_elf_header(header)
+        os.fchmod(destination, 0o555)
+        os.fsync(destination)
+        os.close(destination)
+        destination = -1
+        os.rename(
+            temporary,
+            target_path.name,
+            src_dir_fd=target,
+            dst_dir_fd=target,
+        )
+        os.fsync(target)
+        identity = {
+            "build_digest": request["build_digest"],
+            "platform_version": request["platform_version"],
+            "schema_version": 1,
+            "sha256": request["sha256"],
+        }
+        _write_atomic_at(
+            target,
+            "identity.json",
+            _canonical(identity),
+            mode=0o444,
+            label="slot identity",
+        )
+    except SupervisorError:
+        try:
+            os.unlink(temporary, dir_fd=target)
+        except OSError:
+            pass
+        raise
+    except OSError as error:
+        try:
+            os.unlink(temporary, dir_fd=target)
+        except OSError:
+            pass
+        raise SupervisorError("candidate installation failed") from error
+    finally:
+        if destination >= 0:
+            os.close(destination)
+        os.close(target)
+        os.close(source)
+    installed = _open_slot(request["target_slot"], request["sha256"])
+    os.close(installed)
+
+
+def _consume_activation_request(
+    directory: int, expected_identity: tuple[int, ...]
+) -> None:
+    try:
+        current = os.stat(
+            "activation-request.json", dir_fd=directory, follow_symlinks=False
+        )
+        if _file_identity(current) != expected_identity:
+            raise SupervisorError("activation request changed during application")
+        os.unlink("activation-request.json", dir_fd=directory)
+        os.fsync(directory)
+    except SupervisorError:
+        raise
+    except OSError as error:
+        raise SupervisorError("activation request cannot be consumed") from error
+
+
 def _service(*arguments: str, check: bool = True) -> subprocess.CompletedProcess[bytes]:
     try:
         return subprocess.run(
@@ -521,6 +861,7 @@ def _initial_state(slot: str, digest: str) -> dict[str, Any]:
 def initialize(slot: str, digest: str) -> int:
     descriptor = _open_slot(slot, digest)
     os.close(descriptor)
+    _read_slot_identity(slot, digest)
     directory = _state_directory(create=True)
     lock = _lock(directory, exclusive=True)
     try:
@@ -540,6 +881,25 @@ def initialize(slot: str, digest: str) -> int:
     return 0
 
 
+def _pending_activation_state(
+    state: dict[str, Any], slot: str, digest: str
+) -> dict[str, Any]:
+    slot_sha256 = dict(state["slot_sha256"])
+    slot_sha256[slot] = digest
+    return {
+        **state,
+        "generation": state["generation"] + 1,
+        "previous_slot": state["active_slot"],
+        "active_slot": slot,
+        "slot_sha256": slot_sha256,
+        "expected_sha256": digest,
+        "activation_deadline": _now() + ACTIVATION_SECONDS,
+        "boot_attempts": 0,
+        "status": "pending",
+        "rollback_performed": False,
+    }
+
+
 def activate(slot: str, digest: str) -> int:
     descriptor = _state_directory(create=False)
     lock = _lock(descriptor, exclusive=True)
@@ -550,29 +910,59 @@ def activate(slot: str, digest: str) -> int:
             raise SupervisorError("activation slot is not inactive")
         new_fd = _open_slot(slot, digest)
         os.close(new_fd)
+        _read_slot_identity(slot, digest)
         old_digest = state["slot_sha256"][state["active_slot"]]
         assert isinstance(old_digest, str)
         old_fd = _open_slot(state["active_slot"], old_digest)
         os.close(old_fd)
-        slot_sha256 = dict(state["slot_sha256"])
-        slot_sha256[slot] = digest
-        pending = {
-            **state,
-            "generation": state["generation"] + 1,
-            "previous_slot": state["active_slot"],
-            "active_slot": slot,
-            "slot_sha256": slot_sha256,
-            "expected_sha256": digest,
-            "activation_deadline": _now() + ACTIVATION_SECONDS,
-            "boot_attempts": 0,
-            "status": "pending",
-            "rollback_performed": False,
-        }
-        _publish(descriptor, pending)
+        _publish(descriptor, _pending_activation_state(state, slot, digest))
     finally:
         os.close(lock)
         os.close(descriptor)
     _service("--no-block", "restart", "dgx-forge-agent-supervisor.service")
+    return 0
+
+
+def apply_request() -> int:
+    request_directory, request, request_identity = _read_activation_request()
+    state_directory = _state_directory(create=False)
+    lock = _lock(state_directory, exclusive=True)
+    published = False
+    consumption_error: SupervisorError | None = None
+    try:
+        _cleanup_staging(state_directory)
+        state = _read_state(state_directory)
+        target = request["target_slot"]
+        previous = request["previous_slot"]
+        expected_target = "B" if state["active_slot"] == "A" else "A"
+        if (
+            state["status"] != "stable"
+            or previous != state["active_slot"]
+            or target != expected_target
+        ):
+            raise SupervisorError("activation request does not match stable state")
+        active_digest = state["slot_sha256"][state["active_slot"]]
+        assert isinstance(active_digest, str)
+        active = _open_slot(state["active_slot"], active_digest)
+        os.close(active)
+        _install_candidate(request)
+        _publish(
+            state_directory,
+            _pending_activation_state(state, target, request["sha256"]),
+        )
+        published = True
+        try:
+            _consume_activation_request(request_directory, request_identity)
+        except SupervisorError as error:
+            consumption_error = error
+    finally:
+        os.close(lock)
+        os.close(state_directory)
+        os.close(request_directory)
+    if published:
+        _service("--no-block", "restart", "dgx-forge-agent-supervisor.service")
+    if consumption_error is not None:
+        raise consumption_error
     return 0
 
 
@@ -777,6 +1167,7 @@ def _rollback(directory: int, state: dict[str, Any]) -> None:
         raise SupervisorError("previous slot is unavailable")
     old_fd = _open_slot(previous, previous_digest)
     os.close(old_fd)
+    _read_slot_identity(previous, previous_digest)
     failed = state["active_slot"]
     rolled_back = _stable(
         {
@@ -843,6 +1234,7 @@ def supervise() -> int:
         state = _read_state(directory)
         try:
             active_fd = _open_slot(state["active_slot"], state["expected_sha256"])
+            _read_slot_identity(state["active_slot"], state["expected_sha256"])
         except SupervisorError:
             if state["status"] == "pending":
                 _rollback(directory, state)
@@ -934,6 +1326,9 @@ def run_agent() -> int:
     try:
         state = _read_state(directory)
         executable = _open_slot(state["active_slot"], state["expected_sha256"])
+        identity = _read_slot_identity(
+            state["active_slot"], state["expected_sha256"]
+        )
     finally:
         os.close(lock)
         os.close(directory)
@@ -947,6 +1342,8 @@ def run_agent() -> int:
         "DGX_AGENT_SUPERVISOR_GENERATION": str(state["generation"]),
         "DGX_AGENT_SUPERVISOR_SLOT": state["active_slot"],
         "DGX_AGENT_SUPERVISOR_SHA256": state["expected_sha256"],
+        "DGX_AGENT_PLATFORM_VERSION": identity["platform_version"],
+        "DGX_AGENT_BUILD_DIGEST": identity["build_digest"],
     }
     try:
         os.execve(f"/proc/self/fd/{executable}", ["dgx-forge-agent"], environment)
@@ -963,6 +1360,7 @@ def _parser() -> UsageParser:
         child = subparsers.add_parser(command)
         child.add_argument("--slot", choices=SLOTS, required=True)
         child.add_argument("--sha256", required=True)
+    subparsers.add_parser("apply-request")
     subparsers.add_parser("supervise")
     subparsers.add_parser("run-agent")
     return parser
@@ -999,6 +1397,8 @@ def main(argv: list[str] | None = None) -> int:
             return initialize(arguments.slot, arguments.sha256)
         if arguments.command == "activate":
             return activate(arguments.slot, arguments.sha256)
+        if arguments.command == "apply-request":
+            return apply_request()
         if arguments.command == "supervise":
             return supervise()
         if arguments.command == "run-agent":

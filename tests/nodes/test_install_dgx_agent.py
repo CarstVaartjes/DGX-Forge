@@ -343,6 +343,10 @@ def installer_inputs(tmp_path: Path) -> dict[str, object]:
     arguments = [
         "--node-id",
         "spk_0123456789abcdef0123456789abcdef",
+        "--platform-version",
+        "1.0.0",
+        "--build-digest",
+        "sha256:" + "a" * 64,
         "--agent-artifact",
         str(agent),
         "--agent-sha256",
@@ -706,7 +710,7 @@ def test_abandoned_publication_crash_boundaries_recover_bounded_exact_staging(
 
 
 @LINUX_INSTALLER_RUNTIME
-def test_missing_unit_fails_before_target_mutation_and_both_units_are_enabled(
+def test_missing_unit_fails_before_target_mutation_and_all_units_are_enabled(
     installer_inputs: dict[str, object], tmp_path: Path
 ) -> None:
     source = tmp_path / "incomplete-source"
@@ -748,8 +752,8 @@ def test_missing_unit_fails_before_target_mutation_and_both_units_are_enabled(
     assert installed.returncode == 0, installed.stderr
     assert actions.read_text().splitlines() == [
         "daemon-reload",
-        "enable dgx-forge-agent.service dgx-forge-agent-supervisor.service",
-        "start dgx-forge-agent-supervisor.service",
+        "enable dgx-forge-agent.service dgx-forge-agent-supervisor.service dgx-forge-agent-activation.path",
+        "start dgx-forge-agent-supervisor.service dgx-forge-agent-activation.path",
     ]
 
 

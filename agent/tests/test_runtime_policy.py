@@ -210,6 +210,11 @@ def test_build_agent_constructs_release_and_workload_handlers_with_one_credentia
         "dgx_agent.main.InstalledPolicy.load", lambda _: sentinel_nvidia
     )
     monkeypatch.setattr("dgx_agent.main.RuntimePolicy.load", lambda _: runtime)
+    monkeypatch.setenv("DGX_AGENT_PLATFORM_VERSION", "1.0.0")
+    monkeypatch.setenv("DGX_AGENT_BUILD_DIGEST", "sha256:" + "b" * 64)
+    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_SLOT", "A")
+    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_SHA256", "a" * 64)
+    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_GENERATION", "1")
 
     agent = build_agent(config)
 

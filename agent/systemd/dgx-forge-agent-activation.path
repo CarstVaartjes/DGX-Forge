@@ -1,0 +1,10 @@
+[Unit]
+Description=Watch for DGX Forge agent activation requests
+After=local-fs.target
+
+[Path]
+PathExists=/run/dgx-forge-agent/activation-request.json
+Unit=dgx-forge-agent-activation.service
+
+[Install]
+WantedBy=multi-user.target

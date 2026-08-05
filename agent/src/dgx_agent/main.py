@@ -22,6 +22,7 @@ from dgx_agent_protocol import AgentClaim, AgentProgress, AgentResult
 
 from .client import (
     AgentClient,
+    AgentRuntimeIdentity,
     AgentTransportError,
     CredentialProvider,
     CredentialStore,
@@ -343,6 +344,7 @@ def build_agent(
         credentials,
         long_poll_seconds=min(60, config.poll_max_seconds),
         lease_seconds=max(30, min(300, config.poll_max_seconds * 2)),
+        runtime_identity=AgentRuntimeIdentity.from_environment(),
     )
     state = AgentStateStore(config.state_root)
     policy = InstalledPolicy.load(config.installed_policy_path)

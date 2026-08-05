@@ -356,6 +356,37 @@ def test_heartbeat_never_shortens_a_longer_existing_lease(service) -> None:
     assert progress.deadline >= claim.deadline
 
 
+def test_claim_persists_authenticated_running_release_identity(service) -> None:
+    jobs, sessions, clock = service
+    jobs.enqueue(parent(sessions, clock).id, NODE_A, "node.probe", COMMIT, {})
+    runtime_identity = {
+        "active_slot": "B",
+        "agent_sha256": "c" * 64,
+        "build_digest": "sha256:" + "b" * 64,
+        "platform_version": "1.2.3",
+        "supervisor_generation": 7,
+    }
+
+    assert jobs.claim(
+        NODE_A,
+        "serial-a",
+        30,
+        protocol_version=1,
+        runtime_identity=runtime_identity,
+    ) is not None
+
+    with sessions() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        assert {
+            "active_slot": node.active_slot,
+            "agent_sha256": node.agent_sha256,
+            "build_digest": node.build_digest,
+            "platform_version": node.platform_version,
+            "supervisor_generation": node.supervisor_generation,
+        } == runtime_identity
+
+
 @pytest.mark.parametrize("agent_action", ("heartbeat", "result"))
 def test_retired_identity_cannot_mutate_active_attempt_or_record_contact(
     service, agent_action: str

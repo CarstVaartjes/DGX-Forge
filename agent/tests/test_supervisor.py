@@ -15,6 +15,8 @@ PROJECT = Path(__file__).resolve().parents[1]
 SUPERVISOR = PROJECT / "supervisor" / "dgx-agent-supervisor"
 AGENT_UNIT = PROJECT / "systemd" / "dgx-forge-agent.service"
 SUPERVISOR_UNIT = PROJECT / "systemd" / "dgx-forge-agent-supervisor.service"
+ACTIVATION_UNIT = PROJECT / "systemd" / "dgx-forge-agent-activation.service"
+ACTIVATION_PATH = PROJECT / "systemd" / "dgx-forge-agent-activation.path"
 SYSTEMD_VERIFY = PROJECT.parent / "scripts" / "verify-agent-systemd"
 
 
@@ -88,6 +90,54 @@ class SupervisorHost:
     def readiness_path(self) -> Path:
         return self.host_root / "run/dgx-forge-agent/readiness.json"
 
+    @property
+    def activation_request_path(self) -> Path:
+        return self.host_root / "run/dgx-forge-agent/activation-request.json"
+
+    def stage_update_request(
+        self, candidate: Path, *, previous: str = "A", target: str = "B"
+    ) -> str:
+        digest = _digest(candidate)
+        staging = self.host_root / "var/lib/dgx-forge-agent/update-staging"
+        staging.mkdir(parents=True, mode=0o700)
+        staged = staging / f"{digest}.agent"
+        shutil.copyfile(candidate, staged)
+        staged.chmod(0o500)
+        self.activation_request_path.parent.mkdir(parents=True, exist_ok=True)
+        self.activation_request_path.parent.chmod(0o700)
+        request = {
+            "build_digest": "sha256:" + digest,
+            "platform_version": "1.2.0",
+            "previous_slot": previous,
+            "schema_version": 1,
+            "sha256": digest,
+            "size": staged.stat().st_size,
+            "target_slot": target,
+        }
+        self.activation_request_path.write_text(
+            json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n"
+        )
+        self.activation_request_path.chmod(0o600)
+        return digest
+
+    @staticmethod
+    def write_identity(target: Path, *, platform_version: str = "1.0.0") -> None:
+        digest = _digest(target)
+        target.with_name("identity.json").write_text(
+            json.dumps(
+                {
+                    "build_digest": "sha256:" + digest,
+                    "platform_version": platform_version,
+                    "schema_version": 1,
+                    "sha256": digest,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+        target.with_name("identity.json").chmod(0o444)
+
     def compile_agent(self, slot: str, message: str) -> Path:
         source = self.root / f"agent-{slot}.c"
         source.write_text(
@@ -102,6 +152,7 @@ class SupervisorHost:
             capture_output=True,
         )
         target.chmod(0o555)
+        self.write_identity(target)
         return target
 
     def compile_readiness_agent(self, slot: str) -> Path:
@@ -126,6 +177,7 @@ class SupervisorHost:
             capture_output=True,
         )
         target.chmod(0o555)
+        self.write_identity(target)
         return target
 
     def spawn_agent_from_systemctl(self) -> None:
@@ -214,6 +266,93 @@ def test_initialize_and_run_agent_executes_only_verified_elf(
         "slot_sha256": {"A": _digest(agent), "B": None},
         "status": "stable",
     }
+
+
+def test_run_agent_exports_verified_release_identity(
+    supervisor_host: SupervisorHost,
+) -> None:
+    source = supervisor_host.root / "identity-agent.c"
+    source.write_text(
+        "#include <stdio.h>\n#include <stdlib.h>\n"
+        "int main(void){printf(\"%s %s\\n\",getenv(\"DGX_AGENT_PLATFORM_VERSION\"),"
+        "getenv(\"DGX_AGENT_BUILD_DIGEST\"));}\n"
+    )
+    target = (
+        supervisor_host.host_root
+        / "opt/dgx-forge/agent-slots/A/dgx-forge-agent"
+    )
+    target.parent.mkdir(parents=True)
+    subprocess.run(["cc", "-O2", "-o", target, source], check=True)
+    target.chmod(0o555)
+    supervisor_host.write_identity(target, platform_version="7.8.9")
+    digest = _digest(target)
+
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", digest
+    ).returncode == 0
+    launched = supervisor_host.run("run-agent")
+
+    assert launched.returncode == 0, launched.stderr
+    assert launched.stdout == f"7.8.9 sha256:{digest}\n"
+
+
+def test_apply_request_installs_verified_inactive_slot_and_starts_activation(
+    supervisor_host: SupervisorHost,
+) -> None:
+    active = supervisor_host.compile_agent("A", "slot-a")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(active)
+    ).returncode == 0
+    candidate = supervisor_host.root / "candidate"
+    source = supervisor_host.root / "candidate.c"
+    source.write_text('#include <stdio.h>\nint main(void){puts("slot-b");}\n')
+    subprocess.run(["cc", "-O2", "-o", candidate, source], check=True)
+    digest = supervisor_host.stage_update_request(candidate)
+
+    applied = supervisor_host.run("apply-request")
+
+    assert applied.returncode == 0, applied.stderr
+    installed = (
+        supervisor_host.host_root
+        / "opt/dgx-forge/agent-slots/B/dgx-forge-agent"
+    )
+    assert _digest(installed) == digest
+    assert installed.stat().st_mode & 0o777 == 0o555
+    identity = json.loads(installed.with_name("identity.json").read_text())
+    assert identity == {
+        "build_digest": "sha256:" + digest,
+        "platform_version": "1.2.0",
+        "schema_version": 1,
+        "sha256": digest,
+    }
+    assert not supervisor_host.activation_request_path.exists()
+    state = supervisor_host.state()
+    assert state["active_slot"] == "B"
+    assert state["previous_slot"] == "A"
+    assert state["status"] == "pending"
+    assert "--no-block restart dgx-forge-agent-supervisor.service" in (
+        supervisor_host.actions.read_text()
+    )
+
+
+@pytest.mark.parametrize(
+    ("previous", "target"),
+    [("B", "B"), ("A", "A")],
+)
+def test_apply_request_rejects_wrong_previous_or_active_target(
+    supervisor_host: SupervisorHost, previous: str, target: str
+) -> None:
+    active = supervisor_host.compile_agent("A", "slot-a")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(active)
+    ).returncode == 0
+    candidate = supervisor_host.compile_agent("B", "slot-b")
+    supervisor_host.stage_update_request(candidate, previous=previous, target=target)
+
+    applied = supervisor_host.run("apply-request")
+
+    assert applied.returncode == 1
+    assert supervisor_host.state()["active_slot"] == "A"
 
 
 def test_run_agent_rejects_script_and_hardlinked_or_tampered_elf(
@@ -659,6 +798,7 @@ def test_arm64_elf_is_validated_without_execution(
         b"\x7fELF\x02\x01\x01" + b"\0" * 9 + b"\x02\0\xb7\0" + b"\0" * 44
     )
     target.chmod(0o555)
+    supervisor_host.write_identity(target)
     supervisor_host.environment["DGX_SUPERVISOR_TEST_ARCH"] = "aarch64"
 
     initialized = supervisor_host.run(
@@ -677,7 +817,8 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
     shutil.copytree("/usr/lib/systemd/system", unit_root / "usr/lib/systemd/system")
     unit_directory.mkdir(parents=True)
     executable_directory.mkdir(parents=True)
-    for source in (AGENT_UNIT, SUPERVISOR_UNIT):
+    units = (AGENT_UNIT, SUPERVISOR_UNIT, ACTIVATION_UNIT, ACTIVATION_PATH)
+    for source in units:
         shutil.copy2(source, unit_directory / source.name)
     shutil.copy2("/bin/true", executable_directory / "dgx-agent-supervisor")
     verified = subprocess.run(
@@ -685,8 +826,7 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
             "systemd-analyze",
             "verify",
             f"--root={unit_root}",
-            str(unit_directory / AGENT_UNIT.name),
-            str(unit_directory / SUPERVISOR_UNIT.name),
+            *(str(unit_directory / unit.name) for unit in units),
         ],
         text=True,
         capture_output=True,
@@ -694,7 +834,7 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
     )
     assert verified.returncode == 0, verified.stderr
     effective: dict[str, dict[str, object]] = {}
-    for unit in (AGENT_UNIT, SUPERVISOR_UNIT):
+    for unit in (AGENT_UNIT, SUPERVISOR_UNIT, ACTIVATION_UNIT):
         analyzed = subprocess.run(
             [
                 "systemd-analyze",
@@ -718,6 +858,9 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
     assert effective[SUPERVISOR_UNIT.name]["PrivateNetwork"] is True
     assert effective[SUPERVISOR_UNIT.name]["NoNewPrivileges"] is True
     assert effective[SUPERVISOR_UNIT.name]["ProtectSystem"] is True
+    assert effective[ACTIVATION_UNIT.name]["PrivateNetwork"] is True
+    assert effective[ACTIVATION_UNIT.name]["NoNewPrivileges"] is True
+    assert effective[ACTIVATION_UNIT.name]["ProtectSystem"] is True
     assert (
         effective[SUPERVISOR_UNIT.name][
             "CapabilityBoundingSet_CAP_CHOWN_FSETID_SETFCAP"
@@ -726,6 +869,8 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
     )
     agent = AGENT_UNIT.read_text()
     supervisor = SUPERVISOR_UNIT.read_text()
+    activation = ACTIVATION_UNIT.read_text()
+    activation_path = ACTIVATION_PATH.read_text()
     for literal in (
         "User=dgx-agent",
         "Group=dgx-agent",
@@ -756,6 +901,18 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
     ):
         assert literal in supervisor
     assert "User=" not in supervisor
+    for literal in (
+        "ExecStart=/usr/libexec/dgx-agent-supervisor apply-request",
+        "NoNewPrivileges=yes",
+        "PrivateNetwork=yes",
+        "ProtectSystem=strict",
+        "ReadOnlyPaths=/var/lib/dgx-forge-agent/update-staging /usr/libexec/dgx-agent-supervisor",
+        "ReadWritePaths=/opt/dgx-forge/agent-slots /var/lib/dgx-forge-agent-supervisor /run/dgx-forge-agent",
+    ):
+        assert literal in activation
+    assert "User=" not in activation
+    assert "PathExists=/run/dgx-forge-agent/activation-request.json" in activation_path
+    assert "Unit=dgx-forge-agent-activation.service" in activation_path
 
 
 def test_agent_effective_device_policy_is_closed_and_read_only() -> None:
@@ -820,5 +977,14 @@ def test_installed_systemd_harness_verifies_units_by_installed_name() -> None:
     assert set(report["units"]) == {
         "dgx-forge-agent.service",
         "dgx-forge-agent-supervisor.service",
+        "dgx-forge-agent-activation.service",
+        "dgx-forge-agent-activation.path",
     }
-    assert all(unit["exposure"] == "OK" for unit in report["units"].values())
+    assert set(report["security_units"]) == {
+        "dgx-forge-agent.service",
+        "dgx-forge-agent-supervisor.service",
+        "dgx-forge-agent-activation.service",
+    }
+    assert all(
+        unit["exposure"] == "OK" for unit in report["security_units"].values()
+    )

@@ -29,6 +29,8 @@ Identity = tuple[int, int]
 
 NODE_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+PREFIXED_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+SEMVER = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\Z")
 DEVICE = re.compile(r"[A-Za-z0-9_.:-]{1,64}\Z")
 REPOSITORY = re.compile(
     r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?:/[a-z0-9]+(?:[._-][a-z0-9]+)*)*\Z"
@@ -1264,6 +1266,10 @@ def _enrollment_identity_is_active(
 
 
 def install(arguments: argparse.Namespace) -> dict[str, object]:
+    if SEMVER.fullmatch(arguments.platform_version) is None:
+        raise InstallError("platform version is invalid")
+    if PREFIXED_DIGEST.fullmatch(arguments.build_digest) is None:
+        raise InstallError("platform build digest is invalid")
     if not NODE_ID.fullmatch(arguments.node_id):
         raise InstallError("node ID is not canonical")
     for field in (
@@ -1347,6 +1353,8 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
         for name in (
             "dgx-forge-agent.service",
             "dgx-forge-agent-supervisor.service",
+            "dgx-forge-agent-activation.service",
+            "dgx-forge-agent-activation.path",
         )
     }
     lock_path = _installer_lock_path()
@@ -1398,7 +1406,20 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
         )
         changed |= _publish_tree(
             agent_path.parent,
-            {agent_path.name: (snapshots["agent"], 0o555)},
+            {
+                agent_path.name: (snapshots["agent"], 0o555),
+                "identity.json": (
+                    _canonical(
+                        {
+                            "build_digest": arguments.build_digest,
+                            "platform_version": arguments.platform_version,
+                            "schema_version": 1,
+                            "sha256": arguments.agent_sha256,
+                        }
+                    ),
+                    0o444,
+                ),
+            },
             root_owner,
         )
         changed |= _publish_tree(
@@ -1541,6 +1562,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
                         "enable",
                         "dgx-forge-agent.service",
                         "dgx-forge-agent-supervisor.service",
+                        "dgx-forge-agent-activation.path",
                     ],
                     check=True,
                     timeout=30,
@@ -1550,6 +1572,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
                         str(systemctl),
                         "start",
                         "dgx-forge-agent-supervisor.service",
+                        "dgx-forge-agent-activation.path",
                     ],
                     check=True,
                     timeout=30,
@@ -1558,8 +1581,10 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
                 raise InstallError("agent services could not be enabled") from error
         return {
             "agent_sha256": arguments.agent_sha256,
+            "build_digest": arguments.build_digest,
             "nvidia_sha256": lock["sha256"],
             "node_id": arguments.node_id,
+            "platform_version": arguments.platform_version,
             "schema_version": 1,
             "status": "changed" if changed else "unchanged",
         }
@@ -1570,6 +1595,8 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
 def _parser() -> UsageParser:
     parser = UsageParser(description="networkless local DGX Forge agent installer")
     parser.add_argument("--node-id", required=True)
+    parser.add_argument("--platform-version", required=True)
+    parser.add_argument("--build-digest", required=True)
     for name in (
         "agent-artifact",
         "agent-sha256",
