@@ -320,7 +320,7 @@ services:
       retries: 12
 
   litellm:
-    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.82.3-stable@sha256:b959a1816fa454a14d2842242d0fa1cd0d39f96fc94d3a1f4e1de4e48e2398c6}
+    image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.83.14-stable@sha256:c81eb79cd4333c6cfe374c0ec929110fd23f0ee5f7fd198855a6fbddc77b83ba}
     restart: unless-stopped
     logging: *bounded-logging
     entrypoint: [/app/dgx-entrypoint]
