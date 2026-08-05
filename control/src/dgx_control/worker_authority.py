@@ -119,17 +119,25 @@ class RepositoryAuthorityService:
         return value
 
 
-def worker_document_signature(token: bytes, document: Mapping[str, object]) -> str:
+def worker_document_signature(
+    token: bytes,
+    document: Mapping[str, object],
+    *,
+    purpose: str,
+) -> str:
     """Return the HMAC for one canonical internal authority document."""
 
     if _TOKEN.fullmatch(token) is None:
         raise ValueError("worker authority token is invalid")
+    if purpose not in {"request", "response"}:
+        raise ValueError("worker authority signature purpose is invalid")
     encoded = json.dumps(
         document,
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
-    return hmac.new(token, encoded, hashlib.sha256).hexdigest()
+    domain = f"dgx-forge-worker-authority/v1/{purpose}\0".encode()
+    return hmac.new(token, domain + encoded, hashlib.sha256).hexdigest()
 
 
 def install_worker_authority_routes(
@@ -144,7 +152,7 @@ def install_worker_authority_routes(
         raise ValueError("worker authority token is invalid")
     def authenticate(request: Request, document: Mapping[str, object]) -> None:
         supplied = request.headers.get("x-dgx-worker-signature", "")
-        expected = worker_document_signature(token, document)
+        expected = worker_document_signature(token, document, purpose="request")
         if not secrets.compare_digest(supplied, expected):
             raise HTTPException(status_code=401, detail="authentication required")
 
@@ -166,7 +174,11 @@ def install_worker_authority_routes(
             }
             return {
                 **response,
-                "signature": worker_document_signature(token, response),
+                "signature": worker_document_signature(
+                    token,
+                    response,
+                    purpose="response",
+                ),
             }
         except (OSError, RuntimeError, TypeError, ValueError):
             raise HTTPException(status_code=503, detail="repository authority unavailable") from None
@@ -227,6 +239,7 @@ class HttpWorkerAuthority:
             headers["X-DGX-Worker-Signature"] = worker_document_signature(
                 self._token,
                 document,
+                purpose="request",
             )
             method = "POST"
         request = urllib.request.Request(
@@ -297,7 +310,11 @@ class HttpWorkerAuthority:
             raise WorkerAuthorityError("worker authority response is invalid")
         unsigned = dict(document)
         signature = unsigned.pop("signature")
-        expected_signature = worker_document_signature(self._token, unsigned)
+        expected_signature = worker_document_signature(
+            self._token,
+            unsigned,
+            purpose="response",
+        )
         expected_routes_digest = hashlib.sha256(
             json.dumps(
                 request_document["routes"],

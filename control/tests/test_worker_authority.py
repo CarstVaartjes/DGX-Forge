@@ -64,14 +64,22 @@ def test_internal_worker_authority_requires_exact_service_token() -> None:
     assert client.post(
         "/internal/v1/repository/evaluate",
         headers={
-            "x-dgx-worker-signature": worker_document_signature(b"x" * 32, body)
+            "x-dgx-worker-signature": worker_document_signature(
+                b"x" * 32,
+                body,
+                purpose="request",
+            )
         },
         json=body,
     ).status_code == 401
     response = client.post(
         "/internal/v1/repository/evaluate",
         headers={
-            "x-dgx-worker-signature": worker_document_signature(b"w" * 32, body)
+            "x-dgx-worker-signature": worker_document_signature(
+                b"w" * 32,
+                body,
+                purpose="request",
+            )
         },
         json=body,
     )
@@ -101,7 +109,11 @@ def test_internal_worker_authority_returns_commit_bound_hermes_deployments() -> 
     response = client.post(
         "/internal/v1/repository/evaluate",
         headers={
-            "x-dgx-worker-signature": worker_document_signature(b"w" * 32, body)
+            "x-dgx-worker-signature": worker_document_signature(
+                b"w" * 32,
+                body,
+                purpose="request",
+            )
         },
         json=body,
     )
@@ -134,7 +146,11 @@ def test_internal_worker_authority_fails_closed_before_repository_policy_output(
     response = client.post(
         "/internal/v1/repository/evaluate",
         headers={
-            "x-dgx-worker-signature": worker_document_signature(b"w" * 32, body)
+            "x-dgx-worker-signature": worker_document_signature(
+                b"w" * 32,
+                body,
+                purpose="request",
+            )
         },
         json=body,
     )
@@ -171,7 +187,11 @@ def test_worker_consumes_one_nonce_bound_evaluation_for_eligibility_and_head() -
             "issued_at": 100,
             "expires_at": 115,
         }
-        response["signature"] = worker_document_signature(b"w" * 32, response)
+        response["signature"] = worker_document_signature(
+            b"w" * 32,
+            response,
+            purpose="response",
+        )
         return Response(json.dumps(response).encode())
 
     authority = HttpWorkerAuthority(
@@ -238,7 +258,11 @@ def test_worker_rejects_tampered_stale_redirected_or_oversized_authority(
             "issued_at": 80 if fault == "expired" else 100,
             "expires_at": 95 if fault == "expired" else 115,
         }
-        response["signature"] = worker_document_signature(b"w" * 32, response)
+        response["signature"] = worker_document_signature(
+            b"w" * 32,
+            response,
+            purpose="response",
+        )
         if fault == "signature":
             response["signature"] = "0" * 64
         return Response(json.dumps(response).encode())
