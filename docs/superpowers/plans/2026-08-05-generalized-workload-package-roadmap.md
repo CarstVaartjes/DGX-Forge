@@ -12,7 +12,7 @@
 
 - Existing roadmap task numbers and already accepted evidence do not move.
 - No W task begins implementation in a file owned by an unmerged Task 26–31 branch.
-- The incoming GitHub container-release branch lands first. W tasks consume its
+- The GitHub container-release baseline landed in `e9f7695`. W tasks consume its
   GHCR metadata, immutable three-image Compose references, public-input checks,
   pull-only NAS deployment, UID/GID policy, and supply-chain evidence; they do
   not recreate or weaken those contracts.
@@ -26,7 +26,7 @@
 ## Ordered task graph
 
 ```text
-Task 25 complete -> incoming GitHub container-release merge
+Task 25 complete -> landed GitHub container-release baseline (`e9f7695`)
   -> Tasks 26-31: DGX-Forge platform update and NAS/Spark version-skew UX
       -> W1-W4: contracts, Git authority, workload TUF, promotion
           -> W5-W10: Spark acquisition, store, environments, adapters, generations
@@ -54,7 +54,7 @@ and design acceptance do not count as implementation completion.
 | Area | Existing owner | Workload owner | Sequencing rule |
 | --- | --- | --- | --- |
 | Platform release manifest, control-host generations, agent A/B slots | Tasks 26–31 | None | Workload locks cannot contain these artifacts. |
-| GHCR API/worker/Hermes image build and pull-only NAS deployment | Incoming container-release merge | W3/W5/W20 extend merged secrets/protocol/docs | Never add production `build:` or use the fixed three-image workflow for workload payloads. |
+| GHCR API/worker/Hermes image build and pull-only NAS deployment | Landed container-release baseline (`e9f7695`) | W3/W5/W20 extend merged secrets/protocol/docs | Never add production `build:` or use the fixed three-image workflow for workload payloads. |
 | Agent version/build/protocol/slot telemetry and NAS-newer prompt | Tasks 26–31 | W16 displays workload impact only | Implement once in platform update services and reuse its projection. |
 | Shared immutable workload lock bytes | None | W1 | `dgx_agent_protocol` is the sole shared wire owner. |
 | Git family/deployment authoring | Existing proposal/repository services | W2/W4 | Extend typed allowlists; do not create another Git writer. |

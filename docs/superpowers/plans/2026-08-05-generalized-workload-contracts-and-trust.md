@@ -224,7 +224,7 @@ git commit -m "feat: isolate workload release trust"
 
 **Interfaces:**
 - Produces `WorkloadArtifactBuild.parse(document) -> WorkloadArtifactBuild` and a digest/provenance/SBOM `WorkloadArtifactResult` that W12 discovery can resolve and W13 promotion can verify.
-- The separate workload-artifact workflow consumes a validated build request from an eligible Git commit and publishes only digest-pinned OCI artifacts, SBOMs, and provenance. It extends but does not modify the incoming fixed API/worker/Hermes image release workflow.
+- The separate workload-artifact workflow consumes a validated build request from an eligible Git commit and publishes only digest-pinned OCI artifacts, SBOMs, and provenance. It extends but does not modify the landed fixed API/worker/Hermes image release workflow from `e9f7695`.
 - The build job has no workload TUF credential and cannot promote desired state; W13 verifies its output before the NAS signs a lock.
 
 - [ ] **Step 1: Write RED build-boundary tests**
@@ -255,7 +255,7 @@ workflow runs only for eligible merged/tagged requests, uses a job-scoped
 registry token without passing credentials into BuildKit, publishes by digest,
 and emits a signed provenance/SBOM result for discovery. It never receives a
 workload TUF key and never changes NAS desired state. Keep its job names,
-permissions, packages, and release metadata distinct from the incoming fixed
+permissions, packages, and release metadata distinct from the landed fixed
 API/worker/Hermes workflow.
 
 ```python

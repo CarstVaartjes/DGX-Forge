@@ -684,7 +684,7 @@ Implementation is decomposed without renumbering the existing roadmap:
 - W17–W20: `2026-08-05-workload-package-migration-acceptance.md`; and
 - ordering/conflict gates: `2026-08-05-generalized-workload-package-roadmap.md`.
 
-The incoming GitHub container-release work remains authoritative for building
+The GitHub container-release baseline landed in `e9f7695` and remains authoritative for building
 and publishing the three DGX-Forge NAS service images and for pull-only NAS
 Compose deployment. The workload-artifact builder is a separate generic
 workflow for workload payloads; it produces digests, SBOMs, and provenance but
