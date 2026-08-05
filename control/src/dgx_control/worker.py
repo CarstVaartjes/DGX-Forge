@@ -79,17 +79,47 @@ if __name__ == "__main__":
     import os
     import time
     from datetime import UTC, datetime
+    from pathlib import Path
 
+    from .agent_jobs import AgentJobService
+    from .agent_reconciliation import AgentReconciliationService
     from .code_host import RepositoryCodeHost
     from .db import build_engine, session_factory
     from .git_policy import GitPolicy, PolicyStore
     from .logging import JobLogStore
     from .offline import OnlineLock
+    from .presence import AgentPresenceService, ManagementAddressPolicy
+    from .route_runtime import AtomicRouteBundlePublisher
     from .runtime import RuntimeHandlers
     from .settings import Settings
 
     settings = Settings.from_env_and_secrets()
-    jobs = JobService(session_factory(build_engine(settings.database_url)), clock=lambda: datetime.now(UTC))
+    sessions = session_factory(build_engine(settings.database_url))
+    clock = lambda: datetime.now(UTC)
+    jobs = JobService(sessions, clock=clock)
+    address_policy = ManagementAddressPolicy.parse(
+        settings.management_cidrs,
+        forbidden_cidrs=settings.direct_fabric_cidrs,
+    )
+    presence = AgentPresenceService(sessions, address_policy, clock=clock)
+    agent_jobs = AgentJobService(sessions, clock=clock)
+
+    def endpoint(node_id: str) -> tuple[str, datetime]:
+        observation = presence.latest(node_id, maximum_age_seconds=300)
+        return observation.address, observation.observed_at
+
+    reconciliations = AgentReconciliationService(
+        sessions,
+        agent_jobs=agent_jobs,
+        publisher=AtomicRouteBundlePublisher(
+            Path("/routes"),
+            management_policy=address_policy,
+            clock=clock,
+            maximum_lease_seconds=300,
+        ),
+        endpoint_resolver=endpoint,
+        clock=clock,
+    )
     if settings.git_signing_key_path is None:
         raise RuntimeError("production Git signing key is unavailable")
     code_host = RepositoryCodeHost(
@@ -109,6 +139,7 @@ if __name__ == "__main__":
     worker = Worker(
         jobs, os.environ.get("HOSTNAME", "control-worker"), runtime.registry(),
         logs=JobLogStore(settings.state_path / "job-logs"),
+        reconciliations=reconciliations,
     )
     with OnlineLock(settings.state_path / "offline.lock"):
         while True:
