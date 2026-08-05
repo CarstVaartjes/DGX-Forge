@@ -4,6 +4,7 @@ import time
 import urllib.error
 from pathlib import Path
 
+import httpx
 import pytest
 
 from spark_profiles import control_client
@@ -46,6 +47,42 @@ class Response:
 
     def __exit__(self, *_):
         pass
+
+
+class GeneratedTransport(httpx.BaseTransport):
+    def __init__(self, opener) -> None:
+        self._opener = opener
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        outgoing = urllib.request.Request(
+            str(request.url),
+            data=request.content or None,
+            headers=dict(request.headers),
+            method=request.method,
+        )
+        try:
+            response_context = self._opener(outgoing, timeout=15)
+        except urllib.error.HTTPError as error:
+            response_context = error
+        except (OSError, urllib.error.URLError) as error:
+            raise control_client.ControlTransportError(
+                f"control API request failed: {type(error).__name__}"
+            ) from None
+        with response_context as response:
+            return httpx.Response(
+                response.status,
+                content=response.read(1_048_577),
+                headers=response.headers,
+                request=request,
+            )
+
+
+def generated_client(tmp_path: Path, opener) -> ControlClient:
+    return ControlClient(
+        "https://control.invalid",
+        token_file(tmp_path),
+        transport=GeneratedTransport(opener),
+    )
 
 
 def token_file(tmp_path: Path) -> Path:
@@ -157,9 +194,7 @@ def test_operational_methods_use_generated_models_and_exact_routes(
         calls.append((request, timeout))
         return next(responses)
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
 
     assert isinstance(client.nodes(), FleetStatusResponse)
     assert isinstance(client.plan_profile("agent"), ReconciliationPlanResponse)
@@ -202,9 +237,7 @@ def test_control_statuses_raise_typed_failures(
     def opener(request, timeout):
         return Response({"detail": "bounded failure"}, status=status)
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
     expected = getattr(control_client, exception_name)
 
     with pytest.raises(expected) as caught:
@@ -214,13 +247,63 @@ def test_control_statuses_raise_typed_failures(
     assert caught.value.detail == "bounded failure"
 
 
+@pytest.mark.parametrize(
+    ("status", "exception_name"),
+    [
+        (401, "ControlUnauthorized"),
+        (403, "ControlForbidden"),
+        (404, "ControlNotFound"),
+        (409, "ControlConflict"),
+        (503, "ControlUnavailable"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("body", "content_type"),
+    [
+        (b"", "application/json"),
+        (b"<html>failure</html>", "text/html"),
+        (b"{", "application/json"),
+        (b'{"wrong":"shape"}', "application/json"),
+    ],
+    ids=["empty", "html", "malformed-json", "schema-invalid"],
+)
+def test_http_status_typing_precedes_unusable_error_body_parsing(
+    tmp_path: Path,
+    status: int,
+    exception_name: str,
+    body: bytes,
+    content_type: str,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            status,
+            content=body,
+            headers={"content-type": content_type, "retry-after": "99"},
+        )
+
+    client = ControlClient(
+        "https://control.invalid",
+        token_file(tmp_path),
+        transport=httpx.MockTransport(handler),
+    )
+    expected = getattr(control_client, exception_name)
+
+    with pytest.raises(expected) as caught:
+        if status == 404:
+            client.job(JOB_ID)
+        else:
+            client.plan_profile("agent")
+
+    assert caught.value.status_code == status
+    assert caught.value.detail == "control API request failed"
+    assert caught.value.retry_after_seconds == 30
+
+
 def test_missing_resource_raises_typed_not_found(tmp_path: Path) -> None:
     def opener(request, timeout):
         return Response({"detail": "job not found"}, status=404)
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
 
     with pytest.raises(control_client.ControlNotFound) as caught:
         client.job(JOB_ID)
@@ -233,9 +316,7 @@ def test_malformed_json_raises_typed_response_failure(tmp_path: Path) -> None:
     def opener(request, timeout):
         return Response(b"not-json", raw=True)
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
 
     with pytest.raises(control_client.ControlMalformedResponse, match="invalid JSON"):
         client.nodes()
@@ -247,9 +328,7 @@ def test_malformed_generated_model_raises_typed_response_failure(
     def opener(request, timeout):
         return Response({"commit": COMMIT})
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
 
     with pytest.raises(control_client.ControlMalformedResponse, match="schema"):
         client.nodes()
@@ -261,9 +340,7 @@ def test_oversized_generated_response_is_rejected_before_parsing(
     def opener(request, timeout):
         return Response(b"{" + b" " * 1_048_576, raw=True)
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
 
     with pytest.raises(control_client.ControlResponseTooLarge, match="safety limit"):
         client.nodes()
@@ -276,9 +353,7 @@ def test_generated_response_requires_json_content_type(tmp_path: Path) -> None:
             headers={"content-type": "text/html"},
         )
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
 
     with pytest.raises(control_client.ControlMalformedResponse, match="content type"):
         client.nodes()
@@ -293,9 +368,7 @@ def test_ambiguous_apply_transport_failure_is_not_replayed(
         calls.append(request)
         raise urllib.error.URLError("signed-token upstream reset")
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
 
     with pytest.raises(control_client.ControlTransportError) as caught:
         client.apply_plan(
@@ -305,6 +378,39 @@ def test_ambiguous_apply_transport_failure_is_not_replayed(
     assert len(calls) == 1
     assert calls[0].headers["X-request-id"] == ("33333333-3333-4333-8333-333333333333")
     assert "signed-token" not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "location",
+    ["http://attacker.invalid/steal", "https://other.invalid/steal"],
+)
+def test_generated_mutation_rejects_redirect_without_forwarding_credentials(
+    tmp_path: Path, location: str
+) -> None:
+    calls: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(
+            302,
+            headers={"location": location, "content-type": "application/json"},
+            json={"detail": "redirected"},
+        )
+
+    client = ControlClient(
+        "https://control.invalid",
+        token_file(tmp_path),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(ControlClientError, match="HTTP 302"):
+        client.apply_plan(
+            PLAN_DIGEST, request_id="33333333-3333-4333-8333-333333333333"
+        )
+
+    assert len(calls) == 1
+    assert calls[0].url == "https://control.invalid/api/v1/reconciliations"
+    assert calls[0].headers["authorization"] == "Bearer signed-token"
 
 
 def test_urlopen_http_error_body_keeps_typed_status_mapping(tmp_path: Path) -> None:
@@ -317,9 +423,7 @@ def test_urlopen_http_error_body_keeps_typed_status_mapping(tmp_path: Path) -> N
             io.BytesIO(b'{"detail":"try later"}'),
         )
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
 
     with pytest.raises(control_client.ControlUnavailable) as caught:
         client.plan_profile("agent")
@@ -342,9 +446,7 @@ def test_retry_after_is_bounded_to_safe_seconds(
             headers={"retry-after": header},
         )
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
 
     with pytest.raises(control_client.ControlUnavailable) as caught:
         client.plan_profile("agent")
@@ -352,13 +454,102 @@ def test_retry_after_is_bounded_to_safe_seconds(
     assert caught.value.retry_after_seconds == expected
 
 
+@pytest.mark.parametrize(
+    ("remote_text", "forbidden_values"),
+    [
+        ("Authorization: Bearer signed-token", ("signed-token",)),
+        (
+            (
+                "-----BEGIN CERTIFICATE-----\nCERTIFICATE-BODY\n"
+                "-----END CERTIFICATE-----\n"
+                "-----BEGIN PRIVATE KEY-----\nPRIVATE-KEY-BODY\n"
+                "-----END PRIVATE KEY-----"
+            ),
+            ("CERTIFICATE-BODY", "PRIVATE-KEY-BODY"),
+        ),
+        (
+            "password=hunter2 credential=https://admin:swordfish@host.invalid",
+            ("hunter2", "admin", "swordfish"),
+        ),
+        ("x" * 5_000, ("x" * 257,)),
+    ],
+    ids=["bearer", "pem", "credential", "oversized"],
+)
+def test_http_error_detail_is_bounded_and_redacted(
+    tmp_path: Path, remote_text: str, forbidden_values: tuple[str, ...]
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            409,
+            headers={"content-type": "application/json"},
+            json={"detail": remote_text},
+        )
+
+    client = ControlClient(
+        "https://control.invalid",
+        token_file(tmp_path),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(control_client.ControlConflict) as caught:
+        client.plan_profile("agent")
+
+    assert len(caught.value.detail) <= 256
+    for forbidden in forbidden_values:
+        assert forbidden not in caught.value.detail
+        assert forbidden not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("remote_text", "forbidden_values"),
+    [
+        ("Bearer signed-token", ("signed-token",)),
+        (
+            (
+                "-----BEGIN CERTIFICATE-----\nCERTIFICATE-BODY\n"
+                "-----END CERTIFICATE-----\n"
+                "-----BEGIN PRIVATE KEY-----\nPRIVATE-KEY-BODY\n"
+                "-----END PRIVATE KEY-----"
+            ),
+            ("CERTIFICATE-BODY", "PRIVATE-KEY-BODY"),
+        ),
+        ("api_key=raw-key password=hunter2", ("raw-key", "hunter2")),
+        ("y" * 5_000, ("y" * 257,)),
+    ],
+    ids=["bearer", "pem", "credential", "oversized"],
+)
+def test_terminal_job_reason_is_bounded_and_redacted(
+    tmp_path: Path, remote_text: str, forbidden_values: tuple[str, ...]
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/json"},
+            json=job_payload("failed", remote_text),
+        )
+
+    client = ControlClient(
+        "https://control.invalid",
+        token_file(tmp_path),
+        transport=httpx.MockTransport(handler),
+    )
+
+    with pytest.raises(control_client.JobFailed) as caught:
+        client.wait_job(JOB_ID, timeout=1, interval=0)
+
+    assert caught.value.reason == caught.value.job.status_reason
+    assert caught.value.reason is not None
+    assert len(caught.value.reason) <= 256
+    for forbidden in forbidden_values:
+        assert forbidden not in caught.value.reason
+        assert forbidden not in str(caught.value)
+
+
 def test_wait_job_returns_structured_terminal_success(tmp_path: Path) -> None:
     def opener(request, timeout):
         return Response(job_payload("succeeded"))
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
 
     result = client.wait_job(JOB_ID, timeout=1, interval=0)
 
@@ -381,9 +572,7 @@ def test_wait_job_raises_typed_terminal_failure(
     def opener(request, timeout):
         return Response(job_payload(state, "operator action required"))
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
     expected = getattr(control_client, exception_name)
 
     with pytest.raises(expected) as caught:
@@ -408,9 +597,7 @@ def test_wait_job_polls_only_get_until_terminal_state(tmp_path: Path) -> None:
         calls.append(request)
         return next(responses)
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
 
     result = client.wait_job(JOB_ID, timeout=1, interval=0)
 
@@ -432,9 +619,7 @@ def test_wait_job_times_out_with_last_observation(tmp_path: Path) -> None:
             raise AssertionError("polling ignored its deadline")
         return Response(job_payload("queued"))
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
 
     with pytest.raises(control_client.ControlTimeout) as caught:
         client.wait_job(JOB_ID, timeout=0.005, interval=0.001)
@@ -461,9 +646,7 @@ def test_wait_job_honors_bounded_retry_after_on_get(tmp_path: Path) -> None:
         calls.append(request)
         return next(responses)
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
     started = time.monotonic()
 
     result = client.wait_job(JOB_ID, timeout=2, interval=0)
@@ -483,9 +666,7 @@ def test_wait_job_retries_ambiguous_get_transport_failure(tmp_path: Path) -> Non
             raise urllib.error.URLError("connection reset")
         return Response(job_payload("succeeded"))
 
-    client = ControlClient(
-        "https://control.invalid", token_file(tmp_path), opener=opener
-    )
+    client = generated_client(tmp_path, opener)
 
     result = client.wait_job(JOB_ID, timeout=1, interval=0)
 
@@ -514,6 +695,59 @@ def test_client_rejects_group_or_world_readable_token(tmp_path: Path) -> None:
 
     with pytest.raises(ControlClientError, match="permissions"):
         ControlClient("https://control.invalid", token)
+
+
+def test_client_reads_token_from_single_validated_descriptor(tmp_path: Path) -> None:
+    class ReplacingPath(type(tmp_path)):
+        replacement: Path
+
+        def read_text(self, *args, **kwargs):
+            self.unlink()
+            self.symlink_to(self.replacement)
+            return super().read_text(*args, **kwargs)
+
+    original = tmp_path / "token"
+    original.write_text("original-token")
+    original.chmod(0o600)
+    replacement = tmp_path / "attacker-token"
+    replacement.write_text("attacker-token")
+    replacement.chmod(0o600)
+    raced = ReplacingPath(original)
+    raced.replacement = replacement
+    calls = []
+
+    def opener(request, timeout):
+        calls.append(request)
+        return Response({"digest": "abc"})
+
+    client = ControlClient("https://control.invalid", raced, opener=opener)
+    client.create_proposal({"base_commit": COMMIT, "changes": []})
+
+    assert calls[0].headers["Authorization"] == "Bearer original-token"
+
+
+def test_client_closes_token_descriptor_on_validation_error(
+    tmp_path: Path, monkeypatch
+) -> None:
+    token = tmp_path / "token"
+    token.write_bytes(b"\xff")
+    token.chmod(0o600)
+    real_open = control_client.os.open
+    descriptors: list[int] = []
+
+    def tracking_open(path, flags):
+        descriptor = real_open(path, flags)
+        descriptors.append(descriptor)
+        return descriptor
+
+    monkeypatch.setattr(control_client.os, "open", tracking_open)
+
+    with pytest.raises(ControlClientError, match="token file is invalid"):
+        ControlClient("https://control.invalid", token)
+
+    assert len(descriptors) == 1
+    with pytest.raises(OSError):
+        control_client.os.fstat(descriptors[0])
 
 
 def test_apply_rejects_noncanonical_request_id_before_network(

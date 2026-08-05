@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import os
+import re
 import stat
 import time
 import urllib.error
@@ -38,6 +40,21 @@ from .generated_control.models.reconciliation_request import ReconciliationReque
 from .generated_control.types import Response as GeneratedResponse
 
 _MAX_RESPONSE = 1_048_576
+_MAX_TOKEN = 8192
+_MAX_REMOTE_TEXT = 256
+_PEM_BLOCK = re.compile(
+    r"-----BEGIN ([A-Z0-9][A-Z0-9 -]{0,63})-----.*?"
+    r"-----END \1-----",
+    re.DOTALL,
+)
+_AUTHORIZATION = re.compile(r"(?i)(authorization\s*:\s*)(?:bearer|basic)\s+[^\s,;]+")
+_BEARER = re.compile(r"(?i)\b(?:bearer|basic)\s+[^\s,;]+")
+_SENSITIVE_ASSIGNMENT = re.compile(
+    r"(?i)\b(authorization|api[_-]?key|password|private[_-]?key|"
+    r"secret|token|credential)\b(\s*[:=]\s*)"
+    r"(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
+)
+_URL_CREDENTIALS = re.compile(r"(?i)(https?://)[^/@\s]+@")
 
 
 class ControlClientError(RuntimeError):
@@ -65,6 +82,10 @@ class ControlTimeout(ControlClientError):
 
 class JobTerminalError(ControlClientError):
     def __init__(self, job: JobDetailResponse) -> None:
+        if job.status_reason is not None:
+            job.status_reason = _sanitize_remote_text(
+                job.status_reason, "job failed without a safe reason"
+            )
         self.job = job
         self.reason = job.status_reason
         super().__init__(
@@ -89,9 +110,9 @@ class ControlHTTPError(ControlClientError):
         retry_after_seconds: int | None = None,
     ) -> None:
         self.status_code = status_code
-        self.detail = detail
+        self.detail = _sanitize_remote_text(detail, "control API request failed")
         self.retry_after_seconds = retry_after_seconds
-        super().__init__(f"control API returned HTTP {status_code}: {detail}")
+        super().__init__(f"control API returned HTTP {status_code}: {self.detail}")
 
 
 class ControlUnauthorized(ControlHTTPError):
@@ -135,9 +156,84 @@ def _bounded_retry_after(value: str | None) -> int | None:
     return max(1, min(30, seconds))
 
 
+def _sanitize_remote_text(value: object, fallback: str) -> str:
+    if not isinstance(value, str) or not value:
+        return fallback
+    text = value.replace("\x00", "")
+    text = _PEM_BLOCK.sub("<redacted pem>", text)
+    if "-----BEGIN " in text:
+        text = text.split("-----BEGIN ", 1)[0] + "<redacted pem>"
+    text = _AUTHORIZATION.sub(r"\1<redacted>", text)
+    text = _BEARER.sub("<redacted>", text)
+    text = _SENSITIVE_ASSIGNMENT.sub(
+        lambda match: f"{match.group(1)}{match.group(2)}<redacted>", text
+    )
+    text = _URL_CREDENTIALS.sub(r"\1<redacted>@", text)
+    text = "".join(
+        character for character in text if character in "\n\t" or ord(character) >= 32
+    ).strip()
+    if not text:
+        text = fallback
+    marker = "...<truncated>"
+    if len(text) > _MAX_REMOTE_TEXT:
+        text = text[: _MAX_REMOTE_TEXT - len(marker)] + marker
+    return text
+
+
+def _read_token_file(token_file: Path) -> str:
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOINHERIT", 0)
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    flags |= no_follow
+    if not no_follow and token_file.is_symlink():
+        raise ControlClientError("control token must be a regular non-symlink file")
+
+    descriptor = -1
+    try:
+        descriptor = os.open(token_file, flags)
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode):
+            raise ControlClientError("control token must be a regular non-symlink file")
+        getuid = getattr(os, "getuid", None)
+        if getuid is not None and metadata.st_uid != getuid():
+            raise ControlClientError("control token file owner is invalid")
+        if stat.S_IMODE(metadata.st_mode) & 0o077:
+            raise ControlClientError("control token file permissions are too broad")
+
+        content = bytearray()
+        while len(content) <= _MAX_TOKEN:
+            chunk = os.read(descriptor, _MAX_TOKEN + 1 - len(content))
+            if not chunk:
+                break
+            content.extend(chunk)
+        if len(content) > _MAX_TOKEN:
+            raise ControlClientError("control token file is invalid")
+        try:
+            token = bytes(content).decode().strip()
+        except UnicodeDecodeError:
+            raise ControlClientError("control token file is invalid") from None
+    except ControlClientError:
+        raise
+    except OSError:
+        raise ControlClientError(
+            "control token must be a regular non-symlink file"
+        ) from None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+    if (
+        not token
+        or len(token) > _MAX_TOKEN
+        or any(character.isspace() for character in token)
+    ):
+        raise ControlClientError("control token file is invalid")
+    return token
+
+
 class _OpenerTransport(httpx.BaseTransport):
-    def __init__(self, opener: Callable[..., object], timeout: float) -> None:
-        self._opener = opener
+    def __init__(self, timeout: float) -> None:
         self._timeout = timeout
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
@@ -148,7 +244,7 @@ class _OpenerTransport(httpx.BaseTransport):
             method=request.method,
         )
         try:
-            response_context = self._opener(outgoing, timeout=self._timeout)
+            response_context = _open_without_redirects(outgoing, timeout=self._timeout)
         except urllib.error.HTTPError as error:
             response_context = error
         except (OSError, urllib.error.URLError) as error:
@@ -162,17 +258,37 @@ class _OpenerTransport(httpx.BaseTransport):
                     "control API response exceeds safety limit"
                 )
             response_headers = httpx.Headers(response.headers)  # type: ignore[attr-defined]
-            media_type = response_headers.get("content-type", "").split(";", 1)[0]
-            if media_type.strip().lower() != "application/json":
-                raise ControlMalformedResponse(
-                    "control API returned an invalid content type"
-                )
             return httpx.Response(
                 response.status,  # type: ignore[attr-defined]
                 content=content,
                 headers=response_headers,
                 request=request,
             )
+
+
+class _RecordingTransport(httpx.BaseTransport):
+    def __init__(self, transport: httpx.BaseTransport) -> None:
+        self._transport = transport
+        self.response: httpx.Response | None = None
+
+    def handle_request(self, request: httpx.Request) -> httpx.Response:
+        response = self._transport.handle_request(request)
+        self.response = response
+        if len(response.content) > _MAX_RESPONSE:
+            raise ControlResponseTooLarge("control API response exceeds safety limit")
+        return response
+
+
+class _RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _open_without_redirects(
+    request: urllib.request.Request, *, timeout: float
+) -> object:
+    opener = urllib.request.build_opener(_RejectRedirectHandler())
+    return opener.open(request, timeout=timeout)
 
 
 class ControlClient:
@@ -182,6 +298,7 @@ class ControlClient:
         token_file: Path,
         *,
         opener: Callable[..., object] = urllib.request.urlopen,
+        transport: httpx.BaseTransport | None = None,
         timeout_seconds: float = 15,
     ) -> None:
         parsed = urllib.parse.urlsplit(base_url)
@@ -197,24 +314,17 @@ class ControlClient:
             raise ControlClientError(
                 "control URL must be an HTTPS origin without credentials"
             )
-        if token_file.is_symlink() or not token_file.is_file():
-            raise ControlClientError("control token must be a regular non-symlink file")
-        if stat.S_IMODE(token_file.stat().st_mode) & 0o077:
-            raise ControlClientError("control token file permissions are too broad")
-        token = token_file.read_text().strip()
-        if (
-            not token
-            or len(token) > 8192
-            or any(character.isspace() for character in token)
-        ):
-            raise ControlClientError("control token file is invalid")
+        token = _read_token_file(token_file)
         self._base = base_url.rstrip("/")
         self._token = token
         self._opener = opener
+        self._transport = transport or _OpenerTransport(timeout_seconds)
         self._timeout = timeout_seconds
 
     def _generated_client(
-        self, headers: Mapping[str, str] | None = None
+        self,
+        transport: httpx.BaseTransport,
+        headers: Mapping[str, str] | None = None,
     ) -> AuthenticatedClient:
         return AuthenticatedClient(
             base_url=self._base,
@@ -223,7 +333,25 @@ class ControlClient:
             timeout=httpx.Timeout(self._timeout),
             verify_ssl=True,
             follow_redirects=False,
-            httpx_args={"transport": _OpenerTransport(self._opener, self._timeout)},
+            httpx_args={"transport": transport},
+        )
+
+    def _raise_http_status(
+        self,
+        status_code: int,
+        parsed: object,
+        headers: Mapping[str, str],
+    ) -> None:
+        error_type = _STATUS_ERRORS.get(status_code)
+        if error_type is None:
+            return
+        detail = getattr(parsed, "detail", "control API request failed")
+        if not isinstance(detail, str):
+            detail = "control API request failed"
+        raise error_type(
+            status_code,
+            detail,
+            _bounded_retry_after(headers.get("retry-after")),
         )
 
     def _call_generated(
@@ -233,27 +361,38 @@ class ControlClient:
         headers: Mapping[str, str] | None = None,
         **kwargs: object,
     ) -> object:
+        transport = _RecordingTransport(self._transport)
         try:
-            with self._generated_client(headers) as client:
+            with self._generated_client(transport, headers) as client:
                 response = operation(*args, client=client, **kwargs)
         except (UnicodeDecodeError, json.JSONDecodeError):
+            if transport.response is not None:
+                self._raise_http_status(
+                    transport.response.status_code,
+                    None,
+                    transport.response.headers,
+                )
             raise ControlMalformedResponse(
                 "control API returned invalid JSON"
             ) from None
         except (AttributeError, KeyError, TypeError, ValueError):
+            if transport.response is not None:
+                self._raise_http_status(
+                    transport.response.status_code,
+                    None,
+                    transport.response.headers,
+                )
             raise ControlMalformedResponse(
                 "control API response does not match the generated schema"
             ) from None
+        self._raise_http_status(response.status_code, response.parsed, response.headers)
         if 200 <= response.status_code < 300 and response.parsed is not None:
+            media_type = response.headers.get("content-type", "").split(";", 1)[0]
+            if media_type.strip().lower() != "application/json":
+                raise ControlMalformedResponse(
+                    "control API returned an invalid content type"
+                )
             return response.parsed
-        error_type = _STATUS_ERRORS.get(response.status_code)
-        detail = getattr(response.parsed, "detail", "control API request failed")
-        if error_type is not None:
-            raise error_type(
-                response.status_code,
-                detail,
-                _bounded_retry_after(response.headers.get("retry-after")),
-            )
         raise ControlClientError(f"control API returned HTTP {response.status_code}")
 
     @classmethod

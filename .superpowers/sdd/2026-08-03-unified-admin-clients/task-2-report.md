@@ -407,3 +407,133 @@ No blocking Task 2 concern. The reproducible out-of-scope Python/jsonschema
 SIGSEGV prevents claiming that the entire unrelated legacy CLI file is green in
 this environment; the exact isolated legacy test and all scoped/adjacent client
 verification described above pass.
+
+# Fix Round 1
+
+Reviewed head: `1ae2464667ba2ed9523ade47a77ba26f8c6bbcbb`
+
+## Finding 1: redirects and credential forwarding
+
+Added
+`test_generated_mutation_rejects_redirect_without_forwarding_credentials`,
+covering HTTPS-to-HTTP and cross-origin redirect locations. The test asserts a
+single credentialed mutation request, a typed rejection of the 302, and no
+replay or forwarded request. Generated operations now use a transport whose
+urllib boundary installs a redirect handler that never creates a redirect
+request; the httpx generated client also keeps `follow_redirects=False`.
+
+RED:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_generated_mutation_rejects_redirect_without_forwarding_credentials -v
+2 failed in 0.12s
+TypeError: ControlClient.__init__() got an unexpected keyword argument 'transport'
+```
+
+GREEN:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_generated_mutation_rejects_redirect_without_forwarding_credentials -v
+2 passed in 0.09s
+```
+
+## Finding 2: descriptor-bound token validation
+
+Added `test_client_reads_token_from_single_validated_descriptor`, which
+deterministically replaces the token path at the former `Path.read_text()`
+boundary. The client now opens the token once with no-follow and close-on-exec
+flags where supported, validates regular-file type, owner, and mode from
+`fstat()`, reads a bounded value from that same descriptor, and closes it in a
+`finally` block. `test_client_closes_token_descriptor_on_validation_error`
+verifies closure on a decode failure.
+
+RED:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_client_reads_token_from_single_validated_descriptor -v
+1 failed in 0.11s
+Expected Bearer original-token; observed Bearer attacker-token
+```
+
+GREEN:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_client_reads_token_from_single_validated_descriptor tests/spark_profiles/test_control_client.py::test_client_rejects_symlink_token tests/spark_profiles/test_control_client.py::test_client_rejects_group_or_world_readable_token -v
+3 passed in 0.09s
+
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_client_closes_token_descriptor_on_validation_error -v
+1 passed in 0.11s
+```
+
+## Finding 3: typed HTTP status before parsing
+
+Added a 20-case matrix in
+`test_http_status_typing_precedes_unusable_error_body_parsing`: empty, HTML,
+malformed JSON, and schema-invalid bodies for 401, 403, 404, 409, and 503. The
+raw response is recorded at the transport boundary so mandatory status mapping
+occurs even when generated parsing fails. Retry-After remains bounded to 30
+seconds, and unusable bodies receive a fixed safe detail.
+
+RED:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_http_status_typing_precedes_unusable_error_body_parsing -v
+20 failed in 0.30s
+Observed ControlMalformedResponse instead of the required typed status errors
+```
+
+GREEN:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_http_status_typing_precedes_unusable_error_body_parsing -v
+20 passed in 0.10s
+```
+
+## Finding 4: remote detail and terminal reason sanitization
+
+Added bearer-token, PEM certificate/private-key, credential, and oversized-text
+cases to `test_http_error_detail_is_bounded_and_redacted` and
+`test_terminal_job_reason_is_bounded_and_redacted`. HTTP error details and
+terminal job reasons are sanitized before they are stored on exceptions or
+included in exception text, with a 256-character maximum.
+
+RED:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_http_error_detail_is_bounded_and_redacted tests/spark_profiles/test_control_client.py::test_terminal_job_reason_is_bounded_and_redacted -v
+8 failed in 0.18s
+Raw secrets/PEM content remained visible and oversized values remained length 5000
+```
+
+GREEN:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_http_error_detail_is_bounded_and_redacted tests/spark_profiles/test_control_client.py::test_terminal_job_reason_is_bounded_and_redacted -v
+8 passed in 0.12s
+```
+
+## Fix Round 1 fresh verification
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py -q
+63 passed in 1.19s
+
+$ uv run pytest tests/control/test_openapi_clients.py -q
+5 passed in 3.63s
+
+$ uv run --with ruff==0.16.1 ruff check src/spark_profiles/control_client.py tests/spark_profiles/test_control_client.py
+All checks passed!
+
+$ uv run --with ruff==0.16.1 ruff format --check src/spark_profiles/control_client.py tests/spark_profiles/test_control_client.py
+2 files already formatted
+
+$ git diff --check
+[no output; exit 0]
+```
+
+Self-review confirmed no generated source edits, no mutation replay, no token
+path reopen after validation, mandatory typed status mapping before body parsing,
+and bounded remote text on the exception surfaces covered by this task. The
+pre-existing unrelated `progress.md` modification remains unstaged. The prior
+out-of-scope legacy CLI/jsonschema SIGSEGV concern above is unchanged; scoped
+and adjacent verification are green.
