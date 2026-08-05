@@ -236,3 +236,51 @@ def test_issued_certificate_revocation_evidence_migration_is_bounded_and_reversi
 
     downgrade_to("0006_reconciliation_graph", database)
     assert "agent_issued_certificate_revocations" not in tables(database)
+
+
+def test_resolved_plan_migration_follows_issued_revocations_and_is_reversible(
+    tmp_path: Path,
+) -> None:
+    database = f"sqlite:///{tmp_path / 'control.sqlite'}"
+    engine = create_engine(database)
+    upgrade_to("0007_issued_revocations", database)
+    assert "plan_digest" not in {
+        column["name"] for column in inspect(engine).get_columns("reconciliations")
+    }
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO reconciliations "
+                "(id,base_commit,status,summary,created_at) VALUES "
+                "('legacy-plan','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',"
+                "'planned','{}','2026-08-05 00:00:00')"
+            )
+        )
+
+    upgrade_to("0008_resolved_plan", database)
+    columns = {
+        column["name"] for column in inspect(engine).get_columns("reconciliations")
+    }
+    assert {"plan_digest", "resolved_plan"} <= columns
+    indexes = {
+        index["name"]: index
+        for index in inspect(engine).get_indexes("reconciliations")
+    }
+    assert indexes["ix_reconciliations_plan_digest"]["unique"] == 1
+    with engine.connect() as connection:
+        assert connection.execute(
+            text(
+                "SELECT plan_digest,resolved_plan FROM reconciliations "
+                "WHERE id='legacy-plan'"
+            )
+        ).one() == (None, None)
+
+    downgrade_to("0007_issued_revocations", database)
+    assert not {"plan_digest", "resolved_plan"} & {
+        column["name"] for column in inspect(engine).get_columns("reconciliations")
+    }
+    upgrade_to("head", database)
+    with engine.connect() as connection:
+        assert connection.execute(
+            text("SELECT status FROM reconciliations WHERE id='legacy-plan'")
+        ).scalar_one() == "planned"

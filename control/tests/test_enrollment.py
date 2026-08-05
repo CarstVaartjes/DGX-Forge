@@ -797,9 +797,6 @@ def test_postgres_issued_revocation_evidence_migration_chain(
     }
     assert not {"certificate_pem", "chain_pem", "private_key"} & columns
     with postgres_engine.connect() as connection:
-        assert compare_metadata(
-            MigrationContext.configure(connection), Base.metadata
-        ) == []
         assert connection.execute(text(
             "SELECT status FROM reconciliations "
             "WHERE id = 'legacy-reconciliation'"
@@ -808,6 +805,15 @@ def test_postgres_issued_revocation_evidence_migration_chain(
             "SELECT state FROM agent_certificates "
             "WHERE serial = 'legacy-serial'"
         )).scalar_one() == "active"
+    command.upgrade(config, "0008_resolved_plan")
+    with postgres_engine.connect() as connection:
+        assert compare_metadata(
+            MigrationContext.configure(connection), Base.metadata
+        ) == []
+        assert connection.execute(text(
+            "SELECT plan_digest,resolved_plan FROM reconciliations "
+            "WHERE id = 'legacy-reconciliation'"
+        )).one() == (None, None)
     with postgres_engine.begin() as connection:
         connection.execute(text("""
             INSERT INTO agent_issued_certificate_revocations
@@ -853,7 +859,7 @@ def test_postgres_issued_revocation_evidence_migration_chain(
             "WHERE serial = 'legacy-serial'"
         )).scalar_one() == "active"
 
-    command.upgrade(config, "0007_issued_revocations")
+    command.upgrade(config, "head")
     with postgres_engine.begin() as connection:
         connection.execute(text("""
             INSERT INTO agent_nodes (node_id,state,capabilities)

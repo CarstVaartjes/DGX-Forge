@@ -44,7 +44,13 @@ package from the allowlisted root build context alongside the pinned agent proto
 wheel. The existing Docker security test still verifies the exact protocol-wheel
 hash and direct installation source.
 
-Task 1 files and accepted behavior were not changed.
+The final integration is linear after the accepted control-plane migrations:
+`0006_reconciliation_graph` → `0007_issued_revocations` →
+`0008_resolved_plan`. The `0008_resolved_reconciliation_plan.py` migration owns
+the unique plan digest and persisted resolved-plan columns. Task20's reviewed
+Node → Certificate → Operation/Attempt lock order and revocation-recovery evidence
+remain authoritative; desired state layers capability advertisement and bounded
+probe observations onto that path.
 
 ## RED/GREEN evidence
 
@@ -96,3 +102,16 @@ Final evidence:
   perform the Task 3/4 worker cutover.
 
 Implementation is ready for independent review on `feature/desired-state`.
+
+## Post-Task20 integration verification
+
+The branch was rebased onto Task20 main `edc8148`. Conflict resolution retained
+Task20's enrollment, rotation, revocation-recovery, and PostgreSQL lock-order
+semantics, then added only closed capability advertisement and bounded probe
+observations. Verification covered the single Alembic head and real
+`0007_issued_revocations` ↔ `0008_resolved_plan` SQLite/PostgreSQL cycles, 23
+PostgreSQL lock/migration/atomic-plan tests, 122 focused control tests, all 360
+segmented control tests, all 541 segmented agent tests, and the repository-driven
+lifecycle E2E. Ruff, `py_compile`, conflict-marker scanning, and diff checks passed.
+The monolithic runner still reproduces an interpreter segmentation fault inside
+jsonschema on Python 3.12; isolated modules pass and expose no assertion failure.
