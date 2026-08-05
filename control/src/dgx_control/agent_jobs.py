@@ -75,9 +75,13 @@ class AgentJobService:
         clock: Callable[[], datetime],
         result_consumer: ResultConsumer | None = None,
     ) -> None:
+        if result_consumer is not None and not callable(result_consumer):
+            raise TypeError("agent result consumer must be callable")
         self._sessions = sessions
         self._clock = clock
         self._result_consumer = result_consumer
+        self._configuration_lock = threading.Lock()
+        self._started = False
         # SQLite ignores row locks. This only prevents same-service test races;
         # PostgreSQL correctness is provided by the database locks below.
         self._claim_lock = threading.RLock()
@@ -116,6 +120,7 @@ class AgentJobService:
         operation_id: str,
     ) -> StoredOperation:
         """Attach a caller-identified operation to the caller's transaction."""
+        self._mark_started()
         now = self._clock()
         protocol_operation = AgentOperation(operation)
         validated = AgentClaim(
@@ -173,6 +178,21 @@ class AgentJobService:
         with self._available:
             self._available.notify_all()
 
+    def set_result_consumer(self, consumer: ResultConsumer) -> None:
+        """Bind projection consumption once, before the queue serves any work."""
+        if not callable(consumer):
+            raise TypeError("agent result consumer must be callable")
+        with self._configuration_lock:
+            if self._result_consumer is not None:
+                raise RuntimeError("agent result consumer is already configured")
+            if self._started:
+                raise RuntimeError("agent job service has already started")
+            self._result_consumer = consumer
+
+    def _mark_started(self) -> None:
+        with self._configuration_lock:
+            self._started = True
+
     def claim(
         self,
         node_id: str,
@@ -182,6 +202,7 @@ class AgentJobService:
         protocol_version: int | None = None,
         capabilities: Sequence[str] | None = None,
     ) -> AgentClaim | None:
+        self._mark_started()
         if (
             not node_id.strip()
             or not certificate_serial.strip()
@@ -313,6 +334,7 @@ class AgentJobService:
         progress: Mapping[str, object],
         lease_seconds: int,
     ) -> AgentProgress:
+        self._mark_started()
         if lease_seconds <= 0:
             raise ValueError("lease must be positive")
         with self._sessions.begin() as session:
@@ -363,6 +385,7 @@ class AgentJobService:
         result: Mapping[str, object] | None,
         reason: str | None,
     ) -> None:
+        self._mark_started()
         with self._sessions.begin() as session:
             operation, attempt = self._active(session, fence)
             now = self._clock()

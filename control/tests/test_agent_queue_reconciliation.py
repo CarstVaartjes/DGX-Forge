@@ -139,6 +139,92 @@ def test_session_enqueue_uses_caller_operation_id_and_caller_transaction(queue) 
         assert session.get(AgentOperation, operation_id) is None
 
 
+def test_result_consumer_can_be_late_bound_exactly_once_before_activity(queue) -> None:
+    """Silent replacement would let a different projection consume later results."""
+    sessions, clock = queue
+    received: list[AgentResult] = []
+    service = AgentJobService(sessions, clock=clock)
+    service.set_result_consumer(
+        lambda _session, _operation, _attempt, message: received.append(message)
+    )
+
+    with pytest.raises(RuntimeError, match="already configured"):
+        service.set_result_consumer(
+            lambda _session, _operation, _attempt, message: received.append(message)
+        )
+
+    service.enqueue(
+        _parent_id(sessions),
+        NODE_ID,
+        "workload.stop",
+        COMMIT,
+        {"workload_id": "model"},
+    )
+    claim = _claim(service)
+    message = _result(
+        claim,
+        "failed",
+        {"status": "failed", "error_code": "service_failed"},
+    )
+    service.record_result(message)
+    assert received == [message]
+
+
+@pytest.mark.parametrize("consumer", (None, object()))
+def test_result_consumer_late_binding_rejects_noncallable(queue, consumer) -> None:
+    """Accepting an unusable hook defers a configuration error into result commit."""
+    sessions, clock = queue
+    service = AgentJobService(sessions, clock=clock)
+
+    with pytest.raises(TypeError, match="callable"):
+        service.set_result_consumer(consumer)
+
+
+def test_result_consumer_constructor_rejects_noncallable(queue) -> None:
+    """An invalid startup hook must fail before the queue begins serving work."""
+    sessions, clock = queue
+
+    with pytest.raises(TypeError, match="callable"):
+        AgentJobService(sessions, clock=clock, result_consumer=object())  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("activity", ("enqueue", "claim", "result"))
+def test_result_consumer_cannot_be_bound_after_queue_activity(queue, activity: str) -> None:
+    """A hook installed after activity can miss a result and split projection authority."""
+    sessions, clock = queue
+    service = AgentJobService(sessions, clock=clock)
+    if activity == "enqueue":
+        service.enqueue(
+            _parent_id(sessions),
+            NODE_ID,
+            "workload.stop",
+            COMMIT,
+            {"workload_id": "model"},
+        )
+    elif activity == "claim":
+        assert service.claim(NODE_ID, "serial-a", 30) is None
+    else:
+        bootstrap = AgentJobService(sessions, clock=clock)
+        bootstrap.enqueue(
+            _parent_id(sessions),
+            NODE_ID,
+            "workload.stop",
+            COMMIT,
+            {"workload_id": "model"},
+        )
+        claim = _claim(bootstrap)
+        service.record_result(
+            _result(
+                claim,
+                "failed",
+                {"status": "failed", "error_code": "service_failed"},
+            )
+        )
+
+    with pytest.raises(RuntimeError, match="already started"):
+        service.set_result_consumer(lambda *_args: None)
+
+
 @pytest.mark.parametrize(
     ("state", "result"),
     (
