@@ -90,14 +90,17 @@ def test_public_provisioner_config_bootstrap_executes_in_disposable_fixture(tmp_
     assert stored_private["y"] == configured["y"] and "d" in stored_private
 
 
+def test_pinned_step_thumbprint_command_is_documented() -> None:
+    runbook = _text()
+    assert "step crypto jwk thumbprint <" in runbook
+    assert "step crypto jwk fingerprint" not in runbook
+
+
 def test_pinned_step_image_supports_documented_jwk_thumbprint_command() -> None:
     if shutil.which("docker") is None:
         pytest.skip("Docker CLI is unavailable")
     if subprocess.run(["docker", "info"], capture_output=True, check=False).returncode:
         pytest.skip("Docker daemon is unavailable")
-    runbook = _text()
-    assert "step crypto jwk thumbprint <" in runbook
-    assert "step crypto jwk fingerprint" not in runbook
     public = {
         "kty": "EC", "crv": "P-256", "use": "sig", "alg": "ES256",
         "x": "NTgTNOnQHzF1BD0MWqZ09QpZyWoshtsnf5FgMbW7k24",

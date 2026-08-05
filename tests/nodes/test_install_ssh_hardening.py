@@ -165,6 +165,7 @@ def test_wrong_user_or_key_fingerprint_never_mutates(
     assert hardening_host["actions"].read_text() == ""
 
 
+@LINUX_NODE_RUNTIME
 def test_foreign_target_is_refused_and_preserved(
     hardening_host: dict[str, object],
 ) -> None:

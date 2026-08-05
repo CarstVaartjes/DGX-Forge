@@ -24,6 +24,10 @@ def test_linux_node_runtime_cases_skip_on_non_linux_hosts() -> None:
         ),
         (
             "tests/nodes/test_install_ssh_hardening.py::"
+            "test_foreign_target_is_refused_and_preserved"
+        ),
+        (
+            "tests/nodes/test_install_ssh_hardening.py::"
             "test_rollback_removes_only_matching_managed_drop_in"
         ),
     )
@@ -44,7 +48,7 @@ def test_linux_node_runtime_cases_skip_on_non_linux_hosts() -> None:
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "4 skipped" in result.stdout
+    assert "5 skipped" in result.stdout
 
 
 def test_image_runtime_case_skips_when_only_compose_is_available(tmp_path: Path) -> None:
@@ -68,10 +72,9 @@ def test_image_runtime_case_skips_when_only_compose_is_available(tmp_path: Path)
             "-m",
             "pytest",
             "-q",
-            (
-                "tests/runbooks/test_agent_pki.py::"
-                "test_pinned_step_image_supports_documented_jwk_thumbprint_command"
-            ),
+            "tests/runbooks/test_agent_pki.py",
+            "-k",
+            "pinned_step",
         ],
         cwd=ROOT,
         env={
@@ -85,4 +88,4 @@ def test_image_runtime_case_skips_when_only_compose_is_available(tmp_path: Path)
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "1 skipped" in result.stdout
+    assert "1 passed, 1 skipped" in result.stdout
