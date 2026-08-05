@@ -145,5 +145,11 @@ scoped rereview found no Critical, Important, or Minor issues and returned
 **Ready: Yes**. That is the scoped Task 6 acceptance. The later exact integrated
 whole-plan rereview at `b79296ae21ff717a4c38d577d407dbe690b942a5` found no
 Critical, Important, or Minor issues and returned **Plan Ready: Yes**. Publication
-acceptance remains separate and awaits hosted CI for that final integrated commit; the
-simulation boundaries and physical-host disclaimers above remain unchanged.
+acceptance is now complete: after hosted run `30970085006` exposed that ten
+real-state simulator cases were Linux-runtime tests, the exact non-Linux boundary was
+independently reviewed and integrated at
+`533b56969831fb0fce4bde8ced0d729ba837cc43`. Hosted run `30970818836` passed Ruff,
+Ubuntu full Python+Bash in 2m39s, and macOS full Python+Bash in 2m33s. Linux retains
+all real-state simulator coverage; macOS retains the two portable parser/preflight
+contracts. The simulation boundaries and physical-host disclaimers above remain
+unchanged.

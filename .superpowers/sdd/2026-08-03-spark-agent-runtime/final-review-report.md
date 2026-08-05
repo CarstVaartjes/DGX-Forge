@@ -58,9 +58,15 @@ Important, and 0 Minor** issues and returned **Plan Ready: Yes**.
 - The literal local broad run is **not green**: it recorded 530 passes plus two known
   PyInstaller crashes/hangs on the shared host. Those two cases are not counted as
   passes or waived into a green result.
-- Hosted CI for `b79296a` remains pending and is required before publication
-  acceptance. This report makes no hosted-green claim for the final integrated commit.
+- Hosted run `30970085006` first exposed ten simulator cases executing the production
+  Linux descriptor-anchored state runtime on macOS. The rejected portability attempt
+  was fully removed; the accepted net correction classifies exactly those ten cases as
+  Linux runtime coverage while keeping two parser/preflight contracts portable.
+- Independent review of that net correction found no Critical, Important, or Minor
+  issues and returned Ready: Yes. Hosted run `30970818836` at
+  `533b56969831fb0fce4bde8ced0d729ba837cc43` then passed Ruff, the Ubuntu full
+  Python+Bash suite in 2m39s, and the macOS full Python+Bash suite in 2m33s.
 
-The runtime plan is therefore review-ready, while release publication remains gated
-on hosted CI and the later installed-host and physical-hardware evidence identified by
-the task reports.
+The runtime plan and its simulated lifecycle acceptance are therefore published and
+accepted. Installed-host and physical-hardware evidence remain separately identified
+by the task reports and are not implied by the simulated acceptance.
