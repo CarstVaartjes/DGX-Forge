@@ -441,3 +441,89 @@ All checks passed; generated drift and diff checks emitted no differences.
 ### Concerns
 
 None. Chromium still needs the host's previously documented temporary NSS/NSPR library path; no system or repository dependency was changed.
+
+---
+
+## Publication fix after hosted CI run 31033481023
+
+### Ancestry and scope
+
+The publication fix began from integrated commit `a527ebe`; `git merge-base --is-ancestor a527ebe HEAD` exited zero. Only the unified-admin-clients worktree was changed. The controller-owned `progress.md` remained untouched and unstaged.
+
+### RED evidence
+
+The strengthened lifecycle regression required two distinct canonical 64-character fleet evidence digests to be reported by the real two-reconciliation acceptance path. Before implementation:
+
+```text
+uv run pytest tests/e2e/test_platform_lifecycle.py::test_repository_to_running_profile_and_safe_withdrawal -q
+
+FAILED tests/e2e/test_platform_lifecycle.py::test_repository_to_running_profile_and_safe_withdrawal
+ValueError: desired-state planning requires fleet evidence
+1 failed in 0.68s
+```
+
+The workflow regression required both locked JavaScript workspaces before the shared matrix pytest step and asserted that the job covers `ubuntu-latest` and `macos-latest`. Before implementation:
+
+```text
+uv run pytest tests/test_ci_platform_boundaries.py::test_full_matrix_installs_locked_javascript_workspaces_before_pytest -q
+
+FAILED tests/test_ci_platform_boundaries.py::test_full_matrix_installs_locked_javascript_workspaces_before_pytest
+AssertionError: Install locked admin web dependencies step was absent
+1 failed in 0.02s
+```
+
+### Implementation
+
+- `scripts/accept-platform-lifecycle` now derives current evidence through the production `DashboardService` and validated `fleet_response` projection for both the initial and replacement repository revisions.
+- Each plan receives that exact digest, each guarded enqueue rechecks the same live projection, and the acceptance script verifies the resolved plan and persisted parent job payload carry the same bound digest.
+- The lifecycle report exposes the two evidence digests; the behavioral test verifies they are canonical and distinct across repository revisions.
+- The shared Linux/macOS test matrix now runs frozen `npm ci --prefix control/web` before root pytest, in addition to the pinned generator workspace install.
+- The workflow boundary test executes in pytest, verifies exact commands and ordering, and confirms both hosted matrix operating systems remain covered.
+
+### GREEN evidence
+
+Focused regressions:
+
+```text
+uv run pytest tests/e2e/test_platform_lifecycle.py::test_repository_to_running_profile_and_safe_withdrawal tests/test_ci_platform_boundaries.py::test_full_matrix_installs_locked_javascript_workspaces_before_pytest -q
+2 passed in 1.33s
+```
+
+Exact locked web install plus complete workflow/platform boundary group:
+
+```text
+npm ci --prefix control/web
+added 122 packages; found 0 vulnerabilities
+
+uv run pytest tests/test_ci_platform_boundaries.py tests/e2e/test_platform_lifecycle.py -q
+6 passed in 2.24s
+```
+
+Phase 5 and live equivalence group:
+
+```text
+uv run pytest tests/spark_profiles/test_agent_cli.py tests/e2e/test_admin_equivalence.py tests/spark_profiles/test_live_admin_client_equivalence.py -q
+28 passed in 15.76s
+```
+
+Deterministic clients, Ruff, and diff gates:
+
+```text
+scripts/generate-control-clients
+git diff --exit-code -- control/openapi.json src/spark_profiles/generated_control control/web/src/api/generated.d.ts
+uvx --from ruff==0.16.1 ruff check .
+git diff --check
+
+All checks passed; generated drift and diff checks emitted no differences.
+```
+
+Final combined publication gate:
+
+```text
+uv run pytest tests/e2e/test_platform_lifecycle.py tests/test_ci_platform_boundaries.py tests/spark_profiles/test_agent_cli.py tests/e2e/test_admin_equivalence.py tests/spark_profiles/test_live_admin_client_equivalence.py -q
+34 passed in 18.48s
+```
+
+### Concerns
+
+None.
