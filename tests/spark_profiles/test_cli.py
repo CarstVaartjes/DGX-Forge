@@ -13,8 +13,8 @@ from pathlib import Path
 import pytest
 
 from spark_profiles.catalog import Catalog, fingerprint
-from spark_profiles.cli import CliDependencies, build_dependencies, main
 from spark_profiles.health import ClusterHealth, NodeHealth
+from spark_profiles.legacy_cli import CliDependencies, build_dependencies, main
 from spark_profiles.state import (
     ControllerState,
     LockBusy,
@@ -1000,7 +1000,12 @@ def test_node_health_dependencies_use_the_health_specific_output_cap(tmp_path: P
 
 def test_bin_script_finds_the_repository_when_run_elsewhere(tmp_path: Path) -> None:
     completed = subprocess.run(
-        [sys.executable, REPOSITORY_ROOT / "bin/sparkctl", "status", "--json"],
+        [
+            sys.executable,
+            REPOSITORY_ROOT / "bin/sparkctl-legacy",
+            "status",
+            "--json",
+        ],
         cwd=tmp_path,
         check=False,
         capture_output=True,
@@ -1011,7 +1016,12 @@ def test_bin_script_finds_the_repository_when_run_elsewhere(tmp_path: Path) -> N
     assert json.loads(completed.stdout)["status"] == "stopped"
 
     invalid = subprocess.run(
-        [sys.executable, REPOSITORY_ROOT / "bin/sparkctl", "--json", "switch"],
+        [
+            sys.executable,
+            REPOSITORY_ROOT / "bin/sparkctl-legacy",
+            "--json",
+            "switch",
+        ],
         cwd=tmp_path,
         check=False,
         capture_output=True,

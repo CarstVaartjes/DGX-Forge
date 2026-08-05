@@ -1,23 +1,47 @@
-# `sparkctl` developer controller
+# `sparkctl` control API client
 
-`sparkctl` is the repository-local, developer-machine interface to the
-content-addressed Spark profile catalog. It reads controller state from
-`.state/sparkctl`, resolves friendly selectors to canonical Cluster Profile
-IDs, and delegates admitted transitions to the profile switcher.
-
-Run it from any directory with the repository launcher. During development,
-`uv` can provide the one runtime dependency without changing the project lock:
+`sparkctl` is the routine operator interface to the authenticated control API.
+It does not read local controller state, construct SSH dependencies, contact a
+Spark directly, or fall back when the control plane is unavailable. Configure
+the HTTPS origin and a restrictive bearer-token file before use:
 
 ```bash
-uv run --no-project --with jsonschema -- /path/to/spark/bin/sparkctl status
-uv run --no-project --with jsonschema -- /path/to/spark/bin/sparkctl status --json
+export DGX_CONTROL_URL=https://control.example.invalid
+export DGX_CONTROL_TOKEN_FILE=/run/secrets/dgx-control-token
 ```
 
-`--json` may be placed before the command or on the command itself. Human
-output is the default. `status --json` is the stable local interface intended
-for the future NAS controller. It is a persisted snapshot and deliberately
-reports no live published endpoints. `nodes status --json` performs a fresh,
-read-only SSH probe of both Sparks; it is not persisted in controller state.
+The routine command surface is:
+
+```bash
+bin/sparkctl nodes status --json
+bin/sparkctl validate PROFILE --json
+bin/sparkctl prepare PROFILE [--apply] [--wait|--no-wait] --json
+bin/sparkctl switch PROFILE [--apply] [--wait|--no-wait] --json
+bin/sparkctl restore-default [--apply] [--wait|--no-wait] --json
+bin/sparkctl endpoint ALIAS --json
+```
+
+`nodes status` and `endpoint` return their typed server resources. `validate`
+requests and prints the exact server plan without applying it. `prepare`,
+`switch`, and `restore-default` also print that exact plan by default. A
+mutation requires `--apply`, submits only the digest from the freshly returned
+plan, and waits for the accepted job unless `--no-wait` is selected. `--wait`
+is available for explicit scripting. Control errors emit bounded, redacted
+`error_type=control_api` output and stop.
+
+## Explicit legacy compatibility
+
+`bin/sparkctl-legacy` preserves the retired developer-machine controller for
+explicit migration and recovery compatibility only. It may use local state and
+SSH. It is not a production interface, must not be installed or configured as
+the ordinary `sparkctl`, and is never selected implicitly after an API error.
+
+The remainder of this document records the compatibility controller's former
+behavior for recovery context. Commands in this archived section require the
+separately named `sparkctl-legacy` launcher; they are not supported by routine
+`sparkctl`.
+
+## Archived local-controller behavior
 
 Developer-machine SSH selection is cross-platform. macOS and native Linux use
 `ssh` and `scp` from `PATH`. WSL uses `ssh.exe` and `scp.exe` only when WSL is
@@ -32,15 +56,15 @@ bits.
 ## Commands
 
 ```text
-sparkctl catalog [--json]
-sparkctl validate PROFILE_OR_SELECTOR [--json]
-sparkctl status [--json]
-sparkctl nodes status [--json]
-sparkctl prepare PROFILE_OR_SELECTOR [--json]
-sparkctl switch PROFILE_OR_SELECTOR [--restore PROFILE_OR_SELECTOR] [--dry-run] [--json]
-sparkctl restore-default [--dry-run] [--json]
-sparkctl endpoint ENDPOINT_ALIAS [--json]
-sparkctl break-stale-lock [--json]
+sparkctl-legacy catalog [--json]
+sparkctl-legacy validate PROFILE_OR_SELECTOR [--json]
+sparkctl-legacy status [--json]
+sparkctl-legacy nodes status [--json]
+sparkctl-legacy prepare PROFILE_OR_SELECTOR [--json]
+sparkctl-legacy switch PROFILE_OR_SELECTOR [--restore PROFILE_OR_SELECTOR] [--dry-run] [--json]
+sparkctl-legacy restore-default [--dry-run] [--json]
+sparkctl-legacy endpoint ENDPOINT_ALIAS [--json]
+sparkctl-legacy break-stale-lock [--json]
 ```
 
 - `catalog` lists profiles, workload definitions, content hashes, maturity, and
@@ -89,7 +113,7 @@ it never falls back to stale local measurements. The checked-in
 `deepseek-agent-dual` has `verified` maturity. Its direct Mia runtime is
 operational, but profile admission remains fail-closed until the definition is
 `accepted`. The single-Spark `deepseek-agent-single` DS4 definition is also
-operational and `verified`, but has no accepted profile path: `sparkctl` must
+operational and `verified`, but has no accepted profile path: `sparkctl-legacy` must
 continue to reject it until performance, thermal, lifecycle, reboot, and exact
 co-residency evidence advances the definition and a complete profile to
 `accepted`.
@@ -97,11 +121,11 @@ co-residency evidence advances the definition and a complete profile to
 ## Durable preparation
 
 Run preparation only after deploying the exact digest-qualified runtime
-release and while `sparkctl status` reports a clean stopped state:
+release and while `sparkctl-legacy status` reports a clean stopped state:
 
 ```bash
 uv run --no-project --with jsonschema -- \
-  bin/sparkctl prepare default --json
+  bin/sparkctl-legacy prepare default --json
 ```
 
 The adapter owns the durable node-local preparation job. For each workload, the
@@ -170,14 +194,15 @@ whitespace-separated option value cannot be echoed by the parser.
 
 ## Safe bring-up checks
 
-These commands do not mutate either Spark node. `catalog` and `status` are
-local; `validate` and `nodes status` perform live read-only probes:
+These archived compatibility commands do not mutate either Spark node.
+`catalog` and `status` are local; `validate` and `nodes status` perform live
+read-only probes:
 
 ```bash
-uv run --no-project --with jsonschema -- bin/sparkctl catalog --json
-uv run --no-project --with jsonschema -- bin/sparkctl validate default --json
-uv run --no-project --with jsonschema -- bin/sparkctl status --json
-uv run --no-project --with jsonschema -- bin/sparkctl nodes status --json
+uv run --no-project --with jsonschema -- bin/sparkctl-legacy catalog --json
+uv run --no-project --with jsonschema -- bin/sparkctl-legacy validate default --json
+uv run --no-project --with jsonschema -- bin/sparkctl-legacy status --json
+uv run --no-project --with jsonschema -- bin/sparkctl-legacy nodes status --json
 ```
 
 At the current milestone, `catalog` succeeds, `validate default` exits `3` with

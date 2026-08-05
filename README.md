@@ -46,25 +46,34 @@ uv sync --dev
 uv run pytest
 ```
 
-Inspect the local catalog and controller state without changing either Spark:
+Configure the authenticated control origin and restrictive token file, then
+inspect current node state and preview the exact server reconciliation plan:
 
 ```bash
-uv run --no-project --with jsonschema -- bin/sparkctl catalog --json
-uv run --no-project --with jsonschema -- bin/sparkctl status --json
+export DGX_CONTROL_URL=https://control.example.invalid
+export DGX_CONTROL_TOKEN_FILE=/run/secrets/dgx-control-token
+bin/sparkctl nodes status --json
+bin/sparkctl validate PROFILE --json
+bin/sparkctl switch PROFILE --json
 ```
 
-The old direct health command remains available for explicit break-glass and
-development use:
+`prepare`, `switch`, and `restore-default` are plan-only unless `--apply` is
+present. Applied commands wait for the accepted job by default; use `--no-wait`
+to return its job ID for later API polling. Routine commands fail with
+`error_type=control_api` when the control plane is unavailable and never fall
+back to SSH.
+
+The old local controller remains available only as an explicitly named
+migration/recovery compatibility tool:
 
 ```bash
-uv run --no-project --with jsonschema -- bin/sparkctl nodes status --json
+uv run --no-project --with jsonschema -- bin/sparkctl-legacy status --json
 ```
 
-That command performs live SSH probes and is not the production control-plane
-transport. Routine production work is repository-planned by the API, persisted
-in PostgreSQL, claimed outbound by each Spark agent over mTLS, and reconciled by
-the repository-less worker. Read the `sparkctl` runbook before using any direct
-mutating command such as `prepare` or `switch`.
+Never use or configure `sparkctl-legacy` as a production command. It is never
+selected implicitly. Routine production work is repository-planned by the API,
+persisted in PostgreSQL, claimed outbound by each Spark agent over mTLS, and
+reconciled by the repository-less worker.
 
 ## Repository layout
 
