@@ -527,3 +527,57 @@ uv run pytest tests/e2e/test_platform_lifecycle.py tests/test_ci_platform_bounda
 ### Concerns
 
 None.
+
+## Hosted publication fix review round 1
+
+### Finding
+
+The hosted OS regression read every line after `test:` through end of file, so a
+later job could preserve the `ubuntu-latest` and `macos-latest` strings after
+both values were removed from the actual test matrix.
+
+### RED evidence
+
+The regression starts from the real workflow, replaces the test job's OS matrix
+with `os: []`, appends a controlled later job containing both hosted OS values,
+and requires the test-job parser to reject those later values. Before bounding
+the extracted helper:
+
+```text
+uv run pytest tests/test_ci_platform_boundaries.py::test_test_matrix_os_assertions_reject_values_from_a_later_job -q
+
+FAILED tests/test_ci_platform_boundaries.py::test_test_matrix_os_assertions_reject_values_from_a_later_job
+AssertionError: assert '          - ubuntu-latest' not in test_job_lines
+1 failed in 0.02s
+```
+
+### Implementation
+
+- A shared workflow helper now stops at the next top-level job boundary.
+- Named-step extraction and hosted OS assertions both use that same bounded
+  test-job projection.
+- The controlled mutation remains executable regression coverage for the prior
+  cross-job false pass.
+
+### GREEN evidence
+
+Complete workflow/platform boundary group:
+
+```text
+uv run pytest tests/test_ci_platform_boundaries.py -q
+6 passed in 1.24s
+```
+
+Workflow YAML syntax, focused Ruff, and diff gates:
+
+```text
+uv run --with pyyaml python -c "import pathlib, yaml; yaml.safe_load(pathlib.Path('.github/workflows/ci.yml').read_text())"
+uvx --from ruff==0.16.1 ruff check tests/test_ci_platform_boundaries.py
+git diff --check
+
+YAML parsing and diff checks emitted no output; Ruff reported `All checks passed!`.
+```
+
+### Concerns
+
+None.
