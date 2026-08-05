@@ -243,3 +243,118 @@ Expected: all pass.
 git add control/src/dgx_control/metrics.py control/src/dgx_control/dashboard.py deploy/compose/prometheus/alerts.yaml deploy/compose/grafana/dashboards/fleet.json control/tests/test_agent_metrics.py deploy/compose/tests/test_observability.py
 git commit -m "feat: observe outbound Spark agents"
 ```
+
+---
+
+## Final Task 3 review repair wave (2026-08-05)
+
+**Goal:** Close the final reconciliation, publication, supervisor, lifecycle, and
+production-authority findings without implementing Task 4 SSH removal.
+
+**Architecture:** PostgreSQL remains the authority for operation and publication
+state. A locked singleton publication-owner row selects the newest accepted plan;
+per-reconciliation rows carry durable withdrawal/publication/cancellation intent,
+and a bounded filesystem request/ack channel proves the live LiteLLM process has
+stopped or started the exact marker before database phases advance. Agent claims,
+results, sweeps, and publication all revalidate the pinned plan and linked Job.
+
+**Global constraints:** Preserve sorted-target-first locking and
+Node -> Certificate -> Presence -> Operation -> Attempt. Use actual PostgreSQL
+critical-section tests for concurrency. Presence supplies address/freshness only.
+Do not weaken persisted-plan/evidence validation and do not remove SSH or worker
+cluster egress in this task.
+
+### Repair 1: Canonical plan bytes and authoritative replay linkage
+
+**Files:** `control/src/dgx_control/route_runtime.py`,
+`control/src/dgx_control/desired_state.py`, and their focused tests.
+
+- [ ] Add a planner-to-`AtomicRouteBundlePublisher` regression whose quota digest
+  comes only from `DesiredStateResolver`; run it and record the exact digest RED.
+- [ ] Make quota verification use the same `canonical_message()` bytes as planning;
+  retain newline-terminated canonical files only at the filesystem boundary.
+- [ ] Add corruption/replay regressions for exact `Job.reconciliation_id`, including
+  missing JSON hint, mismatched hint, duplicate/corrupt link; remove payload-based
+  reconciliation authority and run RED then GREEN.
+
+### Repair 2: Transactional queue authority, quiescence, expiry, and fairness
+
+**Files:** `control/src/dgx_control/agent_jobs.py`,
+`control/src/dgx_control/agent_reconciliation.py`, `control/src/dgx_control/worker.py`,
+and queue/reconciliation PostgreSQL tests.
+
+- [ ] Add deterministic PostgreSQL multi-operation RED cases for agent-declared
+  uncertainty and unsafe expiry with queued/running primary and compensation
+  siblings; assert no later claim/result can mutate them.
+- [ ] Join every reconciliation claim to its authoritative Job/reconciliation phase,
+  validate the pinned protocol/capability/commit/node contract, and transactionally
+  quiesce every role/attempt before operator wait.
+- [ ] Add an autonomous expired-attempt sweep invoked by maintenance ticks, with a
+  no-follow-up-claim RED/GREEN case.
+- [ ] Add bounded database repoll to long claims and a cross-service-instance test;
+  make `tick()` return `False` on no transition and alternate reconciliation/generic
+  work so neither side starves.
+- [ ] Add secret-like agent/operator reason regressions and redact before every
+  durable terminal field.
+
+### Repair 3: Singleton publication ownership and continuous eligibility
+
+**Files:** migration `0009`, models, reconciliation service, production assembly,
+and PostgreSQL publication/eligibility tests.
+
+- [ ] Add a locked singleton current-owner row and distinct R1/R2 RED races/restarts:
+  old completed renewal, newer noncompleted maintenance, newer completion, and old
+  cancellation must never overwrite the newer owner.
+- [ ] Revalidate active/revoked state, exact plan protocol and operation capability,
+  repository node compatibility, current commit eligibility, presence address, and
+  freshness at claim/result/publication and on every completed-owner maintenance
+  pass. Bind production callbacks through `RepositoryService` and `GitPolicy`.
+- [ ] Add post-completion revocation/address/incompatibility/ineligible-commit RED
+  cases that withdraw immediately rather than waiting for lease renewal.
+
+### Repair 4: Durable live LiteLLM request/ack and cancellation intent
+
+**Files:** route runtime, reconciliation persistence/service,
+`deploy/compose/litellm/config_supervisor.py`, and supervisor/runtime tests.
+
+- [ ] Add RED crash/restart cases around request staging, marker replacement,
+  supervisor stop/start, exact ack, and database acknowledgement.
+- [ ] Persist cancellation/withdrawal intent before any marker side effect; resume it
+  after crashes and never republish a cancelled completed plan.
+- [ ] Require an exact bounded supervisor ack before leaving withdrawal-pending or
+  completing publication. Failed validation/start/timeout/crash stays maintenance;
+  the live supervisor enforces lease expiry at or before the deadline.
+- [ ] Add an RBAC/audited/idempotent production cancellation route that calls only
+  `AgentReconciliationService.request_cancel`; deprecate the legacy orchestrator
+  cancellation entry point for production callers.
+
+### Repair 5: Production lifecycle acceptance
+
+**Files:** `scripts/accept-platform-lifecycle` and
+`tests/e2e/test_platform_lifecycle.py`.
+
+- [ ] Make lifecycle E2E RED on the manual orchestration/legacy publisher path.
+- [ ] Drive both initial and A-to-B loops through bound result consumption,
+  dependency-wave ticks, real claims/results, authenticated address presence, and
+  `AtomicRouteBundlePublisher` plus supervisor acknowledgement. Keep durable replay,
+  inference, and withdrawal evidence; remove manual phase/Job mutations.
+
+### Repair 6: Compose least privilege
+
+**Files:** Compose, route initializer, supervisor entrypoint, and Compose tests.
+
+- [ ] Add rendered-config RED assertions for LiteLLM UID/GID, `cap_drop: ALL`,
+  `no-new-privileges`, read-only root, bounded writable tmp/ack path, and route volume
+  ownership; retain secrets and network segmentation.
+- [ ] Implement matching initializer ownership and non-root service settings, then
+  run supervisor and rendered Compose tests GREEN.
+
+### Repair 7: Verification and evidence
+
+- [ ] Run focused RED/GREEN commands after each repair, then full control tests,
+  actual PostgreSQL races/migration cycles, supervisor/Compose tests, lifecycle E2E,
+  shared agent tests if contracts changed, Ruff 0.16.1, compileall, Bash syntax,
+  JSON/YAML/schema validation, and `git diff --check`.
+- [ ] Append exact evidence and the final finding-by-finding self-review to the Task 3
+  report and feature-branch progress ledger; stage only Task 3 files and commit the
+  cohesive repair wave without claiming review readiness.

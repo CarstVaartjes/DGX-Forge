@@ -13,27 +13,25 @@ def test_database_secret_is_read_from_file(tmp_path: Path, monkeypatch) -> None:
     assert settings.repository_path == Path("/srv/dgx-forge/repository")
 
 
-def test_management_network_configuration_is_validated(monkeypatch) -> None:
+def test_management_networks_are_explicit_and_policy_validated(monkeypatch) -> None:
     monkeypatch.setenv("DGX_DATABASE_URL", "postgresql://db/control")
-    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24,10.1.0.0/16")
-    monkeypatch.setenv("DGX_DIRECT_FABRIC_CIDRS", "10.1.0.0/24")
+    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24,2001:db8:42::/64")
+    monkeypatch.setenv("DGX_DIRECT_FABRIC_CIDRS", "10.0.0.240/28")
 
     settings = Settings.from_env_and_secrets()
 
-    assert settings.management_cidrs == "10.0.0.0/24,10.1.0.0/16"
-    assert settings.direct_fabric_cidrs == "10.1.0.0/24"
+    assert settings.management_cidrs == "10.0.0.0/24,2001:db8:42::/64"
+    assert settings.direct_fabric_cidrs == "10.0.0.240/28"
 
     monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.1/24")
-    with pytest.raises(SettingsError, match="management CIDRs"):
-        Settings.from_env_and_secrets()
-
-    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
-    monkeypatch.setenv("DGX_DIRECT_FABRIC_CIDRS", "10.0.0.0/24")
-    with pytest.raises(SettingsError, match="fully forbidden"):
+    with pytest.raises(SettingsError, match="canonical CIDR"):
         Settings.from_env_and_secrets()
 
 
-def test_production_requires_management_cidrs(tmp_path: Path, monkeypatch) -> None:
+def test_production_agent_runtime_requires_management_networks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     database = tmp_path / "database-url"
     database.write_text("postgresql://db/control")
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
@@ -46,6 +44,7 @@ def test_production_requires_management_cidrs(tmp_path: Path, monkeypatch) -> No
 
 def test_production_rejects_raw_database_secret(monkeypatch) -> None:
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
+    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
     monkeypatch.setenv("DGX_AGENT_CA_PROVIDER", "step-ca")
     monkeypatch.setenv("DGX_DATABASE_URL", "postgresql://unsafe")
     with pytest.raises(SettingsError, match="secret file"):
@@ -193,6 +192,7 @@ def test_agent_proxy_auth_defaults_empty_and_production_rejects_builtin_ca(monke
     assert settings.agent_proxy_auth == b""
 
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
+    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
     monkeypatch.setenv("DGX_AGENT_CA_PROVIDER", "builtin")
     with pytest.raises(SettingsError, match="explicit bootstrap"):
         Settings.from_env_and_secrets()
@@ -232,7 +232,6 @@ def test_production_worker_settings_can_explicitly_disable_agent_runtime(tmp_pat
         "DGX_GIT_SIGNING_KEY_FILE": "git-key",
     }
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
-    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
     monkeypatch.setenv("DGX_AGENT_CA_PROVIDER", "step-ca")
     monkeypatch.setenv("DGX_AGENT_RUNTIME", "disabled")
     for name, value in values.items():
@@ -240,10 +239,15 @@ def test_production_worker_settings_can_explicitly_disable_agent_runtime(tmp_pat
         path.write_text(value)
         monkeypatch.setenv(name, str(path))
 
+    with pytest.raises(SettingsError, match="DGX_MANAGEMENT_CIDRS"):
+        Settings.from_env_and_secrets()
+
+    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
     settings = Settings.from_env_and_secrets()
 
     assert settings.agent_ca_provider == "step-ca"
     assert settings.agent_proxy_auth == b""
+    assert settings.management_cidrs == "10.0.0.0/24"
 
 
 def test_production_requires_an_explicit_agent_ca_provider(monkeypatch) -> None:

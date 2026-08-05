@@ -34,6 +34,7 @@ from dgx_control.models import (
     AgentEnrollmentGrant,
     AgentNode,
     AgentOperationAttempt,
+    AgentPresence,
     Base,
     Job,
     Observation,
@@ -151,13 +152,19 @@ def agent_system(tmp_path):
         for node, serial in ((NODE_A, "serial-a"), (NODE_B, "serial-b")):
             session.add(AgentNode(node_id=node, state="active", capabilities=[]))
             session.add(AgentCertificate(serial=serial, node_id=node, fingerprint=f"fingerprint-{serial}", not_before=clock.now - timedelta(seconds=1), not_after=clock.now + timedelta(hours=1)))
+    presence = AgentPresenceService(
+        sessions,
+        ManagementAddressPolicy.parse("10.0.0.0/24"),
+        clock=clock,
+    )
+    operations = AgentJobService(sessions, clock=clock)
+    operations.set_contact_consumer(presence.observe_in_session)
     services = AgentApiServices(
         enrollment=EnrollmentService(sessions, Authority(), clock=clock),
-        operations=AgentJobService(sessions, clock=clock), sessions=sessions, clock=clock,
-        presence=AgentPresenceService(
-            sessions,
-            ManagementAddressPolicy.parse("10.0.0.0/24"),
-        ),
+        operations=operations,
+        sessions=sessions,
+        clock=clock,
+        presence=presence,
         artifact_root=tmp_path / "artifacts",
     )
     services.artifact_root.mkdir()
@@ -335,6 +342,62 @@ def test_verified_identity_cannot_claim_other_node(agent_system) -> None:
     assert response.status_code == 403
 
 
+def test_claim_requires_a_trusted_policy_bounded_source(agent_system) -> None:
+    client, services, _, _ = agent_system
+    missing = agent_headers(NODE_A, "serial-a")
+    missing.pop("x-dgx-agent-source")
+
+    assert client.post("/agent/v1/claim", headers=missing).status_code == 401
+    outside = client.post(
+        "/agent/v1/claim",
+        headers={
+            **agent_headers(NODE_A, "serial-a"),
+            "x-dgx-agent-source": "10.1.0.42",
+        },
+    )
+    assert outside.status_code == 422
+    with services.sessions() as session:
+        assert session.get(AgentPresence, NODE_A) is None
+        assert session.get(AgentNode, NODE_A).last_seen_at is None
+
+
+def test_authenticated_claim_persists_certificate_bound_source(agent_system) -> None:
+    client, services, _, clock = agent_system
+
+    response = client.post(
+        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
+    )
+
+    assert response.status_code == 204
+    with services.sessions() as session:
+        presence = session.get(AgentPresence, NODE_A)
+        assert presence is not None
+        assert presence.certificate_serial == "serial-a"
+        assert presence.certificate_fingerprint == "fingerprint-serial-a"
+        assert presence.management_address == "10.0.0.42"
+        assert presence.observed_at.replace(tzinfo=UTC) == clock.now
+
+
+def test_claim_uses_atomic_presence_consumer_not_post_commit(
+    agent_system,
+    monkeypatch,
+) -> None:
+    client, services, _, _ = agent_system
+
+    def reject_post_commit(_source) -> None:
+        raise AssertionError("presence must be written inside the queue transaction")
+
+    monkeypatch.setattr(services.presence, "observe", reject_post_commit)
+
+    response = client.post(
+        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
+    )
+
+    assert response.status_code == 204
+    with services.sessions() as session:
+        assert session.get(AgentPresence, NODE_A) is not None
+
+
 def test_authenticated_claim_records_protocol_contact_for_metrics(agent_system) -> None:
     client, services, _, clock = agent_system
     clock.now += timedelta(seconds=15)
@@ -368,8 +431,8 @@ def test_authenticated_claim_records_protocol_contact_for_metrics(agent_system) 
     )
 
 
-def test_unknown_claim_capability_is_rejected_without_protocol_metadata(agent_system) -> None:
-    client, services, _, clock = agent_system
+def test_unknown_claim_capability_is_rejected_without_contact(agent_system) -> None:
+    client, services, _, _ = agent_system
 
     response = client.post(
         "/agent/v1/claim",
@@ -389,16 +452,13 @@ def test_unknown_claim_capability_is_rejected_without_protocol_metadata(agent_sy
         assert node is not None
         assert node.capabilities == []
         assert node.protocol_version is None
-        assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
-        presence = session.scalar(
-            select(Observation).where(Observation.kind == "management-address")
-        )
-        assert presence is not None
-        assert presence.payload == {"address": "10.0.0.42"}
+        assert node.last_seen_at is None
+        assert session.get(AgentPresence, NODE_A) is None
 
 
 def test_authenticated_heartbeat_preserves_claim_advertised_protocol_after_exact_fence_validation(
     agent_system,
+    monkeypatch,
 ) -> None:
     client, services, _, clock = agent_system
     services.operations.enqueue(
@@ -427,9 +487,17 @@ def test_authenticated_heartbeat_preserves_claim_advertised_protocol_after_exact
         )
     } | {"progress": {"phase": "checking"}}
 
+    def reject_post_commit(_source) -> None:
+        raise AssertionError("presence must be written inside the queue transaction")
+
+    monkeypatch.setattr(services.presence, "observe", reject_post_commit)
+
     response = client.post(
         "/agent/v1/heartbeat",
-        headers=agent_headers(NODE_A, "serial-a"),
+        headers={
+            **agent_headers(NODE_A, "serial-a"),
+            "x-dgx-agent-source": "10.0.0.43",
+        },
         json=progress,
     )
 
@@ -439,10 +507,15 @@ def test_authenticated_heartbeat_preserves_claim_advertised_protocol_after_exact
         assert node is not None
         assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
         assert node.protocol_version == 2
+        presence = session.get(AgentPresence, NODE_A)
+        assert presence is not None
+        assert presence.management_address == "10.0.0.43"
+        assert presence.observed_at.replace(tzinfo=UTC) == clock.now
 
 
 def test_authenticated_result_preserves_claim_advertised_protocol_after_exact_fence_validation(
     agent_system,
+    monkeypatch,
 ) -> None:
     client, services, _, clock = agent_system
     services.operations.enqueue(
@@ -471,9 +544,17 @@ def test_authenticated_result_preserves_claim_advertised_protocol_after_exact_fe
         )
     } | {"state": "succeeded", "result": PROBE_RESULT}
 
+    def reject_post_commit(_source) -> None:
+        raise AssertionError("presence must be written inside the queue transaction")
+
+    monkeypatch.setattr(services.presence, "observe", reject_post_commit)
+
     response = client.post(
         "/agent/v1/result",
-        headers=agent_headers(NODE_A, "serial-a"),
+        headers={
+            **agent_headers(NODE_A, "serial-a"),
+            "x-dgx-agent-source": "10.0.0.44",
+        },
         json=result,
     )
 
@@ -483,6 +564,10 @@ def test_authenticated_result_preserves_claim_advertised_protocol_after_exact_fe
         assert node is not None
         assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
         assert node.protocol_version == 2
+        presence = session.get(AgentPresence, NODE_A)
+        assert presence is not None
+        assert presence.management_address == "10.0.0.44"
+        assert presence.observed_at.replace(tzinfo=UTC) == clock.now
 
 
 def test_exact_fenced_probe_success_writes_bounded_durable_health(agent_system) -> None:
@@ -525,10 +610,7 @@ def test_exact_fenced_probe_success_writes_bounded_durable_health(agent_system) 
     with services.sessions() as session:
         observations = list(
             session.scalars(
-                select(Observation).where(
-                    Observation.node_id == NODE_A,
-                    Observation.kind == "health",
-                )
+                select(Observation).where(Observation.node_id == NODE_A)
             )
         )
         assert len(observations) == 1
@@ -575,9 +657,7 @@ def test_failed_probe_result_never_writes_health_observation(agent_system) -> No
         json=result,
     ).status_code == 204
     with services.sessions() as session:
-        assert session.scalar(
-            select(Observation).where(Observation.kind == "health")
-        ) is None
+        assert session.scalar(select(Observation)) is None
 
 
 def test_untrusted_and_stale_requests_do_not_record_agent_contact(agent_system) -> None:
@@ -606,9 +686,13 @@ def test_untrusted_and_stale_requests_do_not_record_agent_contact(agent_system) 
     ).json()
     with services.sessions.begin() as session:
         node = session.get(AgentNode, NODE_A)
+        presence = session.get(AgentPresence, NODE_A)
         assert node is not None
+        assert presence is not None
+        observed_at = presence.observed_at.replace(tzinfo=UTC)
         node.last_seen_at = None
         node.protocol_version = None
+    clock.now += timedelta(seconds=5)
     stale = {
         key: claim[key]
         for key in (
@@ -627,7 +711,10 @@ def test_untrusted_and_stale_requests_do_not_record_agent_contact(agent_system) 
 
     rejected = client.post(
         "/agent/v1/result",
-        headers=agent_headers(NODE_A, "serial-a"),
+        headers={
+            **agent_headers(NODE_A, "serial-a"),
+            "x-dgx-agent-source": "10.0.0.43",
+        },
         json=stale,
     )
 
@@ -637,6 +724,10 @@ def test_untrusted_and_stale_requests_do_not_record_agent_contact(agent_system) 
         assert node is not None
         assert node.last_seen_at is None
         assert node.protocol_version is None
+        presence = session.get(AgentPresence, NODE_A)
+        assert presence is not None
+        assert presence.management_address == "10.0.0.42"
+        assert presence.observed_at.replace(tzinfo=UTC) == observed_at
 
 
 def test_boolean_protocol_advertisement_is_rejected_without_recording_contact(
@@ -661,52 +752,6 @@ def test_boolean_protocol_advertisement_is_rejected_without_recording_contact(
         assert node is not None
         assert node.last_seen_at is None
         assert node.protocol_version is None
-
-
-def test_claim_requires_one_valid_proxy_observed_source_address(agent_system) -> None:
-    client, services, _, _ = agent_system
-    missing = agent_headers(NODE_A, "serial-a")
-    missing.pop("x-dgx-agent-source")
-
-    assert client.post("/agent/v1/claim", headers=missing).status_code == 422
-    assert client.post(
-        "/agent/v1/claim",
-        headers={**agent_headers(NODE_A, "serial-a"), "x-dgx-agent-source": "10.0.1.42"},
-    ).status_code == 422
-
-    duplicate = list(agent_headers(NODE_A, "serial-a").items())
-    duplicate.append(("x-dgx-agent-source", "10.0.0.43"))
-    assert client.post("/agent/v1/claim", headers=duplicate).status_code == 401
-    with services.sessions() as session:
-        assert session.query(Observation).count() == 0
-
-
-def test_authenticated_claim_records_presence_before_polling(agent_system) -> None:
-    client, services, _, clock = agent_system
-
-    response = client.post("/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a"))
-
-    assert response.status_code == 204, response.text
-    with services.sessions() as session:
-        node = session.get(AgentNode, NODE_A)
-        observations = session.query(Observation).all()
-    assert node is not None and node.last_seen_at is not None
-    assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
-    assert len(observations) == 1
-    assert observations[0].payload == {"address": "10.0.0.42"}
-
-
-def test_forged_certificate_identity_writes_no_presence(agent_system) -> None:
-    client, services, _, _ = agent_system
-
-    response = client.post(
-        "/agent/v1/claim",
-        headers=agent_headers(NODE_A, "serial-b"),
-    )
-
-    assert response.status_code == 401
-    with services.sessions() as session:
-        assert session.query(Observation).count() == 0
 
 
 @pytest.mark.parametrize("mutation", ("revoked", "retired", "expired", "fingerprint"))
@@ -913,7 +958,7 @@ def test_staged_certificate_can_only_activate_and_activation_is_idempotent_after
         assert new is not None and new.state == "active" and new.revoked_at is None
 
 
-def test_failed_result_maps_stable_error_code_to_bounded_failure_reason(agent_system) -> None:
+def test_failed_result_preserves_canonical_evidence_and_maps_parent_reason(agent_system) -> None:
     client, services, _, clock = agent_system
     services.operations.enqueue(
         parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {}
@@ -939,7 +984,9 @@ def test_failed_result_maps_stable_error_code_to_bounded_failure_reason(agent_sy
     assert response.status_code == 204
     with services.sessions() as session:
         attempt = session.query(AgentOperationAttempt).filter_by(fence=claim["fence"]).one()
-        assert attempt.result == {"reason": "probe_failed"}
+        parent_job = session.get(Job, claim["job_id"])
+        assert attempt.result == {"status": "failed", "error_code": "probe_failed"}
+        assert parent_job is not None and parent_job.status_reason == "probe_failed"
 
 
 def test_agent_validation_errors_are_canonical_json(agent_system) -> None:

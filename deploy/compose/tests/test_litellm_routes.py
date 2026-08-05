@@ -18,11 +18,12 @@ def test_entrypoint_uses_supervisor_for_atomic_generated_config() -> None:
     supervisor = COMPOSE / "litellm/config_supervisor.py"
     ast.parse(supervisor.read_text())
     source = supervisor.read_text()
-    assert 'Path("/routes/config.yaml")' in source
-    assert 'Path("/routes/lease.json")' in source
-    assert 'Path("/app/bootstrap-config.yaml")' in source
+    assert 'ROOT / "activation.json"' in source
+    assert 'ROOT / "generations"' in source
+    assert 'Path("/app/bootstrap-config.json")' in source
+    assert 'Path("/supervisor")' in source
     assert "sha256" in source
-    assert "STARTED_AT" in source
+    assert "MAXIMUM_LEASE" in source
     assert "terminate" in source
     assert "kill" in source
     assert "shell=True" not in source

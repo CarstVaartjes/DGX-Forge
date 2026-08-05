@@ -8,6 +8,7 @@ from datetime import datetime
 from sqlalchemy import (
     JSON,
     BigInteger,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Integer,
@@ -38,6 +39,9 @@ class Job(Base):
     current_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    reconciliation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("reconciliations.id"), unique=True, index=True
+    )
 
 
 class JobAttempt(Base):
@@ -118,6 +122,187 @@ class ReconciliationCompletionGeneration(Base):
     last_generation: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
+class ReconciliationOperation(Base):
+    __tablename__ = "reconciliation_operations"
+    __table_args__ = (
+        UniqueConstraint(
+            "reconciliation_id",
+            "graph_operation_id",
+            "role",
+            name="uq_reconciliation_operation_graph_role",
+        ),
+        CheckConstraint(
+            "length(graph_operation_id) BETWEEN 1 AND 128",
+            name="ck_reconciliation_operations_graph_operation_id_length",
+        ),
+        CheckConstraint(
+            "role IN ('primary', 'compensation')",
+            name="ck_reconciliation_operations_role",
+        ),
+        CheckConstraint(
+            "state IN ('planned', 'queued', 'running', 'succeeded', "
+            "'accepted', 'failed', 'waiting-for-operator', 'compensating', "
+            "'compensated', 'uncertain')",
+            name="ck_reconciliation_operations_state",
+        ),
+        CheckConstraint(
+            "length(expected_payload_digest) = 64",
+            name="ck_reconciliation_operations_expected_payload_digest_length",
+        ),
+        CheckConstraint(
+            "result_digest IS NULL OR length(result_digest) = 64",
+            name="ck_reconciliation_operations_result_digest_length",
+        ),
+        CheckConstraint(
+            "evidence_digest IS NULL OR length(evidence_digest) = 64",
+            name="ck_reconciliation_operations_evidence_digest_length",
+        ),
+        CheckConstraint(
+            "compensated_graph_operation_id IS NULL OR "
+            "length(compensated_graph_operation_id) BETWEEN 1 AND 128",
+            name="ck_reconciliation_operations_compensated_id_length",
+        ),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    reconciliation_id: Mapped[str] = mapped_column(
+        ForeignKey("reconciliations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    graph_operation_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    agent_operation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("agent_operations.id"), unique=True, index=True
+    )
+    expected_payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    result_digest: Mapped[str | None] = mapped_column(String(64))
+    evidence_digest: Mapped[str | None] = mapped_column(String(64))
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    compensated_graph_operation_id: Mapped[str | None] = mapped_column(String(128))
+
+
+class ReconciliationCancellation(Base):
+    """Durable operator intent advanced independently of process lifetime."""
+
+    __tablename__ = "reconciliation_cancellations"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('requested', 'withdrawal-pending', 'withdrawn', "
+            "'processing', 'compensating', 'completed', "
+            "'waiting-for-operator')",
+            name="ck_reconciliation_cancellations_state",
+        ),
+        CheckConstraint(
+            "length(reason) BETWEEN 1 AND 1024",
+            name="ck_reconciliation_cancellations_reason_length",
+        ),
+    )
+    reconciliation_id: Mapped[str] = mapped_column(
+        ForeignKey("reconciliations.id", ondelete="CASCADE"), primary_key=True
+    )
+    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    actor: Mapped[str] = mapped_column(String(200), nullable=False)
+    request_id: Mapped[str] = mapped_column(String(36), nullable=False, unique=True)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class RoutePublication(Base):
+    __tablename__ = "route_publications"
+    __table_args__ = (
+        CheckConstraint(
+            "state IN ('withdrawal-pending', 'routes-withdrawn', "
+            "'publication-pending', 'completed', 'failed')",
+            name="ck_route_publications_state",
+        ),
+        CheckConstraint(
+            "generation IS NULL OR generation >= 0",
+            name="ck_route_publications_generation",
+        ),
+        CheckConstraint(
+            "length(plan_digest) = 64",
+            name="ck_route_publications_plan_digest_length",
+        ),
+        CheckConstraint(
+            "evidence_digest IS NULL OR length(evidence_digest) = 64",
+            name="ck_route_publications_evidence_digest_length",
+        ),
+        CheckConstraint(
+            "route_digest IS NULL OR length(route_digest) = 64",
+            name="ck_route_publications_route_digest_length",
+        ),
+        CheckConstraint(
+            "litellm_digest IS NULL OR length(litellm_digest) = 64",
+            name="ck_route_publications_litellm_digest_length",
+        ),
+        CheckConstraint(
+            "bundle_digest IS NULL OR length(bundle_digest) = 64",
+            name="ck_route_publications_bundle_digest_length",
+        ),
+        CheckConstraint(
+            "activation_marker_digest IS NULL OR "
+            "length(activation_marker_digest) = 64",
+            name="ck_route_publications_activation_marker_digest_length",
+        ),
+        CheckConstraint(
+            "lease_expires_at IS NULL OR "
+            "(lease_issued_at IS NOT NULL AND lease_expires_at > lease_issued_at)",
+            name="ck_route_publications_lease_window",
+        ),
+    )
+    reconciliation_id: Mapped[str] = mapped_column(
+        ForeignKey("reconciliations.id", ondelete="CASCADE"), primary_key=True
+    )
+    state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    generation: Mapped[int | None] = mapped_column(
+        BigInteger, unique=True, index=True
+    )
+    plan_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    evidence_digest: Mapped[str | None] = mapped_column(String(64))
+    route_digest: Mapped[str | None] = mapped_column(String(64))
+    litellm_digest: Mapped[str | None] = mapped_column(String(64))
+    bundle_digest: Mapped[str | None] = mapped_column(String(64))
+    activation_marker: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    activation_marker_digest: Mapped[str | None] = mapped_column(String(64))
+    lease_issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    lease_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RoutePublicationOwner(Base):
+    """Singleton authority for the one global LiteLLM activation marker."""
+
+    __tablename__ = "route_publication_owner"
+    __table_args__ = (
+        CheckConstraint(
+            "singleton_id = 1",
+            name="ck_route_publication_owner_singleton",
+        ),
+        CheckConstraint(
+            "owner_generation >= 0",
+            name="ck_route_publication_owner_generation",
+        ),
+    )
+    singleton_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    reconciliation_id: Mapped[str | None] = mapped_column(
+        ForeignKey("reconciliations.id", ondelete="SET NULL"),
+        unique=True,
+    )
+    owner_generation: Mapped[int] = mapped_column(
+        BigInteger,
+        nullable=False,
+        default=0,
+    )
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
 class User(Base):
     __tablename__ = "users"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -160,6 +345,31 @@ class AgentCertificate(Base):
     csr_public_key_fingerprint: Mapped[str | None] = mapped_column(String(64))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     ca_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AgentPresence(Base):
+    """Latest authenticated management address for one active agent node."""
+
+    __tablename__ = "agent_presence"
+    __table_args__ = (
+        CheckConstraint(
+            "length(management_address) BETWEEN 2 AND 45",
+            name="ck_agent_presence_management_address_length",
+        ),
+    )
+    node_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_nodes.node_id", ondelete="CASCADE"), primary_key=True
+    )
+    certificate_serial: Mapped[str] = mapped_column(
+        ForeignKey("agent_certificates.serial"), nullable=False, index=True
+    )
+    certificate_fingerprint: Mapped[str] = mapped_column(
+        String(128), nullable=False
+    )
+    management_address: Mapped[str] = mapped_column(String(45), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
 
 
 class AgentCertificateRotation(Base):

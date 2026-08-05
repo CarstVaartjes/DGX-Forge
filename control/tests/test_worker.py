@@ -65,5 +65,87 @@ def test_worker_runs_route_housekeeping_even_when_queue_is_idle(tmp_path) -> Non
     jobs = _service(tmp_path)
     calls = []
 
-    assert Worker(jobs, "worker-1", {}, housekeeping=lambda: calls.append("refresh")).run_once() is False
+    worker = Worker(
+        jobs,
+        "worker-1",
+        {},
+        housekeeping=lambda: calls.append("refresh"),
+    )
+
+    assert worker.run_once() is False
     assert calls == ["refresh"]
+
+
+def test_worker_ticks_durable_reconciliations_before_generic_jobs(tmp_path) -> None:
+    jobs = _service(tmp_path)
+    jobs.enqueue("probe", "operator", "a" * 40, ["node"], {})
+
+    class Reconciliations:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def tick(self) -> bool:
+            self.calls += 1
+            return True
+
+    reconciliations = Reconciliations()
+    handled = []
+    worker = Worker(
+        jobs,
+        "worker-1",
+        {"probe": lambda request: handled.append(request) or {}},
+        reconciliations=reconciliations,
+    )
+
+    assert worker.run_once() is True
+    assert reconciliations.calls == 1
+    assert handled == []
+
+
+def test_worker_falls_through_when_no_reconciliation_can_advance(tmp_path) -> None:
+    jobs = _service(tmp_path)
+    jobs.enqueue("probe", "operator", "a" * 40, ["node"], {})
+
+    class Reconciliations:
+        def tick(self) -> bool:
+            return False
+
+    handled = []
+    worker = Worker(
+        jobs,
+        "worker-1",
+        {"probe": lambda request: handled.append(request.kind) or {}},
+        reconciliations=Reconciliations(),
+    )
+
+    assert worker.run_once() is True
+    assert handled == ["probe"]
+
+
+def test_worker_alternates_busy_reconciliation_and_generic_job_queues(
+    tmp_path,
+) -> None:
+    jobs = _service(tmp_path)
+    jobs.enqueue("probe", "operator", "a" * 40, ["node"], {})
+
+    class Reconciliations:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def tick(self) -> bool:
+            self.calls += 1
+            return True
+
+    reconciliations = Reconciliations()
+    handled = []
+    worker = Worker(
+        jobs,
+        "worker-1",
+        {"probe": lambda request: handled.append(request.kind) or {}},
+        reconciliations=reconciliations,
+    )
+
+    assert worker.run_once() is True
+    assert worker.run_once() is True
+    assert reconciliations.calls == 1
+    assert handled == ["probe"]

@@ -93,7 +93,10 @@ def _server_on_port(adapted: dict, port: int) -> dict:
     return next(
         server
         for server in adapted["apps"]["http"]["servers"].values()
-        if any(str(listener).endswith(suffix) for listener in server.get("listen", []))
+        if any(
+            str(listener).endswith(suffix)
+            for listener in server.get("listen", [])
+        )
     )
 
 
@@ -163,7 +166,9 @@ def _settings_result(rendered: dict, tmp_path: Path) -> subprocess.CompletedProc
                 "from dgx_control.settings import Settings; "
                 "settings = Settings.from_env_and_secrets(); "
                 "print(settings.agent_ca_provider); "
-                "print(settings.agent_proxy_auth.decode('ascii'))"
+                "print(settings.agent_proxy_auth.decode('ascii')); "
+                "print(settings.management_cidrs); "
+                "print(settings.direct_fabric_cidrs)"
             ),
         ],
         capture_output=True,
@@ -188,7 +193,11 @@ def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents(
     backend_server = _server_on_port(adapted, 8443)
 
     def site(host: str) -> dict:
-        return next(route for route in backend_server["routes"] if route.get("match") == [{"host": [host]}])
+        return next(
+            route
+            for route in backend_server["routes"]
+            if route.get("match") == [{"host": [host]}]
+        )
 
     control_routes = tailnet_server["routes"]
     denied = next(
@@ -489,4 +498,9 @@ def test_each_provider_overlay_passes_application_settings_guard(tmp_path: Path)
         rendered = _rendered("compose.yaml", overlay)
         result = _settings_result(rendered, tmp_path / provider)
         assert result.returncode == 0, result.stderr
-        assert result.stdout.splitlines() == [provider, token]
+        assert result.stdout.splitlines() == [
+            provider,
+            token,
+            "10.0.0.0/24",
+            "192.168.100.0/24,192.168.101.0/24",
+        ]

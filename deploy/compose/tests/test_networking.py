@@ -98,6 +98,13 @@ def test_database_has_only_data_network_and_ingress_is_segmented() -> None:
         "ingress",
     }
     assert set(services["prometheus"]["networks"]) == {"application"}
+    for service in ("control-api", "control-worker"):
+        assert services[service]["environment"]["DGX_MANAGEMENT_CIDRS"] == (
+            "10.0.0.0/24"
+        )
+        assert services[service]["environment"]["DGX_DIRECT_FABRIC_CIDRS"] == (
+            "192.168.100.0/24,192.168.101.0/24"
+        )
 
 
 def test_tailnet_backends_have_readiness_checks() -> None:
@@ -121,23 +128,34 @@ def test_litellm_routes_use_a_dedicated_atomic_config_volume() -> None:
     worker_volumes = {volume["target"]: volume for volume in services["control-worker"]["volumes"]}
     litellm_volumes = {volume["target"]: volume for volume in services["litellm"]["volumes"]}
 
-    assert worker_volumes["/litellm-routes"]["source"] == "litellm-routes"
+    assert worker_volumes["/routes"]["source"] == "route-publications"
+    assert worker_volumes["/supervisor"] == {
+        "type": "volume",
+        "source": "litellm-supervisor-state",
+        "target": "/supervisor",
+        "read_only": True,
+        "volume": {},
+    }
     assert litellm_volumes["/routes"] == {
         "type": "volume",
-        "source": "litellm-routes",
+        "source": "route-publications",
         "target": "/routes",
         "read_only": True,
         "volume": {},
     }
-    assert services["control-worker"]["environment"]["DGX_LITELLM_CONFIG_PATH"] == "/litellm-routes/config.yaml"
-    assert "litellm-upstream-key" in {
+    assert litellm_volumes["/supervisor"]["source"] == "litellm-supervisor-state"
+    assert "DGX_LITELLM_CONFIG_PATH" not in services["control-worker"]["environment"]
+    assert "litellm-upstream-key" not in {
         secret["source"] for secret in services["control-worker"]["secrets"]
     }
-    initializer = services["litellm-routes-init"]
+    initializer = services["route-publication-init"]
     assert initializer["network_mode"] == "none"
     assert initializer["cap_drop"] == ["ALL"]
     assert set(initializer["cap_add"]) == {"CHOWN", "FOWNER"}
     assert initializer["security_opt"] == ["no-new-privileges:true"]
+    assert services["litellm"]["user"] == "10002:10001"
+    assert services["litellm"]["cap_drop"] == ["ALL"]
+    assert services["litellm"]["security_opt"] == ["no-new-privileges:true"]
 
 
 def test_caddy_disables_admin_and_sets_edge_guards() -> None:

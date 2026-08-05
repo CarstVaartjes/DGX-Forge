@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 
 from .jobs import JobService
 
@@ -39,19 +38,36 @@ class Worker:
         *,
         logs=None,
         housekeeping: Callable[[], object] | None = None,
+        reconciliations=None,
     ) -> None:
         self._jobs = jobs
         self._worker_id = worker_id
         self._handlers = dict(handlers)
         self._logs = logs
         self._housekeeping = housekeeping
+        self._reconciliations = reconciliations
+        self._reconciliation_turn = True
 
     def run_once(self) -> bool:
         if self._housekeeping is not None:
             self._housekeeping()
+        reconciliation_attempted = False
+        if self._reconciliations is not None and self._reconciliation_turn:
+            self._reconciliation_turn = False
+            reconciliation_attempted = True
+            if self._reconciliations.tick():
+                return True
         attempt = self._jobs.claim(self._worker_id, 30)
         if attempt is None:
+            if (
+                self._reconciliations is not None
+                and not self._reconciliation_turn
+                and not reconciliation_attempted
+            ):
+                self._reconciliation_turn = True
+                return self._reconciliations.tick()
             return False
+        self._reconciliation_turn = True
         if self._logs is not None:
             self._logs.save(attempt.job_id, f"job {attempt.kind} attempt {attempt.attempt} started".encode())
         handler = self._handlers.get(attempt.kind)
@@ -80,20 +96,41 @@ if __name__ == "__main__":
     import os
     import time
     from datetime import UTC, datetime
+    from pathlib import Path
 
+    from .agent_jobs import AgentJobService
+    from .agent_reconciliation import AgentReconciliationService
     from .code_host import RepositoryCodeHost
     from .db import build_engine, session_factory
     from .git_policy import GitPolicy, PolicyStore
     from .logging import JobLogStore
     from .offline import OnlineLock
     from .presence import AgentPresenceService, ManagementAddressPolicy
-    from .route_runtime import ProductionRouteManager, RouteRuntimeError
+    from .repository import RepositoryService
+    from .route_runtime import (
+        AtomicRouteBundlePublisher,
+        FileSupervisorAcknowledger,
+    )
     from .runtime import RuntimeHandlers
     from .settings import Settings
 
     settings = Settings.from_env_and_secrets()
     sessions = session_factory(build_engine(settings.database_url))
-    jobs = JobService(sessions, clock=lambda: datetime.now(UTC))
+    clock = lambda: datetime.now(UTC)
+    jobs = JobService(sessions, clock=clock)
+    address_policy = ManagementAddressPolicy.parse(
+        settings.management_cidrs,
+        forbidden_cidrs=settings.direct_fabric_cidrs,
+    )
+    presence = AgentPresenceService(sessions, address_policy, clock=clock)
+    repository = RepositoryService(settings.repository_path)
+
+    def endpoint(session, node_id: str) -> tuple[str, datetime]:
+        observation = presence.latest_in_session(
+            session, node_id, maximum_age_seconds=300
+        )
+        return observation.address, observation.observed_at
+
     if settings.git_signing_key_path is None:
         raise RuntimeError("production Git signing key is unavailable")
     code_host = RepositoryCodeHost(
@@ -106,42 +143,41 @@ if __name__ == "__main__":
         protected_branch=settings.deployment_branch,
         required_checks=settings.required_checks,
     )
-    upstream_key_source = os.environ.get("DGX_LITELLM_UPSTREAM_KEY_FILE", "")
-    upstream_key_path = Path(upstream_key_source) if upstream_key_source else None
-    if (
-        upstream_key_path is None
-        or upstream_key_path.is_symlink()
-        or not upstream_key_path.is_file()
-    ):
-        raise RouteRuntimeError("production LiteLLM upstream key file is unavailable")
-    upstream_key = upstream_key_path.read_text().strip()
-    live_config_raw = os.environ.get("DGX_LITELLM_CONFIG_PATH", "")
-    if not live_config_raw:
-        raise RouteRuntimeError("production LiteLLM config path is unavailable")
-    management_policy = ManagementAddressPolicy.parse(
-        settings.management_cidrs,
-        forbidden_cidrs=settings.direct_fabric_cidrs,
+    commit_eligible = lambda commit: policy.eligible(commit).ok
+    current_commit = lambda: repository.head(settings.deployment_branch)
+    agent_jobs = AgentJobService(
+        sessions,
+        clock=clock,
+        commit_eligible=commit_eligible,
+        current_commit=current_commit,
     )
-    route_manager = ProductionRouteManager(
-        settings.repository_path,
-        state_root=settings.state_path / "route-runtime",
-        live_config=Path(live_config_raw),
-        presence=AgentPresenceService(sessions, management_policy),
-        management_policy=management_policy,
-        upstream_key=upstream_key,
+    reconciliations = AgentReconciliationService(
+        sessions,
+        agent_jobs=agent_jobs,
+        publisher=AtomicRouteBundlePublisher(
+            Path("/routes"),
+            management_policy=address_policy,
+            clock=clock,
+            maximum_lease_seconds=300,
+            await_supervisor_ack=FileSupervisorAcknowledger(
+                Path("/supervisor/ack.json"),
+                clock=clock,
+            ),
+        ),
+        endpoint_resolver=endpoint,
+        clock=clock,
+        commit_eligible=commit_eligible,
+        current_commit=current_commit,
     )
     runtime = RuntimeHandlers(
         settings.repository_path,
-        eligible=lambda commit: policy.eligible(commit).ok,
-        route_manager=route_manager,
+        eligible=commit_eligible,
+        current_commit=current_commit,
     )
     worker = Worker(
         jobs, os.environ.get("HOSTNAME", "control-worker"), runtime.registry(),
         logs=JobLogStore(settings.state_path / "job-logs"),
-        housekeeping=lambda: route_manager.refresh_if_due(
-            runtime.current_commit,
-            eligible=lambda commit: policy.eligible(commit).ok,
-        ),
+        reconciliations=reconciliations,
     )
     with OnlineLock(settings.state_path / "offline.lock"):
         while True:

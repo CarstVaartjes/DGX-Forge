@@ -2,463 +2,476 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing
+import threading
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
-from dgx_control.models import AgentNode, Base
-from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
-from dgx_control.route_runtime import ProductionRouteManager, RouteRuntimeError
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from dgx_agent_protocol import canonical_message
+from dgx_control.presence import ManagementAddressPolicy
+from dgx_control.route_runtime import (
+    AcceptedEndpointEvidence,
+    AtomicRouteBundlePublisher,
+    FileSupervisorAcknowledger,
+    RouteBundleRequest,
+    RouteRuntimeError,
+)
 
-NODE_ID = "spk_" + "0" * 31 + "1"
-SECOND_NODE_ID = "spk_" + "0" * 31 + "2"
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
-ROUTES = {
-    "deepseek": {
-        "node_id": NODE_ID,
-        "workload": "deepseek-agent-single",
-        "requests_per_minute": 30,
-        "tokens_per_minute": 10_000,
-    }
-}
+NODE = "spk_" + "1" * 32
+RECONCILIATION_ID = "bb7aac18-edbf-4cc1-bafd-15e282557c53"
+PLAN_DIGEST = "a" * 64
+EVIDENCE_SET_DIGEST = "b" * 64
 
 
-def _manager(
-    tmp_path,
-    *,
-    probe=lambda _url, _key: None,
-    observed_at=NOW,
-    clock=lambda: NOW,
-    maturity=None,
-    presence_addresses=None,
-):
-    maturity = maturity or {
-        "deepseek-agent-dual": "accepted",
-        "deepseek-agent-single": "verified",
-    }
-    presence_addresses = presence_addresses or {NODE_ID: "10.0.0.42"}
-    repository = tmp_path / "repository"
-    workload_root = repository / "config/workloads"
-    workload_root.mkdir(parents=True)
-    for workload_id in ("deepseek-agent-dual", "deepseek-agent-single"):
-        (workload_root / f"{workload_id}.toml").write_text(
-            f'id = "{workload_id}"\n[endpoint]\nhost = "127.0.0.1"\nport = 8888\n'
-        )
-    (repository / "config/hermes-agent-policy.toml").write_text(
-        "schema_version = 1\n"
-        'alias = "hermes-agent"\n'
-        "local_only = true\n\n"
-        "[[candidates]]\n"
-        'workload = "deepseek-agent-dual"\n'
-        "priority = 1\n"
-        'minimum_maturity = "accepted"\n\n'
-        "[[candidates]]\n"
-        'workload = "deepseek-agent-single"\n'
-        "priority = 2\n"
-        'minimum_maturity = "accepted"\n'
-    )
-    report = repository / "inventory/reports/model-definitions.json"
-    report.parent.mkdir(parents=True)
-    report.write_text(json.dumps({
-        "definitions": [
-            {"id": workload_id, "maturity": state}
-            for workload_id, state in maturity.items()
-        ]
-    }))
-    fleet = repository / "inventory/fleet.toml"
-    fleet.parent.mkdir(parents=True, exist_ok=True)
-    fleet.write_text(
-        "".join(
-            f'[nodes."{node_id}"]\nlifecycle = "ready"\n'
-            for node_id in presence_addresses
-        )
-    )
-    engine = create_engine(f"sqlite:///{tmp_path / 'routes.sqlite'}")
-    Base.metadata.create_all(engine)
-    sessions = sessionmaker(engine, expire_on_commit=False)
-    with sessions.begin() as session:
-        session.add_all(
-            AgentNode(node_id=node_id, state="active", capabilities=[])
-            for node_id in presence_addresses
-        )
-    policy = ManagementAddressPolicy.parse("10.0.0.0/24")
-    presence = AgentPresenceService(sessions, policy)
-    for node_id, address in presence_addresses.items():
-        presence.observe(node_id, address, observed_at)
-    live = tmp_path / "live/config.yaml"
-    manager = ProductionRouteManager(
-        repository,
-        state_root=tmp_path / "state",
-        live_config=live,
-        presence=presence,
-        management_policy=policy,
-        upstream_key="upstream-test-key",
-        probe=probe,
-        clock=clock,
-        maximum_age_seconds=150,
-        refresh_interval_seconds=60,
-        repository_reader=lambda _commit, path: (repository / path).read_bytes(),
-    )
-    return manager, live, presence
-
-
-def _v2_route(workload: str, node_id: str, *, port: int = 9999):
-    quota = {"requests_per_minute": 30, "tokens_per_minute": 10_000}
+def _routes() -> dict[str, object]:
     return {
-        "workload_id": workload,
-        "nodes": [node_id],
-        "entrypoint_node_id": node_id,
-        "scheme": "http",
-        "port": port,
-        "path": "/v1",
-        "quota": quota,
-        "quota_digest": hashlib.sha256(
-            json.dumps(quota, sort_keys=True, separators=(",", ":")).encode()
-        ).hexdigest(),
+        "chat": {
+            "workload_id": "model",
+            "nodes": [NODE],
+            "entrypoint_node_id": NODE,
+            "scheme": "http",
+            "port": 8000,
+            "path": "/v1",
+            "quota": {
+                "requests_per_minute": 30,
+                "tokens_per_minute": 10_000,
+            },
+            "quota_digest": hashlib.sha256(
+                canonical_message(
+                    {
+                        "requests_per_minute": 30,
+                        "tokens_per_minute": 10_000,
+                    }
+                )
+            ).hexdigest(),
+        }
     }
 
 
-def _hermes_models(live):
-    return [
-        item for item in json.loads(live.read_bytes())["model_list"]
-        if item["model_name"] == "hermes-agent"
-    ]
-
-
-def test_successful_reconciliation_publishes_probed_presence_route(tmp_path) -> None:
-    probes = []
-    manager, live, _presence = _manager(
-        tmp_path,
-        probe=lambda url, key: probes.append((url, key)),
-    )
-    manager.withdraw((NODE_ID,))
-    assert json.loads(live.read_bytes())["model_list"] == []
-
-    result = manager.publish(
-        commit="a" * 40,
-        profile="agent-single",
-        targets=(NODE_ID,),
-        routes=ROUTES,
-    )
-
-    assert probes == [("http://10.0.0.42:8888/v1/models", "upstream-test-key")]
-    config = json.loads(live.read_bytes())
-    assert config["model_list"][0]["model_name"] == "deepseek"
-    assert config["model_list"][0]["litellm_params"]["api_base"] == "http://10.0.0.42:8888/v1"
-    assert b"upstream-test-key" not in live.read_bytes()
-    assert result.route_state.health_timestamp == NOW.isoformat()
-    lease = json.loads((live.parent / "lease.json").read_bytes())
-    assert lease["config_sha256"] == hashlib.sha256(live.read_bytes()).hexdigest()
-    assert lease["issued_at"] == NOW.isoformat()
-    assert lease["expires_at"] == (NOW + timedelta(seconds=150)).isoformat()
-
-
-def test_probe_failure_keeps_litellm_withdrawn(tmp_path) -> None:
-    def fail(_url, _key):
-        raise OSError("refused")
-
-    manager, live, _presence = _manager(tmp_path, probe=fail)
-    manager.withdraw((NODE_ID,))
-
-    with pytest.raises(RouteRuntimeError, match="probe"):
-        manager.publish(
-            commit="a" * 40,
-            profile="agent-single",
-            targets=(NODE_ID,),
-            routes=ROUTES,
-        )
-
-    assert json.loads(live.read_bytes())["model_list"] == []
-
-
-def test_stale_presence_never_reaches_probe_or_live_routes(tmp_path) -> None:
-    manager, live, _presence = _manager(
-        tmp_path,
-        observed_at=NOW - timedelta(seconds=151),
-        probe=lambda _url, _key: pytest.fail("must not probe stale address"),
-    )
-    manager.withdraw((NODE_ID,))
-
-    with pytest.raises(RouteRuntimeError, match="stale"):
-        manager.publish(
-            commit="a" * 40,
-            profile="agent-single",
-            targets=(NODE_ID,),
-            routes=ROUTES,
-        )
-
-    assert json.loads(live.read_bytes())["model_list"] == []
-
-
-def test_route_port_must_come_from_repository_workload(tmp_path) -> None:
-    manager, _live, _presence = _manager(tmp_path)
-    forged = {"deepseek": dict(ROUTES["deepseek"], port=9999)}
-
-    with pytest.raises(RouteRuntimeError, match="fields"):
-        manager.publish(
-            commit="a" * 40,
-            profile="agent-single",
-            targets=(NODE_ID,),
-            routes=forged,
-        )
-
-
-def test_refresh_republishes_a_changed_dhcp_observation(tmp_path) -> None:
-    current = [NOW]
-    probes = []
-    manager, live, presence = _manager(
-        tmp_path,
-        clock=lambda: current[0],
-        probe=lambda url, _key: probes.append(url),
-    )
-    manager.withdraw((NODE_ID,))
-    manager.publish(
-        commit="a" * 40,
-        profile="agent-single",
-        targets=(NODE_ID,),
-        routes=ROUTES,
-    )
-    current[0] = NOW + timedelta(seconds=60)
-    presence.observe(NODE_ID, "10.0.0.43", current[0])
-
-    assert manager.refresh_if_due(lambda: "a" * 40) is True
-    config = json.loads(live.read_bytes())
-    assert config["model_list"][0]["litellm_params"]["api_base"] == "http://10.0.0.43:8888/v1"
-    assert probes[-1] == "http://10.0.0.43:8888/v1/models"
-
-
-def test_changed_dhcp_route_is_withdrawn_before_replacement_probe(tmp_path) -> None:
-    current = [NOW]
-    live_holder = []
-
-    def probe(url, _key):
-        if url.startswith("http://10.0.0.43"):
-            assert json.loads(live_holder[0].read_bytes())["model_list"] == []
-
-    manager, live, presence = _manager(
-        tmp_path,
-        clock=lambda: current[0],
-        probe=probe,
-    )
-    live_holder.append(live)
-    manager.publish(
-        commit="a" * 40,
-        profile="agent-single",
-        targets=(NODE_ID,),
-        routes=ROUTES,
-    )
-    current[0] = NOW + timedelta(seconds=60)
-    presence.observe(NODE_ID, "10.0.0.43", current[0])
-
-    assert manager.refresh_if_due(lambda: "a" * 40) is True
-
-
-def test_route_target_must_be_ready_in_accepted_repository_fleet(tmp_path) -> None:
-    manager, live, _presence = _manager(
-        tmp_path,
-        probe=lambda _url, _key: pytest.fail("unaccepted node must not be probed"),
-    )
-    fleet = tmp_path / "repository/inventory/fleet.toml"
-    fleet.write_text(f'[nodes."{NODE_ID}"]\nlifecycle = "quarantined"\n')
-
-    with pytest.raises(RouteRuntimeError, match="accepted fleet"):
-        manager.publish(
-            commit="a" * 40,
-            profile="agent-single",
-            targets=(NODE_ID,),
-            routes=ROUTES,
-        )
-
-    assert json.loads(live.read_bytes())["model_list"] == []
-
-
-def test_desired_state_is_durable_before_any_probe_or_activation(tmp_path, monkeypatch) -> None:
-    manager, live, _presence = _manager(
-        tmp_path,
-        probe=lambda _url, _key: pytest.fail("must not probe before desired state is durable"),
-    )
-
-    def fail(_content):
-        raise OSError("disk full")
-
-    monkeypatch.setattr(manager._desired, "write", fail)
-    with pytest.raises(RouteRuntimeError, match="disk full"):
-        manager.publish(
-            commit="a" * 40,
-            profile="agent-single",
-            targets=(NODE_ID,),
-            routes=ROUTES,
-        )
-
-    assert json.loads(live.read_bytes())["model_list"] == []
-
-
-def test_refresh_withdraws_routes_when_presence_expires(tmp_path) -> None:
-    current = [NOW]
-    manager, live, _presence = _manager(tmp_path, clock=lambda: current[0])
-    manager.withdraw((NODE_ID,))
-    manager.publish(
-        commit="a" * 40,
-        profile="agent-single",
-        targets=(NODE_ID,),
-        routes=ROUTES,
-    )
-    current[0] = NOW + timedelta(seconds=151)
-
-    assert manager.refresh_if_due(lambda: "a" * 40) is False
-    assert json.loads(live.read_bytes())["model_list"] == []
-
-
-def test_refresh_is_bounded_and_skips_before_interval(tmp_path) -> None:
-    current = [NOW]
-    manager, _live, _presence = _manager(tmp_path, clock=lambda: current[0])
-    manager.withdraw((NODE_ID,))
-    manager.publish(
-        commit="a" * 40,
-        profile="agent-single",
-        targets=(NODE_ID,),
-        routes=ROUTES,
-    )
-
-    assert manager.refresh_if_due(lambda: pytest.fail("must not resolve commit")) is False
-
-
-def test_refresh_withdraws_when_commit_loses_eligibility(tmp_path) -> None:
-    current = [NOW]
-    manager, live, _presence = _manager(tmp_path, clock=lambda: current[0])
-    manager.withdraw((NODE_ID,))
-    manager.publish(
-        commit="a" * 40,
-        profile="agent-single",
-        targets=(NODE_ID,),
-        routes=ROUTES,
-    )
-    current[0] = NOW + timedelta(seconds=60)
-
-    assert manager.refresh_if_due(lambda: "a" * 40, eligible=lambda _commit: False) is False
-    assert json.loads(live.read_bytes())["model_list"] == []
-
-
-def test_dual_candidate_outranks_simultaneously_running_single_candidate(tmp_path) -> None:
-    manager, live, _presence = _manager(
-        tmp_path,
-        maturity={
-            "deepseek-agent-dual": "accepted",
-            "deepseek-agent-single": "accepted",
-        },
-        presence_addresses={NODE_ID: "10.0.0.42", SECOND_NODE_ID: "10.0.0.43"},
-    )
-    manager.publish(
-        commit="a" * 40,
-        profile="mixed",
-        targets=(NODE_ID, SECOND_NODE_ID),
-        routes={
-            "dual": _v2_route("deepseek-agent-dual", NODE_ID),
-            "single": _v2_route("deepseek-agent-single", SECOND_NODE_ID),
-        },
-    )
-
-    assert [item["litellm_params"]["model"] for item in _hermes_models(live)] == [
-        "openai/deepseek-agent-dual",
-        "openai/deepseek-agent-single",
-    ]
-    assert [item["litellm_params"]["order"] for item in _hermes_models(live)] == [1, 2]
-
-
-def test_verified_single_candidate_is_not_added_to_hermes_group(tmp_path) -> None:
-    manager, live, _presence = _manager(tmp_path)
-    manager.publish(
-        commit="a" * 40,
-        profile="agent-single",
-        targets=(NODE_ID,),
-        routes={"deepseek": _v2_route("deepseek-agent-single", NODE_ID)},
-    )
-
-    assert _hermes_models(live) == []
-    assert json.loads(live.read_bytes())["model_list"][0]["model_name"] == "deepseek"
-
-
-def test_mixed_profile_can_publish_an_accepted_single_candidate(tmp_path) -> None:
-    manager, live, _presence = _manager(
-        tmp_path,
-        maturity={
-            "deepseek-agent-dual": "accepted",
-            "deepseek-agent-single": "accepted",
-        },
-    )
-    manager.publish(
-        commit="a" * 40,
-        profile="mixed",
-        targets=(NODE_ID,),
-        routes={"deepseek": _v2_route("deepseek-agent-single", NODE_ID)},
-    )
-
-    assert [item["litellm_params"]["model"] for item in _hermes_models(live)] == [
-        "openai/deepseek-agent-single"
-    ]
-
-
-def test_failed_primary_probe_leaves_only_an_eligible_secondary(tmp_path) -> None:
-    def probe(url, _key):
-        if url.startswith("http://10.0.0.42"):
-            raise OSError("primary refused")
-
-    manager, live, _presence = _manager(
-        tmp_path,
-        probe=probe,
-        maturity={
-            "deepseek-agent-dual": "accepted",
-            "deepseek-agent-single": "accepted",
-        },
-        presence_addresses={NODE_ID: "10.0.0.42", SECOND_NODE_ID: "10.0.0.43"},
-    )
-    routes = {
-        "dual": _v2_route("deepseek-agent-dual", NODE_ID),
-        "single": _v2_route("deepseek-agent-single", SECOND_NODE_ID),
+def _endpoint_digest(
+    *, address: str, observed_at: datetime, verify_evidence_digest: str
+) -> str:
+    content = {
+        "address": address,
+        "node_id": NODE,
+        "observed_at": observed_at.isoformat(),
+        "operation_id": f"model:{NODE}:workload.verify",
+        "schema_version": 1,
+        "verify_evidence_digest": verify_evidence_digest,
     }
-    with pytest.raises(RouteRuntimeError, match="probe"):
-        manager.publish(
-            commit="a" * 40,
-            profile="mixed",
-            targets=(NODE_ID, SECOND_NODE_ID),
-            routes=routes,
+    return hashlib.sha256(
+        (json.dumps(content, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+
+
+def _request(
+    *, address: str = "10.0.0.42", observed_at: datetime = NOW
+) -> RouteBundleRequest:
+    verify_evidence_digest = "c" * 64
+    return RouteBundleRequest(
+        reconciliation_id=RECONCILIATION_ID,
+        plan_digest=PLAN_DIGEST,
+        evidence_set_digest=EVIDENCE_SET_DIGEST,
+        routes=_routes(),
+        endpoints={
+            NODE: AcceptedEndpointEvidence(
+                node_id=NODE,
+                address=address,
+                observed_at=observed_at,
+                operation_id=f"model:{NODE}:workload.verify",
+                verify_evidence_digest=verify_evidence_digest,
+                evidence_digest=_endpoint_digest(
+                    address=address,
+                    observed_at=observed_at,
+                    verify_evidence_digest=verify_evidence_digest,
+                ),
+            )
+        },
+        expires_at=NOW + timedelta(seconds=150),
+    )
+
+
+def _publisher(tmp_path: Path, **kwargs) -> AtomicRouteBundlePublisher:
+    return AtomicRouteBundlePublisher(
+        tmp_path / "runtime",
+        management_policy=ManagementAddressPolicy.parse("10.0.0.0/24"),
+        clock=lambda: NOW,
+        **kwargs,
+    )
+
+
+def test_bundle_stages_structured_routes_litellm_and_manifest_before_one_marker(
+    tmp_path: Path,
+) -> None:
+    publisher = _publisher(tmp_path)
+
+    marker = publisher.publish(_request())
+
+    assert marker.reconciliation_id == RECONCILIATION_ID
+    assert marker.plan_digest == PLAN_DIGEST
+    assert marker.evidence_set_digest == EVIDENCE_SET_DIGEST
+    directory = tmp_path / "runtime/generations" / marker.directory
+    routes = json.loads((directory / "routes.json").read_bytes())
+    config = json.loads((directory / "litellm.json").read_bytes())
+    manifest = json.loads((directory / "manifest.json").read_bytes())
+    activation_path = tmp_path / "runtime/activation.json"
+    activation = json.loads(activation_path.read_bytes())
+
+    assert routes == {
+        "generation": 1,
+        "routes": {
+            "chat": {
+                "address": "10.0.0.42",
+                "evidence_digest": _endpoint_digest(
+                    address="10.0.0.42",
+                    observed_at=NOW,
+                    verify_evidence_digest="c" * 64,
+                ),
+                "node_id": NODE,
+                "observed_at": NOW.isoformat(),
+                "operation_id": f"model:{NODE}:workload.verify",
+                "path": "/v1",
+                "port": 8000,
+                "scheme": "http",
+                "verify_evidence_digest": "c" * 64,
+            }
+        },
+        "schema_version": 1,
+        "state": "published",
+    }
+    assert config["model_list"][0]["litellm_params"] == {
+        "api_base": "http://10.0.0.42:8000/v1",
+        "api_key": "os.environ/LITELLM_UPSTREAM_KEY",
+        "model": "openai/chat",
+        "rpm": 30,
+        "tpm": 10_000,
+    }
+    assert activation == {
+        **manifest,
+        "directory": marker.directory,
+        "manifest_sha256": marker.manifest_sha256,
+    }
+    assert (
+        activation["routes_sha256"]
+        == hashlib.sha256((directory / "routes.json").read_bytes()).hexdigest()
+    )
+    assert (
+        activation["litellm_sha256"]
+        == hashlib.sha256((directory / "litellm.json").read_bytes()).hexdigest()
+    )
+    assert marker.canonical_bytes() == activation_path.read_bytes()
+    assert marker.digest == hashlib.sha256(activation_path.read_bytes()).hexdigest()
+    assert publisher.inspect(expected=marker) == marker
+
+
+def test_routes_are_derived_only_from_exact_entrypoint_and_bounded_address_evidence(
+    tmp_path: Path,
+) -> None:
+    publisher = _publisher(tmp_path)
+    bad_routes = _routes()
+    bad_routes["chat"]["entrypoint_node_id"] = "spk_" + "2" * 32
+
+    with pytest.raises(RouteRuntimeError, match="entrypoint"):
+        publisher.publish(
+            _request().__class__(**{**_request().__dict__, "routes": bad_routes})
         )
-    assert json.loads(live.read_bytes())["model_list"] == []
-
-    manager.publish(
-        commit="a" * 40,
-        profile="mixed",
-        targets=(NODE_ID, SECOND_NODE_ID),
-        routes=routes,
-    )
-    assert [item["litellm_params"]["model"] for item in _hermes_models(live)] == [
-        "openai/deepseek-agent-single"
-    ]
+    with pytest.raises(RouteRuntimeError, match="management"):
+        publisher.publish(_request(address="192.0.2.9"))
+    assert not (tmp_path / "runtime/activation.json").exists()
 
 
-def test_no_eligible_candidate_omits_hermes_group_but_keeps_other_routes(tmp_path) -> None:
-    manager, live, _presence = _manager(tmp_path)
-    manager.publish(
-        commit="a" * 40,
-        profile="agent-single",
-        targets=(NODE_ID,),
-        routes={"deepseek": _v2_route("deepseek-agent-single", NODE_ID)},
+def test_address_cannot_be_relabelled_with_an_accepted_endpoint_digest(
+    tmp_path: Path,
+) -> None:
+    request = _request()
+    original = request.endpoints[NODE]
+    relabelled = original.__class__(
+        node_id=NODE,
+        address="10.0.0.43",
+        observed_at=original.observed_at,
+        operation_id=original.operation_id,
+        verify_evidence_digest=original.verify_evidence_digest,
+        evidence_digest=original.evidence_digest,
     )
 
-    assert [item["model_name"] for item in json.loads(live.read_bytes())["model_list"]] == [
-        "deepseek"
-    ]
+    with pytest.raises(RouteRuntimeError, match="binding"):
+        _publisher(tmp_path).publish(
+            request.__class__(**{**request.__dict__, "endpoints": {NODE: relabelled}})
+        )
 
 
-def test_v2_reconciliation_route_shape_is_normalized_without_trusting_an_address(tmp_path) -> None:
-    manager, live, _presence = _manager(tmp_path)
-    manager.publish(
-        commit="a" * 40,
-        profile="agent-single",
-        targets=(NODE_ID,),
-        routes={"deepseek": _v2_route("deepseek-agent-single", NODE_ID, port=9999)},
+def test_route_lease_cannot_outlive_endpoint_freshness(tmp_path: Path) -> None:
+    request = _request(observed_at=NOW - timedelta(seconds=299))
+
+    with pytest.raises(RouteRuntimeError, match="freshness"):
+        _publisher(tmp_path).publish(request)
+
+
+def test_runtime_rejects_a_side_effecting_pre_marker_apply_hook(tmp_path: Path) -> None:
+    with pytest.raises(TypeError, match="apply"):
+        _publisher(tmp_path, apply=lambda _directory: None)
+
+
+def test_explicit_entrypoint_is_authoritative_even_when_nodes_have_another_order(
+    tmp_path: Path,
+) -> None:
+    request = _request()
+    routes = _routes()
+    routes["chat"]["nodes"] = ["spk_" + "2" * 32, NODE]
+
+    marker = _publisher(tmp_path).publish(
+        request.__class__(**{**request.__dict__, "routes": routes})
     )
 
-    model = json.loads(live.read_bytes())["model_list"][0]
-    assert model["litellm_params"]["api_base"] == "http://10.0.0.42:8888/v1"
+    assert marker.state == "published"
+
+
+def test_concurrent_same_publication_is_one_idempotent_generation(
+    tmp_path: Path,
+) -> None:
+    publisher = _publisher(tmp_path)
+    barrier = threading.Barrier(2)
+    markers = []
+
+    def publish() -> None:
+        barrier.wait(timeout=5)
+        markers.append(publisher.publish(_request()))
+
+    threads = [threading.Thread(target=publish) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert len(markers) == 2
+    assert markers[0] == markers[1]
+    assert markers[0].generation == 1
+    assert len(list((tmp_path / "runtime/generations").iterdir())) == 1
+
+
+def test_every_publication_waits_for_an_exact_live_supervisor_ack(
+    tmp_path: Path,
+) -> None:
+    acknowledged = []
+    publisher = _publisher(
+        tmp_path,
+        await_supervisor_ack=acknowledged.append,
+    )
+
+    first = publisher.publish(_request())
+    second = publisher.publish(_request())
+
+    assert first == second
+    assert acknowledged == [first, second]
+
+
+def test_control_accepts_only_a_recent_ack_for_the_exact_marker(tmp_path: Path) -> None:
+    marker = _publisher(tmp_path).publish(_request())
+    ack_path = tmp_path / "supervisor/ack.json"
+    ack_path.parent.mkdir()
+    acknowledgement = {
+        "acknowledged_at": NOW.isoformat(),
+        "activation_sha256": marker.digest,
+        "child_pid": 123,
+        "expires_at": marker.expires_at,
+        "generation": marker.generation,
+        "litellm_sha256": marker.litellm_sha256,
+        "schema_version": 1,
+        "state": marker.state,
+    }
+    ack_path.write_bytes(
+        (json.dumps(acknowledgement, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    )
+    FileSupervisorAcknowledger(ack_path, clock=lambda: NOW)(marker)
+
+    acknowledgement["activation_sha256"] = "f" * 64
+    ack_path.write_bytes(
+        (json.dumps(acknowledgement, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    )
+    moments = iter((0.0, 1.0))
+    mismatched = FileSupervisorAcknowledger(
+        ack_path,
+        clock=lambda: NOW,
+        timeout_seconds=0.5,
+        poll_seconds=0.1,
+        monotonic=lambda: next(moments),
+        sleep=lambda _seconds: None,
+    )
+    with pytest.raises(RouteRuntimeError, match="timed out"):
+        mismatched(marker)
+
+
+def test_restart_after_activation_before_ack_reuses_the_exact_request(
+    tmp_path: Path,
+) -> None:
+    def crash_before_ack(_marker):
+        raise RuntimeError("supervisor unavailable")
+
+    with pytest.raises(RouteRuntimeError, match="acknowledgement"):
+        _publisher(
+            tmp_path,
+            await_supervisor_ack=crash_before_ack,
+        ).publish(_request())
+
+    acknowledged = []
+    marker = _publisher(
+        tmp_path,
+        await_supervisor_ack=acknowledged.append,
+    ).publish(_request())
+
+    assert marker.generation == 1
+    assert acknowledged == [marker]
+
+
+def test_multiprocess_publication_is_serialized_to_one_generation(
+    tmp_path: Path,
+) -> None:
+    context = multiprocessing.get_context("fork")
+    barrier = context.Barrier(2)
+    results = context.Queue()
+
+    def publish() -> None:
+        barrier.wait(timeout=5)
+        marker = _publisher(tmp_path).publish(_request())
+        results.put((marker.generation, marker.digest))
+
+    processes = [context.Process(target=publish) for _ in range(2)]
+    for process in processes:
+        process.start()
+    for process in processes:
+        process.join(timeout=10)
+
+    assert [process.exitcode for process in processes] == [0, 0]
+    receipts = [results.get(timeout=2) for _ in processes]
+    assert receipts[0] == receipts[1]
+    assert receipts[0][0] == 1
+
+
+def test_validation_or_activation_failure_retains_previous_exact_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    publisher = _publisher(tmp_path)
+    previous = publisher.publish(_request())
+    active = tmp_path / "runtime/activation.json"
+    previous_bytes = active.read_bytes()
+    replacement = _request().__class__(
+        **{**_request().__dict__, "evidence_set_digest": "d" * 64}
+    )
+
+    rejecting = _publisher(tmp_path, validate_litellm=lambda _content: False)
+    with pytest.raises(RouteRuntimeError, match="LiteLLM validation"):
+        rejecting.publish(replacement)
+    assert active.read_bytes() == previous_bytes
+
+    original_replace = __import__("os").replace
+
+    def fail_marker(source, target):
+        if Path(target) == active:
+            raise OSError("crash before activation")
+        original_replace(source, target)
+
+    monkeypatch.setattr("dgx_control.route_runtime.os.replace", fail_marker)
+    with pytest.raises(RouteRuntimeError, match="activation"):
+        publisher.publish(replacement)
+    assert active.read_bytes() == previous_bytes
+    monkeypatch.undo()
+    assert (
+        AtomicRouteBundlePublisher(
+            tmp_path / "runtime",
+            management_policy=ManagementAddressPolicy.parse("10.0.0.0/24"),
+            clock=lambda: NOW,
+        ).inspect(expected=previous)
+        == previous
+    )
+
+
+def test_crash_before_files_leaves_no_generation_or_activation(tmp_path: Path) -> None:
+    publisher = _publisher(tmp_path, validate_routes=lambda _content: False)
+
+    with pytest.raises(RouteRuntimeError, match="route validation"):
+        publisher.publish(_request())
+
+    assert list((tmp_path / "runtime/generations").iterdir()) == []
+    assert not (tmp_path / "runtime/activation.json").exists()
+
+
+def test_restart_after_marker_before_db_ack_reuses_exact_receipt(
+    tmp_path: Path,
+) -> None:
+    marker = _publisher(tmp_path).publish(_request())
+
+    restarted = AtomicRouteBundlePublisher(
+        tmp_path / "runtime",
+        management_policy=ManagementAddressPolicy.parse("10.0.0.0/24"),
+        clock=lambda: NOW,
+    )
+
+    assert restarted.publish(_request()) == marker
+    assert len(list((tmp_path / "runtime/generations").iterdir())) == 1
+
+
+def test_restart_inspection_rejects_tampering_wrong_expectation_and_expired_lease(
+    tmp_path: Path,
+) -> None:
+    publisher = _publisher(tmp_path)
+    marker = publisher.publish(_request())
+    restarted = AtomicRouteBundlePublisher(
+        tmp_path / "runtime",
+        management_policy=ManagementAddressPolicy.parse("10.0.0.0/24"),
+        clock=lambda: NOW,
+    )
+    wrong = marker.__class__(**{**marker.__dict__, "plan_digest": "d" * 64})
+    with pytest.raises(RouteRuntimeError, match="expected"):
+        restarted.inspect(expected=wrong)
+
+    activation = tmp_path / "runtime/activation.json"
+    exact = activation.read_bytes()
+    activation.write_text(json.dumps(json.loads(exact), indent=2))
+    with pytest.raises(RouteRuntimeError, match="canonical"):
+        restarted.inspect(expected=marker)
+    activation.write_bytes(exact)
+
+    config = tmp_path / "runtime/generations" / marker.directory / "litellm.json"
+    config.write_bytes(b'{"model_list":[{"unsafe":true}]}\n')
+    with pytest.raises(RouteRuntimeError, match="checksum"):
+        restarted.inspect(expected=marker)
+
+    clean_root = tmp_path / "clean"
+    clean = AtomicRouteBundlePublisher(
+        clean_root,
+        management_policy=ManagementAddressPolicy.parse("10.0.0.0/24"),
+        clock=lambda: NOW,
+    )
+    clean_marker = clean.publish(_request())
+    expired = AtomicRouteBundlePublisher(
+        clean_root,
+        management_policy=ManagementAddressPolicy.parse("10.0.0.0/24"),
+        clock=lambda: NOW + timedelta(seconds=151),
+    )
+    with pytest.raises(RouteRuntimeError, match="lease"):
+        expired.inspect(expected=clean_marker)
+
+
+def test_withdrawal_activates_an_empty_fail_closed_bundle(tmp_path: Path) -> None:
+    publisher = _publisher(tmp_path)
+    publisher.publish(_request())
+
+    marker = publisher.withdraw(
+        reconciliation_id=RECONCILIATION_ID,
+        plan_digest=PLAN_DIGEST,
+        targets=(NODE,),
+        reason="reconciliation in progress bearer-secret",
+    )
+
+    directory = tmp_path / "runtime/generations" / marker.directory
+    routes = json.loads((directory / "routes.json").read_bytes())
+    config = json.loads((directory / "litellm.json").read_bytes())
+    assert marker.state == "maintenance"
+    assert routes["state"] == "maintenance"
+    assert routes["routes"] == {}
+    assert routes["targets"] == [NODE]
+    assert "bearer-secret" not in routes["reason"]
+    assert config["model_list"] == []

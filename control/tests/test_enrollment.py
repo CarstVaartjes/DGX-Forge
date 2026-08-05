@@ -805,7 +805,7 @@ def test_postgres_issued_revocation_evidence_migration_chain(
             "SELECT state FROM agent_certificates "
             "WHERE serial = 'legacy-serial'"
         )).scalar_one() == "active"
-    command.upgrade(config, "0008_resolved_plan")
+    command.upgrade(config, "head")
     with postgres_engine.connect() as connection:
         assert compare_metadata(
             MigrationContext.configure(connection), Base.metadata

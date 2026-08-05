@@ -24,6 +24,34 @@ x-control-environment: &control-environment
   DGX_DIRECT_FABRIC_CIDRS: ${DGX_DIRECT_FABRIC_CIDRS:-}
 
 services:
+  route-publication-init:
+    image: ${CONTROL_IMAGE:?set a digest-pinned control image}
+    restart: "no"
+    logging: *bounded-logging
+    user: "0:0"
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: [no-new-privileges:true]
+    command:
+      - python
+      - -c
+      - >-
+        import os;
+        os.chown('/routes', 0, 0);
+        os.chmod('/routes', 0o700);
+        os.makedirs('/routes/generations', mode=0o700, exist_ok=True);
+        os.chmod('/routes/generations', 0o700);
+        os.chown('/routes/generations', 10001, 10001);
+        os.chown('/routes', 10001, 10001);
+        os.makedirs('/supervisor', mode=0o750, exist_ok=True);
+        os.chmod('/supervisor', 0o750);
+        os.chown('/supervisor', 10002, 10001)
+    volumes:
+      - route-publications:/routes
+      - litellm-supervisor-state:/supervisor
+
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929}
     restart: unless-stopped
@@ -75,35 +103,17 @@ services:
       <<: *control-environment
       DGX_AGENT_CA_PROVIDER: step-ca
       DGX_AGENT_RUNTIME: disabled
-      DGX_LITELLM_CONFIG_PATH: /litellm-routes/config.yaml
-      DGX_LITELLM_UPSTREAM_KEY_FILE: /run/secrets/litellm-upstream-key
-    secrets: [database-url, token-signing-key, metrics-token, git-signing-key, litellm-upstream-key]
+    secrets: [database-url, token-signing-key, metrics-token, git-signing-key]
     volumes:
       - ${REPOSITORY_PATH:?set repository path}:/repository
       - control-state:/state
-      - litellm-routes:/litellm-routes
+      - route-publications:/routes
+      - litellm-supervisor-state:/supervisor:ro
     tmpfs: [/tmp]
     networks: [application, data, cluster-egress]
     depends_on:
       postgres: {condition: service_healthy}
-      litellm-routes-init: {condition: service_completed_successfully}
-
-  litellm-routes-init:
-    image: ${CONTROL_IMAGE:?set a digest-pinned control image}
-    restart: "no"
-    logging: *bounded-logging
-    user: "0:0"
-    read_only: true
-    network_mode: none
-    command:
-      - python
-      - -c
-      - "import os; os.chmod('/litellm-routes', 0o750); os.chown('/litellm-routes', 10001, 10001)"
-    cap_drop: [ALL]
-    cap_add: [CHOWN, FOWNER]
-    security_opt: [no-new-privileges:true]
-    volumes:
-      - litellm-routes:/litellm-routes
+      route-publication-init: {condition: service_completed_successfully}
 
   litellm:
     image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.82.3-stable@sha256:b959a1816fa454a14d2842242d0fa1cd0d39f96fc94d3a1f4e1de4e48e2398c6}
@@ -111,17 +121,21 @@ services:
     logging: *bounded-logging
     entrypoint: [/app/dgx-entrypoint]
     read_only: true
+    user: "10002:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
     secrets: [litellm-master-key, litellm-upstream-key, litellm-database-url]
     volumes:
-      - ./litellm/config.yaml:/app/bootstrap-config.yaml:ro
+      - ./litellm/bootstrap-config.json:/app/bootstrap-config.json:ro
       - ./litellm/entrypoint.sh:/app/dgx-entrypoint:ro
       - ./litellm/config_supervisor.py:/app/config-supervisor.py:ro
-      - litellm-routes:/routes:ro
+      - route-publications:/routes:ro
+      - litellm-supervisor-state:/supervisor:rw
     tmpfs: [/tmp]
     networks: [data, ingress, cluster-egress, hermes-inference]
     depends_on:
       postgres: {condition: service_healthy}
-      litellm-routes-init: {condition: service_completed_successfully}
+      route-publication-init: {condition: service_completed_successfully}
     healthcheck:
       test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness', timeout=3)"]
       interval: 15s
@@ -266,7 +280,8 @@ volumes:
   control-state: {}
   caddy-data: {}
   caddy-config: {}
+  litellm-supervisor-state: {}
   prometheus-data: {}
   grafana-data: {}
   registry-data: {}
-  litellm-routes: {}
+  route-publications: {}

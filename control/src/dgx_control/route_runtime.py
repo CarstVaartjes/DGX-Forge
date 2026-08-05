@@ -1,47 +1,33 @@
-"""Production bridge from authenticated presence to live LiteLLM routes."""
+"""Fail-closed, atomic route and LiteLLM bundle publication."""
 
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
+import stat
 import tempfile
-import tomllib
-import urllib.request
+import time
+import uuid
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from contextlib import contextmanager
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
-from .git_content import read_commit_file
-from .hermes_policy import HermesAgentPolicy
-from .litellm import (
-    LiteLlmDeployment,
-    LiteLlmGeneration,
-    LiteLlmPolicy,
-    LiteLlmPublisher,
-)
-from .presence import AgentPresenceService, ManagementAddressPolicy, PresenceError
-from .routes import (
-    RouteCandidate,
-    RouteEndpoint,
-    RouteEndpointPolicy,
-    RoutePublisher,
-    RouteState,
-    RouteValidationError,
-)
+from dgx_agent_protocol import canonical_message
 
-_ALIAS = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}")
-_NODE = re.compile(r"spk_[0-9a-f]{32}")
-_WORKLOAD = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?")
+from .presence import ManagementAddressPolicy, PresenceError
+
+_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_NODE = re.compile(r"spk_[0-9a-f]{32}\Z")
+_IDENTIFIER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,127}\Z")
+_OPERATION = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}\Z")
+_DIRECTORY = re.compile(r"[0-9]{8}-[0-9a-f]{64}\Z")
 _ROUTE_FIELDS = {
-    "node_id",
-    "workload",
-    "requests_per_minute",
-    "tokens_per_minute",
-}
-_V2_ROUTE_FIELDS = {
     "workload_id",
     "nodes",
     "entrypoint_node_id",
@@ -51,49 +37,701 @@ _V2_ROUTE_FIELDS = {
     "quota",
     "quota_digest",
 }
+_QUOTA_FIELDS = {"requests_per_minute", "tokens_per_minute"}
+_MARKER_FIELDS = {
+    "schema_version",
+    "generation",
+    "state",
+    "reconciliation_id",
+    "plan_digest",
+    "evidence_set_digest",
+    "routes_sha256",
+    "litellm_sha256",
+    "issued_at",
+    "expires_at",
+    "directory",
+    "manifest_sha256",
+}
+_ACK_FIELDS = {
+    "acknowledged_at",
+    "activation_sha256",
+    "child_pid",
+    "expires_at",
+    "generation",
+    "litellm_sha256",
+    "schema_version",
+    "state",
+}
 
 
 class RouteRuntimeError(RuntimeError):
-    """A live route could not be safely derived or applied."""
+    """A route bundle could not be safely staged, activated, or inspected."""
+
+
+def _encoded(value: Mapping[str, object]) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def _sha256(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def _canonical_sha256(value: Mapping[str, object]) -> str:
+    """Hash protocol documents without filesystem-only trailing whitespace."""
+
+    return _sha256(canonical_message(value))
+
+
+def _aware(value: datetime, label: str) -> datetime:
+    if value.tzinfo is None or value.utcoffset() is None:
+        raise RouteRuntimeError(f"{label} must include a timezone")
+    return value.astimezone(UTC)
+
+
+def _parse_time(value: object, label: str) -> datetime:
+    if not isinstance(value, str):
+        raise RouteRuntimeError(f"activation {label} is invalid")
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise RouteRuntimeError(f"activation {label} is invalid") from error
+    return _aware(parsed, f"activation {label}")
 
 
 @dataclass(frozen=True)
-class RouteRuntimeResult:
-    route_state: RouteState
-    litellm_generation: LiteLlmGeneration
+class AcceptedEndpointEvidence:
+    """Endpoint address carried by already-accepted, fenced operation evidence."""
 
-
-@dataclass(frozen=True)
-class _NormalizedRoute:
     node_id: str
-    workload: str
-    requests_per_minute: int
-    tokens_per_minute: int
+    address: str
+    observed_at: datetime
+    operation_id: str
+    verify_evidence_digest: str
+    evidence_digest: str
 
 
-class AtomicConfigTarget:
-    def __init__(self, target: Path, *, mode: int = 0o644) -> None:
-        if target.is_symlink() or target.parent.is_symlink():
-            raise RouteRuntimeError("LiteLLM live config path must not be a symlink")
-        target.parent.mkdir(parents=True, exist_ok=True, mode=0o750)
-        self._target = target
-        self._mode = mode
+@dataclass(frozen=True)
+class RouteBundleRequest:
+    reconciliation_id: str
+    plan_digest: str
+    evidence_set_digest: str
+    routes: Mapping[str, object]
+    endpoints: Mapping[str, AcceptedEndpointEvidence]
+    expires_at: datetime
 
-    def write(self, content: bytes) -> None:
+
+@dataclass(frozen=True)
+class ActivationMarker:
+    schema_version: int
+    generation: int
+    state: str
+    reconciliation_id: str
+    plan_digest: str
+    evidence_set_digest: str
+    routes_sha256: str
+    litellm_sha256: str
+    issued_at: str
+    expires_at: str
+    directory: str
+    manifest_sha256: str
+
+    def canonical_bytes(self) -> bytes:
+        """Return the exact representation persisted as the activation marker."""
+
+        return _encoded(asdict(self))
+
+    @property
+    def digest(self) -> str:
+        """Bind a durable database receipt to the exact activation marker bytes."""
+
+        return _sha256(self.canonical_bytes())
+
+
+class FileSupervisorAcknowledger:
+    """Wait for a recent live-process ack bound to one exact marker request."""
+
+    def __init__(
+        self,
+        path: Path,
+        *,
+        clock: Callable[[], datetime],
+        timeout_seconds: float = 30,
+        maximum_ack_age_seconds: float = 5,
+        poll_seconds: float = 0.1,
+        monotonic: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        if (
+            timeout_seconds <= 0
+            or maximum_ack_age_seconds <= 0
+            or poll_seconds <= 0
+            or poll_seconds > timeout_seconds
+        ):
+            raise RouteRuntimeError("supervisor acknowledgement bounds are invalid")
+        self._path = path
+        self._clock = clock
+        self._timeout_seconds = timeout_seconds
+        self._maximum_age = timedelta(seconds=maximum_ack_age_seconds)
+        self._poll_seconds = poll_seconds
+        self._monotonic = monotonic
+        self._sleep = sleep
+
+    def __call__(self, marker: ActivationMarker) -> None:
+        deadline = self._monotonic() + self._timeout_seconds
+        while True:
+            if self._matches(marker):
+                return
+            if self._monotonic() >= deadline:
+                raise RouteRuntimeError(
+                    "live LiteLLM supervisor acknowledgement timed out"
+                )
+            self._sleep(self._poll_seconds)
+
+    def _matches(self, marker: ActivationMarker) -> bool:
+        path = self._path
+        if path.is_symlink() or not path.is_file() or path.parent.is_symlink():
+            return False
         try:
-            json.loads(content)
-        except (TypeError, json.JSONDecodeError) as error:
-            raise RouteRuntimeError("LiteLLM live config is invalid") from error
-        descriptor, temporary_raw = tempfile.mkstemp(prefix=".config-", dir=self._target.parent)
+            content = path.read_bytes()
+            raw: Any = json.loads(content)
+        except (OSError, json.JSONDecodeError):
+            return False
+        if (
+            len(content) > 4096
+            or not isinstance(raw, dict)
+            or set(raw) != _ACK_FIELDS
+            or content != _encoded(raw)
+            or raw.get("schema_version") != 1
+            or raw.get("state") != marker.state
+            or raw.get("generation") != marker.generation
+            or raw.get("activation_sha256") != marker.digest
+            or raw.get("litellm_sha256") != marker.litellm_sha256
+            or raw.get("expires_at") != marker.expires_at
+            or isinstance(raw.get("child_pid"), bool)
+            or not isinstance(raw.get("child_pid"), int)
+            or raw["child_pid"] <= 0
+        ):
+            return False
+        try:
+            acknowledged = _parse_time(
+                raw.get("acknowledged_at"), "acknowledgement timestamp"
+            )
+            issued = _parse_time(marker.issued_at, "issued timestamp")
+            expires = _parse_time(marker.expires_at, "expiry timestamp")
+            now = _aware(self._clock(), "supervisor acknowledgement clock")
+        except RouteRuntimeError:
+            return False
+        return (
+            issued <= acknowledged <= now < expires
+            and now - acknowledged <= self._maximum_age
+        )
+
+
+def endpoint_evidence_digest(
+    *,
+    node_id: str,
+    address: str,
+    observed_at: datetime,
+    operation_id: str,
+    verify_evidence_digest: str,
+) -> str:
+    """Bind authenticated presence to the exact accepted verify evidence."""
+
+    return _sha256(
+        _encoded(
+            {
+                "address": address,
+                "node_id": node_id,
+                "observed_at": observed_at.astimezone(UTC).isoformat(),
+                "operation_id": operation_id,
+                "schema_version": 1,
+                "verify_evidence_digest": verify_evidence_digest,
+            }
+        )
+    )
+
+
+class AtomicRouteBundlePublisher:
+    """Stage a complete bundle and replace its sole activation marker last."""
+
+    def __init__(
+        self,
+        root: Path,
+        *,
+        management_policy: ManagementAddressPolicy,
+        clock: Callable[[], datetime],
+        maximum_lease_seconds: int = 300,
+        validate_routes: Callable[[bytes], bool] | None = None,
+        validate_litellm: Callable[[bytes], bool] | None = None,
+        await_supervisor_ack: Callable[[ActivationMarker], None] | None = None,
+    ) -> None:
+        if root.is_symlink():
+            raise RouteRuntimeError("route runtime root must not be a symlink")
+        if not 1 <= maximum_lease_seconds <= 3600:
+            raise RouteRuntimeError("route lease bound is invalid")
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        root.chmod(0o700)
+        generations = root / "generations"
+        if generations.is_symlink():
+            raise RouteRuntimeError("route generation root must not be a symlink")
+        generations.mkdir(mode=0o700, exist_ok=True)
+        self._root = root
+        self._generations = generations
+        self._policy = management_policy
+        self._clock = clock
+        self._maximum_lease = timedelta(seconds=maximum_lease_seconds)
+        self._validate_routes = validate_routes or self._valid_json_mapping
+        self._validate_litellm = validate_litellm or self._valid_litellm
+        self._await_supervisor_ack = await_supervisor_ack
+
+    def _require_supervisor_ack(self, marker: ActivationMarker) -> None:
+        if self._await_supervisor_ack is None:
+            return
+        try:
+            self._await_supervisor_ack(marker)
+        except RouteRuntimeError:
+            raise
+        except Exception as error:
+            raise RouteRuntimeError(
+                "live LiteLLM supervisor acknowledgement is unavailable"
+            ) from error
+
+    @staticmethod
+    def _valid_json_mapping(content: bytes) -> bool:
+        try:
+            return isinstance(json.loads(content), dict)
+        except (TypeError, json.JSONDecodeError):
+            return False
+
+    @staticmethod
+    def _valid_litellm(content: bytes) -> bool:
+        try:
+            document = json.loads(content)
+        except (TypeError, json.JSONDecodeError):
+            return False
+        return isinstance(document, dict) and isinstance(
+            document.get("model_list"), list
+        )
+
+    @staticmethod
+    def empty_litellm() -> bytes:
+        return _encoded(
+            {
+                "general_settings": {
+                    "database_url": "os.environ/LITELLM_DATABASE_URL",
+                    "disable_admin_ui": True,
+                    "master_key": "os.environ/LITELLM_MASTER_KEY",
+                },
+                "litellm_settings": {
+                    "drop_params": True,
+                    "failure_callback": [],
+                    "set_verbose": False,
+                    "success_callback": [],
+                },
+                "model_list": [],
+                "router_settings": {
+                    "enable_pre_call_checks": True,
+                    "routing_strategy": "simple-shuffle",
+                },
+            }
+        )
+
+    def _current_generation(self) -> int:
+        marker = self._read_marker(
+            optional=True, verify_files=False, verify_lease=False
+        )
+        return marker.generation if marker is not None else 0
+
+    def _lease(self, expires_at: datetime) -> tuple[datetime, datetime]:
+        issued = _aware(self._clock(), "route clock")
+        expires = _aware(expires_at, "route lease expiry")
+        if expires <= issued or expires - issued > self._maximum_lease:
+            raise RouteRuntimeError(
+                "route lease is invalid or exceeds its configured bound"
+            )
+        return issued, expires
+
+    @staticmethod
+    def _identity(
+        reconciliation_id: str, plan_digest: str, evidence_digest: str
+    ) -> None:
+        try:
+            parsed = uuid.UUID(reconciliation_id)
+        except (TypeError, ValueError, AttributeError) as error:
+            raise RouteRuntimeError("reconciliation ID is invalid") from error
+        if str(parsed) != reconciliation_id:
+            raise RouteRuntimeError("reconciliation ID is not canonical")
+        if (
+            _DIGEST.fullmatch(plan_digest) is None
+            or _DIGEST.fullmatch(evidence_digest) is None
+        ):
+            raise RouteRuntimeError("publication digest identity is invalid")
+
+    def _render_routes(
+        self,
+        generation: int,
+        request: RouteBundleRequest,
+        now: datetime,
+        expires: datetime,
+    ) -> tuple[bytes, bytes]:
+        if not request.routes:
+            raise RouteRuntimeError("published routes must not be empty")
+        exact_endpoints: set[str] = set()
+        rendered_routes: dict[str, object] = {}
+        models: list[dict[str, object]] = []
+        for alias, raw in sorted(request.routes.items()):
+            if not isinstance(alias, str) or _IDENTIFIER.fullmatch(alias) is None:
+                raise RouteRuntimeError("route alias is invalid")
+            if not isinstance(raw, Mapping) or set(raw) != _ROUTE_FIELDS:
+                raise RouteRuntimeError("route fields do not match the resolved plan")
+            workload_id = raw.get("workload_id")
+            nodes = raw.get("nodes")
+            node_id = raw.get("entrypoint_node_id")
+            scheme = raw.get("scheme")
+            port = raw.get("port")
+            path = raw.get("path")
+            quota = raw.get("quota")
+            quota_digest = raw.get("quota_digest")
+            if (
+                not isinstance(workload_id, str)
+                or _IDENTIFIER.fullmatch(workload_id) is None
+                or not isinstance(nodes, (list, tuple))
+                or not nodes
+                or len(nodes) != len(set(nodes))
+                or any(
+                    not isinstance(node, str) or _NODE.fullmatch(node) is None
+                    for node in nodes
+                )
+                or not isinstance(node_id, str)
+                or node_id not in nodes
+                or _NODE.fullmatch(node_id) is None
+            ):
+                raise RouteRuntimeError("route entrypoint is invalid")
+            evidence = request.endpoints.get(node_id)
+            if evidence is None or evidence.node_id != node_id:
+                raise RouteRuntimeError("route endpoint evidence is unavailable")
+            expected_operation = f"{workload_id}:{node_id}:workload.verify"
+            if (
+                _OPERATION.fullmatch(evidence.operation_id) is None
+                or evidence.operation_id != expected_operation
+                or _DIGEST.fullmatch(evidence.verify_evidence_digest) is None
+                or _DIGEST.fullmatch(evidence.evidence_digest) is None
+            ):
+                raise RouteRuntimeError(
+                    "route endpoint evidence is not exact verify evidence"
+                )
+            observed = _aware(evidence.observed_at, "endpoint evidence timestamp")
+            if observed > now or now - observed > self._maximum_lease:
+                raise RouteRuntimeError(
+                    "route endpoint evidence is stale or in the future"
+                )
+            try:
+                address = self._policy.validate(evidence.address)
+            except PresenceError as error:
+                raise RouteRuntimeError(
+                    f"management address evidence is invalid: {error}"
+                ) from error
+            expected_endpoint_digest = endpoint_evidence_digest(
+                node_id=node_id,
+                address=address,
+                observed_at=observed,
+                operation_id=evidence.operation_id,
+                verify_evidence_digest=evidence.verify_evidence_digest,
+            )
+            if evidence.evidence_digest != expected_endpoint_digest:
+                raise RouteRuntimeError("endpoint evidence binding is invalid")
+            if expires > observed + self._maximum_lease:
+                raise RouteRuntimeError("route lease exceeds endpoint freshness")
+            if (
+                scheme not in {"http", "https"}
+                or isinstance(port, bool)
+                or not isinstance(port, int)
+                or not 1 <= port <= 65535
+                or not isinstance(path, str)
+                or not path.startswith("/")
+                or "?" in path
+                or "#" in path
+                or "//" in path
+                or "/../" in f"{path}/"
+            ):
+                raise RouteRuntimeError("route structured endpoint is invalid")
+            if not isinstance(quota, Mapping) or set(quota) != _QUOTA_FIELDS:
+                raise RouteRuntimeError("route quota is invalid")
+            rpm = quota.get("requests_per_minute")
+            tpm = quota.get("tokens_per_minute")
+            if (
+                isinstance(rpm, bool)
+                or not isinstance(rpm, int)
+                or isinstance(tpm, bool)
+                or not isinstance(tpm, int)
+                or not 1 <= rpm <= 100_000
+                or not 1 <= tpm <= 100_000_000
+                or _DIGEST.fullmatch(quota_digest) is None
+                or _canonical_sha256(dict(quota)) != quota_digest
+            ):
+                raise RouteRuntimeError("route quota or quota digest is invalid")
+            host = (
+                f"[{address}]"
+                if isinstance(ipaddress.ip_address(address), ipaddress.IPv6Address)
+                else address
+            )
+            base = f"{scheme}://{host}:{port}{path.rstrip('/')}"
+            exact_endpoints.add(node_id)
+            rendered_routes[alias] = {
+                "address": address,
+                "evidence_digest": evidence.evidence_digest,
+                "node_id": node_id,
+                "observed_at": observed.isoformat(),
+                "operation_id": evidence.operation_id,
+                "path": path,
+                "port": port,
+                "scheme": scheme,
+                "verify_evidence_digest": evidence.verify_evidence_digest,
+            }
+            models.append(
+                {
+                    "model_name": alias,
+                    "litellm_params": {
+                        "api_base": base,
+                        "api_key": "os.environ/LITELLM_UPSTREAM_KEY",
+                        "model": f"openai/{alias}",
+                        "rpm": rpm,
+                        "tpm": tpm,
+                    },
+                }
+            )
+        if set(request.endpoints) != exact_endpoints:
+            raise RouteRuntimeError(
+                "endpoint evidence must exactly cover route entrypoints"
+            )
+        route_content = _encoded(
+            {
+                "generation": generation,
+                "routes": rendered_routes,
+                "schema_version": 1,
+                "state": "published",
+            }
+        )
+        litellm_document = json.loads(self.empty_litellm())
+        litellm_document["model_list"] = models
+        return route_content, _encoded(litellm_document)
+
+    def publish(self, request: RouteBundleRequest) -> ActivationMarker:
+        self._identity(
+            request.reconciliation_id,
+            request.plan_digest,
+            request.evidence_set_digest,
+        )
+        with self._locked():
+            issued, expires = self._lease(request.expires_at)
+            current = self._read_marker(
+                optional=True,
+                verify_files=True,
+                verify_lease=False,
+            )
+            generation = current.generation if current is not None else 1
+            routes, litellm = self._render_routes(generation, request, issued, expires)
+            if (
+                current is not None
+                and current.state == "published"
+                and current.reconciliation_id == request.reconciliation_id
+                and current.plan_digest == request.plan_digest
+                and current.evidence_set_digest == request.evidence_set_digest
+                and current.routes_sha256 == _sha256(routes)
+                and current.litellm_sha256 == _sha256(litellm)
+                and _parse_time(current.expires_at, "expiry timestamp") > issued
+            ):
+                self._require_supervisor_ack(current)
+                return current
+            generation = (current.generation if current is not None else 0) + 1
+            if current is not None:
+                routes, litellm = self._render_routes(
+                    generation, request, issued, expires
+                )
+            marker = self._activate(
+                generation=generation,
+                state="published",
+                reconciliation_id=request.reconciliation_id,
+                plan_digest=request.plan_digest,
+                evidence_set_digest=request.evidence_set_digest,
+                routes=routes,
+                litellm=litellm,
+                issued=issued,
+                expires=expires,
+            )
+            self._require_supervisor_ack(marker)
+            return marker
+
+    def withdraw(
+        self,
+        *,
+        reconciliation_id: str,
+        plan_digest: str,
+        targets: tuple[str, ...],
+        reason: str,
+    ) -> ActivationMarker:
+        self._identity(reconciliation_id, plan_digest, "0" * 64)
+        if (
+            not targets
+            or len(targets) != len(set(targets))
+            or any(_NODE.fullmatch(target) is None for target in targets)
+        ):
+            raise RouteRuntimeError("maintenance targets are invalid")
+        safe_reason = re.sub(
+            r"(?i)(bearer|token|secret|password)[^\s]*",
+            "<redacted>",
+            reason,
+        )[:256]
+        with self._locked():
+            issued = _aware(self._clock(), "route clock")
+            expires = issued + self._maximum_lease
+            current = self._read_marker(
+                optional=True,
+                verify_files=True,
+                verify_lease=False,
+            )
+            generation = current.generation if current is not None else 1
+
+            def maintenance_routes(number: int) -> bytes:
+                return _encoded(
+                    {
+                        "generation": number,
+                        "reason": safe_reason or "maintenance",
+                        "routes": {},
+                        "schema_version": 1,
+                        "state": "maintenance",
+                        "targets": sorted(targets),
+                    }
+                )
+
+            routes = maintenance_routes(generation)
+            empty = self.empty_litellm()
+            if (
+                current is not None
+                and current.state == "maintenance"
+                and current.reconciliation_id == reconciliation_id
+                and current.plan_digest == plan_digest
+                and current.routes_sha256 == _sha256(routes)
+                and current.litellm_sha256 == _sha256(empty)
+                and _parse_time(current.expires_at, "expiry timestamp") > issued
+            ):
+                self._require_supervisor_ack(current)
+                return current
+            generation = (current.generation if current is not None else 0) + 1
+            routes = maintenance_routes(generation)
+            marker = self._activate(
+                generation=generation,
+                state="maintenance",
+                reconciliation_id=reconciliation_id,
+                plan_digest=plan_digest,
+                evidence_set_digest="0" * 64,
+                routes=routes,
+                litellm=empty,
+                issued=issued,
+                expires=expires,
+            )
+            self._require_supervisor_ack(marker)
+            return marker
+
+    @contextmanager
+    def _locked(self):
+        try:
+            import fcntl
+
+            path = self._root / ".publication.lock"
+            descriptor = os.open(
+                path,
+                os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW,
+                0o600,
+            )
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                raise RouteRuntimeError("route publication lock is unsafe")
+            fcntl.flock(descriptor, fcntl.LOCK_EX)
+        except RouteRuntimeError:
+            raise
+        except Exception as error:
+            raise RouteRuntimeError("route publication lock is unavailable") from error
+        try:
+            yield
+        finally:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+            os.close(descriptor)
+
+    def _activate(
+        self,
+        *,
+        generation: int,
+        state: str,
+        reconciliation_id: str,
+        plan_digest: str,
+        evidence_set_digest: str,
+        routes: bytes,
+        litellm: bytes,
+        issued: datetime,
+        expires: datetime,
+    ) -> ActivationMarker:
+        if self._validate_routes(routes) is not True:
+            raise RouteRuntimeError("route validation rejected the staged bundle")
+        if self._validate_litellm(litellm) is not True:
+            raise RouteRuntimeError("LiteLLM validation rejected the staged bundle")
+        manifest_document: dict[str, object] = {
+            "schema_version": 1,
+            "generation": generation,
+            "state": state,
+            "reconciliation_id": reconciliation_id,
+            "plan_digest": plan_digest,
+            "evidence_set_digest": evidence_set_digest,
+            "routes_sha256": _sha256(routes),
+            "litellm_sha256": _sha256(litellm),
+            "issued_at": issued.isoformat(),
+            "expires_at": expires.isoformat(),
+        }
+        manifest = _encoded(manifest_document)
+        manifest_digest = _sha256(manifest)
+        directory_name = f"{generation:08d}-{manifest_digest}"
+        directory = self._generations / directory_name
+        try:
+            self._stage(directory, "routes.json", routes)
+            self._stage(directory, "litellm.json", litellm)
+            self._stage(directory, "manifest.json", manifest)
+        except RouteRuntimeError:
+            raise
+        except Exception as error:
+            raise RouteRuntimeError(
+                "route bundle apply failed; previous activation retained"
+            ) from error
+        activation_document = {
+            **manifest_document,
+            "directory": directory_name,
+            "manifest_sha256": manifest_digest,
+        }
+        marker = ActivationMarker(**activation_document)  # type: ignore[arg-type]
+        try:
+            self._atomic_write(
+                self._root / "activation.json", _encoded(activation_document)
+            )
+        except Exception as error:
+            raise RouteRuntimeError(
+                "route bundle activation failed; previous activation retained"
+            ) from error
+        return marker
+
+    @staticmethod
+    def _atomic_write(target: Path, content: bytes, *, mode: int = 0o600) -> None:
+        if target.is_symlink() or target.parent.is_symlink():
+            raise RouteRuntimeError("route runtime target must not be a symlink")
+        descriptor, temporary_raw = tempfile.mkstemp(
+            prefix=f".{target.name}-", dir=target.parent
+        )
         temporary = Path(temporary_raw)
         try:
-            os.fchmod(descriptor, self._mode)
+            os.fchmod(descriptor, mode)
             with os.fdopen(descriptor, "wb") as output:
                 output.write(content)
                 output.flush()
                 os.fsync(output.fileno())
-            os.replace(temporary, self._target)
-            directory = os.open(self._target.parent, os.O_RDONLY | os.O_DIRECTORY)
+            os.replace(temporary, target)
+            directory = os.open(target.parent, os.O_RDONLY | os.O_DIRECTORY)
             try:
                 os.fsync(directory)
             finally:
@@ -101,510 +739,152 @@ class AtomicConfigTarget:
         finally:
             temporary.unlink(missing_ok=True)
 
+    def _stage(self, directory: Path, name: str, content: bytes) -> None:
+        if directory.exists():
+            if directory.is_symlink() or not directory.is_dir():
+                raise RouteRuntimeError("staged route generation is unsafe")
+        else:
+            directory.mkdir(mode=0o700)
+        target = directory / name
+        if target.exists():
+            if (
+                target.is_symlink()
+                or not target.is_file()
+                or target.read_bytes() != content
+            ):
+                raise RouteRuntimeError(
+                    "staged route generation conflicts with existing bytes"
+                )
+            return
+        self._atomic_write(target, content)
 
-class LeasedConfigTarget:
-    """Atomically bind live config bytes to a short, supervisor-visible lease."""
+    def inspect(self, *, expected: ActivationMarker | None = None) -> ActivationMarker:
+        marker = self._read_marker(optional=False, verify_files=True, verify_lease=True)
+        assert marker is not None
+        if expected is not None and marker != expected:
+            raise RouteRuntimeError(
+                "active route marker does not match expected publication"
+            )
+        return marker
 
-    def __init__(
+    def _read_marker(
         self,
-        target: Path,
         *,
-        clock: Callable[[], datetime],
-    ) -> None:
-        self._config = AtomicConfigTarget(target)
-        self._lease = AtomicConfigTarget(target.parent / "lease.json", mode=0o600)
-        self._clock = clock
-
-    def write(self, content: bytes, *, expires_at: datetime) -> None:
-        issued_at = self._clock()
-        if (
-            issued_at.tzinfo is None
-            or issued_at.utcoffset() is None
-            or expires_at.tzinfo is None
-            or expires_at.utcoffset() is None
-            or expires_at.astimezone(UTC) <= issued_at.astimezone(UTC)
-        ):
-            raise RouteRuntimeError("LiteLLM route lease is invalid")
-        lease = {
-            "config_sha256": hashlib.sha256(content).hexdigest(),
-            "expires_at": expires_at.astimezone(UTC).isoformat(),
-            "issued_at": issued_at.astimezone(UTC).isoformat(),
-        }
-        self._config.write(content)
+        optional: bool,
+        verify_files: bool,
+        verify_lease: bool,
+    ) -> ActivationMarker | None:
+        active = self._root / "activation.json"
+        if not active.exists():
+            if optional:
+                return None
+            raise RouteRuntimeError("no route bundle is active")
+        if active.is_symlink() or not active.is_file():
+            raise RouteRuntimeError("route activation marker is unsafe")
         try:
-            self._lease.write(
-                (json.dumps(lease, sort_keys=True, separators=(",", ":")) + "\n").encode()
-            )
-        except Exception:
-            self.withdraw()
-            raise
-
-    def withdraw(self) -> None:
-        content = LiteLlmPublisher.render_empty()
-        self._config.write(content)
-        now = self._clock()
-        if now.tzinfo is None or now.utcoffset() is None:
-            raise RouteRuntimeError("route clock must be timezone-aware")
-        lease = {
-            "config_sha256": hashlib.sha256(content).hexdigest(),
-            "expires_at": now.astimezone(UTC).isoformat(),
-            "issued_at": now.astimezone(UTC).isoformat(),
-        }
-        self._lease.write(
-            (json.dumps(lease, sort_keys=True, separators=(",", ":")) + "\n").encode()
-        )
-
-
-def probe_openai_endpoint(url: str, upstream_key: str) -> None:
-    request = urllib.request.Request(
-        url,
-        headers={"Authorization": f"Bearer {upstream_key}"},
-        method="GET",
-    )
-    with urllib.request.urlopen(request, timeout=5) as response:
-        if not 200 <= response.status < 300:
-            raise OSError("upstream returned a non-success status")
-        if len(response.read(65_537)) > 65_536:
-            raise OSError("upstream probe response exceeded its bound")
-
-
-class ProductionRouteManager:
-    def __init__(
-        self,
-        repository_root: Path,
-        *,
-        state_root: Path,
-        live_config: Path,
-        presence: AgentPresenceService,
-        management_policy: ManagementAddressPolicy,
-        upstream_key: str,
-        probe: Callable[[str, str], None] = probe_openai_endpoint,
-        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
-        maximum_age_seconds: int = 150,
-        refresh_interval_seconds: int = 60,
-        repository_reader: Callable[[str, str], bytes] | None = None,
-    ) -> None:
-        if not upstream_key or any(character.isspace() for character in upstream_key):
-            raise RouteRuntimeError("LiteLLM upstream key is invalid")
-        if maximum_age_seconds <= 0:
-            raise RouteRuntimeError("route maximum age must be positive")
-        if not 1 <= refresh_interval_seconds < maximum_age_seconds:
-            raise RouteRuntimeError("route refresh interval must be below maximum age")
-        self._repository_root = repository_root
-        self._state_root = state_root
-        self._presence = presence
-        self._management_policy = management_policy
-        self._upstream_key = upstream_key
-        self._probe = probe
-        self._clock = clock
-        self._maximum_age_seconds = maximum_age_seconds
-        self._refresh_interval_seconds = refresh_interval_seconds
-        self._repository_reader = repository_reader or (
-            lambda commit, path: read_commit_file(repository_root, commit, path)
-        )
-        self._last_refresh_attempt: datetime | None = None
-        self._failed_hermes_endpoints: set[tuple[str, str, int]] = set()
-        self._target = LeasedConfigTarget(live_config, clock=clock)
-        self._desired = AtomicConfigTarget(
-            state_root / "desired-route.json",
-            mode=0o600,
-        )
-        # A restored named volume must never make an old route live. The worker
-        # revalidates and re-leases desired state through refresh_if_due().
-        self._target.withdraw()
-
-    def _publisher(
-        self,
-        allowed_ports: frozenset[int],
-    ) -> tuple[RoutePublisher, RouteEndpointPolicy]:
-        endpoint_policy = RouteEndpointPolicy(
-            management=self._management_policy,
-            allowed_ports=allowed_ports or frozenset({1}),
-            maximum_age_seconds=self._maximum_age_seconds,
-            clock=self._clock,
-        )
-
-        def apply_route(content: bytes) -> None:
-            payload = json.loads(content)
-            if payload.get("state") == "maintenance":
-                self._target.withdraw()
-
-        return (
-            RoutePublisher(
-                self._state_root / "routes",
-                endpoint_policy=endpoint_policy,
-                validate=lambda content: isinstance(json.loads(content), Mapping),
-                apply=apply_route,
-            ),
-            endpoint_policy,
-        )
-
-    def withdraw(self, targets: tuple[str, ...]) -> RouteState:
+            content = active.read_bytes()
+            raw: Any = json.loads(content)
+        except (OSError, json.JSONDecodeError) as error:
+            raise RouteRuntimeError("route activation marker is unreadable") from error
+        if not isinstance(raw, dict) or set(raw) != _MARKER_FIELDS:
+            raise RouteRuntimeError("route activation marker fields are invalid")
         try:
-            publisher, _policy = self._publisher(frozenset())
-            return publisher.maintenance(
-                targets,
-                "reconciliation in progress",
-            )
-        except (OSError, RouteValidationError) as error:
-            raise RouteRuntimeError(str(error)) from error
-
-    def _workload_port(self, commit: str, workload: str) -> int:
-        try:
-            content = self._repository_reader(
-                commit,
-                f"config/workloads/{workload}.toml",
-            )
-            document = tomllib.loads(content.decode("utf-8"))
-            if document.get("id") != workload:
-                raise RouteRuntimeError("route workload identity does not match its file")
-            endpoint = document["endpoint"]
-            if not isinstance(endpoint, Mapping) or endpoint.get("host") != "127.0.0.1":
-                raise RouteRuntimeError("route workload endpoint must declare loopback locally")
-            port = endpoint["port"]
-        except (KeyError, OSError, UnicodeDecodeError, ValueError, tomllib.TOMLDecodeError) as error:
-            raise RouteRuntimeError("route workload endpoint is invalid") from error
-        if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
-            raise RouteRuntimeError("route workload port is invalid")
-        return port
-
-    def _require_accepted_fleet(self, commit: str, targets: tuple[str, ...]) -> None:
-        try:
-            content = self._repository_reader(commit, "inventory/fleet.toml")
-            document = tomllib.loads(content.decode("utf-8"))
-            nodes = document["nodes"]
-        except (KeyError, OSError, UnicodeDecodeError, ValueError, tomllib.TOMLDecodeError) as error:
-            raise RouteRuntimeError("accepted fleet inventory is invalid") from error
-        if not isinstance(nodes, Mapping) or any(
-            not isinstance(nodes.get(node_id), Mapping)
-            or nodes[node_id].get("lifecycle") != "ready"
-            for node_id in targets
-        ):
-            raise RouteRuntimeError("route target is not ready in the accepted fleet")
+            marker = ActivationMarker(**raw)
+        except TypeError as error:
+            raise RouteRuntimeError(
+                "route activation marker fields are invalid"
+            ) from error
+        self._validate_marker(marker)
+        if content != marker.canonical_bytes():
+            raise RouteRuntimeError("route activation marker is not canonical")
+        if verify_files:
+            directory = self._generations / marker.directory
+            if directory.is_symlink() or not directory.is_dir():
+                raise RouteRuntimeError("active route generation is unavailable")
+            manifest_document = {
+                field: getattr(marker, field)
+                for field in (
+                    "schema_version",
+                    "generation",
+                    "state",
+                    "reconciliation_id",
+                    "plan_digest",
+                    "evidence_set_digest",
+                    "routes_sha256",
+                    "litellm_sha256",
+                    "issued_at",
+                    "expires_at",
+                )
+            }
+            expected_files = {
+                "manifest.json": (marker.manifest_sha256, _encoded(manifest_document)),
+                "routes.json": (marker.routes_sha256, None),
+                "litellm.json": (marker.litellm_sha256, None),
+            }
+            for name, (digest, exact) in expected_files.items():
+                target = directory / name
+                if target.is_symlink() or not target.is_file():
+                    raise RouteRuntimeError("active route generation file is unsafe")
+                content = target.read_bytes()
+                if _sha256(content) != digest or (
+                    exact is not None and content != exact
+                ):
+                    raise RouteRuntimeError("active route generation checksum mismatch")
+        if verify_lease:
+            now = _aware(self._clock(), "route clock")
+            issued = _parse_time(marker.issued_at, "issued timestamp")
+            expires = _parse_time(marker.expires_at, "expiry timestamp")
+            if (
+                issued > now
+                or now >= expires
+                or expires <= issued
+                or expires - issued > self._maximum_lease
+            ):
+                raise RouteRuntimeError("active route lease is invalid or expired")
+        return marker
 
     @staticmethod
-    def _normalize_route(raw: object, targets: tuple[str, ...]) -> _NormalizedRoute:
-        if not isinstance(raw, Mapping):
-            raise RouteRuntimeError("route fields are invalid")
-        if set(raw) == _ROUTE_FIELDS:
-            node_id = raw.get("node_id")
-            workload = raw.get("workload")
-            rpm = raw.get("requests_per_minute")
-            tpm = raw.get("tokens_per_minute")
-        elif set(raw) == _V2_ROUTE_FIELDS:
-            nodes = raw.get("nodes")
-            node_id = raw.get("entrypoint_node_id")
-            workload = raw.get("workload_id")
-            quota = raw.get("quota")
-            declared_port = raw.get("port")
-            if (
-                not isinstance(nodes, (list, tuple))
-                or not nodes
-                or len(nodes) != len(set(nodes))
-                or any(not isinstance(item, str) or _NODE.fullmatch(item) is None for item in nodes)
-                or node_id not in nodes
-                or any(item not in targets for item in nodes)
-                or raw.get("scheme") != "http"
-                or isinstance(declared_port, bool)
-                or not isinstance(declared_port, int)
-                or not 1 <= declared_port <= 65535
-                or raw.get("path") not in {"/v1", "/v1/"}
-                or not isinstance(quota, Mapping)
-                or set(quota) != {"requests_per_minute", "tokens_per_minute"}
-            ):
-                raise RouteRuntimeError("route fields are invalid")
-            expected_digest = hashlib.sha256(
-                json.dumps(quota, sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest()
-            if raw.get("quota_digest") != expected_digest:
-                raise RouteRuntimeError("route quota digest is invalid")
-            rpm = quota.get("requests_per_minute")
-            tpm = quota.get("tokens_per_minute")
-        else:
-            raise RouteRuntimeError("route fields are invalid")
-        if not isinstance(node_id, str) or _NODE.fullmatch(node_id) is None or node_id not in targets:
-            raise RouteRuntimeError("route node is not a reconciliation target")
-        if not isinstance(workload, str) or _WORKLOAD.fullmatch(workload) is None:
-            raise RouteRuntimeError("route workload is invalid")
+    def _validate_marker(marker: ActivationMarker) -> None:
         if (
-            isinstance(rpm, bool)
-            or not isinstance(rpm, int)
-            or not 1 <= rpm <= 100_000
-            or isinstance(tpm, bool)
-            or not isinstance(tpm, int)
-            or not 1 <= tpm <= 100_000_000
+            marker.schema_version != 1
+            or isinstance(marker.generation, bool)
+            or not isinstance(marker.generation, int)
+            or marker.generation <= 0
+            or marker.state not in {"maintenance", "published"}
+            or _DIRECTORY.fullmatch(marker.directory) is None
+            or marker.directory != f"{marker.generation:08d}-{marker.manifest_sha256}"
+            or any(
+                _DIGEST.fullmatch(value) is None
+                for value in (
+                    marker.plan_digest,
+                    marker.evidence_set_digest,
+                    marker.routes_sha256,
+                    marker.litellm_sha256,
+                    marker.manifest_sha256,
+                )
+            )
         ):
-            raise RouteRuntimeError("route quota is invalid")
-        return _NormalizedRoute(node_id, workload, rpm, tpm)
-
-    def _hermes_policy(
-        self,
-        commit: str,
-    ) -> tuple[HermesAgentPolicy, Mapping[str, str]]:
-        try:
-            report = json.loads(
-                self._repository_reader(
-                    commit,
-                    "inventory/reports/model-definitions.json",
-                )
-            )
-            definitions = report["definitions"]
-            if not isinstance(definitions, list) or not definitions:
-                raise TypeError
-            maturity: dict[str, str] = {}
-            for row in definitions:
-                if not isinstance(row, Mapping):
-                    raise TypeError
-                workload = row.get("id")
-                state = row.get("maturity")
-                if (
-                    not isinstance(workload, str)
-                    or _WORKLOAD.fullmatch(workload) is None
-                    or not isinstance(state, str)
-                    or workload in maturity
-                ):
-                    raise TypeError
-                maturity[workload] = state
-            policy = HermesAgentPolicy.parse(
-                self._repository_reader(commit, "config/hermes-agent-policy.toml"),
-                known_workloads=frozenset(maturity),
-            )
-        except (KeyError, OSError, TypeError, ValueError, json.JSONDecodeError) as error:
-            raise RouteRuntimeError("Hermes repository policy is invalid") from error
-        return policy, maturity
-
-    def _publish(
-        self,
-        *,
-        commit: str,
-        profile: str,
-        targets: tuple[str, ...],
-        routes: Mapping[str, object],
-        persist_desired: bool,
-    ) -> RouteRuntimeResult:
-        if not routes:
-            raise RouteRuntimeError("reconciliation routes must not be empty")
-        endpoints: dict[str, RouteEndpoint] = {}
-        quotas: dict[str, Mapping[str, int]] = {}
-        workloads: set[str] = set()
-        ports: set[int] = set()
-        observations = []
-        route_workloads: dict[str, str] = {}
-        route_observations = {}
-        now = self._clock()
-        if now.tzinfo is None or now.utcoffset() is None:
-            raise RouteRuntimeError("route clock must be timezone-aware")
-        self._require_accepted_fleet(commit, targets)
-        for alias, raw in sorted(routes.items()):
-            if not isinstance(alias, str) or _ALIAS.fullmatch(alias) is None:
-                raise RouteRuntimeError("route alias is invalid")
-            normalized = self._normalize_route(raw, targets)
-            node_id = normalized.node_id
-            workload = normalized.workload
-            rpm = normalized.requests_per_minute
-            tpm = normalized.tokens_per_minute
-            port = self._workload_port(commit, workload)
-            try:
-                observation = self._presence.latest(
-                    node_id,
-                    maximum_age_seconds=self._maximum_age_seconds,
-                    now=now,
-                )
-            except PresenceError as error:
-                raise RouteRuntimeError(str(error)) from error
-            endpoints[alias] = RouteEndpoint(
-                node_id=node_id,
-                address=observation.address,
-                port=port,
-                scheme="http",
-                observed_at=observation.observed_at,
-            )
-            quotas[alias] = {
-                "requests_per_minute": rpm,
-                "tokens_per_minute": tpm,
-            }
-            workloads.add(workload)
-            ports.add(port)
-            observations.append(observation)
-            route_workloads[alias] = workload
-            route_observations[alias] = observation
-        hermes_policy, maturity = self._hermes_policy(commit)
-        eligible_candidates = hermes_policy.eligible(frozenset(workloads), maturity)
-        eligible_workloads = {candidate.workload for candidate in eligible_candidates}
-        publisher, endpoint_policy = self._publisher(frozenset(ports))
-        try:
-            desired = {
-                "commit": commit,
-                "profile": profile,
-                "routes": routes,
-                "targets": list(targets),
-            }
-            if persist_desired:
-                self._desired.write(
-                    (json.dumps(desired, sort_keys=True, separators=(",", ":")) + "\n").encode()
-                )
-                self._last_refresh_attempt = self._clock()
-
-            rendered = {
-                alias: endpoint_policy.render(endpoint, node_ids=targets)
-                for alias, endpoint in endpoints.items()
-            }
-            try:
-                current = publisher.snapshot()
-            except RouteValidationError:
-                current = None
-            address_changed = (
-                current is not None
-                and current.state == "published"
-                and dict(current.aliases) != rendered
-            )
-            if address_changed:
-                publisher.maintenance(targets, "route endpoint changed")
-
-            unavailable_aliases = set()
-            for alias, endpoint in endpoints.items():
-                url = f"http://{endpoint.address}:{endpoint.port}/v1/models"
-                failure_key = (route_workloads[alias], endpoint.address, endpoint.port)
-                try:
-                    self._probe(url, self._upstream_key)
-                except Exception as error:
-                    if (
-                        route_workloads[alias] in eligible_workloads
-                        and failure_key in self._failed_hermes_endpoints
-                    ):
-                        unavailable_aliases.add(alias)
-                        continue
-                    if route_workloads[alias] in eligible_workloads:
-                        self._failed_hermes_endpoints.add(failure_key)
-                    publisher.maintenance(targets, "route endpoint probe failed")
-                    raise RouteRuntimeError("route endpoint probe failed") from error
-                self._failed_hermes_endpoints.discard(failure_key)
-
-            if unavailable_aliases:
-                endpoints = {
-                    alias: endpoint
-                    for alias, endpoint in endpoints.items()
-                    if alias not in unavailable_aliases
-                }
-                quotas = {
-                    alias: quota
-                    for alias, quota in quotas.items()
-                    if alias not in unavailable_aliases
-                }
-                workloads = {route_workloads[alias] for alias in endpoints}
-                observations = [route_observations[alias] for alias in endpoints]
-                if not endpoints:
-                    publisher.maintenance(targets, "no route endpoint passed its probe")
-                    raise RouteRuntimeError("no route endpoint passed its probe")
-
-            health_timestamp = self._clock()
-            candidate = RouteCandidate(
-                commit=commit,
-                profile=profile,
-                workload=(next(iter(workloads)) if len(workloads) == 1 else "profile-routes"),
-                node_ids=targets,
-                aliases=endpoints,
-                health_timestamp=health_timestamp,
-            )
-            route_state = publisher.publish(candidate)
-            expires_at = min(
-                observation.observed_at.astimezone(UTC)
-                + timedelta(seconds=self._maximum_age_seconds)
-                for observation in observations
-            )
-            litellm = LiteLlmPublisher(
-                self._state_root / "litellm",
-                validate=lambda content: isinstance(json.loads(content).get("model_list"), list),
-                apply=lambda content: self._target.write(content, expires_at=expires_at),
-            )
-            by_workload = {
-                route_workloads[alias]: (endpoint, quotas[alias])
-                for alias, endpoint in endpoints.items()
-            }
-            deployments = tuple(
-                LiteLlmDeployment(
-                    model_name=hermes_policy.alias,
-                    workload=candidate.workload,
-                    api_base=(
-                        f"http://{by_workload[candidate.workload][0].address}:"
-                        f"{by_workload[candidate.workload][0].port}/v1"
-                    ),
-                    priority=candidate.priority,
-                    requests_per_minute=by_workload[candidate.workload][1]["requests_per_minute"],
-                    tokens_per_minute=by_workload[candidate.workload][1]["tokens_per_minute"],
-                )
-                for candidate in hermes_policy.eligible(
-                    frozenset(by_workload),
-                    maturity,
-                )
-            )
-            generation = litellm.publish(
-                route_state,
-                LiteLlmPolicy(models=quotas, deployments=deployments),
-            )
-        except (OSError, RouteValidationError, ValueError) as error:
-            try:
-                publisher.maintenance(targets, "route publication failed")
-            except (OSError, RouteValidationError):
-                self._target.withdraw()
-            raise RouteRuntimeError(str(error)) from error
-        return RouteRuntimeResult(route_state, generation)
-
-    def publish(
-        self,
-        *,
-        commit: str,
-        profile: str,
-        targets: tuple[str, ...],
-        routes: Mapping[str, object],
-    ) -> RouteRuntimeResult:
-        return self._publish(
-            commit=commit,
-            profile=profile,
-            targets=targets,
-            routes=routes,
-            persist_desired=True,
+            raise RouteRuntimeError("route activation marker identity is invalid")
+        AtomicRouteBundlePublisher._identity(
+            marker.reconciliation_id,
+            marker.plan_digest,
+            marker.evidence_set_digest,
         )
 
-    def refresh_if_due(
-        self,
-        current_commit: Callable[[], str],
-        *,
-        eligible: Callable[[str], bool] = lambda _commit: True,
-    ) -> bool:
-        now = self._clock()
-        if now.tzinfo is None or now.utcoffset() is None:
-            raise RouteRuntimeError("route clock must be timezone-aware")
-        if self._last_refresh_attempt is not None:
-            elapsed = now.astimezone(UTC) - self._last_refresh_attempt.astimezone(UTC)
-            if elapsed.total_seconds() < self._refresh_interval_seconds:
-                return False
-        self._last_refresh_attempt = now
-        desired_path = self._state_root / "desired-route.json"
-        if desired_path.is_symlink() or not desired_path.is_file():
-            return False
-        try:
-            desired = json.loads(desired_path.read_bytes())
-            commit = desired["commit"]
-            profile = desired["profile"]
-            targets = tuple(desired["targets"])
-            routes = desired["routes"]
-            if not isinstance(routes, Mapping):
-                raise TypeError
-        except (OSError, KeyError, TypeError, json.JSONDecodeError) as error:
-            raise RouteRuntimeError("desired route state is unreadable") from error
-        if current_commit() != commit or eligible(commit) is not True:
-            self.withdraw(targets)
-            return False
-        try:
-            self._publish(
-                commit=commit,
-                profile=profile,
-                targets=targets,
-                routes=routes,
-                persist_desired=False,
-            )
-        except RouteRuntimeError:
-            self.withdraw(targets)
-            return False
-        return True
+
+# Compatibility exports for the already-released pre-agent route manager.
+# Production reconciliation uses AtomicRouteBundlePublisher. Task 19 removes
+# the direct RuntimeHandlers wiring; keeping these names here preserves the
+# current main-branch API and its recovery tooling during that cutover.
+from .legacy_route_runtime import (  # noqa: E402
+    AtomicConfigTarget,
+    LeasedConfigTarget,
+    ProductionRouteManager,
+    RouteRuntimeError as _LegacyRouteRuntimeError,
+    RouteRuntimeResult,
+    probe_openai_endpoint,
+)
+
+# Both implementations resolve this module global when raising, so exposing one
+# exception type keeps existing callers and tests deterministic.
+RouteRuntimeError = _LegacyRouteRuntimeError

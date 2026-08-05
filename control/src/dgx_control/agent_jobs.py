@@ -20,6 +20,7 @@ from dgx_agent_protocol import (
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from .auth import AgentSource
 from .logging import redact_text
 from .models import (
     AgentCertificate,
@@ -27,17 +28,32 @@ from .models import (
     AgentOperationAttempt,
     Job,
     Observation,
+    Reconciliation,
+    ReconciliationOperation,
 )
 from .models import AgentOperation as StoredOperation
 
 AgentFence = str | AgentClaim | AgentProgress | AgentResult
+ResultConsumer = Callable[
+    [Session, StoredOperation, AgentOperationAttempt, AgentResult], None
+]
+ContactConsumer = Callable[[Session, AgentSource], None]
 _SAFE_AUTOMATIC_RECLAIM = frozenset({
     AgentOperation.NODE_PROBE.value,
     AgentOperation.WORKLOAD_HEALTH.value,
     AgentOperation.WORKLOAD_VERIFY.value,
 })
+_MUTATING_OPERATIONS = frozenset(
+    {
+        AgentOperation.RELEASE_INSTALL.value,
+        AgentOperation.WORKLOAD_PREPARE.value,
+        AgentOperation.WORKLOAD_START.value,
+        AgentOperation.WORKLOAD_STOP.value,
+    }
+)
 _TERMINAL_PARENT_STATES = frozenset({"succeeded", "failed", "waiting-for-operator", "expired"})
 _RETRY_DISPOSITION = "retry"
+_DATABASE_REPOLL_SECONDS = 0.25
 _IMPLEMENTED_CAPABILITIES = frozenset(
     {
         AgentOperation.NODE_PROBE.value,
@@ -70,9 +86,25 @@ class AgentJobService:
         sessions: sessionmaker[Session],
         *,
         clock: Callable[[], datetime],
+        result_consumer: ResultConsumer | None = None,
+        contact_consumer: ContactConsumer | None = None,
+        commit_eligible: Callable[[str], bool] | None = None,
+        current_commit: Callable[[], str] | None = None,
     ) -> None:
+        if result_consumer is not None and not callable(result_consumer):
+            raise TypeError("agent result consumer must be callable")
+        if contact_consumer is not None and not callable(contact_consumer):
+            raise TypeError("agent contact consumer must be callable")
+        if (commit_eligible is None) != (current_commit is None):
+            raise ValueError("reconciliation commit authority is incomplete")
         self._sessions = sessions
         self._clock = clock
+        self._result_consumer = result_consumer
+        self._contact_consumer = contact_consumer
+        self._commit_eligible = commit_eligible
+        self._current_commit = current_commit
+        self._configuration_lock = threading.Lock()
+        self._started = False
         # SQLite ignores row locks. This only prevents same-service test races;
         # PostgreSQL correctness is provided by the database locks below.
         self._claim_lock = threading.RLock()
@@ -86,12 +118,38 @@ class AgentJobService:
         base_commit: str,
         payload: Mapping[str, object],
     ) -> StoredOperation:
+        with self._sessions.begin() as session:
+            stored = self.enqueue_in_session(
+                session,
+                parent_job_id,
+                node_id,
+                operation,
+                base_commit,
+                payload,
+                operation_id=str(uuid.uuid4()),
+            )
+        self.notify_available()
+        return stored
+
+    def enqueue_in_session(
+        self,
+        session: Session,
+        parent_job_id: str,
+        node_id: str,
+        operation: str,
+        base_commit: str,
+        payload: Mapping[str, object],
+        *,
+        operation_id: str,
+    ) -> StoredOperation:
+        """Attach a caller-identified operation to the caller's transaction."""
+        self._mark_started()
         now = self._clock()
         protocol_operation = AgentOperation(operation)
         validated = AgentClaim(
             schema_version=1,
             job_id=parent_job_id,
-            operation_id=str(uuid.uuid4()),
+            operation_id=operation_id,
             attempt=1,
             fence=str(uuid.uuid4()),
             node_id=node_id,
@@ -114,31 +172,61 @@ class AgentJobService:
             created_at=now,
             updated_at=now,
         )
-        with self._sessions.begin() as session:
-            node = session.scalar(
-                select(AgentNode)
-                .where(AgentNode.node_id == node_id)
-                .with_for_update(of=AgentNode)
-            )
-            if node is None:
-                raise KeyError(node_id)
-            if node.state != "active" or node.revoked_at is not None:
-                raise ValueError("agent operation node must be active")
-            parent = session.scalar(
-                select(Job).where(Job.id == parent_job_id).with_for_update(of=Job)
-            )
-            if parent is None:
-                raise KeyError(parent_job_id)
-            if parent.state in _TERMINAL_PARENT_STATES:
-                raise ValueError("cannot enqueue an agent operation beneath a terminal parent")
-            if parent.base_commit != base_commit:
-                raise ValueError("agent operation base commit must match its parent")
-            if node_id not in parent.targets:
-                raise ValueError("agent operation node must be a parent target")
-            session.add(stored)
+        node = session.scalar(
+            select(AgentNode)
+            .where(AgentNode.node_id == node_id)
+            .with_for_update(of=AgentNode)
+        )
+        if node is None:
+            raise KeyError(node_id)
+        if node.state != "active" or node.revoked_at is not None:
+            raise ValueError("agent operation node must be active")
+        parent = session.scalar(
+            select(Job).where(Job.id == parent_job_id).with_for_update(of=Job)
+        )
+        if parent is None:
+            raise KeyError(parent_job_id)
+        if parent.state in _TERMINAL_PARENT_STATES:
+            raise ValueError("cannot enqueue an agent operation beneath a terminal parent")
+        if parent.base_commit != base_commit:
+            raise ValueError("agent operation base commit must match its parent")
+        if node_id not in parent.targets:
+            raise ValueError("agent operation node must be a parent target")
+        session.add(stored)
+        session.flush()
+        return stored
+
+    def notify_available(self) -> None:
+        """Wake long polls after a caller-managed enqueue transaction commits."""
         with self._available:
             self._available.notify_all()
-        return stored
+
+    def set_result_consumer(self, consumer: ResultConsumer) -> None:
+        """Bind projection consumption once, before the queue serves any work."""
+        if not callable(consumer):
+            raise TypeError("agent result consumer must be callable")
+        with self._configuration_lock:
+            if self._result_consumer is not None:
+                raise RuntimeError("agent result consumer is already configured")
+            if self._started:
+                raise RuntimeError("agent job service has already started")
+            self._result_consumer = consumer
+
+    def set_contact_consumer(self, consumer: ContactConsumer) -> None:
+        """Bind atomic authenticated contact persistence before serving work."""
+
+        if not callable(consumer):
+            raise TypeError("agent contact consumer must be callable")
+        with self._configuration_lock:
+            if self._contact_consumer is not None:
+                raise RuntimeError("agent contact consumer is already configured")
+            if self._started:
+                raise RuntimeError("agent job service has already started")
+            self._contact_consumer = consumer
+
+    def _mark_started(self) -> None:
+        with self._configuration_lock:
+            self._started = True
 
     def claim(
         self,
@@ -148,7 +236,10 @@ class AgentJobService:
         wait_seconds: float = 0,
         protocol_version: int | None = None,
         capabilities: Sequence[str] | None = None,
+        *,
+        source: AgentSource | None = None,
     ) -> AgentClaim | None:
+        self._mark_started()
         if (
             not node_id.strip()
             or not certificate_serial.strip()
@@ -175,13 +266,14 @@ class AgentJobService:
                     lease_seconds,
                     protocol_version,
                     advertised,
+                    source,
                 )
                 if claim is not None:
                     return claim
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return None
-                self._available.wait(remaining)
+                self._available.wait(min(remaining, _DATABASE_REPOLL_SECONDS))
 
     def _claim_once(
         self,
@@ -190,13 +282,30 @@ class AgentJobService:
         lease_seconds: int,
         protocol_version: int | None,
         capabilities: tuple[str, ...] | None,
+        source: AgentSource | None,
     ) -> AgentClaim | None:
         with self._claim_lock, self._sessions.begin() as session:
+            reconciliation_hint = session.scalar(
+                select(StoredOperation.id)
+                .join(Job, Job.id == StoredOperation.parent_job_id)
+                .where(
+                    StoredOperation.node_id == node_id,
+                    Job.reconciliation_id.is_not(None),
+                    StoredOperation.state.in_(
+                        {"queued", "running", "waiting-for-operator"}
+                    ),
+                )
+                .order_by(StoredOperation.created_at, StoredOperation.id)
+                .limit(1)
+            )
+            if reconciliation_hint is not None:
+                self._lock_reconciliation_targets(session, reconciliation_hint)
             identity = self._lock_identity(session, node_id, certificate_serial)
             now = self._clock()
             if identity is None or not self._identity_is_active(*identity, now):
                 return None
-            node, _certificate = identity
+            node, certificate = identity
+            self._consume_contact(session, source, node, certificate)
             self._record_contact(node, now, protocol_version, capabilities)
             expired_attempt = select(AgentOperationAttempt.id).where(
                 AgentOperationAttempt.operation_id == StoredOperation.id,
@@ -231,6 +340,8 @@ class AgentJobService:
             operation = session.scalars(statement).first()
             if operation is None:
                 return None
+            if not self._claim_has_authority(session, operation, now):
+                return None
             if operation.current_attempt:
                 previous = session.scalar(
                     select(AgentOperationAttempt).where(
@@ -245,7 +356,8 @@ class AgentJobService:
                 operation.retry_disposition = None
                 operation.retry_disposition_attempt = None
                 operation.updated_at = now
-                self._aggregate_parent(session, operation.parent_job_id)
+                if not self._project_unsafe_expiry(session, operation, now):
+                    self._aggregate_parent(session, operation.parent_job_id)
                 return None
             operation.current_attempt += 1
             operation.state = "running"
@@ -274,16 +386,203 @@ class AgentJobService:
                 deadline=deadline,
             )
 
+    def _claim_has_authority(
+        self,
+        session: Session,
+        operation: StoredOperation,
+        now: datetime,
+    ) -> bool:
+        job = session.scalar(
+            select(Job)
+            .where(Job.id == operation.parent_job_id)
+            .with_for_update(of=Job)
+        )
+        if job is None:
+            raise ValueError("agent operation lacks its parent job")
+        if job.reconciliation_id is None:
+            if (
+                job.state == "waiting-for-operator"
+                and operation.state == "waiting-for-operator"
+                and operation.retry_disposition == _RETRY_DISPOSITION
+                and operation.retry_disposition_attempt == operation.current_attempt
+            ):
+                job.state = "queued"
+                job.status_reason = None
+                job.updated_at = now
+                return True
+            return job.state not in _TERMINAL_PARENT_STATES
+        reconciliation = session.scalar(
+            select(Reconciliation)
+            .where(Reconciliation.id == job.reconciliation_id)
+            .with_for_update(of=Reconciliation)
+        )
+        projection = session.scalar(
+            select(ReconciliationOperation)
+            .where(
+                ReconciliationOperation.reconciliation_id
+                == job.reconciliation_id,
+                ReconciliationOperation.agent_operation_id == operation.id,
+            )
+            .with_for_update(of=ReconciliationOperation)
+        )
+        if reconciliation is None or projection is None:
+            raise ValueError("agent operation lacks reconciliation authority")
+        expected_phase = (
+            "compensating" if projection.role == "compensation" else "dispatching"
+        )
+        if (
+            job.state == "running"
+            and reconciliation.status == "running"
+            and reconciliation.current_phase == expected_phase
+            and projection.state in {"queued", "running"}
+            and self._continuous_authority_reason(
+                session, reconciliation, job, operation
+            )
+            is None
+        ):
+            return True
+        self._quiesce_reconciliation_operations(
+            session,
+            reconciliation.id,
+            now,
+        )
+        reason = "reconciliation execution authority is no longer eligible"
+        reconciliation.current_phase = "waiting-for-operator"
+        reconciliation.status = "failed"
+        reconciliation.terminal_reason = reason
+        job.state = "waiting-for-operator"
+        job.status_reason = reason
+        job.updated_at = now
+        return False
+
+    def _continuous_authority_reason(
+        self,
+        session: Session,
+        reconciliation: Reconciliation,
+        job: Job,
+        operation: StoredOperation,
+    ) -> str | None:
+        if self._commit_eligible is None or self._current_commit is None:
+            return None
+        try:
+            if (
+                not self._commit_eligible(reconciliation.base_commit)
+                or self._current_commit() != reconciliation.base_commit
+            ):
+                return "reconciliation commit is no longer eligible"
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return "reconciliation commit eligibility is unavailable"
+        document = reconciliation.resolved_plan
+        if not isinstance(document, Mapping):
+            return "reconciliation plan authority is unavailable"
+        protocol = document.get("agent_protocol_range")
+        targets = document.get("targets")
+        if (
+            not isinstance(protocol, list)
+            or len(protocol) != 2
+            or not all(
+                isinstance(value, int) and not isinstance(value, bool)
+                for value in protocol
+            )
+            or not isinstance(targets, list)
+            or targets != job.targets
+            or operation.base_commit != reconciliation.base_commit
+        ):
+            return "reconciliation plan authority is invalid"
+        nodes = list(
+            session.scalars(
+                select(AgentNode)
+                .where(AgentNode.node_id.in_(targets))
+                .order_by(AgentNode.node_id)
+            )
+        )
+        if [node.node_id for node in nodes] != sorted(targets):
+            return "reconciliation target set is unavailable"
+        if any(
+            node.state != "active"
+            or node.revoked_at is not None
+            or not isinstance(node.protocol_version, int)
+            or isinstance(node.protocol_version, bool)
+            or not protocol[0] <= node.protocol_version <= protocol[1]
+            or not isinstance(node.capabilities, list)
+            or set(node.capabilities) != _IMPLEMENTED_CAPABILITIES
+            for node in nodes
+        ):
+            return "reconciliation target agent is incompatible"
+        return None
+
+    @staticmethod
+    def _quiesce_reconciliation_operations(
+        session: Session,
+        reconciliation_id: str,
+        now: datetime,
+    ) -> None:
+        projections = list(
+            session.scalars(
+                select(ReconciliationOperation)
+                .where(
+                    ReconciliationOperation.reconciliation_id == reconciliation_id
+                )
+                .order_by(
+                    ReconciliationOperation.graph_operation_id,
+                    ReconciliationOperation.role,
+                )
+                .with_for_update(of=ReconciliationOperation)
+            )
+        )
+        for projection in projections:
+            if projection.state == "planned":
+                projection.state = "failed"
+                continue
+            if projection.agent_operation_id is None:
+                continue
+            candidate = session.scalar(
+                select(StoredOperation)
+                .where(StoredOperation.id == projection.agent_operation_id)
+                .with_for_update(of=StoredOperation)
+            )
+            if candidate is None:
+                raise ValueError("reconciliation operation projection is incomplete")
+            if candidate.state == "queued":
+                candidate.state = "failed"
+                projection.state = "failed"
+                candidate.updated_at = now
+                continue
+            if candidate.state != "running":
+                continue
+            attempt = session.scalar(
+                select(AgentOperationAttempt)
+                .where(
+                    AgentOperationAttempt.operation_id == candidate.id,
+                    AgentOperationAttempt.attempt == candidate.current_attempt,
+                )
+                .with_for_update(of=AgentOperationAttempt)
+            )
+            if attempt is None or attempt.state != "running":
+                raise ValueError("running reconciliation operation lacks its attempt")
+            terminal = (
+                "waiting-for-operator"
+                if candidate.kind in _MUTATING_OPERATIONS
+                else "failed"
+            )
+            candidate.state = terminal
+            attempt.state = terminal
+            projection.state = terminal
+            candidate.updated_at = now
+
     def heartbeat(
         self,
         fence: AgentFence,
         progress: Mapping[str, object],
         lease_seconds: int,
+        *,
+        source: AgentSource | None = None,
     ) -> AgentProgress:
+        self._mark_started()
         if lease_seconds <= 0:
             raise ValueError("lease must be positive")
         with self._sessions.begin() as session:
-            operation, attempt = self._active(session, fence)
+            operation, attempt = self._active(session, fence, source=source)
             now = self._clock()
             deadline = max(
                 _aware(attempt.lease_deadline),
@@ -313,6 +612,18 @@ class AgentJobService:
     def wait_for_operator(self, fence: AgentFence, reason: str) -> None:
         self._finish(fence, "waiting-for-operator", result=None, reason=reason)
 
+    def record_result(
+        self, message: AgentResult, *, source: AgentSource | None = None
+    ) -> None:
+        """Persist one exact agent result and consume it in the same transaction."""
+        self._finish(
+            message,
+            message.state,
+            result=message.result,
+            reason=None,
+            source=source,
+        )
+
     def _finish(
         self,
         fence: AgentFence,
@@ -320,11 +631,25 @@ class AgentJobService:
         *,
         result: Mapping[str, object] | None,
         reason: str | None,
+        source: AgentSource | None = None,
     ) -> None:
+        self._mark_started()
         with self._sessions.begin() as session:
-            operation, attempt = self._active(session, fence)
+            operation, attempt = self._active(session, fence, source=source)
             now = self._clock()
-            if result is not None:
+            if isinstance(fence, AgentResult):
+                if fence.state != state or (
+                    result is not None
+                    and _document(fence.result) != _document(result)
+                ):
+                    raise ValueError("agent result does not match requested completion")
+                message = fence
+            else:
+                canonical_result = (
+                    result
+                    if result is not None
+                    else {"reason": self._reason(reason)}
+                )
                 message = AgentResult(
                     schema_version=1,
                     job_id=operation.parent_job_id,
@@ -334,37 +659,42 @@ class AgentJobService:
                     node_id=operation.node_id,
                     deadline=_aware(attempt.lease_deadline),
                     state=state,
-                    result=result,
+                    result=canonical_result,
                 )
-                attempt.result = _document(message.result)
-                if operation.kind == AgentOperation.NODE_PROBE.value:
-                    health = self._probe_health(message.result)
-                    if (
-                        operation.payload
-                        == {"require_active_nvidia_compute_processes": 0}
-                        and health["active_nvidia_compute_processes"] != 0
-                    ):
-                        raise ValueError("node probe compute gate is unsatisfied")
-                    session.add(
-                        Observation(
-                            node_id=operation.node_id,
-                            kind="health",
-                            payload=health,
-                            observed_at=now,
-                        )
+            attempt.result = _document(message.result)
+            if (
+                result is not None
+                and state == "succeeded"
+                and operation.kind == AgentOperation.NODE_PROBE.value
+            ):
+                health = self._probe_health(message.result)
+                if (
+                    operation.payload
+                    == {"require_active_nvidia_compute_processes": 0}
+                    and health["active_nvidia_compute_processes"] != 0
+                ):
+                    raise ValueError("node probe compute gate is unsatisfied")
+                session.add(
+                    Observation(
+                        node_id=operation.node_id,
+                        kind="health",
+                        payload=health,
+                        observed_at=now,
                     )
-            else:
-                safe_reason = self._reason(reason)
-                attempt.result = {"reason": safe_reason}
+                )
             attempt.state = state
             operation.state = state
             operation.updated_at = now
+            if self._result_consumer is not None:
+                self._result_consumer(session, operation, attempt, message)
             self._aggregate_parent(session, operation.parent_job_id)
 
     def _active(
         self,
         session: Session,
         fence: AgentFence,
+        *,
+        source: AgentSource | None = None,
     ) -> tuple[StoredOperation, AgentOperationAttempt]:
         token = self._fence_token(fence)
         identity_hint = session.execute(
@@ -382,7 +712,13 @@ class AgentJobService:
         if identity_hint is None:
             raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
         operation_id, node_id, certificate_serial = identity_hint
+        self._lock_reconciliation_targets(session, operation_id)
         identity = self._lock_identity(session, node_id, certificate_serial)
+        now = self._clock()
+        if identity is None or not self._identity_is_active(*identity, now):
+            raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
+        node, certificate = identity
+        self._consume_contact(session, source, node, certificate)
         operation = session.scalar(
             select(StoredOperation)
             .where(StoredOperation.id == operation_id)
@@ -398,11 +734,8 @@ class AgentJobService:
             )
             .with_for_update(of=AgentOperationAttempt)
         )
-        now = self._clock()
         if (
-            identity is None
-            or not self._identity_is_active(*identity, now)
-            or attempt is None
+            attempt is None
             or (not isinstance(fence, str) and operation.parent_job_id != fence.job_id)
             or (not isinstance(fence, str) and operation.id != fence.operation_id)
             or (not isinstance(fence, str) and operation.node_id != fence.node_id)
@@ -412,7 +745,6 @@ class AgentJobService:
             or _aware(attempt.lease_deadline) <= _aware(now)
         ):
             raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
-        node, _certificate = identity
         self._record_contact(node, now, None, None)
         return operation, attempt
 
@@ -447,6 +779,102 @@ class AgentJobService:
             node.protocol_version = protocol_version
         if capabilities is not None:
             node.capabilities = list(capabilities)
+
+    def _consume_contact(
+        self,
+        session: Session,
+        source: AgentSource | None,
+        node: AgentNode,
+        certificate: AgentCertificate,
+    ) -> None:
+        if source is None:
+            return
+        identity = source.identity
+        if (
+            identity.node_id != node.node_id
+            or identity.certificate_serial != certificate.serial
+            or identity.certificate_fingerprint != certificate.fingerprint
+            or identity.verified is not True
+        ):
+            raise ValueError("agent contact source does not match its locked identity")
+        if self._contact_consumer is None:
+            raise RuntimeError("agent contact consumer is not configured")
+        self._contact_consumer(session, source)
+
+    @staticmethod
+    def _lock_reconciliation_targets(
+        session: Session, operation_id: str
+    ) -> None:
+        authority = session.execute(
+            select(Job.reconciliation_id, Job.targets)
+            .join(StoredOperation, StoredOperation.parent_job_id == Job.id)
+            .where(StoredOperation.id == operation_id)
+        ).one_or_none()
+        if authority is None or authority.reconciliation_id is None:
+            return
+        targets = authority.targets
+        if (
+            not isinstance(targets, list)
+            or not targets
+            or len(targets) != len(set(targets))
+            or not all(isinstance(node_id, str) for node_id in targets)
+        ):
+            raise ValueError("reconciliation parent targets are invalid")
+        locked = list(
+            session.scalars(
+                select(AgentNode)
+                .where(AgentNode.node_id.in_(targets))
+                .order_by(AgentNode.node_id)
+                .with_for_update(of=AgentNode)
+            )
+        )
+        if [node.node_id for node in locked] != sorted(targets):
+            raise StaleAgentAttempt(
+                "agent operation lease, certificate, or fence is stale"
+            )
+
+    def _project_unsafe_expiry(
+        self,
+        session: Session,
+        operation: StoredOperation,
+        now: datetime,
+    ) -> bool:
+        hint = session.scalar(
+            select(ReconciliationOperation).where(
+                ReconciliationOperation.agent_operation_id == operation.id
+            )
+        )
+        if hint is None:
+            return False
+        reconciliation = session.scalar(
+            select(Reconciliation)
+            .where(Reconciliation.id == hint.reconciliation_id)
+            .with_for_update(of=Reconciliation)
+        )
+        job = session.scalar(
+            select(Job)
+            .where(
+                Job.id == operation.parent_job_id,
+                Job.reconciliation_id == hint.reconciliation_id,
+            )
+            .with_for_update(of=Job)
+        )
+        projection = session.scalar(
+            select(ReconciliationOperation)
+            .where(ReconciliationOperation.id == hint.id)
+            .with_for_update(of=ReconciliationOperation)
+        )
+        if reconciliation is None or job is None or projection is None:
+            raise ValueError("unsafe agent expiry lacks reconciliation authority")
+        reason = "mutating agent operation lease expired with uncertain outcome"
+        projection.state = "waiting-for-operator"
+        reconciliation.current_phase = "waiting-for-operator"
+        reconciliation.status = "failed"
+        reconciliation.terminal_reason = reason
+        job.state = "waiting-for-operator"
+        job.status_reason = reason
+        job.updated_at = now
+        return True
 
     @staticmethod
     def _probe_health(result: Mapping[str, object]) -> dict[str, object]:
@@ -612,6 +1040,8 @@ class AgentJobService:
         )
         if job is None:
             raise KeyError(parent_job_id)
+        if job.reconciliation_id is not None:
+            return
         operations = list(session.scalars(
             select(StoredOperation)
             .where(StoredOperation.parent_job_id == parent_job_id)
@@ -643,7 +1073,9 @@ class AgentJobService:
             )
             if attempt is not None and attempt.result is not None:
                 reason = attempt.result.get("reason")
+                if not isinstance(reason, str):
+                    reason = attempt.result.get("error_code")
                 if isinstance(reason, str):
-                    job.status_reason = reason
+                    job.status_reason = redact_text(reason)[:1024]
                     return
         job.status_reason = None

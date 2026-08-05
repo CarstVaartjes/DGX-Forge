@@ -20,6 +20,8 @@ if os.environ.get("DGX_LIFECYCLE_LOCKED_ENV") != "1":
 sys.path[:0] = [str(ROOT / "src"), str(ROOT / "control/src")]
 
 from dgx_control.agent_jobs import AgentJobService
+from dgx_control.agent_reconciliation import AgentReconciliationService
+from dgx_control.auth import AgentIdentity, AgentSource
 from dgx_control.desired_state import (
     DesiredStateObservation,
     DesiredStateResolver,
@@ -27,17 +29,14 @@ from dgx_control.desired_state import (
 )
 from dgx_control.git_policy import Eligibility
 from dgx_control.jobs import JobService
-from dgx_control.litellm import LiteLlmPolicy, LiteLlmPublisher
 from dgx_control.models import AgentCertificate, AgentNode, Base
 from dgx_control.orchestration import ReconciliationOrchestrator
-from dgx_control.presence import ManagementAddressPolicy
+from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
 from dgx_control.reconcile import Reconciler
 from dgx_control.repository import RepositoryService
-from dgx_control.routes import (
-    RouteCandidate,
-    RouteEndpoint,
-    RouteEndpointPolicy,
-    RoutePublisher,
+from dgx_control.route_runtime import (
+    AtomicRouteBundlePublisher,
+    FileSupervisorAcknowledger,
 )
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -69,6 +68,77 @@ CAPABILITIES = (
     "workload.stop",
     "workload.verify",
 )
+
+
+def _operation_result(claim) -> dict[str, object]:
+    if claim.operation.value == "node.probe":
+        evidence = {
+            "dgx_forge": {
+                "schema_version": 1,
+                "memory": {"available_bytes": 1_000, "total_bytes": 4_000},
+                "storage": {"available_bytes": 2_000, "total_bytes": 8_000},
+                "accelerator": {
+                    "available": True,
+                    "active_nvidia_compute_processes": 0,
+                },
+            },
+            "nvidia": {"tools": {}},
+        }
+    elif claim.operation.value == "release.install":
+        evidence = {
+            "status": "installed",
+            "release_digest": claim.payload["target_digest"],
+            "manifest_digest": claim.payload["oci_manifest_digest"],
+            "adapter_id": claim.payload["adapter_id"],
+        }
+    else:
+        action = claim.operation.value.removeprefix("workload.")
+        evidence = {
+            "status": {
+                "prepare": "prepared",
+                "start": "started",
+                "stop": "stopped",
+                "health": "healthy",
+                "verify": "verified",
+            }[action],
+            "action": action,
+            "workload_id": claim.payload["workload_id"],
+            "release_digest": claim.payload["release_digest"],
+            "evidence_digest": claim.payload.get("expected_digest", "f" * 64),
+        }
+    return {"status": "ok", "evidence": evidence}
+
+
+def _drive_reconciliation(
+    service: AgentReconciliationService,
+    operations: AgentJobService,
+    sessions,
+    reconciliation_id: str,
+    node_id: str,
+) -> int:
+    claimed = 0
+    for _ in range(128):
+        advanced = service.tick(reconciliation_id)
+        claim = operations.claim(
+            node_id,
+            "simulated-certificate",
+            30,
+            protocol_version=1,
+            capabilities=CAPABILITIES,
+        )
+        if claim is not None:
+            operations.succeed(claim, _operation_result(claim))
+            claimed += 1
+            continue
+        with sessions() as session:
+            from dgx_control.models import Reconciliation
+
+            reconciliation = session.get(Reconciliation, reconciliation_id)
+            if reconciliation is not None and reconciliation.current_phase == "completed":
+                return claimed
+        if not advanced:
+            raise RuntimeError("production reconciliation service made no progress")
+    raise RuntimeError("production reconciliation service exceeded its phase bound")
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -204,6 +274,7 @@ def run(host: str, display_name: str) -> dict[str, object]:
         proposal = build_node_proposal("0" * 40, journal, {"hostname": host})
         repository, commit = _repository(workspace, node_id.value, host, display_name)
         audit = [f"install:{journal.state}", f"proposal:{proposal.sha256}", f"merge:{commit}"]
+
         engine = create_engine(f"sqlite:///{workspace / 'control.sqlite'}")
         Base.metadata.create_all(engine)
         sessions = sessionmaker(engine, expire_on_commit=False)
@@ -253,68 +324,78 @@ def run(host: str, display_name: str) -> dict[str, object]:
         )
         plan = reconciler.plan(commit, "inference")
         queued = reconciler.enqueue(plan.digest, "administrator", "lifecycle-reconcile")
-        operations = AgentJobService(sessions, clock=lambda: now)
         assert plan.operation_graph is not None
-        for graph_node in plan.operation_graph.nodes:
-            operations.enqueue(
-                str(queued["job_id"]),
-                graph_node.node_id,
-                graph_node.kind,
-                commit,
-                plan.operation_payloads[graph_node.operation_id],
+        management_policy = ManagementAddressPolicy.parse("192.0.2.0/24")
+        presence = AgentPresenceService(
+            sessions, management_policy, clock=lambda: now
+        )
+        identity = AgentIdentity(
+            node_id.value,
+            "simulated-certificate",
+            "simulated-fingerprint",
+            True,
+        )
+        presence.observe(AgentSource(identity, "192.0.2.10"))
+        ack_path = workspace / "supervisor/ack.json"
+        ack_path.parent.mkdir(mode=0o750)
+        ack_validator = FileSupervisorAcknowledger(
+            ack_path, clock=lambda: now
+        )
+
+        def acknowledge(marker) -> None:
+            acknowledgement = {
+                "acknowledged_at": now.isoformat(),
+                "activation_sha256": marker.digest,
+                "child_pid": os.getpid(),
+                "expires_at": marker.expires_at,
+                "generation": marker.generation,
+                "litellm_sha256": marker.litellm_sha256,
+                "schema_version": 1,
+                "state": marker.state,
+            }
+            temporary = ack_path.with_suffix(".tmp")
+            temporary.write_text(
+                json.dumps(
+                    acknowledgement, sort_keys=True, separators=(",", ":")
+                )
+                + "\n"
             )
-        workload_status = {
-            "workload.prepare": "prepared",
-            "workload.start": "started",
-            "workload.stop": "stopped",
-            "workload.health": "healthy",
-            "workload.verify": "verified",
-        }
-        claimed = 0
-        while True:
-            claim = operations.claim(
-                node_id.value, "simulated-certificate", 30
+            os.replace(temporary, ack_path)
+            ack_validator(marker)
+
+        route_runtime = AtomicRouteBundlePublisher(
+            workspace / "route-runtime",
+            management_policy=management_policy,
+            clock=lambda: now,
+            maximum_lease_seconds=300,
+            await_supervisor_ack=acknowledge,
+        )
+        operations = AgentJobService(sessions, clock=lambda: now)
+
+        def endpoint(session, target: str):
+            observed = presence.latest_in_session(
+                session, target, maximum_age_seconds=300
             )
-            if claim is None:
-                break
-            if claim.operation.value == "node.probe":
-                evidence = {
-                    "dgx_forge": {
-                        "schema_version": 1,
-                        "memory": {
-                            "available_bytes": 1_000,
-                            "total_bytes": 4_000,
-                        },
-                        "storage": {
-                            "available_bytes": 2_000,
-                            "total_bytes": 8_000,
-                        },
-                        "accelerator": {
-                            "available": True,
-                            "active_nvidia_compute_processes": 0,
-                        },
-                    },
-                    "nvidia": {"tools": {}},
-                }
-            elif claim.operation.value == "release.install":
-                evidence = {
-                    "status": "installed",
-                    "release_digest": "a" * 64,
-                    "manifest_digest": "sha256:" + "9" * 64,
-                    "adapter_id": "spark-runtime-v1",
-                }
-            else:
-                evidence = {
-                    "status": workload_status[claim.operation.value],
-                    "action": claim.operation.value.removeprefix("workload."),
-                    "workload_id": "test-model",
-                    "release_digest": "a" * 64,
-                    "evidence_digest": "f" * 64,
-                }
-            operations.succeed(claim, {"status": "ok", "evidence": evidence})
-            claimed += 1
-        for phase in ("routes-withdrawn", "dispatching", "accepting", "completed"):
-            orchestrator.advance(plan.operation_graph.reconciliation_id, phase)
+            return observed.address, observed.observed_at
+
+        current_commit = [commit]
+        execution = AgentReconciliationService(
+            sessions,
+            agent_jobs=operations,
+            publisher=route_runtime,
+            endpoint_resolver=endpoint,
+            clock=lambda: now,
+            commit_eligible=lambda _commit: True,
+            current_commit=lambda: current_commit[0],
+        )
+        operations.set_result_consumer(execution.consume_result)
+        claimed = _drive_reconciliation(
+            execution,
+            operations,
+            sessions,
+            plan.operation_graph.reconciliation_id,
+            node_id.value,
+        )
 
         # A periodic post-start probe observes the now-running managed workload.
         # Keep it later than the pre-mutation zero-compute gate so durable replay
@@ -387,61 +468,14 @@ def run(host: str, display_name: str) -> dict[str, object]:
             "lifecycle-reconcile-replacement",
         )
         assert replacement_plan.operation_graph is not None
-        for graph_node in replacement_plan.operation_graph.nodes:
-            operations.enqueue(
-                str(replacement_job["job_id"]),
-                graph_node.node_id,
-                graph_node.kind,
-                replacement_commit,
-                replacement_plan.operation_payloads[graph_node.operation_id],
-            )
-        replacement_claimed = 0
-        while True:
-            claim = operations.claim(
-                node_id.value, "simulated-certificate", 30
-            )
-            if claim is None:
-                break
-            if claim.operation.value == "node.probe":
-                evidence = {
-                    "dgx_forge": {
-                        "schema_version": 1,
-                        "memory": {
-                            "available_bytes": 1_000,
-                            "total_bytes": 4_000,
-                        },
-                        "storage": {
-                            "available_bytes": 2_000,
-                            "total_bytes": 8_000,
-                        },
-                        "accelerator": {
-                            "available": True,
-                            "active_nvidia_compute_processes": 0,
-                        },
-                    },
-                    "nvidia": {"tools": {}},
-                }
-            elif claim.operation.value == "release.install":
-                evidence = {
-                    "status": "installed",
-                    "release_digest": claim.payload["target_digest"],
-                    "manifest_digest": claim.payload["oci_manifest_digest"],
-                    "adapter_id": claim.payload["adapter_id"],
-                }
-            else:
-                evidence = {
-                    "status": workload_status[claim.operation.value],
-                    "action": claim.operation.value.removeprefix("workload."),
-                    "workload_id": claim.payload["workload_id"],
-                    "release_digest": claim.payload["release_digest"],
-                    "evidence_digest": "f" * 64,
-                }
-            operations.succeed(claim, {"status": "ok", "evidence": evidence})
-            replacement_claimed += 1
-        for phase in ("routes-withdrawn", "dispatching", "accepting", "completed"):
-            orchestrator.advance(
-                replacement_plan.operation_graph.reconciliation_id, phase
-            )
+        current_commit[0] = replacement_commit
+        replacement_claimed = _drive_reconciliation(
+            execution,
+            operations,
+            sessions,
+            replacement_plan.operation_graph.reconciliation_id,
+            node_id.value,
+        )
         replaced_durable = durable_desired_state_observations(sessions)
         assert (
             len(replaced_durable) == 1
@@ -463,38 +497,15 @@ def run(host: str, display_name: str) -> dict[str, object]:
             )
         )
 
-        endpoint_policy = RouteEndpointPolicy(
-            management=ManagementAddressPolicy.parse("10.0.0.0/24"),
-            allowed_ports=frozenset({8000}),
-            maximum_age_seconds=150,
-            clock=lambda: now,
-        )
-        route_publisher = RoutePublisher(
-            workspace / "routes",
-            endpoint_policy=endpoint_policy,
-            validate=lambda _: True,
-            apply=lambda _: None,
-        )
-        candidate = RouteCandidate(
-            replacement_commit,
-            "agent",
-            "model-repository/revision",
-            (node_id.value,),
-            {
-                "test-model": RouteEndpoint(
-                    node_id.value, "10.0.0.42", 8000, "http", now
-                )
-            },
-            now,
-        )
-        route_publisher.maintenance((node_id.value,), "reconcile")
-        audit.append("routes:maintenance")
-        route_publisher.publish(candidate)
+        published = route_runtime.inspect()
         audit.append("routes:published")
-        snapshot = route_publisher.snapshot()
-        generation = LiteLlmPublisher(workspace / "litellm", validate=lambda _: True, apply=lambda _: None).publish(snapshot, LiteLlmPolicy({"test-model": {"requests_per_minute": 30, "tokens_per_minute": 10000}}))
-        served_status = 200 if snapshot.state == "published" and "test-model" in snapshot.aliases else 503
-        withdrawn = route_publisher.maintenance((node_id.value,), "profile withdrawn")
+        served_status = 200 if published.state == "published" else 503
+        withdrawn = route_runtime.withdraw(
+            reconciliation_id=replacement_plan.operation_graph.reconciliation_id,
+            plan_digest=replacement_plan.digest,
+            targets=(node_id.value,),
+            reason="profile withdrawn",
+        )
         audit.append("routes:withdrawn")
         withdrawn_status = 503 if withdrawn.state == "maintenance" else 200
         ok = journal.state == "accepted" and durable[0].occupied and served_status == 200 and withdrawn_status == 503
@@ -503,7 +514,7 @@ def run(host: str, display_name: str) -> dict[str, object]:
             "dynamic_input": {"host": host, "display_name": display_name}, "node_id": node_id.value,
             "installation_state": journal.state, "installation_gate_count": len(journal.steps),
             "proposal_sha256": proposal.sha256, "eligible_commit": replacement_commit, "profile_source": "model-repository/revision",
-            "reconciliation": "succeeded", "route_generation": snapshot.generation, "litellm_generation": generation.generation,
+            "reconciliation": "succeeded", "route_generation": published.generation, "litellm_generation": published.generation,
             "planner": "DesiredStateResolver",
             "persisted_operation_count": len(plan.operation_graph.nodes) + len(replacement_plan.operation_graph.nodes),
             "claimed_operation_count": claimed,

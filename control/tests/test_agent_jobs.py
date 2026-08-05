@@ -6,6 +6,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
+from threading import Event
 
 import pytest
 from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
@@ -223,6 +224,30 @@ def test_long_poll_wakes_on_enqueue_and_times_out_without_per_client_state(servi
     assert jobs.claim(NODE_B, "serial-b", 30, 0.08) is None
     timeout_elapsed = time.monotonic() - timeout_started
     assert 0.06 <= timeout_elapsed < 0.5
+
+
+def test_long_poll_rechecks_database_for_another_process_enqueue(service) -> None:
+    jobs, sessions, clock = service
+    other_process = AgentJobService(sessions, clock=clock)
+    parent_job = parent(sessions, clock)
+    first_poll = Event()
+    original_claim_once = jobs._claim_once
+
+    def observed_claim_once(*args, **kwargs):
+        result = original_claim_once(*args, **kwargs)
+        first_poll.set()
+        return result
+
+    jobs._claim_once = observed_claim_once  # type: ignore[method-assign]
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        waiting = pool.submit(jobs.claim, NODE_A, "serial-a", 30, 2.0)
+        assert first_poll.wait(timeout=1)
+        operation = other_process.enqueue(
+            parent_job.id, NODE_A, "node.probe", COMMIT, {}
+        )
+        claim = waiting.result(timeout=0.8)
+
+    assert claim is not None and claim.operation_id == operation.id
 
 
 def test_expired_attempt_cannot_publish_success(service) -> None:

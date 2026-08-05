@@ -428,7 +428,7 @@ def test_plan_persists_immutable_canonical_graph_and_progress_fields(planner) ->
         }
 
 
-def test_advance_and_cancel_change_only_mutable_reconciliation_state(planner) -> None:
+def test_advance_changes_mutable_state_but_legacy_cancel_is_disabled(planner) -> None:
     orchestrator, sessions = planner
     graph = orchestrator.plan(distributed_plan())
     original_document = deepcopy(graph.document)
@@ -452,19 +452,19 @@ def test_advance_and_cancel_change_only_mutable_reconciliation_state(planner) ->
     with pytest.raises(ValueError, match="transition"):
         orchestrator.advance(graph.reconciliation_id, "completed")
 
-    orchestrator.cancel(graph.reconciliation_id, "operator cancelled rollout")
+    with pytest.raises(RuntimeError, match="durable cancellation"):
+        orchestrator.cancel(graph.reconciliation_id, "operator cancelled rollout")
 
     with sessions() as session:
         stored = session.get(Reconciliation, graph.reconciliation_id)
         assert stored is not None
-        assert stored.status == "cancelled"
-        assert stored.current_phase == "cancelled"
-        assert stored.terminal_reason == "operator cancelled rollout"
+        assert stored.status == "running"
+        assert stored.current_phase == "dispatching"
+        assert stored.terminal_reason is None
         assert stored.graph == original_document
         assert stored.graph_digest == graph.digest
 
-    with pytest.raises(ValueError, match="terminal"):
-        orchestrator.advance(graph.reconciliation_id, "accepting")
+    orchestrator.advance(graph.reconciliation_id, "accepting")
 
 
 def test_successful_completion_assigns_unique_monotonic_causal_generations(

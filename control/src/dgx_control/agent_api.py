@@ -34,6 +34,7 @@ from .agent_jobs import AgentJobService, StaleAgentAttempt
 from .auth import (
     Actor,
     AgentIdentity,
+    AgentSource,
     agent_identity_from_scope,
     agent_source_from_scope,
 )
@@ -266,14 +267,18 @@ def _body_node_matches(value: str | None, identity: AgentIdentity) -> None:
         raise HTTPException(status_code=403, detail="authenticated node identity cannot be overridden")
 
 
-def _observed_agent_source(request: Request) -> str:
+def _validated_authenticated_source(
+    request: Request,
+    services: AgentApiServices,
+    identity: AgentIdentity,
+) -> AgentSource:
     source = agent_source_from_scope(request.scope)
-    if source is None:
-        raise HTTPException(
-            status_code=422,
-            detail="exactly one proxy-observed agent source is required",
-        )
-    return source
+    if source is None or source.identity != identity:
+        raise HTTPException(status_code=401, detail="verified agent source required")
+    try:
+        return services.presence.validate(source)
+    except PresenceError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from None
 
 
 _ENROLLMENT_TOKEN = re.compile(r"[A-Za-z0-9_-]{43}\Z")
@@ -689,14 +694,7 @@ def install_agent_routes(
         required = _require_services(services)
         identity = _authenticated_identity(request, required)
         _body_node_matches(body.node_id, identity)
-        try:
-            required.presence.observe(
-                identity.node_id,
-                _observed_agent_source(request),
-                required.clock(),
-            )
-        except PresenceError as error:
-            raise HTTPException(status_code=422, detail=str(error)) from None
+        source = _validated_authenticated_source(request, required, identity)
         try:
             result = required.operations.claim(
                 identity.node_id,
@@ -705,6 +703,7 @@ def install_agent_routes(
                 body.wait_seconds,
                 body.protocol_version,
                 body.capabilities,
+                source=source,
             )
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
@@ -720,10 +719,17 @@ def install_agent_routes(
         except AgentProtocolError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
         _body_node_matches(message.node_id, identity)
+        source = _validated_authenticated_source(request, required, identity)
         try:
-            return _json_response(_wire(required.operations.heartbeat(message, message.progress, 30)))
+            response = required.operations.heartbeat(
+                message,
+                message.progress,
+                30,
+                source=source,
+            )
         except (StaleAgentAttempt, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from None
+        return _json_response(_wire(response))
 
     @agent.post("/result", status_code=status.HTTP_204_NO_CONTENT)
     def result(body: dict[str, object], request: Request) -> Response:
@@ -735,10 +741,9 @@ def install_agent_routes(
         except AgentProtocolError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
         _body_node_matches(message.node_id, identity)
+        source = _validated_authenticated_source(request, required, identity)
         try:
-            if message.state == "succeeded":
-                required.operations.succeed(message, message.result)
-            elif message.state == "failed":
+            if message.state == "failed":
                 error_code = message.result.get("error_code")
                 if (
                     message.result.get("status") != "failed"
@@ -746,9 +751,7 @@ def install_agent_routes(
                     or re.fullmatch(r"[a-z][a-z0-9_]{0,63}", error_code) is None
                 ):
                     raise ValueError("stable failure error code is required")
-                required.operations.fail(message, error_code)
-            else:
-                required.operations.wait_for_operator(message, str(message.result.get("reason", "")))
+            required.operations.record_result(message, source=source)
         except (StaleAgentAttempt, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from None
         return Response(status_code=status.HTTP_204_NO_CONTENT)

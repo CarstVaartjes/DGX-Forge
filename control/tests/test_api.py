@@ -60,17 +60,21 @@ def test_admin_mutation_is_correlated_and_audited() -> None:
     assert (event.actor, event.base_commit, event.targets) == ("administrator", "abc", ("node",))
 
 
-def test_generic_jobs_endpoint_cannot_enqueue_reconciliation() -> None:
+def test_generic_job_endpoint_cannot_create_reconciliation_authority() -> None:
     client, headers, jobs, _audits = _client("administrator")
 
-    response = client.post("/api/v1/jobs", headers=headers, json={
-        "kind": "reconcile",
-        "base_commit": "a" * 40,
-        "targets": ["spk_00000000000000000000000000000001"],
-        "payload": {"plan_digest": "0" * 64},
-    })
+    response = client.post(
+        "/api/v1/jobs",
+        headers=headers,
+        json={
+            "kind": "reconcile",
+            "base_commit": "a" * 40,
+            "targets": ["spk_" + "1" * 32],
+            "payload": {"reconciliation_id": "attacker-controlled"},
+        },
+    )
 
-    assert response.status_code == 400
+    assert response.status_code == 422
     assert jobs.calls == []
 
 
