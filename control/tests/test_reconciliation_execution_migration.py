@@ -1,0 +1,340 @@
+from __future__ import annotations
+
+import shutil
+import subprocess
+import time
+from collections.abc import Iterator
+from pathlib import Path
+
+import pytest
+from alembic import command
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+from sqlalchemy import JSON, bindparam, create_engine, inspect, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+
+
+def _config(database_url: str) -> Config:
+    root = Path(__file__).resolve().parents[1]
+    config = Config(root / "alembic.ini")
+    config.set_main_option("script_location", str(root / "migrations"))
+    config.set_main_option("sqlalchemy.url", database_url)
+    return config
+
+
+@pytest.fixture(scope="module")
+def postgres_database() -> Iterator[str]:
+    if shutil.which("docker") is None:
+        pytest.skip("Docker is required for PostgreSQL migration tests")
+    try:
+        container = subprocess.check_output(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "-d",
+                "-e",
+                "POSTGRES_PASSWORD=postgres",
+                "-p",
+                "127.0.0.1::5432",
+                "postgres:16",
+            ],
+            text=True,
+        ).strip()
+    except subprocess.CalledProcessError as error:
+        pytest.skip(f"disposable PostgreSQL is unavailable: {error}")
+    try:
+        port = subprocess.check_output(
+            [
+                "docker",
+                "inspect",
+                "-f",
+                '{{(index (index .NetworkSettings.Ports "5432/tcp") 0).HostPort}}',
+                container,
+            ],
+            text=True,
+        ).strip()
+        database = (
+            "postgresql+psycopg://postgres:postgres@127.0.0.1:"
+            f"{port}/postgres"
+        )
+        engine = create_engine(database)
+        for _ in range(100):
+            try:
+                with engine.connect():
+                    break
+            except (OSError, SQLAlchemyError):
+                time.sleep(0.1)
+        else:
+            pytest.skip("disposable PostgreSQL did not become ready")
+        engine.dispose()
+        yield database
+    finally:
+        subprocess.run(
+            ["docker", "stop", container], check=False, capture_output=True
+        )
+
+
+def _seed_0008(engine: Engine) -> None:
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO reconciliations "
+                "(id,base_commit,status,summary,created_at) VALUES "
+                "('legacy-reconciliation',"
+                "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','planned','{}',"
+                "'2026-08-05 00:00:00+00')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO jobs "
+                "(id,request_id,kind,state,actor,base_commit,targets,"
+                "payload_digest,payload,current_attempt,created_at,updated_at) "
+                "VALUES ('legacy-job','11111111-1111-1111-1111-111111111111',"
+                "'reconcile','queued','admin',"
+                "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','[]',"
+                f"'{'b' * 64}','{{}}',0,"
+                "'2026-08-05 00:00:00+00','2026-08-05 00:00:00+00')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO agent_nodes (node_id,state,capabilities) VALUES "
+                "('spk_0123456789abcdef0123456789abcdef','active','[]')"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO agent_operations "
+                "(id,parent_job_id,node_id,kind,payload_digest,payload,"
+                "base_commit,state,current_attempt,created_at,updated_at) VALUES "
+                "('legacy-agent-operation','legacy-job',"
+                "'spk_0123456789abcdef0123456789abcdef','node.probe',"
+                f"'{'c' * 64}','{{}}',"
+                "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','queued',0,"
+                "'2026-08-05 00:00:00+00','2026-08-05 00:00:00+00')"
+            )
+        )
+
+
+def _assert_legacy_rows(engine: Engine) -> None:
+    with engine.connect() as connection:
+        assert connection.execute(
+            text("SELECT status FROM reconciliations WHERE id='legacy-reconciliation'")
+        ).scalar_one() == "planned"
+        assert connection.execute(
+            text("SELECT state FROM jobs WHERE id='legacy-job'")
+        ).scalar_one() == "queued"
+        assert connection.execute(
+            text(
+                "SELECT state FROM agent_nodes "
+                "WHERE node_id='spk_0123456789abcdef0123456789abcdef'"
+            )
+        ).scalar_one() == "active"
+        assert connection.execute(
+            text(
+                "SELECT state FROM agent_operations "
+                "WHERE id='legacy-agent-operation'"
+            )
+        ).scalar_one() == "queued"
+
+
+def _assert_execution_cycle(database: str) -> None:
+    config = _config(database)
+    engine = create_engine(database)
+    command.upgrade(config, "0008_resolved_plan")
+    _seed_0008(engine)
+
+    command.upgrade(config, "0009_reconciliation_execution")
+    database_inspector = inspect(engine)
+    assert {
+        "reconciliation_operations",
+        "route_publications",
+    } <= set(database_inspector.get_table_names())
+    assert "reconciliation_id" in {
+        column["name"] for column in database_inspector.get_columns("jobs")
+    }
+
+    operation_columns = {
+        column["name"]
+        for column in database_inspector.get_columns("reconciliation_operations")
+    }
+    assert operation_columns == {
+        "id",
+        "reconciliation_id",
+        "graph_operation_id",
+        "role",
+        "agent_operation_id",
+        "expected_payload_digest",
+        "state",
+        "result_digest",
+        "evidence_digest",
+        "accepted_at",
+        "compensated_graph_operation_id",
+    }
+    publication_columns = {
+        column["name"]
+        for column in database_inspector.get_columns("route_publications")
+    }
+    assert publication_columns == {
+        "reconciliation_id",
+        "state",
+        "generation",
+        "plan_digest",
+        "evidence_digest",
+        "route_digest",
+        "litellm_digest",
+        "bundle_digest",
+        "activation_marker",
+        "activation_marker_digest",
+        "lease_issued_at",
+        "lease_expires_at",
+    }
+
+    with engine.begin() as connection:
+        connection.execute(
+            text(
+                "UPDATE jobs SET reconciliation_id='legacy-reconciliation' "
+                "WHERE id='legacy-job'"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO reconciliation_operations "
+                "(id,reconciliation_id,graph_operation_id,role,agent_operation_id,"
+                "expected_payload_digest,state,result_digest,evidence_digest,"
+                "accepted_at,compensated_graph_operation_id) VALUES "
+                "('execution-1','legacy-reconciliation','model:probe','primary',"
+                "'legacy-agent-operation',"
+                f"'{'d' * 64}','accepted','{'e' * 64}','{'f' * 64}',"
+                "'2026-08-05 00:01:00+00',NULL)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO route_publications "
+                "(reconciliation_id,state,generation,plan_digest,evidence_digest,"
+                "route_digest,litellm_digest,bundle_digest,"
+                "activation_marker,activation_marker_digest,"
+                "lease_issued_at,lease_expires_at) VALUES "
+                "('legacy-reconciliation','completed',7,"
+                f"'{'1' * 64}','{'2' * 64}','{'3' * 64}','{'4' * 64}',"
+                f"'{'5' * 64}',"
+                ":activation_marker,"
+                f"'{'6' * 64}',"
+                "'2026-08-05 00:01:00+00','2026-08-05 00:03:30+00')"
+            ).bindparams(bindparam("activation_marker", type_=JSON)),
+            {
+                "activation_marker": {
+                    "schema_version": 1,
+                    "state": "published",
+                }
+            },
+        )
+    _assert_legacy_rows(engine)
+
+    command.downgrade(config, "0008_resolved_plan")
+    database_inspector = inspect(engine)
+    assert not {
+        "reconciliation_operations",
+        "route_publications",
+    } & set(database_inspector.get_table_names())
+    assert "reconciliation_id" not in {
+        column["name"] for column in database_inspector.get_columns("jobs")
+    }
+    _assert_legacy_rows(engine)
+
+    command.upgrade(config, "0009_reconciliation_execution")
+    _assert_legacy_rows(engine)
+    with engine.connect() as connection:
+        assert connection.execute(
+            text("SELECT count(*) FROM reconciliation_operations")
+        ).scalar_one() == 0
+        assert connection.execute(
+            text("SELECT count(*) FROM route_publications")
+        ).scalar_one() == 0
+        assert connection.execute(
+            text("SELECT reconciliation_id FROM jobs WHERE id='legacy-job'")
+        ).scalar_one() is None
+    engine.dispose()
+
+
+def test_0009_is_the_sole_linear_head() -> None:
+    config = _config("sqlite://")
+    heads = ScriptDirectory.from_config(config).get_heads()
+
+    assert heads == ["0009_reconciliation_execution"]
+    revision = ScriptDirectory.from_config(config).get_revision(heads[0])
+    assert revision is not None
+    assert revision.down_revision == "0008_resolved_plan"
+
+
+def test_execution_models_expose_durable_links_and_bounded_fields() -> None:
+    from dgx_control import models
+
+    assert hasattr(models, "ReconciliationOperation")
+    assert hasattr(models, "RoutePublication")
+    assert models.Job.__table__.c.reconciliation_id.unique
+
+    operation = models.ReconciliationOperation.__table__
+    assert operation.c.reconciliation_id.foreign_keys
+    assert operation.c.agent_operation_id.foreign_keys
+    assert operation.c.agent_operation_id.unique
+    assert operation.c.graph_operation_id.type.length == 128
+    assert operation.c.role.type.length == 16
+    assert operation.c.state.type.length == 32
+    assert any(
+        constraint.columns.keys()
+        == ["reconciliation_id", "graph_operation_id", "role"]
+        for constraint in operation.constraints
+    )
+
+    publication = models.RoutePublication.__table__
+    assert publication.c.reconciliation_id.primary_key
+    assert publication.c.reconciliation_id.foreign_keys
+    assert publication.c.state.type.length == 32
+    assert publication.c.generation.unique
+    assert "activation_marker" in publication.c
+
+
+def test_sqlite_rejects_execution_states_outside_closed_sets(
+    tmp_path: Path,
+) -> None:
+    database = f"sqlite:///{tmp_path / 'bounded-states.sqlite'}"
+    config = _config(database)
+    engine = create_engine(database)
+    command.upgrade(config, "0008_resolved_plan")
+    _seed_0008(engine)
+    command.upgrade(config, "0009_reconciliation_execution")
+
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO reconciliation_operations "
+                "(id,reconciliation_id,graph_operation_id,role,"
+                "expected_payload_digest,state) VALUES "
+                "('bad-execution-state','legacy-reconciliation','model:probe',"
+                f"'primary','{'d' * 64}','arbitrary')"
+            )
+        )
+    with pytest.raises(IntegrityError), engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO route_publications "
+                "(reconciliation_id,state,plan_digest) VALUES "
+                f"('legacy-reconciliation','arbitrary','{'1' * 64}')"
+            )
+        )
+    engine.dispose()
+
+
+def test_sqlite_0008_0009_preservation_cycle(tmp_path: Path) -> None:
+    _assert_execution_cycle(f"sqlite:///{tmp_path / 'execution.sqlite'}")
+
+
+def test_postgresql_0008_0009_preservation_cycle(
+    postgres_database: str,
+) -> None:
+    _assert_execution_cycle(postgres_database)
