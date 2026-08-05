@@ -388,6 +388,11 @@ class Reconciler:
                 raise ValueError("unknown reconciliation plan digest") from None
         self._verify_plan(plan)
         self._eligible(plan.commit)
+        reconciliation_id = (
+            plan.operation_graph.reconciliation_id
+            if plan.operation_graph is not None
+            else None
+        )
         job = self._jobs.enqueue(
             "reconcile", actor, plan.commit, list(plan.targets),
             {
@@ -409,6 +414,11 @@ class Reconciler:
                 ),
             },
             request_id=request_id,
+            **(
+                {"reconciliation_id": reconciliation_id}
+                if reconciliation_id is not None
+                else {}
+            ),
         )
         result = {"job_id": job.id, "state": job.state, "base_commit": plan.commit}
         if plan.operation_graph is not None:

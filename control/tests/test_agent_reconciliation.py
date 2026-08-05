@@ -1,23 +1,48 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import uuid
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from dgx_agent_protocol import canonical_message
+from dgx_control.agent_jobs import AgentJobService
 from dgx_control.agent_reconciliation import (
+    AgentReconciliationService,
     accepted_result_digests,
     compensation_order,
     ready_operation_ids,
 )
+from dgx_control.models import (
+    AgentCertificate,
+    AgentNode,
+    AgentOperation,
+    AgentOperationAttempt,
+    Base,
+    Job,
+    Reconciliation,
+    ReconciliationOperation,
+)
 from dgx_control.orchestration import OperationNode
-
+from dgx_control.route_runtime import ActivationMarker
+from sqlalchemy import create_engine, func, select
+from sqlalchemy.orm import sessionmaker
 
 NODE_A = "spk_" + "a" * 32
 NODE_B = "spk_" + "b" * 32
+BASE_COMMIT = "a" * 40
 
 
 def _digest(value: object) -> str:
     return hashlib.sha256(canonical_message(value)).hexdigest()
+
+
+def _json_digest(value: object) -> str:
+    return hashlib.sha256(
+        json.dumps(value, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def _node(
@@ -61,6 +86,9 @@ def test_dependency_waves_trust_only_accepted_projection_rows() -> None:
     )
 
     assert ready_operation_ids(nodes, {}) == ("worker:start",)
+    assert ready_operation_ids(nodes, {"worker:start": "planned"}) == (
+        "worker:start",
+    )
     assert ready_operation_ids(nodes, {"worker:start": "succeeded"}) == ()
     assert ready_operation_ids(nodes, {"worker:start": "accepted"}) == (
         "entrypoint:start",
@@ -219,3 +247,557 @@ def test_node_gate_requires_exact_zero_compute_evidence() -> None:
 def test_only_canonical_success_evidence_can_be_accepted(result: object) -> None:
     with pytest.raises((TypeError, ValueError), match="result|evidence"):
         accepted_result_digests("workload.stop", {}, result)
+
+
+class FakeAgentJobs:
+    def __init__(self) -> None:
+        self.notifications = 0
+
+    def enqueue_in_session(
+        self,
+        session,
+        parent_job_id,
+        node_id,
+        operation,
+        base_commit,
+        payload,
+        *,
+        operation_id,
+    ):
+        stored = AgentOperation(
+            id=operation_id,
+            parent_job_id=parent_job_id,
+            node_id=node_id,
+            kind=operation,
+            payload_digest=_digest(payload),
+            payload=dict(payload),
+            base_commit=base_commit,
+            state="queued",
+            current_attempt=0,
+            created_at=datetime(2026, 8, 5, tzinfo=UTC),
+            updated_at=datetime(2026, 8, 5, tzinfo=UTC),
+        )
+        session.add(stored)
+        session.flush()
+        return stored
+
+    def notify_available(self) -> None:
+        self.notifications += 1
+
+
+class FakePublisher:
+    def __init__(self, *, fail_withdrawal: bool = False) -> None:
+        self.fail_withdrawal = fail_withdrawal
+        self.withdrawals = 0
+        self.publications = []
+
+    def withdraw(self, *, reconciliation_id, plan_digest, targets, reason):
+        self.withdrawals += 1
+        if self.fail_withdrawal:
+            raise RuntimeError("withdrawal failed")
+        return ActivationMarker(
+            schema_version=1,
+            generation=1,
+            state="maintenance",
+            reconciliation_id=reconciliation_id,
+            plan_digest=plan_digest,
+            evidence_set_digest="0" * 64,
+            routes_sha256="1" * 64,
+            litellm_sha256="2" * 64,
+            issued_at="2026-08-05T00:00:00+00:00",
+            expires_at="2026-08-05T00:05:00+00:00",
+            directory="00000001-" + "3" * 64,
+            manifest_sha256="3" * 64,
+        )
+
+    def publish(self, request):
+        self.publications.append(request)
+        return ActivationMarker(
+            schema_version=1,
+            generation=2,
+            state="published",
+            reconciliation_id=request.reconciliation_id,
+            plan_digest=request.plan_digest,
+            evidence_set_digest=request.evidence_set_digest,
+            routes_sha256="4" * 64,
+            litellm_sha256="5" * 64,
+            issued_at="2026-08-05T00:00:00+00:00",
+            expires_at="2026-08-05T00:01:00+00:00",
+            directory="00000002-" + "6" * 64,
+            manifest_sha256="6" * 64,
+        )
+
+
+def _execution_fixture(
+    tmp_path,
+    *,
+    fail_withdrawal: bool = False,
+    real_queue: bool = False,
+    operation_kind: str = "workload.health",
+    routes: dict[str, object] | None = None,
+):
+    engine = create_engine(
+        f"sqlite:///{tmp_path / f'execution-{uuid.uuid4()}.sqlite'}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine, expire_on_commit=False)
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "workload_id": "model",
+        "release_digest": "a" * 64,
+        "adapter_id": "spark-runtime-v1",
+    }
+    if operation_kind == "workload.verify":
+        payload["expected_digest"] = "e" * 64
+    operation = {
+        "operation_id": f"model:{NODE_A}:{operation_kind}",
+        "node_id": NODE_A,
+        "workload_id": "model",
+        "kind": operation_kind,
+        "dependencies": [],
+        "compensation_kind": None,
+        "payload_digest": _digest(payload),
+    }
+    graph = {
+        "schema_version": 1,
+        "base_commit": BASE_COMMIT,
+        "targets": [NODE_A],
+        "nodes": [operation],
+    }
+    resolved = {
+        "commit": BASE_COMMIT,
+        "targets": [NODE_A],
+        "placements": {},
+        "routes": routes or {},
+        "releases": {},
+        "workload_groups": {},
+        "input_digests": {"fleet": "f" * 64},
+        "operation_graph": graph,
+        "operation_payloads": {operation["operation_id"]: payload},
+        "agent_protocol_range": [1, 1],
+    }
+    reconciliation_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+    now = datetime(2026, 8, 5, tzinfo=UTC)
+    with sessions.begin() as session:
+        session.add(AgentNode(node_id=NODE_A, state="active", capabilities=[]))
+        session.add(
+            AgentCertificate(
+                serial="serial-a",
+                node_id=NODE_A,
+                not_before=now - timedelta(minutes=1),
+                not_after=now + timedelta(hours=1),
+                fingerprint="fingerprint-a",
+            )
+        )
+        session.add(
+            Reconciliation(
+                id=reconciliation_id,
+                base_commit=BASE_COMMIT,
+                status="planned",
+                summary={},
+                graph=graph,
+                graph_digest=_json_digest(graph),
+                plan_digest=_json_digest(resolved),
+                resolved_plan=resolved,
+                current_phase="planned",
+                route_withdrawal_generation=0,
+                created_at=now,
+            )
+        )
+        session.add(
+            Job(
+                id=job_id,
+                request_id=str(uuid.uuid4()),
+                kind="reconcile",
+                state="queued",
+                actor="operator",
+                base_commit=BASE_COMMIT,
+                targets=[NODE_A],
+                payload_digest=_digest({}),
+                payload={},
+                current_attempt=0,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    queue = (
+        AgentJobService(sessions, clock=lambda: now)
+        if real_queue
+        else FakeAgentJobs()
+    )
+    publisher = FakePublisher(fail_withdrawal=fail_withdrawal)
+    service = AgentReconciliationService(
+        sessions,
+        agent_jobs=queue,
+        publisher=publisher,
+        endpoint_resolver=lambda _node: ("192.0.2.10", now),
+        clock=lambda: now,
+    )
+    service.attach_job(reconciliation_id, job_id)
+    if real_queue:
+        queue.set_result_consumer(service.consume_result)
+    return service, sessions, queue, publisher, reconciliation_id, job_id
+
+
+def test_withdrawal_is_durable_before_any_agent_operation(tmp_path) -> None:
+    service, sessions, queue, publisher, reconciliation_id, job_id = (
+        _execution_fixture(tmp_path)
+    )
+
+    assert service.tick(reconciliation_id) is True
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        assert stored is not None and stored.current_phase == "withdrawal-pending"
+        assert session.scalar(select(func.count()).select_from(AgentOperation)) == 0
+
+    assert service.tick(reconciliation_id) is True
+    assert publisher.withdrawals == 1
+    assert service.tick(reconciliation_id) is True
+    assert service.tick(reconciliation_id) is True
+
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        operations = list(session.scalars(select(AgentOperation)))
+        projections = list(session.scalars(select(ReconciliationOperation)))
+        assert stored is not None and stored.current_phase == "dispatching"
+        assert job is not None and job.state == "running"
+        assert len(operations) == len(projections) == 1
+        assert projections[0].agent_operation_id == operations[0].id
+        assert projections[0].state == "queued"
+    assert queue.notifications == 1
+
+
+def test_withdrawal_failure_inserts_zero_agent_operations(tmp_path) -> None:
+    service, sessions, _queue, publisher, reconciliation_id, _job_id = (
+        _execution_fixture(tmp_path, fail_withdrawal=True)
+    )
+    service.tick(reconciliation_id)
+
+    with pytest.raises(RuntimeError, match="withdrawal"):
+        service.tick(reconciliation_id)
+
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        assert stored is not None and stored.current_phase == "withdrawal-pending"
+        assert session.scalar(select(func.count()).select_from(AgentOperation)) == 0
+    assert publisher.withdrawals == 1
+
+
+def test_concurrent_ticks_enqueue_one_exact_operation(tmp_path) -> None:
+    service, sessions, queue, _publisher, reconciliation_id, _job_id = (
+        _execution_fixture(tmp_path)
+    )
+    for _ in range(3):
+        service.tick(reconciliation_id)
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _: service.tick(reconciliation_id), range(4)))
+
+    with sessions() as session:
+        assert session.scalar(select(func.count()).select_from(AgentOperation)) == 1
+        assert (
+            session.scalar(select(func.count()).select_from(ReconciliationOperation))
+            == 1
+        )
+    assert queue.notifications == 1
+
+
+def _health_result(*, action: str = "health") -> dict[str, object]:
+    return {
+        "status": "ok",
+        "evidence": {
+            "status": "healthy",
+            "action": action,
+            "workload_id": "model",
+            "release_digest": "a" * 64,
+            "evidence_digest": "e" * 64,
+        },
+    }
+
+
+def test_first_completed_wave_is_accepted_without_terminalizing_parent(tmp_path) -> None:
+    service, sessions, queue, _publisher, reconciliation_id, job_id = (
+        _execution_fixture(tmp_path, real_queue=True)
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    claim = queue.claim(NODE_A, "serial-a", 30)
+    assert claim is not None
+
+    queue.succeed(claim, _health_result())
+
+    with sessions() as session:
+        job = session.get(Job, job_id)
+        projection = session.scalar(select(ReconciliationOperation))
+        assert job is not None and job.state == "running"
+        assert projection is not None and projection.state == "accepted"
+        assert projection.result_digest == _digest(_health_result())
+        assert projection.evidence_digest == _digest(_health_result()["evidence"])
+
+    service.tick(reconciliation_id)
+    service.tick(reconciliation_id)
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        assert stored is not None and stored.current_phase == "publication-pending"
+        assert job is not None and job.state == "running"
+
+
+def test_bad_evidence_rolls_back_agent_and_projection_result_atomically(tmp_path) -> None:
+    service, sessions, queue, _publisher, reconciliation_id, _job_id = (
+        _execution_fixture(tmp_path, real_queue=True)
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    claim = queue.claim(NODE_A, "serial-a", 30)
+    assert claim is not None
+
+    with pytest.raises(ValueError, match="workload evidence"):
+        queue.succeed(claim, _health_result(action="start"))
+
+    with sessions() as session:
+        operation = session.get(AgentOperation, claim.operation_id)
+        attempt = session.scalar(
+            select(AgentOperationAttempt).where(
+                AgentOperationAttempt.operation_id == claim.operation_id
+            )
+        )
+        projection = session.scalar(select(ReconciliationOperation))
+        assert operation is not None and operation.state == "running"
+        assert attempt is not None and attempt.state == "running"
+        assert attempt.result is None
+        assert projection is not None and projection.state == "queued"
+
+
+def test_complete_graph_publishes_exact_bundle_then_terminalizes_parent(tmp_path) -> None:
+    quota = {"requests_per_minute": 20, "tokens_per_minute": 1000}
+    route = {
+        "workload_id": "model",
+        "nodes": [NODE_A],
+        "entrypoint_node_id": NODE_A,
+        "scheme": "http",
+        "port": 8000,
+        "path": "/v1",
+        "quota": quota,
+        "quota_digest": _json_digest(quota),
+    }
+    service, sessions, queue, publisher, reconciliation_id, job_id = (
+        _execution_fixture(
+            tmp_path,
+            real_queue=True,
+            operation_kind="workload.verify",
+            routes={"model": route},
+        )
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    claim = queue.claim(NODE_A, "serial-a", 30)
+    assert claim is not None
+    queue.succeed(claim, _health_result(action="verify"))
+
+    for _ in range(3):
+        service.tick(reconciliation_id)
+
+    assert len(publisher.publications) == 1
+    request = publisher.publications[0]
+    assert request.reconciliation_id == reconciliation_id
+    assert set(request.endpoints) == {NODE_A}
+    assert request.endpoints[NODE_A].operation_id == (
+        f"model:{NODE_A}:workload.verify"
+    )
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        assert stored is not None and stored.current_phase == "completed"
+        assert stored.status == "succeeded"
+        assert stored.completion_generation == 1
+        assert job is not None and job.state == "succeeded"
+        assert job.result == {
+            "reconciliation_id": reconciliation_id,
+            "plan_digest": stored.plan_digest,
+            "bundle_digest": "6" * 64,
+        }
+
+
+def _compensation_fixture(tmp_path):
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'compensation.sqlite'}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine, expire_on_commit=False)
+    now = datetime(2026, 8, 5, tzinfo=UTC)
+    payload = {
+        "schema_version": 1,
+        "workload_id": "model",
+        "release_digest": "a" * 64,
+        "adapter_id": "spark-runtime-v1",
+        "preparation_digest": "d" * 64,
+    }
+    worker_id = f"model:{NODE_A}:workload.start"
+    entry_id = f"model:{NODE_B}:workload.start"
+    operations = [
+        {
+            "operation_id": worker_id,
+            "node_id": NODE_A,
+            "workload_id": "model",
+            "kind": "workload.start",
+            "dependencies": [],
+            "compensation_kind": "workload.stop",
+            "payload_digest": _digest(payload),
+        },
+        {
+            "operation_id": entry_id,
+            "node_id": NODE_B,
+            "workload_id": "model",
+            "kind": "workload.start",
+            "dependencies": [worker_id],
+            "compensation_kind": "workload.stop",
+            "payload_digest": _digest(payload),
+        },
+    ]
+    graph = {
+        "schema_version": 1,
+        "base_commit": BASE_COMMIT,
+        "targets": [NODE_A, NODE_B],
+        "nodes": operations,
+    }
+    resolved = {
+        "commit": BASE_COMMIT,
+        "targets": [NODE_A, NODE_B],
+        "placements": {},
+        "routes": {},
+        "releases": {},
+        "workload_groups": {},
+        "input_digests": {"fleet": "f" * 64},
+        "operation_graph": graph,
+        "operation_payloads": {worker_id: payload, entry_id: payload},
+        "agent_protocol_range": [1, 1],
+    }
+    reconciliation_id = str(uuid.uuid4())
+    job_id = str(uuid.uuid4())
+    with sessions.begin() as session:
+        for node_id, serial in ((NODE_A, "serial-a"), (NODE_B, "serial-b")):
+            session.add(AgentNode(node_id=node_id, state="active", capabilities=[]))
+            session.add(
+                AgentCertificate(
+                    serial=serial,
+                    node_id=node_id,
+                    not_before=now - timedelta(minutes=1),
+                    not_after=now + timedelta(hours=1),
+                    fingerprint=f"fingerprint-{serial}",
+                )
+            )
+        session.add(
+            Reconciliation(
+                id=reconciliation_id,
+                base_commit=BASE_COMMIT,
+                status="planned",
+                summary={},
+                graph=graph,
+                graph_digest=_json_digest(graph),
+                plan_digest=_json_digest(resolved),
+                resolved_plan=resolved,
+                current_phase="planned",
+                route_withdrawal_generation=0,
+                created_at=now,
+            )
+        )
+        session.add(
+            Job(
+                id=job_id,
+                request_id=str(uuid.uuid4()),
+                kind="reconcile",
+                state="queued",
+                actor="operator",
+                base_commit=BASE_COMMIT,
+                targets=[NODE_A, NODE_B],
+                payload_digest=_digest({}),
+                payload={},
+                current_attempt=0,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    queue = AgentJobService(sessions, clock=lambda: now)
+    service = AgentReconciliationService(
+        sessions,
+        agent_jobs=queue,
+        publisher=FakePublisher(),
+        endpoint_resolver=lambda _node: ("192.0.2.10", now),
+        clock=lambda: now,
+    )
+    service.attach_job(reconciliation_id, job_id)
+    queue.set_result_consumer(service.consume_result)
+    return service, sessions, queue, reconciliation_id, job_id
+
+
+def _workload_result(action: str) -> dict[str, object]:
+    return {
+        "status": "ok",
+        "evidence": {
+            "status": "completed",
+            "action": action,
+            "workload_id": "model",
+            "release_digest": "a" * 64,
+            "evidence_digest": "e" * 64,
+        },
+    }
+
+
+def test_partial_start_failure_compensates_accepted_starts_in_reverse_order(
+    tmp_path,
+) -> None:
+    service, sessions, queue, reconciliation_id, job_id = _compensation_fixture(
+        tmp_path
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    worker = queue.claim(NODE_A, "serial-a", 30)
+    assert worker is not None and worker.operation.value == "workload.start"
+    queue.succeed(worker, _workload_result("start"))
+    service.tick(reconciliation_id)
+    entrypoint = queue.claim(NODE_B, "serial-b", 30)
+    assert entrypoint is not None and entrypoint.operation.value == "workload.start"
+
+    queue.fail(entrypoint, "start-failed")
+
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        assert stored is not None and stored.current_phase == "compensating"
+        assert job is not None and job.state == "running"
+
+    service.tick(reconciliation_id)
+    compensation = queue.claim(NODE_A, "serial-a", 30)
+    assert compensation is not None
+    assert compensation.operation.value == "workload.stop"
+    assert compensation.payload == {
+        "schema_version": 1,
+        "workload_id": "model",
+        "release_digest": "a" * 64,
+        "adapter_id": "spark-runtime-v1",
+    }
+    queue.succeed(compensation, _workload_result("stop"))
+    service.tick(reconciliation_id)
+
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        compensations = list(
+            session.scalars(
+                select(ReconciliationOperation).where(
+                    ReconciliationOperation.role == "compensation"
+                )
+            )
+        )
+        assert stored is not None and stored.current_phase == "failed"
+        assert job is not None and job.state == "failed"
+        assert len(compensations) == 1
+        assert compensations[0].state == "compensated"
+        assert compensations[0].graph_operation_id == (
+            f"model:{NODE_A}:workload.start"
+        )

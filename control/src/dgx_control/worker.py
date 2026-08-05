@@ -30,13 +30,24 @@ Handler = Callable[[HandlerRequest], Mapping[str, object]]
 
 
 class Worker:
-    def __init__(self, jobs: JobService, worker_id: str, handlers: Mapping[str, Handler], *, logs=None) -> None:
+    def __init__(
+        self,
+        jobs: JobService,
+        worker_id: str,
+        handlers: Mapping[str, Handler],
+        *,
+        logs=None,
+        reconciliations=None,
+    ) -> None:
         self._jobs = jobs
         self._worker_id = worker_id
         self._handlers = dict(handlers)
         self._logs = logs
+        self._reconciliations = reconciliations
 
     def run_once(self) -> bool:
+        if self._reconciliations is not None and self._reconciliations.tick():
+            return True
         attempt = self._jobs.claim(self._worker_id, 30)
         if attempt is None:
             return False

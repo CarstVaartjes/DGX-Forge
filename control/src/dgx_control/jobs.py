@@ -149,9 +149,15 @@ class JobService:
         payload: Mapping[str, object],
         *,
         request_id: str | None = None,
+        reconciliation_id: str | None = None,
     ) -> Job:
         if not all(value.strip() for value in (kind, actor, base_commit)):
             raise ValueError("job kind, actor, and base commit are required")
+        if reconciliation_id is not None:
+            try:
+                reconciliation_id = str(uuid.UUID(reconciliation_id))
+            except (AttributeError, TypeError, ValueError) as error:
+                raise ValueError("reconciliation identity is invalid") from error
         clean, encoded = _canonical_payload(payload, kind=kind)
         now = self._clock()
         job = Job(
@@ -166,6 +172,7 @@ class JobService:
             current_attempt=0,
             created_at=now,
             updated_at=now,
+            reconciliation_id=reconciliation_id,
         )
         with self._sessions.begin() as session:
             session.add(job)
