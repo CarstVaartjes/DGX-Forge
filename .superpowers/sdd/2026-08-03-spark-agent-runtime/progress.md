@@ -52,3 +52,6 @@ Task 5: verification pending remote CI (literal local full-root remains non-gree
 Cross-cutting CI: macOS boundary fix delivered (commit 563c13a; four DGX OS/Linux runtime cases remain Linux-covered and skip only on non-Linux, Compose-only shim no longer represents a Docker daemon; independent review and hosted rerun pending)
 Cross-cutting CI: fix round 1/5 (2 Important submitted — retain portable PKI documentation assertions without Docker and eliminate the false-positive non-Linux foreign-target hardening test; commits 563c13a..pending)
 Cross-cutting CI: fix round 1/5 complete (commit d6ce0bd; both Important findings addressed, 21 focused tests and repo Ruff green, independent re-review Ready Yes; hosted macOS rerun pending)
+Cross-cutting CI: hosted run 30963128897 (Ruff and Ubuntu full suite green; macOS exposed 19 DGX-installer runtime tests incorrectly executing with a Mach-O interpreter fixture)
+Cross-cutting CI: fix round 2/5 submitted (classify exact Linux/ELF installer runtime coverage while retaining portable installer contracts on macOS; commits d6ce0bd..pending)
+Cross-cutting CI: fix round 2/5 complete (commit 9368f5e; exact 20 Linux runtime / 7 portable classification, 50 focused tests and pinned Ruff green, independent review Ready Yes; hosted rerun pending)
