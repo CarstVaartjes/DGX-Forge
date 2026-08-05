@@ -526,3 +526,57 @@ API test was required.
 
 No blocking concern. The one generator SIGSEGV was not reproducible serially;
 the fresh complete generator suite passed after restoration.
+
+## Hosted CI publication fix
+
+Hosted run [31007916192](https://github.com/CarstVaartjes/DGX-Forge/actions/runs/31007916192)
+failed both Ubuntu and macOS matrix test jobs after Task 1 reached pushed main at
+`7b1bd09`. Root pytest collects `tests/control/test_openapi_clients.py`, but the
+matrix job did not install `tools/openapi-client`; two generator tests therefore
+raised `FileNotFoundError` for
+`tools/openapi-client/node_modules/.bin/openapi-typescript` on both operating
+systems. The dedicated `generated-clients` job already ran the locked
+`npm ci --prefix tools/openapi-client` step and passed, confirming that the
+workflow boundary—not the generated artifacts or pinned toolchain—was the root
+cause.
+
+The matrix job now reuses that exact locked install immediately after uv setup
+and before any full test execution. A workflow-structure regression parses the
+named matrix steps and requires the exact command to precede the exact root
+pytest command. Implementation commit: `2ee85da` (`ci: install generator in
+full test matrix`).
+
+```text
+$ uv run --frozen pytest \
+    tests/test_ci_platform_boundaries.py::test_full_matrix_installs_pinned_typescript_generator_before_pytest -q
+1 failed in 0.02s (exact install step absent from matrix job)
+
+$ uv run --frozen pytest \
+    tests/test_ci_platform_boundaries.py::test_full_matrix_installs_pinned_typescript_generator_before_pytest -q
+1 passed in 0.01s
+
+$ uv run --frozen pytest tests/test_ci_platform_boundaries.py -q
+5 passed in 1.16s
+
+$ node -e '<parse ci.yml with pinned js-yaml>'
+parsed test steps: 7
+
+$ uv run --project control --frozen pytest tests/control/test_openapi_clients.py -q
+5 passed in 3.82s
+
+$ uvx --from ruff==0.16.1 ruff check .
+All checks passed!
+
+$ git diff --check
+(no output)
+```
+
+The exact hosted root command was also attempted locally and collected 716
+tests. Its generated-client cases passed, but the run later encountered an
+unrelated supply-chain verifier subprocess failure and a local `jsonschema`
+SIGSEGV. Isolation passed all 21 admission tests; the supply-chain file recorded
+15 passed and 2 failures where verifier subprocesses exited on SIGSEGV, and an
+immediate two-case rerun recorded 1 passed and 1 identical environment failure.
+No product, API, generator, or generated-artifact file changed in this
+publication fix. A fresh hosted rerun remains the cross-platform acceptance
+gate.
