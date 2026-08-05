@@ -427,6 +427,81 @@ def test_postgres_enqueue_cannot_race_parent_finalization(service, postgres_engi
     assert child_count == 1
 
 
+def test_postgres_enqueue_locks_node_before_completion_and_parent_aggregation(
+    service, postgres_engine
+) -> None:
+    sessions, clock = service
+    enqueueing = AgentJobService(sessions, clock=clock)
+    finishing = AgentJobService(sessions, clock=clock)
+    parent_job = parent(sessions, clock)
+    first_operation = finishing.enqueue(
+        parent_job.id, NODE_A, "node.probe", COMMIT, {}
+    )
+    claim = finishing.claim(NODE_A, "serial-a", 30)
+    assert claim is not None
+    node_locked = threading.Event()
+    release_enqueue = threading.Event()
+    enqueue_results: list[object] = []
+    finish_errors: list[Exception] = []
+
+    def pause_after_enqueue_node_lock(
+        _conn, _cursor, statement, _parameters, _context, _many
+    ) -> None:
+        if (
+            threading.current_thread().name == "enqueuer"
+            and "FROM agent_nodes" in statement
+            and "FOR UPDATE OF agent_nodes" in statement
+        ):
+            node_locked.set()
+            assert release_enqueue.wait(timeout=5)
+
+    def enqueue() -> None:
+        try:
+            enqueue_results.append(
+                enqueueing.enqueue(
+                    parent_job.id, NODE_A, "workload.health", COMMIT, {}
+                )
+            )
+        except (AssertionError, OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
+            enqueue_results.append(error)
+
+    def finish() -> None:
+        try:
+            finishing.succeed(claim, {"healthy": True})
+        except (AssertionError, OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
+            finish_errors.append(error)
+
+    event.listen(postgres_engine, "after_cursor_execute", pause_after_enqueue_node_lock)
+    try:
+        enqueuer = threading.Thread(target=enqueue, name="enqueuer")
+        finisher = threading.Thread(target=finish, name="finisher")
+        enqueuer.start()
+        assert node_locked.wait(timeout=5)
+        finisher.start()
+        time.sleep(0.25)
+        assert finisher.is_alive(), "completion must order behind enqueue's node lock"
+        release_enqueue.set()
+        enqueuer.join(timeout=5)
+        finisher.join(timeout=5)
+    finally:
+        release_enqueue.set()
+        event.remove(postgres_engine, "after_cursor_execute", pause_after_enqueue_node_lock)
+
+    assert not enqueuer.is_alive() and not finisher.is_alive()
+    assert not finish_errors
+    assert len(enqueue_results) == 1
+    assert not isinstance(enqueue_results[0], Exception)
+    with sessions() as session:
+        first = session.get(AgentOperation, first_operation.id)
+        sibling_count = session.scalar(select(func.count()).select_from(AgentOperation).where(
+            AgentOperation.parent_job_id == parent_job.id,
+        ))
+        stored_parent = session.get(Job, parent_job.id)
+        assert first is not None and first.state == "succeeded"
+        assert sibling_count == 2
+        assert stored_parent is not None and stored_parent.state == "queued"
+
+
 def test_postgres_complete_serializes_expired_reclaim_with_identity_lock(
     service, postgres_engine
 ) -> None:

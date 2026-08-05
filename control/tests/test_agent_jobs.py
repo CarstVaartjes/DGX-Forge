@@ -188,8 +188,27 @@ def test_sqlite_enqueue_enforces_parent_commit_and_target(service) -> None:
 
     with pytest.raises(ValueError, match="base commit"):
         jobs.enqueue(parent_job.id, NODE_A, "node.probe", "b" * 40, {})
+    with sessions.begin() as session:
+        stored_parent = session.get(Job, parent_job.id)
+        assert stored_parent is not None
+        stored_parent.targets = [NODE_A]
     with pytest.raises(ValueError, match="target"):
-        jobs.enqueue(parent_job.id, "spk_" + "c" * 32, "node.probe", COMMIT, {})
+        jobs.enqueue(parent_job.id, NODE_B, "node.probe", COMMIT, {})
+
+
+def test_sqlite_enqueue_rejects_retired_node_before_parent_mutation(service) -> None:
+    jobs, sessions, clock = service
+    parent_job = parent(sessions, clock)
+    with sessions.begin() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        node.state = "retired"
+        node.revoked_at = clock.now
+
+    with pytest.raises(ValueError, match="active"):
+        jobs.enqueue(parent_job.id, NODE_A, "node.probe", COMMIT, {})
+
+    assert job_state(sessions, parent_job.id).state == "queued"
 
 
 def test_heartbeat_persists_canonical_progress_and_renews_lease(service) -> None:

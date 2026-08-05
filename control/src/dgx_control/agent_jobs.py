@@ -98,6 +98,15 @@ class AgentJobService:
             updated_at=now,
         )
         with self._sessions.begin() as session:
+            node = session.scalar(
+                select(AgentNode)
+                .where(AgentNode.node_id == node_id)
+                .with_for_update(of=AgentNode)
+            )
+            if node is None:
+                raise KeyError(node_id)
+            if node.state != "active" or node.revoked_at is not None:
+                raise ValueError("agent operation node must be active")
             parent = session.scalar(
                 select(Job).where(Job.id == parent_job_id).with_for_update(of=Job)
             )
@@ -109,8 +118,6 @@ class AgentJobService:
                 raise ValueError("agent operation base commit must match its parent")
             if node_id not in parent.targets:
                 raise ValueError("agent operation node must be a parent target")
-            if session.get(AgentNode, node_id) is None:
-                raise KeyError(node_id)
             session.add(stored)
         with self._available:
             self._available.notify_all()

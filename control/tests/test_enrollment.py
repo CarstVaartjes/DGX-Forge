@@ -29,7 +29,7 @@ from dgx_control.models import (
     Base,
 )
 from dgx_control.pki import CertificateAuthority, IssuedCertificate
-from sqlalchemy import create_engine, func, select
+from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import sessionmaker
@@ -95,6 +95,43 @@ class RecordingAuthority(CertificateAuthority):
         self.revocations.append(serial)
         if serial in self.revoke_failures:
             raise RuntimeError("provider response deliberately lost")
+
+
+class CompletedRenewalAuthority(RecordingAuthority):
+    def __init__(self, *, crash_new_revocation: bool) -> None:
+        super().__init__()
+        self.completed = threading.Event()
+        self.release = threading.Event()
+        self.crash_new_revocation = crash_new_revocation
+        self.crashed_serials: set[str] = set()
+
+    def renew_node(
+        self,
+        node_id: str,
+        public_key_pem: bytes,
+        now: datetime,
+        *,
+        request_id: str,
+    ) -> IssuedCertificate:
+        issued = super().renew_node(
+            node_id,
+            public_key_pem,
+            now,
+            request_id=request_id,
+        )
+        self.completed.set()
+        assert self.release.wait(timeout=5)
+        return issued
+
+    def revoke_node(self, serial: str, now: datetime) -> None:
+        super().revoke_node(serial, now)
+        if (
+            self.crash_new_revocation
+            and serial == "serial-2"
+            and serial not in self.crashed_serials
+        ):
+            self.crashed_serials.add(serial)
+            raise SystemExit("simulated crash during issued-certificate revocation")
 
 
 def csr(node_id: str = NODE_ID) -> bytes:
@@ -577,6 +614,111 @@ def postgres_engine() -> Engine:
         engine.dispose()
     finally:
         subprocess.run(["docker", "stop", container], check=False, capture_output=True)
+
+
+@pytest.mark.parametrize("crash_new_revocation", (False, True))
+def test_postgres_retirement_wins_completed_rotation_and_reconciles_issued_serial(
+    postgres_engine: Engine,
+    crash_new_revocation: bool,
+) -> None:
+    Base.metadata.drop_all(postgres_engine)
+    Base.metadata.create_all(postgres_engine)
+    clock = Clock()
+    sessions = sessionmaker(postgres_engine, expire_on_commit=False)
+    initial = EnrollmentService(sessions, RecordingAuthority(), clock=clock)
+    source = initial.approve(enroll(initial).id, "admin")
+    authority = CompletedRenewalAuthority(
+        crash_new_revocation=crash_new_revocation
+    )
+    authority._serial = 1
+    rotating = EnrollmentService(sessions, authority, clock=clock)
+    revoking = EnrollmentService(sessions, authority, clock=clock)
+    request = csr()
+    revocation_locked = threading.Event()
+    release_revocation = threading.Event()
+    renewal_results: list[object] = []
+    revocation_errors: list[BaseException] = []
+
+    def pause_after_revocation_node_lock(
+        _conn, _cursor, statement, _parameters, _context, _many
+    ) -> None:
+        if (
+            threading.current_thread().name == "revoker"
+            and "FROM agent_nodes" in statement
+            and "FOR UPDATE OF agent_nodes" in statement
+        ):
+            revocation_locked.set()
+            assert release_revocation.wait(timeout=5)
+
+    def renew() -> None:
+        try:
+            renewal_results.append(rotating.renew(NODE_ID, source.serial, request))
+        except BaseException as error:  # noqa: BLE001 - deliberate process-death regression
+            renewal_results.append(error)
+
+    def revoke() -> None:
+        try:
+            revoking.revoke_node(NODE_ID, "admin")
+        except BaseException as error:  # noqa: BLE001 - thread must report SystemExit
+            revocation_errors.append(error)
+
+    event.listen(postgres_engine, "after_cursor_execute", pause_after_revocation_node_lock)
+    try:
+        renewer = threading.Thread(target=renew, name="renewer")
+        revoker = threading.Thread(target=revoke, name="revoker")
+        renewer.start()
+        assert authority.completed.wait(timeout=5)
+        revoker.start()
+        assert revocation_locked.wait(timeout=5)
+        authority.release.set()
+        time.sleep(0.25)
+        assert renewer.is_alive(), "rotation persistence must wait for revocation's node lock"
+        release_revocation.set()
+        revoker.join(timeout=5)
+        renewer.join(timeout=5)
+    finally:
+        authority.release.set()
+        release_revocation.set()
+        event.remove(postgres_engine, "after_cursor_execute", pause_after_revocation_node_lock)
+
+    assert not renewer.is_alive() and not revoker.is_alive()
+    assert not revocation_errors
+    assert len(renewal_results) == 1
+    if crash_new_revocation:
+        assert isinstance(renewal_results[0], SystemExit)
+    else:
+        assert isinstance(renewal_results[0], EnrollmentDenied)
+    with sessions() as session:
+        node = session.get(AgentNode, NODE_ID)
+        original = session.get(AgentCertificate, source.serial)
+        issued = session.get(AgentCertificate, "serial-2")
+        intent = session.get(AgentCertificateRotation, NODE_ID)
+        assert node is not None and node.state == "retired"
+        assert original is not None and original.state == "revoked"
+        assert issued is not None and issued.state == "revoked"
+        assert issued.revoked_at is not None
+        assert intent is not None
+        if crash_new_revocation:
+            assert issued.ca_revoked_at is None
+            assert intent.state == "revocation-pending"
+        else:
+            assert issued.ca_revoked_at is not None
+            assert intent.state == "revoked"
+    assert authority.revocations == [source.serial, "serial-2"]
+
+    if crash_new_revocation:
+        revoking.revoke_node(NODE_ID, "admin")
+        revoking.revoke_node(NODE_ID, "admin")
+        assert authority.revocations == [
+            source.serial,
+            "serial-2",
+            "serial-2",
+        ]
+        with sessions() as session:
+            issued = session.get(AgentCertificate, "serial-2")
+            intent = session.get(AgentCertificateRotation, NODE_ID)
+            assert issued is not None and issued.ca_revoked_at is not None
+            assert intent is not None and intent.state == "revoked"
 
 
 def test_postgres_separate_services_return_one_idempotent_exact_replay(postgres_engine: Engine) -> None:

@@ -306,12 +306,17 @@ class EnrollmentService:
                 request_id=claim.provider_request_id,
             )
             self._validate_renewal_result(issued, claim)
-            self._persist_rotation(issued, claim)
+            disposition = self._persist_rotation(issued, claim)
         except Exception as error:
             self._mark_rotation_uncertain(claim, now)
             raise RenewalIssuanceUncertain(
                 "certificate rotation requires manual recovery"
             ) from error
+        if disposition == "revocation-pending":
+            self._revoke_denied_rotation(issued.serial, claim, now)
+            raise EnrollmentDenied(
+                "node identity retired during certificate rotation; issued certificate revoked"
+            )
         return replace(issued, generation=claim.generation)
 
     def _claim_rotation(
@@ -328,10 +333,15 @@ class EnrollmentService:
             )
             if node is None:
                 raise EnrollmentDenied("certificate serial does not identify node")
-            certificate = session.scalar(
+            certificates = list(session.scalars(
                 select(AgentCertificate)
-                .where(AgentCertificate.serial == serial, AgentCertificate.node_id == node_id)
+                .where(AgentCertificate.node_id == node_id)
+                .order_by(AgentCertificate.serial)
                 .with_for_update(of=AgentCertificate)
+            ))
+            certificate = next(
+                (candidate for candidate in certificates if candidate.serial == serial),
+                None,
             )
             if certificate is None:
                 raise EnrollmentDenied("certificate serial does not identify node")
@@ -341,15 +351,13 @@ class EnrollmentService:
                 raise EnrollmentDenied("certificate is not active")
             if _stored_utc(certificate.not_before) > now or _stored_utc(certificate.not_after) <= now:
                 raise EnrollmentDenied("certificate is not currently valid")
-            staged = session.scalar(
-                select(AgentCertificate)
-                .where(
-                    AgentCertificate.node_id == node_id,
-                    AgentCertificate.state == "staged",
-                    AgentCertificate.revoked_at.is_(None),
-                )
-                .with_for_update(of=AgentCertificate)
-                .limit(1)
+            staged = next(
+                (
+                    candidate
+                    for candidate in certificates
+                    if candidate.state == "staged" and candidate.revoked_at is None
+                ),
+                None,
             )
             if staged is not None:
                 if staged.csr_public_key_fingerprint != csr_fingerprint:
@@ -376,12 +384,10 @@ class EnrollmentService:
                 if intent.state not in {"issuing", "manual-recovery"}:
                     raise EnrollmentDenied("certificate rotation state is invalid")
                 return _rotation_claim(intent, owner=False)
-            generations = list(session.scalars(
-                select(AgentCertificate.generation)
-                .where(AgentCertificate.node_id == node_id)
-                .with_for_update()
-            ))
-            generation = max(generations, default=0) + 1
+            generation = max(
+                (candidate.generation for candidate in certificates),
+                default=0,
+            ) + 1
             intent = AgentCertificateRotation(
                 node_id=node_id,
                 source_serial=serial,
@@ -417,8 +423,24 @@ class EnrollmentService:
         self,
         issued: IssuedCertificate,
         claim: _RotationClaim,
-    ) -> None:
+    ) -> str:
+        now = _utc(self._clock())
         with self._sessions.begin() as session:
+            node = session.scalar(
+                select(AgentNode)
+                .where(AgentNode.node_id == claim.node_id)
+                .with_for_update(of=AgentNode)
+            )
+            if node is None:
+                raise EnrollmentDenied(
+                    "certificate rotation node disappeared; manual recovery required"
+                )
+            certificates = list(session.scalars(
+                select(AgentCertificate)
+                .where(AgentCertificate.node_id == claim.node_id)
+                .order_by(AgentCertificate.serial)
+                .with_for_update(of=AgentCertificate)
+            ))
             intent = session.scalar(
                 select(AgentCertificateRotation)
                 .where(
@@ -432,20 +454,58 @@ class EnrollmentService:
                 raise EnrollmentDenied(
                     "certificate rotation issuance state changed; manual recovery required"
                 )
+            source = next(
+                (
+                    certificate
+                    for certificate in certificates
+                    if certificate.serial == claim.source_serial
+                ),
+                None,
+            )
+            denied = (
+                node.state != "active"
+                or node.revoked_at is not None
+                or source is None
+                or source.state != "active"
+                or source.revoked_at is not None
+            )
+            state = "revoked" if denied else "staged"
+            revoked_at = now if denied else None
             session.add(AgentCertificate(
                 serial=issued.serial,
                 node_id=claim.node_id,
                 not_before=issued.not_before,
                 not_after=issued.not_after,
                 fingerprint=issued.fingerprint,
-                state="staged",
+                state=state,
                 generation=claim.generation,
                 certificate_pem=issued.certificate_pem.decode("ascii"),
                 chain_pem=issued.chain_pem.decode("ascii"),
                 csr_public_key_fingerprint=claim.csr_public_key_fingerprint,
+                revoked_at=revoked_at,
             ))
+            if denied:
+                intent.state = "revocation-pending"
+                intent.updated_at = now
+                session.flush()
+                return "revocation-pending"
             session.delete(intent)
             session.flush()
+            return "staged"
+
+    def _revoke_denied_rotation(
+        self,
+        serial: str,
+        claim: _RotationClaim,
+        now: datetime,
+    ) -> None:
+        try:
+            self._authority.revoke_node(serial, now)
+        except RuntimeError as error:
+            raise RenewalIssuanceUncertain(
+                "issued certificate is denied locally; remote revocation requires reconciliation"
+            ) from error
+        self._confirm_remote_revocation(claim.node_id, serial, now)
 
     def _mark_rotation_uncertain(
         self,
@@ -454,6 +514,19 @@ class EnrollmentService:
     ) -> None:
         try:
             with self._sessions.begin() as session:
+                node = session.scalar(
+                    select(AgentNode)
+                    .where(AgentNode.node_id == claim.node_id)
+                    .with_for_update(of=AgentNode)
+                )
+                if node is None:
+                    return
+                list(session.scalars(
+                    select(AgentCertificate)
+                    .where(AgentCertificate.node_id == claim.node_id)
+                    .order_by(AgentCertificate.serial)
+                    .with_for_update(of=AgentCertificate)
+                ))
                 intent = session.scalar(
                     select(AgentCertificateRotation)
                     .where(
@@ -463,7 +536,7 @@ class EnrollmentService:
                     )
                     .with_for_update(of=AgentCertificateRotation)
                 )
-                if intent is not None:
+                if intent is not None and intent.state == "issuing":
                     intent.state = "manual-recovery"
                     intent.updated_at = now
         except SQLAlchemyError:
@@ -544,6 +617,11 @@ class EnrollmentService:
                 .order_by(AgentCertificate.serial)
                 .with_for_update(of=AgentCertificate)
             ))
+            session.scalar(
+                select(AgentCertificateRotation)
+                .where(AgentCertificateRotation.node_id == node_id)
+                .with_for_update(of=AgentCertificateRotation)
+            )
             node.state = "retired"
             node.revoked_at = node.revoked_at or now
             serials = [certificate.serial for certificate in certificates if certificate.ca_revoked_at is None]
@@ -557,16 +635,47 @@ class EnrollmentService:
             except RuntimeError:
                 uncertain = True
             else:
-                with self._sessions.begin() as session:
-                    certificate = session.scalar(
-                        select(AgentCertificate)
-                        .where(AgentCertificate.serial == serial, AgentCertificate.node_id == node_id)
-                        .with_for_update(of=AgentCertificate)
-                    )
-                    if certificate is not None:
-                        certificate.ca_revoked_at = certificate.ca_revoked_at or now
+                self._confirm_remote_revocation(node_id, serial, now)
         if uncertain:
             raise RemoteRevocationUncertain("local revocation complete; remote CA revocation is uncertain")
+
+    def _confirm_remote_revocation(
+        self,
+        node_id: str,
+        serial: str,
+        now: datetime,
+    ) -> None:
+        with self._sessions.begin() as session:
+            node = session.scalar(
+                select(AgentNode)
+                .where(AgentNode.node_id == node_id)
+                .with_for_update(of=AgentNode)
+            )
+            if node is None:
+                return
+            certificate = session.scalar(
+                select(AgentCertificate)
+                .where(
+                    AgentCertificate.serial == serial,
+                    AgentCertificate.node_id == node_id,
+                )
+                .with_for_update(of=AgentCertificate)
+            )
+            intent = session.scalar(
+                select(AgentCertificateRotation)
+                .where(AgentCertificateRotation.node_id == node_id)
+                .with_for_update(of=AgentCertificateRotation)
+            )
+            if certificate is None:
+                return
+            certificate.ca_revoked_at = certificate.ca_revoked_at or now
+            if (
+                intent is not None
+                and intent.state == "revocation-pending"
+                and certificate.generation == intent.generation
+            ):
+                intent.state = "revoked"
+                intent.updated_at = now
 
     def _claim_issuance(self, enrollment_id: str, actor: str, now: datetime) -> _IssuanceClaim | IssuedCertificate:
         with self._sessions.begin() as session:

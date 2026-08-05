@@ -203,3 +203,74 @@ PostgreSQL races passed 3/3. The new SQLite retired-identity no-write cases pass
 
 The rereview correction addresses both submitted findings. Independent rereview and
 integration with Tasks 1–4 remain pending.
+
+## Rereview round 3 correction
+
+Round 3 identified two remaining lock-order and post-issuance retirement defects:
+
+1. `AgentJobService.enqueue` locked the parent `Job` before it even read the target
+   `AgentNode`. Its eventual operation insert also acquired implicit foreign-key
+   protection on the node, inverting completion's node-first transaction order.
+2. Rotation persistence locked `AgentCertificateRotation` before its certificate
+   insert's implicit node dependency. If the CA had completed renewal while a
+   concurrent revocation retired the node, persistence could commit the newly issued
+   serial as staged after revocation had already selected the serials to revoke.
+
+Enqueue now locks and validates an active node before locking the parent job. The
+deterministic PostgreSQL regression pauses enqueue immediately after that first node
+lock, starts same-node completion, and proves completion orders behind enqueue without
+deadlock. Enqueue commits its sibling before completion aggregates the parent, so the
+completed first operation is durable while the parent correctly remains queued.
+
+The agent-job transaction audit now has no Job-before-Node path:
+
+- enqueue is node, parent job, then operation insert;
+- claim is node, certificate, operation, attempt, then optional parent aggregation;
+- heartbeat/result are node, certificate, operation, attempt, then optional parent
+  aggregation.
+
+Rotation claim, persistence, uncertainty annotation, revocation, and remote-revocation
+confirmation now share node, serial-ordered certificate rows, then rotation-intent
+ordering. Activation already began with the node and certificate rows. Initial
+enrollment remains a separate absent-node issuance domain protected by its durable
+enrollment row and PostgreSQL node-specific advisory lock; it does not lock an
+existing job or agent node in reverse order.
+
+When retirement wins after the CA has issued a renewal, persistence now records the
+new certificate as locally revoked with a revocation timestamp and retains the
+rotation intent as `revocation-pending`. Only after that denied audit state commits is
+the new serial sent to the CA revocation boundary. Provider confirmation records
+`ca_revoked_at` and advances the intent to `revoked`; the serial is never active or
+staged. If the process dies during the provider call, the durable pending certificate
+is included by the normal administrator `revoke_node` reconciliation. Repeated retry
+calls invoke the provider once for the still-unconfirmed serial and then become a
+no-op, preserving the CA interface's idempotent contract.
+
+### Round 3 RED/GREEN evidence
+
+Before production edits:
+
+- the SQLite retired-node enqueue regression failed because enqueue accepted work;
+- the PostgreSQL enqueue-order regression failed because enqueue never acquired the
+  expected node row lock; and
+- both completed-CA rotation races failed because renewal returned serial 2 as staged
+  after retirement, without invoking its remote revocation path.
+
+After the correction, those regressions passed 1/1, 1/1, and 2/2 respectively. The
+crash variant proves the pending local disposition survives `SystemExit`, the first
+administrator retry confirms the new serial, and the second retry performs no remote
+call.
+
+### Round 3 correction verification
+
+- Focused job/API/enrollment/PostgreSQL suites: **122 passed**.
+- Complete control suite: **306 passed**.
+- `agent/tests/test_client.py`: **39 passed**.
+- Compose observability suite: **8 passed**.
+- Focused pinned Ruff 0.16.1, direct `py_compile`, JSON parsing, and
+  `git diff --check` passed.
+- `promtool` remains unavailable locally; rules retain structural parsing and
+  behavioral observability-test coverage.
+
+Round 3's submitted findings are addressed. Independent rereview and integration with
+Tasks 1–4 remain pending.
