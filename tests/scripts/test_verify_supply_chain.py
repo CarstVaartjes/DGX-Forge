@@ -34,6 +34,8 @@ def _copy(tmp_path: Path) -> Path:
         "deploy/compose/litellm/entrypoint.sh",
         "deploy/compose/trust/litellm-cosign.pub",
         "scripts/container-release-metadata",
+        "scripts/refuse-existing-image-version",
+        "scripts/validate-container-release-digests",
         "scripts/verify-public-image-inputs",
     ):
         destination = target / path

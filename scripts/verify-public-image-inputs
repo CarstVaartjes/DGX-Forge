@@ -7,17 +7,63 @@ import re
 import sys
 from pathlib import Path
 
-
 INPUTS = (
+    "pyproject.toml",
+    "src/spark_profiles",
     "control/Dockerfile",
     "control/pyproject.toml",
     "control/src",
-    "control/web/package.json",
-    "control/web/package-lock.json",
-    "control/web/src",
+    "control/web",
     "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl",
     "deploy/compose/hermes-agent/Dockerfile",
     "deploy/compose/hermes-agent/entrypoint.sh",
+)
+
+EXCLUDED_DIRECTORIES = frozenset(
+    {
+        "__pycache__",
+        ".pytest_cache",
+        "coverage",
+        "htmlcov",
+        "build",
+        "dist",
+        "node_modules",
+        ".mypy_cache",
+        ".ruff_cache",
+        ".ssh",
+        ".aws",
+        ".kube",
+        "test-results",
+        "playwright-report",
+    }
+)
+EXCLUDED_FILES = frozenset(
+    {
+        ".npmrc",
+        ".netrc",
+        ".pypirc",
+        ".git-credentials",
+        "credentials.json",
+        "credentials.yaml",
+        "credentials.yml",
+        "credentials.toml",
+        "secrets.json",
+        "secrets.yaml",
+        "secrets.yml",
+        "secrets.toml",
+        "id_rsa",
+        "id_ed25519",
+    }
+)
+EXCLUDED_SUFFIXES = (
+    ".pyc",
+    ".pyo",
+    ".pem",
+    ".key",
+    ".p12",
+    ".pfx",
+    ".crt",
+    ".der",
 )
 
 PATTERNS = {
@@ -39,6 +85,26 @@ def files_in(path: Path) -> list[Path]:
     return []
 
 
+def dockerignored(path: Path, root: Path) -> bool:
+    relative = path.relative_to(root)
+    parts = relative.parts
+    name = path.name
+    if any(part in EXCLUDED_DIRECTORIES for part in parts[:-1]) or (
+        name in EXCLUDED_DIRECTORIES and (path.is_dir() or path.is_symlink())
+    ):
+        return True
+    if name in EXCLUDED_FILES or name.endswith(EXCLUDED_SUFFIXES):
+        return True
+    if name == ".env" or name.startswith((".env.", ".coverage")):
+        return True
+    if len(parts) >= 2 and parts[-2:] == (".docker", "config.json"):
+        return True
+    return any(
+        parts[index : index + 2] == (".config", "gcloud")
+        for index in range(len(parts) - 1)
+    )
+
+
 def main(argv: list[str]) -> int:
     root = Path(argv[1]).resolve() if len(argv) == 2 else Path(__file__).resolve().parents[1]
     patterns = {name: re.compile(pattern) for name, pattern in PATTERNS.items()}
@@ -50,6 +116,8 @@ def main(argv: list[str]) -> int:
             continue
         for path in files_in(input_path):
             display = path.relative_to(root).as_posix()
+            if dockerignored(path, root):
+                continue
             if path.is_symlink():
                 findings.append((display, "symlink"))
                 continue

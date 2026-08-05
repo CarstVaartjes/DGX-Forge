@@ -71,7 +71,7 @@ def protocol_version(lock: bytes) -> str:
         raise ValueError("control and agent must resolve the verified protocol wheel")
     version = packages[0].get("version")
     if not isinstance(version, str):
-        raise ValueError("protocol lock has no version")
+        raise TypeError("protocol lock has no version")
     return version
 
 
@@ -196,6 +196,8 @@ def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
         "deploy/compose/litellm/entrypoint.sh",
         "deploy/compose/trust/litellm-cosign.pub",
         "scripts/container-release-metadata",
+        "scripts/refuse-existing-image-version",
+        "scripts/validate-container-release-digests",
         "scripts/verify-public-image-inputs",
     )
     manifest = {
@@ -213,7 +215,7 @@ def image_errors(root: Path) -> list[str]:
     errors: list[str] = []
     try:
         lock = json.loads((root / "deploy/compose/images.lock.json").read_bytes())
-    except Exception:
+    except (OSError, ValueError):
         return ["image lock is unreadable"]
     compose_paths = (
         "deploy/compose/compose.yaml",
@@ -352,7 +354,7 @@ def verify(root: Path, generate: bool) -> tuple[list[str], dict[str, object]]:
     errors = image_errors(root)
     try:
         sboms, wheel, manifest = expected(root)
-    except (OSError, ValueError, KeyError, json.JSONDecodeError, subprocess.CalledProcessError, tomllib.TOMLDecodeError) as error:
+    except (OSError, ValueError, TypeError, KeyError, json.JSONDecodeError, subprocess.CalledProcessError, tomllib.TOMLDecodeError) as error:
         return [*errors, f"could not generate expected supply-chain evidence: {type(error).__name__}: {error}"], {}
     manifest_path = root / "inventory/sbom/manifest.json"
     if generate:

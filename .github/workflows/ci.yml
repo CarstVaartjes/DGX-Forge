@@ -148,19 +148,17 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Refuse an existing release version
         shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+          CONTROL_API_IMAGE: ${{ needs.release-metadata.outputs.api_image }}
+          CONTROL_WORKER_IMAGE: ${{ needs.release-metadata.outputs.worker_image }}
+          HERMES_AGENT_IMAGE: ${{ needs.release-metadata.outputs.hermes_image }}
         run: |
-          set -euo pipefail
-          version=${{ needs.release-metadata.outputs.version }}
-          for image in \
-            "${{ needs.release-metadata.outputs.api_image }}" \
-            "${{ needs.release-metadata.outputs.worker_image }}" \
-            "${{ needs.release-metadata.outputs.hermes_image }}"
-          do
-            if docker buildx imagetools inspect "${image}:${version}" >/dev/null 2>&1; then
-              echo "release image already exists: ${image}:${version}" >&2
-              exit 1
-            fi
-          done
+          scripts/refuse-existing-image-version \
+            "$RELEASE_VERSION" \
+            "$CONTROL_API_IMAGE" \
+            "$CONTROL_WORKER_IMAGE" \
+            "$HERMES_AGENT_IMAGE"
       - name: Build and push API image
         id: api
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
@@ -241,11 +239,19 @@ jobs:
       contents: write
     steps:
       - name: Create digest-pinned image environment
+        env:
+          CONTROL_API_IMAGE: ${{ needs.release-metadata.outputs.api_image }}:${{ needs.release-metadata.outputs.version }}
+          CONTROL_WORKER_IMAGE: ${{ needs.release-metadata.outputs.worker_image }}:${{ needs.release-metadata.outputs.version }}
+          HERMES_AGENT_IMAGE: ${{ needs.release-metadata.outputs.hermes_image }}:${{ needs.release-metadata.outputs.version }}
+          CONTROL_API_DIGEST: ${{ needs.publish-images.outputs.api_digest }}
+          CONTROL_WORKER_DIGEST: ${{ needs.publish-images.outputs.worker_digest }}
+          HERMES_AGENT_DIGEST: ${{ needs.publish-images.outputs.hermes_digest }}
         run: |
+          scripts/validate-container-release-digests
           printf '%s\n' \
-            "CONTROL_API_IMAGE=${{ needs.release-metadata.outputs.api_image }}:${{ needs.release-metadata.outputs.version }}@${{ needs.publish-images.outputs.api_digest }}" \
-            "CONTROL_WORKER_IMAGE=${{ needs.release-metadata.outputs.worker_image }}:${{ needs.release-metadata.outputs.version }}@${{ needs.publish-images.outputs.worker_digest }}" \
-            "HERMES_AGENT_IMAGE=${{ needs.release-metadata.outputs.hermes_image }}:${{ needs.release-metadata.outputs.version }}@${{ needs.publish-images.outputs.hermes_digest }}" \
+            "CONTROL_API_IMAGE=$CONTROL_API_IMAGE@$CONTROL_API_DIGEST" \
+            "CONTROL_WORKER_IMAGE=$CONTROL_WORKER_IMAGE@$CONTROL_WORKER_DIGEST" \
+            "HERMES_AGENT_IMAGE=$HERMES_AGENT_IMAGE@$HERMES_AGENT_DIGEST" \
             > dgx-forge-images.env
           sha256sum dgx-forge-images.env > dgx-forge-images.env.sha256
       - name: Create public GitHub Release

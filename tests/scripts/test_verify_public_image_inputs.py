@@ -3,6 +3,7 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/verify-public-image-inputs"
@@ -51,3 +52,47 @@ def test_private_key_header_is_rejected_without_echoing_content(tmp_path: Path) 
     assert result.returncode == 1
     assert "control/src/dgx_control/leak.py: private-key" in result.stderr
     assert value not in result.stderr
+
+
+@pytest.mark.parametrize(
+    "relative",
+    (
+        "pyproject.toml",
+        "src/spark_profiles/leak.py",
+        "control/web/vite.config.ts",
+    ),
+)
+def test_every_newly_covered_build_input_rejects_injected_secrets(
+    tmp_path: Path,
+    relative: str,
+) -> None:
+    repository = tmp_path / "repository"
+    source = repository / relative
+    source.parent.mkdir(parents=True, exist_ok=True)
+    value = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
+    source.write_text(f'SECRET = "{value}"\n')
+
+    result = run(repository)
+
+    assert result.returncode == 1
+    assert f"{relative}: github-token" in result.stderr
+    assert value not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize(
+    "excluded_directory",
+    ("node_modules", "dist", "test-results", "playwright-report"),
+)
+def test_dockerignored_web_outputs_are_not_scanned(
+    tmp_path: Path,
+    excluded_directory: str,
+) -> None:
+    repository = tmp_path / "repository"
+    source = repository / "control/web" / excluded_directory / "generated.js"
+    source.parent.mkdir(parents=True)
+    source.write_text('SECRET = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"\n')
+
+    result = run(repository)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "public image inputs: PASS\n"
