@@ -119,6 +119,7 @@ def test_enqueue_pins_plan_commit_and_digest() -> None:
         "plan_digest": plan.digest,
         "releases": {"spk_a": "sha256:abc"},
         "routes": {"spk_a": "entry"},
+        "workload_groups": {},
     }
 
 
@@ -189,6 +190,7 @@ class DesiredPlanner:
             placements={"model": (node_id,)},
             routes={},
             releases={},
+            workload_groups={},
             input_digests={"fleet": "f" * 64},
             operation_graph=graph,
             operation_payloads={"model:probe": {}},

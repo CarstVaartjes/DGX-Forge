@@ -17,7 +17,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from .logging import redact_text
-from .models import Reconciliation
+from .models import Reconciliation, ReconciliationCompletionGeneration
 
 _COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -157,7 +157,13 @@ class ReconciliationOrchestrator:
                     raise ValueError("route generation must not decrease")
                 stored.route_withdrawal_generation = route_withdrawal_generation
             stored.current_phase = phase
-            stored.status = "succeeded" if phase == "completed" else "running"
+            if phase == "completed":
+                stored.completion_generation = self._next_completion_generation(
+                    session
+                )
+                stored.status = "succeeded"
+            else:
+                stored.status = "running"
 
     def store_resolved_plan(
         self,
@@ -317,6 +323,30 @@ class ReconciliationOrchestrator:
         if stored is None:
             raise KeyError("unknown reconciliation")
         return stored
+
+    @staticmethod
+    def _next_completion_generation(session: Session) -> int:
+        statement = (
+            select(ReconciliationCompletionGeneration)
+            .where(ReconciliationCompletionGeneration.singleton_id == 1)
+            .with_for_update()
+        )
+        counter = session.scalar(statement)
+        if counter is None:
+            try:
+                with session.begin_nested():
+                    session.add(ReconciliationCompletionGeneration(
+                        singleton_id=1,
+                        last_generation=0,
+                    ))
+                    session.flush()
+            except IntegrityError:
+                pass
+            counter = session.scalar(statement)
+        if counter is None or not 0 <= counter.last_generation < 2**63 - 1:
+            raise RuntimeError("reconciliation completion generation is unavailable")
+        counter.last_generation += 1
+        return counter.last_generation
 
 
 def _resolved_document(

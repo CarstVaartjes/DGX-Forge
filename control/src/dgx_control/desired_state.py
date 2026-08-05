@@ -74,6 +74,13 @@ class CurrentWorkloadState:
     release_digest: str
     adapter_id: str
     managed: bool = True
+    nodes: tuple[str, ...] = ()
+    entrypoint_node_id: str | None = None
+    definition_hash: str | None = None
+    profile_digest: str | None = None
+    preparation_digest: str | None = None
+    start_order: str | None = None
+    stop_order: str | None = None
 
     def __post_init__(self) -> None:
         if _IDENTIFIER.fullmatch(self.workload_id) is None:
@@ -84,6 +91,35 @@ class CurrentWorkloadState:
             raise ValueError("current workload adapter is not reviewed")
         if not isinstance(self.managed, bool):
             raise TypeError("current workload management state is invalid")
+        nodes = tuple(self.nodes)
+        if len(nodes) != len(set(nodes)):
+            raise ValueError("current workload group nodes are duplicate")
+        for node_id in nodes:
+            NodeId.parse(node_id)
+        object.__setattr__(self, "nodes", nodes)
+        group_fields = (
+            self.entrypoint_node_id,
+            self.definition_hash,
+            self.profile_digest,
+            self.preparation_digest,
+            self.start_order,
+            self.stop_order,
+        )
+        if nodes:
+            if (
+                self.entrypoint_node_id != nodes[0]
+                or any(value is None for value in group_fields)
+                or _DIGEST.fullmatch(cast(str, self.definition_hash)) is None
+                or _DIGEST.fullmatch(cast(str, self.profile_digest)) is None
+                or _DIGEST.fullmatch(cast(str, self.preparation_digest)) is None
+                or self.start_order
+                not in {"independent", "workers-before-entrypoint"}
+                or self.stop_order
+                not in {"independent", "entrypoint-before-workers"}
+            ):
+                raise ValueError("current workload group contract is invalid")
+        elif any(value is not None for value in group_fields):
+            raise ValueError("current workload group contract is incomplete")
 
 
 @dataclass(frozen=True)
@@ -129,6 +165,8 @@ class DesiredStateObservation:
             current_workloads
         ):
             raise ValueError("current workload evidence is duplicate")
+        if len(current_workloads) > 1:
+            raise ValueError("current co-resident workload groups are unsupported")
         if self.occupied is not bool(current_workloads):
             raise ValueError("node occupancy does not match current workload evidence")
         object.__setattr__(self, "current_workloads", current_workloads)
@@ -255,8 +293,6 @@ class DesiredStateResolver:
             fleet=fleet,
             now=self._clock(),
             ttl=self._observation_ttl,
-            desired_workloads=frozenset(workload_ids),
-            desired_releases=releases,
         )
         placements: dict[str, tuple[str, ...]] = {}
         available = placement_observations
@@ -271,11 +307,15 @@ class DesiredStateResolver:
                     available[node_id] = replace(available[node_id], occupied=True)
 
         routes = _routes(profile, placements, releases)
-        operation_graph, payloads = _operations(
-            commit,
+        desired_groups = _desired_workload_groups(
             placements=placements,
             releases=releases,
             lifecycle=_mapping(profile["lifecycle"], "profile lifecycle"),
+        )
+        operation_graph, payloads = _operations(
+            commit,
+            releases=releases,
+            desired_groups=desired_groups,
             observations={item.node_id: item for item in observation_values},
         )
         input_digests = {
@@ -289,6 +329,10 @@ class DesiredStateResolver:
             placements=placements,
             routes=routes,
             releases=releases,
+            workload_groups={
+                workload_id: _group_document(group)
+                for workload_id, group in desired_groups.items()
+            },
             input_digests=input_digests,
             operation_graph=operation_graph,
             operation_payloads=payloads,
@@ -376,12 +420,7 @@ def _accepted_current_workloads(
 ) -> dict[str, dict[str, CurrentWorkloadState]]:
     """Replay accepted start/stop evidence from completed reconciliations."""
 
-    all_reconciliations = tuple(
-        session.scalars(
-            select(Reconciliation)
-            .order_by(Reconciliation.created_at, Reconciliation.id)
-        )
-    )
+    all_reconciliations = tuple(session.scalars(select(Reconciliation)))
     jobs = tuple(session.scalars(select(Job).where(Job.kind == "reconcile")))
     operations = tuple(session.scalars(select(StoredOperation)))
     attempts = tuple(session.scalars(select(AgentOperationAttempt)))
@@ -391,12 +430,46 @@ def _accepted_current_workloads(
     attempts_by_operation = {
         (attempt.operation_id, attempt.attempt): attempt for attempt in attempts
     }
-    reconciliations = tuple(
+    completed = tuple(
         item
         for item in all_reconciliations
         if item.status == "succeeded" and item.current_phase == "completed"
     )
-    accepted_ids = {item.id for item in reconciliations}
+    for reconciliation in completed:
+        raw_nodes = reconciliation.graph.get("nodes")
+        if (
+            reconciliation.completion_generation is None
+            and isinstance(raw_nodes, list)
+            and any(
+                isinstance(node, Mapping)
+                and node.get("kind")
+                in {
+                    AgentOperation.WORKLOAD_START.value,
+                    AgentOperation.WORKLOAD_STOP.value,
+                }
+                for node in raw_nodes
+            )
+        ):
+            raise ValueError(
+                "completed workload reconciliation lacks causal completion generation"
+            )
+    reconciliations = tuple(
+        sorted(
+            (
+                item
+                for item in completed
+                if item.completion_generation is not None
+            ),
+            key=lambda item: cast(int, item.completion_generation),
+        )
+    )
+    generations = [item.completion_generation for item in reconciliations]
+    if len(generations) != len(set(generations)) or any(
+        not isinstance(item, int) or isinstance(item, bool) or item < 1
+        for item in generations
+    ):
+        raise ValueError("completed reconciliation generation is invalid")
+    accepted_ids = {item.id for item in completed}
     unaccepted_job_ids = {
         job.id
         for job in jobs
@@ -418,6 +491,29 @@ def _accepted_current_workloads(
         return {}
     current: dict[str, dict[str, CurrentWorkloadState]] = {}
     for reconciliation in reconciliations:
+        resolved = reconciliation.resolved_plan
+        graph = _mapping(reconciliation.graph, "completed reconciliation graph")
+        raw_nodes = graph.get("nodes")
+        if not isinstance(raw_nodes, list):
+            raise TypeError("completed reconciliation operation evidence is invalid")
+        mutates_workloads = any(
+            isinstance(node, Mapping)
+            and node.get("kind")
+            in {
+                AgentOperation.WORKLOAD_START.value,
+                AgentOperation.WORKLOAD_STOP.value,
+            }
+            for node in raw_nodes
+        )
+        if not isinstance(resolved, Mapping) or "workload_groups" not in resolved:
+            if mutates_workloads:
+                raise ValueError(
+                    "completed reconciliation lacks persisted workload group contract"
+                )
+            continue
+        desired_groups = _persisted_workload_groups(
+            _mapping(resolved["workload_groups"], "persisted workload groups")
+        )
         matched_jobs = [
             job
             for job in jobs
@@ -426,10 +522,6 @@ def _accepted_current_workloads(
         if len(matched_jobs) != 1 or matched_jobs[0].state != "succeeded":
             raise ValueError("completed reconciliation lacks exact operation evidence")
         job = matched_jobs[0]
-        graph = _mapping(reconciliation.graph, "completed reconciliation graph")
-        raw_nodes = graph.get("nodes")
-        if not isinstance(raw_nodes, list):
-            raise TypeError("completed reconciliation operation evidence is invalid")
         stored = list(operations_by_job.get(job.id, ()))
         if len(stored) != len(raw_nodes):
             raise ValueError("completed reconciliation lacks exact operation evidence")
@@ -494,22 +586,96 @@ def _accepted_current_workloads(
                 != operation.payload_digest
             ):
                 raise ValueError("completed reconciliation workload evidence is invalid")
-            state = CurrentWorkloadState(
-                cast(str, workload_id),
-                cast(str, payload.get("release_digest")),
-                cast(str, payload.get("adapter_id")),
-            )
             node_state = current.setdefault(cast(str, node_id), {})
-            existing = node_state.get(state.workload_id)
+            existing = node_state.get(cast(str, workload_id))
             if action == "start":
                 if existing is not None:
                     raise ValueError("completed reconciliation workload drift is uncertain")
-                node_state[state.workload_id] = state
+                desired = desired_groups.get(cast(str, workload_id))
+                if (
+                    desired is None
+                    or node_id not in desired.nodes
+                    or payload.get("release_digest") != desired.release_digest
+                    or payload.get("adapter_id") != desired.adapter_id
+                    or payload.get("preparation_digest")
+                    != desired.preparation_digest
+                ):
+                    raise ValueError(
+                        "completed reconciliation workload group start is invalid"
+                    )
+                node_state[desired.workload_id] = desired
             else:
-                if existing != state:
+                if (
+                    existing is None
+                    or existing.release_digest != payload.get("release_digest")
+                    or existing.adapter_id != payload.get("adapter_id")
+                ):
                     raise ValueError("completed reconciliation workload drift is uncertain")
-                del node_state[state.workload_id]
+                del node_state[cast(str, workload_id)]
+        expected = {
+            node_id: {
+                workload_id: group
+                for workload_id, group in desired_groups.items()
+                if node_id in group.nodes
+            }
+            for node_id in {
+                node_id
+                for group in desired_groups.values()
+                for node_id in group.nodes
+            }
+        }
+        actual = {
+            node_id: workloads
+            for node_id, workloads in current.items()
+            if workloads
+        }
+        if actual != expected:
+            raise ValueError(
+                "completed reconciliation workload group transition is incomplete"
+            )
     return current
+
+
+def _persisted_workload_groups(
+    document: Mapping[str, Any],
+) -> Mapping[str, CurrentWorkloadState]:
+    groups: dict[str, CurrentWorkloadState] = {}
+    required = {
+        "nodes",
+        "entrypoint_node_id",
+        "release_digest",
+        "adapter_id",
+        "definition_hash",
+        "profile_digest",
+        "preparation_digest",
+        "lifecycle",
+    }
+    for workload_id, raw_group in sorted(document.items()):
+        if _IDENTIFIER.fullmatch(workload_id) is None:
+            raise ValueError("persisted workload group ID is invalid")
+        group = _mapping(raw_group, "persisted workload group")
+        lifecycle = _mapping(group.get("lifecycle"), "persisted group lifecycle")
+        nodes = group.get("nodes")
+        if (
+            set(group) != required
+            or not isinstance(nodes, (list, tuple))
+            or not all(isinstance(node_id, str) for node_id in nodes)
+            or set(lifecycle) != {"start_order", "stop_order"}
+        ):
+            raise ValueError("persisted workload group contract is invalid")
+        groups[workload_id] = CurrentWorkloadState(
+            workload_id=workload_id,
+            release_digest=cast(str, group.get("release_digest")),
+            adapter_id=cast(str, group.get("adapter_id")),
+            nodes=tuple(cast(Sequence[str], nodes)),
+            entrypoint_node_id=cast(str, group.get("entrypoint_node_id")),
+            definition_hash=cast(str, group.get("definition_hash")),
+            profile_digest=cast(str, group.get("profile_digest")),
+            preparation_digest=cast(str, group.get("preparation_digest")),
+            start_order=cast(str, lifecycle.get("start_order")),
+            stop_order=cast(str, lifecycle.get("stop_order")),
+        )
+    return MappingProxyType(groups)
 
 
 def _mapping(value: object, field: str) -> Mapping[str, Any]:
@@ -591,6 +757,8 @@ def _requirements(
         )
     if set(requirements) != set(workload_ids):
         raise ValueError("profile workload reference lacks one exact requirement")
+    if any(not requirement.exclusive for requirement in requirements.values()):
+        raise ValueError("desired workloads must use exclusive placement")
     return MappingProxyType(requirements)
 
 
@@ -733,8 +901,6 @@ def _placement_observations(
     fleet: Fleet,
     now: datetime,
     ttl: timedelta,
-    desired_workloads: frozenset[str],
-    desired_releases: Mapping[str, Mapping[str, Any]],
 ) -> dict[NodeId, NodeObservation]:
     now = _aware(now)
     resolved: dict[NodeId, NodeObservation] = {}
@@ -755,26 +921,11 @@ def _placement_observations(
         managed = bool(observation.current_workloads) and all(
             item.managed for item in observation.current_workloads
         )
-        reclaimable = managed and any(
-            item.workload_id not in desired_workloads
-            or item.release_digest
-            != cast(
-                Mapping[str, object],
-                desired_releases[item.workload_id]["release_request"],
-            )["target_digest"]
-            or item.adapter_id
-            != cast(
-                Mapping[str, object],
-                desired_releases[item.workload_id]["release_request"],
-            )["adapter_id"]
-            for item in observation.current_workloads
-        )
-        retained = managed and not reclaimable
-        if (reclaimable or retained) and (
+        if managed and (
             observation.memory_total_bytes is None
             or observation.disk_total_bytes is None
         ):
-            raise ValueError("reclaimable node total capacity is unavailable")
+            raise ValueError("managed node total capacity is unavailable")
         resolved[node_id] = NodeObservation(
             node_id,
             observation.healthy,
@@ -785,6 +936,7 @@ def _placement_observations(
             if managed
             else observation.disk_available_bytes,
             observation.occupied and not managed,
+            available_for_placement=not observation.occupied or managed,
         )
     if set(resolved) != set(fleet.nodes):
         raise ValueError("durable observations must exactly cover the fleet")
@@ -825,54 +977,129 @@ def _payload_digest(payload: Mapping[str, object]) -> str:
     return hashlib.sha256(canonical_message(payload)).hexdigest()
 
 
-def _operations(
-    commit: str,
+def _desired_workload_groups(
     *,
     placements: Mapping[str, tuple[str, ...]],
     releases: Mapping[str, Mapping[str, Any]],
     lifecycle: Mapping[str, Any],
+) -> Mapping[str, CurrentWorkloadState]:
+    groups: dict[str, CurrentWorkloadState] = {}
+    for workload_id, nodes in sorted(placements.items()):
+        release = _mapping(releases[workload_id], "resolved release")
+        release_request = _mapping(
+            release["release_request"], "resolved release request"
+        )
+        requests = _mapping(
+            release["workload_requests"], "resolved workload requests"
+        )
+        prepare = _mapping(requests["prepare"], "resolved prepare request")
+        start = _mapping(requests["start"], "resolved start request")
+        groups[workload_id] = CurrentWorkloadState(
+            workload_id=workload_id,
+            release_digest=cast(str, release_request["target_digest"]),
+            adapter_id=cast(str, release_request["adapter_id"]),
+            nodes=nodes,
+            entrypoint_node_id=nodes[0],
+            definition_hash=cast(str, release["definition_hash"]),
+            profile_digest=cast(str, prepare["profile_digest"]),
+            preparation_digest=cast(str, start["preparation_digest"]),
+            start_order=cast(str, lifecycle["start_order"]),
+            stop_order=cast(str, lifecycle["stop_order"]),
+        )
+    return MappingProxyType(groups)
+
+
+def _group_document(group: CurrentWorkloadState) -> Mapping[str, object]:
+    if not group.nodes or group.entrypoint_node_id is None:
+        raise ValueError("workload group contract is unavailable")
+    return MappingProxyType(
+        {
+            "nodes": group.nodes,
+            "entrypoint_node_id": group.entrypoint_node_id,
+            "release_digest": group.release_digest,
+            "adapter_id": group.adapter_id,
+            "definition_hash": cast(str, group.definition_hash),
+            "profile_digest": cast(str, group.profile_digest),
+            "preparation_digest": cast(str, group.preparation_digest),
+            "lifecycle": MappingProxyType(
+                {
+                    "start_order": cast(str, group.start_order),
+                    "stop_order": cast(str, group.stop_order),
+                }
+            ),
+        }
+    )
+
+
+def _current_workload_groups(
+    observations: Mapping[str, DesiredStateObservation],
+) -> Mapping[str, CurrentWorkloadState]:
+    groups: dict[str, CurrentWorkloadState] = {}
+    members: dict[str, set[str]] = {}
+    for node_id, observation in observations.items():
+        for state in observation.current_workloads:
+            if not state.managed:
+                continue
+            if not state.nodes or node_id not in state.nodes:
+                raise ValueError("current managed workload group contract is unavailable")
+            existing = groups.setdefault(state.workload_id, state)
+            if existing != state:
+                raise ValueError("current workload group contract is inconsistent")
+            members.setdefault(state.workload_id, set()).add(node_id)
+    for workload_id, group in groups.items():
+        if members[workload_id] != set(group.nodes):
+            raise ValueError("current workload group membership is incomplete")
+    return MappingProxyType(groups)
+
+
+def _operations(
+    commit: str,
+    *,
+    releases: Mapping[str, Mapping[str, Any]],
+    desired_groups: Mapping[str, CurrentWorkloadState],
     observations: Mapping[str, DesiredStateObservation],
 ) -> tuple[OperationGraph, Mapping[str, Mapping[str, object]]]:
     nodes: dict[str, OperationNode] = {}
     payloads: dict[str, Mapping[str, object]] = {}
-    current = {
-        (item.workload_id, observation.node_id): item
-        for observation in observations.values()
-        for item in observation.current_workloads
-        if item.managed
-    }
-    desired_exact: set[tuple[str, str]] = set()
-    for workload_id, targets in placements.items():
-        release = cast(Mapping[str, object], releases[workload_id]["release_request"])
-        for node_id in targets:
-            state = current.get((workload_id, node_id))
-            if state is not None and (
-                state.release_digest == release["target_digest"]
-                and state.adapter_id == release["adapter_id"]
-            ):
-                desired_exact.add((workload_id, node_id))
+    current_groups = _current_workload_groups(observations)
     teardown = {
-        key: state for key, state in current.items() if key not in desired_exact
+        workload_id: group
+        for workload_id, group in current_groups.items()
+        if desired_groups.get(workload_id) != group
+    }
+    deploy = {
+        workload_id: group
+        for workload_id, group in desired_groups.items()
+        if current_groups.get(workload_id) != group
+    }
+    retained = {
+        workload_id: group
+        for workload_id, group in desired_groups.items()
+        if current_groups.get(workload_id) == group
     }
     stop_ids = {
-        key: f"{key[0]}:{key[1]}:{AgentOperation.WORKLOAD_STOP.value}"
-        for key in teardown
+        (workload_id, node_id): (
+            f"{workload_id}:{node_id}:{AgentOperation.WORKLOAD_STOP.value}"
+        )
+        for workload_id, group in teardown.items()
+        for node_id in group.nodes
     }
-    for workload_id in sorted({key[0] for key in teardown}):
-        old_nodes = sorted(node_id for old_id, node_id in teardown if old_id == workload_id)
-        head = old_nodes[0]
-        for node_id in old_nodes:
-            state = teardown[(workload_id, node_id)]
+    for workload_id, old_group in sorted(teardown.items()):
+        old_head = cast(str, old_group.entrypoint_node_id)
+        for node_id in old_group.nodes:
             operation_id = stop_ids[(workload_id, node_id)]
             dependencies = ()
-            if node_id != head and lifecycle["stop_order"] == "entrypoint-before-workers":
-                dependencies = (stop_ids[(workload_id, head)],)
+            if (
+                node_id != old_head
+                and old_group.stop_order == "entrypoint-before-workers"
+            ):
+                dependencies = (stop_ids[(workload_id, old_head)],)
             payload: Mapping[str, object] = MappingProxyType(
                 {
                     "schema_version": 1,
-                    "workload_id": state.workload_id,
-                    "release_digest": state.release_digest,
-                    "adapter_id": state.adapter_id,
+                    "workload_id": old_group.workload_id,
+                    "release_digest": old_group.release_digest,
+                    "adapter_id": old_group.adapter_id,
                 }
             )
             payloads[operation_id] = payload
@@ -886,20 +1113,18 @@ def _operations(
                 _payload_digest(payload),
             )
     all_stops = tuple(sorted(stop_ids.values()))
-    for workload_id, targets in sorted(placements.items()):
-        deploy_targets = tuple(
-            node_id for node_id in targets if (workload_id, node_id) not in desired_exact
-        )
+    for workload_id, desired_group in sorted(deploy.items()):
+        targets = desired_group.nodes
         operation_ids: dict[tuple[str, str], str] = {}
-        for node_id in deploy_targets:
+        for node_id in targets:
             for kind in _PLANNED_OPERATIONS[1:]:
                 operation_ids[(node_id, kind)] = f"{workload_id}:{node_id}:{kind}"
         worker_starts = tuple(
             operation_ids[(node_id, AgentOperation.WORKLOAD_START.value)]
-            for node_id in deploy_targets
-            if node_id != targets[0]
+            for node_id in targets
+            if node_id != desired_group.entrypoint_node_id
         )
-        for node_id in deploy_targets:
+        for node_id in targets:
             for kind in _PLANNED_OPERATIONS[1:]:
                 operation_id = operation_ids[(node_id, kind)]
                 if kind == AgentOperation.RELEASE_INSTALL.value:
@@ -913,8 +1138,8 @@ def _operations(
                         operation_ids[(node_id, AgentOperation.WORKLOAD_PREPARE.value)],
                     )
                     if (
-                        node_id == targets[0]
-                        and lifecycle["start_order"] == "workers-before-entrypoint"
+                        node_id == desired_group.entrypoint_node_id
+                        and desired_group.start_order == "workers-before-entrypoint"
                     ):
                         dependencies += worker_starts
                 elif kind == AgentOperation.WORKLOAD_HEALTH.value:
@@ -950,14 +1175,49 @@ def _operations(
                     ),
                     payload_digest=_payload_digest(payload),
                 )
+    for workload_id, group in sorted(retained.items()):
+        requests = cast(
+            Mapping[str, Mapping[str, object]],
+            releases[workload_id]["workload_requests"],
+        )
+        for node_id in group.nodes:
+            health_id = f"{workload_id}:{node_id}:{AgentOperation.WORKLOAD_HEALTH.value}"
+            verify_id = f"{workload_id}:{node_id}:{AgentOperation.WORKLOAD_VERIFY.value}"
+            health_payload = requests["health"]
+            verify_payload = requests["verify"]
+            payloads[health_id] = MappingProxyType(dict(health_payload))
+            payloads[verify_id] = MappingProxyType(dict(verify_payload))
+            nodes[health_id] = OperationNode(
+                health_id,
+                node_id,
+                workload_id,
+                AgentOperation.WORKLOAD_HEALTH.value,
+                (),
+                None,
+                _payload_digest(health_payload),
+            )
+            nodes[verify_id] = OperationNode(
+                verify_id,
+                node_id,
+                workload_id,
+                AgentOperation.WORKLOAD_VERIFY.value,
+                (health_id,),
+                None,
+                _payload_digest(verify_payload),
+            )
     ordered = _topological(nodes)
     targets = tuple(
         sorted(
             {node.node_id for node in ordered}
             | {
                 node_id
-                for workload_targets in placements.values()
-                for node_id in workload_targets
+                for group in desired_groups.values()
+                for node_id in group.nodes
+            }
+            | {
+                node_id
+                for group in current_groups.values()
+                for node_id in group.nodes
             }
         )
     )

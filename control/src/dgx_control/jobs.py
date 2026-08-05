@@ -18,7 +18,6 @@ from .logging import redact_text
 from .models import Job, JobAttempt
 
 _SENSITIVE = re.compile(r"(?i)(password|secret|token|private.?key|authorization)")
-_SAFE_POLICY_FIELDS = frozenset({"tokens_per_minute"})
 _MAX_PAYLOAD = 65_536
 
 
@@ -43,18 +42,84 @@ def _aware(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
-def _canonical_payload(payload: Mapping[str, object]) -> tuple[dict[str, object], bytes]:
-    def inspect(value: object) -> None:
+def _validated_quota_fields(
+    kind: str | None, payload: Mapping[str, object]
+) -> frozenset[tuple[str, ...]]:
+    if kind != "reconcile":
+        return frozenset()
+    routes = payload.get("routes")
+    if not isinstance(routes, Mapping):
+        return frozenset()
+    accepted: set[tuple[str, ...]] = set()
+    route_fields = {
+        "workload_id",
+        "nodes",
+        "entrypoint_node_id",
+        "scheme",
+        "port",
+        "path",
+        "quota",
+        "quota_digest",
+    }
+    for alias, raw_route in routes.items():
+        if not isinstance(alias, str) or not isinstance(raw_route, Mapping):
+            continue
+        quota = raw_route.get("quota")
+        nodes = raw_route.get("nodes")
+        if (
+            set(raw_route) != route_fields
+            or not isinstance(raw_route.get("workload_id"), str)
+            or not isinstance(nodes, list)
+            or not nodes
+            or len(nodes) != len(set(nodes))
+            or not all(isinstance(node_id, str) for node_id in nodes)
+            or raw_route.get("entrypoint_node_id") not in nodes
+            or raw_route.get("scheme") not in {"http", "https"}
+            or not isinstance(raw_route.get("port"), int)
+            or isinstance(raw_route.get("port"), bool)
+            or not 1 <= raw_route["port"] <= 65535
+            or not isinstance(raw_route.get("path"), str)
+            or not raw_route["path"].startswith("/")
+            or not isinstance(quota, Mapping)
+            or set(quota) != {"requests_per_minute", "tokens_per_minute"}
+        ):
+            continue
+        rpm = quota.get("requests_per_minute")
+        tpm = quota.get("tokens_per_minute")
+        quota_digest = hashlib.sha256(
+            json.dumps(quota, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if (
+            not isinstance(rpm, int)
+            or isinstance(rpm, bool)
+            or not 1 <= rpm <= 100_000
+            or not isinstance(tpm, int)
+            or isinstance(tpm, bool)
+            or not 1 <= tpm <= 100_000_000
+            or raw_route.get("quota_digest") != quota_digest
+        ):
+            continue
+        accepted.add(("routes", alias, "quota", "tokens_per_minute"))
+    return frozenset(accepted)
+
+
+def _canonical_payload(
+    payload: Mapping[str, object], *, kind: str | None = None
+) -> tuple[dict[str, object], bytes]:
+    safe_quota_fields = _validated_quota_fields(kind, payload)
+
+    def inspect(value: object, path: tuple[str, ...] = ()) -> None:
         if isinstance(value, Mapping):
             for key, child in value.items():
                 if not isinstance(key, str):
                     raise TypeError("job payload keys must be strings")
-                if key not in _SAFE_POLICY_FIELDS and _SENSITIVE.search(key):
+                child_path = path + (key,)
+                if _SENSITIVE.search(key) and child_path not in safe_quota_fields:
                     raise ValueError("job payload contains a sensitive field")
-                inspect(child)
+                inspect(child, child_path)
         elif isinstance(value, list):
             for child in value:
-                inspect(child)
+                inspect(child, path)
 
     inspect(payload)
     copied = json.loads(json.dumps(payload, sort_keys=True, separators=(",", ":")))
@@ -87,7 +152,7 @@ class JobService:
     ) -> Job:
         if not all(value.strip() for value in (kind, actor, base_commit)):
             raise ValueError("job kind, actor, and base commit are required")
-        clean, encoded = _canonical_payload(payload)
+        clean, encoded = _canonical_payload(payload, kind=kind)
         now = self._clock()
         job = Job(
             request_id=request_id or str(uuid.uuid4()),

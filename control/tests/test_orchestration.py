@@ -225,3 +225,25 @@ def test_advance_and_cancel_change_only_mutable_reconciliation_state(planner) ->
 
     with pytest.raises(ValueError, match="terminal"):
         orchestrator.advance(graph.reconciliation_id, "accepting")
+
+
+def test_successful_completion_assigns_unique_monotonic_causal_generations(
+    planner,
+) -> None:
+    orchestrator, sessions = planner
+    first = orchestrator.plan(distributed_plan())
+    second = orchestrator.plan(distributed_plan())
+
+    for graph in (first, second):
+        for phase in ("routes-withdrawn", "dispatching", "accepting", "completed"):
+            orchestrator.advance(graph.reconciliation_id, phase)
+
+    pending = orchestrator.plan(distributed_plan())
+    with sessions() as session:
+        stored = {
+            item.id: item
+            for item in session.scalars(select(Reconciliation)).all()
+        }
+        assert stored[first.reconciliation_id].completion_generation == 1
+        assert stored[second.reconciliation_id].completion_generation == 2
+        assert stored[pending.reconciliation_id].completion_generation is None

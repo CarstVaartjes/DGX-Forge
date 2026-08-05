@@ -261,12 +261,14 @@ def test_resolved_plan_migration_follows_issued_revocations_and_is_reversible(
     columns = {
         column["name"] for column in inspect(engine).get_columns("reconciliations")
     }
-    assert {"plan_digest", "resolved_plan"} <= columns
+    assert {"plan_digest", "resolved_plan", "completion_generation"} <= columns
+    assert "reconciliation_completion_generation" in tables(database)
     indexes = {
         index["name"]: index
         for index in inspect(engine).get_indexes("reconciliations")
     }
     assert indexes["ix_reconciliations_plan_digest"]["unique"] == 1
+    assert indexes["ix_reconciliations_completion_generation"]["unique"] == 1
     with engine.connect() as connection:
         assert connection.execute(
             text(
@@ -274,9 +276,22 @@ def test_resolved_plan_migration_follows_issued_revocations_and_is_reversible(
                 "WHERE id='legacy-plan'"
             )
         ).one() == (None, None)
+        assert connection.execute(
+            text(
+                "SELECT singleton_id,last_generation "
+                "FROM reconciliation_completion_generation"
+            )
+        ).one() == (1, 0)
+        assert connection.execute(
+            text(
+                "SELECT completion_generation FROM reconciliations "
+                "WHERE id='legacy-plan'"
+            )
+        ).scalar_one() is None
 
     downgrade_to("0007_issued_revocations", database)
-    assert not {"plan_digest", "resolved_plan"} & {
+    assert "reconciliation_completion_generation" not in tables(database)
+    assert not {"plan_digest", "resolved_plan", "completion_generation"} & {
         column["name"] for column in inspect(engine).get_columns("reconciliations")
     }
     upgrade_to("head", database)

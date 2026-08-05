@@ -86,6 +86,20 @@ def test_filters_health_capacity_exclusivity_and_labels() -> None:
     assert set(selected.reasons) == {node_id.value for node_id in subject.nodes}
 
 
+def test_explicitly_unavailable_node_is_rejected_for_nonexclusive_placement() -> None:
+    subject = fleet(2)
+    values = list(observations(subject))
+    values[0] = replace(values[0], available_for_placement=False)
+
+    selected = PlacementPlanner().plan(
+        requirement(exclusive=False), subject, topology(subject), values
+    )
+
+    assert selected.nodes == (
+        NodeId.parse("spk_00000000000000000000000000000001"),
+    )
+
+
 def test_explicit_preference_then_node_id_controls_stable_order() -> None:
     subject = fleet(4)
     preferred = "spk_00000000000000000000000000000003"

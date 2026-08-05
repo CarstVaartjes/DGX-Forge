@@ -68,6 +68,7 @@ class ReconciliationPlan:
     placements: Mapping[str, object]
     routes: Mapping[str, object]
     releases: Mapping[str, object]
+    workload_groups: Mapping[str, object]
     input_digests: Mapping[str, str]
     digest: str
     operation_graph: OperationGraph | None = None
@@ -125,9 +126,16 @@ def _plan_content(commit: str, values: Mapping[str, object]) -> tuple[dict[str, 
         "placements": values.get("placements", {}),
         "routes": values.get("routes", {}),
         "releases": values.get("releases", {}),
+        "workload_groups": values.get("workload_groups", {}),
         "input_digests": values.get("input_digests", {}),
     }
-    for field_name in ("placements", "routes", "releases", "input_digests"):
+    for field_name in (
+        "placements",
+        "routes",
+        "releases",
+        "workload_groups",
+        "input_digests",
+    ):
         if not isinstance(content[field_name], Mapping):
             raise TypeError(f"reconciliation {field_name} must be a mapping")
     graph = values.get("operation_graph")
@@ -162,6 +170,7 @@ def resolved_reconciliation_plan(
     placements: Mapping[str, object],
     routes: Mapping[str, object],
     releases: Mapping[str, object],
+    workload_groups: Mapping[str, object],
     input_digests: Mapping[str, str],
     operation_graph: OperationGraph,
     operation_payloads: Mapping[str, Mapping[str, object]],
@@ -172,6 +181,7 @@ def resolved_reconciliation_plan(
         "placements": placements,
         "routes": routes,
         "releases": releases,
+        "workload_groups": workload_groups,
         "input_digests": input_digests,
         "operation_graph": operation_graph,
         "operation_payloads": operation_payloads,
@@ -184,6 +194,7 @@ def resolved_reconciliation_plan(
         placements=_freeze_mapping(cast_mapping(placements)),
         routes=_freeze_mapping(cast_mapping(routes)),
         releases=_freeze_mapping(cast_mapping(releases)),
+        workload_groups=_freeze_mapping(cast_mapping(workload_groups)),
         input_digests=MappingProxyType(dict(sorted(input_digests.items()))),
         digest=hashlib.sha256(encoded).hexdigest(),
         operation_graph=operation_graph,
@@ -241,6 +252,9 @@ class Reconciler:
                 placements=_freeze_mapping(cast_mapping(content["placements"])),
                 routes=_freeze_mapping(cast_mapping(content["routes"])),
                 releases=_freeze_mapping(cast_mapping(content["releases"])),
+                workload_groups=_freeze_mapping(
+                    cast_mapping(content["workload_groups"])
+                ),
                 input_digests=MappingProxyType(
                     dict(sorted(cast_mapping(content["input_digests"]).items()))
                 ),
@@ -272,6 +286,7 @@ class Reconciler:
                         "placements": plan.placements,
                         "routes": plan.routes,
                         "releases": plan.releases,
+                        "workload_groups": plan.workload_groups,
                         "input_digests": plan.input_digests,
                         "operation_graph": provisional,
                         "operation_payloads": plan.operation_payloads,
@@ -287,6 +302,7 @@ class Reconciler:
                     placements=plan.placements,
                     routes=plan.routes,
                     releases=plan.releases,
+                    workload_groups=plan.workload_groups,
                     input_digests=plan.input_digests,
                     operation_graph=graph,
                     operation_payloads=plan.operation_payloads,
@@ -312,6 +328,7 @@ class Reconciler:
             placements=cast_mapping(document["placements"]),
             routes=cast_mapping(document["routes"]),
             releases=cast_mapping(document["releases"]),
+            workload_groups=cast_mapping(document["workload_groups"]),
             input_digests=cast_mapping(document["input_digests"]),
             operation_graph=graph,
             operation_payloads=cast_mapping(document["operation_payloads"]),
@@ -325,6 +342,7 @@ class Reconciler:
         values = {
             "targets": list(plan.targets), "placements": plan.placements,
             "routes": plan.routes, "releases": plan.releases,
+            "workload_groups": plan.workload_groups,
             "input_digests": plan.input_digests,
         }
         if plan.operation_graph is not None:
@@ -377,6 +395,7 @@ class Reconciler:
                 "placements": _jsonable(plan.placements),
                 "routes": _jsonable(plan.routes),
                 "releases": _jsonable(plan.releases),
+                "workload_groups": _jsonable(plan.workload_groups),
                 "input_digests": dict(plan.input_digests),
                 **(
                     {

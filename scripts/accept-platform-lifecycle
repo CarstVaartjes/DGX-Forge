@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -328,8 +328,6 @@ def run(host: str, display_name: str) -> dict[str, object]:
         assert len(durable) == 1 and len(durable[0].current_workloads) == 1
         first_current = durable[0].current_workloads[0]
         assert first_current.release_digest == "a" * 64
-        now += timedelta(seconds=1)
-
         manifest_path = repository.root / "manifests/releases/test-model.json"
         replacement = json.loads(manifest_path.read_text())
         replacement["release_request"]["target_digest"] = "7" * 64

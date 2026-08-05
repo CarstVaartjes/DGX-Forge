@@ -47,6 +47,7 @@ class DesiredPlanner:
             placements={"model": (NODE_ID,)},
             routes={},
             releases={},
+            workload_groups={},
             input_digests={"fleet": "f" * 64},
             operation_graph=OperationGraph(
                 "pending",
@@ -168,3 +169,56 @@ def test_concurrent_identical_plans_get_one_atomic_persisted_reconciliation(
         assert stored is not None
         assert stored.plan_digest == results[0].digest
         assert stored.resolved_plan is not None
+
+
+def test_concurrent_successful_completions_get_distinct_causal_generations(
+    postgres_engine: Engine,
+) -> None:
+    Base.metadata.drop_all(postgres_engine)
+    Base.metadata.create_all(postgres_engine)
+    sessions = sessionmaker(postgres_engine, expire_on_commit=False)
+    clock = lambda: datetime(2026, 8, 5, tzinfo=UTC)
+    services = (
+        ReconciliationOrchestrator(sessions, clock=clock),
+        ReconciliationOrchestrator(sessions, clock=clock),
+    )
+    graphs = tuple(service.plan({
+        "base_commit": BASE_COMMIT,
+        "targets": [NODE_ID],
+        "route_withdrawal_generation": 0,
+        "operations": [
+            {
+                "operation_id": f"model-{index}:probe",
+                "node_id": NODE_ID,
+                "workload_id": f"model-{index}",
+                "kind": "node.probe",
+                "dependencies": [],
+                "compensation_kind": None,
+                "payload_digest": str(index + 1) * 64,
+            }
+        ],
+    }) for index, service in enumerate(services))
+    for service, graph in zip(services, graphs, strict=True):
+        for phase in ("routes-withdrawn", "dispatching", "accepting"):
+            service.advance(graph.reconciliation_id, phase)
+    start = threading.Barrier(2)
+
+    def complete(pair):
+        service, graph = pair
+        start.wait(timeout=10)
+        service.advance(graph.reconciliation_id, "completed")
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(complete, pair)
+            for pair in zip(services, graphs, strict=True)
+        ]
+        for future in futures:
+            future.result(timeout=10)
+
+    with sessions() as session:
+        generations = {
+            item.completion_generation
+            for item in session.scalars(select(Reconciliation)).all()
+        }
+    assert generations == {1, 2}

@@ -265,6 +265,30 @@ def _observations(count: int) -> tuple[DesiredStateObservation, ...]:
     )
 
 
+def _managed_group(
+    count: int,
+    *,
+    workload_id: str = "model",
+    release_digest: str = "a" * 64,
+    nodes: tuple[str, ...] | None = None,
+    profile_digest: str = "c" * 64,
+    preparation_digest: str = "e" * 64,
+) -> CurrentWorkloadState:
+    placement = nodes or tuple(_node_id(index) for index in range(count))
+    return CurrentWorkloadState(
+        workload_id,
+        release_digest,
+        "spark-runtime-v1",
+        nodes=placement,
+        entrypoint_node_id=placement[0],
+        definition_hash=DEFINITION_HASH,
+        profile_digest=profile_digest,
+        preparation_digest=preparation_digest,
+        start_order="workers-before-entrypoint" if count > 1 else "independent",
+        stop_order="entrypoint-before-workers" if count > 1 else "independent",
+    )
+
+
 def _resolve(
     repository: RepositoryService,
     commit: str,
@@ -308,6 +332,25 @@ def test_resolves_one_two_and_sixteen_nodes_from_exact_repository_objects(
                     }
                 )
             ).hexdigest(),
+        }
+    }
+    assert plan.workload_groups == {
+        "model": {
+            "nodes": targets,
+            "entrypoint_node_id": targets[0],
+            "release_digest": "a" * 64,
+            "adapter_id": "spark-runtime-v1",
+            "definition_hash": DEFINITION_HASH,
+            "profile_digest": "c" * 64,
+            "preparation_digest": "e" * 64,
+            "lifecycle": {
+                "start_order": (
+                    "workers-before-entrypoint" if count > 1 else "independent"
+                ),
+                "stop_order": (
+                    "entrypoint-before-workers" if count > 1 else "independent"
+                ),
+            },
         }
     }
     assert plan.input_digests == {
@@ -494,9 +537,7 @@ def test_start_and_stop_dependencies_follow_lifecycle_order(tmp_path: Path) -> N
                 memory_total_bytes=4_000,
                 disk_total_bytes=8_000,
                 current_workloads=(
-                    CurrentWorkloadState(
-                        "model", "8" * 64, "spark-runtime-v1"
-                    ),
+                    _managed_group(2, release_digest="8" * 64),
                 ),
             )
             for observation in _observations(2)
@@ -538,7 +579,7 @@ def test_fresh_deploy_omits_stop_and_upgrade_stops_only_current_release(
         memory_total_bytes=4_000,
         disk_total_bytes=8_000,
         current_workloads=(
-            CurrentWorkloadState("model", "8" * 64, "spark-runtime-v1"),
+            _managed_group(1, release_digest="8" * 64),
         ),
     )
     upgrade = _resolve(repository, commit, (current,))
@@ -582,7 +623,7 @@ def test_fully_occupied_managed_node_can_replace_workload_using_total_capacity(
         memory_total_bytes=4_000,
         disk_total_bytes=8_000,
         current_workloads=(
-            CurrentWorkloadState("model", "8" * 64, "spark-runtime-v1"),
+            _managed_group(1, release_digest="8" * 64),
         ),
     )
 
@@ -609,7 +650,7 @@ def test_reclaimable_occupied_node_without_total_capacity_fails_closed(
         _observations(1)[0],
         occupied=True,
         current_workloads=(
-            CurrentWorkloadState("model", "8" * 64, "spark-runtime-v1"),
+            _managed_group(1, release_digest="8" * 64),
         ),
     )
 
@@ -637,7 +678,65 @@ def test_unmanaged_occupancy_is_never_reclaimed_for_desired_placement(
         _resolve(repository, commit, (observation,))
 
 
-def test_scale_up_retains_exact_node_and_starts_only_the_added_worker(
+def test_nonexclusive_desired_requirement_is_rejected_even_with_unmanaged_occupancy(
+    tmp_path: Path,
+) -> None:
+    repository, _, _ = _repository(tmp_path, 1)
+    profile = repository.root / "config/cluster-profiles/inference.toml"
+    profile.write_text(profile.read_text().replace("exclusive = true", "exclusive = false"))
+    _git(repository.root, "add", ".")
+    _git(repository.root, "commit", "-qm", "request co-location")
+    commit = _git(repository.root, "rev-parse", "HEAD")
+    observation = replace(
+        _observations(1)[0],
+        occupied=True,
+        current_workloads=(
+            CurrentWorkloadState(
+                "external", "8" * 64, "spark-runtime-v1", managed=False
+            ),
+        ),
+    )
+
+    with pytest.raises(ValueError, match="exclusive"):
+        _resolve(repository, commit, (observation,))
+
+
+@pytest.mark.parametrize("mixed_unmanaged", [False, True])
+def test_current_co_resident_groups_are_rejected(
+    tmp_path: Path, mixed_unmanaged: bool
+) -> None:
+    repository, commit, _ = _repository(tmp_path, 1)
+    other = CurrentWorkloadState(
+        "external",
+        "8" * 64,
+        "spark-runtime-v1",
+        managed=not mixed_unmanaged,
+        **(
+            {
+                "nodes": (_node_id(0),),
+                "entrypoint_node_id": _node_id(0),
+                "definition_hash": DEFINITION_HASH,
+                "profile_digest": "c" * 64,
+                "preparation_digest": "e" * 64,
+                "start_order": "independent",
+                "stop_order": "independent",
+            }
+            if not mixed_unmanaged
+            else {}
+        ),
+    )
+    with pytest.raises(ValueError, match="co-resident"):
+        observation = replace(
+            _observations(1)[0],
+            occupied=True,
+            memory_total_bytes=4_000,
+            disk_total_bytes=8_000,
+            current_workloads=(_managed_group(1), other),
+        )
+        _resolve(repository, commit, (observation,))
+
+
+def test_scale_up_restarts_every_member_after_stopping_the_complete_old_group(
     tmp_path: Path,
 ) -> None:
     repository, commit, _ = _repository(tmp_path, 2)
@@ -647,7 +746,7 @@ def test_scale_up_retains_exact_node_and_starts_only_the_added_worker(
         memory_total_bytes=4_000,
         disk_total_bytes=8_000,
         current_workloads=(
-            CurrentWorkloadState("model", "a" * 64, "spark-runtime-v1"),
+            _managed_group(1),
         ),
     )
 
@@ -655,13 +754,22 @@ def test_scale_up_retains_exact_node_and_starts_only_the_added_worker(
 
     worker = _node_id(1)
     kinds_by_node = {
-        node.node_id: {
-            item.kind for item in plan.operation_graph.nodes if item.node_id == node.node_id
+        node_id: {
+            item.kind
+            for item in plan.operation_graph.nodes
+            if item.node_id == node_id
         }
-        for node in plan.operation_graph.nodes
+        for node_id in plan.targets
     }
     assert plan.placements == {"model": (_node_id(0), worker)}
-    assert _node_id(0) not in kinds_by_node
+    assert kinds_by_node[_node_id(0)] == {
+        "workload.stop",
+        "release.install",
+        "workload.prepare",
+        "workload.start",
+        "workload.health",
+        "workload.verify",
+    }
     assert kinds_by_node[worker] == {
         "release.install",
         "workload.prepare",
@@ -669,9 +777,13 @@ def test_scale_up_retains_exact_node_and_starts_only_the_added_worker(
         "workload.health",
         "workload.verify",
     }
+    stop_id = f"model:{_node_id(0)}:workload.stop"
+    assert plan.operation_graph.dependencies(
+        f"model:{worker}:release.install"
+    ) == (stop_id,)
 
 
-def test_scale_down_stops_only_removed_worker_and_keeps_route_entrypoint(
+def test_scale_down_stops_all_old_members_then_restarts_desired_singleton(
     tmp_path: Path,
 ) -> None:
     repository, _, _ = _repository(tmp_path, 2)
@@ -687,7 +799,7 @@ def test_scale_down_stops_only_removed_worker_and_keeps_route_entrypoint(
             memory_total_bytes=4_000,
             disk_total_bytes=8_000,
             current_workloads=(
-                CurrentWorkloadState("model", "a" * 64, "spark-runtime-v1"),
+                _managed_group(2),
             ),
         )
         for observation in _observations(2)
@@ -697,9 +809,200 @@ def test_scale_down_stops_only_removed_worker_and_keeps_route_entrypoint(
 
     assert plan.placements == {"model": (_node_id(0),)}
     assert plan.routes["chat"]["entrypoint_node_id"] == _node_id(0)
-    assert tuple(node.kind for node in plan.operation_graph.nodes) == ("workload.stop",)
-    assert plan.operation_graph.nodes[0].node_id == _node_id(1)
+    stop_ids = tuple(
+        f"model:{_node_id(index)}:workload.stop" for index in range(2)
+    )
+    assert {
+        node.operation_id
+        for node in plan.operation_graph.nodes
+        if node.kind == "workload.stop"
+    } == set(stop_ids)
+    assert plan.operation_graph.dependencies(stop_ids[1]) == (stop_ids[0],)
+    assert plan.operation_graph.dependencies(
+        f"model:{_node_id(0)}:release.install"
+    ) == stop_ids
     assert plan.targets == (_node_id(0), _node_id(1))
+
+
+def test_nonlexical_old_entrypoint_uses_persisted_old_role_for_stop_order(
+    tmp_path: Path,
+) -> None:
+    repository, _, _ = _repository(tmp_path, 2)
+    commit = _git(repository.root, "rev-parse", "HEAD")
+    old_nodes = (_node_id(1), _node_id(0))
+    current = tuple(
+        replace(
+            observation,
+            occupied=True,
+            memory_total_bytes=4_000,
+            disk_total_bytes=8_000,
+            current_workloads=(_managed_group(2, nodes=old_nodes),),
+        )
+        for observation in _observations(2)
+    )
+
+    plan = _resolve(repository, commit, current)
+
+    old_head_stop = f"model:{_node_id(1)}:workload.stop"
+    old_worker_stop = f"model:{_node_id(0)}:workload.stop"
+    new_worker_start = f"model:{_node_id(1)}:workload.start"
+    new_head_start = f"model:{_node_id(0)}:workload.start"
+    assert plan.placements == {"model": (_node_id(0), _node_id(1))}
+    assert plan.operation_graph.dependencies(old_head_stop) == ()
+    assert plan.operation_graph.dependencies(old_worker_stop) == (old_head_stop,)
+    assert new_worker_start in plan.operation_graph.dependencies(new_head_start)
+
+
+def test_exact_complete_group_is_retained_without_stop_prepare_or_start(
+    tmp_path: Path,
+) -> None:
+    repository, commit, _ = _repository(tmp_path, 2)
+    current = tuple(
+        replace(
+            observation,
+            occupied=True,
+            memory_total_bytes=4_000,
+            disk_total_bytes=8_000,
+            current_workloads=(_managed_group(2),),
+        )
+        for observation in _observations(2)
+    )
+
+    plan = _resolve(repository, commit, current)
+
+    assert plan.placements == {"model": (_node_id(0), _node_id(1))}
+    assert {node.kind for node in plan.operation_graph.nodes} == {
+        "workload.health",
+        "workload.verify",
+    }
+
+
+def test_atomic_group_transition_is_independent_of_observation_order(
+    tmp_path: Path,
+) -> None:
+    repository, commit, _ = _repository(tmp_path, 2)
+    observations = tuple(
+        replace(
+            observation,
+            occupied=True,
+            memory_total_bytes=4_000,
+            disk_total_bytes=8_000,
+            current_workloads=(
+                _managed_group(2, release_digest="8" * 64),
+            ),
+        )
+        for observation in _observations(2)
+    )
+
+    first = _resolve(repository, commit, observations)
+    second = _resolve(repository, commit, tuple(reversed(observations)))
+
+    assert first.workload_groups == second.workload_groups
+    assert first.operation_graph.nodes == second.operation_graph.nodes
+    assert first.operation_payloads == second.operation_payloads
+
+
+def test_single_managed_group_total_capacity_is_not_double_counted(
+    tmp_path: Path,
+) -> None:
+    repository, _, _ = _repository(tmp_path, 1)
+    root = repository.root
+    workload = root / "config/workloads/model.toml"
+    (root / "config/workloads/replacement.toml").write_text(
+        workload.read_text().replace('id = "model"', 'id = "replacement"')
+    )
+    release = root / "manifests/releases/model.json"
+    (root / "manifests/releases/replacement.json").write_text(
+        release.read_text()
+        .replace('"workload_id":"model"', '"workload_id":"replacement"')
+        .replace('"target_name":"model"', '"target_name":"replacement"')
+    )
+    (root / "config/cluster-profiles/inference.toml").write_text(
+        f'''schema_version = 2
+id = "inference"
+accepted_evidence = "inventory/reports/inference.json"
+workloads = ["model", "replacement"]
+
+[[requirements]]
+workload = "model"
+definition_hash = "{DEFINITION_HASH}"
+node_count = 1
+required_labels = {{pool = "default"}}
+min_memory_bytes = 100
+min_disk_bytes = 200
+exclusive = true
+distributed_supported = true
+
+[[requirements]]
+workload = "replacement"
+definition_hash = "{DEFINITION_HASH}"
+node_count = 1
+required_labels = {{pool = "default"}}
+min_memory_bytes = 100
+min_disk_bytes = 200
+exclusive = true
+distributed_supported = true
+
+[endpoints]
+chat = "model"
+other = "replacement"
+
+[quotas.chat]
+requests_per_minute = 30
+tokens_per_minute = 10000
+
+[quotas.other]
+requests_per_minute = 30
+tokens_per_minute = 10000
+
+[lifecycle]
+start_order = "independent"
+stop_order = "independent"
+'''
+    )
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "request two exclusive workloads")
+    commit = _git(root, "rev-parse", "HEAD")
+    observation = replace(
+        _observations(1)[0],
+        occupied=True,
+        memory_total_bytes=4_000,
+        disk_total_bytes=8_000,
+        current_workloads=(_managed_group(1),),
+    )
+
+    with pytest.raises(ValueError, match="insufficient eligible nodes"):
+        _resolve(repository, commit, (observation,))
+
+
+def test_same_node_profile_digest_change_restarts_complete_group(
+    tmp_path: Path,
+) -> None:
+    repository, _, _ = _repository(tmp_path, 1)
+    release = repository.root / "manifests/releases/model.json"
+    release.write_text(
+        release.read_text().replace(
+            '"profile_digest":"cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"',
+            '"profile_digest":"4444444444444444444444444444444444444444444444444444444444444444"',
+        )
+    )
+    _git(repository.root, "add", ".")
+    _git(repository.root, "commit", "-qm", "change profile digest")
+    commit = _git(repository.root, "rev-parse", "HEAD")
+    current = replace(
+        _observations(1)[0],
+        occupied=True,
+        memory_total_bytes=4_000,
+        disk_total_bytes=8_000,
+        current_workloads=(_managed_group(1),),
+    )
+
+    plan = _resolve(repository, commit, (current,))
+
+    stop_id = f"model:{_node_id(0)}:workload.stop"
+    install_id = f"model:{_node_id(0)}:release.install"
+    assert plan.operation_graph.dependencies(install_id) == (stop_id,)
+    assert plan.workload_groups["model"]["profile_digest"] == "4" * 64
 
 
 def test_preferred_node_move_tears_down_old_node_before_starting_new_node(
@@ -724,7 +1027,7 @@ def test_preferred_node_move_tears_down_old_node_before_starting_new_node(
         memory_total_bytes=4_000,
         disk_total_bytes=8_000,
         current_workloads=(
-            CurrentWorkloadState("model", "a" * 64, "spark-runtime-v1"),
+            _managed_group(1),
         ),
     )
 
@@ -767,7 +1070,7 @@ stop_order = "independent"
         memory_total_bytes=4_000,
         disk_total_bytes=8_000,
         current_workloads=(
-            CurrentWorkloadState("model", "a" * 64, "spark-runtime-v1"),
+            _managed_group(1),
         ),
     )
 
@@ -1049,7 +1352,25 @@ def test_durable_projection_derives_occupancy_from_completed_start_evidence(
                     "nodes": [graph_node],
                 },
                 graph_digest="d" * 64,
+                resolved_plan={
+                    "workload_groups": {
+                        "model": {
+                            "nodes": [node_id],
+                            "entrypoint_node_id": node_id,
+                            "release_digest": "8" * 64,
+                            "adapter_id": "spark-runtime-v1",
+                            "definition_hash": DEFINITION_HASH,
+                            "profile_digest": "c" * 64,
+                            "preparation_digest": "c" * 64,
+                            "lifecycle": {
+                                "start_order": "independent",
+                                "stop_order": "independent",
+                            },
+                        }
+                    }
+                },
                 current_phase="completed",
+                completion_generation=1,
                 created_at=NOW - timedelta(seconds=4),
             )
         )
@@ -1109,7 +1430,11 @@ def test_durable_projection_derives_occupancy_from_completed_start_evidence(
     projected = durable_desired_state_observations(sessions)
     assert projected[0].occupied is True
     assert projected[0].current_workloads == (
-        CurrentWorkloadState("model", "8" * 64, "spark-runtime-v1"),
+        _managed_group(
+            1,
+            release_digest="8" * 64,
+            preparation_digest="c" * 64,
+        ),
     )
 
 
@@ -1144,12 +1469,71 @@ def test_durable_projection_fails_closed_on_completed_graph_without_operation_ev
                     ],
                 },
                 graph_digest="d" * 64,
+                resolved_plan={
+                    "workload_groups": {
+                        "model": {
+                            "nodes": [node_id],
+                            "entrypoint_node_id": node_id,
+                            "release_digest": "8" * 64,
+                            "adapter_id": "spark-runtime-v1",
+                            "definition_hash": DEFINITION_HASH,
+                            "profile_digest": "c" * 64,
+                            "preparation_digest": "c" * 64,
+                            "lifecycle": {
+                                "start_order": "independent",
+                                "stop_order": "independent",
+                            },
+                        }
+                    }
+                },
                 current_phase="completed",
+                completion_generation=1,
                 created_at=NOW,
             )
         )
 
     with pytest.raises(ValueError, match="operation evidence"):
+        durable_desired_state_observations(sessions)
+
+
+def test_durable_projection_rejects_legacy_workload_evidence_without_generation(
+    tmp_path: Path,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'legacy.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine)
+    node_id = _node_id(0)
+    with sessions.begin() as session:
+        session.add(
+            Reconciliation(
+                id="legacy-reconciliation",
+                base_commit="a" * 40,
+                status="succeeded",
+                summary={},
+                graph={
+                    "schema_version": 1,
+                    "base_commit": "a" * 40,
+                    "targets": [node_id],
+                    "nodes": [
+                        {
+                            "operation_id": "legacy-start",
+                            "node_id": node_id,
+                            "workload_id": "model",
+                            "kind": "workload.start",
+                            "dependencies": [],
+                            "compensation_kind": "workload.stop",
+                            "payload_digest": "d" * 64,
+                        }
+                    ],
+                },
+                graph_digest="d" * 64,
+                current_phase="completed",
+                completion_generation=None,
+                created_at=NOW,
+            )
+        )
+
+    with pytest.raises(ValueError, match="causal completion generation"):
         durable_desired_state_observations(sessions)
 
 

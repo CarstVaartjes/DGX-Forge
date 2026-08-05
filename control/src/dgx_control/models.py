@@ -7,6 +7,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     DateTime,
     ForeignKey,
     Integer,
@@ -105,7 +106,16 @@ class Reconciliation(Base):
         Integer, nullable=False, default=0, server_default="0"
     )
     terminal_reason: Mapped[str | None] = mapped_column(Text)
+    completion_generation: Mapped[int | None] = mapped_column(
+        BigInteger, unique=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+
+
+class ReconciliationCompletionGeneration(Base):
+    __tablename__ = "reconciliation_completion_generation"
+    singleton_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    last_generation: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
 
 class User(Base):

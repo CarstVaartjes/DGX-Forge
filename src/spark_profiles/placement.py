@@ -52,10 +52,13 @@ class NodeObservation:
     memory_available_bytes: int
     disk_available_bytes: int
     occupied: bool
+    available_for_placement: bool = True
 
     def __post_init__(self) -> None:
         if self.memory_available_bytes < 0 or self.disk_available_bytes < 0:
             raise PlacementError("observed capacity cannot be negative")
+        if not isinstance(self.available_for_placement, bool):
+            raise PlacementError("placement availability must be boolean")
 
 
 @dataclass(frozen=True)
@@ -111,6 +114,8 @@ class PlacementPlanner:
             rejected: list[str] = []
             if record.lifecycle != "ready":
                 rejected.append(f"lifecycle:{record.lifecycle}")
+            if not observation.available_for_placement:
+                rejected.append("unavailable")
             if not observation.healthy:
                 rejected.append("unhealthy")
             if observation.memory_available_bytes < requirement.min_memory_bytes:
@@ -152,6 +157,7 @@ class PlacementPlanner:
                 "memory_available_bytes": item.memory_available_bytes,
                 "disk_available_bytes": item.disk_available_bytes,
                 "occupied": item.occupied,
+                "available_for_placement": item.available_for_placement,
             }
             for item in sorted(observed.values(), key=lambda item: item.node_id.value)
         ]

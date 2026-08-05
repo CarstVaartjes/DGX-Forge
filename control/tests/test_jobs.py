@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import hashlib
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from dgx_agent_protocol import canonical_message
 from dgx_control.jobs import JobService, StaleAttempt
 from dgx_control.models import Base
 from sqlalchemy import create_engine
@@ -73,14 +75,61 @@ def test_payload_is_bounded_and_rejects_credential_fields(service) -> None:
     with pytest.raises(TypeError, match="keys"):
         jobs.enqueue("probe", "admin", "abc", [], {1: "not-a-string-key"})
 
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"tokens_per_minute": "nested-secret"},
+        {"safe": {"tokens_per_minute": 10_000}},
+        {
+            "routes": {
+                "chat": {
+                    "quota": {
+                        "requests_per_minute": 30,
+                        "tokens_per_minute": "nested-secret",
+                    }
+                }
+            }
+        },
+    ],
+)
+def test_token_named_fields_outside_validated_route_quota_are_sensitive(
+    service, payload: dict[str, object]
+) -> None:
+    jobs, _ = service
+
+    with pytest.raises(ValueError, match="sensitive"):
+        jobs.enqueue("reconcile", "admin", "abc", ["spk_1"], payload)
+
+
+def test_exact_bounded_reconciliation_route_quota_is_accepted(service) -> None:
+    jobs, _ = service
+    quota = {"requests_per_minute": 30, "tokens_per_minute": 10_000}
+    node_id = "spk_00000000000000000000000000000001"
+    payload = {
+        "routes": {
+            "chat": {
+                "workload_id": "model",
+                "nodes": [node_id],
+                "entrypoint_node_id": node_id,
+                "scheme": "http",
+                "port": 8000,
+                "path": "/v1",
+                "quota": quota,
+                "quota_digest": hashlib.sha256(canonical_message(quota)).hexdigest(),
+            }
+        }
+    }
+
     accepted = jobs.enqueue(
         "reconcile",
         "admin",
         "abc",
-        ["spk_1"],
-        {"quota": {"tokens_per_minute": 10_000}},
+        [node_id],
+        payload,
     )
-    assert accepted.payload == {"quota": {"tokens_per_minute": 10_000}}
+    assert accepted.payload == payload
 
 
 def test_matching_fence_can_heartbeat_wait_and_fail(service) -> None:
