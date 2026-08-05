@@ -102,14 +102,46 @@ def test_verifier_rejects_floating_hermes_agent_base(tmp_path: Path) -> None:
     assert "Hermes" in result.stderr and "digest" in result.stderr
 
 
-def test_image_lock_contains_only_the_pinned_hermes_runtime() -> None:
+def test_image_lock_contains_the_pinned_hermes_build_base() -> None:
     lock = json.loads((ROOT / "deploy/compose/images.lock.json").read_text())
 
-    assert lock["images"]["hermes-agent"] == (
+    assert lock["build_bases"]["hermes"] == (
         "nousresearch/hermes-agent:v2026.7.20@sha256:"
         "f7b35053268f532f98955195c909f15a230470fbcbdacaa9fdecb95707dad04a"
     )
+    assert "hermes-agent" not in lock["images"]
     assert not any("ai-devbox" in name for name in lock["build_bases"])
+
+
+def test_image_lock_declares_all_three_public_release_artifacts() -> None:
+    lock = json.loads((ROOT / "deploy/compose/images.lock.json").read_text())
+
+    assert lock["release_images"] == [
+        {
+            "context": ".",
+            "dockerfile": "control/Dockerfile",
+            "environment": "CONTROL_API_IMAGE",
+            "package": "dgx-forge-api",
+            "required": True,
+            "target": "api",
+        },
+        {
+            "context": ".",
+            "dockerfile": "control/Dockerfile",
+            "environment": "CONTROL_WORKER_IMAGE",
+            "package": "dgx-forge-worker",
+            "required": True,
+            "target": "worker",
+        },
+        {
+            "context": "deploy/compose/hermes-agent",
+            "dockerfile": "deploy/compose/hermes-agent/Dockerfile",
+            "environment": "HERMES_AGENT_IMAGE",
+            "package": "dgx-forge-hermes",
+            "required": True,
+            "target": "managed",
+        },
+    ]
 
 
 def test_verifier_rejects_stale_sbom_after_lock_change(tmp_path: Path) -> None:

@@ -63,6 +63,11 @@ def test_wrapper_image_is_digest_pinned_and_contains_no_ssh_stack() -> None:
 def test_compose_hermes_is_unpublished_bounded_and_segmented() -> None:
     service = _rendered()["services"]["hermes-agent"]
 
+    assert service["image"] == (
+        "example/hermes:1@sha256:"
+        "7777777777777777777777777777777777777777777777777777777777777777"
+    )
+    assert "build" not in service
     assert set(service["networks"]) == {
         "hermes-egress",
         "hermes-inference",
