@@ -50,8 +50,9 @@ _PEM_BLOCK = re.compile(
 _AUTHORIZATION = re.compile(r"(?i)(authorization\s*:\s*)(?:bearer|basic)\s+[^\s,;]+")
 _BEARER = re.compile(r"(?i)\b(?:bearer|basic)\s+[^\s,;]+")
 _SENSITIVE_ASSIGNMENT = re.compile(
-    r"(?i)\b(authorization|api[_-]?key|client[_-]?certificate|"
-    r"certificate(?:[_-]?(?:body|chain|data))?|credential|password|"
+    r"(?i)\b(authorization|api[_-]?key|cert[_-]?pem|chain[_-]?pem|"
+    r"client[_-]?certificate(?:[_-]?pem)?|"
+    r"certificate(?:[_-]?(?:body|chain|data|pem))?|credential|password|"
     r"private[_-]?key|secret|token|x509)\b(\s*[:=]\s*)"
     r"(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
 )
@@ -75,9 +76,15 @@ class ControlTransportError(ControlClientError):
 
 
 class ControlTimeout(ControlClientError):
-    def __init__(self, job_id: str, job: JobDetailResponse | None) -> None:
+    def __init__(
+        self,
+        job_id: str,
+        job: JobDetailResponse | None,
+        *,
+        sensitive_values: tuple[str, ...] = (),
+    ) -> None:
         self.job_id = job_id
-        self.job = job
+        self.job = _safe_job_observation(job, sensitive_values=sensitive_values)
         super().__init__(f"timed out waiting for control job {job_id}")
 
 
@@ -197,6 +204,23 @@ def _sanitize_remote_text(
     if len(text) > _MAX_REMOTE_TEXT:
         text = text[: _MAX_REMOTE_TEXT - len(marker)] + marker
     return text
+
+
+def _safe_job_observation(
+    job: JobDetailResponse | None,
+    *,
+    sensitive_values: tuple[str, ...] = (),
+) -> JobDetailResponse | None:
+    if job is None:
+        return None
+    safe_job = JobDetailResponse.from_dict(job.to_dict())
+    if safe_job.status_reason is not None:
+        safe_job.status_reason = _sanitize_remote_text(
+            safe_job.status_reason,
+            "job observation has no safe reason",
+            sensitive_values=sensitive_values,
+        )
+    return safe_job
 
 
 def _read_token_file(token_file: Path) -> str:
@@ -516,13 +540,17 @@ class ControlClient:
             except (ControlTransportError, ControlUnavailable) as error:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise ControlTimeout(job_id, result) from error
+                    raise ControlTimeout(
+                        job_id, result, sensitive_values=(self._token,)
+                    ) from error
                 delay = getattr(error, "retry_after_seconds", None)
                 if delay is None:
                     delay = interval
                 if delay >= remaining:
                     time.sleep(remaining)
-                    raise ControlTimeout(job_id, result) from error
+                    raise ControlTimeout(
+                        job_id, result, sensitive_values=(self._token,)
+                    ) from error
                 time.sleep(delay)
                 continue
             if result.state == "succeeded":
@@ -533,10 +561,10 @@ class ControlClient:
                 raise JobWaitingForOperator(result, sensitive_values=(self._token,))
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise ControlTimeout(job_id, result)
+                raise ControlTimeout(job_id, result, sensitive_values=(self._token,))
             if interval >= remaining:
                 time.sleep(remaining)
-                raise ControlTimeout(job_id, result)
+                raise ControlTimeout(job_id, result, sensitive_values=(self._token,))
             time.sleep(interval)
 
     def endpoint(self, alias: str) -> EndpointResponse:

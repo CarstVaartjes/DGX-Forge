@@ -695,3 +695,76 @@ token/certificate redaction before exception storage or display. No generated
 source was edited. The pre-existing unrelated `progress.md` modification remains
 unstaged, and the previously reported out-of-scope legacy CLI/jsonschema SIGSEGV
 concern is unchanged.
+
+# Fix Round 3
+
+Reviewed head: `c3b00d5fe4cb285d4f76d8cb2e5b0a36bba4b0c7`
+
+## Residual finding: safe copied timeout observations
+
+Added three timeout-path regressions:
+
+- `test_wait_job_timeout_stores_safe_bounded_observation` covers ordinary
+  nonterminal timeout with a bare client token, PEM certificate/private key,
+  credential assignment, oversized text, `certificate_pem`, `cert_pem`,
+  `chain_pem`, and mixed-case/spacing assignment syntax.
+- `test_wait_job_transient_timeout_stores_safe_bounded_observation` covers both
+  a transient transport failure and a typed 503 after a prior queued
+  observation.
+- `test_wait_job_timeout_copies_observation_before_sanitizing` proves the
+  generated/caller observation is not mutated and the exception stores a
+  separate generated `JobDetailResponse` copy.
+
+All timeout tests assert that non-sensitive identifiers, state, attempt, commit,
+and progress fields remain intact; stored `status_reason` values stay within 256
+characters; and neither the observation nor exception string exposes the
+original secret/certificate content.
+
+RED:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_wait_job_timeout_stores_safe_bounded_observation tests/spark_profiles/test_control_client.py::test_wait_job_transient_timeout_stores_safe_bounded_observation tests/spark_profiles/test_control_client.py::test_wait_job_timeout_copies_observation_before_sanitizing -v
+11 failed in 0.27s
+ControlTimeout retained the raw observation by identity; secrets and oversized reasons remained stored
+```
+
+GREEN:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_wait_job_timeout_stores_safe_bounded_observation tests/spark_profiles/test_control_client.py::test_wait_job_transient_timeout_stores_safe_bounded_observation tests/spark_profiles/test_control_client.py::test_wait_job_timeout_copies_observation_before_sanitizing -v
+11 passed in 0.12s
+```
+
+`ControlTimeout` now creates its stored observation with the generated model's
+`to_dict()`/`from_dict()` round trip, sanitizes only the copied
+`status_reason`, and receives the client's literal token as a sensitive value at
+all ordinary and transient timeout raises. The assignment sanitizer now covers
+`certificate_pem`, `cert_pem`, `chain_pem`, and `client_certificate_pem`
+case-insensitively with existing flexible separator spacing. Generated response
+typing is unchanged, and no polling-parameter behavior was modified.
+
+## Fix Round 3 fresh verification
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py -q
+92 passed in 1.38s
+
+$ uv run pytest tests/control/test_openapi_clients.py -q
+5 passed in 3.89s
+
+$ uv run --with ruff==0.16.1 ruff check src/spark_profiles/control_client.py tests/spark_profiles/test_control_client.py
+All checks passed!
+
+$ uv run --with ruff==0.16.1 ruff format --check src/spark_profiles/control_client.py tests/spark_profiles/test_control_client.py
+2 files already formatted
+
+$ git diff --check
+[no output; exit 0]
+```
+
+Self-review confirmed timeout observations are copied before sanitization,
+generated/caller objects remain unchanged, every timeout construction path
+passes token context, certificate assignment labels are covered exactly, and no
+generated source or deferred polling parameter was changed. The pre-existing
+unrelated `progress.md` modification remains unstaged; the previously reported
+legacy CLI/jsonschema SIGSEGV concern is unchanged.

@@ -738,6 +738,132 @@ def test_wait_job_times_out_with_last_observation(tmp_path: Path) -> None:
     assert 1 <= calls <= 50
 
 
+@pytest.mark.parametrize(
+    ("remote_text", "forbidden_values"),
+    [
+        ("upstream rejected signed-token", ("signed-token",)),
+        (
+            (
+                "-----BEGIN CERTIFICATE-----\nCERTIFICATE-BODY\n"
+                "-----END CERTIFICATE-----\n"
+                "-----BEGIN PRIVATE KEY-----\nPRIVATE-KEY-BODY\n"
+                "-----END PRIVATE KEY-----"
+            ),
+            ("CERTIFICATE-BODY", "PRIVATE-KEY-BODY"),
+        ),
+        ("password = hunter2", ("hunter2",)),
+        ("z" * 5_000, ("z" * 257,)),
+        ("certificate_pem = CERTIFICATE-PEM-CONTENT", ("CERTIFICATE-PEM-CONTENT",)),
+        ("cert_pem=CERT-PEM-CONTENT", ("CERT-PEM-CONTENT",)),
+        ("chain_pem : CHAIN-PEM-CONTENT", ("CHAIN-PEM-CONTENT",)),
+        ("CeRt_PeM   =   MIXED-CASE-CERTIFICATE", ("MIXED-CASE-CERTIFICATE",)),
+    ],
+    ids=[
+        "bare-token",
+        "pem",
+        "credential",
+        "oversized",
+        "certificate-pem",
+        "cert-pem",
+        "chain-pem",
+        "mixed-case-spacing",
+    ],
+)
+def test_wait_job_timeout_stores_safe_bounded_observation(
+    tmp_path: Path, remote_text: str, forbidden_values: tuple[str, ...]
+) -> None:
+    def opener(request, timeout):
+        return Response(job_payload("running", remote_text))
+
+    client = generated_client(tmp_path, opener)
+
+    with pytest.raises(control_client.ControlTimeout) as caught:
+        client.wait_job(JOB_ID, timeout=0, interval=0)
+
+    assert caught.value.job is not None
+    assert caught.value.job.id == JOB_ID
+    assert caught.value.job.state == "running"
+    assert caught.value.job.base_commit == COMMIT
+    assert caught.value.job.current_attempt == 1
+    assert caught.value.job.progress.total == 0
+    assert caught.value.job.status_reason is not None
+    assert len(caught.value.job.status_reason) <= 256
+    for forbidden in forbidden_values:
+        assert forbidden not in caught.value.job.status_reason
+        assert forbidden not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("failure_kind", "cause_type"),
+    [
+        ("transport", control_client.ControlTransportError),
+        ("unavailable", control_client.ControlUnavailable),
+    ],
+)
+def test_wait_job_transient_timeout_stores_safe_bounded_observation(
+    tmp_path: Path, monkeypatch, failure_kind: str, cause_type: type[Exception]
+) -> None:
+    remote_text = (
+        "signed-token CERT_PEM = CERTIFICATE-CONTENT password=hunter2 " + "q" * 5_000
+    )
+    calls = 0
+
+    def opener(request, timeout):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return Response(job_payload("queued", remote_text))
+        if failure_kind == "transport":
+            raise urllib.error.URLError("connection reset")
+        return Response({"detail": "try later"}, status=503)
+
+    clock = iter([0.0, 0.5, 1.1])
+    monkeypatch.setattr(control_client.time, "monotonic", lambda: next(clock))
+    client = generated_client(tmp_path, opener)
+
+    with pytest.raises(control_client.ControlTimeout) as caught:
+        client.wait_job(JOB_ID, timeout=1, interval=0)
+
+    assert isinstance(caught.value.__cause__, cause_type)
+    assert calls == 2
+    assert caught.value.job is not None
+    assert caught.value.job.id == JOB_ID
+    assert caught.value.job.state == "queued"
+    assert caught.value.job.progress.total == 0
+    assert caught.value.job.status_reason is not None
+    assert len(caught.value.job.status_reason) <= 256
+    for forbidden in (
+        "signed-token",
+        "CERTIFICATE-CONTENT",
+        "hunter2",
+        "q" * 257,
+    ):
+        assert forbidden not in caught.value.job.status_reason
+        assert forbidden not in str(caught.value)
+
+
+def test_wait_job_timeout_copies_observation_before_sanitizing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    original_reason = "upstream rejected signed-token"
+    observation = JobDetailResponse.from_dict(job_payload("running", original_reason))
+    client = generated_client(
+        tmp_path,
+        lambda request, timeout: (_ for _ in ()).throw(
+            AssertionError("network must not be reached")
+        ),
+    )
+    monkeypatch.setattr(client, "job", lambda job_id: observation)
+
+    with pytest.raises(control_client.ControlTimeout) as caught:
+        client.wait_job(JOB_ID, timeout=0, interval=0)
+
+    assert observation.status_reason == original_reason
+    assert caught.value.job is not observation
+    assert caught.value.job is not None
+    assert caught.value.job.status_reason == "upstream rejected <redacted>"
+
+
 def test_wait_job_honors_bounded_retry_after_on_get(tmp_path: Path) -> None:
     responses = iter(
         [
