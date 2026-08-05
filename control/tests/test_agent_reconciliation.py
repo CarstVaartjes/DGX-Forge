@@ -621,6 +621,22 @@ def test_complete_graph_publishes_exact_bundle_then_terminalizes_parent(tmp_path
             "bundle_digest": "6" * 64,
         }
 
+    assert service.tick(reconciliation_id) is True
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        assert stored is not None and stored.current_phase == "accepting"
+        assert job is not None and job.state == "running"
+    assert publisher.withdrawals == 2
+
+    service.tick(reconciliation_id)
+    service.tick(reconciliation_id)
+    assert len(publisher.publications) == 2
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        assert stored is not None and stored.current_phase == "completed"
+        assert stored.completion_generation == 1
+
 
 def _compensation_fixture(tmp_path):
     engine = create_engine(

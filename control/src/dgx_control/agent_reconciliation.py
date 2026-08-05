@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from dgx_agent_protocol import AgentResult, canonical_message
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from .models import (
@@ -302,9 +302,12 @@ class AgentReconciliationService:
                     self._store_marker(publication, marker, "completed")
                     reconciliation.current_phase = "completed"
                     reconciliation.status = "succeeded"
-                    reconciliation.completion_generation = (
-                        ReconciliationOrchestrator._next_completion_generation(session)
-                    )
+                    if reconciliation.completion_generation is None:
+                        reconciliation.completion_generation = (
+                            ReconciliationOrchestrator._next_completion_generation(
+                                session
+                            )
+                        )
                     job.state = "succeeded"
                     job.status_reason = None
                     job.result = {
@@ -313,12 +316,23 @@ class AgentReconciliationService:
                         "bundle_digest": marker.manifest_sha256,
                     }
                     job.updated_at = self._clock()
+                elif phase == "completed":
+                    marker = self._publisher.withdraw(
+                        reconciliation_id=reconciliation.id,
+                        plan_digest=self._plan_digest(reconciliation),
+                        targets=graph.targets,
+                        reason="route lease renewal",
+                    )
+                    self._store_marker(publication, marker, "routes-withdrawn")
+                    reconciliation.current_phase = "accepting"
+                    reconciliation.status = "running"
+                    job.state = "running"
+                    job.updated_at = self._clock()
                 elif phase == "compensating":
                     notify = self._dispatch_compensation(
                         session, reconciliation, job, graph, document
                     )
                 elif phase in {
-                    "completed",
                     "failed",
                     "cancelled",
                     "waiting-for-operator",
@@ -441,17 +455,30 @@ class AgentReconciliationService:
             return session.scalar(
                 select(Reconciliation.id)
                 .join(Job, Job.reconciliation_id == Reconciliation.id)
+                .outerjoin(
+                    RoutePublication,
+                    RoutePublication.reconciliation_id == Reconciliation.id,
+                )
                 .where(
-                    Reconciliation.current_phase.in_(
-                        {
-                            "planned",
-                            "withdrawal-pending",
-                            "routes-withdrawn",
-                            "dispatching",
-                            "accepting",
-                            "publication-pending",
-                            "compensating",
-                        }
+                    or_(
+                        Reconciliation.current_phase.in_(
+                            {
+                                "planned",
+                                "withdrawal-pending",
+                                "routes-withdrawn",
+                                "dispatching",
+                                "accepting",
+                                "publication-pending",
+                                "compensating",
+                            }
+                        ),
+                        (
+                            (Reconciliation.current_phase == "completed")
+                            & (
+                                RoutePublication.lease_expires_at
+                                <= self._clock() + timedelta(seconds=30)
+                            )
+                        ),
                     )
                 )
                 .order_by(Reconciliation.created_at, Reconciliation.id)
