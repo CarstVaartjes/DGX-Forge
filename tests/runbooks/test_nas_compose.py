@@ -6,6 +6,30 @@ ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_README = ROOT / "deploy/compose/README.md"
 ENVIRONMENT = ROOT / "deploy/compose/.env.example"
 SUPPLY_CHAIN = ROOT / "docs/runbooks/supply-chain.md"
+PRODUCTION_FILE_VARIABLES = (
+    "DATABASE_URL_FILE",
+    "POSTGRES_PASSWORD_FILE",
+    "TOKEN_SIGNING_KEY_FILE",
+    "METRICS_TOKEN_FILE",
+    "GIT_SIGNING_KEY_FILE",
+    "WORKER_API_TOKEN_FILE",
+    "GRAFANA_ADMIN_PASSWORD_FILE",
+    "LITELLM_MASTER_KEY_FILE",
+    "LITELLM_UPSTREAM_KEY_FILE",
+    "LITELLM_DATABASE_URL_FILE",
+    "AGENT_CLIENT_CA_FILE",
+    "AGENT_INTERMEDIATE_CERTIFICATE_FILE",
+    "AGENT_PROXY_AUTH_FILE",
+    "AGENT_CA_CREDENTIAL_FILE",
+    "AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE",
+    "STEP_CA_CONFIG_FILE",
+    "STEP_CA_ROOT_CERTIFICATE_FILE",
+    "STEP_CA_INTERMEDIATE_KEY_FILE",
+    "STEP_CA_PASSWORD_FILE",
+    "TAILSCALE_OAUTH_CLIENT_ID_FILE",
+    "TAILSCALE_OAUTH_CLIENT_SECRET_FILE",
+    "HERMES_API_KEY_FILE",
+)
 
 
 def test_nas_compose_readme_is_the_complete_operator_entry_point() -> None:
@@ -27,17 +51,8 @@ def test_nas_compose_readme_is_the_complete_operator_entry_point() -> None:
         "DGX_CONTAINER_RELEASES_ENABLED",
         "No images are currently being published",
         "Dependabot cannot publish",
-        "sudo install -d -m 0750 -o \"$USER\" -g \"$USER\" /srv/dgx-forge",
-        "DATABASE_URL_FILE",
-        "POSTGRES_PASSWORD_FILE",
-        "TOKEN_SIGNING_KEY_FILE",
-        "METRICS_TOKEN_FILE",
-        "GIT_SIGNING_KEY_FILE",
-        "WORKER_API_TOKEN_FILE",
-        "GRAFANA_ADMIN_PASSWORD_FILE",
-        "LITELLM_MASTER_KEY_FILE",
-        "LITELLM_UPSTREAM_KEY_FILE",
-        "LITELLM_DATABASE_URL_FILE",
+        "operator_user=$(id -un)",
+        "sudo install -d -m 0750 -o \"$operator_user\" -g \"$operator_group\" /srv/dgx-forge",
         "At least 32 bytes.",
         "At least 16 non-whitespace characters.",
         "10001:10001",
@@ -45,14 +60,33 @@ def test_nas_compose_readme_is_the_complete_operator_entry_point() -> None:
         "65534:65534",
         "1100:1100",
         "control.dgx-forge.lan is not a LAN-accessible human endpoint",
+        "setfacl -R -m u:10001:rwX",
+        "setfacl -m d:u:10001:rwx",
+        "CONTROL_API writes `.git`",
+        "--user 0:0 --entrypoint /bin/sh control-api",
+        "chown 10001:10001 /state",
+        "chmod 0700 /state",
     ):
         assert required in text
+    for variable in PRODUCTION_FILE_VARIABLES:
+        assert variable in text
     assert "\nsudo git clone " not in text
-    migration = "dgx_control.offline --state-path /state migrate"
-    assert text.index("up -d postgres") < text.index(migration)
-    assert text.index(migration) < text.index(
-        "create-admin --subject ADMIN_ID"
-    ) < text.index("up -d\ndocker compose")
+    first_start = text.split("## Preflight and first start", 1)[1].split(
+        "## Upgrade and rollback", 1
+    )[0]
+    command_block = first_start.split("```bash", 1)[1].split("```", 1)[0]
+    normalized = " ".join(command_block.replace("\\\n", " ").split())
+    steps = (
+        "config --quiet",
+        "--user 0:0 --entrypoint /bin/sh control-api",
+        "up -d postgres",
+        "control-api -m dgx_control.offline --state-path /state init --repository /repository",
+        "control-api -m dgx_control.offline --state-path /state migrate",
+        "create-admin --subject ADMIN_ID",
+        "compose.step-ca.yaml up -d docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml ps",
+    )
+    positions = tuple(normalized.index(step) for step in steps)
+    assert positions == tuple(sorted(positions))
 
 
 def test_environment_requires_three_release_images_without_duplicate_networks() -> None:

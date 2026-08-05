@@ -29,11 +29,14 @@ complete public GitHub Release containing both `dgx-forge-images.env` and
 ## Host and network prerequisites
 
 Use a supported `linux/amd64` NAS with Docker Engine plus the Docker Compose
-plugin, `curl`, `sha256sum`, local DNS, and persistent storage. Keep the
-repository checkout and host-local configuration outside Git, for example:
+plugin, `curl`, `sha256sum`, POSIX ACL tools (`setfacl` and `getfacl`), local
+DNS, and persistent storage. Keep the repository checkout and host-local
+configuration outside Git, for example:
 
 ```bash
-sudo install -d -m 0750 -o "$USER" -g "$USER" /srv/dgx-forge
+operator_user=$(id -un)
+operator_group=$(id -gn)
+sudo install -d -m 0750 -o "$operator_user" -g "$operator_group" /srv/dgx-forge
 git clone https://github.com/CarstVaartjes/DGX-Forge.git /srv/dgx-forge/repository
 sudo install -d -m 0700 /srv/dgx-forge/secrets /srv/dgx-forge/hermes /srv/dgx-forge/step-ca
 cd /srv/dgx-forge/repository/deploy/compose
@@ -41,11 +44,28 @@ cp .env.example .env
 chmod 0600 .env
 ```
 
-The deployment operator owns the checkout, so the unprivileged `cp`, later
-reviewed `git` updates, and edits to `.env` work. Do not use `sudo git clone`
-and then try to edit its root-owned result. The secrets, Hermes data, and
-step-ca directories stay administrator-owned and are prepared with the
-consumer-specific ownership below.
+The deployment operator owns the checkout, so unprivileged `cp`, later reviewed
+`git` updates, and edits to `.env` work. `id -gn` records the operator's actual
+primary group; do not assume a same-named group and do not use `sudo git clone`
+and then try to edit its root-owned result.
+
+`control-api` mounts this checkout read-write as UID `10001:10001` and
+CONTROL_API writes `.git` for signed repository administration. Preserve
+operator administration while granting that exact UID recursive read/write/
+traverse access now and on all future files and directories:
+
+```bash
+sudo setfacl -R -m u:10001:rwX /srv/dgx-forge/repository
+sudo find /srv/dgx-forge/repository -type d -exec \
+  setfacl -m d:u:10001:rwx {} +
+sudo getfacl /srv/dgx-forge/repository /srv/dgx-forge/repository/.git
+```
+
+Reapply the two `setfacl` commands after a checkout replacement or restore; do
+not replace this with `chown -R 10001`, which would remove the operator's
+administrative ownership. The secrets, Hermes data, and step-ca directories
+stay administrator-owned and are prepared with the consumer-specific ownership
+below.
 
 Reserve a host management-LAN address and put it in the host-local `.env`:
 
@@ -262,6 +282,9 @@ Run the production commands exactly from the Compose directory:
 cd /srv/dgx-forge/repository/deploy/compose
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml pull
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml config --quiet
+docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml run --rm --no-deps \
+  --user 0:0 --entrypoint /bin/sh control-api \
+  -c 'chown 10001:10001 /state && chmod 0700 /state'
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml up -d postgres
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml run --rm --no-deps \
   --entrypoint python control-api -m dgx_control.offline --state-path /state \
@@ -276,11 +299,14 @@ docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml ps
 ```
 
 In short, the required preflight sequence is `docker compose pull`, then
-`docker compose config --quiet`, then PostgreSQL-only `up -d postgres`, offline
-migration and administrator creation, before the first full `up -d`. The
-one-shot commands use the production control-api image so it reads the same
-Compose secrets as the service; API and worker remain stopped. After Docker
-creates its bridge, apply and verify the Hermes host-egress rule as
+`docker compose config --quiet`, then the root one-off that initializes the
+Compose-managed `control-state` volume to `10001:10001` mode `0700`, then
+PostgreSQL-only `up -d postgres`, offline init/migration/administrator creation,
+before the first full `up -d`. The root one-off attaches the named volume through
+the same Compose project and service definition, so it does not guess a raw
+Docker volume name. The later one-shot commands run as the production
+control-api UID and read the same Compose secrets as the service; API and worker
+remain stopped. After Docker creates its bridge, apply and verify the Hermes host-egress rule as
 documented in [Hermes Agent](../../docs/runbooks/hermes-agent.md). Check the
 Tailscale Service status and verify that ordinary LAN clients cannot reach human
 or Hermes endpoints.
