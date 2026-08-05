@@ -307,6 +307,31 @@ def test_validation_or_activation_failure_retains_previous_exact_marker(
     )
 
 
+def test_crash_before_files_leaves_no_generation_or_activation(tmp_path: Path) -> None:
+    publisher = _publisher(tmp_path, validate_routes=lambda _content: False)
+
+    with pytest.raises(RouteRuntimeError, match="route validation"):
+        publisher.publish(_request())
+
+    assert list((tmp_path / "runtime/generations").iterdir()) == []
+    assert not (tmp_path / "runtime/activation.json").exists()
+
+
+def test_restart_after_marker_before_db_ack_reuses_exact_receipt(
+    tmp_path: Path,
+) -> None:
+    marker = _publisher(tmp_path).publish(_request())
+
+    restarted = AtomicRouteBundlePublisher(
+        tmp_path / "runtime",
+        management_policy=ManagementAddressPolicy.parse("10.0.0.0/24"),
+        clock=lambda: NOW,
+    )
+
+    assert restarted.publish(_request()) == marker
+    assert len(list((tmp_path / "runtime/generations").iterdir())) == 1
+
+
 def test_restart_inspection_rejects_tampering_wrong_expectation_and_expired_lease(
     tmp_path: Path,
 ) -> None:

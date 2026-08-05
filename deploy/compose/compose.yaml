@@ -33,11 +33,12 @@ services:
       - -c
       - >-
         import os;
-        os.makedirs('/routes/generations', mode=0o700, exist_ok=True);
+        os.chown('/routes', 0, 0);
         os.chmod('/routes', 0o700);
+        os.makedirs('/routes/generations', mode=0o700, exist_ok=True);
         os.chmod('/routes/generations', 0o700);
-        os.chown('/routes', 10001, 10001);
-        os.chown('/routes/generations', 10001, 10001)
+        os.chown('/routes/generations', 10001, 10001);
+        os.chown('/routes', 10001, 10001)
     volumes:
       - route-publications:/routes
 

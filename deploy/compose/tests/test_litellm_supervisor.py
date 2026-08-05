@@ -199,6 +199,12 @@ def test_compose_initializes_route_volume_for_unprivileged_control_worker() -> N
     assert initializer["user"] == "0:0"
     assert initializer["cap_drop"] == ["ALL"]
     assert set(initializer["cap_add"]) == {"CHOWN", "FOWNER"}
+    command = initializer["command"][-1]
+    reclaim = "os.chown('/routes', 0, 0)"
+    child = "os.chown('/routes/generations', 10001, 10001)"
+    root = "os.chown('/routes', 10001, 10001)"
+    assert command.index(reclaim) < command.index("os.makedirs")
+    assert command.index(child) < command.index(root)
     assert services["control-worker"]["depends_on"]["route-publication-init"] == {
         "condition": "service_completed_successfully",
         "required": True,
