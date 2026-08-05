@@ -61,6 +61,20 @@ def test_admin_mutation_is_correlated_and_audited() -> None:
     assert (event.actor, event.base_commit, event.targets) == ("administrator", "abc", ("node",))
 
 
+def test_generic_jobs_endpoint_cannot_enqueue_reconciliation() -> None:
+    client, headers, jobs, _audits = _client("administrator")
+
+    response = client.post("/api/v1/jobs", headers=headers, json={
+        "kind": "reconcile",
+        "base_commit": "a" * 40,
+        "targets": ["spk_00000000000000000000000000000001"],
+        "payload": {"plan_digest": "0" * 64},
+    })
+
+    assert response.status_code == 400
+    assert jobs.calls == []
+
+
 def test_cookie_authenticated_mutation_requires_matching_csrf() -> None:
     client, headers, _, _ = _client("operator")
     token = headers["Authorization"].removeprefix("Bearer ")

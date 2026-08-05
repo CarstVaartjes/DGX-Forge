@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime, timedelta
 
@@ -35,6 +36,11 @@ def _manager(
     workload.write_text(
         'id = "deepseek-agent-single"\n[endpoint]\nhost = "127.0.0.1"\nport = 8888\n'
     )
+    fleet = repository / "inventory/fleet.toml"
+    fleet.parent.mkdir(parents=True)
+    fleet.write_text(
+        f'[nodes."{NODE_ID}"]\nlifecycle = "ready"\n'
+    )
     engine = create_engine(f"sqlite:///{tmp_path / 'routes.sqlite'}")
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
@@ -55,6 +61,7 @@ def _manager(
         clock=clock,
         maximum_age_seconds=150,
         refresh_interval_seconds=60,
+        repository_reader=lambda _commit, path: (repository / path).read_bytes(),
     )
     return manager, live, presence
 
@@ -81,6 +88,10 @@ def test_successful_reconciliation_publishes_probed_presence_route(tmp_path) -> 
     assert config["model_list"][0]["litellm_params"]["api_base"] == "http://10.0.0.42:8888/v1"
     assert b"upstream-test-key" not in live.read_bytes()
     assert result.route_state.health_timestamp == NOW.isoformat()
+    lease = json.loads((live.parent / "lease.json").read_bytes())
+    assert lease["config_sha256"] == hashlib.sha256(live.read_bytes()).hexdigest()
+    assert lease["issued_at"] == NOW.isoformat()
+    assert lease["expires_at"] == (NOW + timedelta(seconds=150)).isoformat()
 
 
 def test_probe_failure_keeps_litellm_withdrawn(tmp_path) -> None:
@@ -155,6 +166,72 @@ def test_refresh_republishes_a_changed_dhcp_observation(tmp_path) -> None:
     config = json.loads(live.read_bytes())
     assert config["model_list"][0]["litellm_params"]["api_base"] == "http://10.0.0.43:8888/v1"
     assert probes[-1] == "http://10.0.0.43:8888/v1/models"
+
+
+def test_changed_dhcp_route_is_withdrawn_before_replacement_probe(tmp_path) -> None:
+    current = [NOW]
+    live_holder = []
+
+    def probe(url, _key):
+        if url.startswith("http://10.0.0.43"):
+            assert json.loads(live_holder[0].read_bytes())["model_list"] == []
+
+    manager, live, presence = _manager(
+        tmp_path,
+        clock=lambda: current[0],
+        probe=probe,
+    )
+    live_holder.append(live)
+    manager.publish(
+        commit="a" * 40,
+        profile="agent-single",
+        targets=(NODE_ID,),
+        routes=ROUTES,
+    )
+    current[0] = NOW + timedelta(seconds=60)
+    presence.observe(NODE_ID, "10.0.0.43", current[0])
+
+    assert manager.refresh_if_due(lambda: "a" * 40) is True
+
+
+def test_route_target_must_be_ready_in_accepted_repository_fleet(tmp_path) -> None:
+    manager, live, _presence = _manager(
+        tmp_path,
+        probe=lambda _url, _key: pytest.fail("unaccepted node must not be probed"),
+    )
+    fleet = tmp_path / "repository/inventory/fleet.toml"
+    fleet.write_text(f'[nodes."{NODE_ID}"]\nlifecycle = "quarantined"\n')
+
+    with pytest.raises(RouteRuntimeError, match="accepted fleet"):
+        manager.publish(
+            commit="a" * 40,
+            profile="agent-single",
+            targets=(NODE_ID,),
+            routes=ROUTES,
+        )
+
+    assert json.loads(live.read_bytes())["model_list"] == []
+
+
+def test_desired_state_is_durable_before_any_probe_or_activation(tmp_path, monkeypatch) -> None:
+    manager, live, _presence = _manager(
+        tmp_path,
+        probe=lambda _url, _key: pytest.fail("must not probe before desired state is durable"),
+    )
+
+    def fail(_content):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(manager._desired, "write", fail)
+    with pytest.raises(RouteRuntimeError, match="disk full"):
+        manager.publish(
+            commit="a" * 40,
+            profile="agent-single",
+            targets=(NODE_ID,),
+            routes=ROUTES,
+        )
+
+    assert json.loads(live.read_bytes())["model_list"] == []
 
 
 def test_refresh_withdraws_routes_when_presence_expires(tmp_path) -> None:

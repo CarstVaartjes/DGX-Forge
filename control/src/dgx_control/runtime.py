@@ -9,6 +9,7 @@ import subprocess
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
+from .git_content import read_commit_file
 from .worker import HandlerRequest
 
 _NAME = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?")
@@ -40,12 +41,16 @@ class RuntimeHandlers:
         current_commit: Callable[[], str] | None = None,
         run: Callable[[Sequence[str]], Mapping[str, object]] = run_bounded,
         route_manager=None,
+        repository_reader: Callable[[str, str], bytes] | None = None,
     ) -> None:
         self._root = repository_root.resolve()
         self._eligible = eligible
         self._current_commit = current_commit or self._resolve_current_commit
         self._run = run
         self._route_manager = route_manager
+        self._repository_reader = repository_reader or (
+            lambda commit, path: read_commit_file(self._root, commit, path)
+        )
 
     def _resolve_current_commit(self) -> str:
         process = subprocess.run(
@@ -67,6 +72,41 @@ class RuntimeHandlers:
         if request.payload:
             raise ValueError("probe payload must be empty")
         return self._run((str(self._root / "bin/sparkctl"), "nodes", "status", "--json"))
+
+    def _verify_repository_plan(self, content: Mapping[str, object]) -> None:
+        try:
+            raw = self._repository_reader(
+                str(content["commit"]),
+                "inventory/reconciliation.json",
+            )
+            definition = json.loads(raw)
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            raise ValueError("repository plan is unreadable") from error
+        if not isinstance(definition, Mapping):
+            raise ValueError("repository plan must be an object")
+        targets = definition.get("targets")
+        if (
+            not isinstance(targets, list)
+            or not targets
+            or not all(isinstance(target, str) and target.strip() for target in targets)
+            or len(set(targets)) != len(targets)
+        ):
+            raise ValueError("repository plan targets are invalid")
+        expected = {
+            "commit": content["commit"],
+            "targets": sorted(targets),
+            "placements": definition.get("placements", {}),
+            "routes": definition.get("routes", {}),
+            "releases": definition.get("releases", {}),
+            "input_digests": definition.get("input_digests", {}),
+        }
+        if any(
+            not isinstance(expected[field], Mapping)
+            for field in ("placements", "routes", "releases", "input_digests")
+        ):
+            raise ValueError("repository plan mappings are invalid")
+        if expected != dict(content):
+            raise ValueError("queued content does not match the repository plan")
 
     def reconcile(self, request: HandlerRequest) -> Mapping[str, object]:
         if not self._eligible(request.base_commit):
@@ -91,6 +131,7 @@ class RuntimeHandlers:
         encoded = json.dumps(content, sort_keys=True, separators=(",", ":")).encode()
         if not hashlib.sha256(encoded).hexdigest() == digest:
             raise ValueError("reconciliation plan digest does not match queued content")
+        self._verify_repository_plan(content)
         profile = placements.get("profile")
         workloads = placements.get("workloads")
         releases = content["releases"]

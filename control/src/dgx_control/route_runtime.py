@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -10,9 +11,10 @@ import tomllib
 import urllib.request
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+from .git_content import read_commit_file
 from .litellm import LiteLlmGeneration, LiteLlmPolicy, LiteLlmPublisher
 from .presence import AgentPresenceService, ManagementAddressPolicy, PresenceError
 from .routes import (
@@ -76,6 +78,59 @@ class AtomicConfigTarget:
             temporary.unlink(missing_ok=True)
 
 
+class LeasedConfigTarget:
+    """Atomically bind live config bytes to a short, supervisor-visible lease."""
+
+    def __init__(
+        self,
+        target: Path,
+        *,
+        clock: Callable[[], datetime],
+    ) -> None:
+        self._config = AtomicConfigTarget(target)
+        self._lease = AtomicConfigTarget(target.parent / "lease.json", mode=0o600)
+        self._clock = clock
+
+    def write(self, content: bytes, *, expires_at: datetime) -> None:
+        issued_at = self._clock()
+        if (
+            issued_at.tzinfo is None
+            or issued_at.utcoffset() is None
+            or expires_at.tzinfo is None
+            or expires_at.utcoffset() is None
+            or expires_at.astimezone(UTC) <= issued_at.astimezone(UTC)
+        ):
+            raise RouteRuntimeError("LiteLLM route lease is invalid")
+        lease = {
+            "config_sha256": hashlib.sha256(content).hexdigest(),
+            "expires_at": expires_at.astimezone(UTC).isoformat(),
+            "issued_at": issued_at.astimezone(UTC).isoformat(),
+        }
+        self._config.write(content)
+        try:
+            self._lease.write(
+                (json.dumps(lease, sort_keys=True, separators=(",", ":")) + "\n").encode()
+            )
+        except Exception:
+            self.withdraw()
+            raise
+
+    def withdraw(self) -> None:
+        content = LiteLlmPublisher.render_empty()
+        self._config.write(content)
+        now = self._clock()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise RouteRuntimeError("route clock must be timezone-aware")
+        lease = {
+            "config_sha256": hashlib.sha256(content).hexdigest(),
+            "expires_at": now.astimezone(UTC).isoformat(),
+            "issued_at": now.astimezone(UTC).isoformat(),
+        }
+        self._lease.write(
+            (json.dumps(lease, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        )
+
+
 def probe_openai_endpoint(url: str, upstream_key: str) -> None:
     request = urllib.request.Request(
         url,
@@ -103,6 +158,7 @@ class ProductionRouteManager:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         maximum_age_seconds: int = 150,
         refresh_interval_seconds: int = 60,
+        repository_reader: Callable[[str, str], bytes] | None = None,
     ) -> None:
         if not upstream_key or any(character.isspace() for character in upstream_key):
             raise RouteRuntimeError("LiteLLM upstream key is invalid")
@@ -119,15 +175,18 @@ class ProductionRouteManager:
         self._clock = clock
         self._maximum_age_seconds = maximum_age_seconds
         self._refresh_interval_seconds = refresh_interval_seconds
+        self._repository_reader = repository_reader or (
+            lambda commit, path: read_commit_file(repository_root, commit, path)
+        )
         self._last_refresh_attempt: datetime | None = None
-        self._target = AtomicConfigTarget(live_config)
+        self._target = LeasedConfigTarget(live_config, clock=clock)
         self._desired = AtomicConfigTarget(
             state_root / "desired-route.json",
             mode=0o600,
         )
-        desired_path = state_root / "desired-route.json"
-        if desired_path.is_symlink() or not desired_path.is_file():
-            self._target.write(LiteLlmPublisher.render_empty())
+        # A restored named volume must never make an old route live. The worker
+        # revalidates and re-leases desired state through refresh_if_due().
+        self._target.withdraw()
 
     def _publisher(
         self,
@@ -143,7 +202,7 @@ class ProductionRouteManager:
         def apply_route(content: bytes) -> None:
             payload = json.loads(content)
             if payload.get("state") == "maintenance":
-                self._target.write(LiteLlmPublisher.render_empty())
+                self._target.withdraw()
 
         return (
             RoutePublisher(
@@ -165,23 +224,38 @@ class ProductionRouteManager:
         except (OSError, RouteValidationError) as error:
             raise RouteRuntimeError(str(error)) from error
 
-    def _workload_port(self, workload: str) -> int:
-        path = self._repository_root / "config/workloads" / f"{workload}.toml"
-        if path.is_symlink() or not path.is_file():
-            raise RouteRuntimeError("route workload definition is unavailable")
+    def _workload_port(self, commit: str, workload: str) -> int:
         try:
-            document = tomllib.loads(path.read_text())
+            content = self._repository_reader(
+                commit,
+                f"config/workloads/{workload}.toml",
+            )
+            document = tomllib.loads(content.decode("utf-8"))
             if document.get("id") != workload:
                 raise RouteRuntimeError("route workload identity does not match its file")
             endpoint = document["endpoint"]
             if not isinstance(endpoint, Mapping) or endpoint.get("host") != "127.0.0.1":
                 raise RouteRuntimeError("route workload endpoint must declare loopback locally")
             port = endpoint["port"]
-        except (KeyError, OSError, tomllib.TOMLDecodeError) as error:
+        except (KeyError, OSError, UnicodeDecodeError, ValueError, tomllib.TOMLDecodeError) as error:
             raise RouteRuntimeError("route workload endpoint is invalid") from error
         if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
             raise RouteRuntimeError("route workload port is invalid")
         return port
+
+    def _require_accepted_fleet(self, commit: str, targets: tuple[str, ...]) -> None:
+        try:
+            content = self._repository_reader(commit, "inventory/fleet.toml")
+            document = tomllib.loads(content.decode("utf-8"))
+            nodes = document["nodes"]
+        except (KeyError, OSError, UnicodeDecodeError, ValueError, tomllib.TOMLDecodeError) as error:
+            raise RouteRuntimeError("accepted fleet inventory is invalid") from error
+        if not isinstance(nodes, Mapping) or any(
+            not isinstance(nodes.get(node_id), Mapping)
+            or nodes[node_id].get("lifecycle") != "ready"
+            for node_id in targets
+        ):
+            raise RouteRuntimeError("route target is not ready in the accepted fleet")
 
     def _publish(
         self,
@@ -198,9 +272,11 @@ class ProductionRouteManager:
         quotas: dict[str, Mapping[str, int]] = {}
         workloads: set[str] = set()
         ports: set[int] = set()
+        observations = []
         now = self._clock()
         if now.tzinfo is None or now.utcoffset() is None:
             raise RouteRuntimeError("route clock must be timezone-aware")
+        self._require_accepted_fleet(commit, targets)
         for alias, raw in sorted(routes.items()):
             if not isinstance(alias, str) or _ALIAS.fullmatch(alias) is None:
                 raise RouteRuntimeError("route alias is invalid")
@@ -214,7 +290,7 @@ class ProductionRouteManager:
                 raise RouteRuntimeError("route node is not a reconciliation target")
             if not isinstance(workload, str) or _WORKLOAD.fullmatch(workload) is None:
                 raise RouteRuntimeError("route workload is invalid")
-            port = self._workload_port(workload)
+            port = self._workload_port(commit, workload)
             try:
                 observation = self._presence.latest(
                     node_id,
@@ -223,11 +299,6 @@ class ProductionRouteManager:
                 )
             except PresenceError as error:
                 raise RouteRuntimeError(str(error)) from error
-            url = f"http://{observation.address}:{port}/v1/models"
-            try:
-                self._probe(url, self._upstream_key)
-            except Exception as error:
-                raise RouteRuntimeError("route endpoint probe failed") from error
             endpoints[alias] = RouteEndpoint(
                 node_id=node_id,
                 address=observation.address,
@@ -241,17 +312,21 @@ class ProductionRouteManager:
             }
             workloads.add(workload)
             ports.add(port)
-        health_timestamp = self._clock()
+            observations.append(observation)
         publisher, endpoint_policy = self._publisher(frozenset(ports))
         try:
-            candidate = RouteCandidate(
-                commit=commit,
-                profile=profile,
-                workload=(next(iter(workloads)) if len(workloads) == 1 else "profile-routes"),
-                node_ids=targets,
-                aliases=endpoints,
-                health_timestamp=health_timestamp,
-            )
+            desired = {
+                "commit": commit,
+                "profile": profile,
+                "routes": routes,
+                "targets": list(targets),
+            }
+            if persist_desired:
+                self._desired.write(
+                    (json.dumps(desired, sort_keys=True, separators=(",", ":")) + "\n").encode()
+                )
+                self._last_refresh_attempt = self._clock()
+
             rendered = {
                 alias: endpoint_policy.render(endpoint, node_ids=targets)
                 for alias, endpoint in endpoints.items()
@@ -265,34 +340,44 @@ class ProductionRouteManager:
                 and current.state == "published"
                 and dict(current.aliases) != rendered
             )
-            route_state = (
-                publisher.transition(candidate)
-                if address_changed
-                else publisher.publish(candidate)
+            if address_changed:
+                publisher.maintenance(targets, "route endpoint changed")
+
+            for endpoint in endpoints.values():
+                url = f"http://{endpoint.address}:{endpoint.port}/v1/models"
+                try:
+                    self._probe(url, self._upstream_key)
+                except Exception as error:
+                    publisher.maintenance(targets, "route endpoint probe failed")
+                    raise RouteRuntimeError("route endpoint probe failed") from error
+
+            health_timestamp = self._clock()
+            candidate = RouteCandidate(
+                commit=commit,
+                profile=profile,
+                workload=(next(iter(workloads)) if len(workloads) == 1 else "profile-routes"),
+                node_ids=targets,
+                aliases=endpoints,
+                health_timestamp=health_timestamp,
+            )
+            route_state = publisher.publish(candidate)
+            expires_at = min(
+                observation.observed_at.astimezone(UTC)
+                + timedelta(seconds=self._maximum_age_seconds)
+                for observation in observations
             )
             litellm = LiteLlmPublisher(
                 self._state_root / "litellm",
                 validate=lambda content: isinstance(json.loads(content).get("model_list"), list),
-                apply=self._target.write,
+                apply=lambda content: self._target.write(content, expires_at=expires_at),
             )
             generation = litellm.publish(route_state, LiteLlmPolicy(models=quotas))
         except (OSError, RouteValidationError, ValueError) as error:
             try:
                 publisher.maintenance(targets, "route publication failed")
             except (OSError, RouteValidationError):
-                self._target.write(LiteLlmPublisher.render_empty())
+                self._target.withdraw()
             raise RouteRuntimeError(str(error)) from error
-        if persist_desired:
-            desired = {
-                "commit": commit,
-                "profile": profile,
-                "routes": routes,
-                "targets": list(targets),
-            }
-            self._desired.write(
-                (json.dumps(desired, sort_keys=True, separators=(",", ":")) + "\n").encode()
-            )
-            self._last_refresh_attempt = self._clock()
         return RouteRuntimeResult(route_state, generation)
 
     def publish(

@@ -15,6 +15,19 @@ def _request(payload, *, kind="reconcile"):
     )
 
 
+def _write_repository_plan(tmp_path, content) -> None:
+    inventory = tmp_path / "inventory"
+    inventory.mkdir(exist_ok=True)
+    definition = {key: content[key] for key in (
+        "targets", "placements", "routes", "releases", "input_digests"
+    )}
+    (inventory / "reconciliation.json").write_text(json.dumps(definition))
+
+
+def _reader(tmp_path):
+    return lambda _commit, path: (tmp_path / path).read_bytes()
+
+
 def test_reconcile_runs_commit_pinned_release_profile_and_route_publication(tmp_path) -> None:
     content = {
         "commit": "a" * 40,
@@ -24,6 +37,7 @@ def test_reconcile_runs_commit_pinned_release_profile_and_route_publication(tmp_
         "releases": {"model-a": "b" * 64}, "input_digests": {},
     }
     digest = hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    _write_repository_plan(tmp_path, content)
     calls = []
     class Routes:
         def __init__(self): self.calls = []
@@ -37,6 +51,7 @@ def test_reconcile_runs_commit_pinned_release_profile_and_route_publication(tmp_
         current_commit=lambda: "a" * 40,
         run=lambda argv: calls.append(argv) or {"ok": True},
         route_manager=routes,
+        repository_reader=_reader(tmp_path),
     )
 
     result = handlers.reconcile(_request(content | {"plan_digest": digest}))
@@ -96,6 +111,7 @@ def test_route_withdrawal_precedes_mutation_and_failure_never_publishes(tmp_path
         current_commit=lambda: "a" * 40,
         run=lambda argv: (_ for _ in ()).throw(RuntimeError("failed")),
         route_manager=Routes(),
+        repository_reader=_reader(tmp_path),
     )
     content = {
         "commit": "a" * 40,
@@ -106,8 +122,38 @@ def test_route_withdrawal_precedes_mutation_and_failure_never_publishes(tmp_path
         "input_digests": {},
     }
     digest = hashlib.sha256(json.dumps(content, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    _write_repository_plan(tmp_path, content)
 
     with pytest.raises(RuntimeError, match="failed"):
         handlers.reconcile(_request(content | {"plan_digest": digest}))
 
     assert events == [("withdraw", ("spk_00000000000000000000000000000001",))]
+
+
+def test_reconcile_rejects_caller_content_not_in_repository_plan(tmp_path) -> None:
+    node = "spk_00000000000000000000000000000001"
+    content = {
+        "commit": "a" * 40,
+        "targets": [node],
+        "placements": {"profile": "agent", "workloads": {"model-a": [node]}},
+        "routes": {"model-a": {"node_id": node}},
+        "releases": {"model-a": "b" * 64},
+        "input_digests": {},
+    }
+    digest = hashlib.sha256(
+        json.dumps(content, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    repository_content = content | {
+        "targets": ["spk_00000000000000000000000000000002"]
+    }
+    _write_repository_plan(tmp_path, repository_content)
+    handlers = RuntimeHandlers(
+        tmp_path,
+        eligible=lambda _commit: True,
+        current_commit=lambda: "a" * 40,
+        run=lambda _argv: pytest.fail("unaccepted plan must not run"),
+        repository_reader=_reader(tmp_path),
+    )
+
+    with pytest.raises(ValueError, match="repository plan"):
+        handlers.reconcile(_request(content | {"plan_digest": digest}))

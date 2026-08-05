@@ -3,6 +3,7 @@ set -eu
 
 socket=${TS_SOCKET_PATH:-/var/run/tailscale/tailscaled.sock}
 remaining=120
+expected_service_map='{"version":"0.0.1","services":{"svc:ai-devbox":{"endpoints":{"tcp:22":"tcp://ai-devbox:22"}},"svc:dgx-forge":{"endpoints":{"tcp:443":"http://caddy:8080"}}}}'
 
 ts() {
     tailscale --socket="${socket}" "$@"
@@ -23,21 +24,25 @@ fi
 
 serve_is_exact() {
     ts serve status --json >/tmp/tailscale-serve-status.json
+    ts serve get-config --all >/tmp/tailscale-serve-config.json
     tr -d '[:space:]' </tmp/tailscale-serve-status.json >/tmp/tailscale-serve-status.compact
+    tr -d '[:space:]' </tmp/tailscale-serve-config.json >/tmp/tailscale-serve-config.compact
 
     grep -Fq '"svc:dgx-forge":{"TCP":{"443":{"HTTPS":true}}' \
         /tmp/tailscale-serve-status.compact \
         && ! grep -Fq '"443":{"HTTP":true}' /tmp/tailscale-serve-status.compact \
         && grep -Fq '"svc:ai-devbox":{"TCP":{"22":{"TCPForward":"ai-devbox:22"}}}' \
-            /tmp/tailscale-serve-status.compact
+            /tmp/tailscale-serve-status.compact \
+        && [ "$(cat /tmp/tailscale-serve-config.compact)" = "${expected_service_map}" ]
 }
 
 configure_services() {
     # Configuration-file import currently infers the listener protocol from the
     # HTTP upstream and can create plaintext HTTP on port 443. Express the
     # listener protocol explicitly through the CLI instead.
-    ts serve clear svc:dgx-forge >/dev/null 2>&1 || true
-    ts serve clear svc:ai-devbox >/dev/null 2>&1 || true
+    # Reset the complete map so undeclared services or endpoints cannot survive
+    # reconciliation from an earlier gateway configuration.
+    ts serve reset
     ts serve --service=svc:dgx-forge --https=443 http://caddy:8080
     ts serve --service=svc:ai-devbox --tcp=22 tcp://ai-devbox:22
     ts serve advertise svc:dgx-forge

@@ -95,12 +95,18 @@ docker compose --env-file .env \
   -f compose.yaml -f compose.step-ca.yaml exec tailscale-gateway \
   tailscale --socket=/var/run/tailscale/tailscaled.sock serve status --json
 docker compose --env-file .env \
+  -f compose.yaml -f compose.step-ca.yaml exec tailscale-gateway \
+  tailscale --socket=/var/run/tailscale/tailscaled.sock serve get-config --all
+docker compose --env-file .env \
   -f compose.yaml -f compose.step-ca.yaml logs tailscale-configurator
 ```
 
 The status must show `HTTPS: true` for `svc:dgx-forge` port 443, no `HTTP: true`
 on that port, the raw TCP forward for `svc:ai-devbox` port 22, and the tagged
-service-host capability. From an authorized tailnet device, open the
+service-host capability. The exported config must contain exactly those two
+services and exactly the `http://caddy:8080` and `tcp://ai-devbox:22` upstreams;
+the persistent configurator resets any additional service or endpoint before
+recreating this map. From an authorized tailnet device, open the
 `dgx-forge` Service and connect to
 `ai-devbox` on TCP 22. Repeat from a tailnet identity outside the SSH group and
 confirm port 22 is denied. From an ordinary LAN client, confirm the human and

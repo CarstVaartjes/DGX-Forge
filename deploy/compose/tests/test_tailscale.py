@@ -123,6 +123,10 @@ def test_service_map_and_configurator_are_exact_and_fail_closed() -> None:
     assert "--service=svc:ai-devbox --tcp=22 tcp://ai-devbox:22" in text
     assert "serve advertise svc:dgx-forge" in text
     assert "serve advertise svc:ai-devbox" in text
+    assert "serve get-config --all" in text
+    assert "serve reset" in text
+    assert '"svc:ai-devbox":{"endpoints":{"tcp:22":"tcp://ai-devbox:22"}}' in text
+    assert '"svc:dgx-forge":{"endpoints":{"tcp:443":"http://caddy:8080"}}' in text
     assert '"HTTPS":true' in text
     assert '"HTTP":true' in text
     assert "120" in text
@@ -142,6 +146,12 @@ def test_configurator_repairs_plaintext_443_and_verifies_https(tmp_path: Path) -
         f"log={log}\n"
         f"repaired={repaired}\n"
         "case \"$*\" in\n"
+        "  *\"serve get-config --all\"*)\n"
+        "    if [ -f \"$repaired\" ]; then\n"
+        "      printf '%s\\n' '{\"version\":\"0.0.1\",\"services\":{\"svc:ai-devbox\":{\"endpoints\":{\"tcp:22\":\"tcp://ai-devbox:22\"}},\"svc:dgx-forge\":{\"endpoints\":{\"tcp:443\":\"http://caddy:8080\"}}}}'\n"
+        "    else\n"
+        "      printf '%s\\n' '{\"version\":\"0.0.1\",\"services\":{\"svc:extra\":{\"endpoints\":{\"tcp:99\":\"tcp://unexpected:99\"}}}}'\n"
+        "    fi ;;\n"
         "  *\"serve status --json\"*)\n"
         "    if [ -f \"$repaired\" ]; then\n"
         "      printf '%s\\n' '{\"Services\":{\"svc:ai-devbox\":{\"TCP\":{\"22\":{\"TCPForward\":\"ai-devbox:22\"}}},\"svc:dgx-forge\":{\"TCP\":{\"443\":{\"HTTPS\":true}}}}}'\n"
@@ -177,6 +187,7 @@ def test_configurator_repairs_plaintext_443_and_verifies_https(tmp_path: Path) -
     calls = log.read_text()
     assert "--service=svc:dgx-forge --https=443 http://caddy:8080" in calls
     assert "--service=svc:ai-devbox --tcp=22 tcp://ai-devbox:22" in calls
+    assert "serve reset" in calls
     assert "set-config" not in calls
 
 

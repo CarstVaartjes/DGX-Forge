@@ -71,6 +71,10 @@ commit-pinned reconciliation, the worker derives the live config from stable
 `spk_` identity, fresh authenticated presence, repository workload ports, and a
 successful upstream probe. The worker writes only to the dedicated
 `litellm-routes` volume; LiteLLM mounts it read-only and reloads by supervised
-process restart. The worker refreshes the generation every 60 seconds, so a
-DHCP change follows the next authenticated observation and stale presence
-withdraws the route within the 150-second window.
+process restart. Each generated config has a hash-bound expiry lease. The
+supervisor rejects leases from before its own startup and falls back to the
+empty bootstrap when a lease expires, so a dead worker or restored route volume
+cannot keep an upstream published indefinitely. The worker refreshes the
+generation every 60 seconds, so a DHCP change follows the next authenticated
+observation and stale presence withdraws the route within the 150-second
+window.

@@ -19,8 +19,10 @@ def test_entrypoint_uses_supervisor_for_atomic_generated_config() -> None:
     ast.parse(supervisor.read_text())
     source = supervisor.read_text()
     assert 'Path("/routes/config.yaml")' in source
+    assert 'Path("/routes/lease.json")' in source
     assert 'Path("/app/bootstrap-config.yaml")' in source
     assert "sha256" in source
+    assert "STARTED_AT" in source
     assert "terminate" in source
     assert "kill" in source
     assert "shell=True" not in source
