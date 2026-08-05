@@ -352,7 +352,7 @@ services:
       retries: 10
 
   prometheus:
-    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.5.0@sha256:63805ebb8d2b3920190daf1cb14a60871b16fd38bed42b857a3182bc621f4996}
+    image: ${PROMETHEUS_IMAGE:-prom/prometheus:v3.13.2@sha256:508729e0e2d18e11fd742a5a5ca70e557b940a93948c3c95fd0123a6fd538b69}
     restart: unless-stopped
     logging: *bounded-logging
     command:
