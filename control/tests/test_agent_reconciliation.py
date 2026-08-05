@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from dgx_agent_protocol import canonical_message
-from dgx_control.agent_jobs import AgentJobService
+from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
 from dgx_control.agent_reconciliation import (
     AgentReconciliationService,
     accepted_result_digests,
@@ -25,6 +25,7 @@ from dgx_control.models import (
     Job,
     Reconciliation,
     ReconciliationOperation,
+    RoutePublication,
 )
 from dgx_control.orchestration import OperationNode
 from dgx_control.route_runtime import ActivationMarker
@@ -336,6 +337,8 @@ def _execution_fixture(
     real_queue: bool = False,
     operation_kind: str = "workload.health",
     routes: dict[str, object] | None = None,
+    attach_job: bool = True,
+    clock=None,
 ):
     engine = create_engine(
         f"sqlite:///{tmp_path / f'execution-{uuid.uuid4()}.sqlite'}",
@@ -381,6 +384,7 @@ def _execution_fixture(
     reconciliation_id = str(uuid.uuid4())
     job_id = str(uuid.uuid4())
     now = datetime(2026, 8, 5, tzinfo=UTC)
+    clock = clock or (lambda: now)
     with sessions.begin() as session:
         session.add(AgentNode(node_id=NODE_A, state="active", capabilities=[]))
         session.add(
@@ -421,10 +425,11 @@ def _execution_fixture(
                 current_attempt=0,
                 created_at=now,
                 updated_at=now,
+                reconciliation_id=None if attach_job else reconciliation_id,
             )
         )
     queue = (
-        AgentJobService(sessions, clock=lambda: now)
+        AgentJobService(sessions, clock=clock)
         if real_queue
         else FakeAgentJobs()
     )
@@ -433,10 +438,11 @@ def _execution_fixture(
         sessions,
         agent_jobs=queue,
         publisher=publisher,
-        endpoint_resolver=lambda _node: ("192.0.2.10", now),
-        clock=lambda: now,
+        endpoint_resolver=lambda _session, _node: ("192.0.2.10", now),
+        clock=clock,
     )
-    service.attach_job(reconciliation_id, job_id)
+    if attach_job:
+        service.attach_job(reconciliation_id, job_id)
     if real_queue:
         queue.set_result_consumer(service.consume_result)
     return service, sessions, queue, publisher, reconciliation_id, job_id
@@ -485,6 +491,91 @@ def test_withdrawal_failure_inserts_zero_agent_operations(tmp_path) -> None:
         assert stored is not None and stored.current_phase == "withdrawal-pending"
         assert session.scalar(select(func.count()).select_from(AgentOperation)) == 0
     assert publisher.withdrawals == 1
+
+
+@pytest.mark.parametrize("target_state", ["inactive", "revoked", "missing"])
+def test_withdrawal_precedes_inactive_target_rejection(
+    tmp_path, target_state: str
+) -> None:
+    service, sessions, _queue, publisher, reconciliation_id, job_id = (
+        _execution_fixture(tmp_path)
+    )
+    service.tick(reconciliation_id)
+    with sessions.begin() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        if target_state == "missing":
+            certificate = session.get(AgentCertificate, "serial-a")
+            assert certificate is not None
+            session.delete(certificate)
+            session.flush()
+            session.delete(node)
+        elif target_state == "inactive":
+            node.state = "retired"
+        else:
+            node.revoked_at = datetime(2026, 8, 5, tzinfo=UTC)
+
+    assert service.tick(reconciliation_id) is True
+
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        assert stored is not None and stored.current_phase == "routes-withdrawn"
+        assert job is not None and job.state == "running"
+    assert publisher.withdrawals == 1
+
+
+def test_production_linked_job_enters_running_without_attach(tmp_path) -> None:
+    service, sessions, _queue, _publisher, reconciliation_id, job_id = (
+        _execution_fixture(tmp_path, attach_job=False)
+    )
+
+    assert service.tick(reconciliation_id) is True
+
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        assert stored is not None and stored.current_phase == "withdrawal-pending"
+        assert job is not None and job.state == "running"
+
+
+def test_unsafe_mutation_expiry_projects_waiting_for_operator(tmp_path) -> None:
+    now = datetime(2026, 8, 5, tzinfo=UTC)
+    current = [now]
+    service, sessions, queue, _publisher, reconciliation_id, job_id = (
+        _execution_fixture(
+            tmp_path,
+            real_queue=True,
+            operation_kind="workload.start",
+            clock=lambda: current[0],
+        )
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    claim = queue.claim(NODE_A, "serial-a", 30)
+    assert claim is not None
+
+    current[0] += timedelta(seconds=30)
+    assert queue.claim(NODE_A, "serial-a", 30) is None
+    service.request_cancel(reconciliation_id, "operator cancelled after expiry")
+
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        operation = session.get(AgentOperation, claim.operation_id)
+        attempt = session.scalar(
+            select(AgentOperationAttempt).where(
+                AgentOperationAttempt.operation_id == claim.operation_id
+            )
+        )
+        projection = session.scalar(select(ReconciliationOperation))
+        assert stored is not None
+        assert stored.current_phase == "waiting-for-operator"
+        assert stored.status == "failed"
+        assert job is not None and job.state == "waiting-for-operator"
+        assert operation is not None and operation.state == "waiting-for-operator"
+        assert attempt is not None and attempt.state == "expired"
+        assert projection is not None and projection.state == "waiting-for-operator"
 
 
 def test_concurrent_ticks_enqueue_one_exact_operation(tmp_path) -> None:
@@ -639,7 +730,7 @@ def test_complete_graph_publishes_exact_bundle_then_terminalizes_parent(tmp_path
         assert stored.completion_generation == 1
 
 
-def _compensation_fixture(tmp_path):
+def _compensation_fixture(tmp_path, *, parallel_starts: bool = False):
     engine = create_engine(
         f"sqlite:///{tmp_path / 'compensation.sqlite'}",
         connect_args={"check_same_thread": False},
@@ -671,7 +762,7 @@ def _compensation_fixture(tmp_path):
             "node_id": NODE_B,
             "workload_id": "model",
             "kind": "workload.start",
-            "dependencies": [worker_id],
+            "dependencies": [] if parallel_starts else [worker_id],
             "compensation_kind": "workload.stop",
             "payload_digest": _digest(payload),
         },
@@ -744,7 +835,7 @@ def _compensation_fixture(tmp_path):
         sessions,
         agent_jobs=queue,
         publisher=FakePublisher(),
-        endpoint_resolver=lambda _node: ("192.0.2.10", now),
+        endpoint_resolver=lambda _session, _node: ("192.0.2.10", now),
         clock=lambda: now,
     )
     service.attach_job(reconciliation_id, job_id)
@@ -840,6 +931,148 @@ def test_cancellation_after_mutation_enters_compensation(tmp_path) -> None:
         assert job is not None and job.state == "running"
 
 
+def test_cancellation_quiesces_an_in_flight_mutation(tmp_path) -> None:
+    service, sessions, queue, reconciliation_id, job_id = _compensation_fixture(
+        tmp_path
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    claim = queue.claim(NODE_A, "serial-a", 30)
+    assert claim is not None
+
+    service.request_cancel(reconciliation_id, "operator cancelled")
+    service.request_cancel(reconciliation_id, "operator cancelled again")
+
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        operation = session.get(AgentOperation, claim.operation_id)
+        attempt = session.scalar(
+            select(AgentOperationAttempt).where(
+                AgentOperationAttempt.operation_id == claim.operation_id
+            )
+        )
+        projection = session.scalar(
+            select(ReconciliationOperation).where(
+                ReconciliationOperation.agent_operation_id == claim.operation_id
+            )
+        )
+        assert stored is not None
+        assert stored.current_phase == "waiting-for-operator"
+        assert job is not None and job.state == "waiting-for-operator"
+        assert operation is not None and operation.state == "waiting-for-operator"
+        assert attempt is not None and attempt.state == "waiting-for-operator"
+        assert projection is not None and projection.state == "waiting-for-operator"
+    with pytest.raises(StaleAgentAttempt):
+        queue.succeed(claim, _workload_result("start"))
+
+
+def test_terminal_phase_rejects_late_primary_result_atomically(tmp_path) -> None:
+    service, sessions, queue, _publisher, reconciliation_id, job_id = (
+        _execution_fixture(tmp_path, real_queue=True)
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    claim = queue.claim(NODE_A, "serial-a", 30)
+    assert claim is not None
+    with sessions.begin() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        assert stored is not None and job is not None
+        stored.current_phase = "failed"
+        stored.status = "failed"
+        job.state = "failed"
+
+    with pytest.raises(ValueError, match="phase"):
+        queue.succeed(claim, _health_result())
+
+    with sessions() as session:
+        operation = session.get(AgentOperation, claim.operation_id)
+        attempt = session.scalar(
+            select(AgentOperationAttempt).where(
+                AgentOperationAttempt.operation_id == claim.operation_id
+            )
+        )
+        projection = session.scalar(select(ReconciliationOperation))
+        assert operation is not None and operation.state == "running"
+        assert attempt is not None and attempt.state == "running"
+        assert attempt.result is None
+        assert projection is not None and projection.state == "queued"
+
+
+def test_primary_failure_quiesces_running_sibling_mutation(tmp_path) -> None:
+    service, sessions, queue, reconciliation_id, job_id = _compensation_fixture(
+        tmp_path, parallel_starts=True
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    first = queue.claim(NODE_A, "serial-a", 30)
+    sibling = queue.claim(NODE_B, "serial-b", 30)
+    assert first is not None and sibling is not None
+
+    queue.fail(first, "start-failed")
+
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        sibling_operation = session.get(AgentOperation, sibling.operation_id)
+        sibling_attempt = session.scalar(
+            select(AgentOperationAttempt).where(
+                AgentOperationAttempt.operation_id == sibling.operation_id
+            )
+        )
+        sibling_projection = session.scalar(
+            select(ReconciliationOperation).where(
+                ReconciliationOperation.agent_operation_id == sibling.operation_id
+            )
+        )
+        assert stored is not None
+        assert stored.current_phase == "waiting-for-operator"
+        assert job is not None and job.state == "waiting-for-operator"
+        assert sibling_operation is not None
+        assert sibling_operation.state == "waiting-for-operator"
+        assert sibling_attempt is not None
+        assert sibling_attempt.state == "waiting-for-operator"
+        assert sibling_projection is not None
+        assert sibling_projection.state == "waiting-for-operator"
+    with pytest.raises(StaleAgentAttempt):
+        queue.succeed(sibling, _workload_result("start"))
+
+
+def test_completed_cancellation_withdraws_before_compensation(tmp_path) -> None:
+    service, sessions, queue, reconciliation_id, job_id = _compensation_fixture(
+        tmp_path
+    )
+    publisher = service._publisher
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    worker = queue.claim(NODE_A, "serial-a", 30)
+    assert worker is not None
+    queue.succeed(worker, _workload_result("start"))
+    service.tick(reconciliation_id)
+    entrypoint = queue.claim(NODE_B, "serial-b", 30)
+    assert entrypoint is not None
+    queue.succeed(entrypoint, _workload_result("start"))
+    with sessions.begin() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        publication = session.get(RoutePublication, reconciliation_id)
+        assert stored is not None and job is not None and publication is not None
+        stored.current_phase = "completed"
+        stored.status = "succeeded"
+        job.state = "succeeded"
+        publication.state = "completed"
+
+    service.request_cancel(reconciliation_id, "operator cancelled")
+
+    with sessions() as session:
+        stored = session.get(Reconciliation, reconciliation_id)
+        publication = session.get(RoutePublication, reconciliation_id)
+        assert stored is not None and stored.current_phase == "compensating"
+        assert publication is not None and publication.state == "routes-withdrawn"
+    assert publisher.withdrawals == 2
+
+
 def test_uncertain_mutation_waits_for_operator_without_unlocking_dependents(
     tmp_path,
 ) -> None:
@@ -876,7 +1109,7 @@ def test_api_result_consumer_is_bound_once_to_durable_execution(tmp_path) -> Non
             self.consumer = consumer
 
     class Presence:
-        def latest(self, *_args, **_kwargs):
+        def latest_in_session(self, *_args, **_kwargs):
             raise AssertionError("result consumption does not resolve routes")
 
     operations = Operations()

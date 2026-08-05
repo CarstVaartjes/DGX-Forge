@@ -20,6 +20,7 @@ from dgx_agent_protocol import (
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 
+from .auth import AgentSource
 from .logging import redact_text
 from .models import (
     AgentCertificate,
@@ -27,6 +28,8 @@ from .models import (
     AgentOperationAttempt,
     Job,
     Observation,
+    Reconciliation,
+    ReconciliationOperation,
 )
 from .models import AgentOperation as StoredOperation
 
@@ -34,6 +37,7 @@ AgentFence = str | AgentClaim | AgentProgress | AgentResult
 ResultConsumer = Callable[
     [Session, StoredOperation, AgentOperationAttempt, AgentResult], None
 ]
+ContactConsumer = Callable[[Session, AgentSource], None]
 _SAFE_AUTOMATIC_RECLAIM = frozenset({
     AgentOperation.NODE_PROBE.value,
     AgentOperation.WORKLOAD_HEALTH.value,
@@ -74,12 +78,16 @@ class AgentJobService:
         *,
         clock: Callable[[], datetime],
         result_consumer: ResultConsumer | None = None,
+        contact_consumer: ContactConsumer | None = None,
     ) -> None:
         if result_consumer is not None and not callable(result_consumer):
             raise TypeError("agent result consumer must be callable")
+        if contact_consumer is not None and not callable(contact_consumer):
+            raise TypeError("agent contact consumer must be callable")
         self._sessions = sessions
         self._clock = clock
         self._result_consumer = result_consumer
+        self._contact_consumer = contact_consumer
         self._configuration_lock = threading.Lock()
         self._started = False
         # SQLite ignores row locks. This only prevents same-service test races;
@@ -189,6 +197,18 @@ class AgentJobService:
                 raise RuntimeError("agent job service has already started")
             self._result_consumer = consumer
 
+    def set_contact_consumer(self, consumer: ContactConsumer) -> None:
+        """Bind atomic authenticated contact persistence before serving work."""
+
+        if not callable(consumer):
+            raise TypeError("agent contact consumer must be callable")
+        with self._configuration_lock:
+            if self._contact_consumer is not None:
+                raise RuntimeError("agent contact consumer is already configured")
+            if self._started:
+                raise RuntimeError("agent job service has already started")
+            self._contact_consumer = consumer
+
     def _mark_started(self) -> None:
         with self._configuration_lock:
             self._started = True
@@ -201,6 +221,8 @@ class AgentJobService:
         wait_seconds: float = 0,
         protocol_version: int | None = None,
         capabilities: Sequence[str] | None = None,
+        *,
+        source: AgentSource | None = None,
     ) -> AgentClaim | None:
         self._mark_started()
         if (
@@ -229,6 +251,7 @@ class AgentJobService:
                     lease_seconds,
                     protocol_version,
                     advertised,
+                    source,
                 )
                 if claim is not None:
                     return claim
@@ -244,13 +267,15 @@ class AgentJobService:
         lease_seconds: int,
         protocol_version: int | None,
         capabilities: tuple[str, ...] | None,
+        source: AgentSource | None,
     ) -> AgentClaim | None:
         with self._claim_lock, self._sessions.begin() as session:
             identity = self._lock_identity(session, node_id, certificate_serial)
             now = self._clock()
             if identity is None or not self._identity_is_active(*identity, now):
                 return None
-            node, _certificate = identity
+            node, certificate = identity
+            self._consume_contact(session, source, node, certificate)
             self._record_contact(node, now, protocol_version, capabilities)
             expired_attempt = select(AgentOperationAttempt.id).where(
                 AgentOperationAttempt.operation_id == StoredOperation.id,
@@ -299,7 +324,8 @@ class AgentJobService:
                 operation.retry_disposition = None
                 operation.retry_disposition_attempt = None
                 operation.updated_at = now
-                self._aggregate_parent(session, operation.parent_job_id)
+                if not self._project_unsafe_expiry(session, operation, now):
+                    self._aggregate_parent(session, operation.parent_job_id)
                 return None
             operation.current_attempt += 1
             operation.state = "running"
@@ -333,12 +359,14 @@ class AgentJobService:
         fence: AgentFence,
         progress: Mapping[str, object],
         lease_seconds: int,
+        *,
+        source: AgentSource | None = None,
     ) -> AgentProgress:
         self._mark_started()
         if lease_seconds <= 0:
             raise ValueError("lease must be positive")
         with self._sessions.begin() as session:
-            operation, attempt = self._active(session, fence)
+            operation, attempt = self._active(session, fence, source=source)
             now = self._clock()
             deadline = max(
                 _aware(attempt.lease_deadline),
@@ -368,13 +396,16 @@ class AgentJobService:
     def wait_for_operator(self, fence: AgentFence, reason: str) -> None:
         self._finish(fence, "waiting-for-operator", result=None, reason=reason)
 
-    def record_result(self, message: AgentResult) -> None:
+    def record_result(
+        self, message: AgentResult, *, source: AgentSource | None = None
+    ) -> None:
         """Persist one exact agent result and consume it in the same transaction."""
         self._finish(
             message,
             message.state,
             result=message.result,
             reason=None,
+            source=source,
         )
 
     def _finish(
@@ -384,10 +415,11 @@ class AgentJobService:
         *,
         result: Mapping[str, object] | None,
         reason: str | None,
+        source: AgentSource | None = None,
     ) -> None:
         self._mark_started()
         with self._sessions.begin() as session:
-            operation, attempt = self._active(session, fence)
+            operation, attempt = self._active(session, fence, source=source)
             now = self._clock()
             if isinstance(fence, AgentResult):
                 if fence.state != state or (
@@ -445,6 +477,8 @@ class AgentJobService:
         self,
         session: Session,
         fence: AgentFence,
+        *,
+        source: AgentSource | None = None,
     ) -> tuple[StoredOperation, AgentOperationAttempt]:
         token = self._fence_token(fence)
         identity_hint = session.execute(
@@ -462,7 +496,13 @@ class AgentJobService:
         if identity_hint is None:
             raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
         operation_id, node_id, certificate_serial = identity_hint
+        self._lock_reconciliation_targets(session, operation_id)
         identity = self._lock_identity(session, node_id, certificate_serial)
+        now = self._clock()
+        if identity is None or not self._identity_is_active(*identity, now):
+            raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
+        node, certificate = identity
+        self._consume_contact(session, source, node, certificate)
         operation = session.scalar(
             select(StoredOperation)
             .where(StoredOperation.id == operation_id)
@@ -478,11 +518,8 @@ class AgentJobService:
             )
             .with_for_update(of=AgentOperationAttempt)
         )
-        now = self._clock()
         if (
-            identity is None
-            or not self._identity_is_active(*identity, now)
-            or attempt is None
+            attempt is None
             or (not isinstance(fence, str) and operation.parent_job_id != fence.job_id)
             or (not isinstance(fence, str) and operation.id != fence.operation_id)
             or (not isinstance(fence, str) and operation.node_id != fence.node_id)
@@ -492,7 +529,6 @@ class AgentJobService:
             or _aware(attempt.lease_deadline) <= _aware(now)
         ):
             raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
-        node, _certificate = identity
         self._record_contact(node, now, None, None)
         return operation, attempt
 
@@ -527,6 +563,102 @@ class AgentJobService:
             node.protocol_version = protocol_version
         if capabilities is not None:
             node.capabilities = list(capabilities)
+
+    def _consume_contact(
+        self,
+        session: Session,
+        source: AgentSource | None,
+        node: AgentNode,
+        certificate: AgentCertificate,
+    ) -> None:
+        if source is None:
+            return
+        identity = source.identity
+        if (
+            identity.node_id != node.node_id
+            or identity.certificate_serial != certificate.serial
+            or identity.certificate_fingerprint != certificate.fingerprint
+            or identity.verified is not True
+        ):
+            raise ValueError("agent contact source does not match its locked identity")
+        if self._contact_consumer is None:
+            raise RuntimeError("agent contact consumer is not configured")
+        self._contact_consumer(session, source)
+
+    @staticmethod
+    def _lock_reconciliation_targets(
+        session: Session, operation_id: str
+    ) -> None:
+        authority = session.execute(
+            select(Job.reconciliation_id, Job.targets)
+            .join(StoredOperation, StoredOperation.parent_job_id == Job.id)
+            .where(StoredOperation.id == operation_id)
+        ).one_or_none()
+        if authority is None or authority.reconciliation_id is None:
+            return
+        targets = authority.targets
+        if (
+            not isinstance(targets, list)
+            or not targets
+            or len(targets) != len(set(targets))
+            or not all(isinstance(node_id, str) for node_id in targets)
+        ):
+            raise ValueError("reconciliation parent targets are invalid")
+        locked = list(
+            session.scalars(
+                select(AgentNode)
+                .where(AgentNode.node_id.in_(targets))
+                .order_by(AgentNode.node_id)
+                .with_for_update(of=AgentNode)
+            )
+        )
+        if [node.node_id for node in locked] != sorted(targets):
+            raise StaleAgentAttempt(
+                "agent operation lease, certificate, or fence is stale"
+            )
+
+    def _project_unsafe_expiry(
+        self,
+        session: Session,
+        operation: StoredOperation,
+        now: datetime,
+    ) -> bool:
+        hint = session.scalar(
+            select(ReconciliationOperation).where(
+                ReconciliationOperation.agent_operation_id == operation.id
+            )
+        )
+        if hint is None:
+            return False
+        reconciliation = session.scalar(
+            select(Reconciliation)
+            .where(Reconciliation.id == hint.reconciliation_id)
+            .with_for_update(of=Reconciliation)
+        )
+        job = session.scalar(
+            select(Job)
+            .where(
+                Job.id == operation.parent_job_id,
+                Job.reconciliation_id == hint.reconciliation_id,
+            )
+            .with_for_update(of=Job)
+        )
+        projection = session.scalar(
+            select(ReconciliationOperation)
+            .where(ReconciliationOperation.id == hint.id)
+            .with_for_update(of=ReconciliationOperation)
+        )
+        if reconciliation is None or job is None or projection is None:
+            raise ValueError("unsafe agent expiry lacks reconciliation authority")
+        reason = "mutating agent operation lease expired with uncertain outcome"
+        projection.state = "waiting-for-operator"
+        reconciliation.current_phase = "waiting-for-operator"
+        reconciliation.status = "failed"
+        reconciliation.terminal_reason = reason
+        job.state = "waiting-for-operator"
+        job.status_reason = reason
+        job.updated_at = now
+        return True
 
     @staticmethod
     def _probe_health(result: Mapping[str, object]) -> dict[str, object]:

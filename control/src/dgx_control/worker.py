@@ -104,8 +104,10 @@ if __name__ == "__main__":
     presence = AgentPresenceService(sessions, address_policy, clock=clock)
     agent_jobs = AgentJobService(sessions, clock=clock)
 
-    def endpoint(node_id: str) -> tuple[str, datetime]:
-        observation = presence.latest(node_id, maximum_age_seconds=300)
+    def endpoint(session, node_id: str) -> tuple[str, datetime]:
+        observation = presence.latest_in_session(
+            session, node_id, maximum_age_seconds=300
+        )
         return observation.address, observation.observed_at
 
     reconciliations = AgentReconciliationService(

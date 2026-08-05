@@ -8,7 +8,7 @@ import threading
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from dgx_agent_protocol import AgentResult, canonical_message
@@ -60,6 +60,10 @@ _MUTATIONS = frozenset(
 
 def _digest(document: object) -> str:
     return hashlib.sha256(canonical_message(document)).hexdigest()
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def ready_operation_ids(
@@ -199,7 +203,7 @@ class AgentReconciliationService:
         *,
         agent_jobs: Any,
         publisher: Any,
-        endpoint_resolver: Callable[[str], tuple[str, datetime]],
+        endpoint_resolver: Callable[[Session, str], tuple[str, datetime]],
         clock: Callable[[], datetime],
         publication_lease_seconds: int = 60,
     ) -> None:
@@ -218,13 +222,14 @@ class AgentReconciliationService:
         """Bind the sole durable parent job; JSON fields never grant authority."""
 
         with self._sessions.begin() as session:
-            reconciliation, job, _graph, _document = self._locked_context(
+            reconciliation, job, graph, _document = self._locked_context(
                 session, reconciliation_id, expected_job_id=job_id
             )
             if job.reconciliation_id not in {None, reconciliation.id}:
                 raise ValueError("job is attached to another reconciliation")
             if job.base_commit != reconciliation.base_commit:
                 raise ValueError("reconciliation job base commit does not match")
+            self._require_active_targets(session, graph)
             job.reconciliation_id = reconciliation.id
             job.state = "running"
             job.updated_at = self._clock()
@@ -233,6 +238,7 @@ class AgentReconciliationService:
         """Advance one durable phase and return whether work was available."""
 
         with self._tick_lock:
+            automatically_selected = reconciliation_id is None
             candidate = reconciliation_id or self._candidate_id()
             if candidate is None:
                 return False
@@ -243,6 +249,8 @@ class AgentReconciliationService:
                 )
                 phase = reconciliation.current_phase
                 if phase == "planned":
+                    if job.base_commit != reconciliation.base_commit:
+                        raise ValueError("reconciliation job base commit does not match")
                     session.add(
                         RoutePublication(
                             reconciliation_id=reconciliation.id,
@@ -253,8 +261,17 @@ class AgentReconciliationService:
                     )
                     reconciliation.current_phase = "withdrawal-pending"
                     reconciliation.status = "running"
+                    job.state = "running"
+                    job.status_reason = None
+                    job.updated_at = self._clock()
                     return True
                 publication = self._publication(session, reconciliation.id)
+                if phase == "completed" and automatically_selected:
+                    expires_at = publication.lease_expires_at
+                    if expires_at is None or _aware(expires_at) > _aware(
+                        self._clock()
+                    ) + timedelta(seconds=30):
+                        return False
                 if phase == "withdrawal-pending":
                     marker = self._publisher.withdraw(
                         reconciliation_id=reconciliation.id,
@@ -266,6 +283,15 @@ class AgentReconciliationService:
                     reconciliation.current_phase = "routes-withdrawn"
                     return True
                 if phase == "routes-withdrawn":
+                    if not self._targets_are_active(session, graph):
+                        self._quiesce_for_unavailable_target(
+                            session,
+                            reconciliation,
+                            job,
+                            graph,
+                            "reconciliation target agent is unavailable",
+                        )
+                        return True
                     existing = {
                         row.graph_operation_id
                         for row in self._projections(session, reconciliation.id, "primary")
@@ -284,10 +310,28 @@ class AgentReconciliationService:
                     reconciliation.current_phase = "dispatching"
                     return True
                 if phase == "dispatching":
+                    if not self._targets_are_active(session, graph):
+                        self._quiesce_for_unavailable_target(
+                            session,
+                            reconciliation,
+                            job,
+                            graph,
+                            "reconciliation target agent is unavailable",
+                        )
+                        return True
                     notify = self._dispatch_primary(
                         session, reconciliation, job, graph, document
                     )
                 elif phase == "accepting":
+                    if not self._targets_are_active(session, graph):
+                        self._quiesce_for_unavailable_target(
+                            session,
+                            reconciliation,
+                            job,
+                            graph,
+                            "reconciliation target agent is unavailable",
+                        )
+                        return True
                     evidence_digest = self._accepted_evidence_digest(
                         self._projections(session, reconciliation.id, "primary")
                     )
@@ -295,6 +339,15 @@ class AgentReconciliationService:
                     publication.evidence_digest = evidence_digest
                     reconciliation.current_phase = "publication-pending"
                 elif phase == "publication-pending":
+                    if not self._targets_are_active(session, graph):
+                        self._quiesce_for_unavailable_target(
+                            session,
+                            reconciliation,
+                            job,
+                            graph,
+                            "reconciliation target agent is unavailable",
+                        )
+                        return True
                     request = self._publication_request(
                         session, reconciliation, document, publication
                     )
@@ -329,6 +382,15 @@ class AgentReconciliationService:
                     job.state = "running"
                     job.updated_at = self._clock()
                 elif phase == "compensating":
+                    if not self._targets_are_active(session, graph):
+                        self._quiesce_for_unavailable_target(
+                            session,
+                            reconciliation,
+                            job,
+                            graph,
+                            "reconciliation target agent is unavailable during compensation",
+                        )
+                        return True
                     notify = self._dispatch_compensation(
                         session, reconciliation, job, graph, document
                     )
@@ -394,6 +456,11 @@ class AgentReconciliationService:
         self._validate_operation_binding(
             operation, attempt, message, reconciliation, job, projection, node, kind, payload
         )
+        expected_phase = (
+            "compensating" if projection.role == "compensation" else "dispatching"
+        )
+        if reconciliation.current_phase != expected_phase:
+            raise ValueError("agent result is invalid for reconciliation phase")
         now = self._clock()
         if message.state == "succeeded":
             result_digest, evidence_digest = accepted_result_digests(
@@ -426,6 +493,59 @@ class AgentReconciliationService:
                 session, reconciliation_id
             )
             projections = self._projections(session, reconciliation.id, "primary")
+            compensations = self._projections(
+                session, reconciliation.id, "compensation"
+            )
+            if reconciliation.current_phase == "completed":
+                publication = self._publication(session, reconciliation.id)
+                marker = self._publisher.withdraw(
+                    reconciliation_id=reconciliation.id,
+                    plan_digest=self._plan_digest(reconciliation),
+                    targets=graph.targets,
+                    reason="reconciliation cancellation",
+                )
+                self._store_marker(publication, marker, "routes-withdrawn")
+            if reconciliation.current_phase == "waiting-for-operator":
+                self._quiesce_pending(session, reconciliation, graph, projections)
+                self._quiesce_pending(session, reconciliation, graph, compensations)
+                return
+            unsafe_mutation = any(
+                self._graph_node(graph, row.graph_operation_id).kind in _MUTATIONS
+                and row.state
+                in {
+                    "failed",
+                    "running",
+                    "succeeded",
+                    "uncertain",
+                    "waiting-for-operator",
+                }
+                for row in projections
+            ) or any(
+                row.state
+                in {
+                    "failed",
+                    "running",
+                    "succeeded",
+                    "uncertain",
+                    "waiting-for-operator",
+                }
+                for row in compensations
+            )
+            uncertain = self._quiesce_pending(
+                session,
+                reconciliation,
+                graph,
+                projections,
+            )
+            uncertain = (
+                self._quiesce_pending(
+                    session,
+                    reconciliation,
+                    graph,
+                    compensations,
+                )
+                or uncertain
+            )
             mutated = [
                 row
                 for row in projections
@@ -433,7 +553,13 @@ class AgentReconciliationService:
                 and self._graph_node(graph, row.graph_operation_id).kind in _MUTATIONS
             ]
             reconciliation.terminal_reason = reason.strip()[:1024]
-            if any(
+            if uncertain or unsafe_mutation:
+                self._wait_for_operator(
+                    reconciliation,
+                    job,
+                    "cancellation interrupted a running mutation",
+                )
+            elif any(
                 self._graph_node(graph, row.graph_operation_id).compensation_kind
                 for row in mutated
             ):
@@ -496,7 +622,7 @@ class AgentReconciliationService:
         if preview is None:
             raise KeyError(reconciliation_id)
         graph, _document = self._validated_plan(preview)
-        nodes = list(
+        _locked_nodes = tuple(
             session.scalars(
                 select(AgentNode)
                 .where(AgentNode.node_id.in_(graph.targets))
@@ -504,14 +630,11 @@ class AgentReconciliationService:
                 .with_for_update(of=AgentNode)
             )
         )
-        if [node.node_id for node in nodes] != list(graph.targets) or any(
-            node.state != "active" or node.revoked_at is not None for node in nodes
-        ):
-            raise ValueError("reconciliation target agent is unavailable")
         reconciliation = session.scalar(
             select(Reconciliation)
             .where(Reconciliation.id == reconciliation_id)
             .with_for_update(of=Reconciliation)
+            .execution_options(populate_existing=True)
         )
         assert reconciliation is not None
         graph, document = self._validated_plan(reconciliation)
@@ -526,6 +649,26 @@ class AgentReconciliationService:
         if expected_job_id is None and job.reconciliation_id != reconciliation.id:
             raise ValueError("reconciliation parent link is invalid")
         return reconciliation, job, graph, document
+
+    @staticmethod
+    def _targets_are_active(session: Session, graph: OperationGraph) -> bool:
+        nodes = list(
+            session.scalars(
+                select(AgentNode)
+                .where(AgentNode.node_id.in_(graph.targets))
+                .order_by(AgentNode.node_id)
+            )
+        )
+        return [node.node_id for node in nodes] == list(graph.targets) and all(
+            node.state == "active" and node.revoked_at is None for node in nodes
+        )
+
+    @classmethod
+    def _require_active_targets(
+        cls, session: Session, graph: OperationGraph
+    ) -> None:
+        if not cls._targets_are_active(session, graph):
+            raise ValueError("reconciliation target agent is unavailable")
 
     @staticmethod
     def _validated_plan(
@@ -700,7 +843,7 @@ class AgentReconciliationService:
                 or not isinstance(projection.evidence_digest, str)
             ):
                 raise ValueError("accepted route lacks exact verify evidence")
-            address, observed_at = self._endpoint_resolver(node_id)
+            address, observed_at = self._endpoint_resolver(session, node_id)
             endpoint_digest = endpoint_evidence_digest(
                 node_id=node_id,
                 address=address,
@@ -831,10 +974,15 @@ class AgentReconciliationService:
         failed_node: OperationNode,
         reason: str,
     ) -> None:
-        accepted = {
-            row.graph_operation_id: row.state
-            for row in self._projections(session, reconciliation.id, "primary")
-        }
+        projections = self._projections(session, reconciliation.id, "primary")
+        if self._quiesce_pending(session, reconciliation, graph, projections):
+            self._wait_for_operator(
+                reconciliation,
+                job,
+                "a sibling mutation was running when reconciliation failed",
+            )
+            return
+        accepted = {row.graph_operation_id: row.state for row in projections}
         compensatable = compensation_order(graph.nodes, accepted)
         if failed_node.kind in {"workload.start", "workload.health", "workload.verify"} and compensatable:
             reconciliation.current_phase = "compensating"
@@ -849,6 +997,82 @@ class AgentReconciliationService:
             job.state = "failed"
             job.status_reason = reason
             job.updated_at = self._clock()
+
+    def _quiesce_pending(
+        self,
+        session: Session,
+        reconciliation: Reconciliation,
+        graph: OperationGraph,
+        projections: Sequence[ReconciliationOperation],
+    ) -> bool:
+        """Fence unresolved work while target Node locks serialize agent traffic."""
+
+        uncertain_mutation = False
+        now = self._clock()
+        for projection in projections:
+            if projection.state == "planned":
+                projection.state = "failed"
+                continue
+            if projection.state != "queued" or projection.agent_operation_id is None:
+                continue
+            operation = session.scalar(
+                select(StoredAgentOperation)
+                .where(StoredAgentOperation.id == projection.agent_operation_id)
+                .with_for_update(of=StoredAgentOperation)
+            )
+            if operation is None:
+                raise ValueError("reconciliation operation projection is incomplete")
+            node = self._graph_node(graph, projection.graph_operation_id)
+            if operation.state == "queued":
+                operation.state = "failed"
+                operation.updated_at = now
+                projection.state = "failed"
+                continue
+            if operation.state != "running":
+                continue
+            attempt = session.scalar(
+                select(AgentOperationAttempt)
+                .where(
+                    AgentOperationAttempt.operation_id == operation.id,
+                    AgentOperationAttempt.attempt == operation.current_attempt,
+                )
+                .with_for_update(of=AgentOperationAttempt)
+            )
+            if attempt is None or attempt.state != "running":
+                raise ValueError("running reconciliation operation lacks its attempt")
+            if node.kind in _MUTATIONS:
+                operation.state = "waiting-for-operator"
+                attempt.state = "waiting-for-operator"
+                projection.state = "waiting-for-operator"
+                uncertain_mutation = True
+            else:
+                operation.state = "failed"
+                attempt.state = "failed"
+                projection.state = "failed"
+            operation.updated_at = now
+        return uncertain_mutation
+
+    def _quiesce_for_unavailable_target(
+        self,
+        session: Session,
+        reconciliation: Reconciliation,
+        job: Job,
+        graph: OperationGraph,
+        reason: str,
+    ) -> None:
+        self._quiesce_pending(
+            session,
+            reconciliation,
+            graph,
+            self._projections(session, reconciliation.id, "primary"),
+        )
+        self._quiesce_pending(
+            session,
+            reconciliation,
+            graph,
+            self._projections(session, reconciliation.id, "compensation"),
+        )
+        self._wait_for_operator(reconciliation, job, reason)
 
     def _finish_failed(self, reconciliation: Reconciliation, job: Job) -> None:
         reconciliation.current_phase = "failed"
@@ -888,8 +1112,9 @@ def bind_reconciliation_result_consumer(
     if not 1 <= maximum_presence_age_seconds <= 300:
         raise ValueError("reconciliation presence age is invalid")
 
-    def endpoint(node_id: str) -> tuple[str, datetime]:
-        observation = presence.latest(
+    def endpoint(session: Session, node_id: str) -> tuple[str, datetime]:
+        observation = presence.latest_in_session(
+            session,
             node_id,
             maximum_age_seconds=maximum_presence_age_seconds,
         )
