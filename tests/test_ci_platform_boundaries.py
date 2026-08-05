@@ -8,6 +8,28 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_agent_simulator_preserves_exact_non_linux_boundaries() -> None:
+    command = (
+        "import sys; "
+        "sys.platform = 'darwin'; "
+        "import pytest; "
+        "raise SystemExit(pytest.main(["
+        "'-q', 'tests/agent/test_failure_matrix.py']))"
+    )
+
+    result = subprocess.run(
+        [sys.executable, "-c", command],
+        cwd=ROOT,
+        env={**os.environ, "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1"},
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "2 passed, 10 skipped" in result.stdout
+
+
 def test_linux_node_runtime_cases_skip_on_non_linux_hosts() -> None:
     test_cases = (
         (

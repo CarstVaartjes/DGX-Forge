@@ -16,8 +16,13 @@ sys.path.insert(0, str(ROOT / "agent/src"))
 _simulator = import_module("dgx_agent.simulator")
 canonical_report = _simulator.canonical_report
 simulate_agent_lifecycle = _simulator.simulate_agent_lifecycle
+LINUX_AGENT_STATE_RUNTIME = pytest.mark.skipif(
+    sys.platform != "linux",
+    reason="secure DGX agent state runtime requires Linux descriptor traversal",
+)
 
 
+@LINUX_AGENT_STATE_RUNTIME
 @pytest.mark.parametrize("nodes", [1, 16])
 def test_failure_matrix_preserves_agent_lifecycle_invariants(nodes: int) -> None:
     report = simulate_agent_lifecycle(nodes=nodes, seed=20260803)
@@ -105,6 +110,7 @@ def test_failure_matrix_preserves_agent_lifecycle_invariants(nodes: int) -> None
     assert report["status"] == "passed"
 
 
+@LINUX_AGENT_STATE_RUNTIME
 @pytest.mark.parametrize(
     ("fault", "counter", "regressed_value"),
     [
@@ -127,6 +133,7 @@ def test_status_rejects_incomplete_or_mutating_security_faults(
     assert evaluator(regressed) is False
 
 
+@LINUX_AGENT_STATE_RUNTIME
 def test_simulation_is_seeded_and_canonical() -> None:
     first = simulate_agent_lifecycle(nodes=16, seed=918273)
     repeated = simulate_agent_lifecycle(nodes=16, seed=918273)
@@ -140,6 +147,7 @@ def test_simulation_is_seeded_and_canonical() -> None:
     assert encoded == canonical_report(json.loads(encoded))
 
 
+@LINUX_AGENT_STATE_RUNTIME
 def test_acceptance_cli_emits_only_canonical_simulated_evidence() -> None:
     completed = subprocess.run(
         [ROOT / "scripts/accept-agent-lifecycle", "--nodes", "16", "--json"],
