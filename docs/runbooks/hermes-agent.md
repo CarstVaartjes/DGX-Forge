@@ -23,8 +23,8 @@ scope it to the necessary repositories and actions, and store it under
 
 ## Prepare persistent paths and the API key
 
-Create the three writable trees and a separate secret file for the selected
-runtime UID/GID:
+Create the three writable trees and a separate secret file for the official
+release runtime UID/GID `1100:1100`:
 
 ```bash
 sudo install -d -m 0700 -o 1100 -g 1100 \
@@ -47,11 +47,13 @@ HERMES_API_KEY_FILE=/srv/dgx-forge/secrets/hermes-api-key
 HERMES_DASHBOARD_ORIGIN=https://EXACT-SVC-HERMES-DASHBOARD-URL
 ```
 
-The selected UID/GID is baked into the local derived image so the upstream
-supervisor never needs to edit `/etc/passwd` on the read-only root. Rebuild
-`hermes-agent` and `hermes-setup` after changing either value. The external API
-key file must remain root-owned mode `0600`; the supervisor has no reason to
-grant it to the unprivileged Hermes user because PID 1 injects only the value.
+GitHub Actions fixes the UID/GID when it builds the published Hermes wrapper;
+official releases require `1100:1100`. They are not freely selectable runtime
+settings, and operators must not rebuild an official release to change them.
+The wrapper's fixed identity lets the upstream supervisor run without editing
+`/etc/passwd` on the read-only root. The external API key file must remain
+root-owned mode `0600`; the supervisor has no reason to grant it to the
+unprivileged Hermes user because PID 1 injects only the value.
 
 The origin is the one exact HTTPS origin shown by Tailscale. Do not use `*`,
 HTTP, or a fallback list.

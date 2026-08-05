@@ -1,5 +1,11 @@
 # Bootstrap the control plane
 
+For a NAS production deployment, begin with the authoritative
+[NAS pull-only Compose deployment guide](../../deploy/compose/README.md). It
+covers release-image assets, site-local `.env` and secrets, Tailscale-only
+access, the production step-ca overlay, startup, and rollback. This runbook
+contains the control-plane initialization steps that follow that guide.
+
 The control plane runs on any Docker Compose-capable Linux machine. The first
 host may be a NAS, but the configuration has no NAS vendor dependency.
 
