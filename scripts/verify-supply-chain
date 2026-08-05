@@ -222,7 +222,13 @@ def image_errors(root: Path) -> list[str]:
     except OSError:
         return ["included Compose image definitions are missing"]
     images = lock.get("images", {})
+    if not isinstance(images, dict):
+        errors.append("image lock images mapping is invalid")
+        images = {}
     build_bases = lock.get("build_bases", {})
+    if not isinstance(build_bases, dict):
+        errors.append("image lock build_bases mapping is invalid")
+        build_bases = {}
     for name, reference in {**images, **build_bases}.items():
         if not isinstance(reference, str) or IMAGE.fullmatch(reference) is None:
             errors.append(f"{name} image is not pinned by digest")
@@ -276,10 +282,14 @@ def image_errors(root: Path) -> list[str]:
     hermes_dockerfile = (root / "deploy/compose/hermes-agent/Dockerfile").read_text()
     for name in ("node", "python"):
         reference = build_bases.get(name)
-        if reference not in dockerfile:
+        if not isinstance(reference, str):
+            errors.append(f"{name} digest-pinned build base is missing or invalid")
+        elif reference not in dockerfile:
             errors.append(f"{name} digest-pinned build base is absent from control Dockerfile")
     hermes_reference = build_bases.get("hermes")
-    if hermes_reference not in hermes_dockerfile:
+    if not isinstance(hermes_reference, str):
+        errors.append("hermes digest-pinned build base is missing or invalid")
+    elif hermes_reference not in hermes_dockerfile:
         errors.append("hermes digest-pinned build base is absent from Hermes Dockerfile")
     if "ARG NODE_IMAGE" not in dockerfile or "ARG PYTHON_IMAGE" not in dockerfile:
         errors.append("control build bases are not explicit locked arguments")
