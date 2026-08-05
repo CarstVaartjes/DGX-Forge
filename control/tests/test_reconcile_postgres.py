@@ -151,7 +151,11 @@ def test_concurrent_identical_plans_get_one_atomic_persisted_reconciliation(
 
     def plan(service: Reconciler):
         start.wait(timeout=10)
-        return service.plan(BASE_COMMIT, "inference")
+        return service.plan(
+            BASE_COMMIT,
+            "inference",
+            fleet_evidence_digest="e" * 64,
+        )
 
     with ThreadPoolExecutor(max_workers=2) as pool:
         futures = [pool.submit(plan, service) for service in services]

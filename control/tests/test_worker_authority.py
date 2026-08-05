@@ -47,6 +47,7 @@ def _client(*, eligible: bool = True) -> TestClient:
             COMMIT,
             PLAN_DIGEST,
             (ROUTE,),
+            "e" * 64,
         )
         if reconciliation_id == RECONCILIATION_ID
         else (_ for _ in ()).throw(ValueError("unknown reconciliation")),
@@ -60,6 +61,7 @@ def _client(*, eligible: bool = True) -> TestClient:
                 tokens_per_minute=20,
             ),
         ),
+        current_fleet_evidence=lambda: "e" * 64,
         clock=lambda: 100,
     )
     app = FastAPI()
@@ -224,6 +226,7 @@ def test_worker_prefetches_once_then_consumes_only_exact_cached_authority() -> N
             "nonce": body["nonce"],
             "current": True,
             "eligible": True,
+            "fleet_evidence_current": True,
             "routes_sha256": hashlib.sha256(b"[]").hexdigest(),
             "deployments": [],
             "issued_at": 100,
@@ -284,6 +287,7 @@ def test_worker_publication_uses_prefetched_route_policy_without_network() -> No
             "nonce": body["nonce"],
             "current": True,
             "eligible": True,
+            "fleet_evidence_current": True,
             "routes_sha256": hashlib.sha256(
                 json.dumps(
                     body["routes"], sort_keys=True, separators=(",", ":")
@@ -345,6 +349,7 @@ def test_atomic_publisher_never_performs_authority_network_io_under_file_lock(
             "nonce": body["nonce"],
             "current": True,
             "eligible": True,
+            "fleet_evidence_current": True,
             "routes_sha256": hashlib.sha256(
                 json.dumps(
                     body["routes"], sort_keys=True, separators=(",", ":")
@@ -454,7 +459,9 @@ def test_repository_head_change_during_policy_evaluation_fails_closed() -> None:
             COMMIT,
             PLAN_DIGEST,
             (ROUTE,),
+            "e" * 64,
         ),
+        current_fleet_evidence=lambda: "e" * 64,
         deployments=lambda commit, _routes: (
             policy_calls.append(commit) or ()
         ),
@@ -472,6 +479,72 @@ def test_repository_head_change_during_policy_evaluation_fails_closed() -> None:
     assert result["eligible"] is False
     assert result["deployments"] == []
     assert policy_calls == [COMMIT]
+
+
+def test_fleet_evidence_change_during_authority_evaluation_fails_closed() -> None:
+    fleet = iter(("e" * 64, "f" * 64))
+    service = RepositoryAuthorityService(
+        current_commit=lambda: COMMIT,
+        commit_eligible=lambda _commit: True,
+        reconciliation_input=lambda _reconciliation_id: (
+            COMMIT,
+            PLAN_DIGEST,
+            (ROUTE,),
+            "e" * 64,
+        ),
+        current_fleet_evidence=lambda: next(fleet),
+        deployments=lambda _commit, _routes: (),
+        clock=lambda: 100,
+    )
+
+    result = service.evaluate(RECONCILIATION_ID, COMMIT, PLAN_DIGEST, (ROUTE,))
+
+    assert result["fleet_evidence_current"] is False
+    assert result["deployments"] == []
+
+
+def test_worker_reports_explicit_signed_fleet_evidence_authority_loss() -> None:
+    class Response(io.BytesIO):
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args) -> None:
+            self.close()
+
+    def open_request(request, *, timeout):
+        body = json.loads(request.data)
+        response = {
+            "schema_version": 1,
+            "reconciliation_id": body["reconciliation_id"],
+            "commit": body["commit"],
+            "plan_digest": body["plan_digest"],
+            "nonce": body["nonce"],
+            "current": True,
+            "eligible": True,
+            "fleet_evidence_current": False,
+            "routes_sha256": hashlib.sha256(b"[]").hexdigest(),
+            "deployments": [],
+            "issued_at": 100,
+            "expires_at": 115,
+        }
+        response["signature"] = worker_document_signature(
+            b"w" * 32, response, purpose="response"
+        )
+        return Response(json.dumps(response).encode())
+
+    authority = HttpWorkerAuthority(
+        "http://control-api:8000",
+        b"w" * 32,
+        opener=open_request,
+        clock=lambda: 100,
+    )
+    authority.prefetch(RECONCILIATION_ID, COMMIT, PLAN_DIGEST, ())
+
+    assert authority.authorization_reason(
+        RECONCILIATION_ID, COMMIT, PLAN_DIGEST, ()
+    ) == "fleet acceptance evidence changed since planning"
 
 
 @pytest.mark.parametrize("mismatch", ("reconciliation", "commit", "plan", "route"))
@@ -548,6 +621,7 @@ def test_worker_rejects_internally_inconsistent_signed_decision(
             "nonce": body["nonce"],
             "current": current,
             "eligible": eligible,
+            "fleet_evidence_current": True,
             "routes_sha256": hashlib.sha256(b"[]").hexdigest(),
             "deployments": deployments,
             "issued_at": 100,
@@ -591,6 +665,7 @@ def test_failed_second_prefetch_cannot_reuse_first_positive_cache() -> None:
             "nonce": body["nonce"],
             "current": True,
             "eligible": True,
+            "fleet_evidence_current": True,
             "routes_sha256": hashlib.sha256(b"[]").hexdigest(),
             "deployments": [],
             "issued_at": 100,
@@ -652,6 +727,7 @@ def test_worker_rejects_tampered_stale_redirected_or_oversized_authority(
             "nonce": "f" * 32 if fault == "nonce" else body["nonce"],
             "current": True,
             "eligible": True,
+            "fleet_evidence_current": True,
             "routes_sha256": hashlib.sha256(b"[]").hexdigest(),
             "deployments": [],
             "issued_at": 80 if fault == "expired" else 100,

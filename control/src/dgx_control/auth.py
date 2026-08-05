@@ -8,7 +8,7 @@ import hmac
 import ipaddress
 import json
 import re
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -18,6 +18,9 @@ _ROLES = frozenset({"viewer", "operator", "administrator"})
 _AGENT_NODE_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
 _AGENT_IDENTITY_SCOPE_KEY = "dgx.agent_identity"
 _AGENT_SOURCE_SCOPE_KEY = "dgx.agent_source"
+_CURSOR_TOKEN = re.compile(r"v1\.[A-Za-z0-9_-]{1,384}\.[A-Za-z0-9_-]{43}\Z")
+_CURSOR_DOMAIN = b"dgx-forge/control-cursor/v1\0"
+_MAX_CURSOR_LENGTH = 512
 
 MUTATION_ROLES = {
     ("POST", "/api/v1/jobs"): frozenset({"operator", "administrator"}),
@@ -234,3 +237,98 @@ class TokenCodec:
             raise
         except Exception as error:
             raise AuthError("token is malformed") from error
+
+    def cursor_codec(self) -> CursorCodec:
+        """Derive an isolated cursor signer from the configured durable key."""
+
+        key = hmac.new(self._key, _CURSOR_DOMAIN + b"key", hashlib.sha256).digest()
+        return CursorCodec(key)
+
+
+class CursorCodec:
+    """Versioned authenticated cursors bound to one resource and query context."""
+
+    def __init__(self, derived_key: bytes) -> None:
+        if len(derived_key) != hashlib.sha256().digest_size:
+            raise ValueError("cursor signing key is invalid")
+        self._key = derived_key
+
+    def encode(
+        self,
+        *,
+        resource: str,
+        order: str,
+        context: Mapping[str, object],
+        boundary: object,
+    ) -> str:
+        document = {
+            "boundary": boundary,
+            "context": dict(context),
+            "order": order,
+            "resource": resource,
+            "version": 1,
+        }
+        try:
+            payload = json.dumps(
+                document,
+                ensure_ascii=True,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode("ascii")
+        except (TypeError, ValueError) as error:
+            raise ValueError("cursor document is invalid") from error
+        body = _encode(payload)
+        signature = _encode(
+            hmac.new(self._key, _CURSOR_DOMAIN + body.encode("ascii"), hashlib.sha256).digest()
+        )
+        token = f"v1.{body}.{signature}"
+        if len(body) > 384 or len(token) > _MAX_CURSOR_LENGTH:
+            raise ValueError("cursor document is too large")
+        return token
+
+    def decode(
+        self,
+        token: str,
+        *,
+        resource: str,
+        order: str,
+        context: Mapping[str, object],
+    ) -> object:
+        try:
+            if (
+                not isinstance(token, str)
+                or len(token) > _MAX_CURSOR_LENGTH
+                or _CURSOR_TOKEN.fullmatch(token) is None
+            ):
+                raise ValueError
+            version, body, signature = token.split(".")
+            if version != "v1":
+                raise ValueError
+            supplied = _decode(signature)
+            payload = _decode(body)
+            if _encode(supplied) != signature or _encode(payload) != body:
+                raise ValueError
+            expected = hmac.new(
+                self._key,
+                _CURSOR_DOMAIN + body.encode("ascii"),
+                hashlib.sha256,
+            ).digest()
+            if len(supplied) != len(expected) or not hmac.compare_digest(
+                supplied, expected
+            ):
+                raise ValueError
+            document = json.loads(payload)
+            if (
+                not isinstance(document, dict)
+                or set(document)
+                != {"boundary", "context", "order", "resource", "version"}
+                or document["version"] != 1
+                or document["resource"] != resource
+                or document["order"] != order
+                or document["context"] != dict(context)
+            ):
+                raise ValueError
+            return document["boundary"]
+        except (UnicodeError, ValueError, TypeError, json.JSONDecodeError):
+            raise ValueError("cursor is invalid") from None

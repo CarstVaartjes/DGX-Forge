@@ -74,7 +74,8 @@ class Reconciler:
     def __init__(self) -> None:
         self.planned: list[tuple[str, str]] = []
 
-    def plan(self, commit, profile_id):
+    def plan(self, commit, profile_id, *, fleet_evidence_digest):
+        del fleet_evidence_digest
         self.planned.append((commit, profile_id))
         return type(
             "Plan",
@@ -104,7 +105,7 @@ class Reconciler:
             },
         )()
 
-    def enqueue(self, plan_digest, actor, request_id):
+    def enqueue(self, plan_digest, actor, request_id, **_kwargs):
         if plan_digest != DIGEST:
             raise ValueError("unknown reconciliation plan digest")
         return {
@@ -631,7 +632,12 @@ def test_durable_projection_reads_only_current_activation_and_hides_agent_secret
             )
         )
 
-    services = projection_factory(sessions, route_root, clock=lambda: now)
+        services = projection_factory(
+            sessions,
+            route_root,
+            clock=lambda: now,
+            cursors=TokenCodec(b"k" * 32).cursor_codec(),
+        )
     endpoint = services.endpoint("model-a")
     agents = list(services.agents())
 
@@ -745,7 +751,10 @@ def test_durable_resume_has_one_atomic_winner(tmp_path) -> None:
     with sessions.begin() as session:
         session.add(job)
     services = operation_api.durable_operation_services(
-        sessions, tmp_path / "routes", clock=lambda: now
+        sessions,
+        tmp_path / "routes",
+        clock=lambda: now,
+        cursors=TokenCodec(b"k" * 32).cursor_codec(),
     )
 
     def resume() -> str:
@@ -802,7 +811,10 @@ def test_durable_operation_keyset_pages_are_complete_and_aggregated(tmp_path) ->
                 )
             )
     services = operation_api.durable_operation_services(
-        sessions, tmp_path / "routes", clock=lambda: now
+        sessions,
+        tmp_path / "routes",
+        clock=lambda: now,
+        cursors=TokenCodec(b"k" * 32).cursor_codec(),
     )
 
     found: list[str] = []
@@ -821,6 +833,94 @@ def test_durable_operation_keyset_pages_are_complete_and_aggregated(tmp_path) ->
             break
 
     assert len(found) == len(set(found)) == 23
+
+
+def test_durable_operation_cursor_rejects_cross_job_replay_and_tampering(
+    tmp_path,
+) -> None:
+    now = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
+    engine = create_engine(f"sqlite:///{tmp_path / 'operation-cursor.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine, expire_on_commit=False)
+    jobs = [
+        Job(
+            request_id=f"33333333-3333-4333-8333-33333333333{index}",
+            kind="reconcile",
+            state="running",
+            actor="operator",
+            base_commit=COMMIT,
+            targets=[NODE_ID],
+            payload_digest="e" * 64,
+            payload={},
+            current_attempt=1,
+            created_at=now,
+            updated_at=now,
+        )
+        for index in (1, 2)
+    ]
+    with sessions.begin() as session:
+        session.add(AgentNode(node_id=NODE_ID, state="active", capabilities=[]))
+        session.add_all(jobs)
+        session.flush()
+        for job in jobs:
+            for index in range(2):
+                session.add(
+                    AgentOperation(
+                        parent_job_id=job.id,
+                        node_id=NODE_ID,
+                        kind="node.probe",
+                        payload_digest=f"{index:064x}",
+                        payload={},
+                        base_commit=COMMIT,
+                        state="queued",
+                        current_attempt=0,
+                        created_at=now + timedelta(seconds=index),
+                        updated_at=now,
+                    )
+                )
+    services = operation_api.durable_operation_services(
+        sessions,
+        tmp_path / "routes",
+        clock=lambda: now,
+        cursors=TokenCodec(b"k" * 32).cursor_codec(),
+    )
+    cursor = services.job_operations(jobs[0].id, None, 1).next_cursor
+    assert cursor is not None
+
+    with pytest.raises(ValueError, match="cursor"):
+        services.job_operations(jobs[1].id, cursor, 1)
+    replacement = "A" if cursor[-1] != "A" else "B"
+    with pytest.raises(ValueError, match="cursor"):
+        services.job_operations(jobs[0].id, cursor[:-1] + replacement, 1)
+
+
+def test_target_cursor_rejects_cross_job_and_cross_resource_replay() -> None:
+    client, operator, _reconciler, _audits = _client()
+    codec = TokenCodec(b"k" * 32).cursor_codec()
+    job_id = EnqueuedJob.id
+    other_job_cursor = codec.encode(
+        resource="job-targets",
+        order="index-asc/v1",
+        context={"job_id": "99999999-9999-4999-8999-999999999999"},
+        boundary=1,
+    )
+    operation_cursor = codec.encode(
+        resource="job-operations",
+        order="created-at-asc/id-asc/v1",
+        context={"job_id": job_id},
+        boundary=[datetime(2026, 8, 5, tzinfo=UTC).isoformat(), "operation"],
+    )
+
+    for cursor in (other_job_cursor, operation_cursor):
+        response = client.get(
+            f"/api/v1/jobs/{job_id}",
+            headers=operator,
+            params={"target_cursor": cursor, "limit": 1},
+        )
+        assert response.status_code == 422
+        assert response.json() == {"detail": "job cursor is invalid"}
+
+
 
 
 def test_admin_operation_schema_declares_applicable_bounded_errors() -> None:

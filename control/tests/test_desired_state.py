@@ -353,6 +353,7 @@ def _persisted_start_plan(
             }
         },
         "input_digests": {"fleet": "f" * 64},
+        "fleet_evidence_digest": "e" * 64,
         "operation_graph": graph,
         "operation_payloads": {"model:node:workload.start": payload},
         "agent_protocol_range": [1, 1],

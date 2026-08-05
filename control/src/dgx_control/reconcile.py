@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import asdict, dataclass, field
 from types import MappingProxyType
@@ -26,6 +27,10 @@ class ChangeService:
 
 
 class IneligibleCommit(RuntimeError):
+    pass
+
+
+class StaleFleetEvidence(ValueError):
     pass
 
 
@@ -70,6 +75,7 @@ class ReconciliationPlan:
     releases: Mapping[str, object]
     workload_groups: Mapping[str, object]
     input_digests: Mapping[str, str]
+    fleet_evidence_digest: str | None
     digest: str
     operation_graph: OperationGraph | None = None
     operation_payloads: Mapping[str, Mapping[str, object]] = field(
@@ -138,6 +144,14 @@ def _plan_content(commit: str, values: Mapping[str, object]) -> tuple[dict[str, 
     ):
         if not isinstance(content[field_name], Mapping):
             raise TypeError(f"reconciliation {field_name} must be a mapping")
+    if "fleet_evidence_digest" in values:
+        evidence_digest = values["fleet_evidence_digest"]
+        if (
+            not isinstance(evidence_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", evidence_digest) is None
+        ):
+            raise ValueError("reconciliation fleet evidence digest is invalid")
+        content["fleet_evidence_digest"] = evidence_digest
     graph = values.get("operation_graph")
     if graph is not None:
         if not isinstance(graph, OperationGraph) or graph.base_commit != commit:
@@ -175,6 +189,7 @@ def resolved_reconciliation_plan(
     operation_graph: OperationGraph,
     operation_payloads: Mapping[str, Mapping[str, object]],
     agent_protocol_range: tuple[int, int],
+    fleet_evidence_digest: str | None = None,
 ) -> ReconciliationPlan:
     values: dict[str, object] = {
         "targets": list(targets),
@@ -187,6 +202,8 @@ def resolved_reconciliation_plan(
         "operation_payloads": operation_payloads,
         "agent_protocol_range": agent_protocol_range,
     }
+    if fleet_evidence_digest is not None:
+        values["fleet_evidence_digest"] = fleet_evidence_digest
     _, encoded = _plan_content(commit, values)
     return ReconciliationPlan(
         commit=commit,
@@ -196,6 +213,7 @@ def resolved_reconciliation_plan(
         releases=_freeze_mapping(cast_mapping(releases)),
         workload_groups=_freeze_mapping(cast_mapping(workload_groups)),
         input_digests=MappingProxyType(dict(sorted(input_digests.items()))),
+        fleet_evidence_digest=fleet_evidence_digest,
         digest=hashlib.sha256(encoded).hexdigest(),
         operation_graph=operation_graph,
         operation_payloads=_freeze_mapping(cast_mapping(operation_payloads)),
@@ -240,6 +258,8 @@ class Reconciler:
         commit: str,
         profile_id: str | None = None,
         observations: Iterable[Any] | None = None,
+        *,
+        fleet_evidence_digest: str | None = None,
     ) -> ReconciliationPlan:
         self._eligible(commit)
         if isinstance(self._planner, CompatibilityDefinitions):
@@ -258,6 +278,7 @@ class Reconciler:
                 input_digests=MappingProxyType(
                     dict(sorted(cast_mapping(content["input_digests"]).items()))
                 ),
+                fleet_evidence_digest=None,
                 digest=hashlib.sha256(encoded).hexdigest(),
             )
         else:
@@ -269,6 +290,21 @@ class Reconciler:
             if current is None:
                 raise ValueError("desired-state planning requires durable observations")
             plan = self._planner.resolve(commit, profile_id, current)
+            if fleet_evidence_digest is None:
+                raise ValueError("desired-state planning requires fleet evidence")
+            plan = resolved_reconciliation_plan(
+                commit=plan.commit,
+                targets=plan.targets,
+                placements=plan.placements,
+                routes=plan.routes,
+                releases=plan.releases,
+                workload_groups=plan.workload_groups,
+                input_digests=plan.input_digests,
+                operation_graph=plan.operation_graph,
+                operation_payloads=plan.operation_payloads,
+                agent_protocol_range=plan.agent_protocol_range or (1, 1),
+                fleet_evidence_digest=fleet_evidence_digest,
+            )
             if self._orchestrator is not None:
                 provisional = plan.operation_graph
                 if provisional is None:
@@ -291,6 +327,7 @@ class Reconciler:
                         "operation_graph": provisional,
                         "operation_payloads": plan.operation_payloads,
                         "agent_protocol_range": plan.agent_protocol_range,
+                        "fleet_evidence_digest": plan.fleet_evidence_digest,
                     },
                 )
                 graph = self._orchestrator.get_or_create_resolved_plan(
@@ -307,6 +344,7 @@ class Reconciler:
                     operation_graph=graph,
                     operation_payloads=plan.operation_payloads,
                     agent_protocol_range=plan.agent_protocol_range or (1, 1),
+                    fleet_evidence_digest=plan.fleet_evidence_digest,
                 )
         self._plans[plan.digest] = plan
         return plan
@@ -333,6 +371,11 @@ class Reconciler:
             operation_graph=graph,
             operation_payloads=cast_mapping(document["operation_payloads"]),
             agent_protocol_range=(protocol[0], protocol[1]),
+            fleet_evidence_digest=(
+                document.get("fleet_evidence_digest")
+                if isinstance(document.get("fleet_evidence_digest"), str)
+                else None
+            ),
         )
         if plan.digest != plan_digest:
             raise ValueError("persisted resolved plan content is invalid")
@@ -345,6 +388,8 @@ class Reconciler:
             "workload_groups": plan.workload_groups,
             "input_digests": plan.input_digests,
         }
+        if plan.fleet_evidence_digest is not None:
+            values["fleet_evidence_digest"] = plan.fleet_evidence_digest
         if plan.operation_graph is not None:
             values.update(
                 {
@@ -373,7 +418,15 @@ class Reconciler:
             return ReconciliationResult(plan.digest, plan.commit, plan.targets, "failed", f"{type(error).__name__}: reconciliation step failed")
         return ReconciliationResult(plan.digest, plan.commit, plan.targets, "succeeded")
 
-    def enqueue(self, plan_digest: str, actor: str, request_id: str) -> dict[str, object]:
+    def enqueue(
+        self,
+        plan_digest: str,
+        actor: str,
+        request_id: str,
+        *,
+        fleet_evidence_digest: str | None = None,
+        current_fleet_evidence: Callable[[], str] | None = None,
+    ) -> dict[str, object]:
         if self._jobs is None:
             raise RuntimeError("durable reconciliation jobs are unavailable")
         plan = None
@@ -388,38 +441,74 @@ class Reconciler:
                 raise ValueError("unknown reconciliation plan digest") from None
         self._verify_plan(plan)
         self._eligible(plan.commit)
+        evidence_is_current: Callable[[], bool] | None = None
+        if plan.fleet_evidence_digest is not None:
+            if fleet_evidence_digest != plan.fleet_evidence_digest:
+                raise ValueError(
+                    "submitted evidence does not match the reconciliation plan"
+                )
+            if current_fleet_evidence is None:
+                raise ValueError("live fleet evidence authority is unavailable")
+
+            def evidence_is_current() -> bool:
+                try:
+                    return current_fleet_evidence() == plan.fleet_evidence_digest
+                except (OSError, RuntimeError, TypeError, ValueError):
+                    return False
+
         reconciliation_id = (
             plan.operation_graph.reconciliation_id
             if plan.operation_graph is not None
             else None
         )
-        job = self._jobs.enqueue(
-            "reconcile", actor, plan.commit, list(plan.targets),
-            {
-                "plan_digest": plan.digest,
-                "placements": _jsonable(plan.placements),
-                "routes": _jsonable(plan.routes),
-                "releases": _jsonable(plan.releases),
-                "workload_groups": _jsonable(plan.workload_groups),
-                "input_digests": dict(plan.input_digests),
-                **(
-                    {
-                        "operation_graph": plan.operation_graph.document,
-                        "operation_payloads": _jsonable(plan.operation_payloads),
-                        "agent_protocol_range": list(plan.agent_protocol_range or ()),
-                        "reconciliation_id": plan.operation_graph.reconciliation_id,
-                    }
-                    if plan.operation_graph is not None
-                    else {}
-                ),
-            },
-            request_id=request_id,
+        payload = {
+            "plan_digest": plan.digest,
+            "placements": _jsonable(plan.placements),
+            "routes": _jsonable(plan.routes),
+            "releases": _jsonable(plan.releases),
+            "workload_groups": _jsonable(plan.workload_groups),
+            "input_digests": dict(plan.input_digests),
             **(
-                {"reconciliation_id": reconciliation_id}
-                if reconciliation_id is not None
+                {"fleet_evidence_digest": plan.fleet_evidence_digest}
+                if plan.fleet_evidence_digest is not None
                 else {}
             ),
+            **(
+                {
+                    "operation_graph": plan.operation_graph.document,
+                    "operation_payloads": _jsonable(plan.operation_payloads),
+                    "agent_protocol_range": list(plan.agent_protocol_range or ()),
+                    "reconciliation_id": plan.operation_graph.reconciliation_id,
+                }
+                if plan.operation_graph is not None
+                else {}
+            ),
+        }
+        enqueue_kwargs: dict[str, object] = {"request_id": request_id}
+        if reconciliation_id is not None:
+            enqueue_kwargs["reconciliation_id"] = reconciliation_id
+        if evidence_is_current is not None:
+            enqueue_kwargs["authority_check"] = evidence_is_current
+        enqueue = (
+            self._jobs.enqueue
+            if evidence_is_current is None
+            else self._jobs.enqueue_guarded
         )
+        try:
+            job = enqueue(
+                "reconcile",
+                actor,
+                plan.commit,
+                list(plan.targets),
+                payload,
+                **enqueue_kwargs,
+            )
+        except ValueError as error:
+            if evidence_is_current is not None and "evidence is stale" in str(error):
+                raise StaleFleetEvidence(
+                    "fleet acceptance evidence is stale"
+                ) from None
+            raise
         result = {"job_id": job.id, "state": job.state, "base_commit": plan.commit}
         if plan.operation_graph is not None:
             result["reconciliation_id"] = plan.operation_graph.reconciliation_id

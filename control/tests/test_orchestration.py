@@ -86,6 +86,7 @@ def _persisted_gate_plan() -> tuple[dict[str, object], dict[str, object], str, s
         "releases": {},
         "workload_groups": {},
         "input_digests": {"fleet": "f" * 64},
+        "fleet_evidence_digest": "e" * 64,
         "operation_graph": graph,
         "operation_payloads": payloads,
         "agent_protocol_range": [1, 1],

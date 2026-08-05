@@ -42,7 +42,7 @@ class ReconciliationInput(Protocol):
     def __call__(
         self,
         reconciliation_id: str,
-    ) -> tuple[str, str, tuple[PublishedRoute, ...]]: ...
+    ) -> tuple[str, str, tuple[PublishedRoute, ...], str]: ...
 
 
 class AuthorityRoute(BaseModel):
@@ -77,12 +77,14 @@ class RepositoryAuthorityService:
         current_commit: Callable[[], str],
         commit_eligible: Callable[[str], bool],
         reconciliation_input: ReconciliationInput,
+        current_fleet_evidence: Callable[[], str],
         deployments: DeploymentPolicy,
         clock: Callable[[], int] = lambda: int(time.time()),
     ) -> None:
         self._current_commit = current_commit
         self._commit_eligible = commit_eligible
         self._reconciliation_input = reconciliation_input
+        self._current_fleet_evidence = current_fleet_evidence
         self._deployments = deployments
         self._clock = clock
 
@@ -101,27 +103,40 @@ class RepositoryAuthorityService:
     ) -> Mapping[str, object]:
         if _COMMIT.fullmatch(commit) is None:
             raise WorkerAuthorityError("repository commit is invalid")
-        expected_commit, expected_plan_digest, expected_routes = (
+        (
+            expected_commit,
+            expected_plan_digest,
+            expected_routes,
+            expected_fleet_evidence,
+        ) = (
             self._reconciliation_input(reconciliation_id)
         )
         if (
             not secrets.compare_digest(expected_commit, commit)
             or not secrets.compare_digest(expected_plan_digest, plan_digest)
             or expected_routes != routes
+            or not isinstance(expected_fleet_evidence, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_fleet_evidence) is None
         ):
             raise WorkerAuthorityError("reconciliation authority input is invalid")
+        fleet_evidence_current = secrets.compare_digest(
+            self._current_fleet_evidence(), expected_fleet_evidence
+        )
         current = secrets.compare_digest(self.current(), commit)
         eligible = current and self._commit_eligible(commit) is True
         deployments: tuple[LiteLlmDeployment, ...] = ()
-        if current and eligible and routes:
+        if current and eligible and fleet_evidence_current and routes:
             deployments = self._deployments(commit, routes)
             for deployment in deployments:
                 if not isinstance(deployment, LiteLlmDeployment):
                     raise WorkerAuthorityError("repository deployment is invalid")
                 LiteLlmPublisher._validate_hermes_deployment(deployment)
         current = current and secrets.compare_digest(self.current(), commit)
+        fleet_evidence_current = fleet_evidence_current and secrets.compare_digest(
+            self._current_fleet_evidence(), expected_fleet_evidence
+        )
         eligible = eligible and current
-        if not eligible:
+        if not eligible or not fleet_evidence_current:
             deployments = ()
         return {
             "schema_version": 1,
@@ -130,6 +145,7 @@ class RepositoryAuthorityService:
             "plan_digest": plan_digest,
             "current": current,
             "eligible": eligible,
+            "fleet_evidence_current": fleet_evidence_current,
             "routes_sha256": published_routes_digest(routes),
             "deployments": [asdict(item) for item in deployments],
         }
@@ -330,6 +346,7 @@ class HttpWorkerAuthority:
             "nonce",
             "current",
             "eligible",
+            "fleet_evidence_current",
             "routes_sha256",
             "deployments",
             "issued_at",
@@ -354,10 +371,15 @@ class HttpWorkerAuthority:
             or document["nonce"] != nonce
             or not isinstance(document["current"], bool)
             or not isinstance(document["eligible"], bool)
+            or not isinstance(document["fleet_evidence_current"], bool)
             or not isinstance(document["deployments"], list)
             or (document["eligible"] is True and document["current"] is not True)
             or (
-                (document["eligible"] is not True or document["current"] is not True)
+                (
+                    document["eligible"] is not True
+                    or document["current"] is not True
+                    or document["fleet_evidence_current"] is not True
+                )
                 and bool(document["deployments"])
             )
             or document["routes_sha256"] != expected_routes_digest
@@ -433,6 +455,7 @@ class HttpWorkerAuthority:
             routes_sha256=str(document["routes_sha256"]),
             current=document["current"] is True,
             eligible=document["eligible"] is True,
+            fleet_evidence_current=document["fleet_evidence_current"] is True,
             expires_at=int(document["expires_at"]),
             deployments=deployments,
         )
@@ -468,7 +491,26 @@ class HttpWorkerAuthority:
             )
         ):
             raise WorkerAuthorityError("worker authority identity changed")
-        return cached.current and cached.eligible
+        return cached.current and cached.eligible and cached.fleet_evidence_current
+
+    def authorization_reason(
+        self,
+        reconciliation_id: str,
+        commit: str,
+        plan_digest: str,
+        routes: tuple[PublishedRoute, ...],
+    ) -> bool | str:
+        """Return an explicit bounded reason when continuous authority is lost."""
+
+        self.authorized(reconciliation_id, commit, plan_digest, routes)
+        cached = self._require_cached()
+        if not cached.current:
+            return "reconciliation commit is no longer current"
+        if not cached.eligible:
+            return "reconciliation commit is no longer eligible"
+        if not cached.fleet_evidence_current:
+            return "fleet acceptance evidence changed since planning"
+        return True
 
     def eligible(self, commit: str) -> bool:
         cached = self._require_cached()
@@ -488,7 +530,11 @@ class HttpWorkerAuthority:
             or not secrets.compare_digest(cached.routes_sha256, routes_sha256)
         ):
             raise WorkerAuthorityError("worker authority route identity changed")
-        if not cached.current or not cached.eligible:
+        if (
+            not cached.current
+            or not cached.eligible
+            or not cached.fleet_evidence_current
+        ):
             raise WorkerAuthorityError("repository authority was lost")
         return cached.deployments
 
@@ -501,5 +547,6 @@ class _CachedAuthority:
     routes_sha256: str
     current: bool
     eligible: bool
+    fleet_evidence_current: bool
     expires_at: int
     deployments: tuple[LiteLlmDeployment, ...]

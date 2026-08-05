@@ -7,7 +7,6 @@ import json
 import re
 import threading
 import uuid
-from base64 import urlsafe_b64decode, urlsafe_b64encode
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -15,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import String, cast, func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
+from .auth import CursorCodec
 from .logging import redact_text
 from .models import Job, JobAttempt
 
@@ -136,9 +136,11 @@ class JobService:
         sessions: sessionmaker[Session],
         *,
         clock: Callable[[], datetime],
+        cursors: CursorCodec | None = None,
     ) -> None:
         self._sessions = sessions
         self._clock = clock
+        self._cursors = cursors
         self._claim_lock = threading.RLock()
 
     def enqueue(
@@ -207,11 +209,19 @@ class JobService:
             raise ValueError("job status is invalid")
         if target is not None and not target.strip():
             raise ValueError("job target is invalid")
+        normalized_status = None if status is None else status.strip()
+        normalized_target = None if target is None else target.strip()
+        context = {"status": normalized_status, "target": normalized_target}
         boundary: tuple[datetime, str] | None = None
         if cursor is not None:
             try:
-                decoded = json.loads(
-                    urlsafe_b64decode(cursor.encode("ascii") + b"===")
+                if self._cursors is None:
+                    raise ValueError
+                decoded = self._cursors.decode(
+                    cursor,
+                    resource="jobs",
+                    order="created-at-desc/id-desc/v1",
+                    context=context,
                 )
                 if (
                     not isinstance(decoded, list)
@@ -224,10 +234,10 @@ class JobService:
                 raise ValueError("job list cursor is invalid") from None
         with self._sessions() as session:
             filters = []
-            if status is not None:
-                filters.append(Job.state == status)
-            if target is not None:
-                filters.append(cast(Job.targets, String).contains(f'"{target}"'))
+            if normalized_status is not None:
+                filters.append(Job.state == normalized_status)
+            if normalized_target is not None:
+                filters.append(cast(Job.targets, String).contains(f'"{normalized_target}"'))
             statement = select(Job).where(*filters)
             if boundary is not None:
                 created_at, job_id = boundary
@@ -254,14 +264,64 @@ class JobService:
                 session.expunge(job)
         next_cursor = None
         if has_more and jobs:
+            if self._cursors is None:
+                raise RuntimeError("job cursor signer is unavailable")
             last = jobs[-1]
-            next_cursor = urlsafe_b64encode(
-                json.dumps(
-                    [_aware(last.created_at).isoformat(), last.id],
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).decode("ascii").rstrip("=")
+            next_cursor = self._cursors.encode(
+                resource="jobs",
+                order="created-at-desc/id-desc/v1",
+                context=context,
+                boundary=[_aware(last.created_at).isoformat(), last.id],
+            )
         return jobs, next_cursor, total
+
+    def enqueue_guarded(
+        self,
+        kind: str,
+        actor: str,
+        base_commit: str,
+        targets: Sequence[str],
+        payload: Mapping[str, object],
+        *,
+        authority_check: Callable[[], bool],
+        request_id: str | None = None,
+        reconciliation_id: str | None = None,
+    ) -> Job:
+        """Create a job only while its external acceptance evidence stays current."""
+
+        if not callable(authority_check):
+            raise TypeError("job enqueue authority check is invalid")
+        if not all(value.strip() for value in (kind, actor, base_commit)):
+            raise ValueError("job kind, actor, and base commit are required")
+        if reconciliation_id is not None:
+            try:
+                reconciliation_id = str(uuid.UUID(reconciliation_id))
+            except (AttributeError, TypeError, ValueError) as error:
+                raise ValueError("reconciliation identity is invalid") from error
+        clean, encoded = _canonical_payload(payload, kind=kind)
+        now = self._clock()
+        job = Job(
+            request_id=request_id or str(uuid.uuid4()),
+            kind=kind,
+            state="queued",
+            actor=actor,
+            base_commit=base_commit,
+            targets=list(targets),
+            payload_digest=hashlib.sha256(encoded).hexdigest(),
+            payload=clean,
+            current_attempt=0,
+            created_at=now,
+            updated_at=now,
+            reconciliation_id=reconciliation_id,
+        )
+        with self._sessions.begin() as session:
+            if authority_check() is not True:
+                raise ValueError("fleet acceptance evidence is stale")
+            session.add(job)
+            session.flush()
+            if authority_check() is not True:
+                raise ValueError("fleet acceptance evidence is stale")
+        return job
 
     def claim(self, worker_id: str, lease_seconds: int) -> AttemptFence | None:
         if not worker_id.strip() or lease_seconds <= 0:

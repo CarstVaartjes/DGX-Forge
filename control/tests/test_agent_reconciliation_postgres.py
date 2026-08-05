@@ -213,6 +213,7 @@ def _system(
         "releases": {},
         "workload_groups": {},
         "input_digests": {"fleet": "f" * 64},
+        "fleet_evidence_digest": "e" * 64,
         "operation_graph": graph,
         "operation_payloads": {operation_id: payload},
         "agent_protocol_range": [1, 1],
@@ -1440,6 +1441,7 @@ def _compensation_system(
         "releases": {},
         "workload_groups": {},
         "input_digests": {"fleet": "f" * 64},
+        "fleet_evidence_digest": "e" * 64,
         "operation_graph": graph,
         "operation_payloads": {
             operation_id: payload for operation_id in operation_ids

@@ -29,7 +29,7 @@ class Proposals:
 
 
 class Reconciler:
-    def plan(self, commit, profile_id):
+    def plan(self, commit, profile_id, **_kwargs):
         return type(
             "Plan",
             (),
@@ -201,7 +201,7 @@ def test_expected_planning_rejections_are_stable_bounded_client_errors(
     error, status_code: int, detail: str
 ) -> None:
     class RejectingReconciler:
-        def plan(self, commit, profile_id):
+        def plan(self, commit, profile_id, **_kwargs):
             raise error
 
     codec = TokenCodec(b"k" * 32)
@@ -209,7 +209,7 @@ def test_expected_planning_rejections_are_stable_bounded_client_errors(
         jobs=Jobs(),
         tokens=codec,
         audits=MemoryAuditStore(),
-        fleet=dict,
+        fleet=lambda: {"commit": "a" * 40, "nodes": []},
         admin=AdminServices(Repository(), Proposals(), None, RejectingReconciler()),
         now=lambda: 10,
     )
@@ -229,7 +229,7 @@ def test_expected_planning_rejections_are_stable_bounded_client_errors(
 
 def test_unexpected_planning_errors_remain_server_errors() -> None:
     class BrokenReconciler:
-        def plan(self, commit, profile_id):
+        def plan(self, commit, profile_id, **_kwargs):
             raise AssertionError("programming defect")
 
     codec = TokenCodec(b"k" * 32)
@@ -237,7 +237,7 @@ def test_unexpected_planning_errors_remain_server_errors() -> None:
         jobs=Jobs(),
         tokens=codec,
         audits=MemoryAuditStore(),
-        fleet=dict,
+        fleet=lambda: {"commit": "a" * 40, "nodes": []},
         admin=AdminServices(Repository(), Proposals(), None, BrokenReconciler()),
         now=lambda: 10,
     )

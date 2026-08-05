@@ -167,7 +167,7 @@ if __name__ == "__main__":
         endpoint_resolver=endpoint,
         clock=clock,
         authority_prefetch=authority.prefetch,
-        authority_check=authority.authorized,
+        authority_check=authority.authorization_reason,
         authority_clear=authority.clear,
     )
     worker = Worker(

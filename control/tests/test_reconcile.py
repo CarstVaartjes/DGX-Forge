@@ -107,6 +107,15 @@ class Jobs:
         self.call = (args, kwargs)
         return type("Job", (), {"id": "job", "state": "queued"})()
 
+    def enqueue_guarded(self, *args, authority_check, **kwargs):
+        if not authority_check():
+            raise ValueError("fleet acceptance evidence is stale")
+        result = self.enqueue(*args, **kwargs)
+        if not authority_check():
+            self.call = None
+            raise ValueError("fleet acceptance evidence is stale")
+        return result
+
 
 def test_enqueue_pins_plan_commit_and_digest() -> None:
     jobs = Jobs()
@@ -214,7 +223,11 @@ def test_resolved_plan_digest_survives_process_restart(tmp_path) -> None:
         orchestrator=ReconciliationOrchestrator(sessions, clock=clock),
     )
 
-    planned = first.plan("a" * 40, "inference")
+    planned = first.plan(
+        "a" * 40,
+        "inference",
+        fleet_evidence_digest="e" * 64,
+    )
     assert planned.operation_graph.reconciliation_id != "pending"
     with sessions() as session:
         stored = session.scalar(
@@ -233,8 +246,110 @@ def test_resolved_plan_digest_survives_process_restart(tmp_path) -> None:
         observations=lambda: ("durable",),
         orchestrator=ReconciliationOrchestrator(sessions, clock=clock),
     )
-    result = restarted.enqueue(planned.digest, "operator", "request")
+    result = restarted.enqueue(
+        planned.digest,
+        "operator",
+        "request",
+        fleet_evidence_digest="e" * 64,
+        current_fleet_evidence=lambda: "e" * 64,
+    )
 
     assert result["reconciliation_id"] == planned.operation_graph.reconciliation_id
     assert jobs.call[0][4]["reconciliation_id"] == planned.operation_graph.reconciliation_id
     assert jobs.call[1]["reconciliation_id"] == planned.operation_graph.reconciliation_id
+
+
+def test_live_fleet_evidence_is_part_of_canonical_resolved_plan_digest(
+    tmp_path,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'fleet-plan.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine)
+    reconciler = Reconciler(
+        Policy(),
+        DesiredPlanner(),
+        jobs=Jobs(),
+        observations=lambda: ("durable",),
+        orchestrator=ReconciliationOrchestrator(
+            sessions, clock=lambda: datetime(2026, 8, 5, tzinfo=UTC)
+        ),
+    )
+
+    first = reconciler.plan(
+        "a" * 40, "inference", fleet_evidence_digest="1" * 64
+    )
+    second = reconciler.plan(
+        "a" * 40, "inference", fleet_evidence_digest="2" * 64
+    )
+
+    assert first.digest != second.digest
+    assert first.fleet_evidence_digest == "1" * 64
+    assert second.fleet_evidence_digest == "2" * 64
+    with sessions() as session:
+        stored = session.scalar(
+            select(Reconciliation).where(Reconciliation.plan_digest == first.digest)
+        )
+        assert stored is not None
+        assert stored.resolved_plan["fleet_evidence_digest"] == "1" * 64
+
+
+def test_enqueue_rejects_fresh_evidence_paired_with_old_plan(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'fleet-pair.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine)
+    reconciler = Reconciler(
+        Policy(),
+        DesiredPlanner(),
+        jobs=Jobs(),
+        observations=lambda: ("durable",),
+        orchestrator=ReconciliationOrchestrator(
+            sessions, clock=lambda: datetime(2026, 8, 5, tzinfo=UTC)
+        ),
+    )
+    old = reconciler.plan(
+        "a" * 40, "inference", fleet_evidence_digest="1" * 64
+    )
+
+    with pytest.raises(ValueError, match="plan.*evidence|evidence.*plan"):
+        reconciler.enqueue(
+            old.digest,
+            "operator",
+            "request",
+            fleet_evidence_digest="2" * 64,
+            current_fleet_evidence=lambda: "2" * 64,
+        )
+
+
+def test_evidence_change_at_enqueue_barrier_cannot_create_job(tmp_path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'fleet-barrier.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine, expire_on_commit=False)
+    clock = lambda: datetime(2026, 8, 5, tzinfo=UTC)
+    from dgx_control.jobs import JobService
+
+    jobs = JobService(sessions, clock=clock)
+    reconciler = Reconciler(
+        Policy(),
+        DesiredPlanner(),
+        jobs=jobs,
+        observations=lambda: ("durable",),
+        orchestrator=ReconciliationOrchestrator(sessions, clock=clock),
+    )
+    planned = reconciler.plan(
+        "a" * 40, "inference", fleet_evidence_digest="1" * 64
+    )
+    checks = iter(("1" * 64, "2" * 64))
+
+    with pytest.raises(ValueError, match="evidence.*stale"):
+        reconciler.enqueue(
+            planned.digest,
+            "operator",
+            "request",
+            fleet_evidence_digest="1" * 64,
+            current_fleet_evidence=lambda: next(checks),
+        )
+
+    from dgx_control.models import Job
+
+    with sessions() as session:
+        assert session.scalar(select(Job)) is None

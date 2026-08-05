@@ -91,6 +91,7 @@ class ReconciliationAuthorityInput:
     reconciliation_id: str
     base_commit: str
     plan_digest: str
+    fleet_evidence_digest: str
     routes: tuple[PublishedRoute, ...]
 
 
@@ -143,6 +144,7 @@ def load_reconciliation_authority_input(
         reconciliation_id=reconciliation.id,
         base_commit=reconciliation.base_commit,
         plan_digest=AgentReconciliationService._plan_digest(reconciliation),
+        fleet_evidence_digest=str(document["fleet_evidence_digest"]),
         routes=published,
     )
 
@@ -302,7 +304,7 @@ class AgentReconciliationService:
         ]
         | None = None,
         authority_check: Callable[
-            [str, str, str, tuple[PublishedRoute, ...]], bool
+            [str, str, str, tuple[PublishedRoute, ...]], bool | str
         ]
         | None = None,
         authority_clear: Callable[[], None] | None = None,
@@ -425,24 +427,6 @@ class AgentReconciliationService:
                     session, candidate
                 )
                 phase = reconciliation.current_phase
-                if phase == "withdrawal-pending":
-                    if not self._owns_publication(
-                        session,
-                        reconciliation,
-                        may_supersede=True,
-                    ):
-                        return False
-                    publication = self._publication(session, reconciliation.id)
-                    marker = self._publisher.withdraw(
-                        reconciliation_id=reconciliation.id,
-                        plan_digest=self._plan_digest(reconciliation),
-                        targets=graph.targets,
-                        reason="reconciliation maintenance",
-                    )
-                    self._transfer_publication_owner(session, reconciliation)
-                    self._store_marker(publication, marker, "routes-withdrawn")
-                    reconciliation.current_phase = "routes-withdrawn"
-                    return True
                 cancellation = self._cancellation(session, reconciliation.id)
                 if cancellation is not None:
                     cancellation_advanced = self._advance_cancellation(
@@ -459,6 +443,29 @@ class AgentReconciliationService:
                 if self._sweep_expired_mutations(
                     session, reconciliation, job, graph
                 ):
+                    return True
+                publication_owner = self._publication_owner(session)
+                if (
+                    phase == "withdrawal-pending"
+                    and publication_owner.reconciliation_id is not None
+                    and publication_owner.reconciliation_id != reconciliation.id
+                ):
+                    if not self._owns_publication(
+                        session,
+                        reconciliation,
+                        may_supersede=True,
+                    ):
+                        return False
+                    publication = self._publication(session, reconciliation.id)
+                    marker = self._publisher.withdraw(
+                        reconciliation_id=reconciliation.id,
+                        plan_digest=self._plan_digest(reconciliation),
+                        targets=graph.targets,
+                        reason="reconciliation maintenance",
+                    )
+                    self._transfer_publication_owner(session, reconciliation)
+                    self._store_marker(publication, marker, "routes-withdrawn")
+                    reconciliation.current_phase = "routes-withdrawn"
                     return True
                 authority_reason = self._continuous_authority_reason(
                     session, reconciliation, graph, document
@@ -493,6 +500,24 @@ class AgentReconciliationService:
                         graph,
                         authority_reason,
                     )
+                    return True
+                if phase == "withdrawal-pending":
+                    if not self._owns_publication(
+                        session,
+                        reconciliation,
+                        may_supersede=True,
+                    ):
+                        return False
+                    publication = self._publication(session, reconciliation.id)
+                    marker = self._publisher.withdraw(
+                        reconciliation_id=reconciliation.id,
+                        plan_digest=self._plan_digest(reconciliation),
+                        targets=graph.targets,
+                        reason="reconciliation maintenance",
+                    )
+                    self._transfer_publication_owner(session, reconciliation)
+                    self._store_marker(publication, marker, "routes-withdrawn")
+                    reconciliation.current_phase = "routes-withdrawn"
                     return True
                 if not self._owns_publication(
                     session,
@@ -1347,7 +1372,7 @@ class AgentReconciliationService:
     ) -> str | None:
         if self._authority_check is not None:
             try:
-                if not self._authority_check(
+                decision = self._authority_check(
                     reconciliation.id,
                     reconciliation.base_commit,
                     self._plan_digest(reconciliation),
@@ -1356,7 +1381,16 @@ class AgentReconciliationService:
                         document,
                         self._endpoint_resolver,
                     ),
-                ):
+                )
+                if isinstance(decision, str):
+                    if decision not in {
+                        "fleet acceptance evidence changed since planning",
+                        "reconciliation commit is no longer current",
+                        "reconciliation commit is no longer eligible",
+                    }:
+                        return "reconciliation authority is invalid"
+                    return decision
+                if decision is not True:
                     return "reconciliation commit is no longer eligible"
             except (OSError, RuntimeError, TypeError, ValueError):
                 return "reconciliation commit eligibility is unavailable"

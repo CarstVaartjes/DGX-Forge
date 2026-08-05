@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
+from dgx_control.auth import TokenCodec
 from dgx_control.enrollment import EnrollmentService
 from dgx_control.models import (
     AgentCertificate,
@@ -159,10 +160,16 @@ def test_postgres_resume_transition_has_one_concurrent_winner(
         durable.state = "waiting-for-operator"
         durable.status_reason = "operator approval required"
     first = durable_operation_services(
-        sessions, tmp_path / "routes-a", clock=clock
+        sessions,
+        tmp_path / "routes-a",
+        clock=clock,
+        cursors=TokenCodec(b"k" * 32).cursor_codec(),
     )
     second = durable_operation_services(
-        sessions, tmp_path / "routes-b", clock=clock
+        sessions,
+        tmp_path / "routes-b",
+        clock=clock,
+        cursors=TokenCodec(b"k" * 32).cursor_codec(),
     )
     barrier = threading.Barrier(2)
 

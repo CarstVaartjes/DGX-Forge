@@ -55,7 +55,14 @@ class Repository:
 
 
 class Reconciler:
-    def plan(self, commit: str, profile_id: str) -> SimpleNamespace:
+    def plan(
+        self,
+        commit: str,
+        profile_id: str,
+        *,
+        fleet_evidence_digest: str,
+    ) -> SimpleNamespace:
+        del fleet_evidence_digest
         assert profile_id == "production"
         operation = {
             "compensation_kind": "start",
@@ -87,7 +94,11 @@ class Reconciler:
         )
 
     def enqueue(
-        self, plan_digest: str, actor: str, request_id: str
+        self,
+        plan_digest: str,
+        actor: str,
+        request_id: str,
+        **_kwargs: object,
     ) -> dict[str, object]:
         del actor, request_id
         if plan_digest != DIGEST:

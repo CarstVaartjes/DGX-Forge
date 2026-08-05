@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from dgx_agent_protocol import canonical_message
+from dgx_control.auth import TokenCodec
 from dgx_control.jobs import JobService, StaleAttempt
 from dgx_control.models import Base
 from sqlalchemy import create_engine
@@ -28,7 +29,11 @@ def service(tmp_path):
     )
     Base.metadata.create_all(engine)
     clock = Clock()
-    return JobService(sessionmaker(engine, expire_on_commit=False), clock=clock), clock
+    return JobService(
+        sessionmaker(engine, expire_on_commit=False),
+        clock=clock,
+        cursors=TokenCodec(b"k" * 32).cursor_codec(),
+    ), clock
 
 
 def test_workers_cannot_claim_same_job(service) -> None:
@@ -66,6 +71,70 @@ def test_job_list_keyset_pages_reach_every_job_in_stable_order(service) -> None:
     assert set(found) == expected
     with pytest.raises(ValueError, match="cursor"):
         jobs.list_page(limit=7, cursor="not-a-cursor")
+
+
+def test_job_list_cursor_is_authenticated_and_filter_bound(service) -> None:
+    jobs, _clock = service
+    for index in range(3):
+        jobs.enqueue(
+            "probe",
+            "admin",
+            "a" * 40,
+            [f"spk_{index:032x}"],
+            {},
+        )
+
+    _page, cursor, _total = jobs.list_page(limit=1, status="queued")
+    assert cursor is not None and len(cursor) <= 512
+
+    replacement = "A" if cursor[-1] != "A" else "B"
+    with pytest.raises(ValueError, match="cursor"):
+        jobs.list_page(limit=1, cursor=cursor[:-1] + replacement, status="queued")
+    with pytest.raises(ValueError, match="cursor"):
+        jobs.list_page(limit=1, cursor=cursor, status="running")
+    with pytest.raises(ValueError, match="cursor"):
+        jobs.list_page(limit=1, cursor="v1.e30.A" * 300, status="queued")
+
+
+def test_job_list_keyset_cursor_excludes_concurrent_newer_insert(service) -> None:
+    jobs, clock = service
+    initial = [
+        jobs.enqueue("probe", "admin", "a" * 40, [f"spk_{index:032x}"], {})
+        for index in range(3)
+    ]
+    first, cursor, total = jobs.list_page(limit=2)
+    assert cursor is not None and total == 3
+
+    clock.now += timedelta(seconds=1)
+    inserted = jobs.enqueue(
+        "probe", "admin", "a" * 40, ["spk_" + "f" * 32], {}
+    )
+    second, next_cursor, updated_total = jobs.list_page(limit=2, cursor=cursor)
+
+    assert {job.id for job in second} == {
+        job.id for job in initial
+    } - {job.id for job in first}
+    assert inserted.id not in {job.id for job in (*first, *second)}
+    assert next_cursor is None
+    assert updated_total == 4
+
+
+def test_job_list_rejects_syntactically_valid_cursor_forged_with_other_key(
+    service,
+) -> None:
+    jobs, clock = service
+    for index in range(2):
+        jobs.enqueue("probe", "admin", "a" * 40, [f"spk_{index:032x}"], {})
+    forged_service = JobService(
+        jobs._sessions,
+        clock=clock,
+        cursors=TokenCodec(b"z" * 32).cursor_codec(),
+    )
+    _page, forged, _total = forged_service.list_page(limit=1)
+    assert forged is not None
+
+    with pytest.raises(ValueError, match="cursor"):
+        jobs.list_page(limit=1, cursor=forged)
 
 
 def test_claim_carries_commit_and_targets_to_the_worker(service) -> None:

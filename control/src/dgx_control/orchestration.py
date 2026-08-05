@@ -358,6 +358,7 @@ def validate_persisted_resolved_plan(
         "releases",
         "workload_groups",
         "input_digests",
+        "fleet_evidence_digest",
         "operation_graph",
         "operation_payloads",
         "agent_protocol_range",
@@ -389,6 +390,12 @@ def validate_persisted_resolved_plan(
         for value in input_digests.values()
     ):
         raise ValueError("persisted resolved plan input digest is invalid")
+    fleet_evidence_digest = document["fleet_evidence_digest"]
+    if (
+        not isinstance(fleet_evidence_digest, str)
+        or _DIGEST.fullmatch(fleet_evidence_digest) is None
+    ):
+        raise ValueError("persisted resolved plan fleet evidence digest is invalid")
     protocol = document["agent_protocol_range"]
     if (
         not isinstance(protocol, list)

@@ -407,6 +407,7 @@ def _execution_fixture(
         "releases": {},
         "workload_groups": {},
         "input_digests": {"fleet": "f" * 64},
+        "fleet_evidence_digest": "e" * 64,
         "operation_graph": graph,
         "operation_payloads": {
             operation["operation_id"]: payload for operation in operations
@@ -608,6 +609,62 @@ def test_withdrawal_is_durable_before_any_agent_operation(tmp_path) -> None:
         assert projections[0].agent_operation_id == operations[0].id
         assert projections[0].state == "queued"
     assert queue.notifications == 1
+
+
+def test_authority_change_after_enqueue_stops_before_first_route_side_effect(
+    tmp_path,
+) -> None:
+    _service, sessions, queue, publisher, reconciliation_id, job_id = (
+        _execution_fixture(tmp_path)
+    )
+    now = datetime(2026, 8, 5, tzinfo=UTC)
+    accepted = {"value": True}
+    with sessions.begin() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        node.protocol_version = 1
+        node.capabilities = [
+            "node.probe",
+            "release.install",
+            "workload.health",
+            "workload.prepare",
+            "workload.start",
+            "workload.stop",
+            "workload.verify",
+        ]
+    service = AgentReconciliationService(
+        sessions,
+        agent_jobs=queue,
+        publisher=publisher,
+        endpoint_resolver=lambda _session, _node: ("192.0.2.10", now),
+        clock=lambda: now,
+        authority_prefetch=lambda *_args: None,
+        authority_check=lambda *_args: accepted["value"],
+        authority_clear=lambda: None,
+    )
+
+    assert service.tick(reconciliation_id) is True
+    with sessions() as session:
+        first_reconciliation = session.get(Reconciliation, reconciliation_id)
+        first_job = session.get(Job, job_id)
+        assert (first_reconciliation.current_phase, first_job.status_reason) == (
+            "withdrawal-pending",
+            None,
+        )
+    accepted["value"] = False
+    assert service.tick(reconciliation_id) is True
+
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        job = session.get(Job, job_id)
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "waiting-for-operator"
+        assert job is not None and job.state == "waiting-for-operator"
+        assert "authority" in (job.status_reason or "") or "eligible" in (
+            job.status_reason or ""
+        )
+    assert publisher.withdrawals == 0
+    assert publisher.publications == []
 
 
 def test_authenticated_presence_contact_cannot_create_publication_authority(
@@ -1061,6 +1118,7 @@ def _compensation_fixture(
         "releases": {},
         "workload_groups": {},
         "input_digests": {"fleet": "f" * 64},
+        "fleet_evidence_digest": "e" * 64,
         "operation_graph": graph,
         "operation_payloads": {worker_id: payload, entry_id: payload},
         "agent_protocol_range": [1, 1],

@@ -34,7 +34,14 @@ class Repository:
 
 
 class Reconciler:
-    def plan(self, commit: str, profile_id: str):
+    def plan(
+        self,
+        commit: str,
+        profile_id: str,
+        *,
+        fleet_evidence_digest: str,
+    ):
+        del fleet_evidence_digest
         if profile_id != "production-agents":
             raise ValueError("profile is invalid")
         operation = {
@@ -66,7 +73,13 @@ class Reconciler:
             agent_protocol_range=(1, 1),
         )
 
-    def enqueue(self, digest: str, _actor: str, _request_id: str):
+    def enqueue(
+        self,
+        digest: str,
+        _actor: str,
+        _request_id: str,
+        **_kwargs: object,
+    ):
         if digest != PLAN_DIGEST:
             raise ValueError("unknown plan")
         return {

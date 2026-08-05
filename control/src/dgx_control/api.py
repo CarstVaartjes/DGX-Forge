@@ -72,7 +72,7 @@ from .operation_api import (
     plan_response,
 )
 from .proposals import DocumentChange
-from .reconcile import IneligibleCommit
+from .reconcile import IneligibleCommit, StaleFleetEvidence
 from .repository import RepositoryPolicyError
 
 
@@ -268,6 +268,7 @@ def create_app(
     operations: OperationApiServices | None = None,
 ) -> FastAPI:
     app = FastAPI(title="DGX Forge Control", version="1.0", docs_url=None, redoc_url=None)
+    cursor_codec = tokens.cursor_codec()
 
     @app.exception_handler(StarletteHTTPException)
     async def canonical_agent_http_error(
@@ -498,8 +499,12 @@ def create_app(
         if admin is None or admin.reconciler is None:
             raise HTTPException(status_code=503, detail="reconciliation unavailable")
         try:
-            planned = admin.reconciler.plan(commit, profile_id)
             evidence = fleet_response(fleet())
+            planned = admin.reconciler.plan(
+                commit,
+                profile_id,
+                fleet_evidence_digest=evidence.evidence_digest,
+            )
             return plan_response(
                 planned,
                 fleet_evidence_digest=evidence.evidence_digest,
@@ -568,6 +573,10 @@ def create_app(
                     body.plan_digest,
                     authenticated.subject,
                     request.state.request_id,
+                    fleet_evidence_digest=body.fleet_evidence_digest,
+                    current_fleet_evidence=lambda: fleet_response(
+                        fleet()
+                    ).evidence_digest,
                 )
             )
             audits.append(
@@ -583,6 +592,10 @@ def create_app(
         except IneligibleCommit:
             raise HTTPException(
                 status_code=409, detail="commit is not eligible"
+            ) from None
+        except StaleFleetEvidence:
+            raise HTTPException(
+                status_code=409, detail="fleet acceptance evidence is stale"
             ) from None
         except (TypeError, ValueError):
             raise HTTPException(
@@ -725,8 +738,13 @@ def create_app(
             return job_response(
                 job,
                 projected,
-                target_cursor=decode_offset(target_cursor),
+                target_cursor=decode_offset(
+                    target_cursor,
+                    job_id=str(job.id),
+                    cursors=cursor_codec,
+                ),
                 limit=limit,
+                cursors=cursor_codec,
             )
         except ValueError:
             raise HTTPException(status_code=422, detail="job cursor is invalid") from None
@@ -840,7 +858,9 @@ def production_app() -> FastAPI:
     clock = lambda: datetime.now(UTC)
     online_lock = OnlineLock(settings.state_path / "offline.lock")
     online_lock.__enter__()
-    job_service = JobService(sessions, clock=clock)
+    token_codec = TokenCodec(settings.token_signing_key)
+    cursor_codec = token_codec.cursor_codec()
+    job_service = JobService(sessions, clock=clock, cursors=cursor_codec)
     repository = RepositoryService(settings.repository_path)
     proposals = ProposalService(repository, head=repository.head)
     if settings.git_signing_key_path is None:
@@ -878,7 +898,7 @@ def production_app() -> FastAPI:
     )
     def reconciliation_authority_input(
         reconciliation_id: str,
-    ) -> tuple[str, str, tuple[Any, ...]]:
+    ) -> tuple[str, str, tuple[Any, ...], str]:
         def endpoint(session, node_id: str) -> tuple[str, Any]:
             observation = agent_services.presence.latest_in_session(
                 session,
@@ -893,12 +913,20 @@ def production_app() -> FastAPI:
                 reconciliation_id,
                 endpoint,
             )
-        return snapshot.base_commit, snapshot.plan_digest, snapshot.routes
+        return (
+            snapshot.base_commit,
+            snapshot.plan_digest,
+            snapshot.routes,
+            snapshot.fleet_evidence_digest,
+        )
 
     worker_authority = RepositoryAuthorityService(
         current_commit=current_commit,
         commit_eligible=commit_eligible,
         reconciliation_input=reconciliation_authority_input,
+        current_fleet_evidence=lambda: fleet_response(
+            dashboard.fleet()
+        ).evidence_digest,
         deployments=RepositoryHermesRoutePolicy(
             settings.repository_path
         ).deployments,
@@ -927,7 +955,7 @@ def production_app() -> FastAPI:
                 pass
     app = create_app(
         jobs=job_service,
-        tokens=TokenCodec(settings.token_signing_key),
+        tokens=token_codec,
         audits=SqlAuditStore(sessions, clock),
         fleet=dashboard.fleet,
         admin=AdminServices(
@@ -949,6 +977,7 @@ def production_app() -> FastAPI:
             sessions,
             Path("/routes"),
             clock=clock,
+            cursors=cursor_codec,
         ),
     )
     web_root = Path(__file__).resolve().parent / "web"

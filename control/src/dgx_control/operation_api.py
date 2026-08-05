@@ -5,7 +5,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from base64 import urlsafe_b64decode, urlsafe_b64encode
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
 from dataclasses import asdict, dataclass
@@ -18,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field, RootModel
 from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
+from .auth import CursorCodec
 from .models import (
     AgentCertificate,
     AgentNode,
@@ -322,6 +322,7 @@ def job_response(
     *,
     target_cursor: int,
     limit: int,
+    cursors: CursorCodec,
 ) -> JobDetailResponse:
     projected = [
         JobOperationResponse(
@@ -347,7 +348,11 @@ def job_response(
     targets = list(job.targets)
     visible_targets = targets[target_cursor : target_cursor + limit]
     target_next_cursor = (
-        _encode_offset(target_cursor + limit)
+        _encode_offset(
+            target_cursor + limit,
+            job_id=str(job.id),
+            cursors=cursors,
+        )
         if target_cursor + limit < len(targets)
         else None
     )
@@ -369,18 +374,33 @@ def job_response(
     )
 
 
-def _encode_offset(offset: int) -> str:
-    return urlsafe_b64encode(str(offset).encode("ascii")).decode("ascii").rstrip("=")
+def _encode_offset(offset: int, *, job_id: str, cursors: CursorCodec) -> str:
+    return cursors.encode(
+        resource="job-targets",
+        order="index-asc/v1",
+        context={"job_id": job_id},
+        boundary=offset,
+    )
 
 
-def decode_offset(cursor: str | None) -> int:
+def decode_offset(
+    cursor: str | None,
+    *,
+    job_id: str,
+    cursors: CursorCodec,
+) -> int:
     if cursor is None:
         return 0
     try:
-        offset = int(urlsafe_b64decode(cursor.encode("ascii") + b"==="))
+        offset = cursors.decode(
+            cursor,
+            resource="job-targets",
+            order="index-asc/v1",
+            context={"job_id": job_id},
+        )
     except (UnicodeError, ValueError):
         raise ValueError("target cursor is invalid") from None
-    if offset < 0:
+    if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
         raise ValueError("target cursor is invalid")
     return offset
 
@@ -406,6 +426,7 @@ class _DurableOperationProjection:
         *,
         clock: Callable[[], datetime],
         stale_after_seconds: int,
+        cursors: CursorCodec,
     ) -> None:
         if route_root.is_symlink() or stale_after_seconds <= 0:
             raise ValueError("operation projection configuration is invalid")
@@ -413,6 +434,7 @@ class _DurableOperationProjection:
         self._route_root = route_root
         self._clock = clock
         self._stale_after_seconds = stale_after_seconds
+        self._cursors = cursors
 
     def endpoint(self, alias: str) -> Mapping[str, object]:
         with self._sessions() as session:
@@ -581,8 +603,11 @@ class _DurableOperationProjection:
         boundary: tuple[datetime, str] | None = None
         if cursor is not None:
             try:
-                decoded = json.loads(
-                    urlsafe_b64decode(cursor.encode("ascii") + b"===")
+                decoded = self._cursors.decode(
+                    cursor,
+                    resource="job-operations",
+                    order="created-at-asc/id-asc/v1",
+                    context={"job_id": job_id},
                 )
                 if (
                     not isinstance(decoded, list)
@@ -678,12 +703,12 @@ class _DurableOperationProjection:
         next_cursor = None
         if has_more and operations:
             last = operations[-1]
-            next_cursor = urlsafe_b64encode(
-                json.dumps(
-                    [_aware(last.created_at).isoformat(), last.id],
-                    separators=(",", ":"),
-                ).encode("utf-8")
-            ).decode("ascii").rstrip("=")
+            next_cursor = self._cursors.encode(
+                resource="job-operations",
+                order="created-at-asc/id-asc/v1",
+                context={"job_id": job_id},
+                boundary=[_aware(last.created_at).isoformat(), last.id],
+            )
         terminal = {"succeeded", "accepted", "compensated"}
         failed = {"failed", "uncertain"}
         running = {"queued", "running", "planned", "compensating"}
@@ -724,6 +749,7 @@ def durable_operation_services(
     route_root: Path,
     *,
     clock: Callable[[], datetime],
+    cursors: CursorCodec,
     stale_after_seconds: int = 150,
 ) -> OperationApiServices:
     """Build bounded projections over database state and the active route bundle."""
@@ -733,6 +759,7 @@ def durable_operation_services(
         route_root,
         clock=clock,
         stale_after_seconds=stale_after_seconds,
+        cursors=cursors,
     )
     return OperationApiServices(
         endpoint=projection.endpoint,
