@@ -6,12 +6,14 @@ import os
 import subprocess
 import sys
 import uuid
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from dgx_agent_protocol import canonical_message
+from dgx_control.agent_jobs import AgentJobService
 from dgx_control.desired_state import (
     CurrentWorkloadState,
     DesiredStateObservation,
@@ -41,6 +43,7 @@ REQUIRED_CAPABILITIES = (
     "workload.stop",
     "workload.verify",
 )
+AGENT_CAPABILITIES = ("node.probe", *REQUIRED_CAPABILITIES)
 
 
 def _git(root: Path, *arguments: str) -> str:
@@ -61,6 +64,10 @@ def _git(root: Path, *arguments: str) -> str:
 
 def _node_id(index: int) -> str:
     return f"spk_{index:032x}"
+
+
+def _gate_id(index: int) -> str:
+    return f"gate:{_node_id(index)}:node.probe"
 
 
 def _fleet_toml(count: int, *, reversed_nodes: bool = False) -> str:
@@ -259,7 +266,8 @@ def _observations(count: int) -> tuple[DesiredStateObservation, ...]:
             occupied=False,
             agent_state="active",
             protocol_version=1,
-            capabilities=REQUIRED_CAPABILITIES,
+            capabilities=AGENT_CAPABILITIES,
+            compute_occupancy="clean",
         )
         for index in range(count)
     )
@@ -287,6 +295,63 @@ def _managed_group(
         start_order="workers-before-entrypoint" if count > 1 else "independent",
         stop_order="entrypoint-before-workers" if count > 1 else "independent",
     )
+
+
+def _persisted_start_plan(
+    node_id: str,
+) -> tuple[dict[str, object], str, dict[str, object], str, dict[str, object]]:
+    payload: dict[str, object] = {
+        "schema_version": 1,
+        "workload_id": "model",
+        "release_digest": "8" * 64,
+        "adapter_id": "spark-runtime-v1",
+        "preparation_digest": "c" * 64,
+    }
+    payload_digest = hashlib.sha256(canonical_message(payload)).hexdigest()
+    graph_node: dict[str, object] = {
+        "operation_id": "model:node:workload.start",
+        "node_id": node_id,
+        "workload_id": "model",
+        "kind": "workload.start",
+        "dependencies": [],
+        "compensation_kind": "workload.stop",
+        "payload_digest": payload_digest,
+    }
+    graph: dict[str, object] = {
+        "schema_version": 1,
+        "base_commit": "a" * 40,
+        "targets": [node_id],
+        "nodes": [graph_node],
+    }
+    graph_digest = hashlib.sha256(canonical_message(graph)).hexdigest()
+    resolved: dict[str, object] = {
+        "commit": "a" * 40,
+        "targets": [node_id],
+        "placements": {"model": [node_id]},
+        "routes": {},
+        "releases": {},
+        "workload_groups": {
+            "model": {
+                "nodes": [node_id],
+                "entrypoint_node_id": node_id,
+                "release_digest": "8" * 64,
+                "adapter_id": "spark-runtime-v1",
+                "definition_hash": DEFINITION_HASH,
+                "profile_digest": "c" * 64,
+                "preparation_digest": "c" * 64,
+                "lifecycle": {
+                    "start_order": "independent",
+                    "stop_order": "independent",
+                },
+            }
+        },
+        "input_digests": {"fleet": "f" * 64},
+        "operation_graph": graph,
+        "operation_payloads": {"model:node:workload.start": payload},
+        "agent_protocol_range": [1, 1],
+    }
+    plan_digest = hashlib.sha256(canonical_message(resolved)).hexdigest()
+    return graph, graph_digest, resolved, plan_digest, payload
 
 
 def _resolve(
@@ -358,8 +423,9 @@ def test_resolves_one_two_and_sixteen_nodes_from_exact_repository_objects(
         for path, content in sorted(documents.items())
     }
     assert plan.operation_graph.reconciliation_id
-    assert len(plan.operation_graph.nodes) == count * 5
+    assert len(plan.operation_graph.nodes) == count * 6
     assert {node.kind for node in plan.operation_graph.nodes} == {
+        "node.probe",
         "release.install",
         "workload.prepare",
         "workload.start",
@@ -386,6 +452,9 @@ def test_every_emitted_payload_is_accepted_by_the_exact_agent_parser(
 
         for node in plan.operation_graph.nodes:
             payload = plan.operation_payloads[node.operation_id]
+            if node.kind == "node.probe":
+                assert payload == {"require_active_nvidia_compute_processes": 0}
+                continue
             if node.kind == "release.install":
                 ReleaseRequest.parse(payload)
             else:
@@ -534,6 +603,7 @@ def test_start_and_stop_dependencies_follow_lifecycle_order(tmp_path: Path) -> N
             replace(
                 observation,
                 occupied=True,
+                compute_occupancy="managed",
                 memory_total_bytes=4_000,
                 disk_total_bytes=8_000,
                 current_workloads=(
@@ -554,9 +624,17 @@ def test_start_and_stop_dependencies_follow_lifecycle_order(tmp_path: Path) -> N
     assert graph.dependencies(f"model:{worker}:workload.stop") == (
         f"model:{head}:workload.stop",
     )
+    probes = tuple(f"gate:{node_id}:node.probe" for node_id in (head, worker))
+    for probe_id in probes:
+        assert graph.dependencies(probe_id) == (
+            f"model:{head}:workload.stop",
+            f"model:{worker}:workload.stop",
+        )
+        assert plan.operation_payloads[probe_id] == {
+            "require_active_nvidia_compute_processes": 0
+        }
     assert graph.dependencies(f"model:{head}:release.install") == (
-        f"model:{head}:workload.stop",
-        f"model:{worker}:workload.stop",
+        *probes,
     )
     assert plan.operation_payloads[f"model:{head}:workload.stop"] == {
         "schema_version": 1,
@@ -572,10 +650,16 @@ def test_fresh_deploy_omits_stop_and_upgrade_stops_only_current_release(
     repository, commit, _ = _repository(tmp_path, 1)
     fresh = _resolve(repository, commit, _observations(1))
     assert "workload.stop" not in {node.kind for node in fresh.operation_graph.nodes}
+    fresh_probe = f"gate:{_node_id(0)}:node.probe"
+    assert fresh.operation_graph.dependencies(fresh_probe) == ()
+    assert fresh.operation_graph.dependencies(
+        f"model:{_node_id(0)}:release.install"
+    ) == (fresh_probe,)
 
     current = replace(
         _observations(1)[0],
         occupied=True,
+        compute_occupancy="managed",
         memory_total_bytes=4_000,
         disk_total_bytes=8_000,
         current_workloads=(
@@ -620,6 +704,7 @@ def test_fully_occupied_managed_node_can_replace_workload_using_total_capacity(
     observation = replace(
         _observations(1)[0],
         occupied=True,
+        compute_occupancy="managed",
         memory_total_bytes=4_000,
         disk_total_bytes=8_000,
         current_workloads=(
@@ -639,7 +724,8 @@ def test_fully_occupied_managed_node_can_replace_workload_using_total_capacity(
         "release_digest": "8" * 64,
         "adapter_id": "spark-runtime-v1",
     }
-    assert plan.operation_graph.dependencies(install_id) == (stop_id,)
+    assert plan.operation_graph.dependencies(install_id) == (_gate_id(0),)
+    assert plan.operation_graph.dependencies(_gate_id(0)) == (stop_id,)
 
 
 def test_reclaimable_occupied_node_without_total_capacity_fails_closed(
@@ -649,6 +735,7 @@ def test_reclaimable_occupied_node_without_total_capacity_fails_closed(
     observation = replace(
         _observations(1)[0],
         occupied=True,
+        compute_occupancy="managed",
         current_workloads=(
             _managed_group(1, release_digest="8" * 64),
         ),
@@ -665,6 +752,7 @@ def test_unmanaged_occupancy_is_never_reclaimed_for_desired_placement(
     observation = replace(
         _observations(1)[0],
         occupied=True,
+        compute_occupancy="unmanaged",
         memory_total_bytes=4_000,
         disk_total_bytes=8_000,
         current_workloads=(
@@ -690,6 +778,7 @@ def test_nonexclusive_desired_requirement_is_rejected_even_with_unmanaged_occupa
     observation = replace(
         _observations(1)[0],
         occupied=True,
+        compute_occupancy="unmanaged",
         current_workloads=(
             CurrentWorkloadState(
                 "external", "8" * 64, "spark-runtime-v1", managed=False
@@ -729,6 +818,7 @@ def test_current_co_resident_groups_are_rejected(
         observation = replace(
             _observations(1)[0],
             occupied=True,
+            compute_occupancy="managed",
             memory_total_bytes=4_000,
             disk_total_bytes=8_000,
             current_workloads=(_managed_group(1), other),
@@ -743,6 +833,7 @@ def test_scale_up_restarts_every_member_after_stopping_the_complete_old_group(
     head = replace(
         _observations(2)[0],
         occupied=True,
+        compute_occupancy="managed",
         memory_total_bytes=4_000,
         disk_total_bytes=8_000,
         current_workloads=(
@@ -763,6 +854,7 @@ def test_scale_up_restarts_every_member_after_stopping_the_complete_old_group(
     }
     assert plan.placements == {"model": (_node_id(0), worker)}
     assert kinds_by_node[_node_id(0)] == {
+        "node.probe",
         "workload.stop",
         "release.install",
         "workload.prepare",
@@ -771,6 +863,7 @@ def test_scale_up_restarts_every_member_after_stopping_the_complete_old_group(
         "workload.verify",
     }
     assert kinds_by_node[worker] == {
+        "node.probe",
         "release.install",
         "workload.prepare",
         "workload.start",
@@ -780,7 +873,9 @@ def test_scale_up_restarts_every_member_after_stopping_the_complete_old_group(
     stop_id = f"model:{_node_id(0)}:workload.stop"
     assert plan.operation_graph.dependencies(
         f"model:{worker}:release.install"
-    ) == (stop_id,)
+    ) == (_gate_id(0), _gate_id(1))
+    assert plan.operation_graph.dependencies(_gate_id(0)) == (stop_id,)
+    assert plan.operation_graph.dependencies(_gate_id(1)) == (stop_id,)
 
 
 def test_scale_down_stops_all_old_members_then_restarts_desired_singleton(
@@ -796,6 +891,7 @@ def test_scale_down_stops_all_old_members_then_restarts_desired_singleton(
         replace(
             observation,
             occupied=True,
+            compute_occupancy="managed",
             memory_total_bytes=4_000,
             disk_total_bytes=8_000,
             current_workloads=(
@@ -820,7 +916,9 @@ def test_scale_down_stops_all_old_members_then_restarts_desired_singleton(
     assert plan.operation_graph.dependencies(stop_ids[1]) == (stop_ids[0],)
     assert plan.operation_graph.dependencies(
         f"model:{_node_id(0)}:release.install"
-    ) == stop_ids
+    ) == (_gate_id(0), _gate_id(1))
+    assert plan.operation_graph.dependencies(_gate_id(0)) == stop_ids
+    assert plan.operation_graph.dependencies(_gate_id(1)) == stop_ids
     assert plan.targets == (_node_id(0), _node_id(1))
 
 
@@ -834,6 +932,7 @@ def test_nonlexical_old_entrypoint_uses_persisted_old_role_for_stop_order(
         replace(
             observation,
             occupied=True,
+            compute_occupancy="managed",
             memory_total_bytes=4_000,
             disk_total_bytes=8_000,
             current_workloads=(_managed_group(2, nodes=old_nodes),),
@@ -861,6 +960,7 @@ def test_exact_complete_group_is_retained_without_stop_prepare_or_start(
         replace(
             observation,
             occupied=True,
+            compute_occupancy="managed",
             memory_total_bytes=4_000,
             disk_total_bytes=8_000,
             current_workloads=(_managed_group(2),),
@@ -885,6 +985,7 @@ def test_atomic_group_transition_is_independent_of_observation_order(
         replace(
             observation,
             occupied=True,
+            compute_occupancy="managed",
             memory_total_bytes=4_000,
             disk_total_bytes=8_000,
             current_workloads=(
@@ -966,6 +1067,7 @@ stop_order = "independent"
     observation = replace(
         _observations(1)[0],
         occupied=True,
+        compute_occupancy="managed",
         memory_total_bytes=4_000,
         disk_total_bytes=8_000,
         current_workloads=(_managed_group(1),),
@@ -992,6 +1094,7 @@ def test_same_node_profile_digest_change_restarts_complete_group(
     current = replace(
         _observations(1)[0],
         occupied=True,
+        compute_occupancy="managed",
         memory_total_bytes=4_000,
         disk_total_bytes=8_000,
         current_workloads=(_managed_group(1),),
@@ -1001,7 +1104,8 @@ def test_same_node_profile_digest_change_restarts_complete_group(
 
     stop_id = f"model:{_node_id(0)}:workload.stop"
     install_id = f"model:{_node_id(0)}:release.install"
-    assert plan.operation_graph.dependencies(install_id) == (stop_id,)
+    assert plan.operation_graph.dependencies(install_id) == (_gate_id(0),)
+    assert plan.operation_graph.dependencies(_gate_id(0)) == (stop_id,)
     assert plan.workload_groups["model"]["profile_digest"] == "4" * 64
 
 
@@ -1024,6 +1128,7 @@ def test_preferred_node_move_tears_down_old_node_before_starting_new_node(
     old = replace(
         _observations(2)[0],
         occupied=True,
+        compute_occupancy="managed",
         memory_total_bytes=4_000,
         disk_total_bytes=8_000,
         current_workloads=(
@@ -1036,7 +1141,12 @@ def test_preferred_node_move_tears_down_old_node_before_starting_new_node(
     stop_id = f"model:{_node_id(0)}:workload.stop"
     install_id = f"model:{_node_id(1)}:release.install"
     assert plan.placements == {"model": (_node_id(1),)}
-    assert plan.operation_graph.dependencies(install_id) == (stop_id,)
+    assert plan.operation_graph.dependencies(install_id) == (
+        _gate_id(0),
+        _gate_id(1),
+    )
+    assert plan.operation_graph.dependencies(_gate_id(0)) == (stop_id,)
+    assert plan.operation_graph.dependencies(_gate_id(1)) == (stop_id,)
     assert plan.routes["chat"]["entrypoint_node_id"] == _node_id(1)
 
 
@@ -1067,6 +1177,7 @@ stop_order = "independent"
     current = replace(
         _observations(1)[0],
         occupied=True,
+        compute_occupancy="managed",
         memory_total_bytes=4_000,
         disk_total_bytes=8_000,
         current_workloads=(
@@ -1080,8 +1191,14 @@ stop_order = "independent"
     assert plan.routes == {}
     assert plan.releases == {}
     assert plan.targets == (_node_id(0),)
-    assert tuple(node.kind for node in plan.operation_graph.nodes) == ("workload.stop",)
-    assert plan.operation_payloads[plan.operation_graph.nodes[0].operation_id][
+    assert tuple(node.kind for node in plan.operation_graph.nodes) == (
+        "workload.stop",
+        "node.probe",
+    )
+    assert plan.operation_graph.dependencies(
+        f"gate:{_node_id(0)}:node.probe"
+    ) == (f"model:{_node_id(0)}:workload.stop",)
+    assert plan.operation_payloads[f"model:{_node_id(0)}:workload.stop"][
         "release_digest"
     ] == "a" * 64
 
@@ -1189,7 +1306,7 @@ def test_rejects_stale_observation_and_insufficient_capacity(tmp_path: Path) -> 
                 _observations(1)[0],
                 capabilities=tuple(
                     item
-                    for item in REQUIRED_CAPABILITIES
+                    for item in AGENT_CAPABILITIES
                     if item != "workload.verify"
                 ),
             ),
@@ -1217,16 +1334,19 @@ def test_rejects_release_operations_outside_closed_agent_registry(
         _resolve(repository, commit, _observations(1))
 
 
-def test_agent_may_advertise_other_implemented_closed_registry_operations(
+def test_agent_must_advertise_zero_compute_probe_capability(
     tmp_path: Path,
 ) -> None:
     repository, commit, _ = _repository(tmp_path, 1)
     observation = replace(
         _observations(1)[0],
-        capabilities=REQUIRED_CAPABILITIES + ("node.probe",),
+        capabilities=tuple(
+            item for item in AGENT_CAPABILITIES if item != "node.probe"
+        ),
     )
 
-    assert _resolve(repository, commit, (observation,)).targets == (_node_id(0),)
+    with pytest.raises(ValueError, match="capabilities"):
+        _resolve(repository, commit, (observation,))
 
 
 def test_resolution_is_pinned_to_commit_not_mutable_checkout(tmp_path: Path) -> None:
@@ -1253,7 +1373,7 @@ def test_durable_projection_joins_latest_health_with_agent_compatibility(
                 node_id=node_id,
                 state="active",
                 protocol_version=1,
-                capabilities=list(REQUIRED_CAPABILITIES),
+                capabilities=list(AGENT_CAPABILITIES),
                 last_seen_at=NOW - timedelta(seconds=1),
             )
         )
@@ -1288,9 +1408,68 @@ def test_durable_projection_joins_latest_health_with_agent_compatibility(
             occupied=False,
             agent_state="active",
             protocol_version=1,
-            capabilities=REQUIRED_CAPABILITIES,
+            capabilities=AGENT_CAPABILITIES,
         ),
     )
+
+
+@pytest.mark.parametrize(
+    ("count", "occupancy", "eligible"),
+    ((0, "clean", True), (2, "unmanaged", False), (None, "unknown", False)),
+)
+def test_production_probe_compute_evidence_controls_placement(
+    tmp_path: Path, count: int | None, occupancy: str, eligible: bool
+) -> None:
+    repository, commit, _ = _repository(tmp_path, 1)
+    engine = create_engine(f"sqlite:///{tmp_path / 'probe-occupancy.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine)
+    node_id = _node_id(0)
+    probe_result = {
+        "status": "ok",
+        "evidence": {
+            "dgx_forge": {
+                "schema_version": 1,
+                "memory": {"available_bytes": 1_000, "total_bytes": 4_000},
+                "storage": {"available_bytes": 2_000, "total_bytes": 8_000},
+                "accelerator": {
+                    "available": True,
+                    "active_nvidia_compute_processes": count,
+                },
+            },
+            "nvidia": {"tools": {}},
+        },
+    }
+    with sessions.begin() as session:
+        session.add(
+            AgentNode(
+                node_id=node_id,
+                state="active",
+                protocol_version=1,
+                capabilities=list(AGENT_CAPABILITIES),
+                last_seen_at=NOW - timedelta(seconds=1),
+            )
+        )
+        session.add(
+            Observation(
+                node_id=node_id,
+                kind="health",
+                payload=AgentJobService._probe_health(probe_result),
+                observed_at=NOW - timedelta(seconds=2),
+            )
+        )
+
+    projected = durable_desired_state_observations(sessions)
+
+    assert projected[0].compute_occupancy == occupancy
+    resolver = DesiredStateResolver(repository, clock=lambda: NOW)
+    if eligible:
+        assert resolver.resolve(commit, "inference", projected).placements == {
+            "model": (node_id,)
+        }
+    else:
+        with pytest.raises(ValueError, match="insufficient eligible nodes"):
+            resolver.resolve(commit, "inference", projected)
 
 
 def test_durable_projection_derives_occupancy_from_completed_start_evidence(
@@ -1300,30 +1479,17 @@ def test_durable_projection_derives_occupancy_from_completed_start_evidence(
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine)
     node_id = _node_id(0)
-    payload = {
-        "schema_version": 1,
-        "workload_id": "model",
-        "release_digest": "8" * 64,
-        "adapter_id": "spark-runtime-v1",
-        "preparation_digest": "c" * 64,
-    }
+    graph, graph_digest, resolved, plan_digest, payload = _persisted_start_plan(
+        node_id
+    )
     payload_digest = hashlib.sha256(canonical_message(payload)).hexdigest()
-    graph_node = {
-        "operation_id": "model:node:workload.start",
-        "node_id": node_id,
-        "workload_id": "model",
-        "kind": "workload.start",
-        "dependencies": [],
-        "compensation_kind": "workload.stop",
-        "payload_digest": payload_digest,
-    }
     with sessions.begin() as session:
         session.add(
             AgentNode(
                 node_id=node_id,
                 state="active",
                 protocol_version=1,
-                capabilities=list(REQUIRED_CAPABILITIES),
+                capabilities=list(AGENT_CAPABILITIES),
                 last_seen_at=NOW - timedelta(seconds=1),
             )
         )
@@ -1333,8 +1499,12 @@ def test_durable_projection_derives_occupancy_from_completed_start_evidence(
                 kind="health",
                 payload={
                     "status": "healthy",
+                    "active_nvidia_compute_processes": 1,
+                    "compute_occupancy": "active",
                     "memory_available_bytes": 1_000,
+                    "memory_total_bytes": 4_000,
                     "disk_available_bytes": 2_000,
+                    "disk_total_bytes": 8_000,
                 },
                 observed_at=NOW - timedelta(seconds=2),
             )
@@ -1345,30 +1515,10 @@ def test_durable_projection_derives_occupancy_from_completed_start_evidence(
                 base_commit="a" * 40,
                 status="succeeded",
                 summary={},
-                graph={
-                    "schema_version": 1,
-                    "base_commit": "a" * 40,
-                    "targets": [node_id],
-                    "nodes": [graph_node],
-                },
-                graph_digest="d" * 64,
-                resolved_plan={
-                    "workload_groups": {
-                        "model": {
-                            "nodes": [node_id],
-                            "entrypoint_node_id": node_id,
-                            "release_digest": "8" * 64,
-                            "adapter_id": "spark-runtime-v1",
-                            "definition_hash": DEFINITION_HASH,
-                            "profile_digest": "c" * 64,
-                            "preparation_digest": "c" * 64,
-                            "lifecycle": {
-                                "start_order": "independent",
-                                "stop_order": "independent",
-                            },
-                        }
-                    }
-                },
+                graph=graph,
+                graph_digest=graph_digest,
+                plan_digest=plan_digest,
+                resolved_plan=resolved,
                 current_phase="completed",
                 completion_generation=1,
                 created_at=NOW - timedelta(seconds=4),
@@ -1429,6 +1579,7 @@ def test_durable_projection_derives_occupancy_from_completed_start_evidence(
 
     projected = durable_desired_state_observations(sessions)
     assert projected[0].occupied is True
+    assert projected[0].compute_occupancy == "managed"
     assert projected[0].current_workloads == (
         _managed_group(
             1,
@@ -1436,6 +1587,80 @@ def test_durable_projection_derives_occupancy_from_completed_start_evidence(
             preparation_digest="c" * 64,
         ),
     )
+    repository, commit, _ = _repository(tmp_path, 1)
+    assert _resolve(repository, commit, projected).placements == {
+        "model": (node_id,)
+    }
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    (
+        "entrypoint",
+        "lifecycle",
+        "definition",
+        "profile",
+        "resolved-graph",
+        "stored-graph",
+        "base-commit",
+        "graph-digest",
+        "plan-digest",
+        "payload-digest",
+    ),
+)
+def test_durable_projection_authenticates_complete_plan_before_group_replay(
+    tmp_path: Path, corruption: str
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / f'{corruption}.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine)
+    node_id = _node_id(0)
+    graph, graph_digest, resolved, plan_digest, _ = _persisted_start_plan(node_id)
+    graph = deepcopy(graph)
+    resolved = deepcopy(resolved)
+    base_commit = "a" * 40
+    if corruption == "entrypoint":
+        resolved["workload_groups"]["model"]["entrypoint_node_id"] = _node_id(1)
+    elif corruption == "lifecycle":
+        resolved["workload_groups"]["model"]["lifecycle"]["start_order"] = "workers-first"
+    elif corruption == "definition":
+        resolved["workload_groups"]["model"]["definition_hash"] = "e" * 64
+    elif corruption == "profile":
+        resolved["workload_groups"]["model"]["profile_digest"] = "e" * 64
+    elif corruption == "resolved-graph":
+        resolved["operation_graph"]["targets"] = []
+    elif corruption == "stored-graph":
+        graph["targets"] = []
+    elif corruption == "base-commit":
+        base_commit = "b" * 40
+    elif corruption == "graph-digest":
+        graph_digest = "0" * 64
+    elif corruption == "plan-digest":
+        plan_digest = "0" * 64
+    else:
+        resolved["operation_payloads"]["model:node:workload.start"][
+            "preparation_digest"
+        ] = "e" * 64
+        plan_digest = hashlib.sha256(canonical_message(resolved)).hexdigest()
+    with sessions.begin() as session:
+        session.add(
+            Reconciliation(
+                id="reconciliation",
+                base_commit=base_commit,
+                status="succeeded",
+                summary={},
+                graph=graph,
+                graph_digest=graph_digest,
+                plan_digest=plan_digest,
+                resolved_plan=resolved,
+                current_phase="completed",
+                completion_generation=1,
+                created_at=NOW,
+            )
+        )
+
+    with pytest.raises((TypeError, ValueError), match="persisted resolved plan"):
+        durable_desired_state_observations(sessions)
 
 
 def test_durable_projection_fails_closed_on_completed_graph_without_operation_evidence(
@@ -1445,6 +1670,7 @@ def test_durable_projection_fails_closed_on_completed_graph_without_operation_ev
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine)
     node_id = _node_id(0)
+    graph, graph_digest, resolved, plan_digest, _ = _persisted_start_plan(node_id)
     with sessions.begin() as session:
         session.add(
             Reconciliation(
@@ -1452,40 +1678,10 @@ def test_durable_projection_fails_closed_on_completed_graph_without_operation_ev
                 base_commit="a" * 40,
                 status="succeeded",
                 summary={},
-                graph={
-                    "schema_version": 1,
-                    "base_commit": "a" * 40,
-                    "targets": [node_id],
-                    "nodes": [
-                        {
-                            "operation_id": "missing",
-                            "node_id": node_id,
-                            "workload_id": "model",
-                            "kind": "workload.start",
-                            "dependencies": [],
-                            "compensation_kind": "workload.stop",
-                            "payload_digest": "d" * 64,
-                        }
-                    ],
-                },
-                graph_digest="d" * 64,
-                resolved_plan={
-                    "workload_groups": {
-                        "model": {
-                            "nodes": [node_id],
-                            "entrypoint_node_id": node_id,
-                            "release_digest": "8" * 64,
-                            "adapter_id": "spark-runtime-v1",
-                            "definition_hash": DEFINITION_HASH,
-                            "profile_digest": "c" * 64,
-                            "preparation_digest": "c" * 64,
-                            "lifecycle": {
-                                "start_order": "independent",
-                                "stop_order": "independent",
-                            },
-                        }
-                    }
-                },
+                graph=graph,
+                graph_digest=graph_digest,
+                plan_digest=plan_digest,
+                resolved_plan=resolved,
                 current_phase="completed",
                 completion_generation=1,
                 created_at=NOW,

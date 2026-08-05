@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 import tempfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -234,7 +234,8 @@ def run(host: str, display_name: str) -> dict[str, object]:
             occupied=False,
             agent_state="active",
             protocol_version=1,
-            capabilities=tuple(item for item in CAPABILITIES if item != "node.probe"),
+            capabilities=CAPABILITIES,
+            compute_occupancy="clean",
         )
         jobs = JobService(sessions, clock=lambda: now)
         orchestrator = ReconciliationOrchestrator(sessions, clock=lambda: now)
@@ -271,7 +272,26 @@ def run(host: str, display_name: str) -> dict[str, object]:
             )
             if claim is None:
                 break
-            if claim.operation.value == "release.install":
+            if claim.operation.value == "node.probe":
+                evidence = {
+                    "dgx_forge": {
+                        "schema_version": 1,
+                        "memory": {
+                            "available_bytes": 1_000,
+                            "total_bytes": 4_000,
+                        },
+                        "storage": {
+                            "available_bytes": 2_000,
+                            "total_bytes": 8_000,
+                        },
+                        "accelerator": {
+                            "available": True,
+                            "active_nvidia_compute_processes": 0,
+                        },
+                    },
+                    "nvidia": {"tools": {}},
+                }
+            elif claim.operation.value == "release.install":
                 evidence = {
                     "status": "installed",
                     "release_digest": "a" * 64,
@@ -291,6 +311,10 @@ def run(host: str, display_name: str) -> dict[str, object]:
         for phase in ("routes-withdrawn", "dispatching", "accepting", "completed"):
             orchestrator.advance(plan.operation_graph.reconciliation_id, phase)
 
+        # A periodic post-start probe observes the now-running managed workload.
+        # Keep it later than the pre-mutation zero-compute gate so durable replay
+        # cannot mistake the gate evidence for the current runtime state.
+        now += timedelta(seconds=1)
         probe_job = jobs.enqueue(
             "node-probe",
             "administrator",
@@ -317,7 +341,10 @@ def run(host: str, display_name: str) -> dict[str, object]:
                             "available_bytes": 2_000,
                             "total_bytes": 8_000,
                         },
-                        "accelerator": {"available": True},
+                        "accelerator": {
+                            "available": True,
+                            "active_nvidia_compute_processes": 1,
+                        },
                     },
                     "nvidia": {"tools": {}},
                 },
@@ -370,7 +397,26 @@ def run(host: str, display_name: str) -> dict[str, object]:
             )
             if claim is None:
                 break
-            if claim.operation.value == "release.install":
+            if claim.operation.value == "node.probe":
+                evidence = {
+                    "dgx_forge": {
+                        "schema_version": 1,
+                        "memory": {
+                            "available_bytes": 1_000,
+                            "total_bytes": 4_000,
+                        },
+                        "storage": {
+                            "available_bytes": 2_000,
+                            "total_bytes": 8_000,
+                        },
+                        "accelerator": {
+                            "available": True,
+                            "active_nvidia_compute_processes": 0,
+                        },
+                    },
+                    "nvidia": {"tools": {}},
+                }
+            elif claim.operation.value == "release.install":
                 evidence = {
                     "status": "installed",
                     "release_digest": claim.payload["target_digest"],

@@ -4,6 +4,7 @@ import hashlib
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -15,6 +16,7 @@ from dgx_control.models import (
     AgentOperationAttempt,
     Base,
     Job,
+    Observation,
 )
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -29,11 +31,44 @@ PROBE_RESULT = {
             "schema_version": 1,
             "memory": {"available_bytes": 1_000},
             "storage": {"available_bytes": 2_000},
-            "accelerator": {"available": True},
+            "accelerator": {
+                "available": True,
+                "active_nvidia_compute_processes": 0,
+            },
         },
         "nvidia": {"tools": {}},
     },
 }
+
+
+@pytest.mark.parametrize(
+    ("count", "occupancy"),
+    ((0, "clean"), (2, "active"), (None, "unknown")),
+)
+def test_probe_persists_bounded_compute_occupancy(
+    count: int | None, occupancy: str
+) -> None:
+    result = {
+        "status": "ok",
+        "evidence": {
+            "dgx_forge": {
+                "schema_version": 1,
+                "memory": {"available_bytes": 1_000},
+                "storage": {"available_bytes": 2_000},
+                "accelerator": {
+                    "available": True,
+                    "active_nvidia_compute_processes": count,
+                },
+            },
+            "nvidia": {"tools": {}},
+        },
+    }
+
+    health = AgentJobService._probe_health(result)
+
+    assert health["active_nvidia_compute_processes"] == count
+    assert health["compute_occupancy"] == occupancy
+    assert health["status"] == ("warning" if occupancy == "unknown" else "healthy")
 
 
 @pytest.mark.parametrize("total", [999, -1, True, "4000"])
@@ -127,6 +162,34 @@ def test_agent_can_claim_only_its_node_operation(service) -> None:
     assert claim is not None
     assert claim.operation_id == operation.id
     assert claim.node_id == NODE_A
+
+
+@pytest.mark.parametrize("count", (2, None))
+def test_control_rejects_success_for_unsatisfied_zero_compute_gate(
+    service, count: int | None
+) -> None:
+    jobs, sessions, clock = service
+    operation = jobs.enqueue(
+        parent(sessions, clock).id,
+        NODE_A,
+        "node.probe",
+        COMMIT,
+        {"require_active_nvidia_compute_processes": 0},
+    )
+    claim = jobs.claim(NODE_A, "serial-a", 30)
+    assert claim is not None
+    result = deepcopy(PROBE_RESULT)
+    result["evidence"]["dgx_forge"]["accelerator"][
+        "active_nvidia_compute_processes"
+    ] = count
+
+    with pytest.raises(ValueError, match="compute gate"):
+        jobs.succeed(claim, result)
+
+    with sessions() as session:
+        stored = session.get(AgentOperation, operation.id)
+        assert stored is not None and stored.state == "running"
+        assert session.scalars(select(Observation)).all() == []
 
 
 def test_concurrent_agents_cannot_claim_the_same_operation(service) -> None:

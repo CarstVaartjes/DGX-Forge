@@ -178,7 +178,7 @@ def health_document() -> bytes:
             "memory": {"total_bytes": 128000000000, "available_bytes": 120000000000, "used_bytes": 8000000000, "used_percent": 6.2},
             "swap": {"total_bytes": 0, "free_bytes": 0, "used_bytes": 0, "used_percent": 0},
             "root_filesystem": {"total_bytes": 1000, "available_bytes": 800, "used_bytes": 200, "used_percent": 20, "read_only": False},
-            "accelerator": {"available": True, "name": "NVIDIA GB10", "driver_version": "580.173.02", "utilization_percent": 12, "temperature_c": 41, "performance_state": "P8", "power_watts": 4.25},
+            "accelerator": {"available": True, "name": "NVIDIA GB10", "driver_version": "580.173.02", "utilization_percent": 12, "temperature_c": 41, "performance_state": "P8", "power_watts": 4.25, "active_nvidia_compute_processes": 0},
             "thermal_zones": [{"zone": "thermal_zone0", "type": "cpu-thermal", "temperature_c": 41, "trip_points": [{"type": "critical", "temperature_c": 90, "reached": False}]}],
             "fabric": {"functions": [{"interface": "enp1s0f1np1", "hca": "rocep1s0f1", "operstate": "up", "carrier": 1, "speed_mbps": 200000, "mtu": 9000, "rdma_interface": "enp1s0f1np1", "rdma_state": "ACTIVE", "counters": {"packet_seq_err": 0, "unknown_counter": 99}}]},
             "services": {"docker_available": True, "docker_version": "29.2.1", "earlyoom_load_state": "not-found", "earlyoom_enabled": False, "earlyoom_active": False},
@@ -361,6 +361,25 @@ def test_existing_collector_is_normalized_to_compatible_fabric_runtime_evidence(
     assert evidence["fabric"]["functions"][0]["interface"] == "enp1s0f1np1"
     assert evidence["fabric"]["functions"][0]["counters"] == {"packet_seq_err": 0}
     assert evidence["runtime"]["docker_version"] == "29.2.1"
+
+
+@pytest.mark.parametrize("count", (0, 3, 65535))
+def test_collector_normalizes_only_bounded_compute_process_count(
+    tmp_path, count: int
+) -> None:
+    policy, _ = installed_policy(tmp_path)
+    document = json.loads(health_document())
+    document["accelerator"]["active_nvidia_compute_processes"] = count
+    runner = successful_runner(policy)
+    runner.outcomes[policy.health.executable.name] = ProcessOutcome(
+        0, json.dumps(document).encode(), b""
+    )
+
+    evidence = PinnedNodeProbe(policy, _runner=runner).collect(
+        datetime.now(UTC) + timedelta(seconds=30)
+    )["dgx_forge"]
+
+    assert evidence["accelerator"]["active_nvidia_compute_processes"] == count
 
 
 def test_existing_collector_drops_sensitive_shapes_even_from_allowlisted_fields(tmp_path) -> None:

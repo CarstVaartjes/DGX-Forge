@@ -130,7 +130,8 @@
         "utilization_percent": {"$ref": "#/$defs/nullablePercent"},
         "temperature_c": {"$ref": "#/$defs/nullableNumber"},
         "performance_state": {"type": ["string", "null"], "maxLength": 32},
-        "power_watts": {"$ref": "#/$defs/nullableNumber"}
+        "power_watts": {"$ref": "#/$defs/nullableNumber"},
+        "active_nvidia_compute_processes": {"type": ["integer", "null"], "minimum": 0, "maximum": 65535}
       }
     },
     "thermal": {

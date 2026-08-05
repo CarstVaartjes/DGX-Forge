@@ -201,15 +201,33 @@ collect_root_filesystem() {
 }
 
 collect_accelerator() {
-    local raw=''
+    local raw='' compute_count='null' compute_raw=''
     if command -v nvidia-smi >/dev/null 2>&1; then
         raw="$(bounded_command "$MAX_COMMAND_BYTES" nvidia-smi \
             --query-gpu=name,driver_version,utilization.gpu,temperature.gpu,pstate,power.draw \
             --format=csv,noheader,nounits)"
+        if compute_raw="$(nvidia-smi --query-compute-apps=pid \
+            --format=csv,noheader,nounits 2>/dev/null | head -c "$MAX_COMMAND_BYTES")"; then
+            compute_count="$(awk '
+                BEGIN {valid = 1; count = 0}
+                /^[[:space:]]*$/ {next}
+                /^[[:space:]]*[0-9]{1,20}[[:space:]]*$/ {
+                    value = $0
+                    gsub(/[[:space:]]/, "", value)
+                    if (!(value in seen)) {seen[value] = 1; count++}
+                    next
+                }
+                {valid = 0}
+                END {
+                    if (!valid || count > 65535) exit 1
+                    print count
+                }
+            ' <<<"$compute_raw")" || compute_count='null'
+        fi
     fi
     raw="${raw%%$'\n'*}"
 
-    jq -cn --arg raw "$raw" '
+    jq -cn --arg raw "$raw" --arg compute_count "$compute_count" '
         def trim: gsub("^[[:space:]]+|[[:space:]]+$"; "");
         def optional_number:
             trim | if . == "" or . == "N/A" or . == "[N/A]" then null else try tonumber catch null end;
@@ -221,7 +239,10 @@ collect_accelerator() {
             utilization_percent: (if $raw == "" then null else ($fields[2] // "" | optional_number) end),
             temperature_c: (if $raw == "" then null else ($fields[3] // "" | optional_number) end),
             performance_state: (if $raw == "" then null else (($fields[4] // "")[0:32]) end),
-            power_watts: (if $raw == "" then null else ($fields[5] // "" | optional_number) end)
+            power_watts: (if $raw == "" then null else ($fields[5] // "" | optional_number) end),
+            active_nvidia_compute_processes: (
+                if $compute_count == "null" then null else ($compute_count | tonumber) end
+            )
         }'
 }
 

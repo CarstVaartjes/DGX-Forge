@@ -49,6 +49,11 @@ class NodeProbe(Protocol):
     ) -> Mapping[str, object]: ...
 
 
+@dataclass(frozen=True)
+class NodeProbeRequest:
+    require_zero_compute: bool
+
+
 class ReleaseInstallerBoundary(Protocol):
     def install(
         self, request: ReleaseRequest, deadline: MonotonicDeadline
@@ -285,15 +290,17 @@ class OperationRegistry:
     @staticmethod
     def _validate(
         claim: AgentClaim, context: OperationContext
-    ) -> ReleaseRequest | WorkloadRequest | None:
+    ) -> NodeProbeRequest | ReleaseRequest | WorkloadRequest:
         if type(claim) is not AgentClaim:
             raise UnsupportedOperation("operation is not compiled into this agent")
         if claim.node_id != context.node_id:
             raise AgentProtocolError("claim node does not match this agent")
         if claim.operation is AgentOperation.NODE_PROBE:
-            if claim.payload:
-                raise AgentProtocolError("node probe payload must be empty")
-            return None
+            if not claim.payload:
+                return NodeProbeRequest(False)
+            if claim.payload == {"require_active_nvidia_compute_processes": 0}:
+                return NodeProbeRequest(True)
+            raise AgentProtocolError("node probe payload is invalid")
         if claim.operation is AgentOperation.RELEASE_INSTALL:
             if context.releases is None:
                 raise UnsupportedOperation("release installation is unavailable")
@@ -323,12 +330,25 @@ _WORKLOAD_ACTIONS = {
 
 def _execute_request(
     claim: AgentClaim,
-    request: ReleaseRequest | WorkloadRequest | None,
+    request: NodeProbeRequest | ReleaseRequest | WorkloadRequest,
     context: OperationContext,
     deadline: MonotonicDeadline,
 ) -> Mapping[str, object]:
-    if request is None:
-        return context.probe.collect(deadline)
+    if isinstance(request, NodeProbeRequest):
+        evidence = context.probe.collect(deadline)
+        if request.require_zero_compute:
+            health = evidence.get("dgx_forge")
+            accelerator = (
+                health.get("accelerator") if isinstance(health, Mapping) else None
+            )
+            count = (
+                accelerator.get("active_nvidia_compute_processes")
+                if isinstance(accelerator, Mapping)
+                else None
+            )
+            if not isinstance(count, int) or isinstance(count, bool) or count != 0:
+                raise ProbeError("node compute occupancy is not clean")
+        return evidence
     if isinstance(request, ReleaseRequest):
         assert context.releases is not None
         return context.releases.install(
@@ -347,10 +367,10 @@ def _execute_request(
 
 def _inspect_request(
     claim: AgentClaim,
-    request: ReleaseRequest | WorkloadRequest | None,
+    request: NodeProbeRequest | ReleaseRequest | WorkloadRequest,
     context: OperationContext,
 ) -> OperationInspection:
-    if request is None or claim.operation in {
+    if isinstance(request, NodeProbeRequest) or claim.operation in {
         AgentOperation.WORKLOAD_HEALTH,
         AgentOperation.WORKLOAD_VERIFY,
     }:

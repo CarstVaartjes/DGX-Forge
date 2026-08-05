@@ -338,11 +338,18 @@ class AgentJobService:
                 )
                 attempt.result = _document(message.result)
                 if operation.kind == AgentOperation.NODE_PROBE.value:
+                    health = self._probe_health(message.result)
+                    if (
+                        operation.payload
+                        == {"require_active_nvidia_compute_processes": 0}
+                        and health["active_nvidia_compute_processes"] != 0
+                    ):
+                        raise ValueError("node probe compute gate is unsatisfied")
                     session.add(
                         Observation(
                             node_id=operation.node_id,
                             kind="health",
-                            payload=self._probe_health(message.result),
+                            payload=health,
                             observed_at=now,
                         )
                     )
@@ -475,6 +482,11 @@ class AgentJobService:
             if isinstance(accelerator, Mapping)
             else False
         )
+        raw_compute_processes = (
+            accelerator.get("active_nvidia_compute_processes")
+            if isinstance(accelerator, Mapping)
+            else None
+        )
         if (
             not isinstance(memory_available, int)
             or isinstance(memory_available, bool)
@@ -518,6 +530,22 @@ class AgentJobService:
             "memory_available_bytes": memory_available,
             "disk_available_bytes": disk_available,
         }
+        compute_processes = (
+            raw_compute_processes
+            if accelerator_available is True
+            and isinstance(raw_compute_processes, int)
+            and not isinstance(raw_compute_processes, bool)
+            and 0 <= raw_compute_processes <= 65535
+            else None
+        )
+        if compute_processes is None and observation["status"] == "healthy":
+            observation["status"] = "warning"
+        observation["active_nvidia_compute_processes"] = compute_processes
+        observation["compute_occupancy"] = (
+            "unknown"
+            if compute_processes is None
+            else "clean" if compute_processes == 0 else "active"
+        )
         if memory_total is not None:
             observation["memory_total_bytes"] = memory_total
         if disk_total is not None:

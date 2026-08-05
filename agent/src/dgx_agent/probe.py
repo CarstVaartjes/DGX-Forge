@@ -857,6 +857,7 @@ def _normalize_health(raw: bytes, limit: int) -> Mapping[str, Any]:
             ("utilization_percent", 0, 100),
             ("temperature_c", -100, 300),
             ("power_watts", 0, 100_000),
+            ("active_nvidia_compute_processes", 0, 65535),
         ),
         booleans=("available",),
     )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import shutil
 import subprocess
 import threading
@@ -8,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import pytest
+from dgx_agent_protocol import canonical_message
 from dgx_control.git_policy import Eligibility
 from dgx_control.models import Base, Reconciliation
 from dgx_control.orchestration import (
@@ -32,6 +34,7 @@ class Policy:
 
 class DesiredPlanner:
     def resolve(self, commit, profile_id, observations):
+        payload = {}
         operation = OperationNode(
             "model:probe",
             NODE_ID,
@@ -39,7 +42,7 @@ class DesiredPlanner:
             "node.probe",
             (),
             None,
-            "b" * 64,
+            hashlib.sha256(canonical_message(payload)).hexdigest(),
         )
         return resolved_reconciliation_plan(
             commit=commit,
@@ -56,7 +59,7 @@ class DesiredPlanner:
                 (operation,),
                 "c" * 64,
             ),
-            operation_payloads={"model:probe": {}},
+            operation_payloads={"model:probe": payload},
             agent_protocol_range=(1, 1),
         )
 

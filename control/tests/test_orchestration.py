@@ -125,6 +125,45 @@ def test_independent_nodes_are_sorted_by_canonical_operation_id(planner) -> None
     )
 
 
+def test_zero_compute_gate_is_the_only_cross_workload_barrier(planner) -> None:
+    orchestrator, _ = planner
+    document = distributed_plan()
+    document["operations"] = [
+        {
+            "operation_id": "old:stop",
+            "node_id": NODE_A,
+            "workload_id": "model-a",
+            "kind": "workload.stop",
+            "dependencies": [],
+            "compensation_kind": None,
+            "payload_digest": "1" * 64,
+        },
+        {
+            "operation_id": "node:gate",
+            "node_id": NODE_A,
+            "workload_id": "node-gate",
+            "kind": "node.probe",
+            "dependencies": ["old:stop"],
+            "compensation_kind": None,
+            "payload_digest": "2" * 64,
+        },
+        {
+            "operation_id": "new:install",
+            "node_id": NODE_B,
+            "workload_id": "model-b",
+            "kind": "release.install",
+            "dependencies": ["node:gate"],
+            "compensation_kind": None,
+            "payload_digest": "3" * 64,
+        },
+    ]
+
+    graph = orchestrator.plan(document)
+
+    assert graph.dependencies("node:gate") == ("old:stop",)
+    assert graph.dependencies("new:install") == ("node:gate",)
+
+
 @pytest.mark.parametrize(
     ("mutation", "message"),
     [

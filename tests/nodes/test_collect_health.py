@@ -46,6 +46,8 @@ def run_collector(tmp_path):
         locale_name: str | None = None,
         systemctl_fails: bool = False,
         cpu_stat_variant: str | None = None,
+        compute_processes: str = "",
+        compute_query_fails: bool = False,
     ):
         nonlocal invocation
         invocation += 1
@@ -58,6 +60,11 @@ def run_collector(tmp_path):
         if gpu_power is not None:
             nvidia_fields[-1] = gpu_power
         (fixture_root / "commands" / "nvidia-smi.txt").write_text(", ".join(nvidia_fields) + "\n")
+        (fixture_root / "commands" / "nvidia-compute.txt").write_text(
+            compute_processes
+        )
+        if compute_query_fails:
+            (fixture_root / "commands" / "nvidia-compute-fails").touch()
 
         if cpu_stat_variant is not None:
             proc_root = fixture_root / "proc"
@@ -76,7 +83,18 @@ def run_collector(tmp_path):
         _write_command(bin_dir / "hostname", 'cat "$NODE_HEALTH_COMMAND_ROOT/hostname.txt"\n')
         _write_command(bin_dir / "date", 'cat "$NODE_HEALTH_COMMAND_ROOT/captured-at.txt"\n')
         _write_command(bin_dir / "findmnt", 'cat "$NODE_HEALTH_COMMAND_ROOT/findmnt.txt"\n')
-        _write_command(bin_dir / "nvidia-smi", 'cat "$NODE_HEALTH_COMMAND_ROOT/nvidia-smi.txt"\n')
+        _write_command(
+            bin_dir / "nvidia-smi",
+            '''case "$1" in
+  --query-gpu=*) cat "$NODE_HEALTH_COMMAND_ROOT/nvidia-smi.txt" ;;
+  --query-compute-apps=pid)
+    [[ ! -e "$NODE_HEALTH_COMMAND_ROOT/nvidia-compute-fails" ]] || exit 1
+    cat "$NODE_HEALTH_COMMAND_ROOT/nvidia-compute.txt"
+    ;;
+  *) exit 64 ;;
+esac
+''',
+        )
         _write_command(
             bin_dir / "rdma",
             """case "$*" in
@@ -227,7 +245,32 @@ def test_accelerator_values_are_numeric_when_supported(run_collector):
         "temperature_c": 41,
         "performance_state": "P8",
         "power_watts": 4.25,
+        "active_nvidia_compute_processes": 0,
     }
+
+
+def test_accelerator_reports_only_bounded_unique_active_compute_count(
+    run_collector,
+) -> None:
+    result = run_collector(
+        "healthy", compute_processes=" 441\n442\n441\n"
+    )
+
+    assert result["accelerator"]["active_nvidia_compute_processes"] == 2
+    assert "441" not in json.dumps(result)
+    assert "442" not in json.dumps(result)
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    ({"compute_query_fails": True}, {"compute_processes": "not-a-pid\n"}),
+)
+def test_accelerator_compute_count_is_unknown_when_query_is_ambiguous(
+    run_collector, arguments: dict[str, object]
+) -> None:
+    result = run_collector("healthy", **arguments)
+
+    assert result["accelerator"]["active_nvidia_compute_processes"] is None
 
 
 def test_thermal_collection_retains_enabled_trip_points(run_collector):

@@ -1,7 +1,9 @@
+import hashlib
 from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import pytest
+from dgx_agent_protocol import canonical_message
 from dgx_control.git_policy import Eligibility
 from dgx_control.models import Base, Reconciliation
 from dgx_control.orchestration import (
@@ -168,6 +170,7 @@ class DesiredPlanner:
         assert profile_id == "inference"
         assert tuple(observations) == ("durable",)
         node_id = "spk_" + "1" * 32
+        payload = {}
         operation = OperationNode(
             "model:probe",
             node_id,
@@ -175,7 +178,7 @@ class DesiredPlanner:
             "node.probe",
             (),
             None,
-            "b" * 64,
+            hashlib.sha256(canonical_message(payload)).hexdigest(),
         )
         graph = OperationGraph(
             "pending",
@@ -193,7 +196,7 @@ class DesiredPlanner:
             workload_groups={},
             input_digests={"fleet": "f" * 64},
             operation_graph=graph,
-            operation_payloads={"model:probe": {}},
+            operation_payloads={"model:probe": payload},
             agent_protocol_range=(1, 1),
         )
 

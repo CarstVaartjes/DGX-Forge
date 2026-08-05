@@ -265,39 +265,15 @@ class ReconciliationOrchestrator:
             )
             if stored is None or stored.resolved_plan is None:
                 return None
-            document = json.loads(
-                json.dumps(stored.resolved_plan, sort_keys=True, separators=(",", ":"))
+            return validate_persisted_resolved_plan(
+                reconciliation_id=stored.id,
+                base_commit=stored.base_commit,
+                graph_document=stored.graph,
+                graph_digest=stored.graph_digest,
+                plan_digest=stored.plan_digest,
+                resolved_document=stored.resolved_plan,
+                route_withdrawal_generation=stored.route_withdrawal_generation,
             )
-            encoded = json.dumps(
-                document, sort_keys=True, separators=(",", ":")
-            ).encode()
-            if hashlib.sha256(encoded).hexdigest() != plan_digest:
-                raise ValueError("persisted resolved plan digest is invalid")
-            graph_document = stored.graph
-            if not isinstance(graph_document, Mapping):
-                raise TypeError("persisted reconciliation graph is invalid")
-            _, targets, _, nodes = _parse_plan(
-                {
-                    "base_commit": graph_document.get("base_commit"),
-                    "targets": graph_document.get("targets"),
-                    "route_withdrawal_generation": stored.route_withdrawal_generation,
-                    "operations": graph_document.get("nodes"),
-                }
-            )
-            expected_graph = _graph_document(stored.base_commit, targets, nodes)
-            if (
-                expected_graph != graph_document
-                or _digest(expected_graph) != stored.graph_digest
-            ):
-                raise ValueError("persisted reconciliation graph digest is invalid")
-            graph = OperationGraph(
-                stored.id,
-                stored.base_commit,
-                targets,
-                nodes,
-                stored.graph_digest,
-            )
-            return graph, document
 
     def cancel(self, reconciliation_id: str, reason: str) -> None:
         if not isinstance(reason, str) or not reason.strip():
@@ -362,6 +338,117 @@ def _resolved_document(
     return json.loads(encoded)
 
 
+def validate_persisted_resolved_plan(
+    *,
+    reconciliation_id: object,
+    base_commit: object,
+    graph_document: object,
+    graph_digest: object,
+    plan_digest: object,
+    resolved_document: object,
+    route_withdrawal_generation: object,
+) -> tuple[OperationGraph, Mapping[str, object]]:
+    """Authenticate one complete persisted plan without database access."""
+
+    if not isinstance(reconciliation_id, str) or not reconciliation_id:
+        raise ValueError("persisted resolved plan reconciliation identity is invalid")
+    if not isinstance(resolved_document, Mapping):
+        raise TypeError("persisted resolved plan document is invalid")
+    try:
+        document = _resolved_document(plan_digest, resolved_document)
+    except (TypeError, ValueError) as error:
+        raise ValueError("persisted resolved plan digest is invalid") from error
+    fields = {
+        "commit",
+        "targets",
+        "placements",
+        "routes",
+        "releases",
+        "workload_groups",
+        "input_digests",
+        "operation_graph",
+        "operation_payloads",
+        "agent_protocol_range",
+    }
+    if set(document) != fields:
+        raise ValueError("persisted resolved plan fields are invalid")
+    if (
+        not isinstance(base_commit, str)
+        or _COMMIT.fullmatch(base_commit) is None
+        or document["commit"] != base_commit
+    ):
+        raise ValueError("persisted resolved plan base commit is invalid")
+    for field in (
+        "placements",
+        "routes",
+        "releases",
+        "workload_groups",
+        "input_digests",
+        "operation_payloads",
+    ):
+        value = document[field]
+        if not isinstance(value, Mapping) or not all(
+            isinstance(key, str) for key in value
+        ):
+            raise TypeError(f"persisted resolved plan {field} is invalid")
+    input_digests = document["input_digests"]
+    if not all(
+        isinstance(value, str) and _DIGEST.fullmatch(value)
+        for value in input_digests.values()
+    ):
+        raise ValueError("persisted resolved plan input digest is invalid")
+    protocol = document["agent_protocol_range"]
+    if (
+        not isinstance(protocol, list)
+        or len(protocol) != 2
+        or not all(isinstance(value, int) and not isinstance(value, bool) for value in protocol)
+        or protocol[0] < 1
+        or protocol[0] > protocol[1]
+    ):
+        raise ValueError("persisted resolved plan protocol range is invalid")
+    if not isinstance(graph_document, Mapping):
+        raise TypeError("persisted resolved plan graph is invalid")
+    try:
+        parsed_commit, targets, _, nodes = _parse_plan(
+            {
+                "base_commit": graph_document.get("base_commit"),
+                "targets": graph_document.get("targets"),
+                "route_withdrawal_generation": route_withdrawal_generation,
+                "operations": graph_document.get("nodes"),
+            }
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("persisted resolved plan graph is invalid") from error
+    expected_graph = _graph_document(parsed_commit, targets, nodes)
+    if (
+        expected_graph != graph_document
+        or parsed_commit != base_commit
+        or document["operation_graph"] != expected_graph
+        or document["targets"] != list(targets)
+        or not isinstance(graph_digest, str)
+        or _DIGEST.fullmatch(graph_digest) is None
+        or _digest(expected_graph) != graph_digest
+    ):
+        raise ValueError("persisted resolved plan graph consistency is invalid")
+    payloads = document["operation_payloads"]
+    if set(payloads) != {node.operation_id for node in nodes}:
+        raise ValueError("persisted resolved plan operation payload set is invalid")
+    for node in nodes:
+        payload = payloads[node.operation_id]
+        if not isinstance(payload, Mapping) or _digest(payload) != node.payload_digest:
+            raise ValueError("persisted resolved plan operation payload digest is invalid")
+    return (
+        OperationGraph(
+            reconciliation_id,
+            base_commit,
+            targets,
+            nodes,
+            graph_digest,
+        ),
+        document,
+    )
+
+
 def _parse_plan(
     document: Mapping[str, Any],
 ) -> tuple[str, tuple[str, ...], int, tuple[OperationNode, ...]]:
@@ -393,7 +480,16 @@ def _parse_plan(
             required = by_id.get(dependency)
             if required is None:
                 raise ValueError("reconciliation operation dependency is unknown")
-            if required.workload_id != node.workload_id:
+            cross_workload_gate = (
+                node.kind == AgentOperation.NODE_PROBE.value
+                and node.workload_id == "node-gate"
+                and required.kind == AgentOperation.WORKLOAD_STOP.value
+            ) or (
+                node.kind == AgentOperation.RELEASE_INSTALL.value
+                and required.kind == AgentOperation.NODE_PROBE.value
+                and required.workload_id == "node-gate"
+            )
+            if required.workload_id != node.workload_id and not cross_workload_gate:
                 raise ValueError("cross-workload dependency is invalid")
     return base_commit, targets, generation, _topological(by_id)
 

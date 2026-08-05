@@ -32,7 +32,11 @@ from .models import (
     Reconciliation,
 )
 from .models import AgentOperation as StoredOperation
-from .orchestration import OperationGraph, OperationNode
+from .orchestration import (
+    OperationGraph,
+    OperationNode,
+    validate_persisted_resolved_plan,
+)
 
 if TYPE_CHECKING:
     from .reconcile import ReconciliationPlan
@@ -44,6 +48,7 @@ _OCI_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _SUPPORTED_PROTOCOL_RANGE = (1, 1)
 _REQUIRED_CAPABILITIES = frozenset(
     {
+        AgentOperation.NODE_PROBE.value,
         AgentOperation.RELEASE_INSTALL.value,
         AgentOperation.WORKLOAD_PREPARE.value,
         AgentOperation.WORKLOAD_START.value,
@@ -52,9 +57,7 @@ _REQUIRED_CAPABILITIES = frozenset(
         AgentOperation.WORKLOAD_VERIFY.value,
     }
 )
-_IMPLEMENTED_CAPABILITIES = _REQUIRED_CAPABILITIES | {
-    AgentOperation.NODE_PROBE.value
-}
+_IMPLEMENTED_CAPABILITIES = _REQUIRED_CAPABILITIES
 _SUPPORTED_ADAPTERS = frozenset({"spark-runtime-v1"})
 _PLANNED_OPERATIONS = (
     AgentOperation.WORKLOAD_STOP.value,
@@ -138,6 +141,7 @@ class DesiredStateObservation:
     current_workloads: tuple[CurrentWorkloadState, ...] = ()
     memory_total_bytes: int | None = None
     disk_total_bytes: int | None = None
+    compute_occupancy: str = "unknown"
 
     def __post_init__(self) -> None:
         NodeId.parse(self.node_id)
@@ -170,6 +174,16 @@ class DesiredStateObservation:
         if self.occupied is not bool(current_workloads):
             raise ValueError("node occupancy does not match current workload evidence")
         object.__setattr__(self, "current_workloads", current_workloads)
+        compute_occupancy = self.compute_occupancy
+        if compute_occupancy not in {"clean", "managed", "unmanaged", "unknown"}:
+            raise ValueError("node compute occupancy is invalid")
+        if compute_occupancy == "managed" and (
+            not current_workloads or any(not item.managed for item in current_workloads)
+        ):
+            raise ValueError("managed compute occupancy lacks accepted workload evidence")
+        if compute_occupancy == "clean" and current_workloads:
+            raise ValueError("compute occupancy conflicts with accepted workload evidence")
+        object.__setattr__(self, "compute_occupancy", compute_occupancy)
         for total, available, field in (
             (self.memory_total_bytes, self.memory_available_bytes, "memory"),
             (self.disk_total_bytes, self.disk_available_bytes, "disk"),
@@ -370,6 +384,8 @@ def durable_desired_state_observations(
         disk = payload.get("disk_available_bytes")
         memory_total = payload.get("memory_total_bytes")
         disk_total = payload.get("disk_total_bytes")
+        raw_compute_processes = payload.get("active_nvidia_compute_processes")
+        raw_compute_occupancy = payload.get("compute_occupancy")
         if (
             not isinstance(memory, int)
             or isinstance(memory, bool)
@@ -391,6 +407,28 @@ def durable_desired_state_observations(
             state = "offline"
         else:
             observed_at = min(observed_at, _aware(agent.last_seen_at))
+        node_workloads = tuple(
+            sorted(
+                current.get(agent.node_id, {}).values(),
+                key=lambda item: item.workload_id,
+            )
+        )
+        if (
+            isinstance(raw_compute_processes, int)
+            and not isinstance(raw_compute_processes, bool)
+            and 0 <= raw_compute_processes <= 65535
+            and raw_compute_occupancy
+            == ("clean" if raw_compute_processes == 0 else "active")
+        ):
+            compute_occupancy = (
+                "managed"
+                if node_workloads and raw_compute_processes > 0
+                else "unknown"
+                if node_workloads
+                else "clean" if raw_compute_processes == 0 else "unmanaged"
+            )
+        else:
+            compute_occupancy = "unknown"
         projected.append(
             DesiredStateObservation(
                 node_id=agent.node_id,
@@ -398,18 +436,14 @@ def durable_desired_state_observations(
                 healthy=payload.get("status") in {"healthy", "warning"},
                 memory_available_bytes=memory,
                 disk_available_bytes=disk,
-                occupied=bool(current.get(agent.node_id)),
+                occupied=bool(node_workloads),
                 agent_state=state,
                 protocol_version=agent.protocol_version,
                 capabilities=tuple(sorted(agent.capabilities)),
-                current_workloads=tuple(
-                    sorted(
-                        current.get(agent.node_id, {}).values(),
-                        key=lambda item: item.workload_id,
-                    )
-                ),
+                current_workloads=node_workloads,
                 memory_total_bytes=cast(int | None, memory_total),
                 disk_total_bytes=cast(int | None, disk_total),
+                compute_occupancy=compute_occupancy,
             )
         )
     return tuple(projected)
@@ -492,8 +526,10 @@ def _accepted_current_workloads(
     current: dict[str, dict[str, CurrentWorkloadState]] = {}
     for reconciliation in reconciliations:
         resolved = reconciliation.resolved_plan
-        graph = _mapping(reconciliation.graph, "completed reconciliation graph")
-        raw_nodes = graph.get("nodes")
+        graph_document = _mapping(
+            reconciliation.graph, "completed reconciliation graph"
+        )
+        raw_nodes = graph_document.get("nodes")
         if not isinstance(raw_nodes, list):
             raise TypeError("completed reconciliation operation evidence is invalid")
         mutates_workloads = any(
@@ -505,12 +541,24 @@ def _accepted_current_workloads(
             }
             for node in raw_nodes
         )
-        if not isinstance(resolved, Mapping) or "workload_groups" not in resolved:
-            if mutates_workloads:
-                raise ValueError(
-                    "completed reconciliation lacks persisted workload group contract"
-                )
+        if not isinstance(resolved, Mapping):
+            if not mutates_workloads:
+                continue
+            raise ValueError(
+                "completed reconciliation lacks persisted workload group contract"
+            )
+        if not mutates_workloads and "workload_groups" not in resolved:
             continue
+        validated_graph, resolved = validate_persisted_resolved_plan(
+            reconciliation_id=reconciliation.id,
+            base_commit=reconciliation.base_commit,
+            graph_document=reconciliation.graph,
+            graph_digest=reconciliation.graph_digest,
+            plan_digest=reconciliation.plan_digest,
+            resolved_document=resolved,
+            route_withdrawal_generation=reconciliation.route_withdrawal_generation,
+        )
+        raw_nodes = validated_graph.document["nodes"]
         desired_groups = _persisted_workload_groups(
             _mapping(resolved["workload_groups"], "persisted workload groups")
         )
@@ -936,7 +984,10 @@ def _placement_observations(
             if managed
             else observation.disk_available_bytes,
             observation.occupied and not managed,
-            available_for_placement=not observation.occupied or managed,
+            available_for_placement=(
+                (not observation.occupied or managed)
+                and observation.compute_occupancy in {"clean", "managed"}
+            ),
         )
     if set(resolved) != set(fleet.nodes):
         raise ValueError("durable observations must exactly cover the fleet")
@@ -1113,6 +1164,35 @@ def _operations(
                 _payload_digest(payload),
             )
     all_stops = tuple(sorted(stop_ids.values()))
+    gate_node_ids = tuple(
+        sorted(
+            {
+                node_id
+                for group in (*teardown.values(), *deploy.values())
+                for node_id in group.nodes
+            }
+        )
+    )
+    probe_ids = {
+        node_id: f"gate:{node_id}:{AgentOperation.NODE_PROBE.value}"
+        for node_id in gate_node_ids
+    }
+    probe_payload: Mapping[str, object] = MappingProxyType(
+        {"require_active_nvidia_compute_processes": 0}
+    )
+    for node_id in gate_node_ids:
+        operation_id = probe_ids[node_id]
+        payloads[operation_id] = probe_payload
+        nodes[operation_id] = OperationNode(
+            operation_id,
+            node_id,
+            "node-gate",
+            AgentOperation.NODE_PROBE.value,
+            all_stops,
+            None,
+            _payload_digest(probe_payload),
+        )
+    all_probes = tuple(sorted(probe_ids.values()))
     for workload_id, desired_group in sorted(deploy.items()):
         targets = desired_group.nodes
         operation_ids: dict[tuple[str, str], str] = {}
@@ -1128,7 +1208,7 @@ def _operations(
             for kind in _PLANNED_OPERATIONS[1:]:
                 operation_id = operation_ids[(node_id, kind)]
                 if kind == AgentOperation.RELEASE_INSTALL.value:
-                    dependencies = all_stops
+                    dependencies = all_probes
                 elif kind == AgentOperation.WORKLOAD_PREPARE.value:
                     dependencies = (
                         operation_ids[(node_id, AgentOperation.RELEASE_INSTALL.value)],

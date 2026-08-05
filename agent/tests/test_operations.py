@@ -296,6 +296,40 @@ def test_node_probe_rejects_every_nonempty_payload_before_dispatch(tmp_path) -> 
         )
 
 
+@pytest.mark.parametrize(
+    ("count", "state"), ((0, "succeeded"), (1, "failed"), (None, "failed"))
+)
+def test_zero_compute_gate_succeeds_only_for_exact_zero_count(
+    tmp_path, count: int | None, state: str
+) -> None:
+    probe = RecordingProbe(
+        {
+            "dgx_forge": {
+                "accelerator": {
+                    "active_nvidia_compute_processes": count,
+                }
+            },
+            "nvidia": {"tools": {}},
+        }
+    )
+
+    execution = OperationRegistry().execute(
+        claim(payload={"require_active_nvidia_compute_processes": 0}),
+        OperationContext(
+            node_id=NODE_ID,
+            state=AgentStateStore(tmp_path / "state"),
+            probe=probe,
+        ),
+    )
+
+    assert execution.result.state == state
+    if state == "failed":
+        assert execution.result.result == {
+            "status": "failed",
+            "error_code": "probe_failed",
+        }
+
+
 def test_wrong_node_and_expired_claim_fail_before_state_or_probe(tmp_path) -> None:
     probe = RecordingProbe()
     store = AgentStateStore(tmp_path / "state")
