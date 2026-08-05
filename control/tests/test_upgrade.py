@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
+from dgx_control import offline
 from dgx_control.upgrade import (
     AmbiguousMigrationError,
     ControlUpgrade,
@@ -182,6 +184,22 @@ def test_upgrade_rejects_running_control_plane_before_mutation(tmp_path: Path) -
     assert not (tmp_path / "state").exists()
 
 
+def test_upgrade_rejects_an_active_offline_maintenance_lock(tmp_path: Path) -> None:
+    state_root = tmp_path / "state"
+    state_root.mkdir()
+    backend = FakeUpgradeBoundary()
+    upgrade = ControlUpgrade(state_root, backend)
+    release = _release(tmp_path)
+
+    with (
+        offline.OfflineLock(state_root / "offline.lock"),
+        pytest.raises(UpgradeConflict, match="maintenance lock"),
+    ):
+        upgrade.apply(upgrade.plan(release), release)
+
+    assert not (state_root / "generations").exists()
+
+
 def test_upgrade_applies_backup_migration_readiness_and_commit_in_order(
     tmp_path: Path,
 ) -> None:
@@ -301,3 +319,216 @@ def test_rollback_rejects_unrecorded_or_running_target(tmp_path: Path) -> None:
     backend.online = True
     with pytest.raises(UpgradeConflict, match="running"):
         upgrade.rollback("previous-generation")
+
+
+def test_offline_upgrade_cli_is_dry_run_by_default(tmp_path: Path, capsys) -> None:
+    _release(tmp_path)
+    state_root = tmp_path / "state"
+
+    result = offline.main(
+        [
+            "--state-path",
+            str(state_root),
+            "upgrade",
+            "--release",
+            str(tmp_path / "platform-release.json"),
+        ]
+    )
+
+    assert result == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output["mode"] == "plan"
+    assert output["plan_digest"].startswith("sha256:")
+    assert not state_root.exists()
+
+
+def test_offline_upgrade_and_rollback_cli_require_apply_for_mutation(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    release = _release(tmp_path)
+    state_root = tmp_path / "state"
+    previous = _seed_previous(state_root)
+    backend = FakeUpgradeBoundary()
+    monkeypatch.setattr(offline, "HostUpgradeBoundary", lambda **_kwargs: backend)
+    monkeypatch.setattr(
+        offline,
+        "_load_trusted_release",
+        lambda path, _state_root: PlatformRelease.load(path),
+    )
+    monkeypatch.setenv("DGX_BACKUP_ENCRYPT_COMMAND", "age --encrypt --recipient test")
+
+    upgraded = offline.main(
+        [
+            "--state-path",
+            str(state_root),
+            "upgrade",
+            "--release",
+            str(tmp_path / "platform-release.json"),
+            "--apply",
+        ]
+    )
+    upgrade_output = json.loads(capsys.readouterr().out)
+    assert upgraded == 0
+    assert upgrade_output["release_digest"] == release.digest
+    assert upgrade_output["status"] == "active"
+
+    dry_rollback = offline.main(
+        [
+            "--state-path",
+            str(state_root),
+            "rollback",
+            "--generation",
+            previous,
+        ]
+    )
+    rollback_plan = json.loads(capsys.readouterr().out)
+    assert dry_rollback == 0
+    assert rollback_plan == {
+        "active_generation": upgrade_output["generation_id"],
+        "mode": "plan",
+        "target_generation": previous,
+    }
+    assert (state_root / "active-generation").read_text().strip() != previous
+
+    applied_rollback = offline.main(
+        [
+            "--state-path",
+            str(state_root),
+            "rollback",
+            "--generation",
+            previous,
+            "--apply",
+        ]
+    )
+    rollback_output = json.loads(capsys.readouterr().out)
+    assert applied_rollback == 0
+    assert rollback_output["status"] == "rolled-back"
+    assert (state_root / "active-generation").read_text().strip() == previous
+
+
+def test_offline_apply_requires_configured_platform_tuf_authorization(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    _release(tmp_path)
+    backend = FakeUpgradeBoundary()
+    monkeypatch.setattr(offline, "HostUpgradeBoundary", lambda **_kwargs: backend)
+    monkeypatch.setenv("DGX_BACKUP_ENCRYPT_COMMAND", "age --encrypt --recipient test")
+
+    result = offline.main(
+        [
+            "--state-path",
+            str(tmp_path / "state"),
+            "upgrade",
+            "--release",
+            str(tmp_path / "platform-release.json"),
+            "--apply",
+        ]
+    )
+
+    assert result == 2
+    assert "DGX_PLATFORM_TUF_ROOT" in capsys.readouterr().err
+    assert backend.events == []
+
+
+def test_host_upgrade_boundary_uses_only_fixed_argv_and_exact_image_digests(
+    tmp_path: Path, monkeypatch
+) -> None:
+    compose = tmp_path / "compose.yaml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+    backup_script = tmp_path / "backup-control-plane"
+    backup_script.write_text("#!/bin/false\n", encoding="utf-8")
+    calls: list[tuple[tuple[str, ...], dict[str, object]]] = []
+
+    def run(argv, **kwargs):
+        fixed = tuple(argv)
+        calls.append((fixed, kwargs))
+        if fixed[0] == str(backup_script):
+            Path(fixed[1]).write_bytes(b"encrypted-backup")
+        stdout = b"services: {}\n" if fixed[-1] == "config" else b""
+        return subprocess.CompletedProcess(fixed, 0, stdout=stdout, stderr=b"")
+
+    monkeypatch.setattr(offline.subprocess, "run", run)
+    monkeypatch.setattr(offline, "_api_running", lambda _url: True)
+    boundary = offline.HostUpgradeBoundary(
+        state_root=tmp_path / "state",
+        compose_file=compose,
+        backup_script=backup_script,
+        encrypt_command="age --encrypt --recipient test",
+        health_url="https://control.example.test/api/v1/healthz",
+    )
+    api = f"ghcr.io/example/api@sha256:{SHA_A}"
+    worker = f"ghcr.io/example/worker@sha256:{SHA_B}"
+    environment = {
+        "CONTROL_API_IMAGE": api,
+        "CONTROL_WORKER_IMAGE": worker,
+        "DGX_PLATFORM_BUILD_DIGEST": f"sha256:{SHA_A}",
+        "DGX_PLATFORM_RELEASE_DIGEST": f"sha256:{SHA_C}",
+        "DGX_PLATFORM_VERSION": "1.2.0",
+    }
+    generation = tmp_path / "generation"
+    generation.mkdir()
+    (generation / "platform.env").write_text(
+        "".join(f"{key}={environment[key]}\n" for key in sorted(environment)),
+        encoding="utf-8",
+    )
+
+    assert boundary.control_is_running() is False
+    boundary.pull((api, worker))
+    assert boundary.render_compose(environment) == b"services: {}\n"
+    backup = boundary.backup("gen-a")
+    boundary.stop_worker()
+    boundary.migrate("0010_update_rollouts")
+    boundary.start_api(generation)
+    assert boundary.readiness()["probe"] == "caddy"
+    boundary.start_worker()
+    boundary.stop_api()
+    boundary.restore_generation(generation)
+
+    assert backup["sha256"] == __import__("hashlib").sha256(b"encrypted-backup").hexdigest()
+    assert ("docker", "pull", api) in [argv for argv, _ in calls]
+    assert ("docker", "pull", worker) in [argv for argv, _ in calls]
+    assert any(
+        argv[-8:]
+        == (
+            "run",
+            "--rm",
+            "control-api",
+            "python",
+            "-m",
+            "alembic",
+            "upgrade",
+            "0010_update_rollouts",
+        )
+        for argv, _ in calls
+    )
+    assert all("shell" not in kwargs for _, kwargs in calls)
+
+
+def test_control_release_image_contains_offline_migration_assets() -> None:
+    root = Path(__file__).resolve().parents[2]
+    dockerfile = (root / "control/Dockerfile").read_text(encoding="utf-8")
+
+    assert "COPY control/alembic.ini /srv/dgx-control/alembic.ini" in dockerfile
+    assert "COPY control/migrations /srv/dgx-control/migrations" in dockerfile
+
+
+def test_host_migration_command_failure_is_always_ambiguous(tmp_path: Path, monkeypatch) -> None:
+    compose = tmp_path / "compose.yaml"
+    compose.write_text("services: {}\n", encoding="utf-8")
+    backup_script = tmp_path / "backup-control-plane"
+    backup_script.write_text("#!/bin/false\n", encoding="utf-8")
+
+    def fail(argv, **_kwargs):
+        return subprocess.CompletedProcess(tuple(argv), 1, stdout=b"", stderr=b"failed")
+
+    monkeypatch.setattr(offline.subprocess, "run", fail)
+    boundary = offline.HostUpgradeBoundary(
+        state_root=tmp_path / "state",
+        compose_file=compose,
+        backup_script=backup_script,
+        encrypt_command="age --encrypt --recipient test",
+        health_url="https://control.example.test/api/v1/healthz",
+    )
+
+    with pytest.raises(AmbiguousMigrationError, match="outcome is unknown"):
+        boundary.migrate("0010_update_rollouts")

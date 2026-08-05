@@ -23,6 +23,8 @@ FROM ${PYTHON_IMAGE} AS runtime
 RUN groupadd --gid 10001 control && useradd --uid 10001 --gid 10001 --no-create-home control
 COPY --from=build /install /usr/local
 WORKDIR /srv/dgx-control
+COPY control/alembic.ini /srv/dgx-control/alembic.ini
+COPY control/migrations /srv/dgx-control/migrations
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 
 FROM runtime AS worker

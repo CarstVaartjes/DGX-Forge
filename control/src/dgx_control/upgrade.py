@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
@@ -114,6 +115,9 @@ class ControlUpgrade:
             plan_digest="sha256:" + hashlib.sha256(_canonical(content)).hexdigest(),
         )
 
+    def active_generation(self) -> str | None:
+        return _active_generation(self._state_root)
+
     def apply(
         self,
         plan: ControlGenerationPlan,
@@ -127,14 +131,10 @@ class ControlUpgrade:
         if isinstance(available, bool) or not isinstance(available, int) or available < plan.required_bytes:
             raise UpgradeConflict("insufficient disk space for control generation")
 
-        generations = self._state_root / "generations"
         _secure_directory(self._state_root)
-        _secure_directory(generations)
+        generations = self._state_root / "generations"
         staging = generations / f".{plan.generation_id}.staging"
         final = generations / plan.generation_id
-        if staging.exists() or staging.is_symlink() or final.exists() or final.is_symlink():
-            raise UpgradeConflict("control generation already exists")
-        staging.mkdir(mode=0o700)
         environment = {
             "CONTROL_API_IMAGE": plan.api_image,
             "CONTROL_WORKER_IMAGE": plan.worker_image,
@@ -143,33 +143,56 @@ class ControlUpgrade:
             "DGX_PLATFORM_VERSION": plan.platform_version,
         }
         references = (plan.api_image, plan.worker_image)
+        offline_lock: int | None = None
         try:
-            self._boundary.pull(references)
-            rendered = self._boundary.render_compose(environment)
-            if not isinstance(rendered, bytes) or not 0 < len(rendered) <= _MAX_RENDERED_COMPOSE:
-                raise UpgradeError("rendered Compose generation is invalid")
-            _write_new(staging / "compose.rendered.yaml", rendered)
-            _write_new(
-                staging / "platform.env",
-                "".join(f"{key}={environment[key]}\n" for key in sorted(environment)).encode(),
-            )
-            backup = self._boundary.backup(plan.generation_id)
-            _json_mapping(backup, "backup manifest")
-            self._boundary.stop_worker()
             try:
-                self._boundary.migrate(plan.migration_revision)
-            except AmbiguousMigrationError as error:
-                recovery = {
-                    "schema_version": 1,
-                    "generation_id": plan.generation_id,
-                    "previous_generation": plan.previous_generation,
-                    "phase": "migration-ambiguous",
-                    "release_digest": plan.release_digest,
-                }
-                _write_atomic(self._state_root / "recovery-required.json", _canonical(recovery))
-                raise UpgradeRecoveryRequired(
-                    "database migration is ambiguous; operator recovery is required"
-                ) from error
+                offline_lock = _acquire_offline_lock(self._state_root / "offline.lock")
+                _secure_directory(generations)
+                if (
+                    staging.exists()
+                    or staging.is_symlink()
+                    or final.exists()
+                    or final.is_symlink()
+                ):
+                    raise UpgradeConflict("control generation already exists")
+                staging.mkdir(mode=0o700)
+                self._boundary.pull(references)
+                rendered = self._boundary.render_compose(environment)
+                if (
+                    not isinstance(rendered, bytes)
+                    or not 0 < len(rendered) <= _MAX_RENDERED_COMPOSE
+                ):
+                    raise UpgradeError("rendered Compose generation is invalid")
+                _write_new(staging / "compose.rendered.yaml", rendered)
+                _write_new(
+                    staging / "platform.env",
+                    "".join(
+                        f"{key}={environment[key]}\n" for key in sorted(environment)
+                    ).encode(),
+                )
+                backup = self._boundary.backup(plan.generation_id)
+                _json_mapping(backup, "backup manifest")
+                self._boundary.stop_worker()
+                try:
+                    self._boundary.migrate(plan.migration_revision)
+                except AmbiguousMigrationError as error:
+                    recovery = {
+                        "schema_version": 1,
+                        "generation_id": plan.generation_id,
+                        "previous_generation": plan.previous_generation,
+                        "phase": "migration-ambiguous",
+                        "release_digest": plan.release_digest,
+                    }
+                    _write_atomic(
+                        self._state_root / "recovery-required.json",
+                        _canonical(recovery),
+                    )
+                    raise UpgradeRecoveryRequired(
+                        "database migration is ambiguous; operator recovery is required"
+                    ) from error
+            finally:
+                if offline_lock is not None:
+                    _release_offline_lock(offline_lock)
             self._boundary.start_api(staging)
             try:
                 readiness = self._boundary.readiness()
@@ -318,6 +341,30 @@ def _secure_directory(path: Path) -> None:
     if not path.is_dir() or path.is_symlink() or metadata.st_uid not in {0, os.geteuid()}:
         raise UpgradeConflict("upgrade state directory is unsafe")
     os.chmod(path, 0o700)
+
+
+def _acquire_offline_lock(path: Path) -> int:
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+        )
+    except OSError as error:
+        raise UpgradeConflict("offline maintenance lock is unsafe") from error
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as error:
+        os.close(descriptor)
+        raise UpgradeConflict("another offline maintenance lock is active") from error
+    return descriptor
+
+
+def _release_offline_lock(descriptor: int) -> None:
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
 
 
 def _write_new(path: Path, content: bytes) -> None:
