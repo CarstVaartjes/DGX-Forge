@@ -176,6 +176,7 @@ def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
     }
     input_paths = (
         ".github/workflows/ci.yml",
+        ".github/dependabot.yml",
         "agent/pyproject.toml", "agent/uv.lock", "agent_protocol/pyproject.toml",
         "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
         ".dockerignore", "control/web/package-lock.json", "control/Dockerfile",

@@ -14,6 +14,7 @@ def _copy(tmp_path: Path) -> Path:
     target = tmp_path / "repo"
     for path in (
         ".github/workflows/ci.yml",
+        ".github/dependabot.yml",
         "agent/pyproject.toml", "agent/uv.lock", "agent_protocol/pyproject.toml",
         ".dockerignore", "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
         "control/web/package-lock.json", "control/Dockerfile",
