@@ -57,3 +57,8 @@ Cross-cutting CI: fix round 2/5 submitted (classify exact Linux/ELF installer ru
 Cross-cutting CI: fix round 2/5 complete (commit 9368f5e; exact 20 Linux runtime / 7 portable classification, 50 focused tests and pinned Ruff green, independent review Ready Yes; hosted rerun pending)
 Cross-cutting CI: complete (hosted run 30963728734 at SHA 010b9cded268355fcef1c52e00c9a4aab7464131; Ruff passed; macOS full Python+Bash passed in 2m8s; Ubuntu full Python+Bash passed in 2m33s)
 Task 5: complete and accepted (hosted run 30963728734 at SHA 010b9cded268355fcef1c52e00c9a4aab7464131 is fully green; local full-root remains separately non-green under the documented physical-hardware diagnosis)
+Task 6: active (deterministic outbound-agent simulator and phase acceptance; base ea61813837987fd3e34dd6ec1a9af7ffed7a4df0)
+Task 6: implementation delivered (seeded six-fault matrix at 1/16 agents using real AgentStateStore and OperationRegistry with simulated transport/release effects; initial independent review pending)
+Task 6: fix round 1/5 (2 Important submitted — require every bad-certificate/stale-fence security counter in pass/fail status and bound accidental CLI fleet requests without adding an absolute simulator API limit)
+Task 6: fix round 1/5 complete (exact complete evidence evaluator plus four negative regressions; default 256-node CLI safety threshold with explicit override and no positive-integer API ceiling; source commit b5c00e8)
+Task 6: complete and accepted (source commit b5c00e8255dd6037374182c46ce4b6896392ef59; 38 focused/combined tests, agent suite 514 passed + 1 deselected after the known local PyInstaller CPU-bound hang, canonical CLI evidence, Ruff/py_compile/diff green; independent rereview Ready Yes)
