@@ -13,6 +13,7 @@ SCRIPT = ROOT / "scripts/verify-supply-chain"
 def _copy(tmp_path: Path) -> Path:
     target = tmp_path / "repo"
     for path in (
+        ".github/workflows/ci.yml",
         "agent/pyproject.toml", "agent/uv.lock", "agent_protocol/pyproject.toml",
         ".dockerignore", "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
         "control/web/package-lock.json", "control/Dockerfile",
@@ -32,6 +33,8 @@ def _copy(tmp_path: Path) -> Path:
         "deploy/compose/litellm/config_supervisor.py",
         "deploy/compose/litellm/entrypoint.sh",
         "deploy/compose/trust/litellm-cosign.pub",
+        "scripts/container-release-metadata",
+        "scripts/verify-public-image-inputs",
     ):
         destination = target / path
         destination.parent.mkdir(parents=True, exist_ok=True)

@@ -175,6 +175,7 @@ def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
         "inventory/sbom/control-web.spdx.json": spdx("control-web", web_lock, packages_web(web_lock)),
     }
     input_paths = (
+        ".github/workflows/ci.yml",
         "agent/pyproject.toml", "agent/uv.lock", "agent_protocol/pyproject.toml",
         "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
         ".dockerignore", "control/web/package-lock.json", "control/Dockerfile",
@@ -194,6 +195,8 @@ def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
         "deploy/compose/litellm/config_supervisor.py",
         "deploy/compose/litellm/entrypoint.sh",
         "deploy/compose/trust/litellm-cosign.pub",
+        "scripts/container-release-metadata",
+        "scripts/verify-public-image-inputs",
     )
     manifest = {
         "schema_version": 2,
