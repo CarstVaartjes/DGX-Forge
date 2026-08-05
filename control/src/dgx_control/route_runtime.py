@@ -242,6 +242,15 @@ class ActivationMarker:
         return _sha256(self.canonical_bytes())
 
 
+@dataclass(frozen=True)
+class VerifiedRouteBundle:
+    """One canonical, checksum-bound, unexpired active route bundle."""
+
+    marker: ActivationMarker
+    routes: Mapping[str, object]
+    litellm: Mapping[str, object]
+
+
 class FileSupervisorAcknowledger:
     """Wait for a recent live-process ack bound to one exact marker request."""
 
@@ -934,74 +943,19 @@ class AtomicRouteBundlePublisher:
         verify_files: bool,
         verify_lease: bool,
     ) -> ActivationMarker | None:
-        active = self._root / "activation.json"
-        if not active.exists():
-            if optional:
-                return None
-            raise RouteRuntimeError("no route bundle is active")
-        if active.is_symlink() or not active.is_file():
-            raise RouteRuntimeError("route activation marker is unsafe")
-        try:
-            content = active.read_bytes()
-            raw: Any = json.loads(content)
-        except (OSError, json.JSONDecodeError) as error:
-            raise RouteRuntimeError("route activation marker is unreadable") from error
-        if not isinstance(raw, dict) or set(raw) != _MARKER_FIELDS:
-            raise RouteRuntimeError("route activation marker fields are invalid")
-        try:
-            marker = ActivationMarker(**raw)
-        except TypeError as error:
-            raise RouteRuntimeError(
-                "route activation marker fields are invalid"
-            ) from error
-        self._validate_marker(marker)
-        if content != marker.canonical_bytes():
-            raise RouteRuntimeError("route activation marker is not canonical")
-        if verify_files:
-            directory = self._generations / marker.directory
-            if directory.is_symlink() or not directory.is_dir():
-                raise RouteRuntimeError("active route generation is unavailable")
-            manifest_document = {
-                field: getattr(marker, field)
-                for field in (
-                    "schema_version",
-                    "generation",
-                    "state",
-                    "reconciliation_id",
-                    "plan_digest",
-                    "evidence_set_digest",
-                    "routes_sha256",
-                    "litellm_sha256",
-                    "issued_at",
-                    "expires_at",
-                )
-            }
-            expected_files = {
-                "manifest.json": (marker.manifest_sha256, _encoded(manifest_document)),
-                "routes.json": (marker.routes_sha256, None),
-                "litellm.json": (marker.litellm_sha256, None),
-            }
-            for name, (digest, exact) in expected_files.items():
-                target = directory / name
-                if target.is_symlink() or not target.is_file():
-                    raise RouteRuntimeError("active route generation file is unsafe")
-                content = target.read_bytes()
-                if _sha256(content) != digest or (
-                    exact is not None and content != exact
-                ):
-                    raise RouteRuntimeError("active route generation checksum mismatch")
-        if verify_lease:
-            now = _aware(self._clock(), "route clock")
-            issued = _parse_time(marker.issued_at, "issued timestamp")
-            expires = _parse_time(marker.expires_at, "expiry timestamp")
-            if (
-                issued > now
-                or now >= expires
-                or expires <= issued
-                or expires - issued > self._maximum_lease
-            ):
-                raise RouteRuntimeError("active route lease is invalid or expired")
-        return marker
+        bundle = _read_active_route_bundle(
+            self._root,
+            generations=self._generations,
+            clock=self._clock,
+            maximum_lease=self._maximum_lease,
+            optional=optional,
+            verify_files=verify_files,
+            verify_lease=verify_lease,
+            validate_documents=False,
+            validate_routes=self._validate_routes,
+            validate_litellm=self._validate_litellm,
+        )
+        return None if bundle is None else bundle.marker
 
     @staticmethod
     def _validate_marker(marker: ActivationMarker) -> None:
@@ -1030,3 +984,155 @@ class AtomicRouteBundlePublisher:
             marker.plan_digest,
             marker.evidence_set_digest,
         )
+
+
+def verify_active_route_bundle(
+    root: Path,
+    *,
+    clock: Callable[[], datetime],
+    maximum_lease_seconds: int = 300,
+) -> VerifiedRouteBundle:
+    """Read and authenticate the complete active bundle without mutating it."""
+
+    if root.is_symlink() or not root.is_dir():
+        raise RouteRuntimeError("route runtime root is unavailable")
+    if not 1 <= maximum_lease_seconds <= 3600:
+        raise RouteRuntimeError("route lease bound is invalid")
+    generations = root / "generations"
+    if generations.is_symlink() or not generations.is_dir():
+        raise RouteRuntimeError("route generation root is unavailable")
+    bundle = _read_active_route_bundle(
+        root,
+        generations=generations,
+        clock=clock,
+        maximum_lease=timedelta(seconds=maximum_lease_seconds),
+        optional=False,
+        verify_files=True,
+        verify_lease=True,
+        validate_documents=True,
+        validate_routes=AtomicRouteBundlePublisher._valid_json_mapping,
+        validate_litellm=AtomicRouteBundlePublisher._valid_litellm,
+    )
+    assert bundle is not None
+    return bundle
+
+
+def _read_active_route_bundle(
+    root: Path,
+    *,
+    generations: Path,
+    clock: Callable[[], datetime],
+    maximum_lease: timedelta,
+    optional: bool,
+    verify_files: bool,
+    verify_lease: bool,
+    validate_documents: bool,
+    validate_routes: Callable[[bytes], bool],
+    validate_litellm: Callable[[bytes], bool],
+) -> VerifiedRouteBundle | None:
+    active = root / "activation.json"
+    if not active.exists():
+        if optional:
+            return None
+        raise RouteRuntimeError("no route bundle is active")
+    if active.is_symlink() or not active.is_file():
+        raise RouteRuntimeError("route activation marker is unsafe")
+    try:
+        marker_content = active.read_bytes()
+        raw: Any = json.loads(marker_content)
+    except (OSError, json.JSONDecodeError) as error:
+        raise RouteRuntimeError("route activation marker is unreadable") from error
+    if not isinstance(raw, dict) or set(raw) != _MARKER_FIELDS:
+        raise RouteRuntimeError("route activation marker fields are invalid")
+    try:
+        marker = ActivationMarker(**raw)
+    except TypeError as error:
+        raise RouteRuntimeError(
+            "route activation marker fields are invalid"
+        ) from error
+    AtomicRouteBundlePublisher._validate_marker(marker)
+    if marker_content != marker.canonical_bytes():
+        raise RouteRuntimeError("route activation marker is not canonical")
+
+    documents: dict[str, Mapping[str, object]] = {}
+    if verify_files:
+        directory = generations / marker.directory
+        if directory.is_symlink() or not directory.is_dir():
+            raise RouteRuntimeError("active route generation is unavailable")
+        manifest_document = {
+            field: getattr(marker, field)
+            for field in (
+                "schema_version",
+                "generation",
+                "state",
+                "reconciliation_id",
+                "plan_digest",
+                "evidence_set_digest",
+                "routes_sha256",
+                "litellm_sha256",
+                "issued_at",
+                "expires_at",
+            )
+        }
+        expected_files = {
+            "manifest.json": (
+                marker.manifest_sha256,
+                _encoded(manifest_document),
+            ),
+            "routes.json": (marker.routes_sha256, None),
+            "litellm.json": (marker.litellm_sha256, None),
+        }
+        for name, (digest, exact) in expected_files.items():
+            target = directory / name
+            if target.is_symlink() or not target.is_file():
+                raise RouteRuntimeError("active route generation file is unsafe")
+            try:
+                content = target.read_bytes()
+            except OSError as error:
+                raise RouteRuntimeError(
+                    "active route generation file is unreadable"
+                ) from error
+            if _sha256(content) != digest or (
+                exact is not None and content != exact
+            ):
+                raise RouteRuntimeError(
+                    "active route generation checksum mismatch"
+                )
+            if name in {"routes.json", "litellm.json"}:
+                validator = (
+                    validate_routes
+                    if name == "routes.json"
+                    else validate_litellm
+                )
+                try:
+                    document = json.loads(content)
+                except json.JSONDecodeError as error:
+                    raise RouteRuntimeError(
+                        "active route generation document is invalid"
+                    ) from error
+                if (
+                    not isinstance(document, Mapping)
+                    or validate_documents
+                    and not validator(content)
+                ):
+                    raise RouteRuntimeError(
+                        "active route generation document is invalid"
+                    )
+                documents[name] = document
+
+    if verify_lease:
+        now = _aware(clock(), "route clock")
+        issued = _parse_time(marker.issued_at, "issued timestamp")
+        expires = _parse_time(marker.expires_at, "expiry timestamp")
+        if (
+            issued > now
+            or now >= expires
+            or expires <= issued
+            or expires - issued > maximum_lease
+        ):
+            raise RouteRuntimeError("active route lease is invalid or expired")
+    return VerifiedRouteBundle(
+        marker=marker,
+        routes=documents.get("routes.json", {}),
+        litellm=documents.get("litellm.json", {}),
+    )

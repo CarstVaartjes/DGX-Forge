@@ -6,22 +6,23 @@ from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
 
+from typing import cast
 
 
 
 
 
 
-T = TypeVar("T", bound="ReconciliationPlanResponseInputDigests")
+T = TypeVar("T", bound="PlanPlacements")
 
 
 
 @_attrs_define
-class ReconciliationPlanResponseInputDigests:
+class PlanPlacements:
     """
      """
 
-    additional_properties: dict[str, str] = _attrs_field(init=False, factory=dict)
+    additional_properties: dict[str, list[str]] = _attrs_field(init=False, factory=dict)
 
 
 
@@ -30,7 +31,11 @@ class ReconciliationPlanResponseInputDigests:
     def to_dict(self) -> dict[str, Any]:
 
         field_dict: dict[str, Any] = {}
-        field_dict.update(self.additional_properties)
+        for prop_name, prop in self.additional_properties.items():
+            field_dict[prop_name] = prop
+
+
+
 
         return field_dict
 
@@ -39,21 +44,27 @@ class ReconciliationPlanResponseInputDigests:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        reconciliation_plan_response_input_digests = cls(
+        plan_placements = cls(
         )
 
 
-        reconciliation_plan_response_input_digests.additional_properties = d
-        return reconciliation_plan_response_input_digests
+        additional_properties = {}
+        for prop_name, prop_dict in d.items():
+            additional_property = cast(list[str], prop_dict)
+
+            additional_properties[prop_name] = additional_property
+
+        plan_placements.additional_properties = additional_properties
+        return plan_placements
 
     @property
     def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
-    def __getitem__(self, key: str) -> str:
+    def __getitem__(self, key: str) -> list[str]:
         return self.additional_properties[key]
 
-    def __setitem__(self, key: str, value: str) -> None:
+    def __setitem__(self, key: str, value: list[str]) -> None:
         self.additional_properties[key] = value
 
     def __delitem__(self, key: str) -> None:

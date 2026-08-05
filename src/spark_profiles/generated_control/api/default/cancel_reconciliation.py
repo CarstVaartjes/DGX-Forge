@@ -7,6 +7,7 @@ from ...client import AuthenticatedClient, Client
 from ...types import Response, UNSET
 from ... import errors
 
+from ...models.bounded_error_response import BoundedErrorResponse
 from ...models.cancel_reconciliation_response_cancel_reconciliation_api_v1_reconciliations_reconciliation_id_cancel_post import CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost
 from ...models.http_validation_error import HTTPValidationError
 from ...models.reconciliation_cancel_request import ReconciliationCancelRequest
@@ -42,13 +43,41 @@ def _get_kwargs(
 
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[BoundedErrorResponse, CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]:
     if response.status_code == 202:
         response_202 = CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost.from_dict(response.json())
 
 
 
         return response_202
+
+    if response.status_code == 401:
+        response_401 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_401
+
+    if response.status_code == 403:
+        response_403 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_403
+
+    if response.status_code == 404:
+        response_404 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_404
+
+    if response.status_code == 409:
+        response_409 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_409
 
     if response.status_code == 422:
         response_422 = HTTPValidationError.from_dict(response.json())
@@ -57,13 +86,20 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
 
         return response_422
 
+    if response.status_code == 503:
+        response_503 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_503
+
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
     else:
         return None
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]:
+def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[BoundedErrorResponse, CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -78,7 +114,7 @@ def sync_detailed(
     client: AuthenticatedClient,
     body: ReconciliationCancelRequest,
 
-) -> Response[Union[CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]:
+) -> Response[Union[BoundedErrorResponse, CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]:
     """ Cancel Reconciliation
 
     Args:
@@ -90,7 +126,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]
+        Response[Union[BoundedErrorResponse, CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]
      """
 
 
@@ -112,7 +148,7 @@ def sync(
     client: AuthenticatedClient,
     body: ReconciliationCancelRequest,
 
-) -> Optional[Union[CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]:
+) -> Optional[Union[BoundedErrorResponse, CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]:
     """ Cancel Reconciliation
 
     Args:
@@ -124,7 +160,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]
+        Union[BoundedErrorResponse, CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]
      """
 
 
@@ -141,7 +177,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient,
     body: ReconciliationCancelRequest,
 
-) -> Response[Union[CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]:
+) -> Response[Union[BoundedErrorResponse, CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]:
     """ Cancel Reconciliation
 
     Args:
@@ -153,7 +189,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]
+        Response[Union[BoundedErrorResponse, CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]
      """
 
 
@@ -175,7 +211,7 @@ async def asyncio(
     client: AuthenticatedClient,
     body: ReconciliationCancelRequest,
 
-) -> Optional[Union[CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]:
+) -> Optional[Union[BoundedErrorResponse, CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]]:
     """ Cancel Reconciliation
 
     Args:
@@ -187,7 +223,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]
+        Union[BoundedErrorResponse, CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost, HTTPValidationError]
      """
 
 

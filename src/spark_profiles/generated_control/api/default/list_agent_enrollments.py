@@ -7,8 +7,9 @@ from ...client import AuthenticatedClient, Client
 from ...types import Response, UNSET
 from ... import errors
 
+from ...models.bounded_error_response import BoundedErrorResponse
+from ...models.enrollment_list_response import EnrollmentListResponse
 from ...models.http_validation_error import HTTPValidationError
-from ...models.list_agent_enrollments_response_list_enrollments_api_v1_agents_enrollments_get import ListAgentEnrollmentsResponseListEnrollmentsApiV1AgentsEnrollmentsGet
 from ...types import UNSET, Unset
 from typing import cast
 from typing import cast, Union
@@ -60,13 +61,27 @@ def _get_kwargs(
 
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[HTTPValidationError, ListAgentEnrollmentsResponseListEnrollmentsApiV1AgentsEnrollmentsGet]]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[BoundedErrorResponse, EnrollmentListResponse, HTTPValidationError]]:
     if response.status_code == 200:
-        response_200 = ListAgentEnrollmentsResponseListEnrollmentsApiV1AgentsEnrollmentsGet.from_dict(response.json())
+        response_200 = EnrollmentListResponse.from_dict(response.json())
 
 
 
         return response_200
+
+    if response.status_code == 401:
+        response_401 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_401
+
+    if response.status_code == 403:
+        response_403 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_403
 
     if response.status_code == 422:
         response_422 = HTTPValidationError.from_dict(response.json())
@@ -75,13 +90,20 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
 
         return response_422
 
+    if response.status_code == 503:
+        response_503 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_503
+
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
     else:
         return None
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[HTTPValidationError, ListAgentEnrollmentsResponseListEnrollmentsApiV1AgentsEnrollmentsGet]]:
+def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[BoundedErrorResponse, EnrollmentListResponse, HTTPValidationError]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -97,7 +119,7 @@ def sync_detailed(
     state: Union[None, Unset, str] = UNSET,
     limit: Union[Unset, int] = 100,
 
-) -> Response[Union[HTTPValidationError, ListAgentEnrollmentsResponseListEnrollmentsApiV1AgentsEnrollmentsGet]]:
+) -> Response[Union[BoundedErrorResponse, EnrollmentListResponse, HTTPValidationError]]:
     """ List Enrollments
 
     Args:
@@ -110,7 +132,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[HTTPValidationError, ListAgentEnrollmentsResponseListEnrollmentsApiV1AgentsEnrollmentsGet]]
+        Response[Union[BoundedErrorResponse, EnrollmentListResponse, HTTPValidationError]]
      """
 
 
@@ -134,7 +156,7 @@ def sync(
     state: Union[None, Unset, str] = UNSET,
     limit: Union[Unset, int] = 100,
 
-) -> Optional[Union[HTTPValidationError, ListAgentEnrollmentsResponseListEnrollmentsApiV1AgentsEnrollmentsGet]]:
+) -> Optional[Union[BoundedErrorResponse, EnrollmentListResponse, HTTPValidationError]]:
     """ List Enrollments
 
     Args:
@@ -147,7 +169,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[HTTPValidationError, ListAgentEnrollmentsResponseListEnrollmentsApiV1AgentsEnrollmentsGet]
+        Union[BoundedErrorResponse, EnrollmentListResponse, HTTPValidationError]
      """
 
 
@@ -166,7 +188,7 @@ async def asyncio_detailed(
     state: Union[None, Unset, str] = UNSET,
     limit: Union[Unset, int] = 100,
 
-) -> Response[Union[HTTPValidationError, ListAgentEnrollmentsResponseListEnrollmentsApiV1AgentsEnrollmentsGet]]:
+) -> Response[Union[BoundedErrorResponse, EnrollmentListResponse, HTTPValidationError]]:
     """ List Enrollments
 
     Args:
@@ -179,7 +201,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[HTTPValidationError, ListAgentEnrollmentsResponseListEnrollmentsApiV1AgentsEnrollmentsGet]]
+        Response[Union[BoundedErrorResponse, EnrollmentListResponse, HTTPValidationError]]
      """
 
 
@@ -203,7 +225,7 @@ async def asyncio(
     state: Union[None, Unset, str] = UNSET,
     limit: Union[Unset, int] = 100,
 
-) -> Optional[Union[HTTPValidationError, ListAgentEnrollmentsResponseListEnrollmentsApiV1AgentsEnrollmentsGet]]:
+) -> Optional[Union[BoundedErrorResponse, EnrollmentListResponse, HTTPValidationError]]:
     """ List Enrollments
 
     Args:
@@ -216,7 +238,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[HTTPValidationError, ListAgentEnrollmentsResponseListEnrollmentsApiV1AgentsEnrollmentsGet]
+        Union[BoundedErrorResponse, EnrollmentListResponse, HTTPValidationError]
      """
 
 

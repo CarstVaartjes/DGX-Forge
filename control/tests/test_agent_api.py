@@ -169,7 +169,9 @@ def agent_system(tmp_path):
     )
     services.artifact_root.mkdir()
     codec = TokenCodec(b"k" * 32)
-    app = create_app(jobs=Jobs(), tokens=codec, audits=MemoryAuditStore(), fleet=dict, now=lambda: 0, agent=services, trusted_agent_proxy_auth=b"p" * 32)
+    audits = MemoryAuditStore()
+    app = create_app(jobs=Jobs(), tokens=codec, audits=audits, fleet=dict, now=lambda: 0, agent=services, trusted_agent_proxy_auth=b"p" * 32)
+    app.state.test_audits = audits
     return TestClient(app), services, codec, clock
 
 
@@ -832,10 +834,19 @@ def test_approved_exact_enrollment_replay_picks_up_certificate_and_mismatch_is_d
     }
     pending = client.post("/agent/v1/enroll", json=body)
     enrollment_id = pending.json()["id"]
-    assert client.post(
+    approval = client.post(
         f"/api/v1/agents/enrollments/{enrollment_id}/approve",
         headers=admin_headers(codec),
-    ).status_code == 200
+    )
+
+    assert approval.status_code == 200
+    assert approval.json() == {
+        "id": enrollment_id,
+        "node_id": NODE_C,
+        "state": "approved",
+    }
+    assert "certificate" not in approval.text.lower()
+    assert "chain" not in approval.text.lower()
 
     pickup = client.post("/agent/v1/enroll", json=body)
     mismatch = client.post(
@@ -849,6 +860,118 @@ def test_approved_exact_enrollment_replay_picks_up_certificate_and_mismatch_is_d
     assert "certificate_pem" in pickup.json()
     assert mismatch.status_code == 403
     assert "certificate" not in mismatch.text.lower()
+
+
+def test_human_enrollment_mutations_audit_only_success_with_request_actor_and_targets(
+    agent_system,
+) -> None:
+    client, services, codec, _clock = agent_system
+    headers = admin_headers(codec)
+    audits = client.app.state.test_audits
+
+    grant_response = client.post(
+        "/api/v1/agents/enrollments/grants",
+        headers=headers,
+        json={"node_id": NODE_C, "ttl_seconds": 60},
+    )
+    grant = grant_response.json()
+    csr = _csr_for(NODE_C)
+    pending = client.post(
+        "/agent/v1/enroll",
+        json={
+            "grant_token": grant["token"],
+            "csr": csr.decode(),
+            "evidence": {
+                "node_id": NODE_C,
+                "csr_public_key_fingerprint": _csr_fingerprint(csr),
+                "host_key_fingerprint": "host-c",
+                "hardware_fingerprint": "hardware-c",
+                "agent_digest": "c" * 64,
+                "boot_id": "boot-c",
+            },
+        },
+    )
+    approval = client.post(
+        f"/api/v1/agents/enrollments/{pending.json()['id']}/approve",
+        headers=headers,
+    )
+
+    node_d = "spk_" + "d" * 32
+    direct_grant = services.enrollment.create(node_d, "administrator", 60)
+    reject_csr = _csr_for(node_d)
+    rejected_pending = client.post(
+        "/agent/v1/enroll",
+        json={
+            "grant_token": direct_grant.token,
+            "csr": reject_csr.decode(),
+            "evidence": {
+                "node_id": node_d,
+                "csr_public_key_fingerprint": _csr_fingerprint(reject_csr),
+                "host_key_fingerprint": "host-d",
+                "hardware_fingerprint": "hardware-d",
+                "agent_digest": "d" * 64,
+                "boot_id": "boot-d",
+            },
+        },
+    )
+    rejection = client.post(
+        f"/api/v1/agents/enrollments/{rejected_pending.json()['id']}/reject",
+        headers=headers,
+        json={"reason": "evidence mismatch"},
+    )
+    revocation = client.post(
+        f"/api/v1/agents/nodes/{NODE_A}/revoke",
+        headers=headers,
+    )
+
+    assert [grant_response.status_code, approval.status_code, rejection.status_code, revocation.status_code] == [201, 200, 200, 204]
+    expected = {
+        grant_response.headers["x-request-id"]: (
+            "agent.enrollment.grant.create",
+            (NODE_C,),
+        ),
+        approval.headers["x-request-id"]: (
+            "agent.enrollment.approve",
+            (pending.json()["id"], NODE_C),
+        ),
+        rejection.headers["x-request-id"]: (
+            "agent.enrollment.reject",
+            (rejected_pending.json()["id"], node_d),
+        ),
+        revocation.headers["x-request-id"]: (
+            "agent.node.revoke",
+            (NODE_A,),
+        ),
+    }
+    for request_id, (action, targets) in expected.items():
+        event = audits.for_request(request_id)
+        assert event.actor == "administrator"
+        assert event.action == action
+        assert event.base_commit is None
+        assert event.targets == targets
+
+    successful_count = len(audits.list())
+    failures = [
+        client.post(
+            "/api/v1/agents/enrollments/grants",
+            headers=headers,
+            json={"node_id": "invalid", "ttl_seconds": 60},
+        ),
+        client.post(
+            "/api/v1/agents/enrollments/unknown/approve", headers=headers
+        ),
+        client.post(
+            "/api/v1/agents/enrollments/unknown/reject",
+            headers=headers,
+            json={"reason": "invalid"},
+        ),
+        client.post(
+            f"/api/v1/agents/nodes/{'spk_' + 'f' * 32}/revoke",
+            headers=headers,
+        ),
+    ]
+    assert [response.status_code for response in failures] == [422, 409, 409, 404]
+    assert len(audits.list()) == successful_count
 
 
 def _csr_for(node_id: str) -> bytes:

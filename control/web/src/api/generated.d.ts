@@ -423,6 +423,11 @@ export interface components {
             /** Agents */
             agents: components["schemas"]["AgentSummary"][];
         };
+        /** BoundedErrorResponse */
+        BoundedErrorResponse: {
+            /** Detail */
+            detail: string;
+        };
         /** ChangeRequest */
         ChangeRequest: {
             /** Proposal Digest */
@@ -444,6 +449,67 @@ export interface components {
             observed_at: string;
             /** Plan Digest */
             plan_digest: string;
+            /** State */
+            state: string;
+        };
+        /** EnrollmentDecisionResponse */
+        EnrollmentDecisionResponse: {
+            /** Id */
+            id: string;
+            /** Node Id */
+            node_id: string;
+            /**
+             * State
+             * @enum {string}
+             */
+            state: "approved" | "rejected";
+        };
+        /** EnrollmentGrantResponse */
+        EnrollmentGrantResponse: {
+            /** Expires At */
+            expires_at: string;
+            /** Id */
+            id: string;
+            /** Node Id */
+            node_id: string;
+            /** Token */
+            token: string;
+        };
+        /** EnrollmentListResponse */
+        EnrollmentListResponse: {
+            /** Enrollments */
+            enrollments: components["schemas"]["EnrollmentSummary"][];
+            /** Next Cursor */
+            next_cursor?: string | null;
+        };
+        /** EnrollmentSummary */
+        EnrollmentSummary: {
+            /** Agent Digest */
+            agent_digest: string;
+            /** Boot Id */
+            boot_id: string;
+            /** Certificate Fingerprint */
+            certificate_fingerprint?: string | null;
+            /** Certificate Serial */
+            certificate_serial?: string | null;
+            /** Created At */
+            created_at: string;
+            /** Csr Public Key Fingerprint */
+            csr_public_key_fingerprint: string;
+            /** Decided At */
+            decided_at?: string | null;
+            /** Decision Actor */
+            decision_actor?: string | null;
+            /** Hardware Fingerprint */
+            hardware_fingerprint: string;
+            /** Host Key Fingerprint */
+            host_key_fingerprint: string;
+            /** Id */
+            id: string;
+            /** Node Id */
+            node_id: string;
+            /** Rejection Reason */
+            rejection_reason?: string | null;
             /** State */
             state: string;
         };
@@ -495,6 +561,11 @@ export interface components {
             /** Job Id */
             job_id: string;
         };
+        /** JobOperationProgress */
+        JobOperationProgress: {
+            /** Phase */
+            phase: string;
+        };
         /** JobOperationResponse */
         JobOperationResponse: {
             /** Attempt */
@@ -507,10 +578,7 @@ export interface components {
             kind: string;
             /** Node Id */
             node_id: string;
-            /** Progress */
-            progress?: {
-                [key: string]: unknown;
-            } | null;
+            progress?: components["schemas"]["JobOperationProgress"] | null;
             /** State */
             state: string;
             /** Updated At */
@@ -600,6 +668,193 @@ export interface components {
             /** Stale */
             stale: boolean;
         };
+        /** PlanEndpoint */
+        PlanEndpoint: {
+            /** Path */
+            path: string;
+            /** Port */
+            port: number;
+            /**
+             * Scheme
+             * @enum {string}
+             */
+            scheme: "http" | "https";
+        };
+        /** PlanInputDigests */
+        PlanInputDigests: {
+            [key: string]: string;
+        };
+        /** PlanOperation */
+        PlanOperation: {
+            /** Compensation Kind */
+            compensation_kind?: string | null;
+            /** Dependencies */
+            dependencies: string[];
+            /** Kind */
+            kind: string;
+            /** Node Id */
+            node_id: string;
+            /** Operation Id */
+            operation_id: string;
+            /** Payload Digest */
+            payload_digest: string;
+            /** Workload Id */
+            workload_id: string;
+        };
+        /** PlanOperationGraph */
+        PlanOperationGraph: {
+            /** Base Commit */
+            base_commit: string;
+            /** Nodes */
+            nodes: components["schemas"]["PlanOperation"][];
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /** Targets */
+            targets: string[];
+        };
+        /** PlanPlacements */
+        PlanPlacements: {
+            [key: string]: string[];
+        };
+        /** PlanPrepareRequest */
+        PlanPrepareRequest: {
+            /** Adapter Id */
+            adapter_id: string;
+            /** Profile Digest */
+            profile_digest: string;
+            /** Release Digest */
+            release_digest: string;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /** Workload Id */
+            workload_id: string;
+        };
+        /** PlanQuota */
+        PlanQuota: {
+            /** Requests Per Minute */
+            requests_per_minute: number;
+            /** Tokens Per Minute */
+            tokens_per_minute: number;
+        };
+        /** PlanRelease */
+        PlanRelease: {
+            /** Definition Hash */
+            definition_hash: string;
+            endpoint: components["schemas"]["PlanEndpoint"];
+            /** Manifest Path */
+            manifest_path: string;
+            /** Manifest Sha256 */
+            manifest_sha256: string;
+            release_request: components["schemas"]["PlanReleaseRequest"];
+            workload_requests: components["schemas"]["PlanWorkloadRequests"];
+        };
+        /** PlanReleaseRequest */
+        PlanReleaseRequest: {
+            /** Adapter Id */
+            adapter_id: string;
+            /** Oci Manifest Digest */
+            oci_manifest_digest: string;
+            /** Provenance Digest */
+            provenance_digest: string;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /** Target Digest */
+            target_digest: string;
+            /** Target Name */
+            target_name: string;
+        };
+        /** PlanReleases */
+        PlanReleases: {
+            [key: string]: components["schemas"]["PlanRelease"];
+        };
+        /** PlanRoute */
+        PlanRoute: {
+            /** Entrypoint Node Id */
+            entrypoint_node_id: string;
+            /** Nodes */
+            nodes: string[];
+            /** Path */
+            path: string;
+            /** Port */
+            port: number;
+            quota: components["schemas"]["PlanQuota"];
+            /** Quota Digest */
+            quota_digest: string;
+            /**
+             * Scheme
+             * @enum {string}
+             */
+            scheme: "http" | "https";
+            /** Workload Id */
+            workload_id: string;
+        };
+        /** PlanRoutes */
+        PlanRoutes: {
+            [key: string]: components["schemas"]["PlanRoute"];
+        };
+        /** PlanStartRequest */
+        PlanStartRequest: {
+            /** Adapter Id */
+            adapter_id: string;
+            /** Preparation Digest */
+            preparation_digest: string;
+            /** Release Digest */
+            release_digest: string;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /** Workload Id */
+            workload_id: string;
+        };
+        /** PlanVerifyRequest */
+        PlanVerifyRequest: {
+            /** Adapter Id */
+            adapter_id: string;
+            /** Expected Digest */
+            expected_digest: string;
+            /** Release Digest */
+            release_digest: string;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /** Workload Id */
+            workload_id: string;
+        };
+        /** PlanWorkloadRequest */
+        PlanWorkloadRequest: {
+            /** Adapter Id */
+            adapter_id: string;
+            /** Release Digest */
+            release_digest: string;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /** Workload Id */
+            workload_id: string;
+        };
+        /** PlanWorkloadRequests */
+        PlanWorkloadRequests: {
+            health: components["schemas"]["PlanWorkloadRequest"];
+            prepare: components["schemas"]["PlanPrepareRequest"];
+            start: components["schemas"]["PlanStartRequest"];
+            stop: components["schemas"]["PlanWorkloadRequest"];
+            verify: components["schemas"]["PlanVerifyRequest"];
+        };
         /** ProposalChangeRequest */
         ProposalChangeRequest: {
             /** Document */
@@ -647,28 +902,13 @@ export interface components {
             commit: string;
             /** Digest */
             digest: string;
-            /** Input Digests */
-            input_digests: {
-                [key: string]: string;
-            };
-            /** Operation Graph */
-            operation_graph: {
-                [key: string]: unknown;
-            };
-            /** Placements */
-            placements: {
-                [key: string]: unknown;
-            };
+            input_digests: components["schemas"]["PlanInputDigests"];
+            operation_graph: components["schemas"]["PlanOperationGraph"];
+            placements: components["schemas"]["PlanPlacements"];
             /** Reconciliation Id */
             reconciliation_id: string;
-            /** Releases */
-            releases: {
-                [key: string]: unknown;
-            };
-            /** Routes */
-            routes: {
-                [key: string]: unknown;
-            };
+            releases: components["schemas"]["PlanReleases"];
+            routes: components["schemas"]["PlanRoutes"];
             /** Targets */
             targets: string[];
         };
@@ -718,6 +958,24 @@ export interface operations {
                     "application/json": components["schemas"]["AgentsResponse"];
                 };
             };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
         };
     };
     listAgentEnrollments: {
@@ -739,9 +997,25 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["EnrollmentListResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -751,6 +1025,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
         };
@@ -774,9 +1057,25 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["EnrollmentGrantResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -786,6 +1085,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
         };
@@ -807,9 +1115,34 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["EnrollmentDecisionResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -819,6 +1152,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
         };
@@ -844,9 +1186,34 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": {
-                        [key: string]: unknown;
-                    };
+                    "application/json": components["schemas"]["EnrollmentDecisionResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -856,6 +1223,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
         };
@@ -878,6 +1254,33 @@ export interface operations {
                 };
                 content?: never;
             };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -885,6 +1288,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
         };
@@ -1001,6 +1413,24 @@ export interface operations {
                     "application/json": components["schemas"]["EndpointResponse"];
                 };
             };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -1008,6 +1438,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
         };
@@ -1030,6 +1469,15 @@ export interface operations {
                     "application/json": components["schemas"]["FleetStatusResponse"];
                 };
             };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
         };
     };
     listJobs: {
@@ -1048,6 +1496,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobsResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
         };
@@ -1070,6 +1527,24 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["JobDetailResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
             /** @description Validation Error */
@@ -1103,6 +1578,33 @@ export interface operations {
                     "application/json": components["schemas"]["JobLogsResponse"];
                 };
             };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -1110,6 +1612,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
         };
@@ -1170,6 +1681,42 @@ export interface operations {
                     "application/json": components["schemas"]["JobResumeResponse"];
                 };
             };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -1177,6 +1724,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
         };
@@ -1197,6 +1753,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FleetStatusResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
         };
@@ -1225,6 +1790,24 @@ export interface operations {
                     "application/json": components["schemas"]["ReconciliationPlanResponse"];
                 };
             };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -1232,6 +1815,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
         };
@@ -1293,6 +1885,33 @@ export interface operations {
                     "application/json": components["schemas"]["ReconciliationAcceptedResponse"];
                 };
             };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -1300,6 +1919,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
         };
@@ -1326,6 +1954,24 @@ export interface operations {
                     "application/json": components["schemas"]["ReconciliationPlanResponse"];
                 };
             };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -1333,6 +1979,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
         };
@@ -1363,6 +2018,42 @@ export interface operations {
                     };
                 };
             };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
             /** @description Validation Error */
             422: {
                 headers: {
@@ -1370,6 +2061,15 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
                 };
             };
         };

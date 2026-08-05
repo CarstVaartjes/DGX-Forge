@@ -65,7 +65,7 @@ def protocol_version_bucket(
 class MetricsRegistry:
     def __init__(self) -> None:
         self._lock = threading.RLock()
-        self._nodes: dict[str, tuple[bool, int, int, float]] = {}
+        self._nodes: dict[str, tuple[bool, int, int, float | None]] = {}
         self._jobs: dict[tuple[str, str], int] = {}
         self._route_state = "unavailable"
         self._backup_age: float | None = None
@@ -82,14 +82,18 @@ class MetricsRegistry:
             raise ValueError(f"{field} must be a nonnegative finite number")
         return float(value)
 
-    def update_node(self, node_id: str, *, ready: bool, memory_available_bytes: int, disk_available_bytes: int, probe_age_seconds: float) -> None:
+    def update_node(self, node_id: str, *, ready: bool, memory_available_bytes: int, disk_available_bytes: int, probe_age_seconds: float | None) -> None:
         if _NODE.fullmatch(node_id) is None:
             raise ValueError("metrics node ID must be a stable generated ID")
         if not isinstance(ready, bool):
             raise TypeError("node readiness must be boolean")
         memory = int(self._number(memory_available_bytes, "memory"))
         disk = int(self._number(disk_available_bytes, "disk"))
-        age = self._number(probe_age_seconds, "probe age")
+        age = (
+            None
+            if probe_age_seconds is None
+            else self._number(probe_age_seconds, "probe age")
+        )
         with self._lock:
             self._nodes[node_id] = (ready, memory, disk, age)
 
@@ -199,8 +203,9 @@ class MetricsRegistry:
                 f"dgx_node_ready{{{label}}} {1 if ready else 0}",
                 f"dgx_node_memory_available_bytes{{{label}}} {memory}",
                 f"dgx_node_disk_available_bytes{{{label}}} {disk}",
-                f"dgx_node_probe_age_seconds{{{label}}} {age:g}",
             ))
+            if age is not None:
+                lines.append(f"dgx_node_probe_age_seconds{{{label}}} {age:g}")
         lines.extend(("# HELP dgx_jobs Number of control jobs by bounded kind and state.", "# TYPE dgx_jobs gauge"))
         for (kind, state), count in sorted(jobs.items()):
             lines.append(f'dgx_jobs{{kind="{kind}",state="{state}"}} {count}')

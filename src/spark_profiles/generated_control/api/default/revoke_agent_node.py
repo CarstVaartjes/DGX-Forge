@@ -7,6 +7,7 @@ from ...client import AuthenticatedClient, Client
 from ...types import Response, UNSET
 from ... import errors
 
+from ...models.bounded_error_response import BoundedErrorResponse
 from ...models.http_validation_error import HTTPValidationError
 from typing import cast
 
@@ -32,10 +33,31 @@ def _get_kwargs(
 
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[Any, HTTPValidationError]]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[Any, BoundedErrorResponse, HTTPValidationError]]:
     if response.status_code == 204:
         response_204 = cast(Any, None)
         return response_204
+
+    if response.status_code == 401:
+        response_401 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_401
+
+    if response.status_code == 403:
+        response_403 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_403
+
+    if response.status_code == 404:
+        response_404 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_404
 
     if response.status_code == 422:
         response_422 = HTTPValidationError.from_dict(response.json())
@@ -44,13 +66,20 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
 
         return response_422
 
+    if response.status_code == 503:
+        response_503 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_503
+
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
     else:
         return None
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[Any, HTTPValidationError]]:
+def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[Any, BoundedErrorResponse, HTTPValidationError]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -64,7 +93,7 @@ def sync_detailed(
     *,
     client: AuthenticatedClient,
 
-) -> Response[Union[Any, HTTPValidationError]]:
+) -> Response[Union[Any, BoundedErrorResponse, HTTPValidationError]]:
     """ Revoke
 
     Args:
@@ -75,7 +104,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[Any, HTTPValidationError]]
+        Response[Union[Any, BoundedErrorResponse, HTTPValidationError]]
      """
 
 
@@ -95,7 +124,7 @@ def sync(
     *,
     client: AuthenticatedClient,
 
-) -> Optional[Union[Any, HTTPValidationError]]:
+) -> Optional[Union[Any, BoundedErrorResponse, HTTPValidationError]]:
     """ Revoke
 
     Args:
@@ -106,7 +135,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[Any, HTTPValidationError]
+        Union[Any, BoundedErrorResponse, HTTPValidationError]
      """
 
 
@@ -121,7 +150,7 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
 
-) -> Response[Union[Any, HTTPValidationError]]:
+) -> Response[Union[Any, BoundedErrorResponse, HTTPValidationError]]:
     """ Revoke
 
     Args:
@@ -132,7 +161,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[Any, HTTPValidationError]]
+        Response[Union[Any, BoundedErrorResponse, HTTPValidationError]]
      """
 
 
@@ -152,7 +181,7 @@ async def asyncio(
     *,
     client: AuthenticatedClient,
 
-) -> Optional[Union[Any, HTTPValidationError]]:
+) -> Optional[Union[Any, BoundedErrorResponse, HTTPValidationError]]:
     """ Revoke
 
     Args:
@@ -163,7 +192,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[Any, HTTPValidationError]
+        Union[Any, BoundedErrorResponse, HTTPValidationError]
      """
 
 

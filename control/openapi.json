@@ -99,6 +99,22 @@
         "title": "AgentsResponse",
         "type": "object"
       },
+      "BoundedErrorResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "detail": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "title": "BoundedErrorResponse",
+        "type": "object"
+      },
       "ChangeRequest": {
         "additionalProperties": false,
         "properties": {
@@ -166,6 +182,233 @@
           "state"
         ],
         "title": "EndpointResponse",
+        "type": "object"
+      },
+      "EnrollmentDecisionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "node_id": {
+            "pattern": "^spk_[0-9a-f]{32}$",
+            "title": "Node Id",
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "approved",
+              "rejected"
+            ],
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "node_id",
+          "state"
+        ],
+        "title": "EnrollmentDecisionResponse",
+        "type": "object"
+      },
+      "EnrollmentGrantResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "expires_at": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Expires At",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "node_id": {
+            "pattern": "^spk_[0-9a-f]{32}$",
+            "title": "Node Id",
+            "type": "string"
+          },
+          "token": {
+            "maxLength": 64,
+            "minLength": 43,
+            "title": "Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "node_id",
+          "expires_at",
+          "token"
+        ],
+        "title": "EnrollmentGrantResponse",
+        "type": "object"
+      },
+      "EnrollmentListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "enrollments": {
+            "items": {
+              "$ref": "#/components/schemas/EnrollmentSummary"
+            },
+            "maxItems": 100,
+            "title": "Enrollments",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "enrollments"
+        ],
+        "title": "EnrollmentListResponse",
+        "type": "object"
+      },
+      "EnrollmentSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "agent_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Agent Digest",
+            "type": "string"
+          },
+          "boot_id": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Boot Id",
+            "type": "string"
+          },
+          "certificate_fingerprint": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Certificate Fingerprint"
+          },
+          "certificate_serial": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Certificate Serial"
+          },
+          "created_at": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Created At",
+            "type": "string"
+          },
+          "csr_public_key_fingerprint": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Csr Public Key Fingerprint",
+            "type": "string"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "decision_actor": {
+            "anyOf": [
+              {
+                "maxLength": 200,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decision Actor"
+          },
+          "hardware_fingerprint": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Hardware Fingerprint",
+            "type": "string"
+          },
+          "host_key_fingerprint": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Host Key Fingerprint",
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Id",
+            "type": "string"
+          },
+          "node_id": {
+            "pattern": "^spk_[0-9a-f]{32}$",
+            "title": "Node Id",
+            "type": "string"
+          },
+          "rejection_reason": {
+            "anyOf": [
+              {
+                "maxLength": 1024,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rejection Reason"
+          },
+          "state": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "node_id",
+          "state",
+          "csr_public_key_fingerprint",
+          "host_key_fingerprint",
+          "hardware_fingerprint",
+          "agent_digest",
+          "boot_id",
+          "created_at"
+        ],
+        "title": "EnrollmentSummary",
         "type": "object"
       },
       "FleetStatusResponse": {
@@ -327,6 +570,22 @@
         "title": "JobLogsResponse",
         "type": "object"
       },
+      "JobOperationProgress": {
+        "additionalProperties": false,
+        "properties": {
+          "phase": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Phase",
+            "type": "string"
+          }
+        },
+        "required": [
+          "phase"
+        ],
+        "title": "JobOperationProgress",
+        "type": "object"
+      },
       "JobOperationResponse": {
         "additionalProperties": false,
         "properties": {
@@ -362,14 +621,12 @@
           "progress": {
             "anyOf": [
               {
-                "additionalProperties": true,
-                "type": "object"
+                "$ref": "#/components/schemas/JobOperationProgress"
               },
               {
                 "type": "null"
               }
-            ],
-            "title": "Progress"
+            ]
           },
           "state": {
             "title": "State",
@@ -654,6 +911,527 @@
         "title": "NodeStatus",
         "type": "object"
       },
+      "PlanEndpoint": {
+        "additionalProperties": false,
+        "properties": {
+          "path": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^/",
+            "title": "Path",
+            "type": "string"
+          },
+          "port": {
+            "maximum": 65535.0,
+            "minimum": 1.0,
+            "title": "Port",
+            "type": "integer"
+          },
+          "scheme": {
+            "enum": [
+              "http",
+              "https"
+            ],
+            "title": "Scheme",
+            "type": "string"
+          }
+        },
+        "required": [
+          "scheme",
+          "port",
+          "path"
+        ],
+        "title": "PlanEndpoint",
+        "type": "object"
+      },
+      "PlanInputDigests": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "maxProperties": 512,
+        "title": "PlanInputDigests",
+        "type": "object"
+      },
+      "PlanOperation": {
+        "additionalProperties": false,
+        "properties": {
+          "compensation_kind": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Compensation Kind"
+          },
+          "dependencies": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 512,
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "kind": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Kind",
+            "type": "string"
+          },
+          "node_id": {
+            "pattern": "^spk_[0-9a-f]{32}$",
+            "title": "Node Id",
+            "type": "string"
+          },
+          "operation_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Operation Id",
+            "type": "string"
+          },
+          "payload_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Payload Digest",
+            "type": "string"
+          },
+          "workload_id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Workload Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "operation_id",
+          "node_id",
+          "workload_id",
+          "kind",
+          "dependencies",
+          "payload_digest"
+        ],
+        "title": "PlanOperation",
+        "type": "object"
+      },
+      "PlanOperationGraph": {
+        "additionalProperties": false,
+        "properties": {
+          "base_commit": {
+            "pattern": "^[0-9a-f]{40}$",
+            "title": "Base Commit",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/PlanOperation"
+            },
+            "maxItems": 4096,
+            "title": "Nodes",
+            "type": "array"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "targets": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 512,
+            "title": "Targets",
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema_version",
+          "base_commit",
+          "targets",
+          "nodes"
+        ],
+        "title": "PlanOperationGraph",
+        "type": "object"
+      },
+      "PlanPlacements": {
+        "additionalProperties": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "maxProperties": 128,
+        "title": "PlanPlacements",
+        "type": "object"
+      },
+      "PlanPrepareRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Adapter Id",
+            "type": "string"
+          },
+          "profile_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Profile Digest",
+            "type": "string"
+          },
+          "release_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Release Digest",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "workload_id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Workload Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "workload_id",
+          "release_digest",
+          "adapter_id",
+          "profile_digest"
+        ],
+        "title": "PlanPrepareRequest",
+        "type": "object"
+      },
+      "PlanQuota": {
+        "additionalProperties": false,
+        "properties": {
+          "requests_per_minute": {
+            "maximum": 100000.0,
+            "minimum": 1.0,
+            "title": "Requests Per Minute",
+            "type": "integer"
+          },
+          "tokens_per_minute": {
+            "maximum": 100000000.0,
+            "minimum": 1.0,
+            "title": "Tokens Per Minute",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "requests_per_minute",
+          "tokens_per_minute"
+        ],
+        "title": "PlanQuota",
+        "type": "object"
+      },
+      "PlanRelease": {
+        "additionalProperties": false,
+        "properties": {
+          "definition_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Definition Hash",
+            "type": "string"
+          },
+          "endpoint": {
+            "$ref": "#/components/schemas/PlanEndpoint"
+          },
+          "manifest_path": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Manifest Path",
+            "type": "string"
+          },
+          "manifest_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Manifest Sha256",
+            "type": "string"
+          },
+          "release_request": {
+            "$ref": "#/components/schemas/PlanReleaseRequest"
+          },
+          "workload_requests": {
+            "$ref": "#/components/schemas/PlanWorkloadRequests"
+          }
+        },
+        "required": [
+          "manifest_path",
+          "manifest_sha256",
+          "definition_hash",
+          "release_request",
+          "workload_requests",
+          "endpoint"
+        ],
+        "title": "PlanRelease",
+        "type": "object"
+      },
+      "PlanReleaseRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Adapter Id",
+            "type": "string"
+          },
+          "oci_manifest_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Oci Manifest Digest",
+            "type": "string"
+          },
+          "provenance_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Provenance Digest",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "target_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Target Digest",
+            "type": "string"
+          },
+          "target_name": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Target Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "target_name",
+          "oci_manifest_digest",
+          "target_digest",
+          "provenance_digest",
+          "adapter_id"
+        ],
+        "title": "PlanReleaseRequest",
+        "type": "object"
+      },
+      "PlanReleases": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/PlanRelease"
+        },
+        "maxProperties": 128,
+        "title": "PlanReleases",
+        "type": "object"
+      },
+      "PlanRoute": {
+        "additionalProperties": false,
+        "properties": {
+          "entrypoint_node_id": {
+            "pattern": "^spk_[0-9a-f]{32}$",
+            "title": "Entrypoint Node Id",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Nodes",
+            "type": "array"
+          },
+          "path": {
+            "maxLength": 512,
+            "minLength": 1,
+            "pattern": "^/",
+            "title": "Path",
+            "type": "string"
+          },
+          "port": {
+            "maximum": 65535.0,
+            "minimum": 1.0,
+            "title": "Port",
+            "type": "integer"
+          },
+          "quota": {
+            "$ref": "#/components/schemas/PlanQuota"
+          },
+          "quota_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Quota Digest",
+            "type": "string"
+          },
+          "scheme": {
+            "enum": [
+              "http",
+              "https"
+            ],
+            "title": "Scheme",
+            "type": "string"
+          },
+          "workload_id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Workload Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "workload_id",
+          "nodes",
+          "entrypoint_node_id",
+          "scheme",
+          "port",
+          "path",
+          "quota",
+          "quota_digest"
+        ],
+        "title": "PlanRoute",
+        "type": "object"
+      },
+      "PlanRoutes": {
+        "additionalProperties": {
+          "$ref": "#/components/schemas/PlanRoute"
+        },
+        "maxProperties": 128,
+        "title": "PlanRoutes",
+        "type": "object"
+      },
+      "PlanStartRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Adapter Id",
+            "type": "string"
+          },
+          "preparation_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Preparation Digest",
+            "type": "string"
+          },
+          "release_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Release Digest",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "workload_id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Workload Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "workload_id",
+          "release_digest",
+          "adapter_id",
+          "preparation_digest"
+        ],
+        "title": "PlanStartRequest",
+        "type": "object"
+      },
+      "PlanVerifyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Adapter Id",
+            "type": "string"
+          },
+          "expected_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Digest",
+            "type": "string"
+          },
+          "release_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Release Digest",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "workload_id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Workload Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "workload_id",
+          "release_digest",
+          "adapter_id",
+          "expected_digest"
+        ],
+        "title": "PlanVerifyRequest",
+        "type": "object"
+      },
+      "PlanWorkloadRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "adapter_id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Adapter Id",
+            "type": "string"
+          },
+          "release_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Release Digest",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "workload_id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Workload Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "workload_id",
+          "release_digest",
+          "adapter_id"
+        ],
+        "title": "PlanWorkloadRequest",
+        "type": "object"
+      },
+      "PlanWorkloadRequests": {
+        "additionalProperties": false,
+        "properties": {
+          "health": {
+            "$ref": "#/components/schemas/PlanWorkloadRequest"
+          },
+          "prepare": {
+            "$ref": "#/components/schemas/PlanPrepareRequest"
+          },
+          "start": {
+            "$ref": "#/components/schemas/PlanStartRequest"
+          },
+          "stop": {
+            "$ref": "#/components/schemas/PlanWorkloadRequest"
+          },
+          "verify": {
+            "$ref": "#/components/schemas/PlanVerifyRequest"
+          }
+        },
+        "required": [
+          "prepare",
+          "start",
+          "stop",
+          "health",
+          "verify"
+        ],
+        "title": "PlanWorkloadRequests",
+        "type": "object"
+      },
       "ProposalChangeRequest": {
         "additionalProperties": false,
         "properties": {
@@ -797,35 +1575,23 @@
             "type": "string"
           },
           "input_digests": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "title": "Input Digests",
-            "type": "object"
+            "$ref": "#/components/schemas/PlanInputDigests"
           },
           "operation_graph": {
-            "additionalProperties": true,
-            "title": "Operation Graph",
-            "type": "object"
+            "$ref": "#/components/schemas/PlanOperationGraph"
           },
           "placements": {
-            "additionalProperties": true,
-            "title": "Placements",
-            "type": "object"
+            "$ref": "#/components/schemas/PlanPlacements"
           },
           "reconciliation_id": {
             "title": "Reconciliation Id",
             "type": "string"
           },
           "releases": {
-            "additionalProperties": true,
-            "title": "Releases",
-            "type": "object"
+            "$ref": "#/components/schemas/PlanReleases"
           },
           "routes": {
-            "additionalProperties": true,
-            "title": "Routes",
-            "type": "object"
+            "$ref": "#/components/schemas/PlanRoutes"
           },
           "targets": {
             "items": {
@@ -941,6 +1707,26 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [
@@ -1003,13 +1789,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response List Enrollments Api V1 Agents Enrollments Get",
-                  "type": "object"
+                  "$ref": "#/components/schemas/EnrollmentListResponse"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
           },
           "422": {
             "content": {
@@ -1020,6 +1824,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [
@@ -1048,13 +1862,31 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Create Grant Api V1 Agents Enrollments Grants Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/EnrollmentGrantResponse"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
           },
           "422": {
             "content": {
@@ -1065,6 +1897,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [
@@ -1094,13 +1936,41 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Approve Api V1 Agents Enrollments  Enrollment Id  Approve Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/EnrollmentDecisionResponse"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "422": {
             "content": {
@@ -1111,6 +1981,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [
@@ -1150,13 +2030,41 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "additionalProperties": true,
-                  "title": "Response Reject Api V1 Agents Enrollments  Enrollment Id  Reject Post",
-                  "type": "object"
+                  "$ref": "#/components/schemas/EnrollmentDecisionResponse"
                 }
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
           },
           "422": {
             "content": {
@@ -1167,6 +2075,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [
@@ -1195,6 +2113,36 @@
           "204": {
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -1204,6 +2152,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [
@@ -1395,6 +2353,26 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -1404,6 +2382,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [
@@ -1427,6 +2415,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
           }
         },
         "security": [
@@ -1450,6 +2448,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
           }
         },
         "security": [
@@ -1484,6 +2492,26 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
           },
           "422": {
             "content": {
@@ -1529,6 +2557,36 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -1538,6 +2596,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [
@@ -1634,6 +2702,46 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -1643,6 +2751,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [
@@ -1666,6 +2784,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
           }
         },
         "security": [
@@ -1712,6 +2840,26 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -1721,6 +2869,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [
@@ -1800,6 +2958,36 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -1809,6 +2997,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [
@@ -1843,6 +3041,26 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -1852,6 +3070,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [
@@ -1901,6 +3129,46 @@
             },
             "description": "Successful Response"
           },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -1910,6 +3178,16 @@
               }
             },
             "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
           }
         },
         "security": [

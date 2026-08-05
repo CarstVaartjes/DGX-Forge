@@ -7,6 +7,7 @@ from ...client import AuthenticatedClient, Client
 from ...types import Response, UNSET
 from ... import errors
 
+from ...models.bounded_error_response import BoundedErrorResponse
 from ...models.http_validation_error import HTTPValidationError
 from ...models.job_resume_response import JobResumeResponse
 from typing import cast
@@ -41,13 +42,41 @@ def _get_kwargs(
 
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[HTTPValidationError, JobResumeResponse]]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[BoundedErrorResponse, HTTPValidationError, JobResumeResponse]]:
     if response.status_code == 202:
         response_202 = JobResumeResponse.from_dict(response.json())
 
 
 
         return response_202
+
+    if response.status_code == 401:
+        response_401 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_401
+
+    if response.status_code == 403:
+        response_403 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_403
+
+    if response.status_code == 404:
+        response_404 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_404
+
+    if response.status_code == 409:
+        response_409 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_409
 
     if response.status_code == 422:
         response_422 = HTTPValidationError.from_dict(response.json())
@@ -56,13 +85,20 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
 
         return response_422
 
+    if response.status_code == 503:
+        response_503 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_503
+
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
     else:
         return None
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[HTTPValidationError, JobResumeResponse]]:
+def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[BoundedErrorResponse, HTTPValidationError, JobResumeResponse]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -77,7 +113,7 @@ def sync_detailed(
     client: AuthenticatedClient,
     body: None,
 
-) -> Response[Union[HTTPValidationError, JobResumeResponse]]:
+) -> Response[Union[BoundedErrorResponse, HTTPValidationError, JobResumeResponse]]:
     """ Resume Job
 
     Args:
@@ -89,7 +125,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[HTTPValidationError, JobResumeResponse]]
+        Response[Union[BoundedErrorResponse, HTTPValidationError, JobResumeResponse]]
      """
 
 
@@ -111,7 +147,7 @@ def sync(
     client: AuthenticatedClient,
     body: None,
 
-) -> Optional[Union[HTTPValidationError, JobResumeResponse]]:
+) -> Optional[Union[BoundedErrorResponse, HTTPValidationError, JobResumeResponse]]:
     """ Resume Job
 
     Args:
@@ -123,7 +159,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[HTTPValidationError, JobResumeResponse]
+        Union[BoundedErrorResponse, HTTPValidationError, JobResumeResponse]
      """
 
 
@@ -140,7 +176,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient,
     body: None,
 
-) -> Response[Union[HTTPValidationError, JobResumeResponse]]:
+) -> Response[Union[BoundedErrorResponse, HTTPValidationError, JobResumeResponse]]:
     """ Resume Job
 
     Args:
@@ -152,7 +188,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[HTTPValidationError, JobResumeResponse]]
+        Response[Union[BoundedErrorResponse, HTTPValidationError, JobResumeResponse]]
      """
 
 
@@ -174,7 +210,7 @@ async def asyncio(
     client: AuthenticatedClient,
     body: None,
 
-) -> Optional[Union[HTTPValidationError, JobResumeResponse]]:
+) -> Optional[Union[BoundedErrorResponse, HTTPValidationError, JobResumeResponse]]:
     """ Resume Job
 
     Args:
@@ -186,7 +222,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[HTTPValidationError, JobResumeResponse]
+        Union[BoundedErrorResponse, HTTPValidationError, JobResumeResponse]
      """
 
 

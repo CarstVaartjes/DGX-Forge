@@ -7,8 +7,9 @@ from ...client import AuthenticatedClient, Client
 from ...types import Response, UNSET
 from ... import errors
 
+from ...models.bounded_error_response import BoundedErrorResponse
+from ...models.enrollment_decision_response import EnrollmentDecisionResponse
 from ...models.http_validation_error import HTTPValidationError
-from ...models.reject_agent_enrollment_response_reject_api_v1_agents_enrollments_enrollment_id_reject_post import RejectAgentEnrollmentResponseRejectApiV1AgentsEnrollmentsEnrollmentIdRejectPost
 from ...models.reject_request import RejectRequest
 from typing import cast
 
@@ -42,13 +43,34 @@ def _get_kwargs(
 
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[HTTPValidationError, RejectAgentEnrollmentResponseRejectApiV1AgentsEnrollmentsEnrollmentIdRejectPost]]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[BoundedErrorResponse, EnrollmentDecisionResponse, HTTPValidationError]]:
     if response.status_code == 200:
-        response_200 = RejectAgentEnrollmentResponseRejectApiV1AgentsEnrollmentsEnrollmentIdRejectPost.from_dict(response.json())
+        response_200 = EnrollmentDecisionResponse.from_dict(response.json())
 
 
 
         return response_200
+
+    if response.status_code == 401:
+        response_401 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_401
+
+    if response.status_code == 403:
+        response_403 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_403
+
+    if response.status_code == 409:
+        response_409 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_409
 
     if response.status_code == 422:
         response_422 = HTTPValidationError.from_dict(response.json())
@@ -57,13 +79,20 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
 
         return response_422
 
+    if response.status_code == 503:
+        response_503 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_503
+
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
     else:
         return None
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[HTTPValidationError, RejectAgentEnrollmentResponseRejectApiV1AgentsEnrollmentsEnrollmentIdRejectPost]]:
+def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[BoundedErrorResponse, EnrollmentDecisionResponse, HTTPValidationError]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -78,7 +107,7 @@ def sync_detailed(
     client: AuthenticatedClient,
     body: RejectRequest,
 
-) -> Response[Union[HTTPValidationError, RejectAgentEnrollmentResponseRejectApiV1AgentsEnrollmentsEnrollmentIdRejectPost]]:
+) -> Response[Union[BoundedErrorResponse, EnrollmentDecisionResponse, HTTPValidationError]]:
     """ Reject
 
     Args:
@@ -90,7 +119,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[HTTPValidationError, RejectAgentEnrollmentResponseRejectApiV1AgentsEnrollmentsEnrollmentIdRejectPost]]
+        Response[Union[BoundedErrorResponse, EnrollmentDecisionResponse, HTTPValidationError]]
      """
 
 
@@ -112,7 +141,7 @@ def sync(
     client: AuthenticatedClient,
     body: RejectRequest,
 
-) -> Optional[Union[HTTPValidationError, RejectAgentEnrollmentResponseRejectApiV1AgentsEnrollmentsEnrollmentIdRejectPost]]:
+) -> Optional[Union[BoundedErrorResponse, EnrollmentDecisionResponse, HTTPValidationError]]:
     """ Reject
 
     Args:
@@ -124,7 +153,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[HTTPValidationError, RejectAgentEnrollmentResponseRejectApiV1AgentsEnrollmentsEnrollmentIdRejectPost]
+        Union[BoundedErrorResponse, EnrollmentDecisionResponse, HTTPValidationError]
      """
 
 
@@ -141,7 +170,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient,
     body: RejectRequest,
 
-) -> Response[Union[HTTPValidationError, RejectAgentEnrollmentResponseRejectApiV1AgentsEnrollmentsEnrollmentIdRejectPost]]:
+) -> Response[Union[BoundedErrorResponse, EnrollmentDecisionResponse, HTTPValidationError]]:
     """ Reject
 
     Args:
@@ -153,7 +182,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[HTTPValidationError, RejectAgentEnrollmentResponseRejectApiV1AgentsEnrollmentsEnrollmentIdRejectPost]]
+        Response[Union[BoundedErrorResponse, EnrollmentDecisionResponse, HTTPValidationError]]
      """
 
 
@@ -175,7 +204,7 @@ async def asyncio(
     client: AuthenticatedClient,
     body: RejectRequest,
 
-) -> Optional[Union[HTTPValidationError, RejectAgentEnrollmentResponseRejectApiV1AgentsEnrollmentsEnrollmentIdRejectPost]]:
+) -> Optional[Union[BoundedErrorResponse, EnrollmentDecisionResponse, HTTPValidationError]]:
     """ Reject
 
     Args:
@@ -187,7 +216,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[HTTPValidationError, RejectAgentEnrollmentResponseRejectApiV1AgentsEnrollmentsEnrollmentIdRejectPost]
+        Union[BoundedErrorResponse, EnrollmentDecisionResponse, HTTPValidationError]
      """
 
 

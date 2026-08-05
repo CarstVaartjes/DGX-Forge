@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 import subprocess
@@ -38,6 +39,70 @@ def _digests() -> dict[str, str]:
     }
 
 
+def _operations(schema: dict[str, object]) -> dict[str, dict[str, object]]:
+    return {
+        operation["operationId"]: operation
+        for path in schema["paths"].values()
+        for method, operation in path.items()
+        if method in {"delete", "get", "patch", "post", "put"}
+    }
+
+
+def test_tracked_admin_contract_has_secret_free_decisions_and_typed_errors() -> None:
+    schema = json.loads(OPENAPI.read_text())
+    operations = _operations(schema)
+    successes = {
+        "approveAgentEnrollment": ("200", "EnrollmentDecisionResponse"),
+        "createEnrollmentGrant": ("201", "EnrollmentGrantResponse"),
+        "listAgentEnrollments": ("200", "EnrollmentListResponse"),
+        "rejectAgentEnrollment": ("200", "EnrollmentDecisionResponse"),
+    }
+    for operation_id, (status_code, component) in successes.items():
+        response_schema = operations[operation_id]["responses"][status_code][
+            "content"
+        ]["application/json"]["schema"]
+        assert response_schema == {
+            "$ref": f"#/components/schemas/{component}"
+        }
+        assert schema["components"]["schemas"][component][
+            "additionalProperties"
+        ] is False
+    decision = schema["components"]["schemas"]["EnrollmentDecisionResponse"]
+    assert set(decision["properties"]) == {"id", "node_id", "state"}
+
+    expected_errors = {
+        "applyReconciliation": {"401", "403", "409", "503"},
+        "approveAgentEnrollment": {"401", "403", "409", "503"},
+        "getPublishedEndpoint": {"401", "404", "503"},
+        "resumeJob": {"401", "403", "404", "409", "503"},
+    }
+    for operation_id, statuses in expected_errors.items():
+        for status_code in statuses:
+            assert operations[operation_id]["responses"][status_code]["content"][
+                "application/json"
+            ]["schema"] == {
+                "$ref": "#/components/schemas/BoundedErrorResponse"
+            }
+    bounded_error = schema["components"]["schemas"]["BoundedErrorResponse"]
+    assert bounded_error["additionalProperties"] is False
+    assert bounded_error["properties"]["detail"]["maxLength"] == 256
+
+    plan = schema["components"]["schemas"]["ReconciliationPlanResponse"]
+    for field in ("placements", "routes", "releases", "operation_graph"):
+        assert "$ref" in plan["properties"][field]
+    progress = schema["components"]["schemas"]["JobOperationResponse"][
+        "properties"
+    ]["progress"]
+    assert any(
+        option.get("$ref") == "#/components/schemas/JobOperationProgress"
+        for option in progress["anyOf"]
+    )
+
+    serialized = json.dumps(schema, sort_keys=True).lower()
+    assert "certificate_pem" not in serialized
+    assert "chain_pem" not in serialized
+
+
 def test_generator_is_idempotent_and_admin_schema_is_secret_free() -> None:
     tracked_digests = _digests()
     first = _generate()
@@ -62,21 +127,21 @@ def test_generator_is_idempotent_and_admin_schema_is_secret_free() -> None:
         "/api/v1/reconciliations/plan",
     }
     assert all(path.startswith("/api/v1/") for path in schema["paths"])
-    operations = [
+    operation_list = [
         operation
         for path in schema["paths"].values()
         for method, operation in path.items()
         if method in {"delete", "get", "patch", "post", "put"}
     ]
-    operation_ids = [operation["operationId"] for operation in operations]
+    operation_ids = [operation["operationId"] for operation in operation_list]
     assert len(operation_ids) == len(set(operation_ids))
     assert all("_api_v1_" not in operation_id for operation_id in operation_ids)
     assert schema["components"]["securitySchemes"] == {
         "BearerAuth": {"scheme": "bearer", "type": "http"}
     }
-    assert all(operation["security"] == [{"BearerAuth": []}] for operation in operations)
+    assert all(operation["security"] == [{"BearerAuth": []}] for operation in operation_list)
 
-    by_id = {operation["operationId"]: operation for operation in operations}
+    by_id = {operation["operationId"]: operation for operation in operation_list}
     for operation_id in (
         "applyReconciliation",
         "getFleetStatus",
@@ -116,6 +181,7 @@ def test_generator_is_idempotent_and_admin_schema_is_secret_free() -> None:
 def test_generated_python_models_compile() -> None:
     generated = _generate()
     assert generated.returncode == 0, generated.stderr
+    bytecode_before = set(PYTHON_CLIENT.rglob("*.pyc"))
     result = subprocess.run(
         [
             "uv",
@@ -137,7 +203,7 @@ def test_generated_python_models_compile() -> None:
         check=False,
     )
     assert result.returncode == 0, result.stderr
-    assert not list(PYTHON_CLIENT.rglob("__pycache__"))
+    assert set(PYTHON_CLIENT.rglob("*.pyc")) == bytecode_before
 
 
 def test_generated_python_client_imports_in_the_root_locked_environment() -> None:
@@ -157,3 +223,33 @@ def test_generated_python_client_imports_in_the_root_locked_environment() -> Non
         check=False,
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_generated_python_client_parses_documented_operation_errors() -> None:
+    import httpx
+
+    from spark_profiles.generated_control.client import Client
+    from spark_profiles.generated_control.models.bounded_error_response import (
+        BoundedErrorResponse,
+    )
+
+    client = Client(base_url="https://control.invalid")
+    expected = {
+        "apply_reconciliation": (401, 403, 409, 503),
+        "get_published_endpoint": (401, 404, 503),
+        "resume_job": (401, 403, 404, 409, 503),
+    }
+    for module_name, status_codes in expected.items():
+        module = importlib.import_module(
+            "spark_profiles.generated_control.api.default." + module_name
+        )
+        for status_code in status_codes:
+            parsed = module._parse_response(
+                client=client,
+                response=httpx.Response(
+                    status_code,
+                    json={"detail": f"bounded-{status_code}"},
+                ),
+            )
+            assert isinstance(parsed, BoundedErrorResponse)
+            assert parsed.detail == f"bounded-{status_code}"

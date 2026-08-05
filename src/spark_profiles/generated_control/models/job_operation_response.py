@@ -12,7 +12,7 @@ from typing import cast, Union
 from typing import Union
 
 if TYPE_CHECKING:
-  from ..models.job_operation_response_progress_type_0 import JobOperationResponseProgressType0
+  from ..models.job_operation_progress import JobOperationProgress
 
 
 
@@ -32,7 +32,7 @@ class JobOperationResponse:
             node_id (str):
             state (str):
             graph_operation_id (Union[None, Unset, str]):
-            progress (Union['JobOperationResponseProgressType0', None, Unset]):
+            progress (Union['JobOperationProgress', None, Unset]):
             updated_at (Union[None, Unset, str]):
      """
 
@@ -42,7 +42,7 @@ class JobOperationResponse:
     node_id: str
     state: str
     graph_operation_id: Union[None, Unset, str] = UNSET
-    progress: Union['JobOperationResponseProgressType0', None, Unset] = UNSET
+    progress: Union['JobOperationProgress', None, Unset] = UNSET
     updated_at: Union[None, Unset, str] = UNSET
 
 
@@ -50,7 +50,7 @@ class JobOperationResponse:
 
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.job_operation_response_progress_type_0 import JobOperationResponseProgressType0
+        from ..models.job_operation_progress import JobOperationProgress
         attempt = self.attempt
 
         id = self.id
@@ -70,7 +70,7 @@ class JobOperationResponse:
         progress: Union[None, Unset, dict[str, Any]]
         if isinstance(self.progress, Unset):
             progress = UNSET
-        elif isinstance(self.progress, JobOperationResponseProgressType0):
+        elif isinstance(self.progress, JobOperationProgress):
             progress = self.progress.to_dict()
         else:
             progress = self.progress
@@ -104,7 +104,7 @@ class JobOperationResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.job_operation_response_progress_type_0 import JobOperationResponseProgressType0
+        from ..models.job_operation_progress import JobOperationProgress
         d = dict(src_dict)
         attempt = d.pop("attempt")
 
@@ -126,7 +126,7 @@ class JobOperationResponse:
         graph_operation_id = _parse_graph_operation_id(d.pop("graph_operation_id", UNSET))
 
 
-        def _parse_progress(data: object) -> Union['JobOperationResponseProgressType0', None, Unset]:
+        def _parse_progress(data: object) -> Union['JobOperationProgress', None, Unset]:
             if data is None:
                 return data
             if isinstance(data, Unset):
@@ -134,14 +134,14 @@ class JobOperationResponse:
             try:
                 if not isinstance(data, dict):
                     raise TypeError()
-                progress_type_0 = JobOperationResponseProgressType0.from_dict(data)
+                progress_type_0 = JobOperationProgress.from_dict(data)
 
 
 
                 return progress_type_0
             except: # noqa: E722
                 pass
-            return cast(Union['JobOperationResponseProgressType0', None, Unset], data)
+            return cast(Union['JobOperationProgress', None, Unset], data)
 
         progress = _parse_progress(d.pop("progress", UNSET))
 

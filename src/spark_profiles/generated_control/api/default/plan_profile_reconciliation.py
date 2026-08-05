@@ -7,6 +7,7 @@ from ...client import AuthenticatedClient, Client
 from ...types import Response, UNSET
 from ... import errors
 
+from ...models.bounded_error_response import BoundedErrorResponse
 from ...models.http_validation_error import HTTPValidationError
 from ...models.reconciliation_plan_response import ReconciliationPlanResponse
 from typing import cast
@@ -41,13 +42,27 @@ def _get_kwargs(
 
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[HTTPValidationError, ReconciliationPlanResponse]]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[BoundedErrorResponse, HTTPValidationError, ReconciliationPlanResponse]]:
     if response.status_code == 200:
         response_200 = ReconciliationPlanResponse.from_dict(response.json())
 
 
 
         return response_200
+
+    if response.status_code == 401:
+        response_401 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_401
+
+    if response.status_code == 403:
+        response_403 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_403
 
     if response.status_code == 422:
         response_422 = HTTPValidationError.from_dict(response.json())
@@ -56,13 +71,20 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
 
         return response_422
 
+    if response.status_code == 503:
+        response_503 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_503
+
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
     else:
         return None
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[HTTPValidationError, ReconciliationPlanResponse]]:
+def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[BoundedErrorResponse, HTTPValidationError, ReconciliationPlanResponse]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -77,7 +99,7 @@ def sync_detailed(
     client: AuthenticatedClient,
     body: None,
 
-) -> Response[Union[HTTPValidationError, ReconciliationPlanResponse]]:
+) -> Response[Union[BoundedErrorResponse, HTTPValidationError, ReconciliationPlanResponse]]:
     """ Profile Reconcile Plan
 
     Args:
@@ -89,7 +111,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[HTTPValidationError, ReconciliationPlanResponse]]
+        Response[Union[BoundedErrorResponse, HTTPValidationError, ReconciliationPlanResponse]]
      """
 
 
@@ -111,7 +133,7 @@ def sync(
     client: AuthenticatedClient,
     body: None,
 
-) -> Optional[Union[HTTPValidationError, ReconciliationPlanResponse]]:
+) -> Optional[Union[BoundedErrorResponse, HTTPValidationError, ReconciliationPlanResponse]]:
     """ Profile Reconcile Plan
 
     Args:
@@ -123,7 +145,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[HTTPValidationError, ReconciliationPlanResponse]
+        Union[BoundedErrorResponse, HTTPValidationError, ReconciliationPlanResponse]
      """
 
 
@@ -140,7 +162,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient,
     body: None,
 
-) -> Response[Union[HTTPValidationError, ReconciliationPlanResponse]]:
+) -> Response[Union[BoundedErrorResponse, HTTPValidationError, ReconciliationPlanResponse]]:
     """ Profile Reconcile Plan
 
     Args:
@@ -152,7 +174,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[HTTPValidationError, ReconciliationPlanResponse]]
+        Response[Union[BoundedErrorResponse, HTTPValidationError, ReconciliationPlanResponse]]
      """
 
 
@@ -174,7 +196,7 @@ async def asyncio(
     client: AuthenticatedClient,
     body: None,
 
-) -> Optional[Union[HTTPValidationError, ReconciliationPlanResponse]]:
+) -> Optional[Union[BoundedErrorResponse, HTTPValidationError, ReconciliationPlanResponse]]:
     """ Profile Reconcile Plan
 
     Args:
@@ -186,7 +208,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[HTTPValidationError, ReconciliationPlanResponse]
+        Union[BoundedErrorResponse, HTTPValidationError, ReconciliationPlanResponse]
      """
 
 

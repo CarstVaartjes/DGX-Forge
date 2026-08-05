@@ -45,7 +45,12 @@ class Reconciler:
                     "Graph",
                     (),
                     {
-                        "document": {"schema_version": 1},
+                        "document": {
+                            "schema_version": 1,
+                            "base_commit": commit,
+                            "targets": ["spk_" + "1" * 32],
+                            "nodes": [],
+                        },
                         "reconciliation_id": "reconciliation-1",
                     },
                 )(),
@@ -118,7 +123,12 @@ def test_reconciliation_plan_requires_an_explicit_repository_profile() -> None:
     assert response.status_code == 200
     assert response.json()["agent_protocol_range"] == [1, 1]
     assert response.json()["reconciliation_id"] == "reconciliation-1"
-    assert response.json()["operation_graph"] == {"schema_version": 1}
+    assert response.json()["operation_graph"] == {
+        "schema_version": 1,
+        "base_commit": "a" * 40,
+        "targets": ["spk_" + "1" * 32],
+        "nodes": [],
+    }
     assert client.post(
         "/api/v1/reconciliations/plan", headers=headers, json={"commit": "a" * 40}
     ).status_code == 422

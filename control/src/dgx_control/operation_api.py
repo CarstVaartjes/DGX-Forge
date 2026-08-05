@@ -2,17 +2,15 @@
 
 from __future__ import annotations
 
-import hashlib
-import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from copy import deepcopy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -27,12 +25,12 @@ from .models import (
     RoutePublication,
     RoutePublicationOwner,
 )
+from .route_runtime import verify_active_route_bundle
 
 COMMIT_PATTERN = r"^[0-9a-f]{40}$"
 DIGEST_PATTERN = r"^[0-9a-f]{64}$"
 IDENTIFIER_PATTERN = r"^[a-z0-9][a-z0-9._-]{0,62}$"
 NODE_PATTERN = r"^spk_[0-9a-f]{32}$"
-_GENERATION_DIRECTORY = re.compile(r"[0-9]{8}-[0-9a-f]{64}\Z")
 _ACTIVE_PUBLICATION_STATES = frozenset({"completed"})
 _ADMIN_OPERATION_IDS = {
     ("post", "/api/v1/agents/enrollments/grants"): "createEnrollmentGrant",
@@ -74,16 +72,129 @@ class EmptyBody(StrictModel):
     """A body type used only where an explicit empty JSON object is allowed."""
 
 
+class BoundedErrorResponse(StrictModel):
+    detail: str = Field(min_length=1, max_length=256)
+
+
+def bounded_error_responses(*status_codes: int) -> dict[int, dict[str, object]]:
+    """Describe stable JSON errors for generated clients."""
+
+    return {
+        status_code: {"model": BoundedErrorResponse}
+        for status_code in status_codes
+    }
+
+
+class PlanPlacements(RootModel[dict[str, list[str]]]):
+    root: dict[str, list[str]] = Field(max_length=128)
+
+
+class PlanQuota(StrictModel):
+    requests_per_minute: int = Field(ge=1, le=100_000, strict=True)
+    tokens_per_minute: int = Field(ge=1, le=100_000_000, strict=True)
+
+
+class PlanRoute(StrictModel):
+    workload_id: str = Field(pattern=IDENTIFIER_PATTERN)
+    nodes: list[str] = Field(min_length=1, max_length=64)
+    entrypoint_node_id: str = Field(pattern=NODE_PATTERN)
+    scheme: Literal["http", "https"]
+    port: int = Field(ge=1, le=65535, strict=True)
+    path: str = Field(min_length=1, max_length=512, pattern=r"^/")
+    quota: PlanQuota
+    quota_digest: str = Field(pattern=DIGEST_PATTERN)
+
+
+class PlanRoutes(RootModel[dict[str, PlanRoute]]):
+    root: dict[str, PlanRoute] = Field(max_length=128)
+
+
+class PlanReleaseRequest(StrictModel):
+    schema_version: Literal[1]
+    target_name: str = Field(pattern=IDENTIFIER_PATTERN)
+    oci_manifest_digest: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    target_digest: str = Field(pattern=DIGEST_PATTERN)
+    provenance_digest: str = Field(pattern=DIGEST_PATTERN)
+    adapter_id: str = Field(pattern=IDENTIFIER_PATTERN)
+
+
+class PlanWorkloadRequest(StrictModel):
+    schema_version: Literal[1]
+    workload_id: str = Field(pattern=IDENTIFIER_PATTERN)
+    release_digest: str = Field(pattern=DIGEST_PATTERN)
+    adapter_id: str = Field(pattern=IDENTIFIER_PATTERN)
+
+
+class PlanPrepareRequest(PlanWorkloadRequest):
+    profile_digest: str = Field(pattern=DIGEST_PATTERN)
+
+
+class PlanStartRequest(PlanWorkloadRequest):
+    preparation_digest: str = Field(pattern=DIGEST_PATTERN)
+
+
+class PlanVerifyRequest(PlanWorkloadRequest):
+    expected_digest: str = Field(pattern=DIGEST_PATTERN)
+
+
+class PlanWorkloadRequests(StrictModel):
+    prepare: PlanPrepareRequest
+    start: PlanStartRequest
+    stop: PlanWorkloadRequest
+    health: PlanWorkloadRequest
+    verify: PlanVerifyRequest
+
+
+class PlanEndpoint(StrictModel):
+    scheme: Literal["http", "https"]
+    port: int = Field(ge=1, le=65535, strict=True)
+    path: str = Field(min_length=1, max_length=512, pattern=r"^/")
+
+
+class PlanRelease(StrictModel):
+    manifest_path: str = Field(min_length=1, max_length=512)
+    manifest_sha256: str = Field(pattern=DIGEST_PATTERN)
+    definition_hash: str = Field(pattern=DIGEST_PATTERN)
+    release_request: PlanReleaseRequest
+    workload_requests: PlanWorkloadRequests
+    endpoint: PlanEndpoint
+
+
+class PlanReleases(RootModel[dict[str, PlanRelease]]):
+    root: dict[str, PlanRelease] = Field(max_length=128)
+
+
+class PlanInputDigests(RootModel[dict[str, str]]):
+    root: dict[str, str] = Field(max_length=512)
+
+
+class PlanOperation(StrictModel):
+    operation_id: str = Field(min_length=1, max_length=128)
+    node_id: str = Field(pattern=NODE_PATTERN)
+    workload_id: str = Field(pattern=IDENTIFIER_PATTERN)
+    kind: str = Field(min_length=1, max_length=80)
+    dependencies: list[str] = Field(max_length=512)
+    compensation_kind: str | None = Field(default=None, max_length=80)
+    payload_digest: str = Field(pattern=DIGEST_PATTERN)
+
+
+class PlanOperationGraph(StrictModel):
+    schema_version: Literal[1]
+    base_commit: str = Field(pattern=COMMIT_PATTERN)
+    targets: list[str] = Field(max_length=512)
+    nodes: list[PlanOperation] = Field(max_length=4096)
+
+
 class ReconciliationPlanResponse(StrictModel):
     commit: str = Field(pattern=COMMIT_PATTERN)
     digest: str = Field(pattern=DIGEST_PATTERN)
     targets: list[str]
-    placements: dict[str, Any]
-    routes: dict[str, Any]
-    releases: dict[str, Any]
-    input_digests: dict[str, str]
+    placements: PlanPlacements
+    routes: PlanRoutes
+    releases: PlanReleases
+    input_digests: PlanInputDigests
     reconciliation_id: str
-    operation_graph: dict[str, Any]
+    operation_graph: PlanOperationGraph
     agent_protocol_range: list[int] = Field(min_length=2, max_length=2)
 
 
@@ -120,6 +231,10 @@ class AgentsResponse(StrictModel):
     agents: list[AgentSummary]
 
 
+class JobOperationProgress(StrictModel):
+    phase: str = Field(min_length=1, max_length=80)
+
+
 class JobOperationResponse(StrictModel):
     id: str
     graph_operation_id: str | None = None
@@ -127,7 +242,7 @@ class JobOperationResponse(StrictModel):
     kind: str
     state: str
     attempt: int = Field(ge=0)
-    progress: dict[str, Any] | None = None
+    progress: JobOperationProgress | None = None
     updated_at: str | None = None
 
 
@@ -184,7 +299,27 @@ class OperationApiServices:
 def job_response(
     job: Any, operations: Sequence[Mapping[str, object]]
 ) -> JobDetailResponse:
-    projected = [JobOperationResponse.model_validate(item) for item in operations]
+    projected = [
+        JobOperationResponse(
+            id=str(item["id"]),
+            graph_operation_id=(
+                None
+                if item.get("graph_operation_id") is None
+                else str(item["graph_operation_id"])
+            ),
+            node_id=str(item["node_id"]),
+            kind=str(item["kind"]),
+            state=str(item["state"]),
+            attempt=int(item["attempt"]),
+            progress=_progress_projection(item.get("progress")),
+            updated_at=(
+                None
+                if item.get("updated_at") is None
+                else str(item["updated_at"])
+            ),
+        )
+        for item in operations
+    ]
     states = [item.state for item in projected]
     terminal = {"succeeded", "accepted", "compensated"}
     return JobDetailResponse(
@@ -207,6 +342,15 @@ def job_response(
             total=len(states),
         ),
     )
+
+
+def _progress_projection(value: object) -> JobOperationProgress | None:
+    if not isinstance(value, Mapping):
+        return None
+    phase = value.get("phase")
+    if not isinstance(phase, str) or not phase.strip() or len(phase) > 80:
+        return None
+    return JobOperationProgress(phase=phase)
 
 
 def _aware(value: datetime) -> datetime:
@@ -260,40 +404,44 @@ class _DurableOperationProjection:
             marker = dict(publication.activation_marker)
             marker_digest = publication.activation_marker_digest
             route_digest = publication.route_digest
+            evidence_digest = publication.evidence_digest
+            litellm_digest = publication.litellm_digest
+            bundle_digest = publication.bundle_digest
+            lease_issued_at = publication.lease_issued_at
+            lease_expires_at = publication.lease_expires_at
+            owner_reconciliation_id = owner.reconciliation_id
+            owner_generation = owner.owner_generation
+            publication_generation = publication.generation
+            publication_plan_digest = publication.plan_digest
 
-        active = self._route_root / "activation.json"
-        if active.is_symlink() or not active.is_file():
-            raise RuntimeError("activation marker is unavailable")
-        try:
-            marker_bytes = active.read_bytes()
-            active_marker = json.loads(marker_bytes)
-        except (OSError, json.JSONDecodeError) as error:
-            raise RuntimeError("activation marker is unavailable") from error
-        directory = marker.get("directory")
+        bundle = verify_active_route_bundle(
+            self._route_root,
+            clock=self._clock,
+        )
+        active_marker = bundle.marker
         if (
-            active_marker != marker
-            or hashlib.sha256(marker_bytes).hexdigest() != marker_digest
-            or marker.get("state") != "published"
-            or marker.get("reconciliation_id") != owner.reconciliation_id
-            or marker.get("plan_digest") != publication.plan_digest
-            or marker.get("generation") != publication.generation
-            or marker.get("routes_sha256") != route_digest
-            or not isinstance(directory, str)
-            or _GENERATION_DIRECTORY.fullmatch(directory) is None
+            asdict(active_marker) != marker
+            or active_marker.digest != marker_digest
+            or active_marker.state != "published"
+            or active_marker.reconciliation_id != owner_reconciliation_id
+            or active_marker.plan_digest != publication_plan_digest
+            or active_marker.generation != publication_generation
+            or active_marker.generation != owner_generation
+            or active_marker.evidence_set_digest != evidence_digest
+            or active_marker.routes_sha256 != route_digest
+            or active_marker.litellm_sha256 != litellm_digest
+            or active_marker.manifest_sha256 != bundle_digest
+            or lease_issued_at is None
+            or lease_expires_at is None
+            or _aware(lease_issued_at)
+            != _aware(datetime.fromisoformat(active_marker.issued_at))
+            or _aware(lease_expires_at)
+            != _aware(datetime.fromisoformat(active_marker.expires_at))
         ):
             raise RuntimeError("activation marker does not match durable state")
-        route_path = self._route_root / "generations" / directory / "routes.json"
-        if route_path.is_symlink() or not route_path.is_file():
-            raise RuntimeError("active route state is unavailable")
-        try:
-            route_bytes = route_path.read_bytes()
-            routes = json.loads(route_bytes)
-        except (OSError, json.JSONDecodeError) as error:
-            raise RuntimeError("active route state is unavailable") from error
+        routes = bundle.routes
         if (
-            hashlib.sha256(route_bytes).hexdigest() != route_digest
-            or not isinstance(routes, Mapping)
-            or routes.get("generation") != publication.generation
+            routes.get("generation") != publication_generation
             or routes.get("state") != "published"
             or not isinstance(routes.get("routes"), Mapping)
         ):
@@ -325,11 +473,11 @@ class _DurableOperationProjection:
         return {
             "alias": alias,
             "api_base": f"{scheme}://{address}:{port}{path.rstrip('/')}",
-            "expires_at": str(marker["expires_at"]),
-            "generation": int(publication.generation),
+            "expires_at": active_marker.expires_at,
+            "generation": active_marker.generation,
             "node_id": node_id,
             "observed_at": observed_at,
-            "plan_digest": publication.plan_digest,
+            "plan_digest": active_marker.plan_digest,
             "state": "published",
         }
 
@@ -430,7 +578,16 @@ class _DurableOperationProjection:
                 "progress": (
                     None
                     if attempts.get(operation.id) is None
-                    else attempts[operation.id].progress
+                    else (
+                        None
+                        if _progress_projection(
+                            attempts[operation.id].progress
+                        )
+                        is None
+                        else _progress_projection(
+                            attempts[operation.id].progress
+                        ).model_dump(mode="json")
+                    )
                 ),
                 "state": operation.state,
                 "updated_at": _aware(operation.updated_at).isoformat(),
@@ -560,15 +717,130 @@ class FleetStatusResponse(StrictModel):
 def plan_response(plan: Any) -> ReconciliationPlanResponse:
     """Project an accepted planner result without changing its canonical fields."""
 
+    routes = {
+        alias: _plan_route(value)
+        for alias, value in _plan_mapping(plan.routes, "plan routes").items()
+    }
+    releases = {
+        workload_id: _plan_release(value)
+        for workload_id, value in _plan_mapping(
+            plan.releases, "plan releases"
+        ).items()
+    }
+    graph = _plan_mapping(plan.operation_graph.document, "operation graph")
+    raw_nodes = graph.get("nodes")
+    if not isinstance(raw_nodes, (list, tuple)):
+        raise TypeError("operation graph nodes are invalid")
     return ReconciliationPlanResponse(
         commit=plan.commit,
         digest=plan.digest,
         targets=list(plan.targets),
-        placements=dict(plan.placements),
-        routes=dict(plan.routes),
-        releases=dict(plan.releases),
-        input_digests=dict(plan.input_digests),
+        placements=PlanPlacements(root=dict(plan.placements)),
+        routes=PlanRoutes(root=routes),
+        releases=PlanReleases(root=releases),
+        input_digests=PlanInputDigests(root=dict(plan.input_digests)),
         reconciliation_id=plan.operation_graph.reconciliation_id,
-        operation_graph=plan.operation_graph.document,
+        operation_graph=PlanOperationGraph(
+            schema_version=graph["schema_version"],
+            base_commit=graph["base_commit"],
+            targets=graph["targets"],
+            nodes=[_plan_operation(value) for value in raw_nodes],
+        ),
         agent_protocol_range=list(plan.agent_protocol_range),
+    )
+
+
+def _plan_mapping(value: object, field: str) -> Mapping[str, object]:
+    if not isinstance(value, Mapping) or not all(
+        isinstance(key, str) for key in value
+    ):
+        raise TypeError(f"{field} is invalid")
+    return value
+
+
+def _plan_route(value: object) -> PlanRoute:
+    raw = _plan_mapping(value, "plan route")
+    quota = _plan_mapping(raw["quota"], "plan route quota")
+    return PlanRoute(
+        workload_id=raw["workload_id"],
+        nodes=raw["nodes"],
+        entrypoint_node_id=raw["entrypoint_node_id"],
+        scheme=raw["scheme"],
+        port=raw["port"],
+        path=raw["path"],
+        quota=PlanQuota(
+            requests_per_minute=quota["requests_per_minute"],
+            tokens_per_minute=quota["tokens_per_minute"],
+        ),
+        quota_digest=raw["quota_digest"],
+    )
+
+
+def _plan_release(value: object) -> PlanRelease:
+    raw = _plan_mapping(value, "plan release")
+    request = _plan_mapping(raw["release_request"], "release request")
+    requests = _plan_mapping(raw["workload_requests"], "workload requests")
+    prepare = _plan_mapping(requests["prepare"], "prepare request")
+    start = _plan_mapping(requests["start"], "start request")
+    stop = _plan_mapping(requests["stop"], "stop request")
+    health = _plan_mapping(requests["health"], "health request")
+    verify = _plan_mapping(requests["verify"], "verify request")
+    endpoint = _plan_mapping(raw["endpoint"], "release endpoint")
+    return PlanRelease(
+        manifest_path=raw["manifest_path"],
+        manifest_sha256=raw["manifest_sha256"],
+        definition_hash=raw["definition_hash"],
+        release_request=PlanReleaseRequest(
+            schema_version=request["schema_version"],
+            target_name=request["target_name"],
+            oci_manifest_digest=request["oci_manifest_digest"],
+            target_digest=request["target_digest"],
+            provenance_digest=request["provenance_digest"],
+            adapter_id=request["adapter_id"],
+        ),
+        workload_requests=PlanWorkloadRequests(
+            prepare=PlanPrepareRequest(
+                **_base_workload_request(prepare),
+                profile_digest=prepare["profile_digest"],
+            ),
+            start=PlanStartRequest(
+                **_base_workload_request(start),
+                preparation_digest=start["preparation_digest"],
+            ),
+            stop=PlanWorkloadRequest(**_base_workload_request(stop)),
+            health=PlanWorkloadRequest(**_base_workload_request(health)),
+            verify=PlanVerifyRequest(
+                **_base_workload_request(verify),
+                expected_digest=verify["expected_digest"],
+            ),
+        ),
+        endpoint=PlanEndpoint(
+            scheme=endpoint["scheme"],
+            port=endpoint["port"],
+            path=endpoint["path"],
+        ),
+    )
+
+
+def _base_workload_request(
+    raw: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        "schema_version": raw["schema_version"],
+        "workload_id": raw["workload_id"],
+        "release_digest": raw["release_digest"],
+        "adapter_id": raw["adapter_id"],
+    }
+
+
+def _plan_operation(value: object) -> PlanOperation:
+    raw = _plan_mapping(value, "plan operation")
+    return PlanOperation(
+        operation_id=raw["operation_id"],
+        node_id=raw["node_id"],
+        workload_id=raw["workload_id"],
+        kind=raw["kind"],
+        dependencies=raw["dependencies"],
+        compensation_kind=raw["compensation_kind"],
+        payload_digest=raw["payload_digest"],
     )

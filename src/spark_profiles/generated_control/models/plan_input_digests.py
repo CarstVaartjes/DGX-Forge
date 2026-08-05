@@ -12,16 +12,16 @@ from ..types import UNSET, Unset
 
 
 
-T = TypeVar("T", bound="ReconciliationPlanResponsePlacements")
+T = TypeVar("T", bound="PlanInputDigests")
 
 
 
 @_attrs_define
-class ReconciliationPlanResponsePlacements:
+class PlanInputDigests:
     """
      """
 
-    additional_properties: dict[str, Any] = _attrs_field(init=False, factory=dict)
+    additional_properties: dict[str, str] = _attrs_field(init=False, factory=dict)
 
 
 
@@ -39,21 +39,21 @@ class ReconciliationPlanResponsePlacements:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        reconciliation_plan_response_placements = cls(
+        plan_input_digests = cls(
         )
 
 
-        reconciliation_plan_response_placements.additional_properties = d
-        return reconciliation_plan_response_placements
+        plan_input_digests.additional_properties = d
+        return plan_input_digests
 
     @property
     def additional_keys(self) -> list[str]:
         return list(self.additional_properties.keys())
 
-    def __getitem__(self, key: str) -> Any:
+    def __getitem__(self, key: str) -> str:
         return self.additional_properties[key]
 
-    def __setitem__(self, key: str, value: Any) -> None:
+    def __setitem__(self, key: str, value: str) -> None:
         self.additional_properties[key] = value
 
     def __delitem__(self, key: str) -> None:

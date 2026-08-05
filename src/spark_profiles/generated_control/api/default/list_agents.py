@@ -8,6 +8,7 @@ from ...types import Response, UNSET
 from ... import errors
 
 from ...models.agents_response import AgentsResponse
+from ...models.bounded_error_response import BoundedErrorResponse
 from typing import cast
 
 
@@ -31,7 +32,7 @@ def _get_kwargs(
 
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[AgentsResponse]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[AgentsResponse, BoundedErrorResponse]]:
     if response.status_code == 200:
         response_200 = AgentsResponse.from_dict(response.json())
 
@@ -39,13 +40,27 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
 
         return response_200
 
+    if response.status_code == 401:
+        response_401 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_401
+
+    if response.status_code == 503:
+        response_503 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_503
+
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
     else:
         return None
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[AgentsResponse]:
+def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[AgentsResponse, BoundedErrorResponse]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -58,7 +73,7 @@ def sync_detailed(
     *,
     client: AuthenticatedClient,
 
-) -> Response[AgentsResponse]:
+) -> Response[Union[AgentsResponse, BoundedErrorResponse]]:
     """ Agent List
 
     Raises:
@@ -66,7 +81,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[AgentsResponse]
+        Response[Union[AgentsResponse, BoundedErrorResponse]]
      """
 
 
@@ -84,7 +99,7 @@ def sync(
     *,
     client: AuthenticatedClient,
 
-) -> Optional[AgentsResponse]:
+) -> Optional[Union[AgentsResponse, BoundedErrorResponse]]:
     """ Agent List
 
     Raises:
@@ -92,7 +107,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        AgentsResponse
+        Union[AgentsResponse, BoundedErrorResponse]
      """
 
 
@@ -105,7 +120,7 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
 
-) -> Response[AgentsResponse]:
+) -> Response[Union[AgentsResponse, BoundedErrorResponse]]:
     """ Agent List
 
     Raises:
@@ -113,7 +128,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[AgentsResponse]
+        Response[Union[AgentsResponse, BoundedErrorResponse]]
      """
 
 
@@ -131,7 +146,7 @@ async def asyncio(
     *,
     client: AuthenticatedClient,
 
-) -> Optional[AgentsResponse]:
+) -> Optional[Union[AgentsResponse, BoundedErrorResponse]]:
     """ Agent List
 
     Raises:
@@ -139,7 +154,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        AgentsResponse
+        Union[AgentsResponse, BoundedErrorResponse]
      """
 
 

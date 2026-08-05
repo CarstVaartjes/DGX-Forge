@@ -7,6 +7,7 @@ from ...client import AuthenticatedClient, Client
 from ...types import Response, UNSET
 from ... import errors
 
+from ...models.bounded_error_response import BoundedErrorResponse
 from ...models.endpoint_response import EndpointResponse
 from ...models.http_validation_error import HTTPValidationError
 from typing import cast
@@ -33,13 +34,27 @@ def _get_kwargs(
 
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[EndpointResponse, HTTPValidationError]]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[BoundedErrorResponse, EndpointResponse, HTTPValidationError]]:
     if response.status_code == 200:
         response_200 = EndpointResponse.from_dict(response.json())
 
 
 
         return response_200
+
+    if response.status_code == 401:
+        response_401 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_401
+
+    if response.status_code == 404:
+        response_404 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_404
 
     if response.status_code == 422:
         response_422 = HTTPValidationError.from_dict(response.json())
@@ -48,13 +63,20 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
 
         return response_422
 
+    if response.status_code == 503:
+        response_503 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_503
+
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
     else:
         return None
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[EndpointResponse, HTTPValidationError]]:
+def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[BoundedErrorResponse, EndpointResponse, HTTPValidationError]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -68,7 +90,7 @@ def sync_detailed(
     *,
     client: AuthenticatedClient,
 
-) -> Response[Union[EndpointResponse, HTTPValidationError]]:
+) -> Response[Union[BoundedErrorResponse, EndpointResponse, HTTPValidationError]]:
     """ Endpoint View
 
     Args:
@@ -79,7 +101,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[EndpointResponse, HTTPValidationError]]
+        Response[Union[BoundedErrorResponse, EndpointResponse, HTTPValidationError]]
      """
 
 
@@ -99,7 +121,7 @@ def sync(
     *,
     client: AuthenticatedClient,
 
-) -> Optional[Union[EndpointResponse, HTTPValidationError]]:
+) -> Optional[Union[BoundedErrorResponse, EndpointResponse, HTTPValidationError]]:
     """ Endpoint View
 
     Args:
@@ -110,7 +132,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[EndpointResponse, HTTPValidationError]
+        Union[BoundedErrorResponse, EndpointResponse, HTTPValidationError]
      """
 
 
@@ -125,7 +147,7 @@ async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
 
-) -> Response[Union[EndpointResponse, HTTPValidationError]]:
+) -> Response[Union[BoundedErrorResponse, EndpointResponse, HTTPValidationError]]:
     """ Endpoint View
 
     Args:
@@ -136,7 +158,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[EndpointResponse, HTTPValidationError]]
+        Response[Union[BoundedErrorResponse, EndpointResponse, HTTPValidationError]]
      """
 
 
@@ -156,7 +178,7 @@ async def asyncio(
     *,
     client: AuthenticatedClient,
 
-) -> Optional[Union[EndpointResponse, HTTPValidationError]]:
+) -> Optional[Union[BoundedErrorResponse, EndpointResponse, HTTPValidationError]]:
     """ Endpoint View
 
     Args:
@@ -167,7 +189,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[EndpointResponse, HTTPValidationError]
+        Union[BoundedErrorResponse, EndpointResponse, HTTPValidationError]
      """
 
 

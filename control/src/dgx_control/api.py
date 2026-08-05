@@ -62,6 +62,7 @@ from .operation_api import (
     OperationApiServices,
     ReconciliationAcceptedResponse,
     ReconciliationPlanResponse,
+    bounded_error_responses,
     job_response,
     plan_response,
 )
@@ -167,6 +168,30 @@ class JobQueue(Protocol):
 class AuditSink(Protocol):
     def append(self, event: AuditRecord) -> None: ...
     def list(self, *, limit: int = 100) -> list[AuditRecord]: ...
+
+
+def refresh_fleet_metrics(
+    metrics: MetricsRegistry,
+    fleet_state: Mapping[str, object],
+) -> None:
+    """Refresh bounded fleet series while omitting unknown probe ages."""
+
+    nodes = fleet_state.get("nodes")
+    if not isinstance(nodes, Sequence):
+        raise TypeError("fleet metrics nodes are invalid")
+    for node in nodes:
+        if not isinstance(node, Mapping):
+            raise TypeError("fleet metrics node is invalid")
+        probe_age = node.get("probe_age_seconds")
+        metrics.update_node(
+            str(node["id"]),
+            ready=node.get("healthy") is True,
+            memory_available_bytes=int(node["memory_available_bytes"]),
+            disk_available_bytes=int(node["disk_available_bytes"]),
+            probe_age_seconds=(
+                None if probe_age is None else float(probe_age)
+            ),
+        )
 
 
 class JobRequest(BaseModel):
@@ -319,6 +344,7 @@ def create_app(
     install_agent_routes(
         app,
         actor_dependency=actor,
+        audits=audits,
         services=agent,
         enrollment_rate_limiter=enrollment_rate_limiter,
     )
@@ -354,6 +380,7 @@ def create_app(
     @app.get(
         "/api/v1/fleet",
         response_model=FleetStatusResponse,
+        responses=bounded_error_responses(401),
         operation_id="getFleetStatus",
     )
     def fleet_view(_actor: Actor = authenticated_actor) -> Mapping[str, object]:
@@ -362,6 +389,7 @@ def create_app(
     @app.get(
         "/api/v1/nodes/status",
         response_model=FleetStatusResponse,
+        responses=bounded_error_responses(401),
         operation_id="getNodeStatuses",
     )
     def node_status_view(_actor: Actor = authenticated_actor) -> Mapping[str, object]:
@@ -370,6 +398,7 @@ def create_app(
     @app.get(
         "/api/v1/endpoints/{alias}",
         response_model=EndpointResponse,
+        responses=bounded_error_responses(401, 404, 503),
         operation_id="getPublishedEndpoint",
     )
     def endpoint_view(
@@ -392,6 +421,7 @@ def create_app(
     @app.get(
         "/api/v1/agents",
         response_model=AgentsResponse,
+        responses=bounded_error_responses(401, 503),
         operation_id="listAgents",
     )
     def agent_list(_actor: Actor = authenticated_actor) -> dict[str, object]:
@@ -478,6 +508,7 @@ def create_app(
     @app.post(
         "/api/v1/reconciliations/plan",
         response_model=ReconciliationPlanResponse,
+        responses=bounded_error_responses(401, 403, 503),
         operation_id="planReconciliation",
     )
     def reconcile_plan(body: ReconciliationPlanRequest, authenticated: Actor = authenticated_actor) -> ReconciliationPlanResponse:
@@ -487,6 +518,7 @@ def create_app(
     @app.post(
         "/api/v1/profiles/{profile_id}/plan",
         response_model=ReconciliationPlanResponse,
+        responses=bounded_error_responses(401, 403, 503),
         operation_id="planProfileReconciliation",
     )
     def profile_reconcile_plan(
@@ -505,6 +537,7 @@ def create_app(
     @app.post(
         "/api/v1/reconciliations",
         response_model=ReconciliationAcceptedResponse,
+        responses=bounded_error_responses(401, 403, 409, 503),
         status_code=status.HTTP_202_ACCEPTED,
         operation_id="applyReconciliation",
     )
@@ -542,6 +575,7 @@ def create_app(
     @app.post(
         "/api/v1/reconciliations/{reconciliation_id}/cancel",
         status_code=status.HTTP_202_ACCEPTED,
+        responses=bounded_error_responses(401, 403, 404, 409, 503),
     )
     def cancel_reconciliation(
         reconciliation_id: str,
@@ -609,6 +643,7 @@ def create_app(
     @app.get(
         "/api/v1/jobs",
         response_model=JobsResponse,
+        responses=bounded_error_responses(401),
         operation_id="listJobs",
     )
     def jobs_view(_actor: Actor = authenticated_actor) -> dict[str, object]:
@@ -624,6 +659,7 @@ def create_app(
     @app.get(
         "/api/v1/jobs/{job_id}",
         response_model=JobDetailResponse,
+        responses=bounded_error_responses(401, 404),
         operation_id="getJob",
     )
     def job_view(job_id: str, _actor: Actor = authenticated_actor) -> JobDetailResponse:
@@ -637,6 +673,7 @@ def create_app(
     @app.post(
         "/api/v1/jobs/{job_id}/resume",
         response_model=JobResumeResponse,
+        responses=bounded_error_responses(401, 403, 404, 409, 503),
         status_code=status.HTTP_202_ACCEPTED,
         operation_id="resumeJob",
     )
@@ -673,6 +710,7 @@ def create_app(
     @app.get(
         "/api/v1/jobs/{job_id}/logs",
         response_model=JobLogsResponse,
+        responses=bounded_error_responses(401, 403, 404, 503),
         operation_id="listJobLogs",
     )
     def job_log_list(job_id: str, authenticated: Actor = authenticated_actor) -> dict[str, object]:
@@ -812,13 +850,7 @@ def production_app() -> FastAPI:
     def refresh_metrics() -> None:
         operational_metrics.refresh()
         fleet_state = dashboard.fleet()
-        for node in fleet_state["nodes"]:
-            metrics.update_node(
-                node["id"], ready=node["healthy"] is True,
-                memory_available_bytes=int(node["memory_available_bytes"]),
-                disk_available_bytes=int(node["disk_available_bytes"]),
-                probe_age_seconds=float(node["probe_age_seconds"]),
-            )
+        refresh_fleet_metrics(metrics, fleet_state)
         with sessions() as session:
             for kind, state, count in session.execute(select(Job.kind, Job.state, func.count()).group_by(Job.kind, Job.state)):
                 metrics.set_job_count(kind, state, count)

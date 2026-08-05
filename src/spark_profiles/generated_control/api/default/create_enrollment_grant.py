@@ -7,7 +7,8 @@ from ...client import AuthenticatedClient, Client
 from ...types import Response, UNSET
 from ... import errors
 
-from ...models.create_enrollment_grant_response_create_grant_api_v1_agents_enrollments_grants_post import CreateEnrollmentGrantResponseCreateGrantApiV1AgentsEnrollmentsGrantsPost
+from ...models.bounded_error_response import BoundedErrorResponse
+from ...models.enrollment_grant_response import EnrollmentGrantResponse
 from ...models.grant_request import GrantRequest
 from ...models.http_validation_error import HTTPValidationError
 from typing import cast
@@ -41,13 +42,27 @@ def _get_kwargs(
 
 
 
-def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[CreateEnrollmentGrantResponseCreateGrantApiV1AgentsEnrollmentsGrantsPost, HTTPValidationError]]:
+def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[BoundedErrorResponse, EnrollmentGrantResponse, HTTPValidationError]]:
     if response.status_code == 201:
-        response_201 = CreateEnrollmentGrantResponseCreateGrantApiV1AgentsEnrollmentsGrantsPost.from_dict(response.json())
+        response_201 = EnrollmentGrantResponse.from_dict(response.json())
 
 
 
         return response_201
+
+    if response.status_code == 401:
+        response_401 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_401
+
+    if response.status_code == 403:
+        response_403 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_403
 
     if response.status_code == 422:
         response_422 = HTTPValidationError.from_dict(response.json())
@@ -56,13 +71,20 @@ def _parse_response(*, client: Union[AuthenticatedClient, Client], response: htt
 
         return response_422
 
+    if response.status_code == 503:
+        response_503 = BoundedErrorResponse.from_dict(response.json())
+
+
+
+        return response_503
+
     if client.raise_on_unexpected_status:
         raise errors.UnexpectedStatus(response.status_code, response.content)
     else:
         return None
 
 
-def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[CreateEnrollmentGrantResponseCreateGrantApiV1AgentsEnrollmentsGrantsPost, HTTPValidationError]]:
+def _build_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Response[Union[BoundedErrorResponse, EnrollmentGrantResponse, HTTPValidationError]]:
     return Response(
         status_code=HTTPStatus(response.status_code),
         content=response.content,
@@ -76,7 +98,7 @@ def sync_detailed(
     client: AuthenticatedClient,
     body: GrantRequest,
 
-) -> Response[Union[CreateEnrollmentGrantResponseCreateGrantApiV1AgentsEnrollmentsGrantsPost, HTTPValidationError]]:
+) -> Response[Union[BoundedErrorResponse, EnrollmentGrantResponse, HTTPValidationError]]:
     """ Create Grant
 
     Args:
@@ -87,7 +109,7 @@ def sync_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[CreateEnrollmentGrantResponseCreateGrantApiV1AgentsEnrollmentsGrantsPost, HTTPValidationError]]
+        Response[Union[BoundedErrorResponse, EnrollmentGrantResponse, HTTPValidationError]]
      """
 
 
@@ -107,7 +129,7 @@ def sync(
     client: AuthenticatedClient,
     body: GrantRequest,
 
-) -> Optional[Union[CreateEnrollmentGrantResponseCreateGrantApiV1AgentsEnrollmentsGrantsPost, HTTPValidationError]]:
+) -> Optional[Union[BoundedErrorResponse, EnrollmentGrantResponse, HTTPValidationError]]:
     """ Create Grant
 
     Args:
@@ -118,7 +140,7 @@ def sync(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[CreateEnrollmentGrantResponseCreateGrantApiV1AgentsEnrollmentsGrantsPost, HTTPValidationError]
+        Union[BoundedErrorResponse, EnrollmentGrantResponse, HTTPValidationError]
      """
 
 
@@ -133,7 +155,7 @@ async def asyncio_detailed(
     client: AuthenticatedClient,
     body: GrantRequest,
 
-) -> Response[Union[CreateEnrollmentGrantResponseCreateGrantApiV1AgentsEnrollmentsGrantsPost, HTTPValidationError]]:
+) -> Response[Union[BoundedErrorResponse, EnrollmentGrantResponse, HTTPValidationError]]:
     """ Create Grant
 
     Args:
@@ -144,7 +166,7 @@ async def asyncio_detailed(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Response[Union[CreateEnrollmentGrantResponseCreateGrantApiV1AgentsEnrollmentsGrantsPost, HTTPValidationError]]
+        Response[Union[BoundedErrorResponse, EnrollmentGrantResponse, HTTPValidationError]]
      """
 
 
@@ -164,7 +186,7 @@ async def asyncio(
     client: AuthenticatedClient,
     body: GrantRequest,
 
-) -> Optional[Union[CreateEnrollmentGrantResponseCreateGrantApiV1AgentsEnrollmentsGrantsPost, HTTPValidationError]]:
+) -> Optional[Union[BoundedErrorResponse, EnrollmentGrantResponse, HTTPValidationError]]:
     """ Create Grant
 
     Args:
@@ -175,7 +197,7 @@ async def asyncio(
         httpx.TimeoutException: If the request takes longer than Client.timeout.
 
     Returns:
-        Union[CreateEnrollmentGrantResponseCreateGrantApiV1AgentsEnrollmentsGrantsPost, HTTPValidationError]
+        Union[BoundedErrorResponse, EnrollmentGrantResponse, HTTPValidationError]
      """
 
 

@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from dgx_agent_protocol import (
     AgentProgress,
@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from starlette.responses import StreamingResponse
 
 from .agent_jobs import AgentJobService, StaleAgentAttempt
+from .audit import AuditRecord
 from .auth import (
     Actor,
     AgentIdentity,
@@ -46,6 +47,7 @@ from .enrollment import (
     RenewalInProgress,
 )
 from .models import AgentCertificate, AgentEnrollment, AgentNode, AgentOperation
+from .operation_api import bounded_error_responses
 from .pki import IssuedCertificate
 from .presence import AgentPresenceService, PresenceError
 
@@ -62,6 +64,10 @@ _MAX_RANGE_BYTES = 8 * 1024 * 1024
 
 class _ActorDependency(Protocol):
     def __call__(self, request: Request) -> Actor: ...
+
+
+class _AuditSink(Protocol):
+    def append(self, event: AuditRecord) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -141,6 +147,45 @@ class EnrollmentSubmitRequest(BaseModel):
 class RejectRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     reason: str = Field(min_length=1, max_length=1024)
+
+
+class EnrollmentDecisionResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=128)
+    node_id: str = Field(pattern=r"^spk_[0-9a-f]{32}$")
+    state: Literal["approved", "rejected"]
+
+
+class EnrollmentGrantResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=128)
+    node_id: str = Field(pattern=r"^spk_[0-9a-f]{32}$")
+    expires_at: str = Field(min_length=1, max_length=64)
+    token: str = Field(min_length=43, max_length=64)
+
+
+class EnrollmentSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    id: str = Field(min_length=1, max_length=128)
+    node_id: str = Field(pattern=r"^spk_[0-9a-f]{32}$")
+    state: str = Field(min_length=1, max_length=32)
+    csr_public_key_fingerprint: str = Field(min_length=1, max_length=512)
+    host_key_fingerprint: str = Field(min_length=1, max_length=512)
+    hardware_fingerprint: str = Field(min_length=1, max_length=512)
+    agent_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+    boot_id: str = Field(min_length=1, max_length=512)
+    created_at: str = Field(min_length=1, max_length=64)
+    decision_actor: str | None = Field(default=None, max_length=200)
+    decided_at: str | None = Field(default=None, max_length=64)
+    rejection_reason: str | None = Field(default=None, max_length=1024)
+    certificate_serial: str | None = Field(default=None, max_length=256)
+    certificate_fingerprint: str | None = Field(default=None, max_length=512)
+
+
+class EnrollmentListResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enrollments: list[EnrollmentSummary] = Field(max_length=100)
+    next_cursor: str | None = Field(default=None, max_length=128)
 
 
 class ClaimRequest(BaseModel):
@@ -555,6 +600,7 @@ def install_agent_routes(
     app: Any,
     *,
     actor_dependency: _ActorDependency,
+    audits: _AuditSink,
     services: AgentApiServices | None,
     enrollment_rate_limiter: EnrollmentRateLimiter | None = None,
 ) -> None:
@@ -563,23 +609,50 @@ def install_agent_routes(
     limiter = enrollment_rate_limiter or EnrollmentRateLimiter()
     authenticated_actor = Depends(actor_dependency)
 
-    @human.post("/enrollments/grants", status_code=status.HTTP_201_CREATED)
-    def create_grant(body: GrantRequest, authenticated: Actor = authenticated_actor) -> dict[str, object]:
+    @human.post(
+        "/enrollments/grants",
+        status_code=status.HTTP_201_CREATED,
+        response_model=EnrollmentGrantResponse,
+        responses=bounded_error_responses(401, 403, 503),
+    )
+    def create_grant(
+        body: GrantRequest,
+        request: Request,
+        authenticated: Actor = authenticated_actor,
+    ) -> EnrollmentGrantResponse:
         _require_administrator(authenticated, "/api/v1/agents/enrollments/grants")
         required = _require_services(services)
         try:
             grant = required.enrollment.create(body.node_id, authenticated.subject, body.ttl_seconds)
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
-        return {"id": grant.id, "node_id": grant.node_id, "expires_at": _now(grant.expires_at).isoformat(), "token": grant.token}
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                authenticated.subject,
+                "agent.enrollment.grant.create",
+                None,
+                (grant.node_id,),
+            )
+        )
+        return EnrollmentGrantResponse(
+            id=grant.id,
+            node_id=grant.node_id,
+            expires_at=_now(grant.expires_at).isoformat(),
+            token=grant.token,
+        )
 
-    @human.get("/enrollments")
+    @human.get(
+        "/enrollments",
+        response_model=EnrollmentListResponse,
+        responses=bounded_error_responses(401, 403, 503),
+    )
     def list_enrollments(
         cursor: str | None = None,
         state: str | None = None,
         limit: int = 100,
         authenticated: Actor = authenticated_actor,
-    ) -> dict[str, object]:
+    ) -> EnrollmentListResponse:
         _require_administrator(authenticated, "/api/v1/agents/enrollments")
         required = _require_services(services)
         if not 1 <= limit <= 100:
@@ -600,32 +673,91 @@ def install_agent_routes(
         # In particular, an uncertain `issuing` record remains visible here;
         # this endpoint intentionally never retries or clears it.
         page = records[:limit]
-        return {
-            "enrollments": [_enrollment_view(record) for record in page],
-            "next_cursor": page[-1].id if len(records) > limit and page else None,
-        }
+        return EnrollmentListResponse(
+            enrollments=[
+                EnrollmentSummary.model_validate(_enrollment_view(record))
+                for record in page
+            ],
+            next_cursor=(
+                page[-1].id if len(records) > limit and page else None
+            ),
+        )
 
-    @human.post("/enrollments/{enrollment_id}/approve")
-    def approve(enrollment_id: str, authenticated: Actor = authenticated_actor) -> dict[str, object]:
+    @human.post(
+        "/enrollments/{enrollment_id}/approve",
+        response_model=EnrollmentDecisionResponse,
+        responses=bounded_error_responses(401, 403, 409, 503),
+    )
+    def approve(
+        enrollment_id: str,
+        request: Request,
+        authenticated: Actor = authenticated_actor,
+    ) -> EnrollmentDecisionResponse:
         _require_administrator(authenticated, "/api/v1/agents/enrollments/{enrollment_id}/approve")
         required = _require_services(services)
         try:
-            return _issued_response(required.enrollment.approve(enrollment_id, authenticated.subject))
+            issued = required.enrollment.approve(
+                enrollment_id, authenticated.subject
+            )
         except (EnrollmentDenied, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from None
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                authenticated.subject,
+                "agent.enrollment.approve",
+                None,
+                (enrollment_id, issued.node_id),
+            )
+        )
+        return EnrollmentDecisionResponse(
+            id=enrollment_id,
+            node_id=issued.node_id,
+            state="approved",
+        )
 
-    @human.post("/enrollments/{enrollment_id}/reject")
-    def reject(enrollment_id: str, body: RejectRequest, authenticated: Actor = authenticated_actor) -> dict[str, object]:
+    @human.post(
+        "/enrollments/{enrollment_id}/reject",
+        response_model=EnrollmentDecisionResponse,
+        responses=bounded_error_responses(401, 403, 409, 503),
+    )
+    def reject(
+        enrollment_id: str,
+        body: RejectRequest,
+        request: Request,
+        authenticated: Actor = authenticated_actor,
+    ) -> EnrollmentDecisionResponse:
         _require_administrator(authenticated, "/api/v1/agents/enrollments/{enrollment_id}/reject")
         required = _require_services(services)
         try:
             record = required.enrollment.reject(enrollment_id, authenticated.subject, body.reason)
         except (EnrollmentDenied, ValueError) as error:
             raise HTTPException(status_code=409, detail=str(error)) from None
-        return {"id": record.id, "node_id": record.node_id, "state": record.state}
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                authenticated.subject,
+                "agent.enrollment.reject",
+                None,
+                (record.id, record.node_id),
+            )
+        )
+        return EnrollmentDecisionResponse(
+            id=record.id,
+            node_id=record.node_id,
+            state="rejected",
+        )
 
-    @human.post("/nodes/{node_id}/revoke", status_code=status.HTTP_204_NO_CONTENT)
-    def revoke(node_id: str, authenticated: Actor = authenticated_actor) -> Response:
+    @human.post(
+        "/nodes/{node_id}/revoke",
+        status_code=status.HTTP_204_NO_CONTENT,
+        responses=bounded_error_responses(401, 403, 404, 503),
+    )
+    def revoke(
+        node_id: str,
+        request: Request,
+        authenticated: Actor = authenticated_actor,
+    ) -> Response:
         _require_administrator(authenticated, "/api/v1/agents/nodes/{node_id}/revoke")
         required = _require_services(services)
         try:
@@ -636,6 +768,15 @@ def install_agent_routes(
             raise HTTPException(status_code=422, detail=str(error)) from None
         except EnrollmentDenied as error:
             raise HTTPException(status_code=404, detail=str(error)) from None
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                authenticated.subject,
+                "agent.node.revoke",
+                None,
+                (node_id,),
+            )
+        )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @agent.post("/enroll", status_code=status.HTTP_202_ACCEPTED)

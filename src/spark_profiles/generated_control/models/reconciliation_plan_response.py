@@ -9,11 +9,11 @@ from ..types import UNSET, Unset
 from typing import cast
 
 if TYPE_CHECKING:
-  from ..models.reconciliation_plan_response_releases import ReconciliationPlanResponseReleases
-  from ..models.reconciliation_plan_response_routes import ReconciliationPlanResponseRoutes
-  from ..models.reconciliation_plan_response_placements import ReconciliationPlanResponsePlacements
-  from ..models.reconciliation_plan_response_operation_graph import ReconciliationPlanResponseOperationGraph
-  from ..models.reconciliation_plan_response_input_digests import ReconciliationPlanResponseInputDigests
+  from ..models.plan_routes import PlanRoutes
+  from ..models.plan_releases import PlanReleases
+  from ..models.plan_operation_graph import PlanOperationGraph
+  from ..models.plan_input_digests import PlanInputDigests
+  from ..models.plan_placements import PlanPlacements
 
 
 
@@ -30,24 +30,24 @@ class ReconciliationPlanResponse:
             agent_protocol_range (list[int]):
             commit (str):
             digest (str):
-            input_digests (ReconciliationPlanResponseInputDigests):
-            operation_graph (ReconciliationPlanResponseOperationGraph):
-            placements (ReconciliationPlanResponsePlacements):
+            input_digests (PlanInputDigests):
+            operation_graph (PlanOperationGraph):
+            placements (PlanPlacements):
             reconciliation_id (str):
-            releases (ReconciliationPlanResponseReleases):
-            routes (ReconciliationPlanResponseRoutes):
+            releases (PlanReleases):
+            routes (PlanRoutes):
             targets (list[str]):
      """
 
     agent_protocol_range: list[int]
     commit: str
     digest: str
-    input_digests: 'ReconciliationPlanResponseInputDigests'
-    operation_graph: 'ReconciliationPlanResponseOperationGraph'
-    placements: 'ReconciliationPlanResponsePlacements'
+    input_digests: 'PlanInputDigests'
+    operation_graph: 'PlanOperationGraph'
+    placements: 'PlanPlacements'
     reconciliation_id: str
-    releases: 'ReconciliationPlanResponseReleases'
-    routes: 'ReconciliationPlanResponseRoutes'
+    releases: 'PlanReleases'
+    routes: 'PlanRoutes'
     targets: list[str]
 
 
@@ -55,11 +55,11 @@ class ReconciliationPlanResponse:
 
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.reconciliation_plan_response_releases import ReconciliationPlanResponseReleases
-        from ..models.reconciliation_plan_response_routes import ReconciliationPlanResponseRoutes
-        from ..models.reconciliation_plan_response_placements import ReconciliationPlanResponsePlacements
-        from ..models.reconciliation_plan_response_operation_graph import ReconciliationPlanResponseOperationGraph
-        from ..models.reconciliation_plan_response_input_digests import ReconciliationPlanResponseInputDigests
+        from ..models.plan_routes import PlanRoutes
+        from ..models.plan_releases import PlanReleases
+        from ..models.plan_operation_graph import PlanOperationGraph
+        from ..models.plan_input_digests import PlanInputDigests
+        from ..models.plan_placements import PlanPlacements
         agent_protocol_range = self.agent_protocol_range
 
 
@@ -106,11 +106,11 @@ class ReconciliationPlanResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.reconciliation_plan_response_releases import ReconciliationPlanResponseReleases
-        from ..models.reconciliation_plan_response_routes import ReconciliationPlanResponseRoutes
-        from ..models.reconciliation_plan_response_placements import ReconciliationPlanResponsePlacements
-        from ..models.reconciliation_plan_response_operation_graph import ReconciliationPlanResponseOperationGraph
-        from ..models.reconciliation_plan_response_input_digests import ReconciliationPlanResponseInputDigests
+        from ..models.plan_routes import PlanRoutes
+        from ..models.plan_releases import PlanReleases
+        from ..models.plan_operation_graph import PlanOperationGraph
+        from ..models.plan_input_digests import PlanInputDigests
+        from ..models.plan_placements import PlanPlacements
         d = dict(src_dict)
         agent_protocol_range = cast(list[int], d.pop("agent_protocol_range"))
 
@@ -119,29 +119,29 @@ class ReconciliationPlanResponse:
 
         digest = d.pop("digest")
 
-        input_digests = ReconciliationPlanResponseInputDigests.from_dict(d.pop("input_digests"))
+        input_digests = PlanInputDigests.from_dict(d.pop("input_digests"))
 
 
 
 
-        operation_graph = ReconciliationPlanResponseOperationGraph.from_dict(d.pop("operation_graph"))
+        operation_graph = PlanOperationGraph.from_dict(d.pop("operation_graph"))
 
 
 
 
-        placements = ReconciliationPlanResponsePlacements.from_dict(d.pop("placements"))
+        placements = PlanPlacements.from_dict(d.pop("placements"))
 
 
 
 
         reconciliation_id = d.pop("reconciliation_id")
 
-        releases = ReconciliationPlanResponseReleases.from_dict(d.pop("releases"))
+        releases = PlanReleases.from_dict(d.pop("releases"))
 
 
 
 
-        routes = ReconciliationPlanResponseRoutes.from_dict(d.pop("routes"))
+        routes = PlanRoutes.from_dict(d.pop("routes"))
 
 
 
