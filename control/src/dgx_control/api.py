@@ -422,7 +422,7 @@ def production_app() -> FastAPI:
     from .git_policy import GitPolicy, PolicyStore
     from .jobs import JobService
     from .logging import JobLogStore
-    from .metrics import MetricsRegistry
+    from .metrics import MetricsRegistry, OperationalMetricsCollector
     from .models import Job
     from .offline import OnlineLock
     from .proposals import ProposalService
@@ -457,8 +457,10 @@ def production_app() -> FastAPI:
     )
     dashboard = DashboardService(repository, sessions)
     metrics = MetricsRegistry()
+    operational_metrics = OperationalMetricsCollector(metrics, sessions, clock=clock)
     agent_services = build_agent_services(settings, sessions, clock)
     def refresh_metrics() -> None:
+        operational_metrics.refresh()
         fleet_state = dashboard.fleet()
         for node in fleet_state["nodes"]:
             metrics.update_node(

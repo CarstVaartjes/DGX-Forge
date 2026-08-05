@@ -12,6 +12,8 @@ def test_every_alert_has_runbook_and_nonempty_summary() -> None:
     assert {alert["alert"] for alert in alerts} >= {
         "InferenceRoutesStuckInMaintenance", "SparkProbeStale", "RepeatedReconciliationFailure",
         "ControlBackupStale", "ControlDatabaseUnavailable", "WorkerLeaseStarvation",
+        "SparkAgentStale", "SparkAgentCertificateExpiring",
+        "RepeatedAgentOperationFailures", "AgentRolloutPaused",
     }
     for alert in alerts:
         assert alert["annotations"]["summary"]
@@ -35,6 +37,50 @@ def test_dashboards_are_versioned_and_query_stable_metrics() -> None:
         assert dashboard["uid"] == f"dgx-{name}"
         assert dashboard["title"] and dashboard["panels"]
         assert all(panel.get("targets") for panel in dashboard["panels"])
+
+
+def test_fleet_dashboard_covers_agent_lifecycle_and_standard_host_exporters() -> None:
+    dashboard = json.loads(
+        (ROOT / "deploy/compose/grafana/dashboards/fleet.json").read_text()
+    )
+    expressions = {
+        target["expr"]
+        for panel in dashboard["panels"]
+        for target in panel["targets"]
+    }
+    assert {
+        "dgx_agent_state",
+        "dgx_agent_version_compatibility",
+        "dgx_agent_certificate_expiry_seconds",
+        "dgx_agent_operations",
+        "dgx_agent_operation_lease_age_seconds",
+        "dgx_agent_rollouts",
+        "dgx_agent_last_seen_age_seconds",
+        "node_memory_MemAvailable_bytes",
+        "DCGM_FI_DEV_GPU_UTIL",
+    } <= expressions
+    assert not any(
+        expression.startswith(("dgx_agent_host_", "dgx_agent_gpu_"))
+        for expression in expressions
+    )
+
+
+def test_agent_alerts_use_bounded_operational_metrics() -> None:
+    document = json.loads((ROOT / "deploy/compose/prometheus/alerts.yaml").read_text())
+    alerts = {
+        rule["alert"]: rule
+        for group in document["groups"]
+        for rule in group["rules"]
+    }
+    expected_metrics = {
+        "SparkAgentStale": "dgx_agent_last_seen_age_seconds",
+        "SparkAgentCertificateExpiring": "dgx_agent_certificate_expiry_seconds",
+        "RepeatedAgentOperationFailures": "dgx_agent_operations",
+        "AgentRolloutPaused": "dgx_agent_rollouts",
+    }
+    for alert_name, metric in expected_metrics.items():
+        assert metric in alerts[alert_name]["expr"]
+        assert alerts[alert_name]["annotations"]["runbook_url"].startswith("https://")
 
 
 def test_every_service_has_bounded_logging() -> None:
