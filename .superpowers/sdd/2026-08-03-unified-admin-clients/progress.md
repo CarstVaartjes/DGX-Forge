@@ -23,3 +23,4 @@ Task 3: initial implementation delivered (commit 7f0281b; 25 focused real-HTTP C
 Task 3: minor (deferred): update the standard `bin/sparkctl` module description from developer controller to routine control-API client
 Task 3: fix round 1/5 (1 addressed, 0 open — installed environment-aware console entry point, executable README/runbook journey, real outside-checkout HTTPS coverage, and production HTTPMessage header adaptation; commits 7f0281b..bee4b38)
 Task 3: complete (commits 8d81174..bee4b38; task review clean after one fix round; fresh controller verification passed 187 CLI/client/legacy/runbook tests, repository Ruff, and diff checks; publication acceptance pending merge and hosted CI)
+Task 3: complete and accepted (integrated and pushed on main at 545fe603ca318b0f6b3c9746d9653bff56cd448c; hosted run 31018720841 passed Ruff, generated-client verification, macOS full Python/Bash, and Ubuntu full Python/Bash)
