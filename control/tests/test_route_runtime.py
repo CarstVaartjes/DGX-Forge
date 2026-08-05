@@ -84,7 +84,8 @@ def test_bundle_stages_structured_routes_litellm_and_manifest_before_one_marker(
     routes = json.loads((directory / "routes.json").read_bytes())
     config = json.loads((directory / "litellm.json").read_bytes())
     manifest = json.loads((directory / "manifest.json").read_bytes())
-    activation = json.loads((tmp_path / "runtime/activation.json").read_bytes())
+    activation_path = tmp_path / "runtime/activation.json"
+    activation = json.loads(activation_path.read_bytes())
 
     assert routes == {
         "generation": 1,
@@ -123,6 +124,8 @@ def test_bundle_stages_structured_routes_litellm_and_manifest_before_one_marker(
         activation["litellm_sha256"]
         == hashlib.sha256((directory / "litellm.json").read_bytes()).hexdigest()
     )
+    assert marker.canonical_bytes() == activation_path.read_bytes()
+    assert marker.digest == hashlib.sha256(activation_path.read_bytes()).hexdigest()
     assert publisher.inspect(expected=marker) == marker
 
 
@@ -231,6 +234,13 @@ def test_restart_inspection_rejects_tampering_wrong_expectation_and_expired_leas
     wrong = marker.__class__(**{**marker.__dict__, "plan_digest": "d" * 64})
     with pytest.raises(RouteRuntimeError, match="expected"):
         restarted.inspect(expected=wrong)
+
+    activation = tmp_path / "runtime/activation.json"
+    exact = activation.read_bytes()
+    activation.write_text(json.dumps(json.loads(exact), indent=2))
+    with pytest.raises(RouteRuntimeError, match="canonical"):
+        restarted.inspect(expected=marker)
+    activation.write_bytes(exact)
 
     config = tmp_path / "runtime/generations" / marker.directory / "litellm.json"
     config.write_bytes(b'{"model_list":[{"unsafe":true}]}\n')

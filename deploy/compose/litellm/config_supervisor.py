@@ -68,10 +68,13 @@ def _active_config(*, now: datetime) -> Path | None:
     ):
         return None
     try:
-        marker = json.loads(ACTIVATION.read_bytes())
+        activation_content = ACTIVATION.read_bytes()
+        marker = json.loads(activation_content)
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(marker, dict) or set(marker) != _MARKER_FIELDS:
+        return None
+    if activation_content != _encoded(marker):
         return None
     generation = marker.get("generation")
     directory_name = marker.get("directory")

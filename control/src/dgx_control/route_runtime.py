@@ -12,7 +12,7 @@ import tempfile
 import uuid
 from collections.abc import Callable, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -114,6 +114,17 @@ class ActivationMarker:
     expires_at: str
     directory: str
     manifest_sha256: str
+
+    def canonical_bytes(self) -> bytes:
+        """Return the exact representation persisted as the activation marker."""
+
+        return _encoded(asdict(self))
+
+    @property
+    def digest(self) -> str:
+        """Bind a durable database receipt to the exact activation marker bytes."""
+
+        return _sha256(self.canonical_bytes())
 
 
 class AtomicRouteBundlePublisher:
@@ -614,7 +625,8 @@ class AtomicRouteBundlePublisher:
         if active.is_symlink() or not active.is_file():
             raise RouteRuntimeError("route activation marker is unsafe")
         try:
-            raw: Any = json.loads(active.read_bytes())
+            content = active.read_bytes()
+            raw: Any = json.loads(content)
         except (OSError, json.JSONDecodeError) as error:
             raise RouteRuntimeError("route activation marker is unreadable") from error
         if not isinstance(raw, dict) or set(raw) != _MARKER_FIELDS:
@@ -626,6 +638,8 @@ class AtomicRouteBundlePublisher:
                 "route activation marker fields are invalid"
             ) from error
         self._validate_marker(marker)
+        if content != marker.canonical_bytes():
+            raise RouteRuntimeError("route activation marker is not canonical")
         if verify_files:
             directory = self._generations / marker.directory
             if directory.is_symlink() or not directory.is_dir():

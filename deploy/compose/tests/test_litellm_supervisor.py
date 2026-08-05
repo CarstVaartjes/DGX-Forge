@@ -51,7 +51,9 @@ def _bundle(module, tmp_path: Path, *, now: datetime, expires_at: datetime):
         "directory": directory_name,
         "manifest_sha256": manifest_digest,
     }
-    (root / "activation.json").write_text(json.dumps(activation))
+    (root / "activation.json").write_text(
+        json.dumps(activation, sort_keys=True, separators=(",", ":")) + "\n"
+    )
     bootstrap = tmp_path / "bootstrap.json"
     bootstrap.write_bytes(b'{"model_list":[]}\n')
     module.ROOT = root
@@ -113,6 +115,16 @@ def test_supervisor_falls_back_when_manifest_or_marker_is_not_exact(
     manifest = json.loads((directory / "manifest.json").read_bytes())
     manifest["plan_digest"] = "f" * 64
     (directory / "manifest.json").write_text(json.dumps(manifest))
+    assert module._selected(now=now) == bootstrap
+
+    _generated, bootstrap, _directory = _bundle(
+        module,
+        tmp_path,
+        now=now,
+        expires_at=now + timedelta(seconds=150),
+    )
+    activation = json.loads(module.ACTIVATION.read_bytes())
+    module.ACTIVATION.write_text(json.dumps(activation, indent=2))
     assert module._selected(now=now) == bootstrap
 
     _generated, bootstrap, _directory = _bundle(
