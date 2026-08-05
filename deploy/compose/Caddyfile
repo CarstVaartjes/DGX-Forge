@@ -84,6 +84,7 @@
 			header_up X-DGX-Agent-Fingerprint {tls_client_fingerprint}
 			header_up X-DGX-Agent-Verified "1"
 			header_up X-DGX-Agent-Proxy-Auth "{$DGX_AGENT_PROXY_AUTH}"
+			header_up X-DGX-Agent-Source {http.request.remote.host}
 		}
 	}
 	respond 404

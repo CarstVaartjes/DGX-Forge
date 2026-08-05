@@ -43,6 +43,8 @@ def _environment() -> dict[str, str]:
         "DGX_AGENT_HOSTNAME": "agents.test.example",
         "DGX_REGISTRY_HOSTNAME": "registry.test.example",
         "DGX_AGENT_PROXY_AUTH": "test-proxy-secret",
+        "DGX_MANAGEMENT_CIDRS": "10.0.0.0/24",
+        "DGX_DIRECT_FABRIC_CIDRS": "10.0.0.240/28",
     }
 
 
@@ -140,7 +142,9 @@ def _settings_result(rendered: dict, tmp_path: Path) -> subprocess.CompletedProc
                 "from dgx_control.settings import Settings; "
                 "settings = Settings.from_env_and_secrets(); "
                 "print(settings.agent_ca_provider); "
-                "print(settings.agent_proxy_auth.decode('ascii'))"
+                "print(settings.agent_proxy_auth.decode('ascii')); "
+                "print(settings.management_cidrs); "
+                "print(settings.direct_fabric_cidrs)"
             ),
         ],
         capture_output=True,
@@ -204,6 +208,7 @@ def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents(
         "x-dgx-agent-fingerprint": ["{http.request.tls.client.fingerprint}"],
         "x-dgx-agent-verified": ["1"],
         "x-dgx-agent-proxy-auth": ["test-proxy-secret"],
+        "x-dgx-agent-source": ["{http.request.remote.host}"],
     }
     assert any(route.get("match") == [{"not": [{"path": ["/agent/v1/enroll"]}], "path": ["/agent/v1/*"]}] for route in agent_routes)
     mappings = []
@@ -436,4 +441,9 @@ def test_each_provider_overlay_passes_application_settings_guard(tmp_path: Path)
         rendered = _rendered("compose.yaml", overlay)
         result = _settings_result(rendered, tmp_path / provider)
         assert result.returncode == 0, result.stderr
-        assert result.stdout.splitlines() == [provider, token]
+        assert result.stdout.splitlines() == [
+            provider,
+            token,
+            "10.0.0.0/24",
+            "10.0.0.240/28",
+        ]

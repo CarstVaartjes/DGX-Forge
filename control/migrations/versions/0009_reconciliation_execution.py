@@ -23,6 +23,40 @@ def upgrade() -> None:
         )
 
     op.create_table(
+        "agent_presence",
+        sa.Column("node_id", sa.String(length=36), nullable=False),
+        sa.Column("certificate_serial", sa.String(length=128), nullable=False),
+        sa.Column(
+            "certificate_fingerprint", sa.String(length=128), nullable=False
+        ),
+        sa.Column("management_address", sa.String(length=45), nullable=False),
+        sa.Column("observed_at", sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint(
+            "length(management_address) BETWEEN 2 AND 45",
+            name="ck_agent_presence_management_address_length",
+        ),
+        sa.ForeignKeyConstraint(
+            ["certificate_serial"], ["agent_certificates.serial"]
+        ),
+        sa.ForeignKeyConstraint(
+            ["node_id"], ["agent_nodes.node_id"], ondelete="CASCADE"
+        ),
+        sa.PrimaryKeyConstraint("node_id"),
+    )
+    op.create_index(
+        "ix_agent_presence_certificate_serial",
+        "agent_presence",
+        ["certificate_serial"],
+        unique=False,
+    )
+    op.create_index(
+        "ix_agent_presence_observed_at",
+        "agent_presence",
+        ["observed_at"],
+        unique=False,
+    )
+
+    op.create_table(
         "reconciliation_operations",
         sa.Column("id", sa.String(length=36), nullable=False),
         sa.Column("reconciliation_id", sa.String(length=36), nullable=False),
@@ -193,6 +227,14 @@ def downgrade() -> None:
         table_name="reconciliation_operations",
     )
     op.drop_table("reconciliation_operations")
+
+    op.drop_index(
+        "ix_agent_presence_observed_at", table_name="agent_presence"
+    )
+    op.drop_index(
+        "ix_agent_presence_certificate_serial", table_name="agent_presence"
+    )
+    op.drop_table("agent_presence")
 
     with op.batch_alter_table("jobs") as batch:
         batch.drop_index("ix_jobs_reconciliation_id")

@@ -13,8 +13,38 @@ def test_database_secret_is_read_from_file(tmp_path: Path, monkeypatch) -> None:
     assert settings.repository_path == Path("/srv/dgx-forge/repository")
 
 
+def test_management_networks_are_explicit_and_policy_validated(monkeypatch) -> None:
+    monkeypatch.setenv("DGX_DATABASE_URL", "postgresql://db/control")
+    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24,2001:db8:42::/64")
+    monkeypatch.setenv("DGX_DIRECT_FABRIC_CIDRS", "10.0.0.240/28")
+
+    settings = Settings.from_env_and_secrets()
+
+    assert settings.management_cidrs == "10.0.0.0/24,2001:db8:42::/64"
+    assert settings.direct_fabric_cidrs == "10.0.0.240/28"
+
+    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.1/24")
+    with pytest.raises(SettingsError, match="canonical CIDR"):
+        Settings.from_env_and_secrets()
+
+
+def test_production_agent_runtime_requires_management_networks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    database = tmp_path / "database-url"
+    database.write_text("postgresql://db/control")
+    monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
+    monkeypatch.setenv("DGX_AGENT_CA_PROVIDER", "step-ca")
+    monkeypatch.setenv("DGX_DATABASE_URL_FILE", str(database))
+
+    with pytest.raises(SettingsError, match="DGX_MANAGEMENT_CIDRS"):
+        Settings.from_env_and_secrets()
+
+
 def test_production_rejects_raw_database_secret(monkeypatch) -> None:
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
+    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
     monkeypatch.setenv("DGX_AGENT_CA_PROVIDER", "step-ca")
     monkeypatch.setenv("DGX_DATABASE_URL", "postgresql://unsafe")
     with pytest.raises(SettingsError, match="secret file"):
@@ -72,6 +102,7 @@ def test_production_agent_boundary_requires_secret_files_and_step_ca(tmp_path: P
         "DGX_AGENT_PROXY_AUTH_FILE": "p" * 32 + "\r\n",
     }
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
+    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
     for name, value in values.items():
         path = tmp_path / name
         path.write_text(value)
@@ -117,6 +148,7 @@ def test_production_rejects_noncanonical_agent_proxy_auth(
         "DGX_AGENT_PROXY_AUTH_FILE": proxy_auth,
     }
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
+    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
     monkeypatch.setenv("DGX_AGENT_CA_PROVIDER", "step-ca")
     monkeypatch.setenv("DGX_AGENT_CA_URL", "https://step-ca:9000")
     monkeypatch.setenv("DGX_AGENT_CA_PROVISIONER_NAME", "dgx-forge-agent")
@@ -160,6 +192,7 @@ def test_agent_proxy_auth_defaults_empty_and_production_rejects_builtin_ca(monke
     assert settings.agent_proxy_auth == b""
 
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
+    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
     monkeypatch.setenv("DGX_AGENT_CA_PROVIDER", "builtin")
     with pytest.raises(SettingsError, match="explicit bootstrap"):
         Settings.from_env_and_secrets()
@@ -177,6 +210,7 @@ def test_production_builtin_bootstrap_requires_and_loads_the_mounted_intermediat
         "DGX_AGENT_PROXY_AUTH_FILE": "p" * 32,
     }
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
+    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
     monkeypatch.setenv("DGX_AGENT_CA_PROVIDER", "builtin")
     monkeypatch.setenv("DGX_AGENT_BUILTIN_CA_BOOTSTRAP", "1")
     for name, value in values.items():
@@ -205,10 +239,15 @@ def test_production_worker_settings_can_explicitly_disable_agent_runtime(tmp_pat
         path.write_text(value)
         monkeypatch.setenv(name, str(path))
 
+    with pytest.raises(SettingsError, match="DGX_MANAGEMENT_CIDRS"):
+        Settings.from_env_and_secrets()
+
+    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
     settings = Settings.from_env_and_secrets()
 
     assert settings.agent_ca_provider == "step-ca"
     assert settings.agent_proxy_auth == b""
+    assert settings.management_cidrs == "10.0.0.0/24"
 
 
 def test_production_requires_an_explicit_agent_ca_provider(monkeypatch) -> None:
@@ -238,6 +277,7 @@ def test_builtin_bootstrap_key_must_be_a_regular_non_symlink_file(tmp_path: Path
         "DGX_AGENT_PROXY_AUTH_FILE": "p" * 32,
     }
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
+    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
     monkeypatch.setenv("DGX_AGENT_CA_PROVIDER", "builtin")
     monkeypatch.setenv("DGX_AGENT_BUILTIN_CA_BOOTSTRAP", "1")
     for name, value in values.items():

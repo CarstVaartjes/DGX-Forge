@@ -5,9 +5,11 @@ import asyncio
 import pytest
 from dgx_control.auth import (
     AgentIdentity,
+    AgentSource,
     AuthError,
     TrustedProxyAgentIdentityMiddleware,
     agent_identity_from_scope,
+    agent_source_from_scope,
 )
 
 NODE = "spk_" + "a" * 32
@@ -17,6 +19,31 @@ def test_agent_scope_identity_must_be_typed_and_verified() -> None:
     assert agent_identity_from_scope({"dgx.agent_identity": {"node_id": NODE}}) is None
     identity = AgentIdentity(NODE, "serial", "fingerprint", True)
     assert agent_identity_from_scope({"dgx.agent_identity": identity}) == identity
+
+
+def test_agent_scope_source_must_be_typed_and_bound_to_identity() -> None:
+    identity = AgentIdentity(NODE, "serial", "fingerprint", True)
+    source = AgentSource(identity=identity, management_address="10.0.0.42")
+
+    assert agent_source_from_scope({"dgx.agent_source": source}) is None
+    assert agent_source_from_scope(
+        {"dgx.agent_identity": identity, "dgx.agent_source": source}
+    ) == source
+    assert agent_source_from_scope({"dgx.agent_source": "10.0.0.42"}) is None
+    assert agent_source_from_scope(
+        {
+            "dgx.agent_identity": identity,
+            "dgx.agent_source": AgentSource(
+                identity=AgentIdentity(NODE, "other", "other", True),
+                management_address="10.0.0.42",
+            ),
+        }
+    ) is None
+    with pytest.raises(AuthError):
+        AgentSource(  # type: ignore[arg-type]
+            identity={"node_id": NODE},
+            management_address="10.0.0.42",
+        )
 
 
 @pytest.mark.parametrize("node,verified", (("not-a-node", True), (NODE, False)))
@@ -40,10 +67,46 @@ def test_non_secret_caller_on_any_network_cannot_populate_agent_scope() -> None:
             (b"x-dgx-agent-fingerprint", b"fingerprint"),
             (b"x-dgx-agent-verified", b"1"),
             (b"x-dgx-agent-proxy-auth", b"wrong-secret"),
+            (b"x-dgx-agent-source", b"10.0.0.42"),
         ),
     }
 
     asyncio.run(middleware(scope, lambda: None, lambda _: None))
 
     assert agent_identity_from_scope(received[0]) is None
+    assert agent_source_from_scope(received[0]) is None
+    assert received[0]["headers"] == ()
+
+
+def test_trusted_proxy_builds_one_typed_source_and_strips_forwarded_headers() -> None:
+    received = []
+
+    async def app(scope, receive, send) -> None:
+        received.append(scope)
+
+    middleware = TrustedProxyAgentIdentityMiddleware(
+        app,
+        trusted_proxy_auth=b"p" * 32,
+    )
+    scope = {
+        "type": "http",
+        "path": "/ordinary",
+        "headers": (
+            (b"x-dgx-agent-node", NODE.encode()),
+            (b"x-dgx-agent-serial", b"123"),
+            (b"x-dgx-agent-fingerprint", b"fingerprint"),
+            (b"x-dgx-agent-verified", b"1"),
+            (b"x-dgx-agent-proxy-auth", b"p" * 32),
+            (b"x-dgx-agent-source", b"10.0.0.42"),
+        ),
+    }
+
+    asyncio.run(middleware(scope, lambda: None, lambda _: None))
+
+    identity = AgentIdentity(NODE, "123", "fingerprint", True)
+    assert agent_identity_from_scope(received[0]) == identity
+    assert agent_source_from_scope(received[0]) == AgentSource(
+        identity=identity,
+        management_address="10.0.0.42",
+    )
     assert received[0]["headers"] == ()

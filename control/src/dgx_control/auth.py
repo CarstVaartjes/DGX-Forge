@@ -5,6 +5,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import re
 from collections.abc import Callable
@@ -16,6 +17,7 @@ from starlette.responses import Response
 _ROLES = frozenset({"viewer", "operator", "administrator"})
 _AGENT_NODE_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
 _AGENT_IDENTITY_SCOPE_KEY = "dgx.agent_identity"
+_AGENT_SOURCE_SCOPE_KEY = "dgx.agent_source"
 
 MUTATION_ROLES = {
     ("POST", "/api/v1/jobs"): frozenset({"operator", "administrator"}),
@@ -63,12 +65,41 @@ class AgentIdentity:
             raise AuthError("invalid verified agent identity")
 
 
+@dataclass(frozen=True)
+class AgentSource:
+    """A proxy-observed management address bound to one verified identity."""
+
+    identity: AgentIdentity
+    management_address: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.identity, AgentIdentity):
+            raise AuthError("invalid proxy-observed agent source")
+        try:
+            address = ipaddress.ip_address(self.management_address)
+        except ValueError as error:
+            raise AuthError("invalid proxy-observed agent source") from error
+        if str(address) != self.management_address:
+            raise AuthError("invalid proxy-observed agent source")
+
+
 def agent_identity_from_scope(scope: dict[str, Any]) -> AgentIdentity | None:
     """Return only a typed, verification-marked proxy identity from a scope."""
     identity = scope.get(_AGENT_IDENTITY_SCOPE_KEY)
     if not isinstance(identity, AgentIdentity) or identity.verified is not True:
         return None
     return identity
+
+
+def agent_source_from_scope(scope: dict[str, Any]) -> AgentSource | None:
+    """Return only a typed source bound to the scope's verified identity."""
+    source = scope.get(_AGENT_SOURCE_SCOPE_KEY)
+    if not isinstance(source, AgentSource):
+        return None
+    identity = agent_identity_from_scope(scope)
+    if identity is None or source.identity != identity:
+        return None
+    return source
 
 
 class TrustedProxyAgentIdentityMiddleware:
@@ -112,16 +143,23 @@ class TrustedProxyAgentIdentityMiddleware:
         )
         safe_scope = dict(scope)
         safe_scope.pop(_AGENT_IDENTITY_SCOPE_KEY, None)
+        safe_scope.pop(_AGENT_SOURCE_SCOPE_KEY, None)
         safe_scope["headers"] = sanitized
         supplied_proxy_auth = forwarded.get("x-dgx-agent-proxy-auth", "").encode()
         if self._trusted_proxy_auth and hmac.compare_digest(supplied_proxy_auth, self._trusted_proxy_auth) and not duplicate_forwarded_headers:
             try:
-                safe_scope[_AGENT_IDENTITY_SCOPE_KEY] = AgentIdentity(
+                identity = AgentIdentity(
                     node_id=forwarded["x-dgx-agent-node"],
                     certificate_serial=forwarded["x-dgx-agent-serial"],
                     certificate_fingerprint=forwarded["x-dgx-agent-fingerprint"],
                     verified=forwarded["x-dgx-agent-verified"] == "1",
                 )
+                source = AgentSource(
+                    identity=identity,
+                    management_address=forwarded["x-dgx-agent-source"],
+                )
+                safe_scope[_AGENT_IDENTITY_SCOPE_KEY] = identity
+                safe_scope[_AGENT_SOURCE_SCOPE_KEY] = source
             except (AuthError, KeyError):
                 pass
         path = safe_scope.get("path")

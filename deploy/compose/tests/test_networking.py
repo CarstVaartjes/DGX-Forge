@@ -39,6 +39,8 @@ def _rendered() -> dict:
         "DGX_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
         "DGX_AGENT_HOSTNAME": "agents.test.example",
         "DGX_REGISTRY_HOSTNAME": "registry.test.example",
+        "DGX_MANAGEMENT_CIDRS": "10.0.0.0/24",
+        "DGX_DIRECT_FABRIC_CIDRS": "10.0.0.240/28",
     }
     result = subprocess.run(
         ["docker", "compose", "-f", str(root / "deploy/compose/compose.yaml"), "-f", str(root / "deploy/compose/compose.step-ca.yaml"), "config", "--format", "json"],
@@ -63,6 +65,13 @@ def test_database_has_only_data_network_and_ingress_is_segmented() -> None:
     assert set(services["control-api"]["networks"]) == {"agent-proxy", "application", "ca", "data"}
     assert set(services["litellm"]["networks"]) == {"cluster-egress", "data", "ingress"}
     assert set(services["prometheus"]["networks"]) == {"application"}
+    for service in ("control-api", "control-worker"):
+        assert services[service]["environment"]["DGX_MANAGEMENT_CIDRS"] == (
+            "10.0.0.0/24"
+        )
+        assert services[service]["environment"]["DGX_DIRECT_FABRIC_CIDRS"] == (
+            "10.0.0.240/28"
+        )
 
 
 def test_caddy_disables_admin_and_sets_edge_guards() -> None:

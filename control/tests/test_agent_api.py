@@ -34,11 +34,13 @@ from dgx_control.models import (
     AgentEnrollmentGrant,
     AgentNode,
     AgentOperationAttempt,
+    AgentPresence,
     Base,
     Job,
     Observation,
 )
 from dgx_control.pki import CertificateAuthority, IssuedCertificate
+from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -153,6 +155,11 @@ def agent_system(tmp_path):
     services = AgentApiServices(
         enrollment=EnrollmentService(sessions, Authority(), clock=clock),
         operations=AgentJobService(sessions, clock=clock), sessions=sessions, clock=clock,
+        presence=AgentPresenceService(
+            sessions,
+            ManagementAddressPolicy.parse("10.0.0.0/24"),
+            clock=clock,
+        ),
         artifact_root=tmp_path / "artifacts",
     )
     services.artifact_root.mkdir()
@@ -168,6 +175,7 @@ def agent_headers(node: str, serial: str) -> dict[str, str]:
         "x-dgx-agent-fingerprint": f"fingerprint-{serial}",
         "x-dgx-agent-verified": "1",
         "x-dgx-agent-proxy-auth": "p" * 32,
+        "x-dgx-agent-source": "10.0.0.42",
     }
 
 
@@ -329,6 +337,42 @@ def test_verified_identity_cannot_claim_other_node(agent_system) -> None:
     assert response.status_code == 403
 
 
+def test_claim_requires_a_trusted_policy_bounded_source(agent_system) -> None:
+    client, services, _, _ = agent_system
+    missing = agent_headers(NODE_A, "serial-a")
+    missing.pop("x-dgx-agent-source")
+
+    assert client.post("/agent/v1/claim", headers=missing).status_code == 401
+    outside = client.post(
+        "/agent/v1/claim",
+        headers={
+            **agent_headers(NODE_A, "serial-a"),
+            "x-dgx-agent-source": "10.1.0.42",
+        },
+    )
+    assert outside.status_code == 422
+    with services.sessions() as session:
+        assert session.get(AgentPresence, NODE_A) is None
+        assert session.get(AgentNode, NODE_A).last_seen_at is None
+
+
+def test_authenticated_claim_persists_certificate_bound_source(agent_system) -> None:
+    client, services, _, clock = agent_system
+
+    response = client.post(
+        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
+    )
+
+    assert response.status_code == 204
+    with services.sessions() as session:
+        presence = session.get(AgentPresence, NODE_A)
+        assert presence is not None
+        assert presence.certificate_serial == "serial-a"
+        assert presence.certificate_fingerprint == "fingerprint-serial-a"
+        assert presence.management_address == "10.0.0.42"
+        assert presence.observed_at.replace(tzinfo=UTC) == clock.now
+
+
 def test_authenticated_claim_records_protocol_contact_for_metrics(agent_system) -> None:
     client, services, _, clock = agent_system
     clock.now += timedelta(seconds=15)
@@ -384,6 +428,7 @@ def test_unknown_claim_capability_is_rejected_without_contact(agent_system) -> N
         assert node.capabilities == []
         assert node.protocol_version is None
         assert node.last_seen_at is None
+        assert session.get(AgentPresence, NODE_A) is None
 
 
 def test_authenticated_heartbeat_preserves_claim_advertised_protocol_after_exact_fence_validation(
@@ -418,7 +463,10 @@ def test_authenticated_heartbeat_preserves_claim_advertised_protocol_after_exact
 
     response = client.post(
         "/agent/v1/heartbeat",
-        headers=agent_headers(NODE_A, "serial-a"),
+        headers={
+            **agent_headers(NODE_A, "serial-a"),
+            "x-dgx-agent-source": "10.0.0.43",
+        },
         json=progress,
     )
 
@@ -428,6 +476,10 @@ def test_authenticated_heartbeat_preserves_claim_advertised_protocol_after_exact
         assert node is not None
         assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
         assert node.protocol_version == 2
+        presence = session.get(AgentPresence, NODE_A)
+        assert presence is not None
+        assert presence.management_address == "10.0.0.43"
+        assert presence.observed_at.replace(tzinfo=UTC) == clock.now
 
 
 def test_authenticated_result_preserves_claim_advertised_protocol_after_exact_fence_validation(
@@ -462,7 +514,10 @@ def test_authenticated_result_preserves_claim_advertised_protocol_after_exact_fe
 
     response = client.post(
         "/agent/v1/result",
-        headers=agent_headers(NODE_A, "serial-a"),
+        headers={
+            **agent_headers(NODE_A, "serial-a"),
+            "x-dgx-agent-source": "10.0.0.44",
+        },
         json=result,
     )
 
@@ -472,6 +527,10 @@ def test_authenticated_result_preserves_claim_advertised_protocol_after_exact_fe
         assert node is not None
         assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
         assert node.protocol_version == 2
+        presence = session.get(AgentPresence, NODE_A)
+        assert presence is not None
+        assert presence.management_address == "10.0.0.44"
+        assert presence.observed_at.replace(tzinfo=UTC) == clock.now
 
 
 def test_exact_fenced_probe_success_writes_bounded_durable_health(agent_system) -> None:
@@ -590,9 +649,13 @@ def test_untrusted_and_stale_requests_do_not_record_agent_contact(agent_system) 
     ).json()
     with services.sessions.begin() as session:
         node = session.get(AgentNode, NODE_A)
+        presence = session.get(AgentPresence, NODE_A)
         assert node is not None
+        assert presence is not None
+        observed_at = presence.observed_at.replace(tzinfo=UTC)
         node.last_seen_at = None
         node.protocol_version = None
+    clock.now += timedelta(seconds=5)
     stale = {
         key: claim[key]
         for key in (
@@ -611,7 +674,10 @@ def test_untrusted_and_stale_requests_do_not_record_agent_contact(agent_system) 
 
     rejected = client.post(
         "/agent/v1/result",
-        headers=agent_headers(NODE_A, "serial-a"),
+        headers={
+            **agent_headers(NODE_A, "serial-a"),
+            "x-dgx-agent-source": "10.0.0.43",
+        },
         json=stale,
     )
 
@@ -621,6 +687,10 @@ def test_untrusted_and_stale_requests_do_not_record_agent_contact(agent_system) 
         assert node is not None
         assert node.last_seen_at is None
         assert node.protocol_version is None
+        presence = session.get(AgentPresence, NODE_A)
+        assert presence is not None
+        assert presence.management_address == "10.0.0.42"
+        assert presence.observed_at.replace(tzinfo=UTC) == observed_at
 
 
 def test_boolean_protocol_advertisement_is_rejected_without_recording_contact(

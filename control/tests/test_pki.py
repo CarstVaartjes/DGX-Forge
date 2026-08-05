@@ -172,6 +172,7 @@ def test_caddy_serial_and_fingerprint_of_a_real_issued_certificate_reach_the_pro
             (b"x-dgx-agent-fingerprint", certificate.fingerprint(hashes.SHA256()).hex().encode()),
             (b"x-dgx-agent-verified", b"1"),
             (b"x-dgx-agent-proxy-auth", b"p" * 32),
+            (b"x-dgx-agent-source", b"10.0.0.42"),
         ),
     }
 

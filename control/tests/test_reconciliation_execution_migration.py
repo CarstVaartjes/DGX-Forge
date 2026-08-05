@@ -150,6 +150,7 @@ def _assert_execution_cycle(database: str) -> None:
     command.upgrade(config, "0009_reconciliation_execution")
     database_inspector = inspect(engine)
     assert {
+        "agent_presence",
         "reconciliation_operations",
         "route_publications",
     } <= set(database_inspector.get_table_names())
@@ -192,8 +193,38 @@ def _assert_execution_cycle(database: str) -> None:
         "lease_issued_at",
         "lease_expires_at",
     }
+    presence_columns = {
+        column["name"]
+        for column in database_inspector.get_columns("agent_presence")
+    }
+    assert presence_columns == {
+        "node_id",
+        "certificate_serial",
+        "certificate_fingerprint",
+        "management_address",
+        "observed_at",
+    }
 
     with engine.begin() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO agent_certificates "
+                "(serial,node_id,not_before,not_after,fingerprint,state,generation) "
+                "VALUES ('presence-serial',"
+                "'spk_0123456789abcdef0123456789abcdef',"
+                "'2026-08-05 00:00:00+00','2026-08-06 00:00:00+00',"
+                "'presence-fingerprint','active',1)"
+            )
+        )
+        connection.execute(
+            text(
+                "INSERT INTO agent_presence "
+                "(node_id,certificate_serial,certificate_fingerprint,"
+                "management_address,observed_at) VALUES "
+                "('spk_0123456789abcdef0123456789abcdef','presence-serial',"
+                "'presence-fingerprint','10.0.0.42','2026-08-05 00:01:00+00')"
+            )
+        )
         connection.execute(
             text(
                 "UPDATE jobs SET reconciliation_id='legacy-reconciliation' "
@@ -238,6 +269,7 @@ def _assert_execution_cycle(database: str) -> None:
     command.downgrade(config, "0008_resolved_plan")
     database_inspector = inspect(engine)
     assert not {
+        "agent_presence",
         "reconciliation_operations",
         "route_publications",
     } & set(database_inspector.get_table_names())
@@ -254,6 +286,9 @@ def _assert_execution_cycle(database: str) -> None:
         ).scalar_one() == 0
         assert connection.execute(
             text("SELECT count(*) FROM route_publications")
+        ).scalar_one() == 0
+        assert connection.execute(
+            text("SELECT count(*) FROM agent_presence")
         ).scalar_one() == 0
         assert connection.execute(
             text("SELECT reconciliation_id FROM jobs WHERE id='legacy-job'")
@@ -276,6 +311,7 @@ def test_execution_models_expose_durable_links_and_bounded_fields() -> None:
 
     assert hasattr(models, "ReconciliationOperation")
     assert hasattr(models, "RoutePublication")
+    assert hasattr(models, "AgentPresence")
     assert models.Job.__table__.c.reconciliation_id.unique
 
     operation = models.ReconciliationOperation.__table__
@@ -297,6 +333,13 @@ def test_execution_models_expose_durable_links_and_bounded_fields() -> None:
     assert publication.c.state.type.length == 32
     assert publication.c.generation.unique
     assert "activation_marker" in publication.c
+
+    presence = models.AgentPresence.__table__
+    assert presence.c.node_id.primary_key
+    assert presence.c.node_id.foreign_keys
+    assert presence.c.certificate_serial.foreign_keys
+    assert presence.c.management_address.type.length == 45
+    assert presence.c.observed_at.index
 
 
 def test_sqlite_rejects_execution_states_outside_closed_sets(

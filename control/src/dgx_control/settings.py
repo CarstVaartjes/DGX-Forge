@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from .presence import ManagementAddressPolicy, PresenceError
+
 
 class SettingsError(ValueError):
     pass
@@ -90,6 +92,8 @@ class Settings:
     agent_ca_max_response_bytes: int
     agent_artifact_root: Path
     agent_proxy_auth: bytes
+    management_cidrs: str
+    direct_fabric_cidrs: str
 
     @property
     def database_host(self) -> str | None:
@@ -104,6 +108,7 @@ class Settings:
         agent_runtime = os.environ.get("DGX_AGENT_RUNTIME", "enabled")
         if agent_runtime not in {"enabled", "disabled"}:
             raise SettingsError("DGX_AGENT_RUNTIME is invalid")
+        agent_enabled = mode == "production" and agent_runtime == "enabled"
         builtin_bootstrap = os.environ.get("DGX_AGENT_BUILTIN_CA_BOOTSTRAP", "")
         if builtin_bootstrap not in {"", "1"}:
             raise SettingsError("DGX_AGENT_BUILTIN_CA_BOOTSTRAP is invalid")
@@ -134,6 +139,24 @@ class Settings:
         database_url = _secret("DGX_DATABASE_URL_FILE", production=mode == "production")
         if urlsplit(database_url).scheme not in {"postgresql", "postgresql+psycopg"}:
             raise SettingsError("database URL must use PostgreSQL")
+        management_cidrs = os.environ.get("DGX_MANAGEMENT_CIDRS", "").strip()
+        direct_fabric_cidrs = os.environ.get(
+            "DGX_DIRECT_FABRIC_CIDRS", ""
+        ).strip()
+        if mode == "production" and not management_cidrs:
+            raise SettingsError("DGX_MANAGEMENT_CIDRS is required in production")
+        if not management_cidrs and direct_fabric_cidrs:
+            raise SettingsError(
+                "DGX_MANAGEMENT_CIDRS is required when direct fabric CIDRs are set"
+            )
+        if management_cidrs:
+            try:
+                ManagementAddressPolicy.parse(
+                    management_cidrs,
+                    forbidden_cidrs=direct_fabric_cidrs,
+                )
+            except PresenceError as error:
+                raise SettingsError(str(error)) from error
         signing_file = os.environ.get("DGX_TOKEN_SIGNING_KEY_FILE")
         if signing_file:
             signing_path = Path(signing_file)
@@ -175,7 +198,6 @@ class Settings:
         )
         if len(required_checks) != len(set(required_checks)):
             raise SettingsError("required checks must be unique")
-        agent_enabled = mode == "production" and agent_runtime == "enabled"
         agent_client_ca = _secret("DGX_AGENT_CLIENT_CA_FILE", production=True).encode() if agent_enabled else b""
         agent_intermediate_certificate_path = (
             _secret_path("DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE") if agent_enabled else None
@@ -244,4 +266,6 @@ class Settings:
             agent_ca_max_response_bytes=agent_ca_max_response_bytes,
             agent_artifact_root=Path(os.environ.get("DGX_AGENT_ARTIFACT_ROOT", "/state/agent-artifacts")),
             agent_proxy_auth=agent_proxy_auth,
+            management_cidrs=management_cidrs,
+            direct_fabric_cidrs=direct_fabric_cidrs,
         )

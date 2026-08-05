@@ -58,6 +58,7 @@ def build_agent_services(settings: Any, sessions: Any, clock: Callable[[], Any])
     from .agent_jobs import AgentJobService
     from .enrollment import EnrollmentService
     from .pki import BuiltinCertificateAuthority
+    from .presence import AgentPresenceService, ManagementAddressPolicy
     from .step_ca import StepCertificateAuthority
 
     if settings.agent_runtime != "enabled":
@@ -94,6 +95,14 @@ def build_agent_services(settings: Any, sessions: Any, clock: Callable[[], Any])
         operations=AgentJobService(sessions, clock=clock),
         sessions=sessions,
         clock=clock,
+        presence=AgentPresenceService(
+            sessions,
+            ManagementAddressPolicy.parse(
+                settings.management_cidrs,
+                forbidden_cidrs=settings.direct_fabric_cidrs,
+            ),
+            clock=clock,
+        ),
         artifact_root=settings.agent_artifact_root,
     )
 
@@ -454,6 +463,7 @@ def production_app() -> FastAPI:
 
     from sqlalchemy import func, select
 
+    from .agent_reconciliation import bind_reconciliation_result_consumer
     from .audit import SqlAuditStore
     from .code_host import RepositoryCodeHost
     from .dashboard import DashboardService
@@ -507,6 +517,12 @@ def production_app() -> FastAPI:
     metrics = MetricsRegistry()
     operational_metrics = OperationalMetricsCollector(metrics, sessions, clock=clock)
     agent_services = build_agent_services(settings, sessions, clock)
+    bind_reconciliation_result_consumer(
+        sessions,
+        operations=agent_services.operations,
+        presence=agent_services.presence,
+        clock=clock,
+    )
     def refresh_metrics() -> None:
         operational_metrics.refresh()
         fleet_state = dashboard.fleet()

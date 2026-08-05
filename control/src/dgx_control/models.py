@@ -289,6 +289,31 @@ class AgentCertificate(Base):
     ca_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class AgentPresence(Base):
+    """Latest authenticated management address for one active agent node."""
+
+    __tablename__ = "agent_presence"
+    __table_args__ = (
+        CheckConstraint(
+            "length(management_address) BETWEEN 2 AND 45",
+            name="ck_agent_presence_management_address_length",
+        ),
+    )
+    node_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_nodes.node_id", ondelete="CASCADE"), primary_key=True
+    )
+    certificate_serial: Mapped[str] = mapped_column(
+        ForeignKey("agent_certificates.serial"), nullable=False, index=True
+    )
+    certificate_fingerprint: Mapped[str] = mapped_column(
+        String(128), nullable=False
+    )
+    management_address: Mapped[str] = mapped_column(String(45), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+
+
 class AgentCertificateRotation(Base):
     __tablename__ = "agent_certificate_rotations"
     node_id: Mapped[str] = mapped_column(
