@@ -1,0 +1,164 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dgx-forge.invalid/schemas/platform-update-manifest.schema.json",
+  "title": "DGX-Forge platform update manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "platform_version",
+    "build_digest",
+    "control",
+    "database",
+    "agents",
+    "supervisors",
+    "tooling",
+    "rollback"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "platform_version": {"$ref": "#/$defs/semanticVersion"},
+    "build_digest": {"$ref": "#/$defs/prefixedDigest"},
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["config_version", "protocol", "images", "assets"],
+      "properties": {
+        "config_version": {"type": "integer", "minimum": 1, "maximum": 2147483647},
+        "protocol": {"$ref": "#/$defs/protocolRange"},
+        "images": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["api", "worker"],
+          "properties": {
+            "api": {"$ref": "#/$defs/artifact"},
+            "worker": {"$ref": "#/$defs/artifact"}
+          }
+        },
+        "assets": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "items": {"$ref": "#/$defs/artifact"}
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["expand_revision", "contract_revision", "predecessor_compatible"],
+      "properties": {
+        "expand_revision": {"$ref": "#/$defs/token"},
+        "contract_revision": {
+          "oneOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/token"}
+          ]
+        },
+        "predecessor_compatible": {"type": "boolean"}
+      }
+    },
+    "agents": {"$ref": "#/$defs/architectureArtifactsWithProtocol"},
+    "supervisors": {"$ref": "#/$defs/architectureArtifacts"},
+    "tooling": {"$ref": "#/$defs/architectureArtifacts"},
+    "rollback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["compatible_predecessor_builds"],
+      "properties": {
+        "compatible_predecessor_builds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/prefixedDigest"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "semanticVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "digest": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "prefixedDigest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "token": {
+      "type": "string",
+      "pattern": "^[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?$"
+    },
+    "architecture": {
+      "type": "string",
+      "enum": ["linux-arm64", "linux-x86_64"]
+    },
+    "protocolRange": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minimum", "maximum"],
+      "properties": {
+        "minimum": {"type": "integer", "minimum": 1, "maximum": 65535},
+        "maximum": {"type": "integer", "minimum": 1, "maximum": 65535}
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "reference",
+        "sha256",
+        "size",
+        "sbom_sha256",
+        "provenance_sha256"
+      ],
+      "properties": {
+        "name": {"$ref": "#/$defs/token"},
+        "reference": {
+          "type": "string",
+          "pattern": "^[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$"
+        },
+        "sha256": {"$ref": "#/$defs/digest"},
+        "size": {"type": "integer", "minimum": 1, "maximum": 1099511627776},
+        "sbom_sha256": {"$ref": "#/$defs/digest"},
+        "provenance_sha256": {"$ref": "#/$defs/digest"}
+      }
+    },
+    "architectureArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["architecture", "artifact"],
+      "properties": {
+        "architecture": {"$ref": "#/$defs/architecture"},
+        "artifact": {"$ref": "#/$defs/artifact"}
+      }
+    },
+    "architectureArtifactWithProtocol": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["architecture", "protocol", "artifact"],
+      "properties": {
+        "architecture": {"$ref": "#/$defs/architecture"},
+        "protocol": {"$ref": "#/$defs/protocolRange"},
+        "artifact": {"$ref": "#/$defs/artifact"}
+      }
+    },
+    "architectureArtifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {"$ref": "#/$defs/architectureArtifact"}
+    },
+    "architectureArtifactsWithProtocol": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {"$ref": "#/$defs/architectureArtifactWithProtocol"}
+    }
+  }
+}

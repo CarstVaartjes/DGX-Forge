@@ -7,7 +7,13 @@ name = "spark-profiles"
 version = "0.1.0"
 description = "Developer-machine contracts for DGX Spark workload profiles"
 requires-python = ">=3.12"
-dependencies = ["attrs==26.1.0", "httpx==0.28.1", "jsonschema>=4.23"]
+dependencies = [
+  "attrs==26.1.0",
+  "httpx==0.28.1",
+  "jsonschema>=4.23",
+  "securesystemslib[crypto]==1.4.0",
+  "tuf==7.0.0",
+]
 
 [project.scripts]
 sparkctl = "spark_profiles.cli:main"
@@ -29,6 +35,7 @@ dev = ["pytest==9.1.1"]
 "src/spark_profiles/schemas/placement-requirements.schema.json" = "spark_profiles/schemas/placement-requirements.schema.json"
 "src/spark_profiles/schemas/cluster-profile-v2.schema.json" = "spark_profiles/schemas/cluster-profile-v2.schema.json"
 "src/spark_profiles/schemas/workload-v2.schema.json" = "spark_profiles/schemas/workload-v2.schema.json"
+"src/spark_profiles/schemas/platform-update-manifest.schema.json" = "spark_profiles/schemas/platform-update-manifest.schema.json"
 
 [tool.ruff]
 required-version = "==0.16.1"
