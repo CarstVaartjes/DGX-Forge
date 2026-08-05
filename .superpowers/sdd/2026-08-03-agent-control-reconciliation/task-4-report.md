@@ -93,3 +93,12 @@ rejected; probes arise only as persisted `node.probe` reconciliation operations.
 The unchanged native PyInstaller smoke remains affected locally by the already
 documented CPython 3.12/PyInstaller SIGSEGV; 546 other agent tests passed. This
 does not touch Task 4 code and remains covered by hosted Linux/macOS CI.
+
+## Acceptance
+
+Task 4 was fast-forwarded to `main` at
+`66c32c2f1776892af53fb63528a301d6333390ad`. Hosted CI exposed and corrected the
+missing executable mode on the LiteLLM supervisor at
+`a06f2bf1d4554bb999b8536217411d3b188d0eb4`. Final hosted run `31000970087`
+passed Ruff, macOS full Python/Bash, and Ubuntu full Python/Bash. Task 4 is
+accepted.
