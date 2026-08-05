@@ -163,11 +163,13 @@ class AgentJobService:
         lease_seconds: int,
         protocol_version: int | None,
     ) -> AgentClaim | None:
-        now = self._clock()
         with self._claim_lock, self._sessions.begin() as session:
-            if self._active_certificate(session, node_id, certificate_serial, now) is None:
+            identity = self._lock_identity(session, node_id, certificate_serial)
+            now = self._clock()
+            if identity is None or not self._identity_is_active(*identity, now):
                 return None
-            self._record_contact(session, node_id, now, protocol_version)
+            node, _certificate = identity
+            self._record_contact(node, now, protocol_version)
             expired_attempt = select(AgentOperationAttempt.id).where(
                 AgentOperationAttempt.operation_id == StoredOperation.id,
                 AgentOperationAttempt.attempt == StoredOperation.current_attempt,
@@ -320,9 +322,22 @@ class AgentJobService:
         fence: AgentFence,
     ) -> tuple[StoredOperation, AgentOperationAttempt]:
         token = self._fence_token(fence)
-        operation_id = select(AgentOperationAttempt.operation_id).where(
-            AgentOperationAttempt.fence == token,
-        ).scalar_subquery()
+        identity_hint = session.execute(
+            select(
+                StoredOperation.id,
+                StoredOperation.node_id,
+                AgentOperationAttempt.agent_certificate_serial,
+            )
+            .join(
+                AgentOperationAttempt,
+                AgentOperationAttempt.operation_id == StoredOperation.id,
+            )
+            .where(AgentOperationAttempt.fence == token)
+        ).one_or_none()
+        if identity_hint is None:
+            raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
+        operation_id, node_id, certificate_serial = identity_hint
+        identity = self._lock_identity(session, node_id, certificate_serial)
         operation = session.scalar(
             select(StoredOperation)
             .where(StoredOperation.id == operation_id)
@@ -340,7 +355,9 @@ class AgentJobService:
         )
         now = self._clock()
         if (
-            attempt is None
+            identity is None
+            or not self._identity_is_active(*identity, now)
+            or attempt is None
             or (not isinstance(fence, str) and operation.parent_job_id != fence.job_id)
             or (not isinstance(fence, str) and operation.id != fence.operation_id)
             or (not isinstance(fence, str) and operation.node_id != fence.node_id)
@@ -348,31 +365,18 @@ class AgentJobService:
             or attempt.operation_id != operation.id
             or attempt.state != "running"
             or _aware(attempt.lease_deadline) <= _aware(now)
-            or self._active_certificate(session, operation.node_id, attempt.agent_certificate_serial, now) is None
         ):
             raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
-        self._record_contact(
-            session,
-            operation.node_id,
-            now,
-            None if isinstance(fence, str) else fence.schema_version,
-        )
+        node, _certificate = identity
+        self._record_contact(node, now, None)
         return operation, attempt
 
     @staticmethod
     def _record_contact(
-        session: Session,
-        node_id: str,
+        node: AgentNode,
         now: datetime,
         protocol_version: int | None,
     ) -> None:
-        node = session.scalar(
-            select(AgentNode)
-            .where(AgentNode.node_id == node_id)
-            .with_for_update(of=AgentNode)
-        )
-        if node is None:
-            raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
         current = None if node.last_seen_at is None else _aware(node.last_seen_at)
         observed = _aware(now)
         if current is None or observed > current:
@@ -395,25 +399,41 @@ class AgentJobService:
         return redact_text(reason)[:1024]
 
     @staticmethod
-    def _active_certificate(
+    def _lock_identity(
         session: Session,
         node_id: str,
         certificate_serial: str,
-        now: datetime,
-    ) -> AgentCertificate | None:
-        return session.scalar(
+    ) -> tuple[AgentNode, AgentCertificate] | None:
+        node = session.scalar(
+            select(AgentNode)
+            .where(AgentNode.node_id == node_id)
+            .with_for_update(of=AgentNode)
+        )
+        if node is None:
+            return None
+        certificate = session.scalar(
             select(AgentCertificate)
-            .join(AgentNode, AgentNode.node_id == AgentCertificate.node_id)
             .where(
                 AgentCertificate.serial == certificate_serial,
                 AgentCertificate.node_id == node_id,
-                AgentCertificate.state == "active",
-                AgentCertificate.revoked_at.is_(None),
-                AgentCertificate.not_before <= now,
-                AgentCertificate.not_after > now,
-                AgentNode.state == "active",
-                AgentNode.revoked_at.is_(None),
             )
+            .with_for_update(of=AgentCertificate)
+        )
+        return None if certificate is None else (node, certificate)
+
+    @staticmethod
+    def _identity_is_active(
+        node: AgentNode,
+        certificate: AgentCertificate,
+        now: datetime,
+    ) -> bool:
+        return (
+            node.state == "active"
+            and node.revoked_at is None
+            and certificate.state == "active"
+            and certificate.revoked_at is None
+            and _aware(certificate.not_before) <= _aware(now)
+            and _aware(certificate.not_after) > _aware(now)
         )
 
     def _aggregate_parent(self, session: Session, parent_job_id: str) -> None:

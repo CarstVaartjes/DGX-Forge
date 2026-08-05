@@ -538,11 +538,14 @@ class EnrollmentService:
             )
             if node is None:
                 raise EnrollmentDenied("node identity does not exist")
+            certificates = list(session.scalars(
+                select(AgentCertificate)
+                .where(AgentCertificate.node_id == node_id)
+                .order_by(AgentCertificate.serial)
+                .with_for_update(of=AgentCertificate)
+            ))
             node.state = "retired"
             node.revoked_at = node.revoked_at or now
-            certificates = list(session.scalars(
-                select(AgentCertificate).where(AgentCertificate.node_id == node_id)
-            ))
             serials = [certificate.serial for certificate in certificates if certificate.ca_revoked_at is None]
             for certificate in certificates:
                 certificate.state = "revoked"

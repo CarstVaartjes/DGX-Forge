@@ -335,7 +335,7 @@ def test_authenticated_claim_records_protocol_contact_for_metrics(agent_system) 
     )
 
 
-def test_authenticated_heartbeat_records_contact_after_exact_fence_validation(
+def test_authenticated_heartbeat_preserves_claim_advertised_protocol_after_exact_fence_validation(
     agent_system,
 ) -> None:
     client, services, _, clock = agent_system
@@ -343,13 +343,14 @@ def test_authenticated_heartbeat_records_contact_after_exact_fence_validation(
         parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {}
     )
     claim = client.post(
-        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
+        "/agent/v1/claim",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json={"protocol_version": 2},
     ).json()
     with services.sessions.begin() as session:
         node = session.get(AgentNode, NODE_A)
         assert node is not None
         node.last_seen_at = None
-        node.protocol_version = None
     clock.now += timedelta(seconds=5)
     progress = {
         key: claim[key]
@@ -375,10 +376,10 @@ def test_authenticated_heartbeat_records_contact_after_exact_fence_validation(
         node = session.get(AgentNode, NODE_A)
         assert node is not None
         assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
-        assert node.protocol_version == 1
+        assert node.protocol_version == 2
 
 
-def test_authenticated_result_records_contact_after_exact_fence_validation(
+def test_authenticated_result_preserves_claim_advertised_protocol_after_exact_fence_validation(
     agent_system,
 ) -> None:
     client, services, _, clock = agent_system
@@ -386,13 +387,14 @@ def test_authenticated_result_records_contact_after_exact_fence_validation(
         parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {}
     )
     claim = client.post(
-        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
+        "/agent/v1/claim",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json={"protocol_version": 2},
     ).json()
     with services.sessions.begin() as session:
         node = session.get(AgentNode, NODE_A)
         assert node is not None
         node.last_seen_at = None
-        node.protocol_version = None
     clock.now += timedelta(seconds=5)
     result = {
         key: claim[key]
@@ -418,7 +420,7 @@ def test_authenticated_result_records_contact_after_exact_fence_validation(
         node = session.get(AgentNode, NODE_A)
         assert node is not None
         assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
-        assert node.protocol_version == 1
+        assert node.protocol_version == 2
 
 
 def test_untrusted_and_stale_requests_do_not_record_agent_contact(agent_system) -> None:

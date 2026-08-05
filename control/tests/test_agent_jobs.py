@@ -8,8 +8,15 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
-from dgx_control.models import AgentCertificate, AgentNode, Base, Job
-from sqlalchemy import create_engine
+from dgx_control.models import (
+    AgentCertificate,
+    AgentNode,
+    AgentOperation,
+    AgentOperationAttempt,
+    Base,
+    Job,
+)
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 NODE_A = "spk_" + "a" * 32
@@ -207,6 +214,46 @@ def test_heartbeat_never_shortens_a_longer_existing_lease(service) -> None:
     progress = jobs.heartbeat(claim, {"phase": "checking"}, 30)
 
     assert progress.deadline >= claim.deadline
+
+
+@pytest.mark.parametrize("agent_action", ("heartbeat", "result"))
+def test_retired_identity_cannot_mutate_active_attempt_or_record_contact(
+    service, agent_action: str
+) -> None:
+    jobs, sessions, clock = service
+    operation = jobs.enqueue(
+        parent(sessions, clock).id, NODE_A, "node.probe", COMMIT, {}
+    )
+    claim = jobs.claim(NODE_A, "serial-a", 30, protocol_version=2)
+    assert claim is not None
+    with sessions.begin() as session:
+        node = session.get(AgentNode, NODE_A)
+        certificate = session.get(AgentCertificate, "serial-a")
+        assert node is not None and certificate is not None
+        node.state = "retired"
+        node.revoked_at = clock.now
+        node.last_seen_at = None
+        certificate.state = "revoked"
+        certificate.revoked_at = clock.now
+
+    with pytest.raises(StaleAgentAttempt):
+        if agent_action == "heartbeat":
+            jobs.heartbeat(claim, {"phase": "checking"}, 60)
+        else:
+            jobs.succeed(claim, {"healthy": True})
+
+    with sessions() as session:
+        node = session.get(AgentNode, NODE_A)
+        stored_operation = session.get(AgentOperation, operation.id)
+        attempt = session.scalar(select(AgentOperationAttempt).where(
+            AgentOperationAttempt.operation_id == operation.id,
+            AgentOperationAttempt.attempt == claim.attempt,
+        ))
+        assert node is not None and node.last_seen_at is None
+        assert node.protocol_version == 2
+        assert stored_operation is not None and stored_operation.state == "running"
+        assert attempt is not None and attempt.state == "running"
+        assert attempt.progress is None and attempt.result is None
 
 
 def test_public_fence_string_interface_renews_and_completes(service) -> None:

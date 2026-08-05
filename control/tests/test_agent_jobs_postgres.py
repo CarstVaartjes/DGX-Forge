@@ -11,6 +11,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
+from dgx_control.enrollment import EnrollmentService
 from dgx_control.models import (
     AgentCertificate,
     AgentNode,
@@ -19,6 +20,7 @@ from dgx_control.models import (
     Base,
     Job,
 )
+from dgx_control.pki import CertificateAuthority, IssuedCertificate
 from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError
@@ -38,6 +40,29 @@ class Clock:
 
     def advance(self, *, seconds: int) -> None:
         self.now += timedelta(seconds=seconds)
+
+
+class RevokingAuthority(CertificateAuthority):
+    def issue_node(
+        self, node_id: str, csr_pem: bytes, now: datetime
+    ) -> IssuedCertificate:
+        raise NotImplementedError
+
+    def renew_node(
+        self,
+        node_id: str,
+        csr_pem: bytes,
+        now: datetime,
+        *,
+        request_id: str,
+    ) -> IssuedCertificate:
+        raise NotImplementedError
+
+    def revocation_bundle(self, now: datetime) -> bytes:
+        return b""
+
+    def revoke_node(self, serial: str, now: datetime) -> None:
+        return None
 
 
 @pytest.fixture(scope="module")
@@ -148,6 +173,105 @@ def test_postgres_separate_services_cannot_claim_the_same_operation(service) -> 
     claimed = [claim for claim in claims if claim is not None]
     assert len(claimed) == 1
     assert claimed[0].operation_id == operation.id
+
+
+@pytest.mark.parametrize("agent_action", ("claim", "heartbeat", "result"))
+def test_postgres_revocation_serializes_agent_work_and_contact(
+    service, postgres_engine, agent_action: str
+) -> None:
+    sessions, clock = service
+    jobs = AgentJobService(sessions, clock=clock)
+    enrollment = EnrollmentService(sessions, RevokingAuthority(), clock=clock)
+    operation = jobs.enqueue(parent(sessions, clock).id, NODE_A, "node.probe", COMMIT, {})
+    claim = None
+    original_deadline = None
+    if agent_action != "claim":
+        claim = jobs.claim(NODE_A, "serial-a", 30, protocol_version=2)
+        assert claim is not None
+        original_deadline = claim.deadline
+    with sessions.begin() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        node.last_seen_at = None
+
+    revocation_locked = threading.Event()
+    release_revocation = threading.Event()
+    revocation_errors: list[Exception] = []
+    action_results: list[object] = []
+
+    def pause_after_node_lock(
+        _conn, _cursor, statement, _parameters, _context, _many
+    ) -> None:
+        if (
+            threading.current_thread().name == "revoker"
+            and "FROM agent_nodes" in statement
+            and "FOR UPDATE OF agent_nodes" in statement
+        ):
+            revocation_locked.set()
+            assert release_revocation.wait(timeout=5)
+
+    def revoke() -> None:
+        try:
+            enrollment.revoke_node(NODE_A, "admin")
+        except (AssertionError, OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
+            revocation_errors.append(error)
+
+    def act() -> None:
+        try:
+            if agent_action == "claim":
+                action_results.append(jobs.claim(NODE_A, "serial-a", 30))
+            elif agent_action == "heartbeat":
+                assert claim is not None
+                action_results.append(jobs.heartbeat(claim, {"phase": "checking"}, 60))
+            else:
+                assert claim is not None
+                jobs.succeed(claim, {"healthy": True})
+                action_results.append(None)
+        except (AssertionError, OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
+            action_results.append(error)
+
+    event.listen(postgres_engine, "after_cursor_execute", pause_after_node_lock)
+    try:
+        revoker = threading.Thread(target=revoke, name="revoker")
+        worker = threading.Thread(target=act, name="agent-worker")
+        revoker.start()
+        assert revocation_locked.wait(timeout=5)
+        worker.start()
+        time.sleep(0.25)
+        assert worker.is_alive(), "agent work must wait for the revocation identity lock"
+        release_revocation.set()
+        revoker.join(timeout=5)
+        worker.join(timeout=5)
+    finally:
+        release_revocation.set()
+        event.remove(postgres_engine, "after_cursor_execute", pause_after_node_lock)
+
+    assert not revoker.is_alive() and not worker.is_alive()
+    assert not revocation_errors
+    if agent_action == "claim":
+        assert action_results == [None]
+    else:
+        assert len(action_results) == 1
+        assert isinstance(action_results[0], StaleAgentAttempt)
+    with sessions() as session:
+        node = session.get(AgentNode, NODE_A)
+        certificate = session.get(AgentCertificate, "serial-a")
+        stored_operation = session.get(AgentOperation, operation.id)
+        assert node is not None and node.state == "retired" and node.last_seen_at is None
+        assert certificate is not None and certificate.state == "revoked"
+        assert stored_operation is not None
+        if agent_action == "claim":
+            assert stored_operation.state == "queued"
+            assert stored_operation.current_attempt == 0
+        else:
+            assert claim is not None
+            attempt = session.scalar(select(AgentOperationAttempt).where(
+                AgentOperationAttempt.operation_id == operation.id,
+                AgentOperationAttempt.attempt == claim.attempt,
+            ))
+            assert attempt is not None and attempt.state == "running"
+            assert attempt.lease_deadline.astimezone(UTC) == original_deadline
+            assert attempt.progress is None and attempt.result is None
 
 
 @pytest.mark.parametrize("operation_kind", ("node.probe", "workload.health", "workload.verify"))
@@ -303,7 +427,9 @@ def test_postgres_enqueue_cannot_race_parent_finalization(service, postgres_engi
     assert child_count == 1
 
 
-def test_postgres_complete_holds_operation_lock_against_expired_reclaim(service, postgres_engine) -> None:
+def test_postgres_complete_serializes_expired_reclaim_with_identity_lock(
+    service, postgres_engine
+) -> None:
     sessions, clock = service
     completing = AgentJobService(sessions, clock=clock)
     reclaiming = AgentJobService(sessions, clock=clock)
@@ -314,6 +440,7 @@ def test_postgres_complete_holds_operation_lock_against_expired_reclaim(service,
     locked = threading.Event()
     release = threading.Event()
     errors: list[Exception] = []
+    reclaimed: list[object] = []
 
     def pause_after_operation_lock(_conn, _cursor, statement, _parameters, _context, _many) -> None:
         if (
@@ -332,19 +459,32 @@ def test_postgres_complete_holds_operation_lock_against_expired_reclaim(service,
             except (AssertionError, OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
                 errors.append(error)
 
-        thread = threading.Thread(target=finish, name="finisher")
-        thread.start()
+        def reclaim() -> None:
+            try:
+                reclaimed.append(reclaiming.claim(NODE_A, "serial-a", 30))
+            except (AssertionError, OSError, RuntimeError, ValueError, SQLAlchemyError) as error:
+                reclaimed.append(error)
+
+        finisher = threading.Thread(target=finish, name="finisher")
+        reclaimer = threading.Thread(target=reclaim, name="reclaimer")
+        finisher.start()
         assert locked.wait(timeout=5)
-        assert reclaiming.claim(NODE_A, "serial-a", 30) is None
+        reclaimer.start()
+        time.sleep(0.25)
+        assert reclaimer.is_alive(), "reclaim must wait for the active identity transaction"
         release.set()
-        thread.join(timeout=5)
+        finisher.join(timeout=5)
+        reclaimer.join(timeout=5)
     finally:
+        release.set()
         event.remove(postgres_engine, "after_cursor_execute", pause_after_operation_lock)
 
     assert len(errors) == 1
     assert isinstance(errors[0], StaleAgentAttempt)
-    assert not thread.is_alive()
-    assert reclaiming.claim(NODE_A, "serial-a", 30) is not None
+    assert not finisher.is_alive() and not reclaimer.is_alive()
+    assert len(reclaimed) == 1
+    assert not isinstance(reclaimed[0], Exception)
+    assert reclaimed[0] is not None
 
 
 def test_postgres_concurrent_final_completions_aggregate_parent_once(service, postgres_engine) -> None:

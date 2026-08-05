@@ -148,3 +148,58 @@ and 1 strict-type test.
 
 The correction addresses all submitted findings. Independent rereview remains pending,
 as does integration with Tasks 1–4.
+
+## Independent rereview correction
+
+The independent rereview found two Important transaction-boundary defects:
+
+1. Heartbeat and result copied their protocol message `schema_version` into
+   `AgentNode.protocol_version`. A node that advertised agent protocol version 2 on
+   claim was therefore downgraded to version 1 by its next schema-version-1 progress
+   or result message.
+2. Agent identity state was read before the node row was locked. Revocation could
+   retire the node after that read but before contact or claim/heartbeat/result state
+   was written, allowing post-retirement contact and work mutation.
+
+Heartbeat and result now update last-seen recency only; claim remains the sole writer
+of the advertised agent protocol version. The identity transaction order is now
+`AgentNode`, relevant `AgentCertificate`, operation, attempt, then parent job. Both
+identity rows are locked before active/not-revoked/time-valid state is evaluated and
+before contact or operation state can change. `revoke_node` uses the same leading
+order and locks all of a node's certificate rows in deterministic serial order before
+retiring the node and certificates.
+
+The PostgreSQL regression runs the real `EnrollmentService.revoke_node`, pauses it
+after its node `FOR UPDATE` lock, and starts each of claim, heartbeat, and result in a
+separate service thread. Each operation is proven to wait for revocation, then reject
+the committed retired identity without changing last-seen, lease/progress/result, or
+operation state. SQLite unit coverage independently proves retired identities cannot
+mutate an active attempt or record contact. Existing invalid-authentication and stale
+fence no-write coverage remains green.
+
+### Rereview RED/GREEN evidence
+
+Before the production correction:
+
+- both protocol-retention API regressions failed because heartbeat/result changed
+  advertised version 2 to schema version 1; and
+- all three PostgreSQL revocation races failed because claim issued work, heartbeat
+  renewed work, and result completed work after their stale pre-lock identity read.
+
+After the correction, the same protocol regressions passed 2/2 and the exact
+PostgreSQL races passed 3/3. The new SQLite retired-identity no-write cases passed 2/2.
+
+### Rereview correction verification
+
+- `agent/tests/test_client.py`: **39 passed**.
+- Focused API/job/PostgreSQL/metrics/dashboard suites: **106 passed**, including all
+  **20 PostgreSQL locking tests**.
+- Complete control suite: **302 passed**.
+- Compose observability suite: **8 passed**.
+- Focused pinned Ruff 0.16.1, direct `py_compile`, JSON parsing, and
+  `git diff --check` passed.
+- `promtool` remains unavailable locally; the rules continue to receive structural
+  parsing and behavioral observability-test coverage.
+
+The rereview correction addresses both submitted findings. Independent rereview and
+integration with Tasks 1–4 remain pending.
