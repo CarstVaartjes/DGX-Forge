@@ -238,6 +238,10 @@ jobs:
     permissions:
       contents: write
     steps:
+      - name: Check out tagged commit
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - name: Create digest-pinned image environment
         env:
           CONTROL_API_IMAGE: ${{ needs.release-metadata.outputs.api_image }}:${{ needs.release-metadata.outputs.version }}

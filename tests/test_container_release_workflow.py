@@ -135,19 +135,22 @@ def test_publisher_uses_pinned_docker_actions_and_exact_artifacts() -> None:
 
 
 def test_complete_summary_uses_all_three_build_digests() -> None:
-    text = workflow()
+    summary = workflow_step("publish-images", "Write digest-pinned image summary")
+    run = step_run("publish-images", "Write digest-pinned image summary")
     for variable in (
         "CONTROL_API_IMAGE",
         "CONTROL_WORKER_IMAGE",
         "HERMES_AGENT_IMAGE",
     ):
-        assert variable in text
-    for step in (
+        assert variable in run
+    for digest in (
         "steps.api.outputs.digest",
         "steps.worker.outputs.digest",
         "steps.hermes.outputs.digest",
     ):
-        assert step in text
+        assert digest in run
+    assert "$GITHUB_STEP_SUMMARY" in run
+    assert "```dotenv" in summary
 
 
 def test_public_input_scanner_runs_before_every_image_build() -> None:
@@ -196,6 +199,7 @@ def test_existing_version_guard_allows_only_known_absence(
         "  absent) echo \"ERROR: $4: not found\" >&2; exit 1 ;;\n"
         "  existing) exit 0 ;;\n"
         "  registry-error) echo 'ERROR: registry returned 503' >&2; exit 1 ;;\n"
+        "  mixed-error) printf 'ERROR: %s: not found\\nERROR: registry returned 503\\n' \"$4\" >&2; exit 1 ;;\n"
         "esac\n"
     )
     docker.chmod(0o755)
@@ -218,13 +222,15 @@ def test_existing_version_guard_allows_only_known_absence(
             capture_output=True,
             text=True,
         )
-        for mode in ("absent", "existing", "registry-error")
+        for mode in ("absent", "existing", "registry-error", "mixed-error")
     }
 
     assert results["absent"].returncode == 0, results["absent"].stderr
     assert results["existing"].returncode != 0
     assert results["registry-error"].returncode != 0
+    assert results["mixed-error"].returncode != 0
     assert "registry returned 503" not in results["registry-error"].stderr
+    assert "registry returned 503" not in results["mixed-error"].stderr
 
 
 def test_manifest_receives_digests_only_through_environment() -> None:
@@ -238,6 +244,20 @@ def test_manifest_receives_digests_only_through_environment() -> None:
     ):
         assert f"{name}: ${{{{ needs.publish-images.outputs.{output} }}}}" in step
         assert f"needs.publish-images.outputs.{output}" not in run
+
+
+def test_release_manifest_checks_out_scripts_before_using_them() -> None:
+    manifest = job("release-manifest")
+    checkout = workflow_step("release-manifest", "Check out tagged commit")
+
+    assert (
+        "uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+        in checkout
+    )
+    assert "persist-credentials: false" in checkout
+    assert manifest.index("Check out tagged commit") < manifest.index(
+        "scripts/validate-container-release-digests"
+    )
 
 
 def test_manifest_rejects_invalid_digests_before_creating_assets(
