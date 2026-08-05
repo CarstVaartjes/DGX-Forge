@@ -237,3 +237,4 @@ def test_resolved_plan_digest_survives_process_restart(tmp_path) -> None:
 
     assert result["reconciliation_id"] == planned.operation_graph.reconciliation_id
     assert jobs.call[0][4]["reconciliation_id"] == planned.operation_graph.reconciliation_id
+    assert jobs.call[1]["reconciliation_id"] == planned.operation_graph.reconciliation_id
