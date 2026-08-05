@@ -30,7 +30,7 @@ services:
       - /tmp:size=64m,mode=1777
     networks:
       - tailnet-web-edge
-      - tailnet-ssh-edge
+      - tailnet-hermes-edge
     healthcheck:
       test: [CMD, tailscale, --socket=/var/run/tailscale/tailscaled.sock, status, --json]
       interval: 10s
@@ -56,7 +56,7 @@ services:
       caddy:
         condition: service_healthy
         restart: true
-      ai-devbox:
+      hermes-agent:
         condition: service_healthy
         restart: true
 
@@ -69,7 +69,7 @@ secrets:
 networks:
   # This edge also supplies the gateway's required outbound control-plane path.
   tailnet-web-edge: {}
-  tailnet-ssh-edge:
+  tailnet-hermes-edge:
     internal: true
 
 volumes:

@@ -368,8 +368,8 @@ def test_authenticated_claim_records_protocol_contact_for_metrics(agent_system) 
     )
 
 
-def test_unknown_claim_capability_is_rejected_without_contact(agent_system) -> None:
-    client, services, _, _ = agent_system
+def test_unknown_claim_capability_is_rejected_without_protocol_metadata(agent_system) -> None:
+    client, services, _, clock = agent_system
 
     response = client.post(
         "/agent/v1/claim",
@@ -389,7 +389,12 @@ def test_unknown_claim_capability_is_rejected_without_contact(agent_system) -> N
         assert node is not None
         assert node.capabilities == []
         assert node.protocol_version is None
-        assert node.last_seen_at is None
+        assert node.last_seen_at.replace(tzinfo=UTC) == clock.now
+        presence = session.scalar(
+            select(Observation).where(Observation.kind == "management-address")
+        )
+        assert presence is not None
+        assert presence.payload == {"address": "10.0.0.42"}
 
 
 def test_authenticated_heartbeat_preserves_claim_advertised_protocol_after_exact_fence_validation(
@@ -520,7 +525,10 @@ def test_exact_fenced_probe_success_writes_bounded_durable_health(agent_system) 
     with services.sessions() as session:
         observations = list(
             session.scalars(
-                select(Observation).where(Observation.node_id == NODE_A)
+                select(Observation).where(
+                    Observation.node_id == NODE_A,
+                    Observation.kind == "health",
+                )
             )
         )
         assert len(observations) == 1
@@ -567,7 +575,9 @@ def test_failed_probe_result_never_writes_health_observation(agent_system) -> No
         json=result,
     ).status_code == 204
     with services.sessions() as session:
-        assert session.scalar(select(Observation)) is None
+        assert session.scalar(
+            select(Observation).where(Observation.kind == "health")
+        ) is None
 
 
 def test_untrusted_and_stale_requests_do_not_record_agent_contact(agent_system) -> None:

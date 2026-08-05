@@ -7,7 +7,6 @@ from dgx_control.models import AgentNode, Base, Observation
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-
 NOW = datetime(2026, 8, 5, 12, 0, tzinfo=UTC)
 
 

@@ -3,7 +3,7 @@ set -eu
 
 socket=${TS_SOCKET_PATH:-/var/run/tailscale/tailscaled.sock}
 remaining=120
-expected_service_map='{"version":"0.0.1","services":{"svc:ai-devbox":{"endpoints":{"tcp:22":"tcp://ai-devbox:22"}},"svc:dgx-forge":{"endpoints":{"tcp:443":"http://caddy:8080"}}}}'
+expected_service_map='{"services":{"svc:dgx-forge":{"endpoints":{"tcp:443":"http://caddy:8080"}},"svc:hermes-api":{"endpoints":{"tcp:443":"http://hermes-agent:8642"}},"svc:hermes-dashboard":{"endpoints":{"tcp:443":"http://hermes-agent:9119"}}},"version":"0.0.1"}'
 
 ts() {
     tailscale --socket="${socket}" "$@"
@@ -31,7 +31,10 @@ serve_is_exact() {
     grep -Fq '"svc:dgx-forge":{"TCP":{"443":{"HTTPS":true}}' \
         /tmp/tailscale-serve-status.compact \
         && ! grep -Fq '"443":{"HTTP":true}' /tmp/tailscale-serve-status.compact \
-        && grep -Fq '"svc:ai-devbox":{"TCP":{"22":{"TCPForward":"ai-devbox:22"}}}' \
+        && ! grep -Fq '"TCPForward"' /tmp/tailscale-serve-status.compact \
+        && grep -Fq '"svc:hermes-api":{"TCP":{"443":{"HTTPS":true}}' \
+            /tmp/tailscale-serve-status.compact \
+        && grep -Fq '"svc:hermes-dashboard":{"TCP":{"443":{"HTTPS":true}}' \
             /tmp/tailscale-serve-status.compact \
         && [ "$(cat /tmp/tailscale-serve-config.compact)" = "${expected_service_map}" ]
 }
@@ -44,16 +47,18 @@ configure_services() {
     # reconciliation from an earlier gateway configuration.
     ts serve reset
     ts serve --service=svc:dgx-forge --https=443 http://caddy:8080
-    ts serve --service=svc:ai-devbox --tcp=22 tcp://ai-devbox:22
+    ts serve --service=svc:hermes-api --https=443 http://hermes-agent:8642
+    ts serve --service=svc:hermes-dashboard --https=443 http://hermes-agent:9119
     ts serve advertise svc:dgx-forge
-    ts serve advertise svc:ai-devbox
+    ts serve advertise svc:hermes-api
+    ts serve advertise svc:hermes-dashboard
 }
 
 if ! serve_is_exact; then
     configure_services
 fi
 if ! serve_is_exact; then
-    echo "ERROR: Tailscale Services do not have the exact HTTPS and SSH listeners." >&2
+    echo "ERROR: Tailscale Services do not have the exact HTTPS listeners." >&2
     exit 1
 fi
 

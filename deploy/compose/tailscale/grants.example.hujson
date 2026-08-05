@@ -3,7 +3,7 @@
     "tag:dgx-gateway": ["autogroup:admin"]
   },
   "groups": {
-    "group:ai-devbox-users": ["replace-with-your-login@github"]
+    "group:hermes-users": ["replace-with-your-login@github"]
   },
   "acls": [],
   "grants": [
@@ -13,15 +13,16 @@
       "ip": ["tcp:443"]
     },
     {
-      "src": ["group:ai-devbox-users"],
-      "dst": ["svc:ai-devbox"],
-      "ip": ["tcp:22"]
+      "src": ["group:hermes-users"],
+      "dst": ["svc:hermes-api", "svc:hermes-dashboard"],
+      "ip": ["tcp:443"]
     }
   ],
   "autoApprovers": {
     "services": {
       "svc:dgx-forge": ["tag:dgx-gateway"],
-      "svc:ai-devbox": ["tag:dgx-gateway"]
+      "svc:hermes-api": ["tag:dgx-gateway"],
+      "svc:hermes-dashboard": ["tag:dgx-gateway"]
     }
   },
   "tests": [
@@ -35,11 +36,11 @@
     },
     {
       "src": "replace-with-your-login@github",
-      "accept": ["svc:ai-devbox:22"]
+      "accept": ["svc:hermes-api:443", "svc:hermes-dashboard:443"]
     },
     {
       "src": "autogroup:member",
-      "deny": ["svc:ai-devbox:22"]
+      "deny": ["svc:hermes-api:443", "svc:hermes-dashboard:443"]
     }
   ]
 }

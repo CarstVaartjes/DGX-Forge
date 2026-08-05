@@ -3,69 +3,51 @@
 Use `deploy/compose/bin/backup-control-plane OUTPUT ENCRYPT_COMMAND`. The
 encryption command must read plaintext from standard input and write an
 authenticated encrypted stream to standard output. Plaintext production
-backups are not supported. The archive includes a PostgreSQL custom dump,
-Compose/Caddy configuration, and a canonical SHA-256 manifest.
+backups are not supported. The canonical, checksum-bound archive contains the
+PostgreSQL custom dump, Compose configuration, Hermes `data`, and Hermes
+`workspaces`. Hermes cache is deliberately excluded.
+
+Back up these service-host items in the same authenticated encrypted off-host
+generation:
+
+- the `tailscale-state` volume and both scoped OAuth credential files;
+- the external Hermes API-key file;
+- step-ca state and all online PKI material listed in the agent PKI runbook; and
+- expected repository/image digests and the Tailscale gateway node ID.
 
 Test every backup on a disposable Docker host. Inspection decrypts in memory,
-rejects links and unsafe paths, verifies the exact file set and every checksum,
-and rejects non-canonical or modified archives.
+rejects links and unsafe paths, verifies exact files and checksums, and rejects
+non-canonical or modified archives.
 
-Restore is destructive and therefore requires the literal `--apply` flag:
-
-```bash
-deploy/compose/bin/restore-control-plane BACKUP DECRYPT_COMMAND --apply
-```
-
-The script stops API and worker, obtains the offline maintenance boundary,
-verifies and stages the archive, then invokes `pg_restore --clean --if-exists`.
-Afterward, start the services, run health/readiness checks, inspect recent audit
-events, and compare the checked-out repository commit with the expected base.
-
-## Acceptance levels
-
-Run the portable, non-destructive acceptance on every change:
+Restore is destructive and requires the literal flag:
 
 ```bash
-scripts/accept-control-recovery --output inventory/reports/control-plane-recovery.json --json
+HERMES_DATA_ROOT=/srv/dgx-forge/hermes HERMES_UID=1100 HERMES_GID=1100 \
+  deploy/compose/bin/restore-control-plane BACKUP DECRYPT_COMMAND --apply
 ```
 
-This exercises canonical backup inspection, restoration into a distinct clean
-filesystem root, integrity checks, and fail-closed route state. It deliberately
-uses a transparent test transform and records that fact. It is not evidence of
-production encryption or physical host-loss recovery.
+The script stops API, worker, and Hermes; takes the offline lock; verifies and
+stages the archive; restores PostgreSQL; atomically installs the Hermes trees;
+restores owner-only permissions; and leaves Hermes stopped. Cache is neither
+restored nor required. Restore the API key and Tailscale/PKI state separately.
 
-Before a real release, repeat the Compose backup and restore with authenticated
-encryption on a second generic Docker-capable Linux machine. Retain only the
-sanitized report, image/repository digests, counts, and pass/fail results. Never
-copy database contents, credentials, prompts, or model responses into evidence.
+Run portable acceptance on every change:
 
-## Service-host state outside the database archive
+```bash
+scripts/accept-control-recovery \
+  --output inventory/reports/control-plane-recovery.json --json
+```
 
-The control-plane archive is only one part of a complete NAS backup. The same
-encrypted, authenticated off-host generation must also contain:
+Before release, repeat authenticated-encryption backup and restore on a second
+Docker-capable Linux host. Retain only sanitized evidence.
 
-- the `tailscale-state` Docker volume;
-- both Tailscale OAuth credential files;
-- `/srv/dgx-forge/ai-devbox/home`, `workspaces`, `cache`, and
-  `ssh-host-keys`;
-- the AI devbox authorized-public-key source file; and
-- step-ca state and all online PKI material listed in the agent PKI runbook.
+After restore, verify database and CA health, then start the normal project.
+Hermes must wait for fresh authenticated Spark presence, a successful accepted
+local model probe, and a new LiteLLM lease. Verify the three exact Tailscale
+Services, API-key continuity, session visibility, workspace contents, and the
+absence of cloud model configuration.
 
-Treat devbox home as credential-bearing secret data. Record the Tailscale node
-ID, both advertised Service names, and both devbox SSH host-key fingerprints in
-the encrypted manifest or a separately authenticated recovery record.
-
-On a replacement host, restore secret files and volumes before starting the
-one Compose project. Restore home/workspaces/cache as UID/GID 1100 and the SSH
-host-key directory as root with mode 0700. Start the stack, then verify database
-health, CA health, Tailscale status, both named Services, devbox key-only login,
-and the expected SSH fingerprints.
-
-If Tailscale state is unavailable, the file-backed scoped OAuth client performs
-unattended tagged re-enrollment and the exact service auto-approvals restore
-advertisements. Verify the new gateway node and revoke the orphaned old node.
-If OAuth is unavailable, recovery fails closed with no tailnet ingress.
-
-Loss of devbox host keys is different: it creates a new SSH identity and must be
-handled as a security-sensitive recovery event. Do not clear strict client
-host-key state until the new fingerprint has been verified out of band.
+If Tailscale state is unavailable, scoped OAuth performs unattended tagged
+re-enrollment and exact Service auto-approval. Verify the new node and revoke
+the old node. If OAuth is unavailable, ingress remains closed. If Hermes data
+is unavailable, repeat setup; never expose a LAN port or add a remote model.

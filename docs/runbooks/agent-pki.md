@@ -47,7 +47,7 @@ registry.dgx-forge.lan 10.0.0.2
 Caddy binds backend TLS only to `10.0.0.2:8443`. The NAS firewall permits that
 port only from `10.0.0.0/24`, preferably narrowed to reserved Spark leases.
 Enrollment exposes only `/agent/v1/enroll`; the agent and registry names require
-the issued mTLS identity. Human control, inference, Grafana, and devbox routes
+the issued mTLS identity. Human control, inference, Grafana, and Hermes routes
 are absent from this listener and remain tailnet-only.
 
 Install the Caddy backend trust anchor and stable DNS names during each manual

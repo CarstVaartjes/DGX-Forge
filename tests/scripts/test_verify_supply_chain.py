@@ -21,10 +21,13 @@ def _copy(tmp_path: Path) -> Path:
         "deploy/compose/tailscale/compose.yaml",
         "deploy/compose/tailscale/configure.sh",
         "deploy/compose/tailscale/grants.example.hujson",
-        "deploy/compose/ai-devbox/compose.yaml",
-        "deploy/compose/ai-devbox/Dockerfile",
-        "deploy/compose/ai-devbox/entrypoint.sh",
-        "deploy/compose/ai-devbox/sshd_config",
+        "deploy/compose/hermes-agent/compose.yaml",
+        "deploy/compose/hermes-agent/Dockerfile",
+        "deploy/compose/hermes-agent/entrypoint.sh",
+        "deploy/compose/bin/harden-hermes-egress",
+        "deploy/compose/bin/backup-control-plane",
+        "deploy/compose/bin/restore-control-plane",
+        "config/hermes-agent-policy.toml",
         "deploy/compose/litellm/config.yaml",
         "deploy/compose/litellm/config_supervisor.py",
         "deploy/compose/litellm/entrypoint.sh",
@@ -78,24 +81,35 @@ def test_verifier_rejects_floating_image(tmp_path: Path) -> None:
     assert "digest" in result.stderr or "floating" in result.stderr
 
 
-def test_verifier_rejects_floating_ai_devbox_base(tmp_path: Path) -> None:
+def test_verifier_rejects_floating_hermes_agent_base(tmp_path: Path) -> None:
     repository = _copy(tmp_path)
-    dockerfile = repository / "deploy/compose/ai-devbox/Dockerfile"
+    dockerfile = repository / "deploy/compose/hermes-agent/Dockerfile"
     dockerfile.write_text(
         dockerfile.read_text().replace(
-            "ubuntu:24.04@sha256:561618e2c15bf2397621dd04f96926663a3b5616c189cf7e38db7e82f5c538ea",
-            "ubuntu:24.04",
+            "nousresearch/hermes-agent:v2026.7.20@sha256:f7b35053268f532f98955195c909f15a230470fbcbdacaa9fdecb95707dad04a",
+            "nousresearch/hermes-agent:v2026.7.20",
         )
     )
 
     result = subprocess.run(
         [SCRIPT, "--root", repository, "--generate"],
         capture_output=True,
+        check=False,
         text=True,
     )
 
     assert result.returncode != 0
-    assert "ai-devbox" in result.stderr and "digest" in result.stderr
+    assert "Hermes" in result.stderr and "digest" in result.stderr
+
+
+def test_image_lock_contains_only_the_pinned_hermes_runtime() -> None:
+    lock = json.loads((ROOT / "deploy/compose/images.lock.json").read_text())
+
+    assert lock["images"]["hermes-agent"] == (
+        "nousresearch/hermes-agent:v2026.7.20@sha256:"
+        "f7b35053268f532f98955195c909f15a230470fbcbdacaa9fdecb95707dad04a"
+    )
+    assert not any("ai-devbox" in name for name in lock["build_bases"])
 
 
 def test_verifier_rejects_stale_sbom_after_lock_change(tmp_path: Path) -> None:

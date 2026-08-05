@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
+import re
 import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from .routes import RouteState
 
@@ -18,8 +21,19 @@ class LiteLlmPolicyError(ValueError):
 
 
 @dataclass(frozen=True)
+class LiteLlmDeployment:
+    model_name: str
+    workload: str
+    api_base: str
+    priority: int
+    requests_per_minute: int
+    tokens_per_minute: int
+
+
+@dataclass(frozen=True)
 class LiteLlmPolicy:
     models: Mapping[str, Mapping[str, int]]
+    deployments: tuple[LiteLlmDeployment, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -48,7 +62,7 @@ class LiteLlmPublisher:
         unknown = set(models) - set(routes.aliases)
         if unknown:
             raise LiteLlmPolicyError("LiteLLM policy contains models outside published aliases")
-        if not models:
+        if not models and not policy.deployments:
             raise LiteLlmPolicyError("LiteLLM policy must publish at least one model")
         model_list = []
         for alias in sorted(models):
@@ -68,6 +82,40 @@ class LiteLlmPublisher:
                     "tpm": tpm,
                 },
             })
+        deployments = sorted(policy.deployments, key=lambda item: item.priority)
+        if len({item.priority for item in deployments}) != len(deployments):
+            raise LiteLlmPolicyError("Hermes deployment priorities must be unique")
+        if len({item.workload for item in deployments}) != len(deployments):
+            raise LiteLlmPolicyError("Hermes deployment workloads must be unique")
+        for deployment in deployments:
+            self._validate_hermes_deployment(deployment)
+            model_list.append({
+                "model_name": deployment.model_name,
+                "litellm_params": {
+                    "model": f"openai/{deployment.workload}",
+                    "api_base": deployment.api_base,
+                    "api_key": "os.environ/LITELLM_UPSTREAM_KEY",
+                    "order": deployment.priority,
+                    "rpm": deployment.requests_per_minute,
+                    "tpm": deployment.tokens_per_minute,
+                },
+            })
+        router_settings = {
+            "enable_pre_call_checks": True,
+            "routing_strategy": "simple-shuffle",
+        }
+        if deployments:
+            router_settings.update({
+                "allowed_fails": 0,
+                "num_retries": 1,
+                "retry_policy": {
+                    "AuthenticationErrorRetries": 0,
+                    "BadRequestErrorRetries": 0,
+                    "ContentPolicyViolationErrorRetries": 0,
+                    "RateLimitErrorRetries": 1,
+                    "TimeoutErrorRetries": 1,
+                },
+            })
         document = {
             "general_settings": {
                 "database_url": "os.environ/LITELLM_DATABASE_URL",
@@ -81,9 +129,45 @@ class LiteLlmPublisher:
                 "failure_callback": [],
             },
             "model_list": model_list,
-            "router_settings": {"enable_pre_call_checks": True, "routing_strategy": "simple-shuffle"},
+            "router_settings": router_settings,
         }
         return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+    @staticmethod
+    def _validate_hermes_deployment(deployment: LiteLlmDeployment) -> None:
+        if deployment.model_name != "hermes-agent":
+            raise LiteLlmPolicyError("Hermes deployment alias must be hermes-agent")
+        if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,62}", deployment.workload):
+            raise LiteLlmPolicyError("Hermes deployment workload is invalid")
+        if isinstance(deployment.priority, bool) or not isinstance(deployment.priority, int) or deployment.priority < 1:
+            raise LiteLlmPolicyError("Hermes deployment priority is invalid")
+        for value in (deployment.requests_per_minute, deployment.tokens_per_minute):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+                raise LiteLlmPolicyError("Hermes deployment quota is invalid")
+        if deployment.requests_per_minute > 100_000 or deployment.tokens_per_minute > 100_000_000:
+            raise LiteLlmPolicyError("Hermes deployment quota is invalid")
+        try:
+            parsed = urlsplit(deployment.api_base)
+            address = ipaddress.ip_address(parsed.hostname or "")
+            port = parsed.port
+        except ValueError as error:
+            raise LiteLlmPolicyError("Hermes deployment must use a local IP URL") from error
+        if (
+            parsed.scheme != "http"
+            or not isinstance(address, ipaddress.IPv4Address)
+            or not address.is_private
+            or address.is_loopback
+            or address.is_link_local
+            or address.is_multicast
+            or address.is_unspecified
+            or port is None
+            or parsed.path.rstrip("/") != "/v1"
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise LiteLlmPolicyError("Hermes deployment must use a local IP URL")
 
     @staticmethod
     def render_empty() -> bytes:

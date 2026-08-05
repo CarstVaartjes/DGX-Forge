@@ -1,0 +1,102 @@
+x-hermes-service: &hermes-service
+  build:
+    context: .
+    dockerfile: Dockerfile
+    args:
+      HERMES_IMAGE: ${HERMES_IMAGE:-nousresearch/hermes-agent:v2026.7.20@sha256:f7b35053268f532f98955195c909f15a230470fbcbdacaa9fdecb95707dad04a}
+      HERMES_UID: ${HERMES_UID:-1100}
+      HERMES_GID: ${HERMES_GID:-1100}
+  image: local/hermes-agent:managed
+  logging:
+    driver: local
+    options:
+      max-size: 10m
+      max-file: "5"
+  read_only: true
+  working_dir: /workspace
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  cap_add: [CHOWN, DAC_OVERRIDE, FOWNER, SETGID, SETUID]
+  cpus: ${HERMES_CPUS:-4}
+  mem_limit: ${HERMES_MEMORY_LIMIT:-8g}
+  mem_reservation: ${HERMES_MEMORY_RESERVATION:-4g}
+  shm_size: ${HERMES_SHM_SIZE:-2g}
+  tmpfs:
+    - /run:size=64m,mode=755,exec
+    - /tmp:size=2g,mode=1777
+    - /var/tmp:size=1g,mode=1777
+  environment: &hermes-environment
+    API_SERVER_CORS_ORIGINS: ${HERMES_DASHBOARD_ORIGIN:?set the exact Hermes dashboard HTTPS origin}
+    API_SERVER_ENABLED: "true"
+    API_SERVER_HOST: 0.0.0.0
+    API_SERVER_MODEL_NAME: hermes-agent
+    HERMES_DASHBOARD: "1"
+    HERMES_DASHBOARD_BASIC_AUTH_USERNAME: hermes
+    HERMES_GID: ${HERMES_GID:-1100}
+    HERMES_UID: ${HERMES_UID:-1100}
+    MESSAGING_CWD: /workspace
+    OPENAI_BASE_URL: http://litellm:4000/v1
+  secrets:
+    - hermes-api-key
+  volumes: &hermes-volumes
+    - type: bind
+      source: ${HERMES_DATA_ROOT:?set Hermes data root}/data
+      target: /opt/data
+    - type: bind
+      source: ${HERMES_DATA_ROOT:?set Hermes data root}/workspaces
+      target: /workspace
+    - type: bind
+      source: ${HERMES_DATA_ROOT:?set Hermes data root}/cache
+      target: /opt/data/home/.cache
+
+services:
+  hermes-agent:
+    <<: *hermes-service
+    hostname: hermes-agent
+    restart: unless-stopped
+    networks:
+      - tailnet-hermes-edge
+      - hermes-inference
+      - hermes-egress
+    depends_on:
+      litellm:
+        condition: service_healthy
+        restart: true
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - >-
+          python -c "import pathlib,urllib.request;
+          key=pathlib.Path('/run/secrets/hermes-api-key').read_text().strip();
+          urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8642/health',headers={'Authorization':'Bearer '+key}),timeout=3);
+          urllib.request.urlopen('http://127.0.0.1:9119/',timeout=3)"
+      interval: 15s
+      timeout: 8s
+      retries: 12
+      start_period: 30s
+
+  hermes-setup:
+    <<: *hermes-service
+    profiles: [setup]
+    restart: "no"
+    stdin_open: true
+    tty: true
+    command: [setup]
+    networks:
+      - hermes-inference
+      - hermes-egress
+    depends_on:
+      litellm:
+        condition: service_healthy
+
+secrets:
+  hermes-api-key:
+    file: ${HERMES_API_KEY_FILE:?set Hermes API key secret file}
+
+networks:
+  tailnet-hermes-edge:
+    internal: true
+  hermes-inference:
+    internal: true
+  hermes-egress: {}
