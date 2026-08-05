@@ -22,17 +22,19 @@ class DashboardService:
         protocol_minimum: int = 1,
         protocol_maximum: int = 1,
         agent_online_window_seconds: int = 150,
+        health_stale_after_seconds: int = 300,
     ) -> None:
         if protocol_minimum < 1 or protocol_maximum < protocol_minimum:
             raise ValueError("supported protocol range is invalid")
-        if agent_online_window_seconds <= 0:
-            raise ValueError("agent online window must be positive")
+        if agent_online_window_seconds <= 0 or health_stale_after_seconds <= 0:
+            raise ValueError("observation windows must be positive")
         self._repository = repository
         self._sessions = sessions
         self._clock = clock
         self._protocol_minimum = protocol_minimum
         self._protocol_maximum = protocol_maximum
         self._agent_online_window_seconds = agent_online_window_seconds
+        self._health_stale_after_seconds = health_stale_after_seconds
 
     def fleet(self) -> dict[str, object]:
         commit = self._repository.head()
@@ -106,17 +108,30 @@ class DashboardService:
             certificate_expires_at = None if certificate is None else certificate.not_after
             if certificate_expires_at is not None and certificate_expires_at.tzinfo is None:
                 certificate_expires_at = certificate_expires_at.replace(tzinfo=UTC)
+            probe_age = (
+                None
+                if observed_at is None
+                else max(0.0, (current - observed_at).total_seconds())
+            )
             nodes.append({
                 "id": node_id,
                 "display_name": str(raw.get("display_name", node_id)),
                 "hostname": str(raw.get("hostname", "")),
                 "lifecycle": str(raw.get("lifecycle", "unknown")),
-                "healthy": health.get("status") in {"healthy", "warning"} if isinstance(health, Mapping) else None,
+                "healthy": (
+                    health.get("status") in {"healthy", "warning"}
+                    if observed_at is not None and isinstance(health, Mapping)
+                    else None
+                ),
+                "stale": (
+                    probe_age is None
+                    or probe_age > self._health_stale_after_seconds
+                ),
                 "labels": dict(raw.get("labels", {})) if isinstance(raw.get("labels"), Mapping) else {},
                 "profile": active_profiles.get(node_id),
                 "memory_available_bytes": health.get("memory_available_bytes", 0) if isinstance(health, Mapping) else 0,
                 "disk_available_bytes": health.get("disk_available_bytes", 0) if isinstance(health, Mapping) else 0,
-                "probe_age_seconds": max(0.0, (current - observed_at).total_seconds()) if observed_at is not None else 0.0,
+                "probe_age_seconds": probe_age,
                 "agent_state": agent_node.state if agent_node is not None else "unregistered",
                 "last_seen_at": None if agent_last_seen_at is None else agent_last_seen_at.isoformat(),
                 "last_seen_age_seconds": None if agent_age is None else max(0.0, agent_age),

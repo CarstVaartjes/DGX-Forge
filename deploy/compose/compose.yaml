@@ -93,6 +93,7 @@ services:
     volumes:
       - ${REPOSITORY_PATH:?set repository path}:/repository
       - control-state:/state
+      - route-publications:/routes:ro
     tmpfs: [/tmp]
     networks: [application, data, agent-proxy, worker-authority]
     depends_on:

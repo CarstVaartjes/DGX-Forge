@@ -12,7 +12,18 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from dgx_agent_protocol import canonical_message
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import (
+    Body,
+    Depends,
+    FastAPI,
+    HTTPException,
+    Request,
+    Response,
+    status,
+)
+from fastapi import (
+    Path as ApiPath,
+)
 from fastapi.encoders import jsonable_encoder
 from fastapi.exception_handlers import (
     http_exception_handler,
@@ -40,6 +51,20 @@ from .auth import (
     TrustedProxyAgentIdentityMiddleware,
 )
 from .metrics import MetricsRegistry
+from .operation_api import (
+    AgentsResponse,
+    EndpointResponse,
+    FleetStatusResponse,
+    JobDetailResponse,
+    JobLogsResponse,
+    JobResumeResponse,
+    JobsResponse,
+    OperationApiServices,
+    ReconciliationAcceptedResponse,
+    ReconciliationPlanResponse,
+    job_response,
+    plan_response,
+)
 from .proposals import DocumentChange
 from .reconcile import IneligibleCommit
 from .repository import RepositoryPolicyError
@@ -208,6 +233,7 @@ def create_app(
     worker_authority: Any | None = None,
     worker_api_token: bytes = b"",
     generic_jobs_enabled: bool = False,
+    operations: OperationApiServices | None = None,
 ) -> FastAPI:
     app = FastAPI(title="DGX Forge Control", version="1.0", docs_url=None, redoc_url=None)
 
@@ -325,9 +351,58 @@ def create_app(
             metrics_refresh()
         return Response(metrics.render(), media_type="application/openmetrics-text; version=1.0.0; charset=utf-8")
 
-    @app.get("/api/v1/fleet")
+    @app.get(
+        "/api/v1/fleet",
+        response_model=FleetStatusResponse,
+        operation_id="getFleetStatus",
+    )
     def fleet_view(_actor: Actor = authenticated_actor) -> Mapping[str, object]:
         return fleet()
+
+    @app.get(
+        "/api/v1/nodes/status",
+        response_model=FleetStatusResponse,
+        operation_id="getNodeStatuses",
+    )
+    def node_status_view(_actor: Actor = authenticated_actor) -> Mapping[str, object]:
+        return fleet()
+
+    @app.get(
+        "/api/v1/endpoints/{alias}",
+        response_model=EndpointResponse,
+        operation_id="getPublishedEndpoint",
+    )
+    def endpoint_view(
+        alias: str = ApiPath(pattern=r"^[a-z0-9][a-z0-9._-]{0,62}$"),
+        _actor: Actor = authenticated_actor,
+    ) -> Mapping[str, object]:
+        if operations is None:
+            raise HTTPException(
+                status_code=503, detail="endpoint publication unavailable"
+            )
+        try:
+            return operations.endpoint(alias)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="endpoint not found") from None
+        except RuntimeError:
+            raise HTTPException(
+                status_code=503, detail="endpoint publication unavailable"
+            ) from None
+
+    @app.get(
+        "/api/v1/agents",
+        response_model=AgentsResponse,
+        operation_id="listAgents",
+    )
+    def agent_list(_actor: Actor = authenticated_actor) -> dict[str, object]:
+        if operations is None:
+            raise HTTPException(status_code=503, detail="agent projection unavailable")
+        try:
+            return {"agents": list(operations.agents())}
+        except RuntimeError:
+            raise HTTPException(
+                status_code=503, detail="agent projection unavailable"
+            ) from None
 
     @app.get("/api/v1/repository")
     def repository_view(commit: str | None = None, _actor: Actor = authenticated_actor) -> dict[str, object]:
@@ -382,13 +457,11 @@ def create_app(
         audits.append(AuditRecord(request.state.request_id, authenticated.subject, "repository.change.submit", None, ()))
         return dict(result)
 
-    @app.post("/api/v1/reconciliations/plan")
-    def reconcile_plan(body: ReconciliationPlanRequest, authenticated: Actor = authenticated_actor) -> dict[str, object]:
-        require_mutation_role(authenticated, "/api/v1/reconciliations/plan")
+    def planned_response(commit: str, profile_id: str) -> ReconciliationPlanResponse:
         if admin is None or admin.reconciler is None:
             raise HTTPException(status_code=503, detail="reconciliation unavailable")
         try:
-            plan = admin.reconciler.plan(body.commit, body.profile_id)
+            return plan_response(admin.reconciler.plan(commit, profile_id))
         except IneligibleCommit:
             raise HTTPException(
                 status_code=409, detail="commit is not eligible"
@@ -401,35 +474,69 @@ def create_app(
             raise HTTPException(
                 status_code=422, detail="desired state cannot be planned"
             ) from None
-        return {
-            "commit": plan.commit, "digest": plan.digest, "targets": list(plan.targets),
-            "placements": dict(plan.placements), "routes": dict(plan.routes),
-            "releases": dict(plan.releases), "input_digests": dict(plan.input_digests),
-            "reconciliation_id": plan.operation_graph.reconciliation_id,
-            "operation_graph": plan.operation_graph.document,
-            "agent_protocol_range": list(plan.agent_protocol_range),
-        }
 
-    @app.post("/api/v1/reconciliations", status_code=status.HTTP_202_ACCEPTED)
+    @app.post(
+        "/api/v1/reconciliations/plan",
+        response_model=ReconciliationPlanResponse,
+        operation_id="planReconciliation",
+    )
+    def reconcile_plan(body: ReconciliationPlanRequest, authenticated: Actor = authenticated_actor) -> ReconciliationPlanResponse:
+        require_mutation_role(authenticated, "/api/v1/reconciliations/plan")
+        return planned_response(body.commit, body.profile_id)
+
+    @app.post(
+        "/api/v1/profiles/{profile_id}/plan",
+        response_model=ReconciliationPlanResponse,
+        operation_id="planProfileReconciliation",
+    )
+    def profile_reconcile_plan(
+        profile_id: str = ApiPath(pattern=r"^[a-z0-9][a-z0-9._-]{0,62}$"),
+        body: None = Body(default=None),
+        authenticated: Actor = authenticated_actor,
+    ) -> ReconciliationPlanResponse:
+        del body
+        require_mutation_role(
+            authenticated, "/api/v1/profiles/{profile_id}/plan"
+        )
+        if admin is None:
+            raise HTTPException(status_code=503, detail="reconciliation unavailable")
+        return planned_response(admin.repository.head(), profile_id)
+
+    @app.post(
+        "/api/v1/reconciliations",
+        response_model=ReconciliationAcceptedResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+        operation_id="applyReconciliation",
+    )
     def reconcile(body: ReconciliationRequest, request: Request, authenticated: Actor = authenticated_actor) -> dict[str, object]:
         require_mutation_role(authenticated, "/api/v1/reconciliations")
         if admin is None or admin.reconciler is None:
             raise HTTPException(status_code=503, detail="reconciliation unavailable")
         try:
-            return dict(
+            result = dict(
                 admin.reconciler.enqueue(
                     body.plan_digest,
                     authenticated.subject,
                     request.state.request_id,
                 )
             )
+            audits.append(
+                AuditRecord(
+                    request.state.request_id,
+                    authenticated.subject,
+                    "reconciliation.apply",
+                    str(result.get("base_commit")),
+                    (),
+                )
+            )
+            return result
         except IneligibleCommit:
             raise HTTPException(
                 status_code=409, detail="commit is not eligible"
             ) from None
         except (TypeError, ValueError):
             raise HTTPException(
-                status_code=404, detail="reconciliation plan is unavailable"
+                status_code=409, detail="reconciliation plan digest is stale"
             ) from None
 
     @app.post(
@@ -477,7 +584,12 @@ def create_app(
             "state": cancellation.state,
         }
 
-    @app.post("/api/v1/jobs", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
+    @app.post(
+        "/api/v1/jobs",
+        response_model=JobResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+        include_in_schema=False,
+    )
     def enqueue(body: JobRequest, request: Request, authenticated: Actor = authenticated_actor) -> JobResponse:
         require_mutation_role(authenticated, "/api/v1/jobs")
         if not generic_jobs_enabled:
@@ -494,7 +606,11 @@ def create_app(
         audits.append(AuditRecord(request.state.request_id, authenticated.subject, f"job.enqueue:{body.kind}", body.base_commit, tuple(body.targets)))
         return JobResponse(id=str(job.id), state=str(job.state))
 
-    @app.get("/api/v1/jobs")
+    @app.get(
+        "/api/v1/jobs",
+        response_model=JobsResponse,
+        operation_id="listJobs",
+    )
     def jobs_view(_actor: Actor = authenticated_actor) -> dict[str, object]:
         return {"jobs": [{"id": str(job.id), "state": str(job.state), "kind": str(job.kind)} for job in jobs.list()]}
 
@@ -505,15 +621,60 @@ def create_app(
             for event in audits.list()
         ]}
 
-    @app.get("/api/v1/jobs/{job_id}", response_model=JobResponse)
-    def job_view(job_id: str, _actor: Actor = authenticated_actor) -> JobResponse:
+    @app.get(
+        "/api/v1/jobs/{job_id}",
+        response_model=JobDetailResponse,
+        operation_id="getJob",
+    )
+    def job_view(job_id: str, _actor: Actor = authenticated_actor) -> JobDetailResponse:
         try:
             job = jobs.get(job_id)
         except KeyError:
             raise HTTPException(status_code=404, detail="job not found") from None
-        return JobResponse(id=str(job.id), state=str(job.state))
+        projected = () if operations is None else operations.job_operations(job_id)
+        return job_response(job, projected)
 
-    @app.get("/api/v1/jobs/{job_id}/logs")
+    @app.post(
+        "/api/v1/jobs/{job_id}/resume",
+        response_model=JobResumeResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+        operation_id="resumeJob",
+    )
+    def resume_job(
+        request: Request,
+        job_id: str,
+        body: None = Body(default=None),
+        authenticated: Actor = authenticated_actor,
+    ) -> JobResumeResponse:
+        del body
+        route = "/api/v1/jobs/{job_id}/resume"
+        require_mutation_role(authenticated, route)
+        if operations is None:
+            raise HTTPException(status_code=503, detail="job resume unavailable")
+        try:
+            operations.resume_job(job_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="job not found") from None
+        except ValueError:
+            raise HTTPException(
+                status_code=409, detail="job is not waiting for operator"
+            ) from None
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                authenticated.subject,
+                "job.resume",
+                None,
+                (),
+            )
+        )
+        return JobResumeResponse(id=job_id, state="queued")
+
+    @app.get(
+        "/api/v1/jobs/{job_id}/logs",
+        response_model=JobLogsResponse,
+        operation_id="listJobLogs",
+    )
     def job_log_list(job_id: str, authenticated: Actor = authenticated_actor) -> dict[str, object]:
         if authenticated.role not in {"operator", "administrator"}:
             raise HTTPException(status_code=403, detail="insufficient role")
@@ -564,6 +725,7 @@ def production_app() -> FastAPI:
     from .metrics import MetricsRegistry, OperationalMetricsCollector
     from .models import Job
     from .offline import OnlineLock
+    from .operation_api import durable_operation_services
     from .orchestration import ReconciliationOrchestrator
     from .proposals import ProposalService
     from .reconcile import ChangeService, Reconciler
@@ -687,6 +849,11 @@ def production_app() -> FastAPI:
         trusted_agent_proxy_auth=settings.agent_proxy_auth,
         worker_authority=worker_authority,
         worker_api_token=settings.worker_api_token,
+        operations=durable_operation_services(
+            sessions,
+            Path("/routes"),
+            clock=clock,
+        ),
     )
     web_root = Path(__file__).resolve().parent / "web"
     if web_root.is_dir():

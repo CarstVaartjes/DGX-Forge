@@ -52,13 +52,19 @@ def test_dashboard_joins_repository_fleet_with_latest_observation(tmp_path) -> N
     sessions = sessionmaker(engine, expire_on_commit=False)
     with sessions.begin() as session:
         session.add(Observation(node_id="spk_00000000000000000000000000000001", kind="health", payload={"status": "healthy"}, observed_at=datetime(2026, 8, 3, tzinfo=UTC)))
-    result = DashboardService(Repository(), sessions).fleet()
+    result = DashboardService(
+        Repository(),
+        sessions,
+        clock=lambda: datetime(2026, 8, 3, 0, 5, 1, tzinfo=UTC),
+    ).fleet()
     assert result["commit"] == "a" * 40
     node = result["nodes"][0]
     assert {key: node[key] for key in ("id", "display_name", "hostname", "lifecycle", "healthy", "labels", "profile")} == {
         "id": "spk_00000000000000000000000000000001", "display_name": "Alpha", "hostname": "alpha", "lifecycle": "ready", "healthy": True, "labels": {"zone": "lab"}, "profile": None,
     }
     assert "management" not in result["nodes"][0]
+    assert node["probe_age_seconds"] == 301.0
+    assert node["stale"] is True
 
 
 def test_dashboard_projects_agent_availability_without_addresses(tmp_path) -> None:
@@ -117,6 +123,9 @@ def test_dashboard_projects_agent_availability_without_addresses(tmp_path) -> No
     assert nodes["Missing"]["agent_state"] == "unregistered"
     assert nodes["Missing"]["agent_last_seen_at"] is None
     assert nodes["Missing"]["agent_online"] is False
+    assert nodes["Missing"]["healthy"] is None
+    assert nodes["Missing"]["stale"] is True
+    assert nodes["Missing"]["probe_age_seconds"] is None
     encoded = json.dumps(result, sort_keys=True)
     assert "10.0.0.42" not in encoded
     assert "management-address" not in encoded
