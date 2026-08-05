@@ -50,8 +50,9 @@ _PEM_BLOCK = re.compile(
 _AUTHORIZATION = re.compile(r"(?i)(authorization\s*:\s*)(?:bearer|basic)\s+[^\s,;]+")
 _BEARER = re.compile(r"(?i)\b(?:bearer|basic)\s+[^\s,;]+")
 _SENSITIVE_ASSIGNMENT = re.compile(
-    r"(?i)\b(authorization|api[_-]?key|password|private[_-]?key|"
-    r"secret|token|credential)\b(\s*[:=]\s*)"
+    r"(?i)\b(authorization|api[_-]?key|client[_-]?certificate|"
+    r"certificate(?:[_-]?(?:body|chain|data))?|credential|password|"
+    r"private[_-]?key|secret|token|x509)\b(\s*[:=]\s*)"
     r"(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
 )
 _URL_CREDENTIALS = re.compile(r"(?i)(https?://)[^/@\s]+@")
@@ -81,10 +82,14 @@ class ControlTimeout(ControlClientError):
 
 
 class JobTerminalError(ControlClientError):
-    def __init__(self, job: JobDetailResponse) -> None:
+    def __init__(
+        self, job: JobDetailResponse, *, sensitive_values: tuple[str, ...] = ()
+    ) -> None:
         if job.status_reason is not None:
             job.status_reason = _sanitize_remote_text(
-                job.status_reason, "job failed without a safe reason"
+                job.status_reason,
+                "job failed without a safe reason",
+                sensitive_values=sensitive_values,
             )
         self.job = job
         self.reason = job.status_reason
@@ -108,9 +113,15 @@ class ControlHTTPError(ControlClientError):
         status_code: int,
         detail: str,
         retry_after_seconds: int | None = None,
+        *,
+        sensitive_values: tuple[str, ...] = (),
     ) -> None:
         self.status_code = status_code
-        self.detail = _sanitize_remote_text(detail, "control API request failed")
+        self.detail = _sanitize_remote_text(
+            detail,
+            "control API request failed",
+            sensitive_values=sensitive_values,
+        )
         self.retry_after_seconds = retry_after_seconds
         super().__init__(f"control API returned HTTP {status_code}: {self.detail}")
 
@@ -156,10 +167,18 @@ def _bounded_retry_after(value: str | None) -> int | None:
     return max(1, min(30, seconds))
 
 
-def _sanitize_remote_text(value: object, fallback: str) -> str:
+def _sanitize_remote_text(
+    value: object,
+    fallback: str,
+    *,
+    sensitive_values: tuple[str, ...] = (),
+) -> str:
     if not isinstance(value, str) or not value:
         return fallback
     text = value.replace("\x00", "")
+    for sensitive_value in sorted(set(sensitive_values), key=len, reverse=True):
+        if sensitive_value:
+            text = text.replace(sensitive_value, "<redacted>")
     text = _PEM_BLOCK.sub("<redacted pem>", text)
     if "-----BEGIN " in text:
         text = text.split("-----BEGIN ", 1)[0] + "<redacted pem>"
@@ -184,10 +203,10 @@ def _read_token_file(token_file: Path) -> str:
     flags = os.O_RDONLY
     flags |= getattr(os, "O_CLOEXEC", 0)
     flags |= getattr(os, "O_NOINHERIT", 0)
-    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise ControlClientError("control token file cannot be opened safely")
     flags |= no_follow
-    if not no_follow and token_file.is_symlink():
-        raise ControlClientError("control token must be a regular non-symlink file")
 
     descriptor = -1
     try:
@@ -233,7 +252,8 @@ def _read_token_file(token_file: Path) -> str:
 
 
 class _OpenerTransport(httpx.BaseTransport):
-    def __init__(self, timeout: float) -> None:
+    def __init__(self, opener: Callable[..., object], timeout: float) -> None:
+        self._opener = opener
         self._timeout = timeout
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
@@ -244,7 +264,7 @@ class _OpenerTransport(httpx.BaseTransport):
             method=request.method,
         )
         try:
-            response_context = _open_without_redirects(outgoing, timeout=self._timeout)
+            response_context = self._opener(outgoing, timeout=self._timeout)
         except urllib.error.HTTPError as error:
             response_context = error
         except (OSError, urllib.error.URLError) as error:
@@ -284,11 +304,8 @@ class _RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def _open_without_redirects(
-    request: urllib.request.Request, *, timeout: float
-) -> object:
-    opener = urllib.request.build_opener(_RejectRedirectHandler())
-    return opener.open(request, timeout=timeout)
+def _redirect_denied_opener() -> Callable[..., object]:
+    return urllib.request.build_opener(_RejectRedirectHandler()).open
 
 
 class ControlClient:
@@ -297,8 +314,7 @@ class ControlClient:
         base_url: str,
         token_file: Path,
         *,
-        opener: Callable[..., object] = urllib.request.urlopen,
-        transport: httpx.BaseTransport | None = None,
+        opener: Callable[..., object] | None = None,
         timeout_seconds: float = 15,
     ) -> None:
         parsed = urllib.parse.urlsplit(base_url)
@@ -317,8 +333,8 @@ class ControlClient:
         token = _read_token_file(token_file)
         self._base = base_url.rstrip("/")
         self._token = token
-        self._opener = opener
-        self._transport = transport or _OpenerTransport(timeout_seconds)
+        self._opener = opener if opener is not None else _redirect_denied_opener()
+        self._transport = _OpenerTransport(self._opener, timeout_seconds)
         self._timeout = timeout_seconds
 
     def _generated_client(
@@ -352,6 +368,7 @@ class ControlClient:
             status_code,
             detail,
             _bounded_retry_after(headers.get("retry-after")),
+            sensitive_values=(self._token,),
         )
 
     def _call_generated(
@@ -365,6 +382,16 @@ class ControlClient:
         try:
             with self._generated_client(transport, headers) as client:
                 response = operation(*args, client=client, **kwargs)
+        except RecursionError:
+            if transport.response is not None:
+                self._raise_http_status(
+                    transport.response.status_code,
+                    None,
+                    transport.response.headers,
+                )
+            raise ControlMalformedResponse(
+                "control API response exceeds the nesting limit"
+            ) from None
         except (UnicodeDecodeError, json.JSONDecodeError):
             if transport.response is not None:
                 self._raise_http_status(
@@ -501,9 +528,9 @@ class ControlClient:
             if result.state == "succeeded":
                 return result
             if result.state in {"expired", "failed"}:
-                raise JobFailed(result)
+                raise JobFailed(result, sensitive_values=(self._token,))
             if result.state == "waiting-for-operator":
-                raise JobWaitingForOperator(result)
+                raise JobWaitingForOperator(result, sensitive_values=(self._token,))
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise ControlTimeout(job_id, result)

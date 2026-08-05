@@ -2,9 +2,10 @@ import io
 import json
 import time
 import urllib.error
+import urllib.response
+from email.message import Message
 from pathlib import Path
 
-import httpx
 import pytest
 
 from spark_profiles import control_client
@@ -49,39 +50,36 @@ class Response:
         pass
 
 
-class GeneratedTransport(httpx.BaseTransport):
-    def __init__(self, opener) -> None:
-        self._opener = opener
+class RedirectingProtocolHandler(urllib.request.BaseHandler):
+    handler_order = 100
 
-    def handle_request(self, request: httpx.Request) -> httpx.Response:
-        outgoing = urllib.request.Request(
-            str(request.url),
-            data=request.content or None,
-            headers=dict(request.headers),
-            method=request.method,
+    def __init__(self, location: str) -> None:
+        self.location = location
+        self.calls: list[urllib.request.Request] = []
+
+    def default_open(self, request: urllib.request.Request):
+        self.calls.append(request)
+        headers = Message()
+        headers["content-type"] = "application/json"
+        if len(self.calls) == 1:
+            headers["location"] = self.location
+            status = 302
+            body = b'{"detail":"redirected"}'
+        else:
+            status = 200
+            body = b'{"ok":true}'
+        response = urllib.response.addinfourl(
+            io.BytesIO(body), headers, request.full_url, status
         )
-        try:
-            response_context = self._opener(outgoing, timeout=15)
-        except urllib.error.HTTPError as error:
-            response_context = error
-        except (OSError, urllib.error.URLError) as error:
-            raise control_client.ControlTransportError(
-                f"control API request failed: {type(error).__name__}"
-            ) from None
-        with response_context as response:
-            return httpx.Response(
-                response.status,
-                content=response.read(1_048_577),
-                headers=response.headers,
-                request=request,
-            )
+        response.msg = "Found" if status == 302 else "OK"
+        return response
 
 
 def generated_client(tmp_path: Path, opener) -> ControlClient:
     return ControlClient(
         "https://control.invalid",
         token_file(tmp_path),
-        transport=GeneratedTransport(opener),
+        opener=opener,
     )
 
 
@@ -222,6 +220,41 @@ def test_operational_methods_use_generated_models_and_exact_routes(
     assert json.loads(calls[2][0].data) == {"plan_digest": PLAN_DIGEST}
 
 
+def test_supplied_opener_is_used_by_generated_and_preserved_methods(
+    tmp_path: Path, monkeypatch
+) -> None:
+    responses = iter(
+        [
+            Response({"commit": COMMIT, "nodes": []}),
+            Response({"digest": "abc", "patch": "diff"}),
+        ]
+    )
+    calls: list[urllib.request.Request] = []
+
+    def opener(request, timeout):
+        calls.append(request)
+        return next(responses)
+
+    client = ControlClient(
+        "https://control.invalid", token_file(tmp_path), opener=opener
+    )
+
+    def reject_fallback_boundary(*handlers):
+        raise AssertionError("caller-supplied opener was bypassed")
+
+    monkeypatch.setattr(urllib.request, "build_opener", reject_fallback_boundary)
+
+    assert isinstance(client.nodes(), FleetStatusResponse)
+    assert client.create_proposal({"base_commit": COMMIT, "changes": []}) == {
+        "digest": "abc",
+        "patch": "diff",
+    }
+    assert [request.full_url for request in calls] == [
+        "https://control.invalid/api/v1/nodes/status",
+        "https://control.invalid/api/v1/proposals",
+    ]
+
+
 @pytest.mark.parametrize(
     ("status", "exception_name"),
     [
@@ -274,18 +307,15 @@ def test_http_status_typing_precedes_unusable_error_body_parsing(
     body: bytes,
     content_type: str,
 ) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            status,
-            content=body,
+    def opener(request, timeout):
+        return Response(
+            body,
+            status=status,
             headers={"content-type": content_type, "retry-after": "99"},
+            raw=True,
         )
 
-    client = ControlClient(
-        "https://control.invalid",
-        token_file(tmp_path),
-        transport=httpx.MockTransport(handler),
-    )
+    client = generated_client(tmp_path, opener)
     expected = getattr(control_client, exception_name)
 
     with pytest.raises(expected) as caught:
@@ -297,6 +327,57 @@ def test_http_status_typing_precedes_unusable_error_body_parsing(
     assert caught.value.status_code == status
     assert caught.value.detail == "control API request failed"
     assert caught.value.retry_after_seconds == 30
+
+
+@pytest.mark.parametrize(
+    ("status", "exception_name"),
+    [
+        (401, "ControlUnauthorized"),
+        (403, "ControlForbidden"),
+        (404, "ControlNotFound"),
+        (409, "ControlConflict"),
+        (503, "ControlUnavailable"),
+    ],
+)
+def test_http_status_typing_precedes_recursive_json_failure(
+    tmp_path: Path, status: int, exception_name: str
+) -> None:
+    deeply_nested_json = b"[" * 10_000 + b"0" + b"]" * 10_000
+
+    def opener(request, timeout):
+        return Response(
+            deeply_nested_json,
+            status=status,
+            headers={"retry-after": "99"},
+            raw=True,
+        )
+
+    client = generated_client(tmp_path, opener)
+    expected = getattr(control_client, exception_name)
+
+    with pytest.raises(expected) as caught:
+        if status == 404:
+            client.job(JOB_ID)
+        else:
+            client.plan_profile("agent")
+
+    assert caught.value.status_code == status
+    assert caught.value.detail == "control API request failed"
+    assert caught.value.retry_after_seconds == 30
+
+
+def test_successful_recursive_json_is_reported_as_malformed_response(
+    tmp_path: Path,
+) -> None:
+    deeply_nested_json = b"[" * 10_000 + b"0" + b"]" * 10_000
+
+    def opener(request, timeout):
+        return Response(deeply_nested_json, raw=True)
+
+    client = generated_client(tmp_path, opener)
+
+    with pytest.raises(control_client.ControlMalformedResponse, match="nesting"):
+        client.nodes()
 
 
 def test_missing_resource_raises_typed_not_found(tmp_path: Path) -> None:
@@ -384,33 +465,36 @@ def test_ambiguous_apply_transport_failure_is_not_replayed(
     "location",
     ["http://attacker.invalid/steal", "https://other.invalid/steal"],
 )
-def test_generated_mutation_rejects_redirect_without_forwarding_credentials(
-    tmp_path: Path, location: str
+@pytest.mark.parametrize("mutation", ["apply", "proposal", "change"])
+def test_production_boundary_rejects_mutation_redirect_without_forward_or_replay(
+    tmp_path: Path, monkeypatch, location: str, mutation: str
 ) -> None:
-    calls: list[httpx.Request] = []
+    real_build_opener = urllib.request.build_opener
+    protocol_handler = RedirectingProtocolHandler(location)
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        calls.append(request)
-        return httpx.Response(
-            302,
-            headers={"location": location, "content-type": "application/json"},
-            json={"detail": "redirected"},
-        )
+    def controlled_build_opener(*handlers):
+        return real_build_opener(protocol_handler, *handlers)
 
-    client = ControlClient(
-        "https://control.invalid",
-        token_file(tmp_path),
-        transport=httpx.MockTransport(handler),
+    monkeypatch.setattr(urllib.request, "_opener", real_build_opener(protocol_handler))
+    monkeypatch.setattr(urllib.request, "build_opener", controlled_build_opener)
+    client = ControlClient("https://control.invalid", token_file(tmp_path))
+
+    with pytest.raises(ControlClientError):
+        if mutation == "apply":
+            client.apply_plan(
+                PLAN_DIGEST,
+                request_id="33333333-3333-4333-8333-333333333333",
+            )
+        elif mutation == "proposal":
+            client.create_proposal({"base_commit": COMMIT, "changes": []})
+        else:
+            client.submit_change(PLAN_DIGEST)
+
+    assert len(protocol_handler.calls) == 1
+    assert protocol_handler.calls[0].full_url.startswith(
+        "https://control.invalid/api/v1/"
     )
-
-    with pytest.raises(ControlClientError, match="HTTP 302"):
-        client.apply_plan(
-            PLAN_DIGEST, request_id="33333333-3333-4333-8333-333333333333"
-        )
-
-    assert len(calls) == 1
-    assert calls[0].url == "https://control.invalid/api/v1/reconciliations"
-    assert calls[0].headers["authorization"] == "Bearer signed-token"
+    assert protocol_handler.calls[0].headers["Authorization"] == ("Bearer signed-token")
 
 
 def test_urlopen_http_error_body_keeps_typed_status_mapping(tmp_path: Path) -> None:
@@ -458,6 +542,7 @@ def test_retry_after_is_bounded_to_safe_seconds(
     ("remote_text", "forbidden_values"),
     [
         ("Authorization: Bearer signed-token", ("signed-token",)),
+        ("upstream rejected signed-token", ("signed-token",)),
         (
             (
                 "-----BEGIN CERTIFICATE-----\nCERTIFICATE-BODY\n"
@@ -471,25 +556,37 @@ def test_retry_after_is_bounded_to_safe_seconds(
             "password=hunter2 credential=https://admin:swordfish@host.invalid",
             ("hunter2", "admin", "swordfish"),
         ),
+        (
+            "client_certificate=CERTIFICATE-BODY x509=CERTIFICATE-CHAIN",
+            ("CERTIFICATE-BODY", "CERTIFICATE-CHAIN"),
+        ),
+        (
+            "certificate=" + "CERTIFICATE-SECRET-" * 300,
+            ("CERTIFICATE-SECRET",),
+        ),
         ("x" * 5_000, ("x" * 257,)),
     ],
-    ids=["bearer", "pem", "credential", "oversized"],
+    ids=[
+        "bearer",
+        "bare-token",
+        "pem",
+        "credential",
+        "certificate-labels",
+        "oversized-certificate",
+        "oversized",
+    ],
 )
 def test_http_error_detail_is_bounded_and_redacted(
     tmp_path: Path, remote_text: str, forbidden_values: tuple[str, ...]
 ) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            409,
+    def opener(request, timeout):
+        return Response(
+            {"detail": remote_text},
+            status=409,
             headers={"content-type": "application/json"},
-            json={"detail": remote_text},
         )
 
-    client = ControlClient(
-        "https://control.invalid",
-        token_file(tmp_path),
-        transport=httpx.MockTransport(handler),
-    )
+    client = generated_client(tmp_path, opener)
 
     with pytest.raises(control_client.ControlConflict) as caught:
         client.plan_profile("agent")
@@ -504,6 +601,7 @@ def test_http_error_detail_is_bounded_and_redacted(
     ("remote_text", "forbidden_values"),
     [
         ("Bearer signed-token", ("signed-token",)),
+        ("upstream rejected signed-token", ("signed-token",)),
         (
             (
                 "-----BEGIN CERTIFICATE-----\nCERTIFICATE-BODY\n"
@@ -514,25 +612,36 @@ def test_http_error_detail_is_bounded_and_redacted(
             ("CERTIFICATE-BODY", "PRIVATE-KEY-BODY"),
         ),
         ("api_key=raw-key password=hunter2", ("raw-key", "hunter2")),
+        (
+            "client_certificate=CERTIFICATE-BODY x509=CERTIFICATE-CHAIN",
+            ("CERTIFICATE-BODY", "CERTIFICATE-CHAIN"),
+        ),
+        (
+            "certificate=" + "CERTIFICATE-SECRET-" * 300,
+            ("CERTIFICATE-SECRET",),
+        ),
         ("y" * 5_000, ("y" * 257,)),
     ],
-    ids=["bearer", "pem", "credential", "oversized"],
+    ids=[
+        "bearer",
+        "bare-token",
+        "pem",
+        "credential",
+        "certificate-labels",
+        "oversized-certificate",
+        "oversized",
+    ],
 )
 def test_terminal_job_reason_is_bounded_and_redacted(
     tmp_path: Path, remote_text: str, forbidden_values: tuple[str, ...]
 ) -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
+    def opener(request, timeout):
+        return Response(
+            job_payload("failed", remote_text),
             headers={"content-type": "application/json"},
-            json=job_payload("failed", remote_text),
         )
 
-    client = ControlClient(
-        "https://control.invalid",
-        token_file(tmp_path),
-        transport=httpx.MockTransport(handler),
-    )
+    client = generated_client(tmp_path, opener)
 
     with pytest.raises(control_client.JobFailed) as caught:
         client.wait_job(JOB_ID, timeout=1, interval=0)
@@ -695,6 +804,25 @@ def test_client_rejects_group_or_world_readable_token(tmp_path: Path) -> None:
 
     with pytest.raises(ControlClientError, match="permissions"):
         ControlClient("https://control.invalid", token)
+
+
+def test_client_fails_closed_before_open_when_no_follow_flag_is_unavailable(
+    tmp_path: Path, monkeypatch
+) -> None:
+    token = token_file(tmp_path)
+    opened_paths: list[object] = []
+
+    def tracking_open(path, flags):
+        opened_paths.append(path)
+        raise OSError("path open must not occur")
+
+    monkeypatch.delattr(control_client.os, "O_NOFOLLOW")
+    monkeypatch.setattr(control_client.os, "open", tracking_open)
+
+    with pytest.raises(ControlClientError, match="cannot be opened safely"):
+        ControlClient("https://control.invalid", token)
+
+    assert opened_paths == []
 
 
 def test_client_reads_token_from_single_validated_descriptor(tmp_path: Path) -> None:

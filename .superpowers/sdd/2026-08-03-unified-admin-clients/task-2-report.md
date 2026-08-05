@@ -537,3 +537,161 @@ and bounded remote text on the exception surfaces covered by this task. The
 pre-existing unrelated `progress.md` modification remains unstaged. The prior
 out-of-scope legacy CLI/jsonschema SIGSEGV concern above is unchanged; scoped
 and adjacent verification are green.
+
+# Fix Round 2
+
+Reviewed head: `6a06f090755e1902b3636e78fd2acfbffdbe59bc`
+
+## Finding 1: every production mutation rejects redirects
+
+Replaced the mock-transport redirect regression with
+`test_production_boundary_rejects_mutation_redirect_without_forward_or_replay`.
+It runs urllib's real redirect/error processing with a controlled protocol
+handler for generated `apply_plan()` and preserved `create_proposal()` and
+`submit_change()`, against both HTTPS-to-HTTP and cross-origin HTTPS locations.
+Each case proves exactly one credentialed request and no redirected request or
+mutation replay. When `opener=` is omitted, the client now builds a
+redirect-denying urllib opener and uses it for preserved requests too.
+
+RED (after removing an over-specific error-message assertion so the test
+measured rejection/no forwarding):
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_production_boundary_rejects_mutation_redirect_without_forward_or_replay -v
+2 passed, 4 failed in 0.22s
+The generated apply cases rejected; proposal/change followed the redirects and did not raise
+```
+
+GREEN:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_production_boundary_rejects_mutation_redirect_without_forward_or_replay -v
+6 passed in 0.24s
+```
+
+## Finding 2: missing no-follow support fails closed
+
+Added
+`test_client_fails_closed_before_open_when_no_follow_flag_is_unavailable`.
+It removes `os.O_NOFOLLOW`, installs an `os.open` tripwire, and proves the
+client rejects the platform before any path open. Supported platforms retain
+the single `open`/`fstat`/bounded-read/`close` sequence.
+
+RED:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_client_fails_closed_before_open_when_no_follow_flag_is_unavailable -v
+1 failed in 0.13s
+Expected safe-open rejection; observed the fallback path call os.open
+```
+
+GREEN with adjacent descriptor checks:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_client_fails_closed_before_open_when_no_follow_flag_is_unavailable tests/spark_profiles/test_control_client.py::test_client_reads_token_from_single_validated_descriptor tests/spark_profiles/test_control_client.py::test_client_closes_token_descriptor_on_validation_error tests/spark_profiles/test_control_client.py::test_client_rejects_symlink_token -v
+4 passed in 0.09s
+```
+
+## Finding 3: recursive JSON preserves mandatory status typing
+
+Added a five-status matrix in
+`test_http_status_typing_precedes_recursive_json_failure` and the successful
+response control
+`test_successful_recursive_json_is_reported_as_malformed_response`. The final
+fixture is valid JSON with depth 10,000 and size 20,001 bytes; it deterministically
+raises `RecursionError` in this runtime. Error statuses are mapped with safe
+detail and bounded Retry-After from the recorded raw response, while a 200
+response becomes a visible `ControlMalformedResponse` nesting error.
+
+Fixture calibration at depth 2,000 produced five passes and one schema-error
+failure because the decoder accepted that depth. The corrected fixture then
+provided the required RED:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_http_status_typing_precedes_recursive_json_failure tests/spark_profiles/test_control_client.py::test_successful_recursive_json_is_reported_as_malformed_response -v
+6 failed in 0.32s
+All six exposed uncaught RecursionError from json.decoder
+```
+
+GREEN:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_http_status_typing_precedes_recursive_json_failure tests/spark_profiles/test_control_client.py::test_successful_recursive_json_is_reported_as_malformed_response -v
+6 passed in 0.16s
+```
+
+## Finding 4: token-aware and certificate-aware remote-text redaction
+
+Extended both HTTP-detail and terminal-job-reason matrices with bare literal
+client tokens, delimiter-free `client_certificate`/`x509` values, and oversized
+certificate-labeled values. The client's actual token is now passed as a
+sensitive value into both exception sanitization paths. Certificate-like
+assignments are redacted before bounding, and attributes plus exception strings
+are checked for every forbidden value.
+
+RED:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_http_error_detail_is_bounded_and_redacted tests/spark_profiles/test_control_client.py::test_terminal_job_reason_is_bounded_and_redacted -v
+8 passed, 6 failed in 0.32s
+Bare token, certificate-labeled, and oversized certificate content leaked on both surfaces
+```
+
+GREEN:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_http_error_detail_is_bounded_and_redacted tests/spark_profiles/test_control_client.py::test_terminal_job_reason_is_bounded_and_redacted -v
+14 passed in 0.24s
+```
+
+## Finding 5: one injectable request boundary
+
+Added `test_supplied_opener_is_used_by_generated_and_preserved_methods`. A
+caller-supplied opener returns one generated response and one preserved
+proposal response, while a fallback `build_opener` tripwire proves no alternate
+network boundary is reached. `_OpenerTransport` now adapts the same opener used
+by `request()`; the separate public `transport=` path and its test shim were
+removed. The omitted/default opener remains the redirect-denying production
+boundary from Finding 1.
+
+RED:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_supplied_opener_is_used_by_generated_and_preserved_methods -v
+1 failed in 0.16s
+AssertionError: caller-supplied opener was bypassed
+```
+
+GREEN:
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py::test_supplied_opener_is_used_by_generated_and_preserved_methods -v
+1 passed in 0.12s
+```
+
+## Fix Round 2 fresh verification
+
+```text
+$ uv run pytest tests/spark_profiles/test_control_client.py -q
+81 passed in 1.36s
+
+$ uv run pytest tests/control/test_openapi_clients.py -q
+5 passed in 3.65s
+
+$ uv run --with ruff==0.16.1 ruff check src/spark_profiles/control_client.py tests/spark_profiles/test_control_client.py
+All checks passed!
+
+$ uv run --with ruff==0.16.1 ruff format --check src/spark_profiles/control_client.py tests/spark_profiles/test_control_client.py
+2 files already formatted
+
+$ git diff --check
+[no output; exit 0]
+```
+
+Self-review confirmed one opener boundary for generated and preserved methods,
+one safe default production opener, no mutation replay, fail-closed missing
+no-follow support, typed status mapping across recursive decoder failures, and
+token/certificate redaction before exception storage or display. No generated
+source was edited. The pre-existing unrelated `progress.md` modification remains
+unstaged, and the previously reported out-of-scope legacy CLI/jsonschema SIGSEGV
+concern is unchanged.
