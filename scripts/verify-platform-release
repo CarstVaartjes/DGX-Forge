@@ -52,6 +52,7 @@ _GENERATION = re.compile(r"gen-[0-9a-f]{24}\Z")
 _NODE_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
 _ARCHITECTURE = re.compile(r"linux-(?:amd64|arm64)\Z")
 _WORKLOAD_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_WORKLOAD_BARE_DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 
 
 def canonical(value: object) -> bytes:
@@ -418,7 +419,10 @@ def _failure_matrix_valid(report: object) -> bool:
         return False
     if (
         report.get("schema_version") != 1
-        or report.get("report_type") != "dgx-forge-workload-package-failure-matrix"
+        or report.get("report_type") not in {
+            "dgx-forge-workload-package-failure-matrix",
+            "workload-package-failure-matrix",
+        }
         or report.get("status") != "passed"
         or report.get("evidence_kind") not in {"assertion", "simulated", "physical"}
         or report.get("failure_matrix") is not True
@@ -435,7 +439,11 @@ def _failure_matrix_valid(report: object) -> bool:
             return False
         if (
             not isinstance(case["family_id"], str)
-            or not _WORKLOAD_DIGEST.fullmatch(case["release_digest"])
+            or not isinstance(case["release_digest"], str)
+            or not (
+                _WORKLOAD_DIGEST.fullmatch(case["release_digest"])
+                or _WORKLOAD_BARE_DIGEST.fullmatch(case["release_digest"])
+            )
             or not isinstance(case["node_id"], str)
             or not isinstance(case["fence"], str)
             or not isinstance(case["reason_code"], str)

@@ -57,13 +57,15 @@ plan-first and return a digest that an administrator must review.
 ```bash
 # Discover and inspect signed candidates (no Spark mutation)
 sparkctl admin packages candidates list --family synthetic-stack --json
-sparkctl admin packages candidate show --candidate CANDIDATE_UUID --json
+sparkctl admin packages candidates get --candidate CANDIDATE_UUID --json
 
 # Validate and preview promotion. Keep the returned plan digest.
-sparkctl admin packages validate --candidate CANDIDATE_UUID --json
+sparkctl admin packages validation-preview --candidate CANDIDATE_UUID --json
+sparkctl admin packages validate --candidate CANDIDATE_UUID \
+  --plan-digest VALIDATION_PLAN_DIGEST --json
 sparkctl admin packages promote \
   --candidate CANDIDATE_UUID \
-  --preview-digest aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+  --preview-digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --json
 
 # The web UI presents the same candidate lock, evidence, and plan digest.
@@ -84,11 +86,14 @@ requirements, compatibility, and the predecessor release.
 ```bash
 sparkctl admin deployments rollout \
   --deployment synthetic-canary \
-  --plan-digest bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
+  --plan-digest sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
   --json
 
-sparkctl admin deployments status --deployment synthetic-canary --json
-sparkctl admin deployments repair --deployment synthetic-canary --json
+sparkctl admin deployments status --deployment synthetic-canary \
+  --rollout ROLLOUT_ID --json
+sparkctl admin deployments repair-preview --deployment synthetic-canary --json
+sparkctl admin deployments repair --deployment synthetic-canary \
+  --plan-digest REPAIR_PLAN_DIGEST --json
 ```
 
 The control plane queues typed package operations over each Spark's outbound
@@ -111,12 +116,12 @@ generation.
 ```bash
 sparkctl admin deployments rollback \
   --deployment synthetic-canary \
-  --release-digest cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc \
+  --rollout ROLLOUT_ID \
+  --plan-digest ROLLBACK_PLAN_DIGEST \
   --json
 
-sparkctl admin packages repair --deployment synthetic-canary --json
-sparkctl admin packages gc --preview --json
-sparkctl admin packages gc --apply --plan-digest PLAN_DIGEST --json
+sparkctl admin packages gc-preview --json
+sparkctl admin packages gc --plan-digest GC_PLAN_DIGEST --json
 ```
 
 Rollback is possible offline when the predecessor generation and its verified
