@@ -36,16 +36,21 @@ def _canonical(value: object) -> bytes:
 def report() -> dict[str, object]:
     cases: list[dict[str, object]] = []
     for reason in PackageFailureReason:
-        disposition = (
-            PackageFailureDisposition.COMPENSATE
-            if reason
-            in {
-                PackageFailureReason.ACTIVATION_FAILURE,
-                PackageFailureReason.RUNTIME_HEALTH_FAILURE,
-                PackageFailureReason.ROLLBACK_FAILURE,
-            }
-            else PackageFailureDisposition.SAFE_TO_RETRY
-        )
+        if reason in {
+            PackageFailureReason.ACTIVATION_FAILURE,
+            PackageFailureReason.RUNTIME_HEALTH_FAILURE,
+        }:
+            disposition = PackageFailureDisposition.COMPENSATE
+        elif reason in {
+            PackageFailureReason.TRUST_PROVENANCE_FAILURE,
+            PackageFailureReason.POLICY_LICENSE_REJECTION,
+            PackageFailureReason.INCOMPATIBLE_PLATFORM,
+            PackageFailureReason.MISSING_CREDENTIAL,
+            PackageFailureReason.ROLLBACK_FAILURE,
+        }:
+            disposition = PackageFailureDisposition.OPERATOR_INTERVENTION
+        else:
+            disposition = PackageFailureDisposition.SAFE_TO_RETRY
         record = failure(
             reason,
             disposition=disposition,

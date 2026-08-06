@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 
+from ..deadlines import DeadlineBindingError
 from .providers import Validators
 from .state import (
     OperationBinding,
@@ -306,6 +307,20 @@ class ContentStore:
                     else:
                         # A crashed owner released its reservation.  Adopt its
                         # partial under this fence and account for its size.
+                        committed = connection.execute(
+                            "SELECT COALESCE(SUM(size), 0) FROM components "
+                            "WHERE state = 'complete'"
+                        ).fetchone()[0]
+                        reserved = connection.execute(
+                            "SELECT COALESCE(SUM(bytes_reserved), 0) "
+                            "FROM reservations"
+                        ).fetchone()[0]
+                        if committed + reserved + descriptor.size > self._logical_capacity():
+                            raise PackageCapacityError(
+                                "package store capacity is insufficient"
+                            )
+                        if descriptor.size > _available_bytes(self._root):
+                            raise PackageCapacityError("package store filesystem is full")
                         bytes_reserved = descriptor.size
                         connection.execute(
                             "UPDATE components SET operation_id=?, attempt=?, fence=? "
@@ -410,7 +425,7 @@ class ContentStore:
             if deadline is not None and hasattr(deadline, "check"):
                 try:
                     deadline.check()
-                except Exception:
+                except DeadlineBindingError:
                     return None
             cached = self.lookup(digest, size)
             if cached is not None:

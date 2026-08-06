@@ -47,16 +47,21 @@ def _binding(index: int = 1, *, attempt: int = 1) -> OperationBinding:
 
 
 def _failure(reason: PackageFailureReason):
-    disposition = (
-        PackageFailureDisposition.COMPENSATE
-        if reason
-        in {
-            PackageFailureReason.ACTIVATION_FAILURE,
-            PackageFailureReason.RUNTIME_HEALTH_FAILURE,
-            PackageFailureReason.ROLLBACK_FAILURE,
-        }
-        else PackageFailureDisposition.SAFE_TO_RETRY
-    )
+    if reason in {
+        PackageFailureReason.ACTIVATION_FAILURE,
+        PackageFailureReason.RUNTIME_HEALTH_FAILURE,
+    }:
+        disposition = PackageFailureDisposition.COMPENSATE
+    elif reason in {
+        PackageFailureReason.TRUST_PROVENANCE_FAILURE,
+        PackageFailureReason.POLICY_LICENSE_REJECTION,
+        PackageFailureReason.INCOMPATIBLE_PLATFORM,
+        PackageFailureReason.MISSING_CREDENTIAL,
+        PackageFailureReason.ROLLBACK_FAILURE,
+    }:
+        disposition = PackageFailureDisposition.OPERATOR_INTERVENTION
+    else:
+        disposition = PackageFailureDisposition.SAFE_TO_RETRY
     return failure(
         reason,
         disposition=disposition,
@@ -138,6 +143,33 @@ def test_corrupt_store_is_quarantined_and_refetched(tmp_path: Path) -> None:
     store.quarantine_corrupt(binding, digest)
     assert store.lookup(digest) is None
     assert tuple((store.root / "quarantine").iterdir())
+
+
+def test_crashed_owner_partial_is_adopted_without_capacity_overcommit(
+    tmp_path: Path,
+) -> None:
+    content = b"adopt-after-owner-crash"
+    digest = hashlib.sha256(content).hexdigest()
+    descriptor = type(
+        "Descriptor",
+        (),
+        {"name": "crashed-component", "digest": digest, "size": len(content), "kind": "model"},
+    )()
+    store = ContentStore(tmp_path / "packages", capacity_bytes=len(content))
+    first = _binding(1)
+    reservation = store.reserve_component(first, descriptor)
+    partial = store.begin_component(reservation, descriptor)
+    store.append_partial(partial, content[:7])
+    # The owner process disappeared after checkpointing.  Releasing only its
+    # reservation models the durable crash boundary; bytes remain journaled.
+    store.release_reservation(reservation)
+
+    second = _binding(2)
+    adopted = store.reserve_component(second, descriptor)
+    record = store.begin_component(adopted, descriptor)
+    assert record.bytes_completed == 7
+    store.append_partial(record, content[7:])
+    assert store.promote_component(record, digest).digest == digest
 
 
 def test_gc_interruption_restarts_from_durable_plan(tmp_path: Path) -> None:
