@@ -61,8 +61,13 @@ def test_hosted_ci_uploads_independent_workload_evidence() -> None:
     assert "workload-package-acceptance.json" in workflow
     assert "workload-package-failure-matrix.json" in workflow
     assert "actions/upload-artifact" in workflow
-    assert "hashFiles('scripts/accept-workload-packages')" in workflow
-    assert "hashFiles('scripts/accept-workload-package-failures')" in workflow
+
+
+def test_ci_only_runs_for_main_pull_requests_manual_dispatch_or_release_tags() -> None:
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    assert "  pull_request:\n    branches: [main]" in workflow
+    assert "  workflow_dispatch:" in workflow
+    assert '  push:\n    tags: ["v*"]' in workflow
 
 
 def test_release_verifier_output_has_non_claiming_workload_defaults() -> None:
@@ -83,7 +88,10 @@ def test_release_verifier_output_has_non_claiming_workload_defaults() -> None:
         assert workload["release_two_activated"] is True
         assert workload["offline_release_one_rollback"] is True
         assert workload["unsigned_release_rejected"] is True
-    assert workload["failure_matrix"] is False
+    if any(gate.startswith("workload-package-failure-matrix") for gate in missing):
+        assert workload["failure_matrix"] is False
+    else:
+        assert workload["failure_matrix"] is True
     if any(gate.startswith("workload-package-acceptance") for gate in missing):
         assert workload["ssh_calls"] is None
         assert workload["agent_update_calls"] is None

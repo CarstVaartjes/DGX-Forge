@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from dgx_control.jobs import JobService
 from dgx_control.models import Base
+from dgx_control.package_rollout_worker import PackageRolloutWorker
 from dgx_control.presence import ManagementAddressPolicy
 from dgx_control.route_runtime import AtomicRouteBundlePublisher
 from dgx_control.settings import Settings, SettingsError, WorkerSettings
@@ -89,6 +90,8 @@ def test_production_builder_wires_signer_queue_route_boundary_and_update_worker(
     )
 
     assert isinstance(worker._updates, UpdateRolloutWorker)
+    assert isinstance(worker._packages, PackageRolloutWorker)
+    assert worker._packages._orchestrator._agent_jobs is agent_jobs
     assert worker._updates._orchestrator._agent_jobs is agent_jobs
     assert isinstance(worker._updates._routes, ProductionUpdateRouteBoundary)
     assert worker._updates._routes is worker._updates._orchestrator._routes
