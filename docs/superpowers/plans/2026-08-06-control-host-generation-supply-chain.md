@@ -8,6 +8,23 @@
 
 **Tech Stack:** Python 3.12, python-tuf, OCI/ORAS 1.3, Docker Compose v2, SQLAlchemy/Alembic, FastAPI, `flock`, canonical JSON/tar, pytest.
 
+## Current implementation ledger — 2026-08-06
+
+The implementation for Tasks 1–10 is landed on `main` through the platform
+update and workload-lane integration. The checkbox sequence below remains the
+original red/green execution checklist; current evidence is recorded here so
+it is not mistaken for an unimplemented subsystem. Versioned platform release
+identity, canonical deployment bundles, root-owned generations, bounded host
+commands/backups, exact OCI acquisition, preselection/readiness, journaled
+apply/recovery, signer separation, publication tooling, and the release
+verifier are all present and covered by focused tests.
+
+The remaining release work is external evidence only: physical control-host
+update/recovery, physical replacement-host recovery, physical Spark canary and
+rollback, authenticated-encryption recovery, and a signed platform-update
+manifest produced with the production release key. No simulator or local test
+is treated as proof of those gates.
+
 ## Global Constraints
 
 - Follow [the approved design](../specs/2026-08-06-control-host-generation-supply-chain-design.md).
@@ -513,3 +530,18 @@ class ControlUpgrade:
 
   Report exact test counts/timings, any physical-host-only acceptance gate,
   and the complete changed-file list. Leave commit/push to the parent agent.
+
+#### Post-integration verification checkpoint
+
+- Platform-release, deployment-bundle, and control-host E2E tests: **102
+  passed in 7.97s**.
+- Host state/commands/backup/OCI/upgrade/readiness/heartbeat/signer and agent
+  job tests: **275 passed in 29.91s**.
+- Agent update tests: **21 passed in 0.20s**; Compose networking: **12 passed
+  in 1.37s**.
+- The dedicated signer/update/control integration selection passed **259
+  tests in 41.51s**; the PostgreSQL agent-job/reconciliation race selection
+  passed **64 tests in 29.92s**.
+- Ruff `0.16.1`, entry-point compilation, supply-chain verification, and
+  `git diff --check` passed. The platform verifier remains blocked only on the
+  six external gates listed above.
