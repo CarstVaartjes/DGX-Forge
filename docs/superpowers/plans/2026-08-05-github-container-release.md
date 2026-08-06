@@ -518,8 +518,8 @@ def test_publisher_uses_pinned_docker_actions_and_exact_artifacts() -> None:
     text = workflow()
     for action in (
         "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f",  # v3.12.0
-        "docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9",  # v3.7.0
-        "docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8",  # v6.19.2
+        "docker/login-action@dbcb813823bdd20940b903addbd779551569679f",  # v4.6.0
+        "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a",  # v7.3.0
     ):
         assert action in text
     assert text.count("docker/build-push-action@") == 3
@@ -598,7 +598,7 @@ Append a job to `.github/workflows/ci.yml` with this contract:
       hermes_image: ${{ steps.release.outputs.hermes_image }}
     steps:
       - name: Check out tagged commit
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Validate release metadata
         id: release
         run: >-
@@ -623,7 +623,7 @@ Add `publish-images` with:
       packages: write
     steps:
       - name: Check out tagged commit
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Verify public image inputs
         run: scripts/verify-public-image-inputs
       - name: Verify supply-chain evidence
@@ -631,7 +631,7 @@ Add `publish-images` with:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: Log in to GHCR
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}

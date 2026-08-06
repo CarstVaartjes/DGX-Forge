@@ -216,8 +216,8 @@ def test_publisher_uses_pinned_docker_actions_and_exact_artifacts() -> None:
     text = workflow()
     for action in (
         "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f",
-        "docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9",
-        "docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8",
+        "docker/login-action@dbcb813823bdd20940b903addbd779551569679f",
+        "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a",
     ):
         assert action in text
     assert text.count("docker/build-push-action@") == 3
@@ -350,7 +350,7 @@ def test_release_manifest_checks_out_scripts_before_using_them() -> None:
     checkout = workflow_step("release-manifest", "Check out tagged commit")
 
     assert (
-        "uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd"
+        "uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
         in checkout
     )
     assert "persist-credentials: false" in checkout
