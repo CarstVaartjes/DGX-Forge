@@ -74,6 +74,28 @@ it("requires the exact promotion preview digest and projects audit evidence", as
   expect(await screen.findByRole("status")).toHaveTextContent("Package promotion accepted");
 });
 
+it("starts validation through an exact plan and keeps the run inspectable", async () => {
+  const calls: string[] = [];
+  const control = {
+    ...api(),
+    previewPackageValidation: async () => ({digest: `sha256:${"v".repeat(64)}`, candidate_id: "candidate-1", validation_id: "validation-1"}),
+    validatePackage: async (_id: string, supplied: string) => { calls.push(supplied); return {id: "validation-1", state: "running", progress: {completed: 0, failed: 0, running: 2, total: 2}}; },
+    packageValidation: async () => ({id: "validation-1", state: "passed", progress: {completed: 2, failed: 0, running: 0, total: 2}}),
+  };
+  render(<PackageCandidatePage api={control} candidateId="candidate-1"/>);
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", {name: "Preview package validation"}));
+  const validationDigest = `sha256:${"v".repeat(64)}`;
+  await user.type(screen.getByLabelText("Type the exact validation digest"), validationDigest);
+  await user.click(screen.getByRole("button", {name: "Start exact validation plan"}));
+  expect(calls).toEqual([validationDigest]);
+  const validationSection = screen.getByRole("heading", {name: "Validation"}).closest("section");
+  expect(validationSection).not.toBeNull();
+  expect(within(validationSection!).getByRole("status")).toHaveTextContent("Validation state: running");
+  await user.click(within(validationSection!).getByRole("button", {name: "Refresh validation"}));
+  expect(within(validationSection!).getByRole("status")).toHaveTextContent("Validation state: passed");
+});
+
 it("separates downloads from active generations and requires an exact removal preview", async () => {
   const removalDigest = `sha256:${"f".repeat(64)}`;
   const gcDigest = `sha256:${"g".repeat(64)}`;

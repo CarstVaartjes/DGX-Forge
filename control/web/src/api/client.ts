@@ -297,6 +297,25 @@ export class ApiClient implements ControlApi {
     return packageCandidate(await this.candidateDocument(candidateId));
   }
 
+  async previewPackageValidation(candidateId: string): Promise<PackagePreview> {
+    return packagePreview(resultData(await this.generated.POST("/api/v1/packages/candidates/{candidate_id}/validation-preview", {
+      params: {path: {candidate_id: candidateId}},
+    })));
+  }
+
+  async validatePackage(candidateId: string, previewDigest: string): Promise<PackageProgress> {
+    return resultData(await this.generated.POST("/api/v1/packages/candidates/{candidate_id}/validate", {
+      params: {path: {candidate_id: candidateId}},
+      body: {plan_digest: previewDigest},
+    }));
+  }
+
+  async packageValidation(validationId: string): Promise<PackageProgress> {
+    return resultData(await this.generated.GET("/api/v1/packages/validations/{validation_id}", {
+      params: {path: {validation_id: validationId}},
+    }));
+  }
+
   async previewPackagePromotion(candidateId: string): Promise<PackagePreview> {
     return packagePreview(resultData(await this.generated.POST("/api/v1/packages/candidates/{candidate_id}/promotion-preview", {
       params: {path: {candidate_id: candidateId}},

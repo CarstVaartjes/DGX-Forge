@@ -33,6 +33,8 @@ export type PackageCandidate = PackageCandidateSummary & {
 
 export type PackagePreview = {
   digest: string;
+  candidate_id?: string;
+  validation_id?: string;
   release_digest?: string;
   expires_at?: string;
   diff?: string;
@@ -140,10 +142,22 @@ export type PackageGcProgress = {
   nodes?: Array<{name?: string; node_id?: string; state: string}>;
 };
 
+export type PackageValidationProgress = {
+  id: string;
+  state: string;
+  plan_digest?: string;
+  progress?: {completed: number; failed: number; running: number; total: number};
+  failure?: string | null;
+  job_id?: string | null;
+};
+
 export interface PackageApi {
   packageFamilies(): Promise<PackageFamily[]>;
   packageCandidates(): Promise<PackageCandidateSummary[]>;
   packageCandidate(candidateId: string): Promise<PackageCandidate>;
+  previewPackageValidation?(candidateId: string): Promise<PackagePreview>;
+  validatePackage?(candidateId: string, previewDigest: string): Promise<PackageValidationProgress>;
+  packageValidation?(validationId: string): Promise<PackageValidationProgress>;
   previewPackagePromotion(candidateId: string): Promise<PackagePreview>;
   promotePackage(candidateId: string, previewDigest: string): Promise<{release_digest: string}>;
   deployments(): Promise<PackageDeployment[]>;
