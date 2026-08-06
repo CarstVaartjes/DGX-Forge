@@ -2,7 +2,8 @@
 
 Date: 2026-08-05
 
-Status: architecture approved; implementation blocked pending written-spec review
+Status: architecture approved; implementation landed on `main`; physical tag
+publication and NAS deployment evidence remain release-gated
 
 ## Purpose
 
