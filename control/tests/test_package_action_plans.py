@@ -332,7 +332,7 @@ def test_publication_candidate_reads_lock_from_git_and_validation_from_sql(tmp_p
     Base.metadata.create_all(engine)
     sessions = session_factory(engine)
     root = RepositoryService(Path(__file__).resolve().parents[2])
-    release_digest = "29f0f3e1c16dcac6884a18abce08840b06c233394a23a2a56204b2ea10434f3a"
+    release_digest = "3dc0d24c21684e1c21eaa4ca3271d94be19cf536063502d755bc68e531d7374f"
     candidate_id = "00000000-0000-4000-8000-000000000007"
     now = datetime.now(UTC)
     with sessions.begin() as session:
@@ -404,7 +404,7 @@ def test_validation_preview_persists_a_digest_bound_run(tmp_path) -> None:
     Base.metadata.create_all(engine)
     sessions = session_factory(engine)
     candidate_id = "00000000-0000-4000-8000-000000000010"
-    release_digest = "29f0f3e1c16dcac6884a18abce08840b06c233394a23a2a56204b2ea10434f3a"
+    release_digest = "3dc0d24c21684e1c21eaa4ca3271d94be19cf536063502d755bc68e531d7374f"
     now = datetime.now(UTC)
     with sessions.begin() as session:
         session.add(

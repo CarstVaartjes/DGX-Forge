@@ -331,6 +331,8 @@ def _load_lock(
         or lock.digest != deployment.release_digest
     ):
         raise PackageRolloutError("deployment release identity does not match lock")
+    if lock.resource_envelope is None:
+        raise PackageRolloutError("promoted workload release resource envelope is missing")
     # Repository JSON documents carry the normal terminal newline; the signed
     # lock identity itself is the canonical JSON bytes without that transport
     # newline.  Any other formatting variation remains fail-closed.
@@ -475,6 +477,7 @@ def _package_graph(
             "release_digest": deployment.release_digest,
             "deployment_digest": _package_digest(deployment),
             "lock_digest": lock.digest,
+            "resource_envelope": lock.resource_envelope,
             "rollback_payloads": {},
         }
         releases[deployment_id] = release_payload

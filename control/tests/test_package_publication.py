@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -9,8 +10,64 @@ from dgx_control.package_publication import (
     PublicationError,
 )
 
-LOCK = b'{"family_id":"future-stack","schema_version":1}'
 COMMIT = "a" * 40
+
+
+def _lock_bytes() -> bytes:
+    component = {
+        "name": "payload",
+        "kind": "artifact",
+        "media_type": "application/octet-stream",
+        "sources": [{"provider": "https", "url": "https://example.invalid/a"}],
+        "digest": "sha256:" + "1" * 64,
+        "size": 1,
+        "unpacked_size": 1,
+        "platforms": ["linux/arm64"],
+        "materialization": {"method": "file"},
+        "evidence": [],
+    }
+    document = {
+        "schema_version": 1,
+        "family_id": "future-stack",
+        "upstream_version": "1",
+        "upstream_identity": {
+            "provider": "git",
+            "repository": "https://example.invalid/repo",
+            "commit": "b" * 40,
+        },
+        "components": [component],
+        "dependency_digests": [],
+        "adapter": component | {"name": "adapter", "kind": "adapter", "materialization": {"method": "executable"}},
+        "adapter_abi": 1,
+        "compatibility": {
+            "architectures": ["arm64"],
+            "operating_systems": ["linux"],
+            "required_capabilities": [],
+            "minimum_storage_bytes": 1,
+        },
+        "validation": [],
+        "provenance": [],
+        "resolver": {"name": "resolver", "version": 1},
+        "resource_envelope": {
+            "schema_version": 1,
+            "per_node": {field: 1 for field in (
+                "download_bytes", "installed_bytes", "transient_bytes", "output_bytes",
+                "host_memory_bytes", "gpu_memory_bytes", "kv_cache_base_bytes", "kv_cache_per_token_bytes",
+            )},
+            "aggregate": {field: 1 for field in (
+                "download_bytes", "installed_bytes", "transient_bytes", "output_bytes",
+                "host_memory_bytes", "gpu_memory_bytes", "kv_cache_base_bytes", "kv_cache_per_token_bytes",
+            )},
+            "required_sparks": 1,
+            "topology": "single",
+            "measurement": "declared",
+            "evidence": [{"kind": "capacity", "digest": "sha256:" + "c" * 64}],
+        },
+    }
+    return json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+
+
+LOCK = _lock_bytes()
 
 
 def _candidate() -> dict[str, object]:
@@ -30,6 +87,29 @@ def _candidate() -> dict[str, object]:
         },
         "evidence_digests": ("b" * 64, "c" * 64),
     }
+
+
+def test_preview_rejects_release_without_resource_envelope() -> None:
+    document = json.loads(LOCK)
+    document.pop("resource_envelope")
+    legacy_lock = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+    candidate = _candidate()
+    candidate.update(
+        {
+            "lock_bytes": legacy_lock,
+            "release_digest": hashlib.sha256(legacy_lock).hexdigest(),
+        }
+    )
+    service = PackagePublicationService(
+        candidate_loader=lambda candidate_id: candidate,
+        head=lambda: COMMIT,
+        commit_eligible=lambda commit: commit == COMMIT,
+        validation_loader=lambda candidate_id: {"state": "passed", "digest": "d" * 64},
+        clock=lambda: datetime(2026, 8, 6, tzinfo=UTC),
+    )
+
+    with pytest.raises(PublicationError, match="resource envelope"):
+        service.preview("candidate-1", COMMIT)
 
 
 def test_preview_binds_candidate_commit_policy_and_evidence() -> None:

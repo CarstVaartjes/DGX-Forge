@@ -847,6 +847,21 @@ class ProductionPackageProjectionService:
             "node_ids": sorted(node_ids),
         }
         digest = self.create_action_plan("package.rollout", deployment_id, request)
+        envelope = release.get("resource_envelope")
+        if not isinstance(envelope, Mapping):
+            raise RuntimeError("promoted workload release resource envelope is missing")
+        per_node = envelope.get("per_node")
+        aggregate = envelope.get("aggregate")
+        if not isinstance(per_node, Mapping) or not isinstance(aggregate, Mapping):
+            raise RuntimeError("promoted workload resource envelope is invalid")
+        download_bytes = aggregate.get("download_bytes")
+        installed_bytes = aggregate.get("installed_bytes")
+        transient_bytes = aggregate.get("transient_bytes")
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in (download_bytes, installed_bytes, transient_bytes)
+        ):
+            raise RuntimeError("promoted workload resource envelope is incomplete")
         return {
             "digest": digest,
             "state": "ready",
@@ -855,8 +870,9 @@ class ProductionPackageProjectionService:
             "batches": [sorted(node_ids[:1]), sorted(node_ids[1:])] if node_ids else [],
             "canary_node": node_ids[0] if node_ids else None,
             "offline_pending": [],
-            "storage_bytes": 0,
-            "download_bytes": 0,
+            "storage_bytes": installed_bytes + transient_bytes,
+            "download_bytes": download_bytes,
+            "resource_envelope": envelope,
         }
 
     def rollout(
@@ -1103,6 +1119,47 @@ class ProductionPackageProjectionService:
             },
         )
 
+    @staticmethod
+    def _package_resource_envelope(summary: Mapping[str, object]) -> dict[str, object]:
+        """Return only a complete, explicitly declared resource envelope.
+
+        Missing values are deliberately an error.  A zero is meaningful only
+        when the signed workload release explicitly declared zero (for
+        example, a runtime with no retained output or KV cache).
+        """
+        raw = summary.get("resources")
+        if not isinstance(raw, Mapping):
+            raise RuntimeError("package observation has no resource envelope")
+        fields = (
+            "download_bytes",
+            "installed_bytes",
+            "transient_bytes",
+            "output_bytes",
+            "host_memory_bytes",
+            "gpu_memory_bytes",
+            "kv_cache_base_bytes",
+            "kv_cache_per_token_bytes",
+        )
+        result: dict[str, object] = {}
+        for field in fields:
+            value = raw.get(field)
+            if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                raise RuntimeError(f"package resource envelope is missing {field}")
+            result[field] = value
+        required_sparks = raw.get("required_sparks")
+        topology = raw.get("topology")
+        if (
+            not isinstance(required_sparks, int)
+            or isinstance(required_sparks, bool)
+            or not 1 <= required_sparks <= 512
+            or not isinstance(topology, str)
+            or topology not in {"single", "replicated", "gang"}
+        ):
+            raise RuntimeError("package resource envelope topology is incomplete")
+        result["required_sparks"] = required_sparks
+        result["topology"] = topology
+        return result
+
     def inventory(
         self,
         node_id: str | None,
@@ -1152,16 +1209,7 @@ class ProductionPackageProjectionService:
                     "prepared": "staged",
                     "failed": "failed",
                 }.get(row.state, "available")
-                envelope = _bounded_mapping(summary.get("resources"))
-                envelope.setdefault("download_bytes", 0)
-                envelope.setdefault("installed_bytes", 0)
-                envelope.setdefault("transient_bytes", 0)
-                envelope.setdefault("host_memory_bytes", 0)
-                envelope.setdefault("gpu_memory_bytes", 0)
-                envelope.setdefault("kv_cache_base_bytes", 0)
-                envelope.setdefault("kv_cache_per_token_bytes", 0)
-                envelope.setdefault("required_sparks", 1)
-                envelope.setdefault("topology", "single")
+                envelope = self._package_resource_envelope(summary)
                 packages.append(
                     {
                         "deployment_id": row.deployment_id,
