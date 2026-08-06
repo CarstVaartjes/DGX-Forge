@@ -4,21 +4,26 @@ Standard service images are fixed by version and OCI index digest in
 `deploy/compose/images.lock.json`; Compose uses those exact references as its
 defaults. The custom control image is a release artifact and must be supplied
 through `CONTROL_API_IMAGE`, `CONTROL_WORKER_IMAGE`, and `HERMES_AGENT_IMAGE`
-with one complete set of registry digests. The three DGX-Forge packages are
+with one complete set of registry digests. The six DGX-Forge platform packages are
 `ghcr.io/carstvaartjes/dgx-forge-api`,
 `ghcr.io/carstvaartjes/dgx-forge-worker`, and
-`ghcr.io/carstvaartjes/dgx-forge-hermes`. Build the `api` and `worker`
+`ghcr.io/carstvaartjes/dgx-forge-hermes`, plus
+`ghcr.io/carstvaartjes/dgx-forge-agent`,
+`ghcr.io/carstvaartjes/dgx-forge-agent-supervisor`, and
+`ghcr.io/carstvaartjes/dgx-forge-tooling`. Build the `api` and `worker`
 Dockerfile targets from the same release commit; the worker target deliberately
 contains neither Git nor OpenSSH. The Node and Python build bases are separately
 digest-pinned in the lock.
 
 ## Future image releases
 
-No images are currently being published. The repository variable
+No images are currently being published by the protected release workflow.
+Public manually uploaded `0.1.0` candidates are not signed or installable
+platform releases and provide no reusable build evidence. The repository variable
 `DGX_CONTAINER_RELEASES_ENABLED` remains unset/default-off until the whole
 repository is release-ready. Setting it to `true` is a deliberate maintainer
 enablement action. Once enabled, only an exact stable SemVer version-tag push
-(`vX.Y.Z`) can publish the three packages; branches, pull requests, malformed
+(`vX.Y.Z`) can publish the six packages; branches, pull requests, malformed
 tags, and Dependabot cannot publish.
 
 For each package's initial publication, a maintainer must open its GitHub
@@ -27,7 +32,9 @@ visibility** → **Set package visibility to Public**. Public NAS pulls then nee
 no GitHub token. A successful three-image publication creates the public
 release assets `dgx-forge-images.env` and
 `dgx-forge-images.env.sha256`; NAS operators verify the checksum and use all
-three version-and-digest assignments as one release set. See the authoritative
+three control-image version-and-digest assignments as one release set. The
+complete platform manifest additionally binds the three native ARM64 Spark
+artifacts. See the authoritative
 [NAS pull-only Compose deployment guide](../../deploy/compose/README.md).
 
 The workflow may update each package's `latest` tag after a successful stable
@@ -60,7 +67,8 @@ scripts/verify-supply-chain --generate --json
 
 The following are **local diagnostic only** builds. They are not an image
 publication procedure: do not log in to a registry, tag a GHCR name, or push.
-Exercise all three release targets together from the tagged source candidate:
+Exercise the three control-image targets together from the tagged source
+candidate:
 
 ```bash
 docker buildx build --platform linux/amd64 --load \
@@ -72,11 +80,17 @@ docker buildx build --platform linux/amd64 --load \
   --tag dgx-forge-hermes:release-dry-run deploy/compose/hermes-agent
 ```
 
-After future deliberate enablement, the tag-triggered GitHub Actions workflow
-is the only publication procedure. It builds all three targets, verifies their
-inputs, emits SBOM and provenance, resolves all three digests, and creates the
-checksum-protected three-reference release asset. It never treats one or two
-images as a releasable publication. LiteLLM signatures use the checked-in key
+These local diagnostics load only `linux/amd64` images. The protected workflow
+publishes the owned control images for `linux/amd64` and `linux/arm64`, while a
+native ARM64 runner builds the agent, supervisor, and tooling payloads. Full
+ARM64 control-host support remains provisional until every pinned third-party
+Compose image passes the complete deployment gate.
+
+After deliberate enablement, the tag-triggered GitHub Actions workflow is the
+only publication procedure. It builds all six platform artifacts, verifies
+their inputs, emits SBOM and provenance, resolves their digests, and creates
+the checksum-protected release evidence. It never treats a partial package set
+as a releasable publication. LiteLLM signatures use the checked-in key
 copied from immutable upstream commit
 `0112e53046018d726492c814b3644b7d376029d0`; verify the locked digest, never a
 mutable tag. Store scan/signature attestations with the release evidence.

@@ -2,8 +2,8 @@
 
 Date: 2026-08-05
 
-Status: architecture approved; implementation landed on `main`; physical tag
-publication and NAS deployment evidence remain release-gated
+Status: architecture approved; release-readiness implementation pending merge;
+physical tag publication and deployment evidence remain release-gated
 
 ## Purpose
 
@@ -89,10 +89,16 @@ relies on `latest`; it uses the workflow-reported `image@sha256:...` reference.
 Tags are conveniences for discovery, while the three-image digest set is the
 deployment identity.
 
-The initial platform is `linux/amd64`, matching the current UGREEN NAS and DGX
-Spark deployment. Multi-architecture publication is out of scope until every
-locked base, including the official Hermes base, is verified for the additional
-platform and its runtime harness passes there.
+The three DGX-Forge-owned control images are published as OCI indexes containing
+both `linux/amd64` and `linux/arm64` runtime manifests. QEMU is used only for the
+cross-architecture Docker build; the DGX Spark agent is built separately on a
+native ARM64 GitHub-hosted runner.
+
+This image-level result does not by itself declare every ARM64 Docker-capable
+control host supported. The production Compose graph also contains digest-pinned
+third-party images. Full ARM64 control-host support remains provisional until
+every upstream image and the complete deployment/runtime gate pass on that
+architecture. `linux/amd64` remains the supported first control-host target.
 
 ## Workflow architecture
 
@@ -252,7 +258,9 @@ Automated tests must prove that:
   directly in production Compose;
 - release tags include version, commit, and stable `latest` metadata;
 - `latest` is documented as evaluation-only and is never a production default;
-- builds target only `linux/amd64`;
+- all three DGX-Forge-owned images target exactly `linux/amd64,linux/arm64`;
+- the documentation does not claim full ARM64 control-host support until the
+  complete third-party Compose graph passes its deployment gate;
 - SBOM and provenance generation are enabled;
 - a successful release attaches a checksum-protected `dgx-forge-images.env`
   containing all three digest-pinned references;

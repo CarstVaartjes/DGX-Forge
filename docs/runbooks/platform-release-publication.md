@@ -5,6 +5,19 @@ control services, host deployment assets, Spark agents, and their signed
 platform metadata. Workload packages have an independent publication system;
 adding or updating a model stack must not require this workflow.
 
+## Current `0.1.0` state
+
+There is no signed or installable DGX-Forge platform release yet. Three public
+`0.1.0` image versions were uploaded manually while evaluating a local incident
+workaround. They are disposable candidates only: they were not built by the
+protected tag workflow, are not TUF-authorized, and must never be selected by a
+NAS or Spark.
+
+The local-upload workaround is withdrawn. Do not promote those bytes by adding
+attestations or TUF metadata later; that would make the workstation uploader an
+unreviewed build authority. The protected workflow must build every official
+artifact itself from the exact merged tag.
+
 ## Release input
 
 A stable `vX.Y.Z` tag must point at a reviewed commit containing canonical JSON
@@ -62,6 +75,10 @@ scripts/build-platform-manifest \
   --artifact-evidence api-evidence.json \
   --artifact-evidence worker-evidence.json \
   --artifact-evidence hermes-evidence.json \
+  --artifact-evidence agent-evidence.json \
+  --artifact-evidence supervisor-evidence.json \
+  --artifact-evidence tooling-evidence.json \
+  --build-digest "sha256:${TAGGED_SOURCE_ARCHIVE_SHA256}" \
   --version "$RELEASE_VERSION" \
   --output platform-release.json
 ```
@@ -70,9 +87,42 @@ The workflow derives each published image reference from the digest emitted by
 its own Buildx step, fetches that digest's raw manifest, SBOM and provenance,
 and replaces the corresponding release-input locator with canonical evidence.
 Thus a reviewed input cannot silently redirect the API, worker, or Hermes
-artifact. The builder also rejects noncanonical input, an input-supplied bundle
+artifact. A native `ubuntu-24.04-arm` job builds the self-contained
+`dgx-agent`, validates the committed `dgx-agent-supervisor`, and creates the
+deterministic `dgx-forge-tooling` archive. The package-writing job publishes
+those payloads to these public OCI repositories:
+
+```text
+ghcr.io/carstvaartjes/dgx-forge-agent
+ghcr.io/carstvaartjes/dgx-forge-agent-supervisor
+ghcr.io/carstvaartjes/dgx-forge-tooling
+```
+
+The publisher records each payload's exact name, SHA-256, and size alongside
+the OCI manifest, SPDX SBOM, and provenance. The platform builder binds all six
+artifact evidence objects plus the digest of the exact tagged source archive.
+The builder also rejects noncanonical input, an input-supplied bundle
 descriptor, duplicate evidence locators, version mismatch, an existing output,
 or a release that fails the shipped v2 parser and schema.
+
+Immediately before any registry mutation, the package-writing job proves that
+the version is absent from all six repositories: API, worker, Hermes, agent,
+agent supervisor, and tooling. A partial or pre-existing version fails closed;
+the job never overwrites it.
+
+The API, worker, and Hermes OCI indexes contain `linux/amd64` and
+`linux/arm64`. This does not yet make the entire third-party Compose graph a
+supported ARM64 control-host deployment. Treat ARM64 Docker hosts as
+provisional until every pinned upstream service and the complete deployment
+gate pass there. Spark payloads are native `linux/arm64` artifacts.
+
+At one-time Spark installation, set the canonical site document's
+`registry_origin` to `https://ghcr.io` and its `repository` to
+`carstvaartjes/dgx-forge-agent`. The installed agent transport deliberately
+pulls platform agent updates only from that pinned repository; an operation
+cannot redirect it. Supervisor and tooling locators remain manifest-bound
+release evidence. This policy is identical for every Spark and contains no
+node name, IP address, or fleet-size assumption.
 
 The unprivileged build job pins ORAS setup, resolves its absolute executable,
 and publishes only the bundle:
@@ -134,6 +184,32 @@ and signs GitHub/Sigstore build provenance with `actions/attest`. It has
 `contents: read`, `id-token: write`, and `attestations: write`, but no package,
 release, registry, or TUF publication permission. Operators verify this
 attestation with `gh attestation verify` before the first root installation.
+
+## First-release operator sequence
+
+For `v0.1.0`, perform these steps in order:
+
+1. Merge the release-readiness pull request only after the required GitHub
+   Actions checks pass.
+2. Deploy and configure the delegated platform-authority service, set the two
+   default-off repository release variables, configure the protected
+   `platform-release` environment, and pass its OIDC policy acceptance.
+3. Complete the outstanding physical hardware, recovery, and installation
+   acceptance gates recorded by `scripts/verify-platform-release --candidate
+   0.1.0 --json`.
+4. Immediately before tagging, delete only the manually published `0.1.0`
+   candidate versions of the API, worker, and Hermes packages. Do not delete
+   unrelated versions or aliases. Confirm `0.1.0` is absent from all six
+   platform repositories.
+5. Create and push `v0.1.0` at the exact merged release commit.
+6. Require the entire protected workflow to pass: required CI, six-artifact
+   publication and evidence, deployment bundle, host-updater attestation,
+   immutable TUF target, `stable` channel update, and final GitHub Release.
+
+Do not delete package versions or create the tag during the readiness PR. If
+any step fails after registry publication starts, preserve the evidence and
+follow the retry rules below; do not move or recreate the tag with different
+source.
 
 ## Delegated authority HTTP contract
 

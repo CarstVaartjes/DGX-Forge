@@ -1,15 +1,23 @@
 # Docker control-host deployment
 
 This is the authoritative operator entry point for a production NAS deployment.
-It applies a reviewed platform release to any supported `linux/amd64`,
-Docker-capable control host. A NAS is convenient but not required. Production
-never executes Compose from the repository checkout: the root-owned host
-updater selects a TUF-authorized platform target, loads the verified OCI deployment bundle,
+It applies a reviewed platform release to a supported Docker-capable control
+host. A NAS is convenient but not required. The first supported control-host
+architecture is `linux/amd64`. DGX-Forge-owned images also contain
+`linux/arm64`, but full ARM64 control-host support remains provisional until
+every pinned third-party service and the complete deployment gate pass there.
+Production never executes Compose from the repository checkout: the root-owned
+host updater selects a TUF-authorized platform target, loads the verified OCI deployment bundle,
 and runs only the resulting immutable generation.
 
 ## Current release state
 
-No images are currently being published. Repository variables
+No images are currently being published by the protected release workflow.
+Public manually uploaded `0.1.0` API, worker, and Hermes package versions may
+exist, but they are disposable candidates rather than signed or installable
+platform releases. Do not deploy or promote them; they must be removed only
+immediately before the official first tag so the six-package immutability guard
+can prove that version is unused. Repository variables
 `DGX_CONTAINER_RELEASES_ENABLED` and `DGX_PLATFORM_RELEASES_ENABLED` are
 deliberately unset (default-off) until the entire repository is release-ready.
 A maintainer must set both to `true` in a protected GitHub environment before
@@ -17,13 +25,16 @@ the stable-tag workflow can publish. Dependabot cannot publish: it only opens
 weekly dependency-update pull requests, which a maintainer must review, merge,
 and deliberately release with a stable version tag after enablement.
 
-When enabled in the future, GitHub Actions publishes only stable version tags
-to these three packages:
+When enabled, GitHub Actions publishes only stable version tags to these six
+packages:
 
 ```text
 ghcr.io/carstvaartjes/dgx-forge-api
 ghcr.io/carstvaartjes/dgx-forge-worker
 ghcr.io/carstvaartjes/dgx-forge-hermes
+ghcr.io/carstvaartjes/dgx-forge-agent
+ghcr.io/carstvaartjes/dgx-forge-agent-supervisor
+ghcr.io/carstvaartjes/dgx-forge-tooling
 ```
 
 Do not deploy an individual package, a tag, or a workflow summary. Select the
@@ -119,8 +130,9 @@ platform/releases/X.Y.Z/REPLACE_MANIFEST_SHA256.json
 ```
 
 The target binds the canonical manifest bytes, all three image digests, the
-deployment-bundle manifest and layer descriptors, supported host-updater ABI,
-database revision, and exact authorized predecessors. The updater downloads
+native ARM64 agent, supervisor, and tooling artifacts, their payload evidence,
+the deployment-bundle manifest and layer descriptors, supported host-updater
+ABI, database revision, and exact authorized predecessors. The updater downloads
 OCI manifest and layer bytes by digest, verifies their media types, sizes, and
 digests, verifies the canonical bundle, and renders Compose inside a new
 root-owned generation. A public package needs no NAS GitHub token. For each

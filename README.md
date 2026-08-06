@@ -7,6 +7,13 @@ separate Caddy, API/worker, PostgreSQL, LiteLLM, Hermes Agent, Prometheus, and G
 services. Administration is available through both `sparkctl admin` and the
 web UX, with Git-backed fleet, model, and profile definitions.
 
+There is no signed or installable DGX-Forge release yet. Public manually
+uploaded `0.1.0` container candidates are not release artifacts and must not be
+deployed. The first official release will be built end to end by the protected
+GitHub Actions tag workflow after the delegated authority and physical gates
+are accepted; see the [platform release publication
+runbook](docs/runbooks/platform-release-publication.md).
+
 Before a real release, run `scripts/verify-platform-release --candidate X.Y.Z
 --json`. A blocked result is expected until external hardware, recovery, and
 protected-code-host evidence exists. PR-only repository mutation is a one-way
@@ -136,6 +143,8 @@ reconciled by the repository-less worker.
   evidence
 - [Platform update runbook](docs/runbooks/platform-update.md) — NAS/Spark
   platform skew and recovery boundaries
+- [Platform release publication](docs/runbooks/platform-release-publication.md)
+  — protected six-artifact build, evidence, authority, and first-release order
 
 ## Security
 
