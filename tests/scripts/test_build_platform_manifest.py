@@ -151,3 +151,116 @@ def test_builder_replaces_review_input_artifact_with_ci_evidence(tmp_path: Path)
     assert json.loads(output.read_bytes())["control"]["images"]["api"] == evidence[
         "artifact"
     ]
+
+
+def test_builder_binds_tagged_source_and_all_arm64_platform_artifacts(
+    tmp_path: Path,
+) -> None:
+    source, descriptor_path, _ = _inputs(tmp_path)
+    output = tmp_path / "platform-release.json"
+    build_digest = "sha256:" + "9" * 64
+    locators = {
+        "agents.linux-arm64": "agent-release",
+        "supervisors.linux-arm64": "supervisor-release",
+        "tooling.linux-arm64": "tooling-release",
+    }
+    evidence_paths: list[Path] = []
+    for index, (locator, name) in enumerate(locators.items(), start=1):
+        digest = f"{index}" * 64
+        evidence = {
+            "artifact": {
+                "name": name,
+                "provenance_sha256": "d" * 64,
+                "reference": f"ghcr.io/example/{name}@sha256:{digest}",
+                "sbom_sha256": "c" * 64,
+                "sha256": digest,
+                "size": 2048 + index,
+            },
+            "locator": locator,
+            "schema_version": 1,
+        }
+        path = tmp_path / f"{name}-evidence.json"
+        path.write_bytes(_canonical(evidence))
+        evidence_paths.append(path)
+
+    arguments = [
+        "--input",
+        str(source),
+        "--bundle-descriptor",
+        str(descriptor_path),
+        "--build-digest",
+        build_digest,
+    ]
+    for path in evidence_paths:
+        arguments.extend(("--artifact-evidence", str(path)))
+    arguments.extend(("--version", "1.2.0", "--output", str(output)))
+    result = _run(*arguments)
+
+    assert result.returncode == 0, result.stderr
+    document = json.loads(output.read_bytes())
+    assert document["build_digest"] == build_digest
+    for collection, name in (
+        ("agents", "agent-release"),
+        ("supervisors", "supervisor-release"),
+        ("tooling", "tooling-release"),
+    ):
+        selected = document[collection][0]
+        assert selected["architecture"] == "linux-arm64"
+        assert selected["artifact"]["name"] == name
+        assert selected["payload"] == json.loads(source.read_bytes())[collection][0][
+            "payload"
+        ]
+
+
+def test_builder_rejects_duplicate_or_unknown_architecture_evidence(
+    tmp_path: Path,
+) -> None:
+    source, descriptor_path, _ = _inputs(tmp_path)
+    evidence = {
+        "artifact": {
+            "name": "agent-release",
+            "provenance_sha256": "d" * 64,
+            "reference": f"ghcr.io/example/agent@sha256:{'e' * 64}",
+            "sbom_sha256": "c" * 64,
+            "sha256": "e" * 64,
+            "size": 2048,
+        },
+        "locator": "agents.linux-x86_64",
+        "schema_version": 1,
+    }
+    evidence_path = tmp_path / "agent-evidence.json"
+    evidence_path.write_bytes(_canonical(evidence))
+
+    unknown = _run(
+        "--input",
+        str(source),
+        "--bundle-descriptor",
+        str(descriptor_path),
+        "--artifact-evidence",
+        str(evidence_path),
+        "--version",
+        "1.2.0",
+        "--output",
+        str(tmp_path / "unknown.json"),
+    )
+    assert unknown.returncode == 2
+    assert "locator is unknown" in unknown.stderr
+
+    evidence["locator"] = "agents.linux-arm64"
+    evidence_path.write_bytes(_canonical(evidence))
+    duplicate = _run(
+        "--input",
+        str(source),
+        "--bundle-descriptor",
+        str(descriptor_path),
+        "--artifact-evidence",
+        str(evidence_path),
+        "--artifact-evidence",
+        str(evidence_path),
+        "--version",
+        "1.2.0",
+        "--output",
+        str(tmp_path / "duplicate.json"),
+    )
+    assert duplicate.returncode == 2
+    assert "overlap" in duplicate.stderr

@@ -12,10 +12,11 @@ import stat
 import sys
 from pathlib import Path
 
-
 _REFERENCE = re.compile(r"[^\s]{1,1900}@sha256:(?P<digest>[0-9a-f]{64})\Z")
 _LOCATOR = re.compile(
-    r"(?:control\.images\.(?:api|worker)|control\.assets\.[a-z0-9][a-z0-9._-]{0,126})\Z"
+    r"(?:control\.images\.(?:api|worker)|"
+    r"control\.assets\.[a-z0-9][a-z0-9._-]{0,126}|"
+    r"(?:agents|supervisors|tooling)\.linux-(?:arm64|x86_64))\Z"
 )
 _NAME = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
 _MAX_MANIFEST = 16 * 1024 * 1024

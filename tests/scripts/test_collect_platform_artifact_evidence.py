@@ -5,6 +5,7 @@ import json
 import subprocess
 from pathlib import Path
 
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/collect-platform-artifact-evidence"
@@ -92,6 +93,93 @@ def test_collector_rejects_digest_mismatch_and_noncanonical_attestation(
             sbom,
             "--provenance",
             provenance,
+            "--output",
+            tmp_path / "evidence.json",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert not (tmp_path / "evidence.json").exists()
+
+
+@pytest.mark.parametrize(
+    "locator",
+    [
+        "agents.linux-arm64",
+        "supervisors.linux-arm64",
+        "tooling.linux-arm64",
+    ],
+)
+def test_collector_accepts_typed_arm64_platform_artifact_locators(
+    tmp_path: Path, locator: str
+) -> None:
+    manifest = b'{"schemaVersion":2}'
+    digest = hashlib.sha256(manifest).hexdigest()
+    manifest_path = tmp_path / "manifest.json"
+    sbom_path = tmp_path / "sbom.json"
+    provenance_path = tmp_path / "provenance.json"
+    output = tmp_path / "evidence.json"
+    manifest_path.write_bytes(manifest)
+    sbom_path.write_bytes(_canonical({"kind": "sbom"}))
+    provenance_path.write_bytes(_canonical({"kind": "provenance"}))
+
+    result = subprocess.run(
+        [
+            SCRIPT,
+            "--locator",
+            locator,
+            "--name",
+            "platform-artifact",
+            "--reference",
+            f"ghcr.io/example/platform-artifact@sha256:{digest}",
+            "--manifest",
+            manifest_path,
+            "--sbom",
+            sbom_path,
+            "--provenance",
+            provenance_path,
+            "--output",
+            output,
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(output.read_bytes())["locator"] == locator
+
+
+def test_collector_rejects_unknown_platform_artifact_architecture(
+    tmp_path: Path,
+) -> None:
+    manifest = b'{"schemaVersion":2}'
+    digest = hashlib.sha256(manifest).hexdigest()
+    manifest_path = tmp_path / "manifest.json"
+    sbom_path = tmp_path / "sbom.json"
+    provenance_path = tmp_path / "provenance.json"
+    manifest_path.write_bytes(manifest)
+    sbom_path.write_bytes(_canonical({"kind": "sbom"}))
+    provenance_path.write_bytes(_canonical({"kind": "provenance"}))
+
+    result = subprocess.run(
+        [
+            SCRIPT,
+            "--locator",
+            "agents.linux-riscv64",
+            "--name",
+            "platform-artifact",
+            "--reference",
+            f"ghcr.io/example/platform-artifact@sha256:{digest}",
+            "--manifest",
+            manifest_path,
+            "--sbom",
+            sbom_path,
+            "--provenance",
+            provenance_path,
             "--output",
             tmp_path / "evidence.json",
         ],

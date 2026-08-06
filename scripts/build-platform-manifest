@@ -20,6 +20,7 @@ if str(repository_src) not in sys.path:
 from spark_profiles.platform_release import PlatformRelease, PlatformReleaseError
 
 _SEMVER = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
+_PREFIXED_SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _MAX_INPUT_BYTES = 1024 * 1024
 
 
@@ -107,6 +108,25 @@ def _bind_artifact(document: dict[str, Any], evidence: dict[str, Any]) -> None:
         matches[0].clear()
         matches[0].update(artifact)
         return
+    elif "." in locator:
+        collection, architecture = locator.split(".", 1)
+        if collection not in {"agents", "supervisors", "tooling"} or architecture not in {
+            "linux-arm64",
+            "linux-x86_64",
+        }:
+            raise BuildError("artifact evidence locator is unknown")
+        candidates = document.get(collection)
+        if not isinstance(candidates, list):
+            raise BuildError("artifact evidence locator is unknown")
+        matches = [
+            item
+            for item in candidates
+            if isinstance(item, dict) and item.get("architecture") == architecture
+        ]
+        if len(matches) != 1:
+            raise BuildError("artifact evidence locator is unknown")
+        matches[0]["artifact"] = artifact
+        return
     else:
         raise BuildError("artifact evidence locator is unknown")
     destination[key] = artifact
@@ -117,6 +137,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--bundle-descriptor", required=True, type=Path)
     parser.add_argument("--artifact-evidence", action="append", default=[], type=Path)
+    parser.add_argument("--build-digest")
     parser.add_argument("--version", required=True)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
@@ -129,6 +150,10 @@ def main(argv: list[str] | None = None) -> int:
             raise BuildError("platform release input must not preselect a bundle")
         if release_input.get("platform_version") != args.version:
             raise BuildError("platform version disagrees with release input")
+        if args.build_digest is not None:
+            if _PREFIXED_SHA256.fullmatch(args.build_digest) is None:
+                raise BuildError("build digest is invalid")
+            release_input["build_digest"] = args.build_digest
         seen_locators: set[str] = set()
         for evidence_path in args.artifact_evidence:
             evidence = _read_object(evidence_path, "artifact evidence")
