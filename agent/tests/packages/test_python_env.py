@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import io
 import stat
+import sysconfig
 import threading
 import zipfile
 from dataclasses import dataclass
@@ -296,7 +297,7 @@ def test_runtime_identity_is_validated_and_immutable() -> None:
 
     assert len(runtime.interpreter_digest) == 64
     assert runtime.interpreter_digest == runtime.interpreter_digest.lower()
-    assert runtime.platform
+    assert sysconfig.get_platform() in runtime.platform
 
     with pytest.raises(ValueError, match="runtime identity"):
         PythonRuntimeIdentity("not-a-digest", runtime.platform)

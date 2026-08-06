@@ -11,6 +11,7 @@ import re
 import shutil
 import stat
 import sys
+import sysconfig
 import tarfile
 import tempfile
 import tomllib
@@ -52,7 +53,10 @@ class PythonRuntimeIdentity:
             digest = hashlib.sha256(executable.read_bytes()).hexdigest()
         except OSError as error:
             raise PythonEnvironmentError("Python interpreter is unavailable") from error
-        platform = f"{sys.implementation.name}-{sys.version_info.major}{sys.version_info.minor}-{sys.platform}"
+        platform = (
+            f"{sys.implementation.name}-{sys.version_info.major}"
+            f"{sys.version_info.minor}-{sysconfig.get_platform()}"
+        )
         if _PLATFORM.fullmatch(platform) is None:
             raise PythonEnvironmentError("Python runtime platform identity is invalid")
         return cls(digest, platform)
