@@ -114,7 +114,7 @@ def test_concurrent_identical_downloads_share_one_verified_fetch(tmp_path: Path)
         try:
             barrier.wait()
             results.append(_fetch(store, provider, index))
-        except Exception as error:  # pragma: no cover - surfaced below
+        except (OSError, RuntimeError, ValueError) as error:  # pragma: no cover
             errors.append(error)
 
     threads = [threading.Thread(target=run, args=(index,)) for index in (1, 2)]
