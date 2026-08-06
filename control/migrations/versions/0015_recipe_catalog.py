@@ -87,6 +87,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.CheckConstraint("source_kind IN ('local','sparkrun','global')", name="ck_recipe_imports_source_kind"),
         sa.CheckConstraint(_lower_hex("source_sha256", 64), name="ck_recipe_imports_source_digest"),
+        sa.UniqueConstraint("source_kind", "source_sha256", name="uq_recipe_import_source"),
     )
     op.create_index("ix_recipe_imports_recipe_id", "recipe_imports", ["recipe_id"])
     op.create_index("ix_recipe_imports_source_sha256", "recipe_imports", ["source_sha256"])

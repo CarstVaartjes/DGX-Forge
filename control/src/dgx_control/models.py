@@ -1598,6 +1598,7 @@ def _resolved_recipe_revision_is_immutable(_mapper, _connection, target: LocalRe
 class RecipeImport(Base):
     __tablename__ = "recipe_imports"
     __table_args__ = (
+        UniqueConstraint("source_kind", "source_sha256", name="uq_recipe_import_source"),
         CheckConstraint("source_kind IN ('local','sparkrun','global')", name="ck_recipe_imports_source_kind"),
         CheckConstraint(_lower_hex("source_sha256", 64), name="ck_recipe_imports_source_digest"),
     )

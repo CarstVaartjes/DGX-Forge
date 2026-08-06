@@ -59,6 +59,8 @@ from .auth import (
 )
 from .catalog_api import install_catalog_routes
 from .catalog_service import CatalogService
+from .sparkrun_api import install_sparkrun_routes
+from .sparkrun_workflow import SparkRunWorkflow
 from .metrics import MetricsRegistry
 from .operation_api import (
     AgentsResponse,
@@ -849,6 +851,7 @@ def create_app(
     updates: Any | None = None,
     packages: PackageApiServices | None = None,
     catalog: CatalogService | None = None,
+    sparkrun: SparkRunWorkflow | None = None,
 ) -> FastAPI:
     app = FastAPI(title="DGX Forge Control", version="1.0", docs_url=None, redoc_url=None)
     cursor_codec = tokens.cursor_codec()
@@ -982,6 +985,7 @@ def create_app(
         audits=audits,
         service=catalog,
     )
+    install_sparkrun_routes(app, actor_dependency=authenticated_actor, audits=audits, workflow=sparkrun)
 
     @app.get("/api/v1/healthz")
     def healthz() -> dict[str, str]:
@@ -1892,6 +1896,7 @@ def production_app() -> FastAPI:
         updates=update_admin,
         packages=PackageApiServices.from_object(package_services),
         catalog=CatalogService(sessions, clock=clock),
+        sparkrun=SparkRunWorkflow(sessions, clock=clock),
     )
     install_selected_generation_readiness(app, generation_readiness)
     web_root = Path(__file__).resolve().parent / "web"

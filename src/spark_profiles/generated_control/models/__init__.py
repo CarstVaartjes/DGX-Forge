@@ -3,6 +3,7 @@
 from .agent_summary import AgentSummary
 from .agents_response import AgentsResponse
 from .apply_platform_update_response_apply_update_api_v1_updates_post import ApplyPlatformUpdateResponseApplyUpdateApiV1UpdatesPost
+from .apply_request import ApplyRequest
 from .approve_platform_update_recovery_response_approve_update_resume_api_v1_updates_rollout_id_approve_resume_post import ApprovePlatformUpdateRecoveryResponseApproveUpdateResumeApiV1UpdatesRolloutIdApproveResumePost
 from .bounded_error_response import BoundedErrorResponse
 from .cancel_reconciliation_response_cancel_reconciliation_api_v1_reconciliations_reconciliation_id_cancel_post import CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost
@@ -88,6 +89,7 @@ from .plan_verify_request import PlanVerifyRequest
 from .plan_workload_request import PlanWorkloadRequest
 from .plan_workload_requests import PlanWorkloadRequests
 from .preview_proposal_response_proposal_preview_api_v1_proposals_post import PreviewProposalResponseProposalPreviewApiV1ProposalsPost
+from .preview_request import PreviewRequest
 from .proposal_change_request import ProposalChangeRequest
 from .proposal_change_request_document import ProposalChangeRequestDocument
 from .proposal_request import ProposalRequest
@@ -118,6 +120,7 @@ __all__ = (
     "AgentsResponse",
     "AgentSummary",
     "ApplyPlatformUpdateResponseApplyUpdateApiV1UpdatesPost",
+    "ApplyRequest",
     "ApprovePlatformUpdateRecoveryResponseApproveUpdateResumeApiV1UpdatesRolloutIdApproveResumePost",
     "BoundedErrorResponse",
     "CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost",
@@ -203,6 +206,7 @@ __all__ = (
     "PlanWorkloadRequest",
     "PlanWorkloadRequests",
     "PreviewProposalResponseProposalPreviewApiV1ProposalsPost",
+    "PreviewRequest",
     "ProposalChangeRequest",
     "ProposalChangeRequestDocument",
     "ProposalRequest",

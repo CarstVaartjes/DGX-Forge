@@ -123,6 +123,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/catalog/imports/sparkrun": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Apply */
+        post: operations["applySparkRunImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/imports/sparkrun/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview */
+        post: operations["previewSparkRunImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/catalog/recipes": {
         parameters: {
             query?: never;
@@ -1001,6 +1035,15 @@ export interface components {
         AgentsResponse: {
             /** Agents */
             agents: components["schemas"]["AgentSummary"][];
+        };
+        /** ApplyRequest */
+        ApplyRequest: {
+            /** Report Digest */
+            report_digest: string;
+            /** Source Sha256 */
+            source_sha256: string;
+            /** Source Yaml */
+            source_yaml: string;
         };
         /** BoundedErrorResponse */
         BoundedErrorResponse: {
@@ -1947,6 +1990,11 @@ export interface components {
             stop: components["schemas"]["PlanWorkloadRequest"];
             verify: components["schemas"]["PlanVerifyRequest"];
         };
+        /** PreviewRequest */
+        PreviewRequest: {
+            /** Source Yaml */
+            source_yaml: string;
+        };
         /** ProposalChangeRequest */
         ProposalChangeRequest: {
             /** Document */
@@ -2553,6 +2601,72 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    applySparkRunImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApplyRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    previewSparkRunImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

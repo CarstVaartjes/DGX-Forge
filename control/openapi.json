@@ -99,6 +99,34 @@
         "title": "AgentsResponse",
         "type": "object"
       },
+      "ApplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "report_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Report Digest",
+            "type": "string"
+          },
+          "source_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Sha256",
+            "type": "string"
+          },
+          "source_yaml": {
+            "maxLength": 262144,
+            "minLength": 1,
+            "title": "Source Yaml",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_yaml",
+          "source_sha256",
+          "report_digest"
+        ],
+        "title": "ApplyRequest",
+        "type": "object"
+      },
       "BoundedErrorResponse": {
         "additionalProperties": false,
         "properties": {
@@ -3297,6 +3325,22 @@
         "title": "PlanWorkloadRequests",
         "type": "object"
       },
+      "PreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "source_yaml": {
+            "maxLength": 262144,
+            "minLength": 1,
+            "title": "Source Yaml",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_yaml"
+        ],
+        "title": "PreviewRequest",
+        "type": "object"
+      },
       "ProposalChangeRequest": {
         "additionalProperties": false,
         "properties": {
@@ -4476,6 +4520,88 @@
           }
         ],
         "summary": "Audit View"
+      }
+    },
+    "/api/v1/catalog/imports/sparkrun": {
+      "post": {
+        "operationId": "applySparkRunImport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Apply"
+      }
+    },
+    "/api/v1/catalog/imports/sparkrun/preview": {
+      "post": {
+        "operationId": "previewSparkRunImport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview"
       }
     },
     "/api/v1/catalog/recipes": {
