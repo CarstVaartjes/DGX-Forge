@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import io
-import json
 import stat
 import threading
 import zipfile
@@ -290,6 +289,25 @@ def _add_real(
     result = store.promote_component(record, digest)
     store.release_reservation(reservation)
     return result
+
+
+def test_runtime_identity_is_validated_and_immutable() -> None:
+    runtime = PythonRuntimeIdentity.local()
+
+    assert len(runtime.interpreter_digest) == 64
+    assert runtime.interpreter_digest == runtime.interpreter_digest.lower()
+    assert runtime.platform
+
+    with pytest.raises(ValueError, match="runtime identity"):
+        PythonRuntimeIdentity("not-a-digest", runtime.platform)
+    with pytest.raises(ValueError, match="runtime identity"):
+        PythonRuntimeIdentity(runtime.interpreter_digest, "not a platform")
+
+
+def test_runtime_identity_is_exported_from_package_namespace() -> None:
+    from dgx_agent.packages import PythonRuntimeIdentity as ExportedIdentity
+
+    assert ExportedIdentity is PythonRuntimeIdentity
 
 
 def test_complete_lock_build_is_reproducible_immutable_and_reused(

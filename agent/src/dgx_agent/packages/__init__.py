@@ -18,6 +18,14 @@ from .store import (
     Reservation,
     StoreObject,
 )
+from .python_env import (
+    PythonEnvironmentBuilder,
+    PythonEnvironmentCancelled,
+    PythonEnvironmentError,
+    PythonEnvironmentSpec,
+    PythonRuntimeIdentity,
+    SourceBuild,
+)
 
 __all__ = [
     "ComponentDescriptor",
@@ -32,6 +40,12 @@ __all__ = [
     "PackageStateConflict",
     "PackageStateError",
     "PackageStoreError",
+    "PythonEnvironmentBuilder",
+    "PythonEnvironmentCancelled",
+    "PythonEnvironmentError",
+    "PythonEnvironmentSpec",
+    "PythonRuntimeIdentity",
     "Reservation",
+    "SourceBuild",
     "StoreObject",
 ]

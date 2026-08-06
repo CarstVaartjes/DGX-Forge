@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import stat
+import sys
 import tarfile
 import tempfile
 import tomllib
@@ -26,6 +27,35 @@ _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*\Z
 _MAX_INPUTS = 512
 _MAX_WHEEL_ENTRIES = 100_000
 _MAX_ENVIRONMENT_BYTES = 16 * 1024**3
+
+
+@dataclass(frozen=True)
+class PythonRuntimeIdentity:
+    """Digest-bound interpreter and platform identity used for derivation."""
+
+    interpreter_digest: str
+    platform: str
+
+    def __post_init__(self) -> None:
+        if (
+            not isinstance(self.interpreter_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", self.interpreter_digest) is None
+            or not isinstance(self.platform, str)
+            or _PLATFORM.fullmatch(self.platform) is None
+        ):
+            raise ValueError("Python runtime identity is invalid")
+
+    @classmethod
+    def local(cls) -> PythonRuntimeIdentity:
+        executable = Path(sys.executable)
+        try:
+            digest = hashlib.sha256(executable.read_bytes()).hexdigest()
+        except OSError as error:
+            raise PythonEnvironmentError("Python interpreter is unavailable") from error
+        platform = f"{sys.implementation.name}-{sys.version_info.major}{sys.version_info.minor}-{sys.platform}"
+        if _PLATFORM.fullmatch(platform) is None:
+            raise PythonEnvironmentError("Python runtime platform identity is invalid")
+        return cls(digest, platform)
 
 
 class PythonEnvironmentError(RuntimeError):
@@ -157,6 +187,7 @@ class PythonEnvironmentSpec:
             or recipe.get("network") is not False
             or not isinstance(build_identity, str)
             or _PLATFORM.fullmatch(build_identity) is None
+            or build_identity != "dgx-workload-build"
         ):
             raise PythonEnvironmentError(
                 "Python build recipe must use a networkless build identity"
@@ -886,6 +917,7 @@ __all__ = [
     "PythonEnvironmentCancelled",
     "PythonEnvironmentError",
     "PythonEnvironmentSpec",
+    "PythonRuntimeIdentity",
     "SourceBuild",
     "WheelBuildSandbox",
 ]
