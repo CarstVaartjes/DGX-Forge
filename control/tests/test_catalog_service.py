@@ -1,0 +1,117 @@
+from __future__ import annotations
+
+import copy
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+
+import pytest
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from dgx_control.catalog_service import (
+    CatalogConflict,
+    CatalogService,
+    CatalogValidationError,
+    RecipeDraftInput,
+)
+from dgx_control.models import Base
+
+
+@pytest.fixture
+def recipe_document() -> dict[str, object]:
+    path = Path(__file__).parent / "fixtures/global/recipe-v1-minimal.json"
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+@pytest.fixture
+def service(tmp_path: Path) -> CatalogService:
+    engine = create_engine(f"sqlite:///{tmp_path / 'catalog.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine, expire_on_commit=False)
+    return CatalogService(sessions, clock=lambda: datetime(2026, 8, 7, tzinfo=UTC))
+
+
+def test_resolve_creates_immutable_revision_and_repeated_resolve_is_idempotent(
+    service: CatalogService, recipe_document: dict[str, object]
+) -> None:
+    draft = service.create_recipe(
+        "admin", RecipeDraftInput(slug="qwen3-vllm", document=recipe_document)
+    )
+
+    resolved = service.resolve(draft.recipe_id, draft.revision_number, "admin")
+    repeated = service.resolve(draft.recipe_id, draft.revision_number, "admin")
+
+    assert resolved.lifecycle == "resolved"
+    assert repeated.id == resolved.id
+    assert repeated.content_sha256 == resolved.content_sha256
+    assert len(resolved.content_sha256 or "") == 64
+
+
+def test_stale_draft_update_has_stable_conflict_code(
+    service: CatalogService, recipe_document: dict[str, object]
+) -> None:
+    draft = service.create_recipe(
+        "admin", RecipeDraftInput(slug="qwen3-vllm", document=recipe_document)
+    )
+    changed = copy.deepcopy(recipe_document)
+    changed["metadata"]["title"] = "Changed title"
+    service.update_draft(draft.recipe_id, draft.revision_number, changed, "admin")
+
+    with pytest.raises(CatalogConflict) as caught:
+        service.update_draft(draft.recipe_id, draft.revision_number, changed, "admin")
+
+    assert caught.value.code == "catalog.stale_revision"
+
+
+@pytest.mark.parametrize(
+    "sensitive_key", [
+        "authorization", "credential", "password", "secret", "token",
+        "private_key", "certificate",
+    ]
+)
+def test_sensitive_keys_are_rejected_at_any_depth(
+    service: CatalogService,
+    recipe_document: dict[str, object],
+    sensitive_key: str,
+) -> None:
+    document = copy.deepcopy(recipe_document)
+    document["metadata"][sensitive_key] = "do-not-store"
+
+    with pytest.raises(CatalogValidationError) as caught:
+        service.create_recipe(
+            "admin", RecipeDraftInput(slug="qwen3-vllm", document=document)
+        )
+
+    assert caught.value.code == "catalog.sensitive_field"
+    assert "do-not-store" not in str(caught.value)
+
+
+def test_fork_records_attribution_and_changes_identity(
+    service: CatalogService, recipe_document: dict[str, object]
+) -> None:
+    original = service.create_recipe(
+        "admin", RecipeDraftInput(slug="qwen3-vllm", document=recipe_document)
+    )
+    resolved = service.resolve(original.recipe_id, original.revision_number, "admin")
+
+    forked = service.fork(
+        original.recipe_id, resolved.revision_number, "my-qwen", "alice"
+    )
+
+    assert forked.document["identity"]["slug"] == "my-qwen"
+    assert forked.document["provenance"]["source_kind"] == "fork"
+    assert resolved.content_sha256 in forked.document["provenance"]["attribution"][0]
+
+
+def test_mutable_external_revision_is_rejected(
+    service: CatalogService, recipe_document: dict[str, object]
+) -> None:
+    recipe_document["artifacts"][0]["revision"] = "main-latest"
+
+    with pytest.raises(CatalogValidationError) as caught:
+        service.create_recipe(
+            "admin", RecipeDraftInput(slug="qwen3-vllm", document=recipe_document)
+        )
+
+    assert caught.value.code == "catalog.mutable_artifact"
