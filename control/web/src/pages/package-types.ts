@@ -149,6 +149,7 @@ export type PackageValidationProgress = {
   progress?: {completed: number; failed: number; running: number; total: number};
   failure?: string | null;
   job_id?: string | null;
+  nodes?: Array<{node_id: string; state: string; batch_index: number; completed: number; total: number}>;
 };
 
 export interface PackageApi {

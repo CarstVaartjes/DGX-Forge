@@ -94,8 +94,9 @@ jobs:
           tests/e2e/test_workload_package_failure_matrix.py
       - name: Run focused control package contracts
         run: >-
-          uv run --project control --frozen pytest -q
+          uv run --project control --frozen --with-editable . pytest -q
           control/tests/test_package_api.py
+          control/tests/test_package_services.py
           control/tests/test_package_action_plans.py
           control/tests/test_package_validation.py
           control/tests/test_package_validation_runner.py
