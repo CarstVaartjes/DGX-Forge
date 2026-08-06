@@ -1,0 +1,24 @@
+schema_version = 1
+deployment_id = "mia-deepseek-dual"
+family_id = "mia-deepseek"
+release_digest = "b71a74ef9ada5eb7782df2960b1c7a8533f2bce00c6c4e2fd326880385517f4a"
+arguments = []
+
+[selector]
+node_count = 2
+required_labels = {}
+preferred_node_ids = []
+
+[secrets]
+
+[ports]
+inference = 8888
+
+[routing]
+alias = "deepseek-agent-dual"
+port = "inference"
+
+[resources]
+memory_bytes = 120000000000
+storage_bytes = 375809638400
+gpu_count = 2

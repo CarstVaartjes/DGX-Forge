@@ -21,6 +21,12 @@ from .contracts import (
     load_cluster_profile,
     load_workload,
 )
+from .workload_packages import (
+    LegacyWorkloadReader,
+    PackageFamily,
+    WorkloadDeployment,
+    WorkloadPackageError,
+)
 
 
 class CatalogError(ValueError):
@@ -143,6 +149,67 @@ def _load_profiles(root: Path) -> dict[str, ClusterProfile]:
         result[profile.id] = profile
     if not result:
         raise CatalogError("catalog has no cluster profiles")
+    return result
+
+
+def _load_package_families(root: Path) -> dict[str, PackageFamily]:
+    directory = root / "config/package-families"
+    result: dict[str, PackageFamily] = {}
+    if not directory.is_dir():
+        return result
+    for path in sorted(directory.glob("*.toml")):
+        try:
+            with path.open("rb") as source:
+                family = PackageFamily.load(tomllib.load(source))
+        except (OSError, tomllib.TOMLDecodeError, WorkloadPackageError) as error:
+            raise CatalogError(f"cannot load package family {path}: {error}") from error
+        if family.family_id in result:
+            raise CatalogError(f"duplicate package family ID: {family.family_id}")
+        if path.name != f"{family.family_id}.toml":
+            raise CatalogError(f"package family path does not match ID: {path.name}")
+        result[family.family_id] = family
+    return result
+
+
+def _load_workload_deployments(
+    root: Path, families: Mapping[str, PackageFamily]
+) -> dict[str, WorkloadDeployment]:
+    directory = root / "config/workload-deployments"
+    result: dict[str, WorkloadDeployment] = {}
+    if not directory.is_dir():
+        return result
+    for path in sorted(directory.glob("*.toml")):
+        try:
+            with path.open("rb") as source:
+                deployment = WorkloadDeployment.load(tomllib.load(source))
+        except (OSError, tomllib.TOMLDecodeError, WorkloadPackageError) as error:
+            raise CatalogError(f"cannot load workload deployment {path}: {error}") from error
+        if deployment.deployment_id in result:
+            raise CatalogError(f"duplicate workload deployment ID: {deployment.deployment_id}")
+        if path.name != f"{deployment.deployment_id}.toml":
+            raise CatalogError(f"workload deployment path does not match ID: {path.name}")
+        if deployment.family_id not in families:
+            raise CatalogError(f"workload deployment family is missing: {deployment.family_id}")
+        result[deployment.deployment_id] = deployment
+    return result
+
+
+def _project_legacy_deployments(
+    definitions: Mapping[str, WorkloadDefinition],
+    deployments: Mapping[str, WorkloadDeployment],
+) -> dict[str, WorkloadDeployment]:
+    result: dict[str, WorkloadDeployment] = {}
+    for deployment in deployments.values():
+        legacy_id = deployment.routing["alias"]
+        definition = definitions.get(legacy_id)
+        if definition is None:
+            continue
+        if legacy_id in result:
+            raise CatalogError(f"duplicate legacy workload deployment: {legacy_id}")
+        try:
+            result[legacy_id] = LegacyWorkloadReader.read(definition, deployment)
+        except (TypeError, WorkloadPackageError) as error:
+            raise CatalogError(f"invalid legacy workload projection: {legacy_id}") from error
     return result
 
 
@@ -415,11 +482,19 @@ class Catalog:
     maturity: dict[str, str]
     maturity_fingerprints: Mapping[str, str]
     accepted_profiles: Mapping[str, tuple[str, ...]]
+    package_families: Mapping[str, PackageFamily]
+    workload_deployments: Mapping[str, WorkloadDeployment]
+    legacy_workload_deployments: Mapping[str, WorkloadDeployment]
 
     @classmethod
     def load(cls, root: Path) -> Catalog:
         root = root.resolve()
         definitions = _load_definitions(root)
+        package_families = _load_package_families(root)
+        workload_deployments = _load_workload_deployments(root, package_families)
+        legacy_workload_deployments = _project_legacy_deployments(
+            definitions, workload_deployments
+        )
         _validate_model_owned_storage_paths(definitions)
         profiles = _load_profiles(root)
         selectors = _load_selectors(root / "config/profile-selectors.toml", profiles)
@@ -469,6 +544,9 @@ class Catalog:
             maturity=maturity,
             maturity_fingerprints=MappingProxyType(maturity_fingerprints),
             accepted_profiles=MappingProxyType(accepted_profiles),
+            package_families=MappingProxyType(package_families),
+            workload_deployments=MappingProxyType(workload_deployments),
+            legacy_workload_deployments=MappingProxyType(legacy_workload_deployments),
         )
 
     def resolve_profile(self, selector: str) -> ClusterProfile:

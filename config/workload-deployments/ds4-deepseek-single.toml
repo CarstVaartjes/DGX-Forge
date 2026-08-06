@@ -1,0 +1,24 @@
+schema_version = 1
+deployment_id = "ds4-deepseek-single"
+family_id = "ds4-deepseek"
+release_digest = "29f0f3e1c16dcac6884a18abce08840b06c233394a23a2a56204b2ea10434f3a"
+arguments = []
+
+[selector]
+node_count = 1
+required_labels = {}
+preferred_node_ids = []
+
+[secrets]
+
+[ports]
+inference = 8888
+
+[routing]
+alias = "deepseek-agent-single"
+port = "inference"
+
+[resources]
+memory_bytes = 120000000000
+storage_bytes = 120000000000
+gpu_count = 1

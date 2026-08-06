@@ -129,6 +129,23 @@ user-selectable merely because it starts successfully.
 | Model activation | The verified runtime is currently running through the direct adapter; `sparkctl` activation remains blocked until exact acceptance evidence exists |
 | `sparkctl nodes status` | Implemented as concurrent, live, read-only health; no database or retained history |
 
+## Legacy workload-package projection
+
+The existing `deepseek-agent-dual` and `deepseek-agent-single` public workload
+IDs remain read-only compatibility projections. Their pinned Mia and DS4
+definitions resolve to the generic package family, immutable release lock, and
+deployment documents under `config/package-families/`,
+`manifests/workload-releases/`, and `config/workload-deployments/`. Package
+operations do not contain family or model-name branches; another family can be
+added through the same documents without a DGX-Forge update.
+
+The DS4 generic release lock uses the SHA-256 of the checked-in DS4 checkpoint
+manifest (`…df5b…`), while the legacy profile/evidence retains its historical
+malformed 63-character `…dfb…` string. This corrects no acceptance evidence and
+does not change the legacy definition fingerprint; it is a migration-boundary
+integrity correction that must be reconciled during any future DS4
+requalification.
+
 ## Maturity and activation
 
 ```mermaid
