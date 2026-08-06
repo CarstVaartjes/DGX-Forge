@@ -187,29 +187,17 @@ attestation with `gh attestation verify` before the first root installation.
 
 ## First-release operator sequence
 
-For `v0.1.0`, perform these steps in order:
+Use the authoritative [`v0.1.0` release checklist](v0.1.0-release-checklist.md)
+for ordering, owners, commands, evidence, and stop conditions. It also records
+two current implementation blockers: the delegated authority server is not
+shipped, and the staged physical-candidate/exporter path needed to close all six
+physical gates does not exist yet.
 
-1. Merge the release-readiness pull request only after the required GitHub
-   Actions checks pass.
-2. Deploy and configure the delegated platform-authority service, set the two
-   default-off repository release variables, configure the protected
-   `platform-release` environment, and pass its OIDC policy acceptance.
-3. Complete the outstanding physical hardware, recovery, and installation
-   acceptance gates recorded by `scripts/verify-platform-release --candidate
-   0.1.0 --json`.
-4. Immediately before tagging, delete only the manually published `0.1.0`
-   candidate versions of the API, worker, and Hermes packages. Do not delete
-   unrelated versions or aliases. Confirm `0.1.0` is absent from all six
-   platform repositories.
-5. Create and push `v0.1.0` at the exact merged release commit.
-6. Require the entire protected workflow to pass: required CI, six-artifact
-   publication and evidence, deployment bundle, host-updater attestation,
-   immutable TUF target, `stable` channel update, and final GitHub Release.
-
-Do not delete package versions or create the tag during the readiness PR. If
-any step fails after registry publication starts, preserve the evidence and
-follow the retry rules below; do not move or recreate the tag with different
-source.
+The authority contract below remains the client/server protocol source. Follow
+[Delegated platform authority deployment](platform-authority-deployment.md) for
+the deployment gate and [Physical release acceptance](physical-release-acceptance.md)
+for the six-gate evidence boundary. Do not delete package versions, create the
+tag, enable publication, or improvise evidence while either runbook is blocked.
 
 ## Delegated authority HTTP contract
 

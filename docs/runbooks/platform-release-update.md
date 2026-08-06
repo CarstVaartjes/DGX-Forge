@@ -323,10 +323,12 @@ gates open:
 - `physical-spark-canary-rollback`.
 
 The release verifier accepts those gates only from a canonical,
-content-addressed `platform-update.json` produced by the approved physical
-acceptance workflow with all three independent evidence digests. Each physical
-artifact is a canonical Ed25519 envelope signed by the separately controlled
-physical-acceptance authority. The signed body binds one candidate, exact
+content-addressed `platform-update.json` produced by an approved physical
+acceptance workflow with all three independent evidence digests. That exporter
+is not shipped yet; follow [Physical release acceptance](physical-release-acceptance.md)
+for its implementation requirements and all six first-release gates. Each
+physical artifact is a canonical Ed25519 envelope signed by the separately
+controlled physical-acceptance authority. The signed body binds one candidate, exact
 release digest, UUID run ID, evidence type, observation time, and protected
 detail digest. All three envelopes and the parent report must name the same
 candidate/release/run; mixing envelopes from another candidate, release, or run
@@ -346,8 +348,9 @@ supposed to authenticate. The fixed envelope names are:
 - `inventory/reports/platform-update-control-host-recovery.json`; and
 - `inventory/reports/platform-update-spark-canary-rollback.json`.
 
-If the approved physical exporter or trusted public key is unavailable, the
-release stays blocked.
+Because the approved physical exporter is currently unavailable, the release
+stays blocked. A locally generated key or hand-authored envelope is not an
+acceptable substitute.
 
 Evidence must contain node IDs, versions, content digests, slot/generation
 identities, timestamps, outcome states, and bounded sanitized errors. Remove

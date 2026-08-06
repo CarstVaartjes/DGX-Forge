@@ -25,6 +25,11 @@ the stable-tag workflow can publish. Dependabot cannot publish: it only opens
 weekly dependency-update pull requests, which a maintainer must review, merge,
 and deliberately release with a stable version tag after enablement.
 
+Before changing a release variable, package version, or tag, follow the
+authoritative [`v0.1.0` release checklist](../../docs/runbooks/v0.1.0-release-checklist.md).
+It records the authority and physical-acceptance implementation blockers that
+must close before this installation path becomes usable.
+
 When enabled, GitHub Actions publishes only stable version tags to these six
 packages:
 

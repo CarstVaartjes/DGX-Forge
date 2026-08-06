@@ -125,6 +125,8 @@ reconciled by the repository-less worker.
 
 ## Documentation
 
+- [`v0.1.0` release checklist](docs/runbooks/v0.1.0-release-checklist.md) —
+  authoritative remaining actions, owners, evidence, and stop conditions
 - [Architecture overview](docs/architecture-overview.md)
 - [NAS pull-only Compose deployment](deploy/compose/README.md)
 - [Control-plane bootstrap](docs/runbooks/control-plane-bootstrap.md)
@@ -144,7 +146,11 @@ reconciled by the repository-less worker.
 - [Platform update runbook](docs/runbooks/platform-update.md) — NAS/Spark
   platform skew and recovery boundaries
 - [Platform release publication](docs/runbooks/platform-release-publication.md)
-  — protected six-artifact build, evidence, authority, and first-release order
+  — protected six-artifact build and publication evidence
+- [Delegated platform authority](docs/runbooks/platform-authority-deployment.md)
+  — current implementation blocker, deployment boundary, and OIDC acceptance
+- [Physical release acceptance](docs/runbooks/physical-release-acceptance.md) —
+  six hardware/recovery gates and the missing exporter/candidate boundary
 
 ## Security
 
