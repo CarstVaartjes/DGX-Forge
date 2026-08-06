@@ -51,6 +51,23 @@ uv sync --dev
 uv run pytest
 ```
 
+The repository deliberately keeps expensive acceptance work local. Pull
+requests run only the focused contract smoke checks and generated-client drift
+check in GitHub Actions. Before requesting review, run the full local tiers
+that match the change:
+
+```bash
+uv run --frozen pytest -q
+uv run --project control --frozen --with-editable . pytest -q control/tests
+npm ci --prefix control/web && npm test --prefix control/web -- --run
+uv run --frozen pytest -q deploy/compose/tests
+scripts/verify-supply-chain --json
+```
+
+The simulated workload acceptance and failure matrix run on manual/tagged
+workflow executions so release evidence is still produced without charging
+every PR for the longest jobs.
+
 Configure the authenticated control origin and restrictive token file, then
 inspect current node state and preview the exact server reconciliation plan:
 

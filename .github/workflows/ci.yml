@@ -81,6 +81,7 @@ jobs:
     name: Workload package acceptance evidence
     needs: [lint, generated-clients, test]
     if: >-
+      github.event_name != 'pull_request' &&
       always() &&
       needs.lint.result == 'success' &&
       needs.generated-clients.result == 'success' &&

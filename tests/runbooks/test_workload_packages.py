@@ -61,6 +61,10 @@ def test_hosted_ci_uploads_independent_workload_evidence() -> None:
     assert "workload-package-acceptance.json" in workflow
     assert "workload-package-failure-matrix.json" in workflow
     assert "actions/upload-artifact" in workflow
+    evidence_job = workflow.split("  workload-package-evidence:", 1)[1].split(
+        "  release-metadata:", 1
+    )[0]
+    assert "github.event_name != 'pull_request'" in evidence_job
 
 
 def test_ci_only_runs_for_main_pull_requests_manual_dispatch_or_release_tags() -> None:
