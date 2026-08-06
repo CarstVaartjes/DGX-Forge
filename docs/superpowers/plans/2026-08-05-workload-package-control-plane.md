@@ -4,9 +4,10 @@
 > implemented on `main`, including migration `0014_package_action_plans`,
 > discovery/resolution, API/CLI parity, web administration, bounded metrics,
 > digest-bound removal/GC dispatch, and TUF-authorized rollout dispatch through
-> the existing agent-job queue. Release publication, validation, and promotion
-> remain explicitly trust/worker-gated until their signer and runner boundaries
-> are installed. See
+> the existing agent-job queue. Promotion now has a durable digest-bound
+> preview/apply boundary, but release publication remains signer-gated and
+> validation remains runner-gated until those isolated boundaries are installed.
+> See
 > the [roadmap status ledger](2026-08-05-generalized-workload-package-roadmap.md#implementation-status-2026-08-06).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.

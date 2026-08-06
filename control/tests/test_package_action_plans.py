@@ -6,7 +6,13 @@ from pathlib import Path
 import pytest
 from dgx_control.agent_jobs import AgentJobService
 from dgx_control.db import build_engine, session_factory
-from dgx_control.models import AgentNode, Base, Observation, PackageActionPlan
+from dgx_control.models import (
+    AgentNode,
+    Base,
+    Observation,
+    PackageActionPlan,
+    PackageCandidate,
+)
 from dgx_control.models import AgentOperation as StoredAgentOperation
 from dgx_control.package_services import ProductionPackageProjectionService
 from dgx_control.repository import RepositoryService
@@ -253,3 +259,66 @@ def test_repair_preview_and_apply_queues_package_repair(tmp_path) -> None:
     result = service.repair("ds4-deepseek-single", preview["digest"], "admin", "request-repair")
     assert result["state"] == "planned"
     assert queued[0][1] == "package.repair"
+
+
+def test_promotion_preview_and_apply_are_fenced_to_publication_service(tmp_path) -> None:
+    engine = build_engine(f"sqlite:///{tmp_path / 'plans.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = session_factory(engine)
+    candidate_id = "00000000-0000-4000-8000-000000000006"
+    release_digest = "d" * 64
+    with sessions.begin() as session:
+        session.add(
+            PackageCandidate(
+                id=candidate_id,
+                family_id="future-stack",
+                upstream_identity_digest="a" * 64,
+                metadata_digest="b" * 64,
+                upstream_version="1.0.0",
+                channel="stable",
+                source_provider="git",
+                source_reference="future-stack/1.0.0",
+                state="resolved",
+                summary={"release": {"release_digest": release_digest}},
+                discovered_by="test",
+                first_seen_at=datetime.now(UTC),
+                last_seen_at=datetime.now(UTC),
+                created_at=datetime.now(UTC),
+                updated_at=datetime.now(UTC),
+            )
+        )
+
+    class Repository:
+        def head(self):
+            return "a" * 40
+
+    published: list[tuple[str, str]] = []
+
+    class Publication:
+        def preview(self, candidate: str, commit: str):
+            assert candidate == candidate_id
+            return type(
+                "Preview",
+                (),
+                {"digest": "e" * 64, "release_digest": release_digest, "base_commit": commit},
+            )()
+
+        def promote(self, preview_digest: str, actor: str):
+            published.append((preview_digest, actor))
+            return type("Target", (), {"digest": release_digest})()
+
+    service = ProductionPackageProjectionService(
+        Repository(), sessions, publication=Publication()
+    )
+    preview = service.promotion_preview(candidate_id)
+    assert preview["candidate_id"] == candidate_id
+    assert preview["release_digest"] == "sha256:" + release_digest
+    result = service.promote(candidate_id, preview["digest"], "admin", "request-promote")
+    assert result == {
+        "candidate_id": candidate_id,
+        "release_digest": "sha256:" + release_digest,
+        "digest": "sha256:" + release_digest,
+        "state": "published",
+    }
+    assert published == [("e" * 64, "admin")]
+    assert service.promote(candidate_id, preview["digest"], "admin", "request-promote") == result

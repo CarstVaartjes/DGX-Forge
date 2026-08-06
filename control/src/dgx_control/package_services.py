@@ -99,6 +99,7 @@ class ProductionPackageProjectionService:
         clock: Callable[[], datetime] | None = None,
         agent_jobs: Any | None = None,
         package_trust: Any | Callable[[str, bytes, str], bool] | None = None,
+        publication: Any | None = None,
     ) -> None:
         if not callable(getattr(repository, "head", None)):
             raise TypeError("package repository is required")
@@ -108,6 +109,9 @@ class ProductionPackageProjectionService:
         self._clock = clock or (lambda: datetime.now(UTC))
         self._agent_jobs = agent_jobs
         self._package_trust = package_trust
+        # Publication is deliberately injected from a separate workload-TUF
+        # signer boundary.  The API process never owns private release keys.
+        self._publication = publication
         self._rollouts = (
             PackageRolloutOrchestrator(sessions, agent_jobs, clock=self._clock)
             if agent_jobs is not None
@@ -824,6 +828,86 @@ class ProductionPackageProjectionService:
         self.finish_action_plan(plan_digest, result=result)
         return result
 
+    # ---- Candidate publication -------------------------------------------------
+
+    def promotion_preview(self, candidate_id: str) -> Mapping[str, object]:
+        """Create a durable preview for a signer-owned workload publication."""
+        if self._publication is None:
+            raise RuntimeError("workload publication service is not installed")
+        if not isinstance(candidate_id, str) or not candidate_id:
+            raise ValueError("package candidate is invalid")
+        commit = self._repository.head()
+        preview = self._publication.preview(candidate_id, commit)
+        preview_digest = getattr(preview, "digest", None)
+        release_digest = getattr(preview, "release_digest", None)
+        base_commit = getattr(preview, "base_commit", commit)
+        if (
+            not isinstance(preview_digest, str)
+            or _raw_digest(preview_digest) is None
+            or not isinstance(release_digest, str)
+            or _raw_digest(release_digest) is None
+            or base_commit != commit
+        ):
+            raise RuntimeError("workload publication preview is invalid")
+        request = {
+            "candidate_id": candidate_id,
+            "publication_preview_digest": _raw_digest(preview_digest),
+            "release_digest": _raw_digest(release_digest),
+            "base_commit": commit,
+        }
+        digest = self.create_action_plan("package.promote", candidate_id, request)
+        return {
+            "digest": digest,
+            "state": "ready",
+            "candidate_id": candidate_id,
+            "release_digest": "sha256:" + str(request["release_digest"]),
+            "batches": [],
+            "canary_node": None,
+            "offline_pending": [],
+            "storage_bytes": 0,
+            "download_bytes": 0,
+        }
+
+    def promote(
+        self, candidate_id: str, plan_digest: str, actor: str, request_id: str
+    ) -> Mapping[str, object]:
+        """Apply exactly one preview through the isolated publication service."""
+        if self._publication is None:
+            raise RuntimeError("workload publication service is not installed")
+        replay = self._progress_replay(plan_digest, "package.promote")
+        if replay is not None:
+            return replay
+        request = self.consume_action_plan(plan_digest, "package.promote", candidate_id)
+        if request.get("candidate_id") != candidate_id:
+            raise ValueError("package promotion candidate changed")
+        publication_preview_digest = request.get("publication_preview_digest")
+        release_digest = request.get("release_digest")
+        base_commit = request.get("base_commit")
+        if (
+            not isinstance(publication_preview_digest, str)
+            or _raw_digest(publication_preview_digest) is None
+            or not isinstance(release_digest, str)
+            or _raw_digest(release_digest) is None
+            or not isinstance(base_commit, str)
+            or self._repository.head() != base_commit
+        ):
+            raise ValueError("package promotion preview is stale")
+        target = self._publication.promote(publication_preview_digest, actor)
+        target_digest = target.get("digest") if isinstance(target, Mapping) else getattr(target, "digest", None)
+        if not isinstance(target_digest, str):
+            raise TypeError("workload publication result is invalid")
+        target_digest = _raw_digest(target_digest)
+        if target_digest != release_digest:
+            raise ValueError("workload publication release changed")
+        result = {
+            "candidate_id": candidate_id,
+            "release_digest": "sha256:" + release_digest,
+            "digest": "sha256:" + release_digest,
+            "state": "published",
+        }
+        self.finish_action_plan(plan_digest, result=result)
+        return result
+
     def rollout_status(
         self, deployment_id: str, rollout_id: str, cursor: str | None, limit: int
     ) -> Mapping[str, object]:
@@ -1177,8 +1261,6 @@ class ProductionPackageProjectionService:
 
     validation_preview = _mutation_unavailable
     validate = _mutation_unavailable
-    promotion_preview = _mutation_unavailable
-    promote = _mutation_unavailable
     rollback_preview = _mutation_unavailable
     rollback = _mutation_unavailable
 
