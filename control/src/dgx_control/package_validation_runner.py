@@ -58,6 +58,7 @@ class PackageValidationRunner:
         validation_id = request.get("validation_id")
         candidate_id = request.get("candidate_id")
         base_commit = request.get("base_commit")
+        release_digest = request.get("release_digest")
         node_ids = request.get("node_ids")
         operations = request.get("operations")
         required_evidence = request.get("required_evidence", [])
@@ -65,13 +66,18 @@ class PackageValidationRunner:
             not isinstance(validation_id, str)
             or not isinstance(candidate_id, str)
             or not isinstance(base_commit, str)
+            or not isinstance(release_digest, str)
+            or len(release_digest) != 64
+            or any(character not in "0123456789abcdef" for character in release_digest)
             or not isinstance(node_ids, list)
             or not node_ids
             or not all(isinstance(node_id, str) for node_id in node_ids)
             or not isinstance(operations, list)
             or len(operations) != len(_VALIDATION_OPERATIONS)
             or not isinstance(required_evidence, list)
+            or len(required_evidence) > 64
             or not all(isinstance(item, str) and item for item in required_evidence)
+            or any(len(item) > 128 for item in required_evidence)
         ):
             raise ValueError("validation request identity is invalid")
         try:
@@ -81,8 +87,12 @@ class PackageValidationRunner:
         now = self._clock()
         with self._sessions.begin() as session:
             run = session.get(PackageValidationRun, validation_id)
-            if run is None or run.candidate_id != candidate_id:
-                raise ValueError("validation run is unavailable")
+            if (
+                run is None
+                or run.candidate_id != candidate_id
+                or run.release_digest != release_digest
+            ):
+                raise ValueError("validation release identity is unavailable")
             progress = dict(run.progress or {})
             existing_job_id = progress.get("job_id")
             if isinstance(existing_job_id, str):
@@ -107,13 +117,21 @@ class PackageValidationRunner:
                     if key in payload
                 }
                 PackageOperationRequest.parse(AgentOperation(expected), agent_payload)
+                if agent_payload.get("release_digest") != release_digest:
+                    raise ValueError("validation operation release identity is invalid")
+                deployment = agent_payload.get("deployment")
+                if (
+                    not isinstance(deployment, Mapping)
+                    or deployment.get("release_digest") != release_digest
+                ):
+                    raise ValueError("validation deployment release identity is invalid")
                 parsed_operations.append((expected, agent_payload))
             job_id = str(uuid.uuid4())
             parent_payload = {
                 "schema_version": 1,
                 "validation_id": validation_id,
                 "candidate_id": candidate_id,
-                "release_digest": request.get("release_digest"),
+                "release_digest": release_digest,
                 "required_evidence": list(dict.fromkeys(required_evidence)),
             }
             session.add(
@@ -212,6 +230,22 @@ class PackageValidationRunner:
                     else:
                         key = operation.kind.removeprefix("package.")
                         evidence[key] = result
+                try:
+                    evidence_size = len(canonical_message(evidence))
+                except (TypeError, ValueError):
+                    evidence_size = 16_385
+                if evidence_size > 16_384:
+                    run.state = "failed"
+                    run.reason_code = "validation-evidence-too-large"
+                    run.failure_detail = {"max_bytes": 16_384}
+                    run.progress = {
+                        **dict(progress),
+                        "completed": 0,
+                        "failed": 1,
+                        "running": 0,
+                    }
+                    run.updated_at = self._clock()
+                    return True
                 required = progress.get("required_evidence", [])
                 if isinstance(required, list):
                     missing = [item for item in required if item not in evidence]

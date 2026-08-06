@@ -25,6 +25,10 @@ The preview and durable `PackageValidationRun` bind:
 - exact canary node IDs and operation IDs; and
 - bounded progress, evidence, retry disposition, and actor.
 
+The runner rejects any operation whose release or deployment identity differs
+from the validated candidate and caps persisted evidence at the same bounded
+size as the API contract.
+
 The worker persists the parent job and agent operations before dispatch. The
 authenticated result consumer accepts only exact operation, payload, release,
 deployment, node, and attempt bindings. A successful prepare followed by

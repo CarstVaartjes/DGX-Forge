@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime
 
+import pytest
 from dgx_agent_protocol import AgentOperation, canonical_message
 from dgx_control.db import build_engine, session_factory
 from dgx_control.models import (
@@ -99,6 +100,11 @@ def test_runner_stages_agent_operations_and_returns_running(tmp_path) -> None:
         )
     jobs = RecordingAgentJobs()
     runner = PackageValidationRunner(sessions, jobs, clock=lambda: now)
+
+    invalid_release = _request()
+    invalid_release["release_digest"] = "c" * 64
+    with pytest.raises(ValueError, match="release identity"):
+        runner(invalid_release)
 
     result = runner(_request())
 
