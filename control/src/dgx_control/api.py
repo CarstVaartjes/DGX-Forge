@@ -593,12 +593,12 @@ def build_agent_services(
     """Construct the fail-closed production agent runtime from one provider."""
     from .agent_jobs import AgentJobService
     from .enrollment import EnrollmentService
-    from .pki import BuiltinCertificateAuthority
     from .package_helper_authority import (
         PackageHelperAuthorityService,
         PackageHelperGrantIssuer,
         PackageObjectReceiptIssuer,
     )
+    from .pki import BuiltinCertificateAuthority
     from .presence import AgentPresenceService, ManagementAddressPolicy
     from .step_ca import StepCertificateAuthority
 
@@ -1598,6 +1598,7 @@ def production_app() -> FastAPI:
     from .offline import OnlineLock
     from .operation_api import durable_operation_services
     from .orchestration import ReconciliationOrchestrator
+    from .package_services import ProductionPackageProjectionService
     from .proposals import ProposalService
     from .reconcile import ChangeService, Reconciler
     from .repository import RepositoryService
@@ -1681,6 +1682,12 @@ def production_app() -> FastAPI:
         orchestrator=ReconciliationOrchestrator(sessions, clock=clock),
     )
     dashboard = DashboardService(repository, sessions)
+    package_services = ProductionPackageProjectionService(
+        repository,
+        sessions,
+        fleet=dashboard.fleet,
+        clock=clock,
+    )
     metrics = MetricsRegistry()
     operational_metrics = OperationalMetricsCollector(metrics, sessions, clock=clock)
     commit_eligible = lambda commit: git_policy.eligible(commit).ok
@@ -1830,6 +1837,7 @@ def production_app() -> FastAPI:
             cursors=cursor_codec,
         ),
         updates=update_admin,
+        packages=PackageApiServices.from_object(package_services),
     )
     install_selected_generation_readiness(app, generation_readiness)
     web_root = Path(__file__).resolve().parent / "web"

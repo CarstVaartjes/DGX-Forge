@@ -46,6 +46,37 @@ def test_read_is_pinned_to_immutable_commit(repository) -> None:
     assert before.sha256 == __import__("hashlib").sha256(before.content).hexdigest()
 
 
+def test_workload_authority_documents_are_read_from_pinned_commits(repository) -> None:
+    root, _commit = repository
+    (root / "config/package-families").mkdir(parents=True)
+    (root / "config/package-families/future.toml").write_text(
+        'schema_version = 1\nfamily_id = "future"\n'
+    )
+    (root / "config/workload-deployments").mkdir(parents=True)
+    (root / "config/workload-deployments/future.toml").write_text(
+        'schema_version = 1\ndeployment_id = "future"\n'
+    )
+    (root / "manifests/workload-releases/future").mkdir(parents=True)
+    release_path = root / (
+        "manifests/workload-releases/future/" + "a" * 64 + ".json"
+    )
+    release_path.write_text("{}")
+    _git(root, "add", ".")
+    _git(root, "commit", "-qm", "workload documents")
+    commit = _git(root, "rev-parse", "HEAD")
+    service = RepositoryService(root)
+
+    assert service.read_document(commit, "config/package-families/future.toml").parsed[
+        "family_id"
+    ] == "future"
+    assert service.read_document(commit, "config/workload-deployments/future.toml").parsed[
+        "deployment_id"
+    ] == "future"
+    assert service.read_document(
+        commit, "manifests/workload-releases/future/" + "a" * 64 + ".json"
+    ).parsed == {}
+
+
 def test_inspect_does_not_execute_repository_hooks(repository, tmp_path: Path) -> None:
     root, commit = repository
     marker = tmp_path / "hook-ran"

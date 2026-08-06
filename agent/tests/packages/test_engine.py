@@ -312,3 +312,185 @@ def test_health_failure_rolls_back_and_crash_inspection_requires_compensation(
     with pytest.raises(PackageEngineError, match="health"):
         engine.execute(request, binding, None)
     assert state.active_generation("future-stack").release_digest == RELEASE_A
+
+
+def test_remove_refuses_active_retained_and_staged_generations_without_stop(
+    tmp_path: Path,
+) -> None:
+    engine, state, _trust, _adapters, events = _engine(tmp_path)
+    engine.execute(_request(AgentOperation.PACKAGE_PREPARE, RELEASE_A), _binding(1), None)
+    generation_path = tmp_path / "generations" / RELEASE_A
+    assert generation_path.is_dir()
+
+    with pytest.raises(PackageEngineError, match="validated"):
+        engine.execute(
+            _request(AgentOperation.PACKAGE_REMOVE, RELEASE_A), _binding(2), None
+        )
+    assert generation_path.is_dir()
+    assert "stop" not in events
+
+    engine.execute(_request(AgentOperation.PACKAGE_ACTIVATE, RELEASE_A), _binding(3), None)
+    with pytest.raises(PackageEngineError, match="active"):
+        engine.execute(
+            _request(AgentOperation.PACKAGE_REMOVE, RELEASE_A), _binding(4), None
+        )
+    assert state.active_generation("future-stack").release_digest == RELEASE_A
+    assert generation_path.is_dir()
+    assert "stop" not in events
+
+    engine.execute(_request(AgentOperation.PACKAGE_PREPARE, RELEASE_B), _binding(5), None)
+    engine.execute(_request(AgentOperation.PACKAGE_ACTIVATE, RELEASE_B), _binding(6), None)
+    with pytest.raises(PackageEngineError, match="retained"):
+        engine.execute(
+            _request(AgentOperation.PACKAGE_REMOVE, RELEASE_A), _binding(7), None
+        )
+    assert generation_path.is_dir()
+
+
+def test_remove_refuses_live_leased_failed_generation_until_lease_expiry(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine, state, _trust, _adapters, _events = _engine(tmp_path)
+    engine.execute(_request(AgentOperation.PACKAGE_PREPARE, RELEASE_A), _binding(1), None)
+    generation = state.generation_for_release("future-stack", RELEASE_A)
+    assert generation is not None
+    state.transition_generation(
+        _binding(1),
+        generation_id=generation.generation_id,
+        expected_states=frozenset({"validated"}),
+        state="failed",
+    )
+    state.acquire_lease(
+        _binding(1),
+        lease_id="70000000-0000-4000-8000-000000000001",
+        generation_id=generation.generation_id,
+        expires_at_ns=2_000,
+    )
+    monkeypatch.setattr("dgx_agent.packages.engine.time.time_ns", lambda: 1_000)
+    with pytest.raises(PackageEngineError, match="leased"):
+        engine.execute(
+            _request(AgentOperation.PACKAGE_REMOVE, RELEASE_A), _binding(2), None
+        )
+    assert (tmp_path / "generations" / RELEASE_A).is_dir()
+
+
+def test_remove_cleans_failed_generation_and_leaves_shared_release_until_last_owner(
+    tmp_path: Path,
+) -> None:
+    engine, state, _trust, _adapters, _events = _engine(tmp_path)
+    engine.execute(_request(AgentOperation.PACKAGE_PREPARE, RELEASE_A), _binding(1), None)
+    shared_request = PackageOperationRequest(
+        operation=AgentOperation.PACKAGE_PREPARE,
+        schema_version=1,
+        deployment_id="other-stack",
+        release_digest=RELEASE_A,
+        deployment_digest=DEPLOYMENT,
+    )
+    engine.execute(shared_request, _binding(2), None)
+    first = state.generation_for_release("future-stack", RELEASE_A)
+    second = state.generation_for_release("other-stack", RELEASE_A)
+    assert first is not None and second is not None
+    state.transition_generation(
+        _binding(1),
+        generation_id=first.generation_id,
+        expected_states=frozenset({"validated"}),
+        state="failed",
+    )
+
+    removed_first = engine.execute(
+        _request(AgentOperation.PACKAGE_REMOVE, RELEASE_A), _binding(3), None
+    )
+    assert removed_first.status == "removed"
+    generation_path = tmp_path / "generations" / RELEASE_A
+    assert generation_path.is_dir()
+
+    state.transition_generation(
+        _binding(2),
+        generation_id=second.generation_id,
+        expected_states=frozenset({"validated"}),
+        state="failed",
+    )
+
+    removed_second = engine.execute(
+        shared_request.__class__(
+            operation=AgentOperation.PACKAGE_REMOVE,
+            schema_version=1,
+            deployment_id="other-stack",
+            release_digest=RELEASE_A,
+            deployment_digest=DEPLOYMENT,
+        ),
+        _binding(4),
+        None,
+    )
+    assert removed_second.status == "removed"
+    assert not generation_path.exists()
+    assert not (tmp_path / "generations" / f".{RELEASE_A}.remove").exists()
+
+
+def test_remove_rejects_generation_symlink_without_touching_target(tmp_path: Path) -> None:
+    engine, state, _trust, _adapters, _events = _engine(tmp_path)
+    engine.execute(_request(AgentOperation.PACKAGE_PREPARE, RELEASE_A), _binding(1), None)
+    generation = state.generation_for_release("future-stack", RELEASE_A)
+    assert generation is not None
+    state.transition_generation(
+        _binding(1),
+        generation_id=generation.generation_id,
+        expected_states=frozenset({"validated"}),
+        state="failed",
+    )
+    generation_path = tmp_path / "generations" / RELEASE_A
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    sentinel = outside / "sentinel"
+    sentinel.write_text("keep", encoding="utf-8")
+    import shutil
+
+    shutil.rmtree(generation_path)
+    generation_path.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(PackageEngineError, match="cleanup failed"):
+        engine.execute(
+            _request(AgentOperation.PACKAGE_REMOVE, RELEASE_A), _binding(2), None
+        )
+    assert sentinel.read_text(encoding="utf-8") == "keep"
+    assert generation_path.is_symlink()
+
+
+def test_remove_cleanup_tombstone_is_retryable_after_interruption(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, state, _trust, _adapters, _events = _engine(tmp_path)
+    engine.execute(_request(AgentOperation.PACKAGE_PREPARE, RELEASE_A), _binding(1), None)
+    generation = state.generation_for_release("future-stack", RELEASE_A)
+    assert generation is not None
+    state.transition_generation(
+        _binding(1),
+        generation_id=generation.generation_id,
+        expected_states=frozenset({"validated"}),
+        state="failed",
+    )
+    import shutil
+
+    original = shutil.rmtree
+    interrupted = {"value": True}
+
+    def fail_once(path, *args, **kwargs):
+        if interrupted["value"]:
+            interrupted["value"] = False
+            raise OSError("interrupted cleanup")
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", fail_once)
+    with pytest.raises(PackageEngineError, match="cleanup failed"):
+        engine.execute(
+            _request(AgentOperation.PACKAGE_REMOVE, RELEASE_A), _binding(2), None
+        )
+    assert not (tmp_path / "generations" / RELEASE_A).exists()
+    assert (tmp_path / "generations" / f".{RELEASE_A}.remove").is_dir()
+
+    result = engine.execute(
+        _request(AgentOperation.PACKAGE_REMOVE, RELEASE_A), _binding(3), None
+    )
+    assert result.status == "removed"
+    assert not (tmp_path / "generations" / f".{RELEASE_A}.remove").exists()

@@ -84,6 +84,8 @@ export type UpdateRollout = {
 export type PackageInventory = components["schemas"]["PackageInventoryResponse"];
 export type PackageRemovalPreview = components["schemas"]["PackageRemovalPreviewResponse"];
 export type PackageRemovalProgress = components["schemas"]["PackageProgressResponse"];
+export type PackagePlan = components["schemas"]["PackagePlanResponse"];
+export type PackageProgress = components["schemas"]["PackageProgressResponse"];
 export interface ControlApi {
   fleet(): Promise<FleetResponse>; documents(kind: "models" | "profiles"): Promise<DocumentList>;
   jobs(cursor?: string): Promise<JobsResponse>;
@@ -107,4 +109,6 @@ export interface ControlApi {
   packageInventory(nodeId?: string, deploymentId?: string, cursor?: string): Promise<PackageInventory>;
   previewPackageRemoval(input: {deployment_id: string; release_digest: string; node_ids: string[]}): Promise<PackageRemovalPreview>;
   removePackageInventory(planDigest: string): Promise<PackageRemovalProgress>;
+  previewPackageGc(): Promise<PackagePlan>;
+  applyPackageGc(planDigest: string): Promise<PackageProgress>;
 }

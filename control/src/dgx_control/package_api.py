@@ -16,7 +16,10 @@ from .auth import Actor
 from .operation_api import bounded_error_responses
 
 _DIGEST = r"^sha256:[0-9a-f]{64}$"
-_RAW_DIGEST = r"^[0-9a-f]{64}$"
+# Discovery implementations historically used content digests as candidate
+# IDs, while the durable W11 projection uses UUID primary keys. Accept both
+# exact forms at the API boundary; neither form is free-form user input.
+_CANDIDATE_ID = r"^(?:[0-9a-f]{64}|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
 _IDENTIFIER = r"^[a-z0-9][a-z0-9._-]{0,126}$"
 _UUID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 _SENSITIVE_KEY = re.compile(
@@ -72,7 +75,7 @@ class PackageFamiliesResponse(StrictModel):
 
 
 class PackageCandidateResponse(StrictModel):
-    id: str = Field(pattern=_RAW_DIGEST)
+    id: str = Field(pattern=_CANDIDATE_ID)
     family_id: str = Field(pattern=_IDENTIFIER)
     release_key: str = Field(min_length=1, max_length=256)
     upstream_version: str = Field(min_length=1, max_length=256)
@@ -110,13 +113,13 @@ class PackageCandidatesResponse(StrictModel):
 
 
 class PackageResolutionResponse(StrictModel):
-    candidate_id: str = Field(pattern=_RAW_DIGEST)
+    candidate_id: str = Field(pattern=_CANDIDATE_ID)
     release_digest: str = Field(pattern=_DIGEST)
     state: str = Field(min_length=1, max_length=64)
 
 
 class PackageCompatibilityResponse(StrictModel):
-    candidate_id: str = Field(pattern=_RAW_DIGEST)
+    candidate_id: str = Field(pattern=_CANDIDATE_ID)
     release_digest: str = Field(pattern=_DIGEST)
     digest: str = Field(pattern=_DIGEST)
     compatible_node_ids: list[str] = Field(max_length=512)
@@ -125,7 +128,7 @@ class PackageCompatibilityResponse(StrictModel):
 class PackagePlanResponse(StrictModel):
     digest: str = Field(pattern=_DIGEST)
     state: str = Field(min_length=1, max_length=64)
-    candidate_id: str | None = Field(default=None, pattern=_RAW_DIGEST)
+    candidate_id: str | None = Field(default=None, pattern=_CANDIDATE_ID)
     deployment_id: str | None = Field(default=None, pattern=_IDENTIFIER)
     release_digest: str | None = Field(default=None, pattern=_DIGEST)
     reclaim_bytes: int | None = Field(default=None, ge=0)
@@ -145,7 +148,7 @@ class PackagePromotionRequest(StrictModel):
 
 
 class PackagePromotionResponse(StrictModel):
-    candidate_id: str = Field(pattern=_RAW_DIGEST)
+    candidate_id: str = Field(pattern=_CANDIDATE_ID)
     release_digest: str = Field(pattern=_DIGEST)
     digest: str = Field(pattern=_DIGEST)
     state: str = Field(min_length=1, max_length=64)
@@ -157,6 +160,7 @@ class DeploymentResponse(StrictModel):
     release_digest: str = Field(pattern=_DIGEST)
     previous_release_digest: str | None = Field(default=None, pattern=_DIGEST)
     state: str = Field(min_length=1, max_length=64)
+    rollout_id: str | None = Field(default=None, pattern=_UUID)
 
 
 class DeploymentsResponse(StrictModel):
@@ -564,24 +568,24 @@ def install_package_routes(
         return {**document, "candidates": [_candidate_document(item) for item in document.get("candidates", []) if isinstance(item, Mapping)]}
 
     @app.get("/api/v1/packages/candidates/{candidate_id}", response_model=PackageCandidateResponse, responses=bounded_error_responses(401, 404, 422, 503), operation_id="getPackageCandidate")
-    def get_candidate(candidate_id: str = ApiPath(pattern=_RAW_DIGEST), _actor: Actor = authenticated) -> Mapping[str, object]:
+    def get_candidate(candidate_id: str = ApiPath(pattern=_CANDIDATE_ID), _actor: Actor = authenticated) -> Mapping[str, object]:
         return _candidate_document(read(lambda: package_services().candidate(candidate_id), "package candidate projection unavailable"))
 
     @app.get("/api/v1/packages/candidates/{candidate_id}/resolution", response_model=PackageResolutionResponse, responses=bounded_error_responses(401, 404, 422, 503), operation_id="getPackageResolution")
-    def get_resolution(candidate_id: str = ApiPath(pattern=_RAW_DIGEST), _actor: Actor = authenticated) -> Mapping[str, object]:
+    def get_resolution(candidate_id: str = ApiPath(pattern=_CANDIDATE_ID), _actor: Actor = authenticated) -> Mapping[str, object]:
         return read(lambda: package_services().resolution(candidate_id), "package resolution unavailable")
 
     @app.get("/api/v1/packages/candidates/{candidate_id}/compatibility", response_model=PackageCompatibilityResponse, responses=bounded_error_responses(401, 404, 422, 503), operation_id="getPackageCompatibility")
-    def get_compatibility(candidate_id: str = ApiPath(pattern=_RAW_DIGEST), _actor: Actor = authenticated) -> Mapping[str, object]:
+    def get_compatibility(candidate_id: str = ApiPath(pattern=_CANDIDATE_ID), _actor: Actor = authenticated) -> Mapping[str, object]:
         return read(lambda: package_services().compatibility(candidate_id), "package compatibility unavailable")
 
     @app.post("/api/v1/packages/candidates/{candidate_id}/validation-preview", response_model=PackagePlanResponse, responses=bounded_error_responses(401, 403, 404, 409, 422, 503), operation_id="previewPackageValidation")
-    def preview_validation(candidate_id: str = ApiPath(pattern=_RAW_DIGEST), authenticated: Actor = authenticated) -> Mapping[str, object]:
+    def preview_validation(candidate_id: str = ApiPath(pattern=_CANDIDATE_ID), authenticated: Actor = authenticated) -> Mapping[str, object]:
         operator(authenticated)
         return read(lambda: package_services().validation_preview(candidate_id), "package validation unavailable")
 
     @app.post("/api/v1/packages/candidates/{candidate_id}/validate", response_model=PackageProgressResponse, responses=bounded_error_responses(401, 403, 404, 409, 422, 503), status_code=status.HTTP_202_ACCEPTED, operation_id="validatePackageCandidate")
-    def validate_candidate(body: PackagePlanRequest, request: Request, candidate_id: str = ApiPath(pattern=_RAW_DIGEST), authenticated: Actor = authenticated) -> Mapping[str, object]:
+    def validate_candidate(body: PackagePlanRequest, request: Request, candidate_id: str = ApiPath(pattern=_CANDIDATE_ID), authenticated: Actor = authenticated) -> Mapping[str, object]:
         operator(authenticated)
         return mutate("package.validate", request, authenticated, lambda: package_services().validate(candidate_id, body.plan_digest, authenticated.subject, request.state.request_id), targets=(candidate_id,), digest=body.plan_digest)
 
@@ -590,12 +594,12 @@ def install_package_routes(
         return read(lambda: package_services().validation_status(validation_id), "package validation status unavailable")
 
     @app.post("/api/v1/packages/candidates/{candidate_id}/promotion-preview", response_model=PackagePlanResponse, responses=bounded_error_responses(401, 403, 404, 409, 422, 503), operation_id="previewPackagePromotion")
-    def preview_promotion(candidate_id: str = ApiPath(pattern=_RAW_DIGEST), authenticated: Actor = authenticated) -> Mapping[str, object]:
+    def preview_promotion(candidate_id: str = ApiPath(pattern=_CANDIDATE_ID), authenticated: Actor = authenticated) -> Mapping[str, object]:
         administrator(authenticated)
         return read(lambda: package_services().promotion_preview(candidate_id), "package promotion unavailable")
 
     @app.post("/api/v1/packages/candidates/{candidate_id}/promote", response_model=PackagePromotionResponse, responses=bounded_error_responses(401, 403, 404, 409, 422, 503), status_code=status.HTTP_202_ACCEPTED, operation_id="promotePackage")
-    def promote_package(body: PackagePromotionRequest, request: Request, candidate_id: str = ApiPath(pattern=_RAW_DIGEST), authenticated: Actor = authenticated) -> Mapping[str, object]:
+    def promote_package(body: PackagePromotionRequest, request: Request, candidate_id: str = ApiPath(pattern=_CANDIDATE_ID), authenticated: Actor = authenticated) -> Mapping[str, object]:
         administrator(authenticated)
         return mutate("package.promote", request, authenticated, lambda: package_services().promote(candidate_id, body.preview_digest, authenticated.subject, request.state.request_id), targets=(candidate_id,), digest=body.preview_digest)
 

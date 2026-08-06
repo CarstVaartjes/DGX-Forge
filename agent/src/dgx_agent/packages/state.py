@@ -408,6 +408,66 @@ class PackageState:
             ).fetchone()
             return None if row is None else _generation_record(connection, row)
 
+    def has_live_lease(self, generation_id: str, *, now_ns: int) -> bool:
+        """Return whether a process lease still protects a generation.
+
+        Lease rows are deliberately retained until their owning operation
+        reaps them.  Removal and GC must therefore evaluate expiry at the
+        point of the decision instead of treating the mere presence of a row
+        as a live process.  The comparison matches :meth:`reachable_objects`
+        (`>=`) so a lease remains valid through its exact expiry instant.
+        """
+        _identifier(generation_id, "generation ID")
+        if type(now_ns) is not int or now_ns < 0:
+            raise ValueError("lease time is invalid")
+        with self._connect() as connection:
+            return (
+                connection.execute(
+                    "SELECT 1 FROM leases WHERE generation_id = ? "
+                    "AND expires_at_ns >= ? LIMIT 1",
+                    (generation_id, now_ns),
+                ).fetchone()
+                is not None
+            )
+
+    def has_generation_reference(
+        self,
+        release_digest: str,
+        *,
+        excluding_generation: str | None = None,
+        now_ns: int,
+    ) -> bool:
+        """Return whether another generation still needs a release tree.
+
+        Materialization is keyed by release digest while the journal identity
+        is deployment/generation scoped.  A release tree must not be removed
+        when another deployment shares it, including a failed generation
+        that still has a live process lease.  This is the state-side half of
+        the remove/GC reachability boundary; the caller performs filesystem
+        cleanup only after this check succeeds.
+        """
+        _digest(release_digest, "release digest")
+        if excluding_generation is not None:
+            _identifier(excluding_generation, "generation ID")
+        if type(now_ns) is not int or now_ns < 0:
+            raise ValueError("lease time is invalid")
+        with self._connect() as connection:
+            clauses = ["g.release_digest = ?"]
+            values: list[object] = [release_digest]
+            if excluding_generation is not None:
+                clauses.append("g.generation_id <> ?")
+                values.append(excluding_generation)
+            query = (
+                "SELECT 1 FROM generations g "
+                "WHERE "
+                + " AND ".join(clauses)
+                + " AND (g.state NOT IN ('failed', 'quarantined', 'inactive') "
+                "OR EXISTS (SELECT 1 FROM leases l WHERE l.generation_id = "
+                "g.generation_id AND l.expires_at_ns >= ?)) LIMIT 1"
+            )
+            values.append(now_ns)
+            return connection.execute(query, tuple(values)).fetchone() is not None
+
     def activate_generation(
         self,
         binding: OperationBinding,

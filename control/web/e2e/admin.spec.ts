@@ -42,3 +42,14 @@ test("profile apply confirms and posts the exact server digest", async ({page}) 
   await expect(page.getByRole("status")).toContainText("job-1");
   expect(bodies).toEqual([{fleet_evidence_digest: evidenceDigest, plan_digest: digest}]);
 });
+
+test("packages remain usable at a mobile viewport", async ({page}) => {
+  await page.setViewportSize({width: 390, height: 844});
+  await page.route("**/api/v1/packages/families**", route => route.fulfill({json: {families: [], total: 0}}));
+  await page.route("**/api/v1/packages/candidates**", route => route.fulfill({json: {candidates: [], total: 0}}));
+  await page.route("**/api/v1/packages/inventory**", route => route.fulfill({json: {nodes: [], total: 0}}));
+  await page.goto("/packages");
+  await expect(page.getByRole("heading", {name: "Workload packages"})).toBeVisible();
+  await expect(page.getByRole("navigation", {name: "Primary"})).toBeVisible();
+  await expect(page.locator(".shell")).toHaveCSS("grid-template-columns", "390px");
+});

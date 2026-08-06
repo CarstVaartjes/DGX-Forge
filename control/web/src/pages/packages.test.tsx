@@ -1,4 +1,4 @@
-import {render, screen} from "@testing-library/react";
+import {render, screen, within} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {PackageCandidatePage} from "./package-candidate";
 import {PackagesPage} from "./packages";
@@ -76,26 +76,43 @@ it("requires the exact promotion preview digest and projects audit evidence", as
 
 it("separates downloads from active generations and requires an exact removal preview", async () => {
   const removalDigest = `sha256:${"f".repeat(64)}`;
+  const gcDigest = `sha256:${"g".repeat(64)}`;
   const calls: string[] = [];
   const control = {
     ...api(),
     packageInventory: async () => ({nodes: [{
       node_id: "spark-a",
+      display_name: "Alpha Spark",
       online: true,
       storage: {total_bytes: 1000, used_bytes: 650, free_bytes: 350, reserved_bytes: 50, reclaimable_bytes: 200},
       resources: {host_memory_total_bytes: 1000, host_memory_free_bytes: 500, gpu_memory_total_bytes: 1000, gpu_memory_free_bytes: 700, gpu_count: 1},
       packages: [
         {deployment_id: "chat", family_id: "llm-runtime", release_digest: removalDigest, content_group: "weights", state: "available", bytes_total: 1000, bytes_complete: 1000, bytes_remaining: 0, installed_bytes: 400, reclaimable_bytes: 400, reserved_bytes: 0, active: false, retained: false, leased: false, resources: {download_bytes: 1000, installed_bytes: 400, transient_bytes: 100, host_memory_bytes: 100, gpu_memory_bytes: 200, kv_cache_base_bytes: 10, kv_cache_per_token_bytes: 1, required_sparks: 1, topology: "single"}},
+        {deployment_id: "chat", family_id: "llm-runtime", release_digest: removalDigest, content_group: "runtime", state: "downloading", bytes_total: 2000, bytes_complete: 1000, bytes_remaining: 1000, installed_bytes: 0, reclaimable_bytes: 0, reserved_bytes: 2000, active: false, retained: false, leased: false, resources: {download_bytes: 2000, installed_bytes: 0, transient_bytes: 300, host_memory_bytes: 512, gpu_memory_bytes: 768, kv_cache_base_bytes: 128, kv_cache_per_token_bytes: 2, required_sparks: 2, topology: "gang"}},
         {deployment_id: "chat", family_id: "llm-runtime", release_digest: removalDigest, content_group: "active", state: "active", bytes_total: 100, bytes_complete: 100, bytes_remaining: 0, installed_bytes: 100, reclaimable_bytes: 0, reserved_bytes: 0, active: true, retained: false, leased: true, resources: {download_bytes: 100, installed_bytes: 100, transient_bytes: 0, host_memory_bytes: 100, gpu_memory_bytes: 300, kv_cache_base_bytes: 10, kv_cache_per_token_bytes: 1, required_sparks: 1, topology: "single"}},
       ],
     }], total: 1}),
     previewPackageRemoval: async (input: {deployment_id: string; release_digest: string; node_ids: string[]}) => { calls.push(JSON.stringify(input)); return {digest: removalDigest}; },
     removePackageInventory: async (digest: string) => { calls.push(digest); return {id: "remove-1", state: "accepted", phase: "remove", failure_reason: null, nodes: []}; },
+    previewPackageGc: async () => ({digest: gcDigest, reclaim_bytes: 400}),
+    applyPackageGc: async (digest: string) => { calls.push(digest); return {id: "gc-1", state: "accepted", phase: "gc", failure_reason: null, nodes: []}; },
   };
   render(<PackagesPage api={control}/>);
   const user = userEvent.setup();
   expect(await screen.findByText("Available")).toBeVisible();
   expect(screen.getByText("Active generation — protected while serving")).toBeVisible();
+  expect(screen.getByText("Downloading")).toBeVisible();
+  const downloading = screen.getByText("Downloading").closest(".inventory-package");
+  expect(downloading).not.toBeNull();
+  expect(within(downloading as HTMLElement).getByText("512 B")).toBeVisible();
+  expect(within(downloading as HTMLElement).getByText("768 B")).toBeVisible();
+  expect(within(downloading as HTMLElement).getByText("128 B")).toBeVisible();
+  expect(within(downloading as HTMLElement).getByText("2")).toBeVisible();
+  expect(downloading).toHaveTextContent("1000 B of 2.0 KiB");
+  expect(downloading).toHaveTextContent("50%");
+  expect(downloading).toHaveTextContent("1000 B remaining");
+  expect(screen.getByText(/Downloaded packages are local and resumable/)).toBeVisible();
+  expect(screen.getByLabelText("Alpha Spark disk usage")).toBeVisible();
   await user.click(screen.getByRole("button", {name: "Preview removal"}));
   expect(await screen.findByLabelText("Type the exact removal preview digest")).toBeVisible();
   const input = screen.getByLabelText("Type the exact removal preview digest");
@@ -103,4 +120,11 @@ it("separates downloads from active generations and requires an exact removal pr
   await user.type(input, removalDigest);
   await user.click(screen.getByRole("button", {name: "Remove exact generation"}));
   expect(calls).toEqual([JSON.stringify({deployment_id: "chat", release_digest: removalDigest, node_ids: ["spark-a"]}), removalDigest]);
+  await user.click(screen.getByRole("button", {name: "Preview cleanup"}));
+  expect(await screen.findByLabelText("Type the exact cleanup preview digest")).toBeVisible();
+  const cleanupInput = screen.getByLabelText("Type the exact cleanup preview digest");
+  expect(screen.getByRole("button", {name: "Apply safe cleanup"})).toBeDisabled();
+  await user.type(cleanupInput, gcDigest);
+  await user.click(screen.getByRole("button", {name: "Apply safe cleanup"}));
+  expect(calls).toContain(gcDigest);
 });

@@ -67,9 +67,9 @@ design acceptance are not counted as implementation completion.
 | Workload contracts and trust | W1–W4 | Complete | Canonical locks, Git/TUF separation, promotion, artifact provenance, and supply-chain verification |
 | Spark package engine | W5–W8, W10 | Complete | Agent/protocol suites, resumable acquisition, immutable environments, generic adapter ABI, generations, rollback, and GC |
 | Backend execution capability | W9 | ABI/native/python-venv complete; OCI runc capability release-gated | Signed deployment policy propagation, immutable Python interpreter/environment-tree verification, and an OCI bundle/rootfs planner with a fixed-runc capability boundary |
-| Workload control plane | W11–W16 | Complete | Alembic `0013_workload_packages`, discovery/resolution, validation, reconciliation, API/CLI/web, metrics |
+| Workload control plane | W11–W16 | Read/projection and UI complete; worker mutation injection remains release-gated | Alembic `0013_workload_packages`, Git/SQL projections, discovery/resolution, typed API/CLI/web, metrics; production mutators fail closed until signer/validation/rollout worker boundaries are injected |
 | Migration and acceptance | W17–W20 | Complete | Mia/DS4-compatible generic projection, unknown-family E2E, failure/scale/security matrix, operator runbooks |
-| Operator experience | W21 | Planned follow-up | Per-Spark inventory, resource-envelope/co-residency projections, guarded removal/GC, and polished responsive web UX |
+| Operator experience | W21 | Implemented locally; acceptance evidence landed | Per-Spark inventory, resource-envelope/co-residency projections, guarded removal/GC, rollback identity, and polished responsive web UX; 53 web tests passed and build is green |
 | Final hardening | Tasks 32–37 | Implemented locally; release-gated | Simulated evidence passes; physical/protected-host evidence remains external |
 
 The reproducible workload acceptance report records zero SSH calls and zero

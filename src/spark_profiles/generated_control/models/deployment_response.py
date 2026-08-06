@@ -28,6 +28,7 @@ class DeploymentResponse:
             state (str):
             family_id (Union[None, Unset, str]):
             previous_release_digest (Union[None, Unset, str]):
+            rollout_id (Union[None, Unset, str]):
      """
 
     id: str
@@ -35,6 +36,7 @@ class DeploymentResponse:
     state: str
     family_id: Union[None, Unset, str] = UNSET
     previous_release_digest: Union[None, Unset, str] = UNSET
+    rollout_id: Union[None, Unset, str] = UNSET
 
 
 
@@ -59,6 +61,12 @@ class DeploymentResponse:
         else:
             previous_release_digest = self.previous_release_digest
 
+        rollout_id: Union[None, Unset, str]
+        if isinstance(self.rollout_id, Unset):
+            rollout_id = UNSET
+        else:
+            rollout_id = self.rollout_id
+
 
         field_dict: dict[str, Any] = {}
 
@@ -71,6 +79,8 @@ class DeploymentResponse:
             field_dict["family_id"] = family_id
         if previous_release_digest is not UNSET:
             field_dict["previous_release_digest"] = previous_release_digest
+        if rollout_id is not UNSET:
+            field_dict["rollout_id"] = rollout_id
 
         return field_dict
 
@@ -105,12 +115,23 @@ class DeploymentResponse:
         previous_release_digest = _parse_previous_release_digest(d.pop("previous_release_digest", UNSET))
 
 
+        def _parse_rollout_id(data: object) -> Union[None, Unset, str]:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(Union[None, Unset, str], data)
+
+        rollout_id = _parse_rollout_id(d.pop("rollout_id", UNSET))
+
+
         deployment_response = cls(
             id=id,
             release_digest=release_digest,
             state=state,
             family_id=family_id,
             previous_release_digest=previous_release_digest,
+            rollout_id=rollout_id,
         )
 
         return deployment_response

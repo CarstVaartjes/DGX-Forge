@@ -37,7 +37,7 @@ export function PackagesPage({api}: {api: PackagesPageApi}) {
       <div className="table-scroll"><table aria-label="Package families">
         <thead><tr><th scope="col">Family</th><th scope="col">Channel</th><th scope="col">Candidates</th><th scope="col">Deployments</th></tr></thead>
         <tbody>{families.map(family => <tr key={family.id}>
-          <th scope="row">{bounded(family.id)}</th><td>{bounded(family.channel)}</td><td>{family.candidate_count}</td><td>{family.deployment_count}</td>
+          <th scope="row">{bounded(family.id)}</th><td>{bounded(family.channel ?? family.channels?.join(", "))}</td><td>{family.candidate_count ?? "—"}</td><td>{family.deployment_count ?? "—"}</td>
         </tr>)}</tbody>
       </table></div>
     </section>

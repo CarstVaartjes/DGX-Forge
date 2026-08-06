@@ -6,6 +6,9 @@ import hashlib
 import inspect
 import json
 import os
+import shutil
+import stat
+import time
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -171,6 +174,7 @@ class PackageEngine:
             "materialize",
             "validate",
             "repair",
+            "cleanup",
         }:
             return PackageInspection(PackageDisposition.SAFE_TO_RETRY)
         if record.phase in {"pointer-selecting", "pointer-selected", "start", "health"}:
@@ -401,14 +405,58 @@ class PackageEngine:
         if generation is None:
             self._state.set_phase(binding, "completed")
             return _evidence(request, None, "removed")
-        if generation.state == "active":
-            raise PackageEngineError("active generation cannot be removed")
+
+        # Removal is intentionally narrower than changing desired state.  The
+        # control plane must first stop/switch/rollback a workload; a remove
+        # request can never interrupt the generation currently serving
+        # traffic, discard the retained rollback, or tear down a staged
+        # generation that an in-flight operation may still publish.
+        if generation.state in {
+            "active",
+            "retained",
+            "staging",
+            "validated",
+            "staged",
+            "rollback",
+            "pinned",
+        }:
+            raise PackageEngineError(
+                f"generation state {generation.state} cannot be removed"
+            )
+        now_ns = time.time_ns()
+        if self._state.has_live_lease(generation.generation_id, now_ns=now_ns):
+            raise PackageEngineError("leased generation cannot be removed")
+        if self._state.has_generation_reference(
+            release_digest,
+            excluding_generation=generation.generation_id,
+            now_ns=now_ns,
+        ):
+            # The journal row can be retired, but its release-keyed
+            # generation directory is shared with another deployment.  Keep
+            # that directory in place; GC will use the remaining journal
+            # roots to decide when its objects are reclaimable.
+            self._state.transition_generation(
+                binding,
+                generation_id=generation.generation_id,
+                expected_states=frozenset({"failed", "quarantined", "inactive"}),
+                state="failed",
+            )
+            self._state.set_phase(binding, "completed")
+            return _evidence(request, generation.generation_id, "removed")
         self._state.transition_generation(
             binding,
             generation_id=generation.generation_id,
-            expected_states=frozenset({generation.state}),
+            expected_states=frozenset({"failed", "quarantined", "inactive"}),
             state="failed",
         )
+        self._state.set_phase(binding, "cleanup")
+        try:
+            _remove_generation_tree(self._generation_root, release_digest)
+        except (OSError, PackageEngineError) as error:
+            # The failed/quarantined journal state is a safe tombstone.  A
+            # later fenced remove can retry the exact cleanup without ever
+            # touching an active pointer or process.
+            raise PackageEngineError("generation cleanup failed safely") from error
         self._state.set_phase(binding, "completed")
         return _evidence(request, generation.generation_id, "removed")
 
@@ -628,3 +676,79 @@ def _atomic_write(path: Path, data: bytes) -> None:
         os.fsync(directory)
     finally:
         os.close(directory)
+
+
+def _remove_generation_tree(root: Path, release_digest: str) -> None:
+    """Remove one release-keyed generation tree after journal fencing.
+
+    Materialization publishes a tree directly below ``root`` using the
+    release digest as its name.  Rename it to a deterministic hidden
+    tombstone before recursive cleanup so a crash cannot leave a published
+    path that a subsequent prepare mistakes for a complete generation.  The
+    root and target are checked with ``lstat``/``O_NOFOLLOW``; no caller data
+    can redirect this operation outside the private generation root.
+    """
+    if not isinstance(root, Path) or not root.is_absolute():
+        raise PackageEngineError("generation root is invalid")
+    if not isinstance(release_digest, str) or len(release_digest) != 64:
+        raise PackageEngineError("release digest is invalid")
+    if any(character not in "0123456789abcdef" for character in release_digest):
+        raise PackageEngineError("release digest is invalid")
+    root_metadata = root.stat(follow_symlinks=False)
+    if not stat.S_ISDIR(root_metadata.st_mode) or root.is_symlink():
+        raise PackageEngineError("generation root is unsafe")
+    target = root / release_digest
+    tombstone = root / f".{release_digest}.remove"
+    target_metadata = _lstat_optional(target)
+    tombstone_metadata = _lstat_optional(tombstone)
+    if target_metadata is not None and not stat.S_ISDIR(target_metadata.st_mode):
+        raise PackageEngineError("generation tree is not a directory")
+    if tombstone_metadata is not None and not stat.S_ISDIR(tombstone_metadata.st_mode):
+        raise PackageEngineError("generation cleanup tombstone is unsafe")
+    if target_metadata is not None and tombstone_metadata is None:
+        os.rename(target, tombstone)
+        _fsync_directory(root)
+    elif target_metadata is not None:
+        # Two independently fenced removals must never race to delete an
+        # unknown tree.  Leave both paths untouched and let reconciliation
+        # classify this as operator intervention.
+        raise PackageEngineError("generation cleanup tombstone already exists")
+    if _lstat_optional(tombstone) is None:
+        return
+    _remove_tree_no_symlinks(tombstone)
+    _fsync_directory(root)
+
+
+def _lstat_optional(path: Path):
+    try:
+        return path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+    )
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _remove_tree_no_symlinks(path: Path) -> None:
+    """Recursively remove a quarantined generation without following links."""
+    metadata = path.stat(follow_symlinks=False)
+    if not stat.S_ISDIR(metadata.st_mode) or path.is_symlink():
+        raise PackageEngineError("generation cleanup tree is unsafe")
+    for child in path.rglob("*"):
+        child_metadata = child.stat(follow_symlinks=False)
+        if child.is_symlink():
+            raise PackageEngineError("generation cleanup tree contains a symlink")
+        if stat.S_ISDIR(child_metadata.st_mode):
+            child.chmod(0o700)
+    # shutil.rmtree is safe after the complete no-symlink walk above; this
+    # also handles read-only materialized files after directory permissions
+    # are normalized.
+    shutil.rmtree(path)

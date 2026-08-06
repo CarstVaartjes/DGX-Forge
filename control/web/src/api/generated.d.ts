@@ -936,6 +936,8 @@ export interface components {
             previous_release_digest?: string | null;
             /** Release Digest */
             release_digest: string;
+            /** Rollout Id */
+            rollout_id?: string | null;
             /** State */
             state: string;
         };

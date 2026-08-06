@@ -13,6 +13,7 @@ function api() {
       release_digest: `sha256:${"c".repeat(64)}`,
       previous_release_digest: `sha256:${"d".repeat(64)}`,
       state: "active",
+      rollout_id: "11111111-1111-4111-8111-111111111111",
     }],
     previewPackageRollout: async () => ({
       digest,
@@ -59,7 +60,7 @@ it("requires exact confirmation before selecting the retained rollback generatio
   // Break caught: an operator can select a previous release without the
   // server-issued rollback preview digest.
   const calls: string[] = [];
-  const control = {...api(), rollbackPackage: async (_id: string, supplied: string) => {
+  const control = {...api(), rollbackPackage: async (_id: string, _rolloutId: string, supplied: string) => {
     calls.push(supplied);
     return {id: "rollback-1"};
   }};

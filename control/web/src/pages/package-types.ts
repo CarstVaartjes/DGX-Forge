@@ -5,27 +5,30 @@
  */
 export type PackageFamily = {
   id: string;
-  channel: string;
-  candidate_count: number;
-  deployment_count: number;
+  /** Legacy projection fields remain accepted while W16 migrates to OpenAPI. */
+  channel?: string | null;
+  channels?: string[];
+  promotion_mode?: string;
+  candidate_count?: number;
+  deployment_count?: number;
 };
 
 export type PackageCandidateSummary = {
   id: string;
   family_id: string | null;
   channel: string | null;
-  provider: string;
+  provider?: string | null;
   state: string;
-  reason_code: string | null;
+  reason_code?: string | null;
   upstream_version: string;
-  updated_at: string;
+  updated_at?: string | null;
 };
 
 export type PackageCandidate = PackageCandidateSummary & {
-  lock: null | {digest: string; components: string[]; dependencies: string[]; provenance: string};
-  compatibility: {compatible: string[]; incompatible_count: number};
-  validations: {backend: string; state: string; reason_code: string | null}[];
-  audit: {action: string; request_id: string}[];
+  lock?: null | {digest: string; components: string[]; dependencies: string[]; provenance: string};
+  compatibility?: {compatible: string[]; incompatible_count: number};
+  validations?: {backend: string; state: string; reason_code: string | null}[];
+  audit?: {action: string; request_id: string}[];
 };
 
 export type PackagePreview = {
@@ -41,6 +44,8 @@ export type PackageDeployment = {
   release_digest: string;
   previous_release_digest: string | null;
   state: string;
+  /** Present when the control projection can identify the retained rollout. */
+  rollout_id?: string | null;
 };
 
 export type PackageRolloutPreview = PackagePreview & {
@@ -144,9 +149,9 @@ export interface PackageApi {
   deployments(): Promise<PackageDeployment[]>;
   previewPackageRollout(deploymentId: string): Promise<PackageRolloutPreview>;
   startPackageRollout(deploymentId: string, previewDigest: string): Promise<{id: string; plan_digest: string}>;
-  packageRollout(rolloutId: string): Promise<PackageRollout>;
-  previewPackageRollback(deploymentId: string): Promise<PackagePreview>;
-  rollbackPackage(deploymentId: string, previewDigest: string): Promise<{id: string}>;
+  packageRollout(deploymentId: string, rolloutId: string): Promise<PackageRollout>;
+  previewPackageRollback(deploymentId: string, rolloutId: string): Promise<PackagePreview>;
+  rollbackPackage(deploymentId: string, rolloutId: string, previewDigest: string): Promise<{id: string}>;
   /** Optional until the control-plane inventory projection is available. */
   packageInventory?(): Promise<PackageInventoryNode[] | {nodes: PackageInventoryNode[]; total?: number; next_cursor?: string | null}>;
   previewPackageGc?(): Promise<PackageGcPreview>;
