@@ -399,11 +399,19 @@ class PackageResolver:
         compatibility["operating_systems"] = list(compatibility["operating_systems"])
         compatibility["required_capabilities"] = ["package-abi-v1"]
         compatibility["minimum_storage_bytes"] = compatibility.pop("min_storage_bytes")
-        compatibility.pop("min_memory_bytes", None)
+        if "min_memory_bytes" in compatibility:
+            compatibility["minimum_memory_bytes"] = compatibility.pop("min_memory_bytes")
         if "cuda" in compatibility:
             compatibility["minimum_cuda"] = compatibility.pop("cuda")["minimum"]
         if "driver" in compatibility:
             compatibility["minimum_driver"] = compatibility.pop("driver")["minimum"]
+        # Execution backend is part of the signed release lock.  Omitting it
+        # silently selects the agent's historical native default and can run
+        # an OCI/Python workload under the wrong sandbox.
+        backend = family.execution.get("backend")
+        if not isinstance(backend, str):
+            raise TypeError("family execution backend is invalid")
+        compatibility["backends"] = [backend]
         # The authoring schema includes timeout policy; the wire lock carries
         # only the stable validation identity and optional evidence binding.
         validation = [

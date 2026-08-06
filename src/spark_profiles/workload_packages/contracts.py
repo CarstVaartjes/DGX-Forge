@@ -166,6 +166,9 @@ class WorkloadDeployment:
     routing: Mapping[str, object]
     resources: Mapping[str, int]
     canonical_bytes: bytes
+    mounts: tuple[Mapping[str, object], ...] = ()
+    devices: tuple[str, ...] = ()
+    network: Mapping[str, object] = MappingProxyType({"mode": "none", "egress": ()})
 
     @classmethod
     def load(cls, document: Mapping[str, object]) -> WorkloadDeployment:
@@ -192,6 +195,9 @@ class WorkloadDeployment:
             routing=_freeze(value["routing"]),
             resources=_freeze(value["resources"]),
             canonical_bytes=_canonical(value),
+            mounts=tuple(_freeze(item) for item in value.get("mounts", ())),
+            devices=tuple(value.get("devices", ())),
+            network=_freeze(value.get("network", {"mode": "none", "egress": []})),
         )
 
     @property

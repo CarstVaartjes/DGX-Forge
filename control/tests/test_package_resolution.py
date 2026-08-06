@@ -142,6 +142,7 @@ def test_resolver_emits_canonical_release_lock_and_is_repeat_deterministic() -> 
     assert first.lock.digest == hashlib.sha256(first.lock.canonical_bytes).hexdigest()
     assert first.lock.digest == second.lock.digest
     assert first.lock.dependency_digests == ()
+    assert first.lock.compatibility["backends"] == ("native",)
 
 
 def test_resolver_rejects_missing_checksum_as_structured_unsupported_reason() -> None:

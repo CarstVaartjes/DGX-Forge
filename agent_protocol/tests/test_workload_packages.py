@@ -74,6 +74,7 @@ def lock_document(
             "architectures": ["arm64"],
             "operating_systems": ["linux"],
             "required_capabilities": ["package-abi-v1"],
+            "minimum_memory_bytes": 4096,
             "minimum_storage_bytes": 2048,
         },
         "validation": [{"kind": "component-digest", "component": "payload"}],
@@ -98,6 +99,7 @@ def test_release_lock_digest_is_stable_for_reordered_maps() -> None:
 
     assert reordered.canonical_bytes == original.canonical_bytes
     assert reordered.digest == original.digest
+    assert original.compatibility["minimum_memory_bytes"] == 4096
     assert hashlib.sha256(original.canonical_bytes).hexdigest() == original.digest
 
 

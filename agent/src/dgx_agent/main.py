@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import math
 import os
+import platform
 import random
 import re
 import shutil
@@ -13,11 +14,11 @@ import signal
 import stat
 import threading
 import time
-from uuid import uuid4
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
+from uuid import uuid4
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
@@ -44,30 +45,17 @@ from .deadlines import MonotonicDeadline
 from .nvidia_tools import InstalledPolicy
 from .oci import ORASClient, ORASPolicy
 from .operations import OperationContext, OperationExecution, OperationRegistry
-from .probe import PinnedNodeProbe
-from .readiness import ReadinessReporter
-from .releases import ReleaseInstaller
-from .runtime_policy import RuntimePolicy
-from .state import AgentStateStore
-from .update import (
-    AgentUpdater,
-    LocalSupervisor,
-    ORASAgentTransport,
-    PlatformAgentTrust,
-    PlatformTUFRouteFetcher,
-)
-from .update_trust import BoundedHTTPSFetcher, TUFReleaseTrust
-from .workloads import WorkloadOperations
-from .package_trust import WorkloadTrust
 from .package_helper_client import (
     PackageHelperAdapterFactory,
     PackageHelperAuthorityVerifier,
     UnixPackageHelperClient,
 )
 from .package_helper_protocol import HelperExecutionBody, HelperRequest
+from .package_trust import WorkloadTrust
 from .packages.backends import (
     Backend,
     BackendInvocation,
+    MountPolicy,
     NetworkPolicy,
     ResourcePolicy,
 )
@@ -86,11 +74,25 @@ from .packages.providers import (
     VerifiedHTTPSProvider,
 )
 from .packages.store import ContentStore
+from .probe import PinnedNodeProbe
+from .readiness import ReadinessReporter
+from .releases import ReleaseInstaller
+from .runtime_policy import RuntimePolicy
+from .state import AgentStateStore
+from .update import (
+    AgentUpdater,
+    LocalSupervisor,
+    ORASAgentTransport,
+    PlatformAgentTrust,
+    PlatformTUFRouteFetcher,
+)
+from .update_trust import BoundedHTTPSFetcher, TUFReleaseTrust
 from .workload_runtime import (
     HTTPSProviderTransport,
     ProtocolAcquisition,
     WorkloadTUFSource,
 )
+from .workloads import WorkloadOperations
 
 
 class AgentControl(Protocol):
@@ -113,6 +115,189 @@ class AgentControl(Protocol):
     def renew(self, csr: bytes) -> IssuedCredential: ...
 
     def activate(self, generation: int, credentials: CredentialProvider) -> None: ...
+
+
+def _local_workload_os_identities() -> tuple[str, ...]:
+    """Return bounded Linux distribution identities for package preflight."""
+
+    identities: list[str] = ["linux"]
+    try:
+        release = platform.freedesktop_os_release()
+    except (AttributeError, OSError):
+        return tuple(identities)
+    raw_ids = [release.get("ID", ""), *release.get("ID_LIKE", "").split()]
+    version = release.get("VERSION_ID", "").strip().strip('"')
+    for raw_id in raw_ids:
+        identity = raw_id.strip().strip('"').lower()
+        if re.fullmatch(r"[a-z0-9][a-z0-9._+-]{0,63}", identity) is None:
+            continue
+        identities.append(identity)
+        if re.fullmatch(r"[a-z0-9][a-z0-9._+-]{0,63}", version):
+            identities.append(f"{identity}-{version}")
+    return tuple(dict.fromkeys(identities))
+
+
+def _validate_workload_compatibility(
+    lock: object,
+    protocol_architecture: str,
+    *,
+    available_storage_bytes: int,
+    operating_systems: tuple[str, ...] | None = None,
+    driver_version: str | None = None,
+    cuda_version: str | None = None,
+    request: object | None = None,
+) -> None:
+    """Fail closed when a signed workload lock cannot run on this Spark."""
+
+    compatibility = getattr(lock, "compatibility", {})
+    if not isinstance(compatibility, Mapping):
+        raise TypeError("workload compatibility policy is invalid")
+    architectures = compatibility.get("architectures", ())
+    supported_os = compatibility.get("operating_systems", ())
+    if (
+        not isinstance(architectures, (tuple, list))
+        or not isinstance(supported_os, (tuple, list))
+        or not all(isinstance(value, str) for value in architectures)
+        or not all(isinstance(value, str) for value in supported_os)
+    ):
+        raise ValueError("workload compatibility policy is invalid")
+    try:
+        local_architecture = {
+            "linux-arm64": "arm64",
+            "linux-x86_64": "x86_64",
+        }[protocol_architecture]
+    except KeyError as error:
+        raise ValueError("workload architecture policy is invalid") from error
+    if local_architecture not in architectures:
+        raise ValueError("workload release is incompatible with this node")
+    local_os = operating_systems or _local_workload_os_identities()
+    if not set(supported_os).intersection(local_os):
+        raise ValueError("workload operating system is incompatible with this node")
+    required_storage = compatibility.get("minimum_storage_bytes", 0)
+    if (
+        type(required_storage) is not int
+        or required_storage < 0
+        or type(available_storage_bytes) is not int
+        or available_storage_bytes < required_storage
+    ):
+        raise ValueError("workload storage capacity is insufficient")
+    required_capabilities = compatibility.get("required_capabilities", ())
+    if not isinstance(required_capabilities, (tuple, list)) or not all(
+        isinstance(value, str) for value in required_capabilities
+    ):
+        raise ValueError("workload capability policy is invalid")
+    if not set(required_capabilities) <= {"package-abi-v1"}:
+        raise ValueError("workload capability is unavailable")
+    backends = compatibility.get("backends", ())
+    if not isinstance(backends, (tuple, list)) or len(backends) != 1 or backends[0] not in {
+        "native",
+        "oci",
+        "python-venv",
+    }:
+        raise ValueError("workload backend policy is invalid")
+    if getattr(lock, "adapter_abi", None) != 1:
+        raise ValueError("workload adapter ABI is unsupported")
+    for field, actual in (
+        ("minimum_driver", driver_version),
+        ("minimum_cuda", cuda_version),
+    ):
+        minimum = compatibility.get(field)
+        if minimum is None:
+            continue
+        if not isinstance(actual, str) or not _version_at_least(actual, minimum):
+            raise ValueError(f"workload {field} requirement is not met")
+    if request is not None:
+        deployment = getattr(request, "deployment", None)
+        if deployment is not None:
+            resources = deployment.get("resources") if isinstance(deployment, Mapping) else None
+            if not isinstance(resources, Mapping):
+                raise ValueError("workload deployment resources are invalid")
+            memory = resources.get("memory_bytes")
+            gpu_count = resources.get("gpu_count")
+            if (
+                not isinstance(memory, int)
+                or isinstance(memory, bool)
+                or memory < 1
+                or not isinstance(gpu_count, int)
+                or isinstance(gpu_count, bool)
+                or not 0 <= gpu_count <= 1024
+            ):
+                raise ValueError("workload deployment resources are invalid")
+            minimum_memory = compatibility.get("minimum_memory_bytes")
+            if minimum_memory is not None and (
+                type(minimum_memory) is not int
+                or minimum_memory < 1
+                or memory < minimum_memory
+            ):
+                raise ValueError("workload memory requirement is not met")
+
+
+def _version_at_least(actual: str, minimum: str) -> bool:
+    def parts(value: str) -> tuple[int, ...] | None:
+        pieces = re.findall(r"\d+", value)
+        return tuple(int(piece) for piece in pieces[:8]) if pieces else None
+
+    parsed_actual, parsed_minimum = parts(actual), parts(minimum)
+    if parsed_actual is None or parsed_minimum is None:
+        return False
+    width = max(len(parsed_actual), len(parsed_minimum))
+    return parsed_actual + (0,) * (width - len(parsed_actual)) >= parsed_minimum + (0,) * (width - len(parsed_minimum))
+
+
+def _backend_invocation_for_workload(
+    lock: object,
+    package_request: object | None,
+    *,
+    release_digest: str,
+    generation: str,
+) -> BackendInvocation:
+    """Project signed family/deployment policy into the helper ABI."""
+    compatibility = getattr(lock, "compatibility", {})
+    if not isinstance(compatibility, Mapping):
+        raise TypeError("workload compatibility policy is invalid")
+    backend_names = compatibility.get("backends")
+    if not isinstance(backend_names, (tuple, list)) or len(backend_names) != 1:
+        raise RuntimeError("workload backend policy is invalid")
+    try:
+        backend = Backend(backend_names[0])
+    except (TypeError, ValueError) as error:
+        raise RuntimeError("workload backend policy is invalid") from error
+    if getattr(lock, "adapter_abi", None) != 1:
+        raise RuntimeError("workload adapter ABI is unsupported")
+    deployment = getattr(package_request, "deployment", None)
+    if deployment is None:
+        raise RuntimeError("workload deployment projection is missing")
+    if not isinstance(deployment, Mapping):
+        raise TypeError("workload deployment policy is invalid")
+    raw_resources = deployment.get("resources")
+    if not isinstance(raw_resources, Mapping):
+        raise TypeError("workload deployment resources are invalid")
+    memory_bytes = raw_resources.get("memory_bytes")
+    if not isinstance(memory_bytes, int) or isinstance(memory_bytes, bool):
+        raise TypeError("workload deployment memory policy is invalid")
+    arguments = tuple(deployment.get("arguments", ()))
+    mounts = tuple(MountPolicy.parse(item) for item in deployment.get("mounts", ()))
+    devices = tuple(deployment.get("devices", ()))
+    network = NetworkPolicy.parse(
+        deployment.get("network", {"mode": "none", "egress": []})
+    )
+    resources = ResourcePolicy(1000, memory_bytes, 256, 900, 64 * 1024)
+    adapter = getattr(lock, "adapter", None)
+    adapter_name = getattr(adapter, "name", None)
+    if not isinstance(adapter_name, str):
+        raise TypeError("workload adapter identity is invalid")
+    return BackendInvocation(
+        schema_version=1,
+        backend=backend,
+        release_digest=release_digest,
+        generation=generation,
+        entrypoint=f"components/{adapter_name}/{adapter_name}",
+        arguments=arguments,
+        resources=resources,
+        mounts=mounts,
+        devices=devices,
+        network=network,
+    )
 
 
 class Interrupt(Protocol):
@@ -539,27 +724,19 @@ def build_agent(
     materializer = Materializer(package_store)
 
     def package_preflight(lock, _request, _binding) -> None:
-        compatibility = getattr(lock, "compatibility", {})
-        if not isinstance(compatibility, Mapping):
-            raise RuntimeError("workload compatibility policy is invalid")
-        architectures = compatibility.get("architectures", ())
-        operating_systems = compatibility.get("operating_systems", ())
-        local_architecture = {
-            "linux-arm64": "arm64",
-            "linux-x86_64": "x86_64",
-        }[protocol_architecture]
-        if local_architecture not in architectures or "linux" not in operating_systems:
-            raise RuntimeError("workload release is incompatible with this node")
-        required_storage = compatibility.get("minimum_storage_bytes", 0)
-        if type(required_storage) is not int or required_storage < 0:
-            raise RuntimeError("workload storage policy is invalid")
-        if shutil.disk_usage(package_root).free < required_storage:
-            raise RuntimeError("workload storage capacity is insufficient")
+        if getattr(_request, "deployment", None) is None:
+            raise ValueError("workload deployment projection is missing")
+        _validate_workload_compatibility(
+            lock,
+            protocol_architecture,
+            available_storage_bytes=shutil.disk_usage(package_root).free,
+            request=_request,
+        )
 
     def package_cancelled(binding) -> bool:
         try:
             return state.operation(binding).cancel_requested
-        except Exception:
+        except Exception:  # noqa: BLE001 - cancellation is best-effort on state loss
             return False
 
     helper_client: UnixPackageHelperClient | None = None
@@ -582,36 +759,15 @@ def build_agent(
         operation,
         invocation,
         _deadline,
+        *,
+        package_request=None,
     ) -> HelperRequest:
         adapter = getattr(lock, "adapter", None)
-        compatibility = getattr(lock, "compatibility", {})
-        backend_names = (
-            compatibility.get("backends", ("native",))
-            if isinstance(compatibility, Mapping)
-            else ("native",)
-        )
-        if not isinstance(backend_names, (tuple, list)) or not backend_names:
-            raise RuntimeError("workload backend policy is invalid")
-        try:
-            backend = Backend(backend_names[0])
-        except (TypeError, ValueError) as error:
-            raise RuntimeError("workload backend policy is invalid") from error
-        adapter_name = getattr(adapter, "name", None)
-        if not isinstance(adapter_name, str):
-            raise RuntimeError("workload adapter identity is invalid")
-        # The package ABI gives every executable adapter a deterministic path;
-        # the name is release data, never a model catalog compiled into Forge.
-        backend_invocation = BackendInvocation(
-            schema_version=1,
-            backend=backend,
+        backend_invocation = _backend_invocation_for_workload(
+            lock,
+            package_request,
             release_digest=invocation.release_digest,
             generation=invocation.generation,
-            entrypoint=f"components/{adapter_name}/{adapter_name}",
-            arguments=(),
-            resources=ResourcePolicy(1000, 1024**3, 256, 900, 64 * 1024),
-            mounts=(),
-            devices=(),
-            network=NetworkPolicy("none"),
         )
         descriptors = tuple(
             item

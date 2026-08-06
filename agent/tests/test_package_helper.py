@@ -580,6 +580,35 @@ def test_launcher_rejects_restricted_network_before_content_or_side_effects(
     assert runner.calls == []
 
 
+@pytest.mark.parametrize("backend", ["oci", "python-venv"])
+def test_launcher_rejects_declared_non_native_backend_before_content(
+    tmp_path: Path, backend: str
+) -> None:
+    class Runner:
+        def __init__(self):
+            self.calls = []
+
+        def run(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return 0
+
+        def cleanup(self, unit_name):
+            self.calls.append(("cleanup", unit_name))
+
+    document = request_document()
+    document["body"]["invocation"]["backend"] = backend
+    request = _request(document)
+    runner = Runner()
+    launcher = SystemdBackendLauncher(tmp_path / "missing", runner=runner)
+
+    with pytest.raises(HelperProtocolError, match="not implemented"):
+        launcher.launch(
+            request,
+            SandboxPolicy(64001, 64001, allowed_devices=("nvidia0",)),
+        )
+    assert runner.calls == []
+
+
 def test_launcher_cleans_failed_transient_unit(tmp_path: Path) -> None:
     generations = tmp_path / "generations"
     executable = generations / ("a" * 64) / "gen-20260806-a" / "bin" / "future-adapter"

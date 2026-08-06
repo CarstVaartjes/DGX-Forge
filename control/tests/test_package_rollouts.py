@@ -126,11 +126,15 @@ def test_package_payload_is_exact_digest_bound_protocol_message() -> None:
         "deployment_id",
         "release_digest",
         "deployment_digest",
+        "deployment",
+        "deployment_config_digest",
     }
     assert (
         payload["deployment_digest"]
         == hashlib.sha256(deployment.canonical_bytes).hexdigest()
     )
+    assert payload["deployment"] == json.loads(deployment.canonical_bytes)
+    assert payload["deployment_config_digest"] == payload["deployment_digest"]
 
 
 def test_unknown_family_resolves_without_static_adapter_catalog() -> None:

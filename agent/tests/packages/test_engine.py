@@ -123,9 +123,11 @@ class AdapterFactory:
         self.events = events
         self.after = None
         self.fail_health_for: str | None = None
+        self.requests = []
 
-    def __call__(self, lock, generation_id, generation_path, objects):
+    def __call__(self, lock, generation_id, generation_path, objects, *, request=None):
         del generation_path, objects
+        self.requests.append(request)
         return Adapter(
             generation_id,
             lock.digest,
@@ -228,6 +230,15 @@ def test_prepare_activate_update_and_offline_rollback_preserve_predecessor(
         "prepare",
         "verify",
     ]
+
+
+def test_package_engine_passes_operation_request_to_adapter_factory(tmp_path: Path) -> None:
+    engine, _state, _trust, adapters, _events = _engine(tmp_path)
+    request = _request(AgentOperation.PACKAGE_PREPARE, RELEASE_A)
+
+    engine.execute(request, _binding(20), None)
+
+    assert adapters.requests == [request]
 
 
 def test_cancellation_before_activation_is_safe_and_after_selection_rolls_back(

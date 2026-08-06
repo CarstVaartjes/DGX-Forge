@@ -121,6 +121,12 @@ def package_operation_payload(
         "deployment_id": deployment.deployment_id,
         "release_digest": _raw_digest(deployment.release_digest),
         "deployment_digest": _package_digest(deployment),
+        # Carry the exact Git-authored deployment projection through the
+        # fenced operation.  The Spark validates the digest/identity again
+        # before constructing a backend invocation; it must not synthesize
+        # execution policy from a compiled model catalog.
+        "deployment": json.loads(deployment.canonical_bytes),
+        "deployment_config_digest": _package_digest(deployment),
     }
     # Parse through the shared protocol constructor so control and agent have
     # one ABI, including exact field sets and digest validation.
@@ -144,6 +150,8 @@ def _package_payload_for_identity(
         "deployment_digest": _raw_digest(
             deployment_digest if deployment_digest is not None else _package_digest(deployment)
         ),
+        "deployment": json.loads(deployment.canonical_bytes),
+        "deployment_config_digest": _package_digest(deployment),
     }
     PackageOperationRequest.parse(kind, payload)
     return payload

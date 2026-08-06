@@ -89,6 +89,82 @@ def test_release_bound_package_operations_accept_an_unknown_deployment_family(
     assert request.deployment_digest == "b" * 64
 
 
+def test_release_bound_package_operations_carry_signed_deployment_execution_policy() -> None:
+    deployment = {
+        "schema_version": 1,
+        "deployment_id": "future-stack",
+        "family_id": "synthetic-family",
+        "release_digest": "a" * 64,
+        "selector": {"node_count": 1, "required_labels": {}, "preferred_node_ids": []},
+        "secrets": {},
+        "ports": {"http": 8080},
+        "arguments": ["serve", "--port", "8080"],
+        "routing": {"alias": "future", "port": "http"},
+        "resources": {"memory_bytes": 4096, "storage_bytes": 8192, "gpu_count": 1},
+    }
+    deployment_digest = hashlib.sha256(canonical_message(deployment) + b"\n").hexdigest()
+    payload = (RELEASE_PAYLOAD | {"deployment_digest": deployment_digest}) | {
+        "deployment": deployment,
+        "deployment_config_digest": deployment_digest,
+    }
+
+    request = PackageOperationRequest.parse(AgentOperation.PACKAGE_PREPARE, payload)
+
+    assert request.deployment is not None
+    assert request.deployment["arguments"] == ("serve", "--port", "8080")
+    assert request.deployment["resources"]["memory_bytes"] == 4096
+
+
+def test_deployment_secret_references_are_allowed_but_paths_are_not() -> None:
+    deployment = {
+        "schema_version": 1,
+        "deployment_id": "future-stack",
+        "family_id": "synthetic-family",
+        "release_digest": "a" * 64,
+        "selector": {"node_count": 1, "required_labels": {}, "preferred_node_ids": []},
+        "secrets": {"hf_token": "secret://workload/hf-token"},
+        "ports": {"http": 8080},
+        "arguments": ["serve"],
+        "routing": {"alias": "future", "port": "http"},
+        "resources": {"memory_bytes": 4096, "storage_bytes": 8192, "gpu_count": 1},
+    }
+    digest = hashlib.sha256(canonical_message(deployment) + b"\n").hexdigest()
+    payload = RELEASE_PAYLOAD | {
+        "deployment": deployment,
+        "deployment_digest": digest,
+        "deployment_config_digest": digest,
+    }
+    assert PackageOperationRequest.parse(AgentOperation.PACKAGE_PREPARE, payload).deployment
+    validate_schema_message(
+        "agent-job.schema.json",
+        package_claim_document("package.prepare", payload),
+    )
+
+
+def test_release_bound_package_operations_reject_tampered_deployment_projection() -> None:
+    deployment = {
+        "schema_version": 1,
+        "deployment_id": "future-stack",
+        "family_id": "synthetic-family",
+        "release_digest": "a" * 64,
+        "selector": {"node_count": 1, "required_labels": {}, "preferred_node_ids": []},
+        "secrets": {},
+        "ports": {"http": 8080},
+        "arguments": ["serve"],
+        "routing": {"alias": "future", "port": "http"},
+        "resources": {"memory_bytes": 4096, "storage_bytes": 8192, "gpu_count": 1},
+    }
+    payload = RELEASE_PAYLOAD | {
+        "deployment": deployment,
+        "deployment_digest": hashlib.sha256(canonical_message(deployment) + b"\n").hexdigest(),
+        "deployment_config_digest": hashlib.sha256(canonical_message(deployment) + b"\n").hexdigest(),
+    }
+    deployment["arguments"] = ["tampered"]
+
+    with pytest.raises(AgentProtocolError, match="deployment digest"):
+        PackageOperationRequest.parse(AgentOperation.PACKAGE_PREPARE, payload)
+
+
 def test_package_gc_has_its_own_bounded_closed_payload() -> None:
     request = PackageOperationRequest.parse(
         AgentOperation.PACKAGE_GC,

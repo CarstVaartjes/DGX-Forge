@@ -135,20 +135,41 @@ def _freeze(value: Any) -> Any:
     return value
 
 
-def _validate_safe_keys(value: Any, *, field_name: str | None = None) -> None:
+def _validate_safe_keys(
+    value: Any,
+    *,
+    field_name: str | None = None,
+    allow_secret_refs: bool = False,
+    secret_value: bool = False,
+) -> None:
     if isinstance(value, Mapping):
         for key, item in value.items():
             if not isinstance(key, str):
                 raise AgentProtocolError("JSON object keys must be strings")
             if _is_path_key(key):
                 raise AgentProtocolError(f"filesystem path key is not allowed: {key}")
-            if UNSAFE_KEY.search(key):
+            if UNSAFE_KEY.search(key) and not (
+                allow_secret_refs and (key == "secrets" or field_name == "secrets")
+            ):
                 raise AgentProtocolError(f"unsafe protocol key: {key}")
-            _validate_safe_keys(item, field_name=key)
+            _validate_safe_keys(
+                item,
+                field_name=key,
+                allow_secret_refs=allow_secret_refs or key == "deployment",
+                secret_value=field_name == "secrets",
+            )
     elif isinstance(value, (list, tuple)):
         for item in value:
-            _validate_safe_keys(item)
+            _validate_safe_keys(
+                item,
+                allow_secret_refs=allow_secret_refs,
+                secret_value=secret_value,
+            )
     elif isinstance(value, str):
+        if secret_value:
+            if not value.startswith("secret://"):
+                raise AgentProtocolError("secret reference is not canonical")
+            return
         if field_name == "platform_target_name":
             if VERSIONED_PLATFORM_TARGET.fullmatch(value) is None:
                 raise AgentProtocolError(

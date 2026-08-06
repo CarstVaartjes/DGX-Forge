@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import re
 import socket
 import struct
@@ -406,6 +407,8 @@ class PackageHelperAdapterFactory:
         generation_id: str,
         generation_path: Path,
         objects: Mapping[str, object],
+        *,
+        request: object | None = None,
     ) -> PackageHelperAdapterExecutor:
         release_digest = getattr(lock, "digest", None)
 
@@ -414,7 +417,7 @@ class PackageHelperAdapterFactory:
             invocation: AdapterInvocation,
             deadline: datetime | MonotonicDeadline,
         ) -> HelperRequest:
-            return self._request_factory(
+            arguments = (
                 lock,
                 generation_id,
                 generation_path,
@@ -423,6 +426,20 @@ class PackageHelperAdapterFactory:
                 invocation,
                 deadline,
             )
+            try:
+                parameters = inspect.signature(self._request_factory).parameters
+                accepts_request = (
+                    "package_request" in parameters
+                    or any(
+                        parameter.kind is inspect.Parameter.VAR_KEYWORD
+                        for parameter in parameters.values()
+                    )
+                )
+            except (TypeError, ValueError):
+                accepts_request = False
+            if accepts_request:
+                return self._request_factory(*arguments, package_request=request)
+            return self._request_factory(*arguments)
 
         return PackageHelperAdapterExecutor(
             self._client,

@@ -493,7 +493,12 @@ def _parse_compatibility(value: Any) -> Mapping[str, object]:
         "required_capabilities",
         "minimum_storage_bytes",
     }
-    optional = {"minimum_driver", "minimum_cuda", "backends"}
+    optional = {
+        "minimum_memory_bytes",
+        "minimum_driver",
+        "minimum_cuda",
+        "backends",
+    }
     _exact_fields(
         compatibility,
         required=required,
@@ -521,6 +526,12 @@ def _parse_compatibility(value: Any) -> Mapping[str, object]:
             maximum=MAX_COMPONENT_SIZE,
         ),
     }
+    if "minimum_memory_bytes" in compatibility:
+        result["minimum_memory_bytes"] = _positive_integer(
+            compatibility["minimum_memory_bytes"],
+            name="compatibility minimum_memory_bytes",
+            maximum=MAX_COMPONENT_SIZE,
+        )
     for field in ("minimum_driver", "minimum_cuda"):
         if field in compatibility:
             result[field] = _bounded_text(

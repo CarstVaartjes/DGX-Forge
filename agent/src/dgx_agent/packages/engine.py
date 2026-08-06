@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 import os
 from collections.abc import Callable, Iterator, Mapping
@@ -218,7 +219,7 @@ class PackageEngine:
             state="staging",
         )
         self._state.set_phase(binding, "validate")
-        adapter = self._adapter(lock, generation_id, objects)
+        adapter = self._adapter(lock, generation_id, objects, request)
         self._invoke(
             adapter,
             AdapterOperation.PREPARE,
@@ -268,7 +269,7 @@ class PackageEngine:
         self._crash_hook("pointer-selected")
         self._state.activate_generation(binding, target.generation_id)
         lock = self._local_lock(release_digest)
-        adapter = self._adapter(lock, target.generation_id, {})
+        adapter = self._adapter(lock, target.generation_id, {}, request)
         try:
             self._state.set_phase(binding, "start")
             self._invoke(
@@ -311,7 +312,7 @@ class PackageEngine:
         self._state.set_phase(binding, "pointer-selected")
         self._state.activate_generation(binding, target.generation_id)
         adapter = self._adapter(
-            self._local_lock(release_digest), target.generation_id, {}
+            self._local_lock(release_digest), target.generation_id, {}, request
         )
         self._invoke(
             adapter,
@@ -345,7 +346,7 @@ class PackageEngine:
         self._select_pointer(previous, target)
         self._state.activate_generation(binding, previous.generation_id)
         adapter = self._adapter(
-            self._local_lock(previous.release_digest), previous.generation_id, {}
+            self._local_lock(previous.release_digest), previous.generation_id, {}, request
         )
         self._invoke(
             adapter,
@@ -380,7 +381,7 @@ class PackageEngine:
         if generation is None:
             raise PackageEngineError("package generation is not installed")
         adapter = self._adapter(
-            self._local_lock(release_digest), generation.generation_id, {}
+            self._local_lock(release_digest), generation.generation_id, {}, request
         )
         self._invoke(
             adapter,
@@ -439,13 +440,30 @@ class PackageEngine:
             target_bytes=target_bytes,
         )
 
-    def _adapter(self, lock, generation_id, objects):
-        return self._adapter_factory(
+    def _adapter(self, lock, generation_id, objects, request):
+        arguments = (
             lock,
             generation_id,
             self._generation_root / lock.digest,
             objects,
         )
+        # Keep the package engine compatible with narrow test/integration
+        # factories while allowing the production helper factory to receive
+        # the signed deployment projection carried by the operation request.
+        try:
+            parameters = inspect.signature(self._adapter_factory).parameters
+            accepts_request = (
+                "request" in parameters
+                or any(
+                    parameter.kind is inspect.Parameter.VAR_POSITIONAL
+                    for parameter in parameters.values()
+                )
+            )
+        except (TypeError, ValueError):
+            accepts_request = False
+        if accepts_request:
+            return self._adapter_factory(*arguments, request=request)
+        return self._adapter_factory(*arguments)
 
     def _local_lock(self, release_digest: str):
         try:

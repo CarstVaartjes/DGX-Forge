@@ -39,6 +39,7 @@ from .package_helper_protocol import (
     frame_helper_message,
     receive_helper_message,
 )
+from .packages.backends import Backend
 from .packages.sandbox import SandboxPolicy
 
 MAX_REPLAY_ENTRIES = 65_536
@@ -281,6 +282,10 @@ class SystemdBackendLauncher:
         executable_fd = -1
         mount_fds: list[int] = []
         try:
+            if request.invocation.backend is not Backend.NATIVE:
+                raise HelperProtocolError(
+                    "package backend is not implemented by the systemd launcher"
+                )
             if request.invocation.network.mode != "none":
                 raise HelperProtocolError(
                     "restricted network requires an installed network-policy boundary"

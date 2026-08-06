@@ -95,6 +95,40 @@
         },
         "gpu_count": {"type": "integer", "minimum": 0, "maximum": 1024}
       }
+    },
+    "mounts": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["object_digest", "target", "read_only"],
+        "properties": {
+          "object_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "target": {"$ref": "#/$defs/relative_path"},
+          "read_only": {"const": true}
+        }
+      }
+    },
+    "devices": {
+      "type": "array",
+      "maxItems": 32,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/identifier"}
+    },
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mode", "egress"],
+      "properties": {
+        "mode": {"enum": ["none", "restricted"]},
+        "egress": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/egress"}
+        }
+      }
     }
   },
   "$defs": {
@@ -109,6 +143,16 @@
       "minLength": 1,
       "maxLength": 128,
       "pattern": "^[^\\u0000-\\u001f\\u007f]+$"
+    },
+    "relative_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.?(?:/|$))(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"
+    },
+    "egress": {
+      "type": "string",
+      "pattern": "^(?:[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?|\\[[0-9a-f:]+\\]):[1-9][0-9]{0,4}$"
     },
     "credential_ref": {
       "type": "string",
