@@ -16,6 +16,7 @@ from typing import Any
 
 from dgx_agent_protocol import (
     AgentClaim,
+    AgentDirective,
     AgentProgress,
     AgentProtocolError,
     AgentResult,
@@ -201,6 +202,48 @@ class AgentStateStore:
             raise AgentStateError("state operation failed") from error
         finally:
             connection.close()
+
+    def apply_directive(
+        self,
+        progress: AgentProgress,
+        directive: AgentDirective,
+        *,
+        allow_terminal_race: bool = False,
+    ) -> AgentAttemptRecord:
+        """Persist an authenticated deadline/cancellation directive atomically."""
+        if type(progress) is not AgentProgress or type(directive) is not AgentDirective:
+            raise AgentStateConflict("heartbeat directive is invalid")
+        if (
+            _identity(progress) != _identity(directive)
+            or progress.fence != directive.fence
+            or progress.schema_version != directive.schema_version
+            or directive.deadline < progress.deadline
+        ):
+            raise AgentStateConflict("heartbeat directive does not match request")
+        durable_progress = AgentProgress(
+            schema_version=progress.schema_version,
+            job_id=progress.job_id,
+            operation_id=progress.operation_id,
+            attempt=progress.attempt,
+            fence=progress.fence,
+            node_id=progress.node_id,
+            deadline=directive.deadline,
+            progress={
+                **dict(progress.progress),
+                "cancel_requested": directive.cancel_requested,
+            },
+        )
+        return self.heartbeat(
+            durable_progress,
+            allow_terminal_race=allow_terminal_race,
+        )
+
+    def cancellation_requested(self, claim: AgentClaim) -> bool:
+        """Return the durable cancellation intent for one exact fenced attempt."""
+        record = self.lookup_exact(claim)
+        if record is None or record.progress is None:
+            return False
+        return record.progress.progress.get("cancel_requested") is True
 
     def finish(self, result: AgentResult) -> AgentAttemptRecord:
         result_bytes = _canonical(result, AgentResult)
@@ -586,7 +629,9 @@ def _validate_schema(connection: sqlite3.Connection) -> None:
         raise AgentStateError("state schema is invalid") from error
 
 
-def _identity(message: AgentClaim | AgentProgress | AgentResult) -> tuple[str, str, str, int]:
+def _identity(
+    message: AgentClaim | AgentDirective | AgentProgress | AgentResult,
+) -> tuple[str, str, str, int]:
     return message.node_id, message.job_id, message.operation_id, message.attempt
 
 
@@ -622,6 +667,12 @@ def _require_progress_match(
     earliest = claim.deadline if latest is None else latest.deadline
     if progress.deadline < earliest:
         raise AgentStateConflict("heartbeat deadline moved backwards")
+    if (
+        latest is not None
+        and latest.progress.get("cancel_requested") is True
+        and progress.progress.get("cancel_requested") is not True
+    ):
+        raise AgentStateConflict("heartbeat cancellation intent moved backwards")
 
 
 def _require_protocol_match(claim: AgentClaim, message: AgentProgress | AgentResult) -> None:

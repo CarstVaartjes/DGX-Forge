@@ -21,6 +21,7 @@ from .models import (
     AgentNode,
     AgentOperationAttempt,
     Job,
+    NodeMutationLease,
     Reconciliation,
     ReconciliationCancellation,
     ReconciliationOperation,
@@ -30,6 +31,7 @@ from .models import (
 from .models import (
     AgentOperation as StoredAgentOperation,
 )
+from .node_leases import NodeLeaseConflict, NodeLeaseGrant, NodeLeaseService
 from .orchestration import (
     OperationGraph,
     OperationNode,
@@ -56,13 +58,15 @@ _WORKLOAD_ACTIONS = {
 }
 _MUTATIONS = frozenset(
     {
+        "agent.rollback",
+        "agent.update",
         "release.install",
         "workload.prepare",
         "workload.start",
         "workload.stop",
     }
 )
-_AGENT_CAPABILITIES = frozenset(
+_REQUIRED_AGENT_CAPABILITIES = frozenset(
     {
         "node.probe",
         "release.install",
@@ -72,6 +76,9 @@ _AGENT_CAPABILITIES = frozenset(
         "workload.stop",
         "workload.verify",
     }
+)
+_NEXT_AGENT_CAPABILITIES = _REQUIRED_AGENT_CAPABILITIES | frozenset(
+    {"agent.rollback", "agent.update"}
 )
 _ACTIVE_CANCELLATION_STATES = frozenset(
     {
@@ -334,6 +341,7 @@ class AgentReconciliationService:
         self._authority_prefetch = authority_prefetch
         self._authority_check = authority_check
         self._authority_clear = authority_clear
+        self._node_leases = NodeLeaseService(clock=clock)
         # SQLite ignores row locks; PostgreSQL remains the production arbiter.
         self._tick_lock = threading.RLock()
 
@@ -427,8 +435,49 @@ class AgentReconciliationService:
                     session, candidate
                 )
                 phase = reconciliation.current_phase
+                released_node_lease = self._release_pending_node_lease(
+                    session, reconciliation, graph
+                )
                 cancellation = self._cancellation(session, reconciliation.id)
+                if (
+                    released_node_lease
+                    and phase != "completed"
+                    and cancellation is None
+                ):
+                    return True
+                if phase in {"failed", "cancelled"} and (
+                    self._mark_node_lease_releasing(
+                        session, reconciliation, graph
+                    )
+                ):
+                    return True
+                if phase in {
+                    "withdrawal-pending",
+                    "routes-withdrawn",
+                    "dispatching",
+                    "accepting",
+                    "publication-pending",
+                    "compensating",
+                } and self._ensure_node_lease(
+                    session, reconciliation, graph
+                ) is None:
+                    return False
                 if cancellation is not None:
+                    if (
+                        phase == "completed"
+                        and cancellation.state
+                        in {"requested", "withdrawal-pending"}
+                        and self._owns_publication(
+                            session,
+                            reconciliation,
+                            may_supersede=False,
+                        )
+                        and self._ensure_node_lease(
+                            session, reconciliation, graph
+                        )
+                        is None
+                    ):
+                        return False
                     cancellation_advanced = self._advance_cancellation(
                         session,
                         reconciliation,
@@ -437,9 +486,13 @@ class AgentReconciliationService:
                         cancellation,
                     )
                     if cancellation_advanced is not None:
+                        if reconciliation.current_phase in {"failed", "cancelled"}:
+                            self._mark_node_lease_releasing(
+                                session, reconciliation, graph
+                            )
                         return cancellation_advanced
                 if phase in {"failed", "cancelled", "waiting-for-operator"}:
-                    return False
+                    return released_node_lease
                 if self._sweep_expired_mutations(
                     session, reconciliation, job, graph
                 ):
@@ -485,6 +538,10 @@ class AgentReconciliationService:
                         and phase in {"completed", "publication-pending"}
                         and self._publisher is not None
                     ):
+                        if self._ensure_node_lease(
+                            session, reconciliation, graph
+                        ) is None:
+                            return False
                         publication = self._publication(session, reconciliation.id)
                         marker = self._publisher.withdraw(
                             reconciliation_id=reconciliation.id,
@@ -528,6 +585,10 @@ class AgentReconciliationService:
                 if phase == "planned":
                     if job.base_commit != reconciliation.base_commit:
                         raise ValueError("reconciliation job base commit does not match")
+                    if self._ensure_node_lease(
+                        session, reconciliation, graph
+                    ) is None:
+                        return False
                     session.add(
                         RoutePublication(
                             reconciliation_id=reconciliation.id,
@@ -548,7 +609,7 @@ class AgentReconciliationService:
                     if expires_at is None or _aware(expires_at) > _aware(
                         self._clock()
                     ) + timedelta(seconds=30):
-                        return False
+                        return released_node_lease
                 if phase == "routes-withdrawn":
                     if not self._targets_are_active(session, graph):
                         self._quiesce_for_unavailable_target(
@@ -636,7 +697,14 @@ class AgentReconciliationService:
                         "bundle_digest": marker.manifest_sha256,
                     }
                     job.updated_at = self._clock()
+                    self._mark_node_lease_releasing(
+                        session, reconciliation, graph
+                    )
                 elif phase == "completed":
+                    if self._ensure_node_lease(
+                        session, reconciliation, graph
+                    ) is None:
+                        return released_node_lease
                     marker = self._publisher.withdraw(
                         reconciliation_id=reconciliation.id,
                         plan_digest=self._plan_digest(reconciliation),
@@ -661,6 +729,10 @@ class AgentReconciliationService:
                     notify = self._dispatch_compensation(
                         session, reconciliation, job, graph, document
                     )
+                    if reconciliation.current_phase == "failed":
+                        self._mark_node_lease_releasing(
+                            session, reconciliation, graph
+                        )
                 elif phase in {
                     "failed",
                     "cancelled",
@@ -791,6 +863,10 @@ class AgentReconciliationService:
             self._wait_for_operator(reconciliation, job, reason)
             return
         self._handle_primary_failure(session, reconciliation, job, graph, node, reason)
+        if reconciliation.current_phase in {"failed", "cancelled"}:
+            self._mark_node_lease_releasing(
+                session, reconciliation, graph
+            )
 
     def request_cancel(self, reconciliation_id: str, reason: str) -> None:
         self.enqueue_cancel(
@@ -1090,6 +1166,21 @@ class AgentReconciliationService:
 
     def _candidate_id(self) -> str | None:
         with self._sessions() as session:
+            releasing_owner = session.scalar(
+                select(Reconciliation.id)
+                .join(
+                    NodeMutationLease,
+                    and_(
+                        NodeMutationLease.owner_kind == "reconciliation",
+                        NodeMutationLease.owner_id == Reconciliation.id,
+                    ),
+                )
+                .where(NodeMutationLease.state == "releasing")
+                .order_by(NodeMutationLease.updated_at, Reconciliation.id)
+                .limit(1)
+            )
+            if releasing_owner is not None:
+                return releasing_owner
             pending = session.scalar(
                 select(Reconciliation.id)
                 .join(
@@ -1363,6 +1454,71 @@ class AgentReconciliationService:
             node.state == "active" and node.revoked_at is None for node in nodes
         )
 
+    def _ensure_node_lease(
+        self,
+        session: Session,
+        reconciliation: Reconciliation,
+        graph: OperationGraph,
+    ) -> NodeLeaseGrant | None:
+        try:
+            grant = self._node_leases.owned_grant_in_session(
+                session,
+                graph.targets,
+                owner_kind="reconciliation",
+                owner_id=reconciliation.id,
+            )
+            if grant is not None:
+                return grant if grant.state == "held" else None
+            return self._node_leases.acquire_in_session(
+                session,
+                graph.targets,
+                owner_kind="reconciliation",
+                owner_id=reconciliation.id,
+            )
+        except NodeLeaseConflict:
+            return None
+
+    def _release_pending_node_lease(
+        self,
+        session: Session,
+        reconciliation: Reconciliation,
+        graph: OperationGraph,
+    ) -> bool:
+        try:
+            grant = self._node_leases.owned_grant_in_session(
+                session,
+                graph.targets,
+                owner_kind="reconciliation",
+                owner_id=reconciliation.id,
+            )
+            if grant is None or grant.state != "releasing":
+                return False
+            self._node_leases.release_in_session(session, grant)
+            session.flush()
+            return True
+        except NodeLeaseConflict:
+            return False
+
+    def _mark_node_lease_releasing(
+        self,
+        session: Session,
+        reconciliation: Reconciliation,
+        graph: OperationGraph,
+    ) -> bool:
+        try:
+            grant = self._node_leases.owned_grant_in_session(
+                session,
+                graph.targets,
+                owner_kind="reconciliation",
+                owner_id=reconciliation.id,
+            )
+        except NodeLeaseConflict:
+            return False
+        if grant is not None and grant.state == "held":
+            self._node_leases.mark_releasing_in_session(session, grant)
+            return True
+        return False
+
     def _continuous_authority_reason(
         self,
         session: Session,
@@ -1430,7 +1586,9 @@ class AgentReconciliationService:
             or isinstance(node.protocol_version, bool)
             or not protocol[0] <= node.protocol_version <= protocol[1]
             or not isinstance(node.capabilities, list)
-            or set(node.capabilities) != _AGENT_CAPABILITIES
+            or not _REQUIRED_AGENT_CAPABILITIES
+            <= set(node.capabilities)
+            <= _NEXT_AGENT_CAPABILITIES
             for node in nodes
         ):
             return "reconciliation target agent is incompatible"

@@ -1,53 +1,120 @@
 # Back up and recover the control plane
 
-Use `deploy/compose/bin/backup-control-plane OUTPUT ENCRYPT_COMMAND`. The
-encryption command must read plaintext from standard input and write an
-authenticated encrypted stream to standard output. Plaintext production
-backups are not supported. The canonical, checksum-bound archive contains the
-PostgreSQL custom dump, Compose configuration, Hermes `data`, and Hermes
-`workspaces`. Hermes cache is deliberately excluded.
+Control-host backup and recovery are fixed operations of the root-owned host
+updater. Production does not execute a repository backup script, accept an
+encryption command, or run Compose from a checkout. `HostBackupBoundary` uses
+fixed Docker, PostgreSQL, archive, and `/usr/bin/age` argument vectors with
+bounded output, deadlines, disk reservation, and pre-opened file descriptors.
 
-Back up these service-host items in the same authenticated encrypted off-host
-generation:
+## Prepare recovery before an update
 
-- the `tailscale-state` volume and both scoped OAuth credential files;
-- the external Hermes API-key file;
-- step-ca state and all online PKI material listed in the agent PKI runbook; and
-- expected repository/image digests and the Tailscale gateway node ID.
+Keep these paths root-owned and outside every container-writable tree:
 
-Test every backup on a disposable Docker host. Inspection decrypts in memory,
-rejects links and unsafe paths, verifies exact files and checksums, and rejects
-non-canonical or modified archives.
+- `/srv/dgx-forge/control-host`, mode `0700`, for generations, operations,
+  encrypted backups, and the single host-operation lock;
+- `/srv/dgx-forge/control-identity`, mode `0755`, for bounded read-only active
+  and candidate projections;
+- `/srv/dgx-forge/site`, mode `0700`, for the allowlisted site configuration;
+- the root-owned age recipients file named by
+  `DGX_BACKUP_RECIPIENTS_FILE`; and
+- the root-owned age identity file named by `DGX_BACKUP_IDENTITY_FILE`.
 
-Restore is destructive and requires the literal flag:
+The age recipients and identity files must be regular, non-linked files with
+the exact private modes enforced by the updater. Store the recovery identity
+offline as well as on the host. Never place the identity, a TUF private key, or
+a registry credential in the deployment bundle, admin repository, online API,
+worker, or a Spark.
+
+Retain enough free space for the current and candidate generations, one new
+encrypted backup, and transient OCI acquisition. Before every maintenance
+window, confirm the exact predecessor platform target remains authorized by
+current TUF metadata and that its content-addressed OCI objects remain
+available.
+
+## Automatic upgrade backup
+
+Every applied platform upgrade creates its backup after exact revalidation and
+generation staging but before migration or selection. The fixed boundary:
+
+1. obtains a PostgreSQL custom-format dump from the selected generation;
+2. collects only the allowlisted site files, selected generation receipt, and
+   verified release assets needed for compensation;
+3. builds the canonical checksum-bound archive;
+4. encrypts it with the root-owned age recipients file; and
+5. fsyncs a new owner-only artifact and exact backup receipt under
+   `/srv/dgx-forge/control-host/backups`.
+
+The receipt binds the operation, selected generation, generation receipt,
+encrypted byte count and SHA-256, archive-manifest SHA-256, and recipients
+SHA-256. The same receipt is recorded in the operation's hash-chained journal.
+Copy the encrypted artifact, its exact backup receipt, generation receipt, and
+terminal journal evidence to authenticated encrypted off-host storage. Also
+protect Tailscale state, scoped OAuth credentials, step-ca online state, and
+the Hermes API key according to their own runbooks.
+
+## Resume an interrupted operation
+
+An unfinished operation blocks a new upgrade or rollback. Do not retry the
+original command, edit journal files, manually start containers, or move the
+active pointer. Recovery takes the same host-operation lock, validates the
+contiguous hash-chained journal, probes each recorded effect, and only adopts
+or repeats an exact idempotent action:
 
 ```bash
-HERMES_DATA_ROOT=/srv/dgx-forge/hermes HERMES_UID=1100 HERMES_GID=1100 \
-  deploy/compose/bin/restore-control-plane BACKUP DECRYPT_COMMAND --apply
+sudo dgx-control-offline --state-path /srv/dgx-forge/control-host \
+  recover --apply
 ```
 
-The script stops API, worker, and Hermes; takes the offline lock; verifies and
-stages the archive; restores PostgreSQL; atomically installs the Hermes trees;
-restores owner-only permissions; and leaves Hermes stopped. Cache is neither
-restored nor required. Restore the API key and Tailscale/PKI state separately.
+Recovery may finish the candidate or compensate to the exact predecessor. If
+compensation needs data restoration, the updater reopens the journal's exact
+backup receipt, verifies the encrypted file by descriptor, decrypts and parses
+it through the trusted boundary, restores the exact database/site state, and
+writes an immutable restore receipt. There is no command-line path for choosing
+an arbitrary backup.
 
-Run portable acceptance on every change:
+If the database reports neither the recorded predecessor revision nor the
+recorded target revision, recovery fails closed. Preserve the complete
+operation directory and contact a maintainer; do not force a migration or
+delete the pending operation.
+
+## Operator-requested rollback
+
+Plan the exact retained generation first, then apply the same generation ID:
 
 ```bash
-scripts/accept-control-recovery \
-  --output inventory/reports/control-plane-recovery.json --json
+sudo dgx-control-offline --state-path /srv/dgx-forge/control-host \
+  rollback --generation REPLACE_GENERATION_ID
+sudo dgx-control-offline --state-path /srv/dgx-forge/control-host \
+  rollback --generation REPLACE_GENERATION_ID --apply
 ```
 
-Before release, repeat authenticated-encryption backup and restore on a second
-Docker-capable Linux host. Retain only sanitized evidence.
+Rollback refreshes current TUF metadata and verifies the active release's exact
+predecessor target, manifest, bundle, generation receipt, site state, database
+revision, and running identities. A stable-channel update to N+1 does not
+change an N-to-N-1 rollback. Removing N-1 from current targets is explicit
+rollback revocation and makes the command fail closed.
 
-After restore, verify database and CA health, then start the normal project.
-Hermes must wait for fresh authenticated Spark presence, a successful accepted
-local model probe, and a new LiteLLM lease. Verify the three exact Tailscale
-Services, API-key continuity, session visibility, workspace contents, and the
-absence of cloud model configuration.
+## Host-loss recovery and evidence
 
-If Tailscale state is unavailable, scoped OAuth performs unattended tagged
-re-enrollment and exact Service auto-approval. Verify the new node and revoke
-the old node. If OAuth is unavailable, ingress remains closed. If Hermes data
-is unavailable, repeat setup; never expose a LAN port or add a remote model.
+Do not improvise a full-host restore with ad-hoc `pg_restore` or Compose
+commands. Rebuild the Docker-capable host, reinstall the same trusted bootstrap
+updater, restore the root-owned trust/site/identity inputs from authenticated
+off-host storage, and place the encrypted generation backup and exact receipt
+at their recorded paths. Use the release-specific, reviewed disaster-recovery
+procedure to reconstruct the journaled compensation operation; the normal CLI
+intentionally cannot accept an arbitrary backup pathname.
+
+Test recovery on a disposable Docker-capable Linux host before enabling release
+publication and after any updater ABI change. Acceptance must prove timeout and
+output bounds, exact backup verification, restoration through the fixed
+boundary, recovery after every journal phase, generation-bound API/worker
+readiness, and failure on a modified archive, receipt, generation, or database
+revision. Retain only sanitized evidence: never include secret contents,
+environment values, age identity material, tokens, or private TUF keys.
+
+After recovery or rollback, verify database and CA health, selected generation
+identity, worker heartbeat, the exact Tailscale Services, Hermes API-key
+continuity, session visibility, workspace contents, and absence of cloud-model
+configuration. If Tailscale state is unavailable, use the scoped OAuth
+re-enrollment path and revoke the old node. If ingress authority is unavailable,
+leave ingress closed.

@@ -243,6 +243,19 @@ def installer_inputs(tmp_path: Path) -> dict[str, object]:
         tmp_path / "root.json", _canonical({"signed": {}, "signatures": []}), 0o644
     )
     auth = _write(tmp_path / "auth.json", _canonical({"auths": {}}), 0o600)
+    update_public = bytes.fromhex("7" * 64)
+    update_authority = _write(
+        tmp_path / "update-authority.json",
+        _canonical(
+            {
+                "algorithm": "ed25519",
+                "key_id": hashlib.sha256(update_public).hexdigest(),
+                "public_key": update_public.hex(),
+                "schema_version": 1,
+            }
+        ),
+        0o644,
+    )
     token = _write(tmp_path / "enrollment-token", b"A" * 43 + b"\n", 0o600)
     site_document = {
         "architecture": architecture,
@@ -371,6 +384,8 @@ def installer_inputs(tmp_path: Path) -> dict[str, object]:
         _sha(tuf),
         "--registry-auth",
         str(auth),
+        "--update-authority",
+        str(update_authority),
         "--enrollment-token",
         str(token),
     ]
@@ -389,6 +404,7 @@ def installer_inputs(tmp_path: Path) -> dict[str, object]:
             "ca_key": ca_key,
             "tuf": tuf,
             "auth": auth,
+            "update_authority": update_authority,
             "token": token,
         },
     }
@@ -439,6 +455,20 @@ def test_install_is_idempotent_generic_and_retains_license_provenance(
     assert runtime["staging_root"] == str(host / "var/lib/dgx-forge/release-staging")
     assert (host / "var/lib/dgx-forge/releases").stat().st_mode & 0o777 == 0o700
     assert (host / "var/lib/dgx-forge/release-staging").stat().st_mode & 0o777 == 0o700
+    installed_authority = host / "etc/dgx-forge-agent/update-authority.json"
+    assert installed_authority.read_bytes() == installer_inputs["paths"][
+        "update_authority"
+    ].read_bytes()
+    assert installed_authority.stat().st_mode & 0o777 == 0o444
+    for unit_name in (
+        "dgx-forge-agent-rollback.service",
+        "dgx-forge-agent-rollback.path",
+    ):
+        installed_unit = host / "etc/systemd/system" / unit_name
+        assert installed_unit.read_bytes() == (
+            ROOT / "agent/systemd" / unit_name
+        ).read_bytes()
+        assert installed_unit.stat().st_mode & 0o777 == 0o644
 
 
 @LINUX_INSTALLER_RUNTIME
@@ -510,6 +540,23 @@ def test_private_key_or_mixed_ca_input_is_rejected_before_target_mutation(
 
     assert rejected.returncode != 0
     assert "public CA" in rejected.stderr
+    assert not installer_inputs["host"].exists()
+
+
+@LINUX_INSTALLER_RUNTIME
+def test_update_authority_key_id_mismatch_is_rejected_before_target_mutation(
+    installer_inputs: dict[str, object],
+) -> None:
+    authority = installer_inputs["paths"]["update_authority"]
+    document = json.loads(authority.read_text())
+    document["key_id"] = "0" * 64
+    authority.write_bytes(_canonical(document))
+    authority.chmod(0o644)
+
+    rejected = _run_installer(installer_inputs)
+
+    assert rejected.returncode != 0
+    assert "key ID" in rejected.stderr
     assert not installer_inputs["host"].exists()
 
 
@@ -710,7 +757,7 @@ def test_abandoned_publication_crash_boundaries_recover_bounded_exact_staging(
 
 
 @LINUX_INSTALLER_RUNTIME
-def test_missing_unit_fails_before_target_mutation_and_all_units_are_enabled(
+def test_missing_rollback_path_fails_before_mutation_and_all_units_are_enabled(
     installer_inputs: dict[str, object], tmp_path: Path
 ) -> None:
     source = tmp_path / "incomplete-source"
@@ -719,9 +766,14 @@ def test_missing_unit_fails_before_target_mutation_and_all_units_are_enabled(
     shutil.copy2(
         ROOT / "agent/supervisor/dgx-agent-supervisor", source / "agent/supervisor"
     )
-    shutil.copy2(
-        ROOT / "agent/systemd/dgx-forge-agent.service", source / "agent/systemd"
-    )
+    for unit_name in (
+        "dgx-forge-agent.service",
+        "dgx-forge-agent-supervisor.service",
+        "dgx-forge-agent-activation.service",
+        "dgx-forge-agent-activation.path",
+        "dgx-forge-agent-rollback.service",
+    ):
+        shutil.copy2(ROOT / "agent/systemd" / unit_name, source / "agent/systemd")
     incomplete_environment = dict(installer_inputs["environment"])
     incomplete_environment["DGX_INSTALL_SOURCE_ROOT_TEST"] = str(source)
 
@@ -752,8 +804,8 @@ def test_missing_unit_fails_before_target_mutation_and_all_units_are_enabled(
     assert installed.returncode == 0, installed.stderr
     assert actions.read_text().splitlines() == [
         "daemon-reload",
-        "enable dgx-forge-agent.service dgx-forge-agent-supervisor.service dgx-forge-agent-activation.path",
-        "start dgx-forge-agent-supervisor.service dgx-forge-agent-activation.path",
+        "enable dgx-forge-agent.service dgx-forge-agent-supervisor.service dgx-forge-agent-activation.path dgx-forge-agent-rollback.path",
+        "start dgx-forge-agent-supervisor.service dgx-forge-agent-activation.path dgx-forge-agent-rollback.path",
     ]
 
 

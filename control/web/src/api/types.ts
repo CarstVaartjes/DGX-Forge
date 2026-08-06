@@ -18,6 +18,69 @@ export type DocumentList = {commit: string; documents: string[]};
 export type ProposalInput = {base_commit: string; changes: {path: string; document: Record<string, unknown>}[]};
 export type ProposalPreview = {base_commit: string; digest: string; patch: string; affected_documents: string[]; validation_results: string[]};
 export type AuditSummary = {request_id: string; actor: string; action: string; base_commit?: string; targets: string[]};
+export type UpdateTarget = {
+  build_digest: string;
+  platform_version: string;
+  protocol_maximum: number;
+  protocol_minimum: number;
+  release: string;
+  release_digest: string;
+  target_sha256: string;
+  tuf_targets_version: number;
+};
+export type UpdateNodeSkew = {
+  active_routes: string[];
+  active_slot: "A" | "B" | null;
+  active_workloads: string[];
+  build_digest: string | null;
+  compatible: boolean;
+  display_name: string;
+  node_id: string;
+  platform_version: string | null;
+  protocol_version: number | null;
+  reasons: string[];
+  rollback_slot: "A" | "B" | null;
+  status: string;
+  update_required: boolean;
+};
+export type UpdateSkew = {
+  affected_nodes: string[];
+  digest: string;
+  incompatible_nodes: string[];
+  nodes: UpdateNodeSkew[];
+  offline_pending: string[];
+  prompt_required: boolean;
+  target: UpdateTarget;
+};
+export type UpdatePlanGate = {detail: string; name: string; status: string};
+export type UpdateWorkload = {members: string[]; minimum_available: number; workload_id: string};
+export type UpdatePlan = {
+  affected_routes: string[];
+  batches: string[][];
+  canary_node: string | null;
+  gates: UpdatePlanGate[];
+  incompatible: string[];
+  offline_pending: string[];
+  plan_digest: string;
+  rollback_slots: Record<string, "A" | "B" | null>;
+  soak_seconds: number;
+  target: UpdateTarget;
+  workloads: UpdateWorkload[];
+};
+export type UpdateRolloutNode = {node_id: string; state: string};
+export type UpdateRollout = {
+  batches: string[][];
+  can_approve_resume: boolean;
+  current_batch: number;
+  failure_reason: string | null;
+  id: string;
+  job_id: string;
+  nodes: UpdateRolloutNode[];
+  plan_digest: string;
+  required_action: "authorize-rollback" | "approve-resume" | null;
+  resume_required: boolean;
+  state: string;
+};
 export interface ControlApi {
   fleet(): Promise<FleetResponse>; documents(kind: "models" | "profiles"): Promise<DocumentList>;
   jobs(cursor?: string): Promise<JobsResponse>;
@@ -33,4 +96,9 @@ export interface ControlApi {
   approveEnrollment(enrollmentId: string): Promise<EnrollmentDecisionResponse>;
   rejectEnrollment(enrollmentId: string, reason: string): Promise<EnrollmentDecisionResponse>;
   revokeAgentNode(nodeId: string): Promise<void>;
+  updateSkew(): Promise<UpdateSkew>;
+  planUpdate(release: string): Promise<UpdatePlan>;
+  applyUpdate(planDigest: string): Promise<UpdateRollout>;
+  updateStatus(rolloutId: string): Promise<UpdateRollout>;
+  approveUpdateResume(rolloutId: string): Promise<UpdateRollout>;
 }

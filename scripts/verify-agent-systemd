@@ -17,6 +17,8 @@ UNITS = (
     "dgx-forge-agent-supervisor.service",
     "dgx-forge-agent-activation.service",
     "dgx-forge-agent-activation.path",
+    "dgx-forge-agent-rollback.service",
+    "dgx-forge-agent-rollback.path",
 )
 SECURITY_UNITS = tuple(name for name in UNITS if name.endswith(".service"))
 SUMMARY = re.compile(
@@ -85,6 +87,11 @@ def _security(root: Path, name: str) -> dict[str, object]:
     assessments = json.loads(effective.stdout)
     if not isinstance(assessments, list) or not assessments:
         raise RuntimeError(f"security analysis for {name} is empty")
+    by_field = {assessment.get("json_field"): assessment for assessment in assessments}
+    ambient = by_field.get("AmbientCapabilities")
+    ptrace = by_field.get("CapabilityBoundingSet_CAP_SYS_PTRACE")
+    if not isinstance(ambient, dict) or not isinstance(ptrace, dict):
+        raise RuntimeError(f"capability analysis for {name} is unavailable")
     rendered = _run(
         [
             "systemd-analyze",
@@ -101,7 +108,9 @@ def _security(root: Path, name: str) -> dict[str, object]:
     if match is None or match.group(1) != name:
         raise RuntimeError(f"security summary for {name} is unavailable")
     return {
+        "ambient_capabilities": not bool(ambient.get("set")),
         "assessment_count": len(assessments),
+        "cap_sys_ptrace": not bool(ptrace.get("set")),
         "exposure": match.group(3),
         "score": float(match.group(2)),
     }
@@ -113,6 +122,15 @@ def verify(repository: Path) -> dict[str, object]:
         _install(root, repository)
         _verify(root)
         units = {name: _security(root, name) for name in SECURITY_UNITS}
+        supervisor = "dgx-forge-agent-supervisor.service"
+        if any(unit["ambient_capabilities"] for unit in units.values()):
+            raise RuntimeError("agent services must not receive ambient capabilities")
+        for name, unit in units.items():
+            expected_ptrace = name == supervisor
+            if unit["cap_sys_ptrace"] is not expected_ptrace:
+                raise RuntimeError(
+                    f"CAP_SYS_PTRACE boundary for {name} does not match policy"
+                )
     return {
         "schema_version": 1,
         "security_units": units,

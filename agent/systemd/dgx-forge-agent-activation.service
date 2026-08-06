@@ -33,5 +33,5 @@ RestrictNamespaces=yes
 RemoveIPC=yes
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX
-ReadOnlyPaths=/var/lib/dgx-forge-agent/update-staging /usr/libexec/dgx-agent-supervisor
+ReadOnlyPaths=/var/lib/dgx-forge-agent/update-staging /etc/dgx-forge-agent/update-authority.json /usr/bin/openssl /usr/libexec/dgx-agent-supervisor
 ReadWritePaths=/opt/dgx-forge/agent-slots /var/lib/dgx-forge-agent-supervisor /run/dgx-forge-agent

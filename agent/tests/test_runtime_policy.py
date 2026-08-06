@@ -6,12 +6,20 @@ import os
 import platform
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from dgx_agent.config import AgentConfig
 from dgx_agent.main import build_agent
 from dgx_agent.releases import ReleaseInstaller
 from dgx_agent.runtime_policy import RuntimePolicy, RuntimePolicyError
+from dgx_agent.update import (
+    AgentUpdater,
+    LocalSupervisor,
+    ORASAgentTransport,
+    PlatformAgentTrust,
+    PlatformTUFRouteFetcher,
+)
 from dgx_agent.workloads import WorkloadOperations
 
 
@@ -180,7 +188,7 @@ def test_runtime_policy_rejects_duplicate_symlink_hardlink_and_tampered_artifact
         RuntimePolicy._load_for_test(path, tmp_path).verify_installed()
 
 
-def test_build_agent_constructs_release_and_workload_handlers_with_one_credential_store(
+def test_build_agent_constructs_all_closed_handlers_with_one_credential_store(
     tmp_path: Path, monkeypatch
 ) -> None:
     policy_path, _ = policy_fixture(tmp_path)
@@ -216,10 +224,14 @@ def test_build_agent_constructs_release_and_workload_handlers_with_one_credentia
     monkeypatch.setenv("DGX_AGENT_SUPERVISOR_SHA256", "a" * 64)
     monkeypatch.setenv("DGX_AGENT_SUPERVISOR_GENERATION", "1")
 
-    agent = build_agent(config)
+    agent = build_agent(config, readiness=SimpleNamespace(report=lambda: None))
 
     assert isinstance(agent._context.releases, ReleaseInstaller)
     assert isinstance(agent._context.workloads, WorkloadOperations)
+    assert isinstance(agent._context.updates, AgentUpdater)
+    assert isinstance(agent._context.updates._trust, PlatformAgentTrust)
+    assert isinstance(agent._context.updates._transport, ORASAgentTransport)
+    assert isinstance(agent._context.updates._supervisor, LocalSupervisor)
     assert agent._context.probe.policy is sentinel_nvidia
     transport = agent._context.releases._transport
     trust = agent._context.releases._trust
@@ -227,3 +239,17 @@ def test_build_agent_constructs_release_and_workload_handlers_with_one_credentia
     assert trust._fetcher._credential_provider is agent._credentials
     assert transport._policy.registry_origin == "https://registry.example:8443"
     assert transport._policy.repository == "dgx-forge/releases"
+    assert agent._context.updates._transport._client is transport
+    platform_fetcher = agent._context.updates._trust._trust._fetcher
+    assert isinstance(platform_fetcher, PlatformTUFRouteFetcher)
+    assert platform_fetcher._delegate is trust._fetcher
+    assert agent._context.updates._trust._trust._metadata_root == (
+        runtime.tuf.metadata_root / "platform"
+    )
+    assert agent._context.updates._trust._trust._target_root == (
+        runtime.tuf.target_root / "platform"
+    )
+    assert agent._context.updates._architecture == {
+        "aarch64": "linux-arm64",
+        "x86_64": "linux-x86_64",
+    }[runtime.architecture]

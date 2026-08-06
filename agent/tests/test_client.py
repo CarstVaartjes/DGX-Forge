@@ -34,6 +34,7 @@ from dgx_agent.client import (
 )
 from dgx_agent_protocol import (
     AgentClaim,
+    AgentDirective,
     AgentOperation,
     AgentProgress,
     AgentResult,
@@ -378,7 +379,17 @@ def test_claim_uses_fixed_mtls_post_and_parses_canonical_protocol_claim(
     assert request.body == canonical_message(
         {
             "capabilities": [
+                "agent.rollback",
+                "agent.update",
                 "node.probe",
+                "package.activate",
+                "package.gc",
+                "package.health",
+                "package.prepare",
+                "package.remove",
+                "package.repair",
+                "package.rollback",
+                "package.stop",
                 "release.install",
                 "workload.health",
                 "workload.prepare",
@@ -388,7 +399,7 @@ def test_claim_uses_fixed_mtls_post_and_parses_canonical_protocol_claim(
             ],
             "lease_seconds": 30,
             "node_id": NODE_ID,
-            "protocol_version": 1,
+            "protocol_version": 2,
             "wait_seconds": 1,
         }
     )
@@ -397,6 +408,7 @@ def test_claim_uses_fixed_mtls_post_and_parses_canonical_protocol_claim(
 def test_claim_advertises_verified_running_release_identity(tmp_path: Path) -> None:
     files = tls_files(tmp_path)
     identity = AgentRuntimeIdentity(
+        architecture="linux-arm64",
         platform_version="1.2.3",
         build_digest="sha256:" + "b" * 64,
         active_slot="B",
@@ -422,6 +434,38 @@ def test_claim_advertises_verified_running_release_identity(tmp_path: Path) -> N
 
     document = json.loads(server.requests[0].body)
     assert document["runtime_identity"] == identity.wire()
+
+
+@pytest.mark.parametrize(
+    ("machine", "expected"),
+    (("aarch64", "linux-arm64"), ("x86_64", "linux-x86_64")),
+)
+def test_runtime_identity_normalizes_local_machine_architecture(
+    monkeypatch, machine: str, expected: str
+) -> None:
+    monkeypatch.setenv("DGX_AGENT_PLATFORM_VERSION", "1.2.3")
+    monkeypatch.setenv("DGX_AGENT_BUILD_DIGEST", "sha256:" + "b" * 64)
+    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_SLOT", "B")
+    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_SHA256", "c" * 64)
+    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_GENERATION", "7")
+
+    identity = AgentRuntimeIdentity.from_environment(machine=lambda: machine)
+
+    assert identity.architecture == expected
+    assert identity.wire()["architecture"] == expected
+    assert identity.wire()["self_test_passed"] is True
+    assert identity.wire()["supervisor_ready_generation"] == 7
+
+
+def test_runtime_identity_rejects_unknown_local_machine(monkeypatch) -> None:
+    monkeypatch.setenv("DGX_AGENT_PLATFORM_VERSION", "1.2.3")
+    monkeypatch.setenv("DGX_AGENT_BUILD_DIGEST", "sha256:" + "b" * 64)
+    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_SLOT", "B")
+    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_SHA256", "c" * 64)
+    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_GENERATION", "7")
+
+    with pytest.raises(ValueError, match="runtime identity is unavailable"):
+        AgentRuntimeIdentity.from_environment(machine=lambda: "riscv64")
 
 
 @pytest.mark.parametrize(
@@ -665,18 +709,28 @@ def test_heartbeat_parses_protocol_progress_and_result_accepts_204_or_stale_409(
     files = tls_files(tmp_path)
     claim = probe_claim()
     message = progress(claim)
+    directive = AgentDirective(
+        schema_version=message.schema_version,
+        job_id=message.job_id,
+        operation_id=message.operation_id,
+        attempt=message.attempt,
+        fence=message.fence,
+        node_id=message.node_id,
+        deadline=message.deadline + timedelta(seconds=30),
+        cancel_requested=True,
+    )
     terminal = result(claim)
     with https_server(files) as server:
         server.responses.extend(
             [
-                ResponseSpec(200, canonical_message(message), "application/json"),
+                ResponseSpec(200, canonical_message(directive), "application/json"),
                 ResponseSpec(204),
                 ResponseSpec(409, b"stale fence", "text/plain"),
             ]
         )
         client = client_for(server, files)
 
-        assert client.heartbeat(message) == message
+        assert client.heartbeat(message) == directive
         client.result(terminal)
         client.result(terminal)
 

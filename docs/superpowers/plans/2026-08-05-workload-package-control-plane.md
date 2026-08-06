@@ -25,7 +25,7 @@
 
 **Files:**
 - Modify: `control/src/dgx_control/models.py`
-- Create: `control/migrations/versions/0011_workload_packages.py`
+- Create: `control/migrations/versions/0013_workload_packages.py`
 - Test: `control/tests/test_workload_package_migration.py`
 - Modify: `control/tests/test_migrations.py`
 
@@ -47,11 +47,13 @@ assert rollout.release_digest == "a" * 64
 
 Run: `uv run --project control --frozen pytest control/tests/test_workload_package_migration.py control/tests/test_migrations.py -v`
 
-Expected: FAIL because revision `0011` and package models are absent.
+Expected: FAIL because revision `0013` and package models are absent.
 
 - [ ] **Step 3: Implement normalized operational state**
 
 Use foreign keys and uniqueness for retry-safe discovery/resolution/validation/rollout. Store bounded JSON evidence/progress, typed state columns, timestamps, actor/automation identity, exact Git/TUF/release/policy digests, retry disposition, and node operation IDs. Do not store source credentials, signed URLs, lock payloads, model bytes, image layers, wheels, or arbitrary logs.
+Set `down_revision = "0012_control_process_heartbeats"`; do not branch from the
+superseded pre-update migration number.
 
 ```python
 class PackageCandidate(Base):
@@ -68,12 +70,12 @@ class PackageCandidate(Base):
 
 Run: `uv run --project control --frozen pytest control/tests/test_workload_package_migration.py control/tests/test_migrations.py control/tests/test_agent_migrations.py -q`
 
-Expected: PASS on SQLite contract tests and configured PostgreSQL migration tests, with `0011` as the only head after platform-update revision `0010`.
+Expected: PASS on SQLite contract tests and configured PostgreSQL migration tests, with `0013` as the only head after platform-update revision `0012_control_process_heartbeats`.
 
 - [ ] **Step 5: Commit W11**
 
 ```bash
-git add control/src/dgx_control/models.py control/migrations/versions/0011_workload_packages.py control/tests/test_workload_package_migration.py control/tests/test_migrations.py
+git add control/src/dgx_control/models.py control/migrations/versions/0013_workload_packages.py control/tests/test_workload_package_migration.py control/tests/test_migrations.py
 git commit -m "feat: persist workload package operations"
 ```
 

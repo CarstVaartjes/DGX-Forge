@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import threading
 import time
@@ -33,6 +34,7 @@ from dgx_agent.releases import (
 from dgx_agent.state import AgentStateStore
 from dgx_agent_protocol import (
     AgentClaim,
+    AgentDirective,
     AgentOperation,
     AgentProgress,
     canonical_message,
@@ -177,14 +179,14 @@ class HeartbeatControl(FakeControl):
         self._state = state
         self._condition = threading.Condition()
         self.heartbeat_requests: list[AgentProgress] = []
-        self.heartbeat_responses: list[AgentProgress] = []
+        self.heartbeat_responses: list[AgentDirective] = []
         self.heartbeat_thread_ids: list[int] = []
 
-    def heartbeat(self, progress: AgentProgress) -> AgentProgress:
+    def heartbeat(self, progress: AgentProgress) -> AgentDirective:
         active = self._state.recover_active()
         assert active is not None
         assert active.claim.fence == progress.fence
-        response = AgentProgress(
+        response = AgentDirective(
             schema_version=progress.schema_version,
             job_id=progress.job_id,
             operation_id=progress.operation_id,
@@ -192,7 +194,7 @@ class HeartbeatControl(FakeControl):
             fence=progress.fence,
             node_id=progress.node_id,
             deadline=progress.deadline + timedelta(seconds=30),
-            progress=progress.progress,
+            cancel_requested=False,
         )
         with self._condition:
             self.heartbeat_requests.append(progress)
@@ -225,16 +227,22 @@ def test_readiness_reporter_requires_complete_environment_and_publishes_exact_ma
             {"DGX_AGENT_SUPERVISOR_GENERATION": "2"}, tmp_path
         )
     environment = {
+        "CREDENTIALS_DIRECTORY": str(tmp_path),
         "DGX_AGENT_SUPERVISOR_GENERATION": "2",
         "DGX_AGENT_SUPERVISOR_SLOT": "B",
         "DGX_AGENT_SUPERVISOR_SHA256": "a" * 64,
     }
+    (tmp_path / "activation-challenge").write_text("b" * 64 + "\n")
     reporter = ReadinessReporter._from_environment_for_test(environment, tmp_path)
 
     assert reporter.report() is True
     marker = tmp_path / "readiness.json"
     assert marker.read_bytes() == (
-        b'{"generation":2,"schema_version":1,"sha256":"'
+        b'{"challenge":"'
+        + b"b" * 64
+        + b'","generation":2,"pid":'
+        + str(os.getpid()).encode("ascii")
+        + b',"schema_version":2,"sha256":"'
         + b"a" * 64
         + b'","slot":"B"}\n'
     )

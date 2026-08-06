@@ -8,6 +8,7 @@ import math
 import os
 import random
 import re
+import shutil
 import signal
 import stat
 import threading
@@ -18,7 +19,9 @@ from typing import Protocol
 
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
-from dgx_agent_protocol import AgentClaim, AgentProgress, AgentResult
+from dgx_agent_protocol import AgentClaim, AgentDirective, AgentProgress, AgentResult
+
+from spark_profiles.update_trust import UpdateTrust
 
 from .client import (
     AgentClient,
@@ -39,6 +42,13 @@ from .readiness import ReadinessReporter
 from .releases import ReleaseInstaller
 from .runtime_policy import RuntimePolicy
 from .state import AgentStateStore
+from .update import (
+    AgentUpdater,
+    LocalSupervisor,
+    ORASAgentTransport,
+    PlatformAgentTrust,
+    PlatformTUFRouteFetcher,
+)
 from .update_trust import BoundedHTTPSFetcher, TUFReleaseTrust
 from .workloads import WorkloadOperations
 
@@ -46,7 +56,9 @@ from .workloads import WorkloadOperations
 class AgentControl(Protocol):
     def claim(self) -> AgentClaim | None: ...
 
-    def heartbeat(self, progress: AgentProgress) -> AgentProgress: ...
+    def heartbeat(
+        self, progress: AgentProgress
+    ) -> AgentDirective | AgentProgress: ...
 
     def result(self, result: AgentResult) -> None: ...
 
@@ -71,6 +83,11 @@ _MAX_HEARTBEAT_INTERVAL_SECONDS = (
     - _HEARTBEAT_SCHEDULING_MARGIN_SECONDS
 )
 _DEFAULT_HEARTBEAT_JOIN_SECONDS = 20.0
+_AGENT_UPDATE_STAGING_ROOT = Path("/var/lib/dgx-forge-agent/update-staging")
+_PROTOCOL_ARCHITECTURE = {
+    "aarch64": "linux-arm64",
+    "x86_64": "linux-x86_64",
+}
 
 
 class AgentHeartbeatShutdownError(RuntimeError):
@@ -150,7 +167,19 @@ class _ActiveHeartbeat:
                     progress={"phase": "executing"},
                 )
                 response = self._client.heartbeat(request)
-                persisted = self._context.state.heartbeat(
+                if isinstance(response, AgentProgress):
+                    response = AgentDirective(
+                        schema_version=response.schema_version,
+                        job_id=response.job_id,
+                        operation_id=response.operation_id,
+                        attempt=response.attempt,
+                        fence=response.fence,
+                        node_id=response.node_id,
+                        deadline=response.deadline,
+                        cancel_requested=False,
+                    )
+                persisted = self._context.state.apply_directive(
+                    request,
                     response,
                     allow_terminal_race=True,
                 )
@@ -387,12 +416,44 @@ def build_agent(
         runtime.staging_root,
     )
     workloads = WorkloadOperations(runtime.release_root, trust)
+    protocol_architecture = _PROTOCOL_ARCHITECTURE[runtime.architecture]
+    platform_fetcher = PlatformTUFRouteFetcher(
+        fetcher, control_origin=config.control_origin
+    )
+    platform_trust = PlatformAgentTrust(
+        UpdateTrust(
+            runtime.tuf.metadata_root / "platform",
+            runtime.tuf.target_root / "platform",
+            f"{config.control_origin}/platform/metadata/",
+            f"{config.control_origin}/platform/targets/",
+            runtime.read_bootstrap_root(),
+            platform_fetcher,
+        ),
+        platform_fetcher,
+    )
+    updates = AgentUpdater(
+        architecture=protocol_architecture,
+        protocol_version=1,
+        staging_root=_AGENT_UPDATE_STAGING_ROOT,
+        trust=platform_trust,
+        transport=ORASAgentTransport(
+            oras,
+            registry_origin=runtime.registry_origin,
+            repository=runtime.repository,
+            architecture=protocol_architecture,
+        ),
+        supervisor=LocalSupervisor(),
+        available_bytes=lambda: shutil.disk_usage(
+            _AGENT_UPDATE_STAGING_ROOT.parent
+        ).free,
+    )
     context = OperationContext(
         node_id=config.node_id,
         state=state,
         probe=PinnedNodeProbe(policy),
         releases=releases,
         workloads=workloads,
+        updates=updates,
     )
     return Agent(
         client,

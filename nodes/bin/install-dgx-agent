@@ -356,6 +356,44 @@ def _certificate_bundle(raw: bytes) -> bytes:
     return raw
 
 
+def _require_supervisor_signature_verifier() -> None:
+    try:
+        result = subprocess.run(
+            ["/usr/bin/openssl", "pkeyutl", "-help"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=5,
+            env={"LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin"},
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        raise InstallError("OpenSSL pkeyutl verifier is unavailable") from error
+    if result.returncode != 0:
+        raise InstallError("OpenSSL pkeyutl verifier is unavailable")
+
+
+def _update_authority(raw: bytes) -> bytes:
+    value = _json(raw, "update authority", canonical=True)
+    if set(value) != {"algorithm", "key_id", "public_key", "schema_version"}:
+        raise InstallError("update authority fields are invalid")
+    if value["algorithm"] != "ed25519" or value["schema_version"] != 1:
+        raise InstallError("update authority algorithm is invalid")
+    key_id = value["key_id"]
+    public_hex = value["public_key"]
+    if (
+        not isinstance(key_id, str)
+        or DIGEST.fullmatch(key_id) is None
+        or not isinstance(public_hex, str)
+        or not re.fullmatch(r"[0-9a-f]{64}", public_hex)
+    ):
+        raise InstallError("update authority public key is invalid")
+    public = bytes.fromhex(public_hex)
+    if hashlib.sha256(public).hexdigest() != key_id:
+        raise InstallError("update authority key ID is invalid")
+    return raw
+
+
 def _lock_path() -> Path:
     override = os.environ.get("DGX_INSTALL_NVIDIA_LOCK_TEST")
     if override is not None:
@@ -1281,6 +1319,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
         "ca",
         "tuf_root",
         "registry_auth",
+        "update_authority",
         "enrollment_token",
     ):
         if not Path(getattr(arguments, field)).is_absolute():
@@ -1317,6 +1356,11 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
             maximum=MAX_JSON,
             private=True,
         ),
+        "update_authority": _snapshot(
+            Path(arguments.update_authority),
+            "update authority",
+            maximum=MAX_JSON,
+        ),
         "token": _snapshot(
             Path(arguments.enrollment_token),
             "enrollment token",
@@ -1335,6 +1379,8 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
     _verify_elf(snapshots["oras"], site["architecture"], "ORAS executable")
     _json(snapshots["tuf"], "TUF bootstrap root", canonical=True)
     _json(snapshots["auth"], "registry auth", canonical=True)
+    _update_authority(snapshots["update_authority"])
+    _require_supervisor_signature_verifier()
     _certificate_bundle(snapshots["ca"])
     lock = _load_lock()
     nvidia_files = _validate_bundle(snapshots["bundle"], lock)
@@ -1355,6 +1401,8 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
             "dgx-forge-agent-supervisor.service",
             "dgx-forge-agent-activation.service",
             "dgx-forge-agent-activation.path",
+            "dgx-forge-agent-rollback.service",
+            "dgx-forge-agent-rollback.path",
         )
     }
     lock_path = _installer_lock_path()
@@ -1471,6 +1519,13 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
             tuf_path, snapshots["tuf"], 0o644, root_owner, parent_mode=0o755
         )
         changed |= _publish_file(
+            etc / "update-authority.json",
+            snapshots["update_authority"],
+            0o444,
+            root_owner,
+            parent_mode=0o755,
+        )
+        changed |= _publish_file(
             etc / "nvidia-policy.json",
             _canonical(
                 _nvidia_policy(
@@ -1563,6 +1618,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
                         "dgx-forge-agent.service",
                         "dgx-forge-agent-supervisor.service",
                         "dgx-forge-agent-activation.path",
+                        "dgx-forge-agent-rollback.path",
                     ],
                     check=True,
                     timeout=30,
@@ -1573,6 +1629,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
                         "start",
                         "dgx-forge-agent-supervisor.service",
                         "dgx-forge-agent-activation.path",
+                        "dgx-forge-agent-rollback.path",
                     ],
                     check=True,
                     timeout=30,
@@ -1610,6 +1667,7 @@ def _parser() -> UsageParser:
         "tuf-root",
         "tuf-root-sha256",
         "registry-auth",
+        "update-authority",
         "enrollment-token",
     ):
         parser.add_argument(f"--{name}", required=True)

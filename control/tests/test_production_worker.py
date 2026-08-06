@@ -5,8 +5,12 @@ from datetime import UTC, datetime
 import pytest
 from dgx_control.jobs import JobService
 from dgx_control.models import Base
+from dgx_control.presence import ManagementAddressPolicy
+from dgx_control.route_runtime import AtomicRouteBundlePublisher
 from dgx_control.settings import Settings, SettingsError, WorkerSettings
-from dgx_control.worker import Worker
+from dgx_control.update_routes import ProductionUpdateRouteBoundary
+from dgx_control.update_worker import UpdateRolloutWorker
+from dgx_control.worker import Worker, assemble_production_worker
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -37,6 +41,59 @@ def test_production_worker_has_no_automatic_direct_transport_fallback(
     assert persisted.state == "waiting-for-operator"
     assert persisted.status_reason == "legacy unlinked job requires operator review"
     assert persisted.current_attempt == 0
+
+
+def test_production_builder_wires_signer_queue_route_boundary_and_update_worker(
+    tmp_path,
+) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path / 'builder.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine, expire_on_commit=False)
+    clock = lambda: datetime(2026, 8, 6, tzinfo=UTC)
+    jobs = JobService(sessions, clock=clock)
+    route_root = tmp_path / "routes"
+    publisher = AtomicRouteBundlePublisher(
+        route_root,
+        management_policy=ManagementAddressPolicy.parse("10.0.0.0/24"),
+        clock=clock,
+    )
+
+    class SignerBackedAgentJobs:
+        pass
+
+    class Authority:
+        def refresh_update_grant(self, *_args):
+            return {"claims": {}, "signature": "test"}
+
+        def prefetch(self, *_args):
+            return None
+
+        def authorization_reason(self, *_args):
+            return True
+
+        def clear(self, *_args):
+            return None
+
+    agent_jobs = SignerBackedAgentJobs()
+
+    worker = assemble_production_worker(
+        jobs=jobs,
+        sessions=sessions,
+        agent_jobs=agent_jobs,
+        publisher=publisher,
+        route_root=route_root,
+        endpoint_resolver=lambda _session, _node: ("10.0.0.11", clock()),
+        clock=clock,
+        authority=Authority(),
+        worker_id="control-worker-test",
+    )
+
+    assert isinstance(worker._updates, UpdateRolloutWorker)
+    assert worker._updates._orchestrator._agent_jobs is agent_jobs
+    assert isinstance(worker._updates._routes, ProductionUpdateRouteBoundary)
+    assert worker._updates._routes is worker._updates._orchestrator._routes
+    assert worker._reconciliations._agent_jobs is agent_jobs
+    assert worker._reconciliations._publisher is publisher
 
 
 def test_production_worker_settings_load_only_worker_authority_secrets(

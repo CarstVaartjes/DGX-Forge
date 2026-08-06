@@ -36,6 +36,9 @@ dev = ["pytest==9.1.1"]
 "src/spark_profiles/schemas/cluster-profile-v2.schema.json" = "spark_profiles/schemas/cluster-profile-v2.schema.json"
 "src/spark_profiles/schemas/workload-v2.schema.json" = "spark_profiles/schemas/workload-v2.schema.json"
 "src/spark_profiles/schemas/platform-update-manifest.schema.json" = "spark_profiles/schemas/platform-update-manifest.schema.json"
+"src/spark_profiles/schemas/control-deployment-bundle.schema.json" = "spark_profiles/schemas/control-deployment-bundle.schema.json"
+"src/spark_profiles/schemas/package-family.schema.json" = "spark_profiles/schemas/package-family.schema.json"
+"src/spark_profiles/schemas/workload-deployment.schema.json" = "spark_profiles/schemas/workload-deployment.schema.json"
 
 [tool.ruff]
 required-version = "==0.16.1"

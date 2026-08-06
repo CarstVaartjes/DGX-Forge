@@ -19,7 +19,6 @@ services:
       DGX_AGENT_CA_PROVISIONER_KID: ${AGENT_CA_PROVISIONER_KID:?set agent CA provisioner key ID}
       DGX_AGENT_CA_TIMEOUT_SECONDS: ${AGENT_CA_TIMEOUT_SECONDS:-3}
       DGX_AGENT_CA_MAX_RESPONSE_BYTES: ${AGENT_CA_MAX_RESPONSE_BYTES:-65536}
-      DGX_AGENT_ARTIFACT_ROOT: /state/agent-artifacts
       DGX_AGENT_PROXY_AUTH_FILE: /run/secrets/agent-proxy-auth
     secrets: [agent-ca-credential, agent-ca-provisioner-public-jwk, step-ca-root-certificate]
     networks: [ca]

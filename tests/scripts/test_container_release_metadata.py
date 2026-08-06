@@ -29,6 +29,11 @@ def test_stable_tag_emits_exact_public_package_metadata() -> None:
         "api_image=ghcr.io/carstvaartjes/dgx-forge-api",
         "worker_image=ghcr.io/carstvaartjes/dgx-forge-worker",
         "hermes_image=ghcr.io/carstvaartjes/dgx-forge-hermes",
+        (
+            "deployment_bundle_repository="
+            "ghcr.io/carstvaartjes/dgx-forge-control-deployment"
+        ),
+        "platform_channel=stable",
     ]
 
 

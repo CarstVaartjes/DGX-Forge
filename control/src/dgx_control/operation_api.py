@@ -60,6 +60,14 @@ _ADMIN_OPERATION_IDS = {
     ("post", "/api/v1/jobs/{job_id}/resume"): "resumeJob",
     ("get", "/api/v1/jobs/{job_id}/logs"): "listJobLogs",
     ("get", "/api/v1/jobs/{job_id}/logs/{digest}"): "getJobLog",
+    ("get", "/api/v1/updates/skew"): "getPlatformUpdateSkew",
+    ("post", "/api/v1/updates/plan"): "planPlatformUpdate",
+    ("post", "/api/v1/updates"): "applyPlatformUpdate",
+    ("get", "/api/v1/updates/{rollout_id}"): "getPlatformUpdate",
+    (
+        "post",
+        "/api/v1/updates/{rollout_id}/approve-resume",
+    ): "approvePlatformUpdateRecovery",
 }
 _HTTP_METHODS = frozenset({"delete", "get", "patch", "post", "put"})
 BoundedIdentifier = Annotated[str, Field(min_length=1, max_length=128)]

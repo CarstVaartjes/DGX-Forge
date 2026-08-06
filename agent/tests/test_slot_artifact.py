@@ -7,6 +7,8 @@ import struct
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 BUILDER = ROOT / "agent/tools/build-slot-artifact"
 PROTOCOL = ROOT / "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
@@ -14,6 +16,32 @@ PROTOCOL = ROOT / "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
 
 def _architecture() -> str:
     return "aarch64" if platform.machine() in {"aarch64", "arm64"} else "x86_64"
+
+
+def test_builder_output_limit_matches_the_root_supervisor_limit() -> None:
+    assert "MAX_ARTIFACT = 256 * 1024 * 1024" in BUILDER.read_text()
+
+
+@pytest.fixture(scope="session")
+def slot_wheels(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
+    distribution = tmp_path_factory.mktemp("slot-distribution")
+    for project in (ROOT / "agent", ROOT):
+        subprocess.run(
+            [
+                "uv",
+                "build",
+                "--project",
+                str(project),
+                "--wheel",
+                "--out-dir",
+                str(distribution),
+            ],
+            check=True,
+        )
+    return (
+        next(distribution.glob("dgx_agent-*.whl")),
+        next(distribution.glob("spark_profiles-*.whl")),
+    )
 
 
 def test_builder_rejects_missing_inputs_cross_architecture_and_output_symlink(
@@ -34,6 +62,8 @@ def test_builder_rejects_missing_inputs_cross_architecture_and_output_symlink(
                 str(argv[0]),
                 "--protocol-wheel",
                 str(argv[1]),
+                "--platform-wheel",
+                str(PROTOCOL),
                 "--output",
                 str(argv[2]),
                 "--architecture",
@@ -53,6 +83,8 @@ def test_builder_rejects_missing_inputs_cross_architecture_and_output_symlink(
             str(PROTOCOL),
             "--protocol-wheel",
             str(PROTOCOL),
+            "--platform-wheel",
+            str(PROTOCOL),
             "--output",
             str(output),
             "--architecture",
@@ -67,21 +99,9 @@ def test_builder_rejects_missing_inputs_cross_architecture_and_output_symlink(
 
 def test_builds_one_self_contained_native_elf_with_isolated_module_smoke(
     tmp_path: Path,
+    slot_wheels: tuple[Path, Path],
 ) -> None:
-    distribution = tmp_path / "distribution"
-    subprocess.run(
-        [
-            "uv",
-            "build",
-            "--project",
-            str(ROOT / "agent"),
-            "--wheel",
-            "--out-dir",
-            str(distribution),
-        ],
-        check=True,
-    )
-    wheel = next(distribution.glob("dgx_agent-*.whl"))
+    wheel, platform_wheel = slot_wheels
     artifact = tmp_path / "outside/dgx-forge-agent"
     artifact.parent.mkdir()
     subprocess.run(
@@ -91,6 +111,8 @@ def test_builds_one_self_contained_native_elf_with_isolated_module_smoke(
             str(wheel),
             "--protocol-wheel",
             str(PROTOCOL),
+            "--platform-wheel",
+            str(platform_wheel),
             "--output",
             str(artifact),
             "--architecture",
@@ -137,21 +159,9 @@ def test_builds_one_self_contained_native_elf_with_isolated_module_smoke(
 
 def test_builder_snapshots_wheels_and_ignores_hostile_path_network_and_empty_cache(
     tmp_path: Path,
+    slot_wheels: tuple[Path, Path],
 ) -> None:
-    distribution = tmp_path / "distribution"
-    subprocess.run(
-        [
-            "uv",
-            "build",
-            "--project",
-            str(ROOT / "agent"),
-            "--wheel",
-            "--out-dir",
-            str(distribution),
-        ],
-        check=True,
-    )
-    wheel = next(distribution.glob("dgx_agent-*.whl"))
+    wheel, platform_wheel = slot_wheels
     hostile = tmp_path / "hostile"
     hostile.mkdir()
     invoked = tmp_path / "hostile-uv-invoked"
@@ -175,6 +185,8 @@ def test_builder_snapshots_wheels_and_ignores_hostile_path_network_and_empty_cac
             str(wheel),
             "--protocol-wheel",
             str(PROTOCOL),
+            "--platform-wheel",
+            str(platform_wheel),
             "--output",
             str(output),
             "--architecture",

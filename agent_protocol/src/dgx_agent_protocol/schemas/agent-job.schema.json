@@ -11,13 +11,54 @@
     "attempt": {"type": "integer", "minimum": 1},
     "fence": {"type": "string", "format": "uuid"},
     "node_id": {"type": "string", "pattern": "^spk_[0-9a-f]{32}$"},
-    "operation": {"enum": ["node.probe", "release.install", "workload.prepare", "workload.start", "workload.stop", "workload.health", "workload.verify", "agent.update", "agent.rollback"]},
+    "operation": {"enum": ["node.probe", "release.install", "workload.prepare", "workload.start", "workload.stop", "workload.health", "workload.verify", "agent.update", "agent.rollback", "package.prepare", "package.activate", "package.health", "package.stop", "package.rollback", "package.remove", "package.repair", "package.gc"]},
     "base_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "payload_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "payload": {"$ref": "#/$defs/safe-object"},
     "deadline": {"type": "string", "format": "date-time", "pattern": "(?:Z|\\+00:00)$"}
   },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "operation": {
+            "enum": ["package.prepare", "package.activate", "package.health", "package.stop", "package.rollback", "package.remove", "package.repair"]
+          }
+        },
+        "required": ["operation"]
+      },
+      "then": {"properties": {"payload": {"$ref": "#/$defs/package-release-payload"}}}
+    },
+    {
+      "if": {
+        "properties": {"operation": {"const": "package.gc"}},
+        "required": ["operation"]
+      },
+      "then": {"properties": {"payload": {"$ref": "#/$defs/package-gc-payload"}}}
+    }
+  ],
   "$defs": {
+    "package-release-payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "deployment_id", "release_digest", "deployment_digest"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "deployment_id": {"type": "string", "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$"},
+        "release_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "deployment_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "package-gc-payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "dry_run"],
+      "properties": {
+        "schema_version": {"const": 1},
+        "dry_run": {"type": "boolean"},
+        "target_bytes": {"type": "integer", "minimum": 1, "maximum": 17592186044416}
+      }
+    },
     "safe-object": {
       "type": "object",
       "propertyNames": {

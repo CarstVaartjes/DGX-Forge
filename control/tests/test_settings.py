@@ -1,7 +1,108 @@
 from pathlib import Path
 
 import pytest
-from dgx_control.settings import Settings, SettingsError, WorkerSettings
+from dgx_control.settings import (
+    GenerationStartupSettings,
+    Settings,
+    SettingsError,
+    StartupMode,
+    WorkerSettings,
+)
+
+GENERATION_SHA_A = "a" * 64
+GENERATION_SHA_B = "b" * 64
+
+
+def _valid_generation_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    mode: StartupMode,
+) -> None:
+    monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "test")
+    monkeypatch.setenv("DGX_DATABASE_URL", "postgresql+psycopg://control:test@db/control")
+    monkeypatch.delenv("DGX_DATABASE_URL_FILE", raising=False)
+    monkeypatch.setenv("DGX_CONTROL_STARTUP_MODE", mode.value)
+    if mode is StartupMode.PRESELECTION:
+        monkeypatch.setenv("DGX_CONTROL_OPERATION_ID", "operation-1")
+    else:
+        monkeypatch.delenv("DGX_CONTROL_OPERATION_ID", raising=False)
+    monkeypatch.setenv("DGX_CONTROL_GENERATION_ID", "gen-a")
+    monkeypatch.setenv(
+        "DGX_PLATFORM_RELEASE_DIGEST",
+        f"sha256:{GENERATION_SHA_A}",
+    )
+    monkeypatch.setenv(
+        "DGX_PLATFORM_BUILD_DIGEST",
+        f"sha256:{GENERATION_SHA_B}",
+    )
+    monkeypatch.setenv("DGX_PLATFORM_VERSION", "1.2.0")
+    monkeypatch.setenv(
+        "DGX_CONTROL_PROCESS_IMAGE",
+        f"ghcr.io/example/control-api@sha256:{GENERATION_SHA_A}",
+    )
+    monkeypatch.setenv("DGX_DATABASE_REVISION", "0012_control_process_heartbeats")
+    monkeypatch.setenv("DGX_CONTROL_START_NONCE", "c" * 64)
+    monkeypatch.setenv("DGX_CONTROL_IDENTITY_ROOT", str(tmp_path / "identity"))
+
+
+def test_generation_startup_operation_is_required_only_during_preselection(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _valid_generation_environment(
+        tmp_path,
+        monkeypatch,
+        mode=StartupMode.PRESELECTION,
+    )
+    monkeypatch.delenv("DGX_CONTROL_OPERATION_ID")
+    with pytest.raises(SettingsError, match="required for preselection"):
+        GenerationStartupSettings.from_env_and_secrets()
+
+    monkeypatch.setenv("DGX_CONTROL_STARTUP_MODE", StartupMode.SELECTED.value)
+    monkeypatch.setenv("DGX_CONTROL_OPERATION_ID", "operation-1")
+    with pytest.raises(SettingsError, match="forbidden in selected mode"):
+        GenerationStartupSettings.from_env_and_secrets()
+
+
+@pytest.mark.parametrize(
+    ("environment_name", "invalid_value", "message"),
+    (
+        (
+            "DGX_PLATFORM_RELEASE_DIGEST",
+            f"sha256:{'A' * 64}",
+            "DGX_PLATFORM_RELEASE_DIGEST",
+        ),
+        (
+            "DGX_PLATFORM_BUILD_DIGEST",
+            f"sha512:{GENERATION_SHA_B}",
+            "DGX_PLATFORM_BUILD_DIGEST",
+        ),
+        (
+            "DGX_CONTROL_PROCESS_IMAGE",
+            "ghcr.io/example/control-api:latest",
+            "DGX_CONTROL_PROCESS_IMAGE",
+        ),
+        ("DGX_CONTROL_START_NONCE", "not-a-nonce", "DGX_CONTROL_START_NONCE"),
+        ("DGX_CONTROL_IDENTITY_ROOT", "relative/identity", "absolute normalized"),
+    ),
+)
+def test_generation_startup_rejects_invalid_identity_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    environment_name: str,
+    invalid_value: str,
+    message: str,
+) -> None:
+    _valid_generation_environment(
+        tmp_path,
+        monkeypatch,
+        mode=StartupMode.SELECTED,
+    )
+    monkeypatch.setenv(environment_name, invalid_value)
+
+    with pytest.raises(SettingsError, match=message):
+        GenerationStartupSettings.from_env_and_secrets()
 
 
 def test_database_secret_is_read_from_file(tmp_path: Path, monkeypatch) -> None:
@@ -25,6 +126,30 @@ def test_management_networks_are_explicit_and_policy_validated(monkeypatch) -> N
 
     monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.1/24")
     with pytest.raises(SettingsError, match="canonical CIDR"):
+        Settings.from_env_and_secrets()
+
+
+def test_platform_tuf_roots_are_explicit_absolute_nonoverlapping_paths(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    metadata = tmp_path / "platform-tuf/metadata"
+    targets = tmp_path / "platform-tuf/targets"
+    monkeypatch.setenv("DGX_DATABASE_URL", "postgresql://db/control")
+    monkeypatch.setenv("DGX_AGENT_TUF_METADATA_ROOT", str(metadata))
+    monkeypatch.setenv("DGX_AGENT_TUF_TARGET_ROOT", str(targets))
+
+    settings = Settings.from_env_and_secrets()
+
+    assert settings.agent_tuf_metadata_root == metadata
+    assert settings.agent_tuf_target_root == targets
+
+    monkeypatch.setenv("DGX_AGENT_TUF_TARGET_ROOT", "relative/targets")
+    with pytest.raises(SettingsError, match="absolute"):
+        Settings.from_env_and_secrets()
+
+    monkeypatch.setenv("DGX_AGENT_TUF_TARGET_ROOT", str(metadata / "nested"))
+    with pytest.raises(SettingsError, match="distinct"):
         Settings.from_env_and_secrets()
 
 
@@ -101,6 +226,8 @@ def test_production_agent_boundary_requires_secret_files_and_step_ca(tmp_path: P
         "DGX_AGENT_CA_ROOT_FILE": "root-certificate",
         "DGX_AGENT_PROXY_AUTH_FILE": "p" * 32 + "\r\n",
         "DGX_WORKER_API_TOKEN_FILE": "w" * 32,
+        "DGX_AGENT_UPDATE_AUTHORITY_KEY_FILE": "fixture-update-authority-key",
+        "DGX_ADMIN_GRANT_PRIVATE_KEY_FILE": "fixture-admin-grant-key",
     }
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
     monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
@@ -117,6 +244,9 @@ def test_production_agent_boundary_requires_secret_files_and_step_ca(tmp_path: P
 
     assert settings.agent_ca_provider == "step-ca"
     assert settings.agent_proxy_auth == ("p" * 32).encode()
+    assert settings.admin_grant_private_key_path == (
+        tmp_path / "DGX_ADMIN_GRANT_PRIVATE_KEY_FILE"
+    )
 
 
 @pytest.mark.parametrize(
@@ -210,6 +340,8 @@ def test_production_builtin_bootstrap_requires_and_loads_the_mounted_intermediat
         "DGX_AGENT_INTERMEDIATE_KEY_FILE": "built-in-key",
         "DGX_AGENT_PROXY_AUTH_FILE": "p" * 32,
         "DGX_WORKER_API_TOKEN_FILE": "w" * 32,
+        "DGX_AGENT_UPDATE_AUTHORITY_KEY_FILE": "fixture-update-authority-key",
+        "DGX_ADMIN_GRANT_PRIVATE_KEY_FILE": "fixture-admin-grant-key",
     }
     monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
     monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
@@ -245,6 +377,9 @@ def test_production_worker_settings_can_explicitly_disable_agent_runtime(tmp_pat
 
     assert settings.internal_api_token == b"w" * 32
     assert settings.management_cidrs == "10.0.0.0/24"
+    assert settings.update_signer_socket_path == Path(
+        "/run/dgx-signer/signer.sock"
+    )
 
 
 def test_production_requires_an_explicit_agent_ca_provider(monkeypatch) -> None:

@@ -64,6 +64,7 @@ _ACK_FIELDS = {
     "schema_version",
     "state",
 }
+_UPDATE_BOUNDARY_FIELDS = {"key", "schema_version"}
 
 
 class RouteRuntimeError(RuntimeError):
@@ -406,6 +407,87 @@ class AtomicRouteBundlePublisher:
                 "live LiteLLM supervisor acknowledgement is unavailable"
             ) from error
 
+    def _read_update_boundary(self) -> str | None:
+        path = self._root / ".update-boundary.json"
+        if not path.exists():
+            return None
+        if path.is_symlink() or not path.is_file():
+            raise RouteRuntimeError("route update boundary is unsafe")
+        try:
+            content = path.read_bytes()
+            raw: Any = json.loads(content)
+        except (OSError, json.JSONDecodeError) as error:
+            raise RouteRuntimeError("route update boundary is unreadable") from error
+        if (
+            len(content) > 256
+            or not isinstance(raw, dict)
+            or set(raw) != _UPDATE_BOUNDARY_FIELDS
+            or raw.get("schema_version") != 1
+            or not isinstance(raw.get("key"), str)
+            or _DIGEST.fullmatch(raw["key"]) is None
+            or content != _encoded(raw)
+        ):
+            raise RouteRuntimeError("route update boundary is invalid")
+        return raw["key"]
+
+    def _require_update_boundary(
+        self,
+        key: str | None,
+    ) -> None:
+        active = self._read_update_boundary()
+        if active is None:
+            if key is not None:
+                raise RouteRuntimeError("route update boundary is not active")
+            return
+        if key != active:
+            raise RouteRuntimeError("route publication is fenced by an update boundary")
+
+    def claim_update_boundary(self, key: str) -> None:
+        """Fence normal publication behind one durable update boundary key."""
+
+        if _DIGEST.fullmatch(key) is None:
+            raise RouteRuntimeError("route update boundary key is invalid")
+        with self._locked():
+            active = self._read_update_boundary()
+            if active is not None:
+                if active != key:
+                    raise RouteRuntimeError(
+                        "route publication belongs to a different update boundary"
+                    )
+                return
+            self._atomic_write(
+                self._root / ".update-boundary.json",
+                _encoded({"key": key, "schema_version": 1}),
+            )
+
+    def inspect_update_boundary(self) -> str | None:
+        """Return the validated active update fence, if one exists."""
+
+        with self._locked():
+            return self._read_update_boundary()
+
+    def release_update_boundary(self, key: str) -> None:
+        """Release only the exact durable update boundary key."""
+
+        if _DIGEST.fullmatch(key) is None:
+            raise RouteRuntimeError("route update boundary key is invalid")
+        with self._locked():
+            active = self._read_update_boundary()
+            if active != key:
+                raise RouteRuntimeError("route update boundary key does not own publication")
+            path = self._root / ".update-boundary.json"
+            try:
+                path.unlink()
+                directory = os.open(self._root, os.O_RDONLY | os.O_DIRECTORY)
+                try:
+                    os.fsync(directory)
+                finally:
+                    os.close(directory)
+            except OSError as error:
+                raise RouteRuntimeError(
+                    "route update boundary release is unavailable"
+                ) from error
+
     @staticmethod
     def _valid_json_mapping(content: bytes) -> bool:
         try:
@@ -686,13 +768,32 @@ class AtomicRouteBundlePublisher:
         litellm_document["model_list"] = models
         return route_content, _encoded(litellm_document)
 
-    def publish(self, request: RouteBundleRequest) -> ActivationMarker:
+    def publish(
+        self,
+        request: RouteBundleRequest,
+        *,
+        update_boundary_key: str | None = None,
+        renew_update_boundary: bool = False,
+        expected_current_digest: str | None = None,
+    ) -> ActivationMarker:
+        if not isinstance(renew_update_boundary, bool):
+            raise RouteRuntimeError("route update renewal flag is invalid")
+        if renew_update_boundary and update_boundary_key is None:
+            raise RouteRuntimeError(
+                "route update renewal requires its exact fence"
+            )
+        if (
+            expected_current_digest is not None
+            and _DIGEST.fullmatch(expected_current_digest) is None
+        ):
+            raise RouteRuntimeError("route publication compare-and-swap digest is invalid")
         self._identity(
             request.reconciliation_id,
             request.plan_digest,
             request.evidence_set_digest,
         )
         with self._locked():
+            self._require_update_boundary(update_boundary_key)
             issued, expires = self._lease(request.expires_at)
             current = self._read_marker(
                 optional=True,
@@ -702,7 +803,8 @@ class AtomicRouteBundlePublisher:
             generation = current.generation if current is not None else 1
             routes, litellm = self._render_routes(generation, request, issued, expires)
             if (
-                current is not None
+                not renew_update_boundary
+                and current is not None
                 and current.state == "published"
                 and current.reconciliation_id == request.reconciliation_id
                 and current.plan_digest == request.plan_digest
@@ -713,6 +815,14 @@ class AtomicRouteBundlePublisher:
             ):
                 self._require_supervisor_ack(current)
                 return current
+            if (
+                expected_current_digest is not None
+                and (
+                    current is None
+                    or current.digest != expected_current_digest
+                )
+            ):
+                raise RouteRuntimeError("route publication compare-and-swap failed")
             generation = (current.generation if current is not None else 0) + 1
             if current is not None:
                 routes, litellm = self._render_routes(
@@ -739,7 +849,21 @@ class AtomicRouteBundlePublisher:
         plan_digest: str,
         targets: tuple[str, ...],
         reason: str,
+        update_boundary_key: str | None = None,
+        renew_update_boundary: bool = False,
+        expected_current_digest: str | None = None,
     ) -> ActivationMarker:
+        if not isinstance(renew_update_boundary, bool):
+            raise RouteRuntimeError("route update renewal flag is invalid")
+        if renew_update_boundary and update_boundary_key is None:
+            raise RouteRuntimeError(
+                "route update renewal requires its exact fence"
+            )
+        if (
+            expected_current_digest is not None
+            and _DIGEST.fullmatch(expected_current_digest) is None
+        ):
+            raise RouteRuntimeError("route publication compare-and-swap digest is invalid")
         self._identity(reconciliation_id, plan_digest, "0" * 64)
         if (
             not targets
@@ -753,6 +877,7 @@ class AtomicRouteBundlePublisher:
             reason,
         )[:256]
         with self._locked():
+            self._require_update_boundary(update_boundary_key)
             issued = _aware(self._clock(), "route clock")
             expires = issued + self._maximum_lease
             current = self._read_marker(
@@ -777,7 +902,8 @@ class AtomicRouteBundlePublisher:
             routes = maintenance_routes(generation)
             empty = self.empty_litellm()
             if (
-                current is not None
+                not renew_update_boundary
+                and current is not None
                 and current.state == "maintenance"
                 and current.reconciliation_id == reconciliation_id
                 and current.plan_digest == plan_digest
@@ -787,6 +913,14 @@ class AtomicRouteBundlePublisher:
             ):
                 self._require_supervisor_ack(current)
                 return current
+            if (
+                expected_current_digest is not None
+                and (
+                    current is None
+                    or current.digest != expected_current_digest
+                )
+            ):
+                raise RouteRuntimeError("route publication compare-and-swap failed")
             generation = (current.generation if current is not None else 0) + 1
             routes = maintenance_routes(generation)
             marker = self._activate(
@@ -928,8 +1062,19 @@ class AtomicRouteBundlePublisher:
             return
         self._atomic_write(target, content)
 
-    def inspect(self, *, expected: ActivationMarker | None = None) -> ActivationMarker:
-        marker = self._read_marker(optional=False, verify_files=True, verify_lease=True)
+    def inspect(
+        self,
+        *,
+        expected: ActivationMarker | None = None,
+        verify_lease: bool = True,
+    ) -> ActivationMarker:
+        if not isinstance(verify_lease, bool):
+            raise RouteRuntimeError("route inspection lease flag is invalid")
+        marker = self._read_marker(
+            optional=False,
+            verify_files=True,
+            verify_lease=verify_lease,
+        )
         assert marker is not None
         if expected is not None and marker != expected:
             raise RouteRuntimeError(

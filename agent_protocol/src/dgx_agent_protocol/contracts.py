@@ -18,6 +18,11 @@ MAX_DOCUMENT_BYTES = 64 * 1024
 NODE_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
 COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+VERSIONED_PLATFORM_TARGET = re.compile(
+    r"platform/releases/"
+    r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)/"
+    r"[0-9a-f]{64}\.json\Z"
+)
 UNSAFE_KEY = re.compile(
     r"password|secret|token|authorization|private.?key|command|shell|environment",
     re.IGNORECASE,
@@ -62,6 +67,14 @@ class AgentOperation(StrEnum):
     WORKLOAD_VERIFY = "workload.verify"
     AGENT_UPDATE = "agent.update"
     AGENT_ROLLBACK = "agent.rollback"
+    PACKAGE_PREPARE = "package.prepare"
+    PACKAGE_ACTIVATE = "package.activate"
+    PACKAGE_HEALTH = "package.health"
+    PACKAGE_STOP = "package.stop"
+    PACKAGE_ROLLBACK = "package.rollback"
+    PACKAGE_REMOVE = "package.remove"
+    PACKAGE_REPAIR = "package.repair"
+    PACKAGE_GC = "package.gc"
 
 
 PROTOCOL_FORMAT_CHECKER = FormatChecker()
@@ -122,7 +135,7 @@ def _freeze(value: Any) -> Any:
     return value
 
 
-def _validate_safe_keys(value: Any) -> None:
+def _validate_safe_keys(value: Any, *, field_name: str | None = None) -> None:
     if isinstance(value, Mapping):
         for key, item in value.items():
             if not isinstance(key, str):
@@ -131,12 +144,18 @@ def _validate_safe_keys(value: Any) -> None:
                 raise AgentProtocolError(f"filesystem path key is not allowed: {key}")
             if UNSAFE_KEY.search(key):
                 raise AgentProtocolError(f"unsafe protocol key: {key}")
-            _validate_safe_keys(item)
+            _validate_safe_keys(item, field_name=key)
     elif isinstance(value, (list, tuple)):
         for item in value:
             _validate_safe_keys(item)
-    elif isinstance(value, str) and ("/" in value or "\\" in value):
-        raise AgentProtocolError("filesystem path values are not allowed")
+    elif isinstance(value, str):
+        if field_name == "platform_target_name":
+            if VERSIONED_PLATFORM_TARGET.fullmatch(value) is None:
+                raise AgentProtocolError(
+                    "platform target identifier is not canonical"
+                )
+        elif "/" in value or "\\" in value:
+            raise AgentProtocolError("filesystem path values are not allowed")
 
 
 def _is_path_key(key: str) -> bool:
@@ -343,7 +362,11 @@ class AgentResult:
 
 def schema_validator(schema_name: str) -> Draft202012Validator:
     """Return the package-mandated Draft 2020-12 validator for a wire schema."""
-    if schema_name not in {"agent-job.schema.json", "agent-result.schema.json"}:
+    if schema_name not in {
+        "agent-job.schema.json",
+        "agent-result.schema.json",
+        "agent-directive.schema.json",
+    }:
         raise AgentProtocolError(f"unknown protocol schema: {schema_name}")
     try:
         document = json.loads(
@@ -358,11 +381,14 @@ def schema_validator(schema_name: str) -> Draft202012Validator:
     return Draft202012Validator(document, format_checker=PROTOCOL_FORMAT_CHECKER)
 
 
-def validate_schema_message(schema_name: str, raw: Any) -> AgentClaim | AgentResult:
+def validate_schema_message(schema_name: str, raw: Any) -> Any:
     """Apply the format-aware wire schema and its mandatory runtime limits."""
+    from .package_operations import AgentDirective
+
     parsers = {
         "agent-job.schema.json": AgentClaim.parse,
         "agent-result.schema.json": AgentResult.parse,
+        "agent-directive.schema.json": AgentDirective.parse,
     }
     try:
         parser = parsers[schema_name]

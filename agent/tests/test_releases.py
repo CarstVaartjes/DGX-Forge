@@ -1163,10 +1163,21 @@ def test_bounded_https_fetcher_accepts_only_exact_tuf_routes_and_deadline() -> N
     assert fetcher.download_bytes(
         "https://control.test.example/agent/v1/tuf/metadata/timestamp.json", 64
     ) == b"signed"
+    assert fetcher.download_bytes(
+        "https://control.test.example/agent/v1/tuf/targets/platform/releases/"
+        + "1.2.3/"
+        + "a" * 64
+        + ".json",
+        64,
+    ) == b"signed"
     for url in (
         "https://attacker.test/agent/v1/tuf/metadata/timestamp.json",
         "https://control.test.example/agent/v1/tuf/metadata/../secret",
         "https://control.test.example/agent/v1/tuf/targets/a?tag=latest",
+        "https://control.test.example/agent/v1/tuf/targets/platform/releases/1.2.3/../escape.json",
+        "https://control.test.example/agent/v1/tuf/targets/platform/releases/latest/"
+        + "a" * 64
+        + ".json",
     ):
         with pytest.raises(DownloadError):
             fetcher.download_bytes(url, 64)

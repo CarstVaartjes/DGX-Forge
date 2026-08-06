@@ -124,6 +124,30 @@ def test_protocol_rejects_unsafe_keys_recursively() -> None:
         AgentClaim.parse(valid_claim() | {"payload": {"safe": {"apiToken": "unsafe"}}})
 
 
+def test_protocol_allows_only_exact_versioned_platform_target_identifier() -> None:
+    target = "platform/releases/1.2.3/" + "a" * 64 + ".json"
+
+    claim = AgentClaim.parse(claim_with_payload({"platform_target_name": target}))
+
+    assert claim.payload["platform_target_name"] == target
+
+
+@pytest.mark.parametrize(
+    "target",
+    (
+        "platform-release.json",
+        "platform/releases/latest/" + "a" * 64 + ".json",
+        "platform/releases/1.2.3/../../escape.json",
+        "platform/releases/1.2.3/" + "A" * 64 + ".json",
+    ),
+)
+def test_protocol_rejects_noncanonical_platform_target_identifier(
+    target: str,
+) -> None:
+    with pytest.raises(AgentProtocolError, match="platform target"):
+        AgentClaim.parse(claim_with_payload({"platform_target_name": target}))
+
+
 def test_claim_rejects_changed_payload_digest() -> None:
     with pytest.raises(AgentProtocolError, match="digest"):
         AgentClaim.parse(valid_claim() | {"payload": {"healthy": True}})
@@ -292,6 +316,14 @@ def test_operation_enum_contains_only_supported_operations() -> None:
         "workload.verify",
         "agent.update",
         "agent.rollback",
+        "package.prepare",
+        "package.activate",
+        "package.health",
+        "package.stop",
+        "package.rollback",
+        "package.remove",
+        "package.repair",
+        "package.gc",
     }
 
 

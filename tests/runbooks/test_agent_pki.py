@@ -30,7 +30,7 @@ def test_agent_pki_runbook_covers_offline_root_rotation_backup_recovery_and_migr
 def test_runbook_shell_blocks_are_syntactically_executable_and_never_mount_root_private_key(tmp_path: Path) -> None:
     text = _text()
     blocks = re.findall(r"```sh\n(.*?)```", text, re.DOTALL)
-    assert len(blocks) >= 6
+    assert len(blocks) >= 5
     for index, block in enumerate(blocks):
         script = tmp_path / f"block-{index}.sh"
         script.write_text("set -eu\n" + block)

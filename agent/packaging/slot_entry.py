@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from importlib import resources
 
 
 def _module_smoke() -> int:
@@ -22,6 +23,19 @@ def _module_smoke() -> int:
         update_trust,
         workloads,
     )
+
+    from spark_profiles import platform_release
+    from spark_profiles import update_trust as platform_update_trust
+
+    if not platform_release.PlatformRelease or not platform_update_trust.UpdateTrust:
+        raise RuntimeError("packaged platform release trust is unavailable")
+
+    schema = resources.files("spark_profiles").joinpath(
+        "schemas", "platform-update-manifest.schema.json"
+    )
+    with schema.open("rb") as stream:
+        if not stream.read(1):
+            raise RuntimeError("packaged platform release schema is empty")
 
     print("packaged-agent-modules-ok")
     return 0

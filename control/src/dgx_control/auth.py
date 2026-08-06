@@ -41,6 +41,11 @@ MUTATION_ROLES = {
     ("POST", "/api/v1/agents/enrollments/{enrollment_id}/approve"): frozenset({"administrator"}),
     ("POST", "/api/v1/agents/enrollments/{enrollment_id}/reject"): frozenset({"administrator"}),
     ("POST", "/api/v1/agents/nodes/{node_id}/revoke"): frozenset({"administrator"}),
+    ("POST", "/api/v1/updates/plan"): frozenset({"operator", "administrator"}),
+    ("POST", "/api/v1/updates"): frozenset({"operator", "administrator"}),
+    ("POST", "/api/v1/updates/{rollout_id}/approve-resume"): frozenset(
+        {"administrator"}
+    ),
 }
 
 

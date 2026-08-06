@@ -1750,6 +1750,51 @@
         "title": "RejectRequest",
         "type": "object"
       },
+      "UpdateApplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "plan_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Plan Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan_digest"
+        ],
+        "title": "UpdateApplyRequest",
+        "type": "object"
+      },
+      "UpdateApproveResumeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "default": "administrator approved update recovery",
+            "maxLength": 1024,
+            "minLength": 1,
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "title": "UpdateApproveResumeRequest",
+        "type": "object"
+      },
+      "UpdatePlanRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "release": {
+            "maxLength": 256,
+            "pattern": "^platform/releases/(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)/[0-9a-f]{64}\\.json$",
+            "title": "Release",
+            "type": "string"
+          }
+        },
+        "required": [
+          "release"
+        ],
+        "title": "UpdatePlanRequest",
+        "type": "object"
+      },
       "ValidationError": {
         "properties": {
           "loc": {
@@ -3533,6 +3578,223 @@
           }
         ],
         "summary": "Repository View"
+      }
+    },
+    "/api/v1/updates": {
+      "post": {
+        "operationId": "applyPlatformUpdate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Apply Update Api V1 Updates Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Apply Update"
+      }
+    },
+    "/api/v1/updates/plan": {
+      "post": {
+        "operationId": "planPlatformUpdate",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Plan Api V1 Updates Plan Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Update Plan"
+      }
+    },
+    "/api/v1/updates/skew": {
+      "get": {
+        "operationId": "getPlatformUpdateSkew",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Skew Api V1 Updates Skew Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Update Skew"
+      }
+    },
+    "/api/v1/updates/{rollout_id}": {
+      "get": {
+        "operationId": "getPlatformUpdate",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rollout_id",
+            "required": true,
+            "schema": {
+              "title": "Rollout Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Update Status Api V1 Updates  Rollout Id  Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Update Status"
+      }
+    },
+    "/api/v1/updates/{rollout_id}/approve-resume": {
+      "post": {
+        "operationId": "approvePlatformUpdateRecovery",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "rollout_id",
+            "required": true,
+            "schema": {
+              "title": "Rollout Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateApproveResumeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Approve Update Resume Api V1 Updates  Rollout Id  Approve Resume Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Approve Update Resume"
       }
     }
   }

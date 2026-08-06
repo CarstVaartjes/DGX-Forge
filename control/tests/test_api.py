@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from dgx_control.api import create_app
+from dgx_control.api import create_app, create_preselection_app
 from dgx_control.audit import MemoryAuditStore
 from dgx_control.auth import Actor, TokenCodec
 from fastapi.testclient import TestClient
@@ -45,6 +45,10 @@ def test_health_is_public_but_fleet_requires_authentication() -> None:
     client, _, _, _ = _client("viewer")
     assert client.get("/api/v1/healthz").status_code == 200
     assert client.get("/api/v1/fleet").status_code == 401
+
+
+def test_preselection_is_a_distinct_app_factory() -> None:
+    assert create_preselection_app is not create_app
 
 
 def test_viewer_cannot_enqueue_mutation() -> None:

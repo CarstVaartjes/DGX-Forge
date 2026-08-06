@@ -60,6 +60,17 @@ _MAX_ENROLLMENT_BODY_BYTES = 64 * 1024
 _MAX_ENROLLMENT_TOKEN_PREFIX_BYTES = 2 * 1024
 _MAX_ARTIFACT_BYTES = 256 * 1024 * 1024
 _MAX_RANGE_BYTES = 8 * 1024 * 1024
+_MAX_TUF_METADATA_BYTES = 2 * 1024 * 1024
+_MAX_TUF_TARGET_BYTES = 16 * 1024 * 1024
+_TUF_METADATA_NAME = re.compile(
+    r"(?:[1-9][0-9]*\.root|timestamp|snapshot|targets|"
+    r"[a-z0-9][a-z0-9._-]{0,126})\.json\Z"
+)
+_TUF_PLATFORM_TARGET_NAME = re.compile(
+    r"platform/releases/"
+    r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)/"
+    r"[0-9a-f]{64}\.json\Z"
+)
 
 
 class _ActorDependency(Protocol):
@@ -78,8 +89,12 @@ class AgentApiServices:
     clock: Callable[[], datetime]
     presence: AgentPresenceService
     artifact_root: Path
+    tuf_metadata_root: Path = Path("/state/agent-tuf/metadata")
+    tuf_target_root: Path = Path("/state/agent-tuf/targets")
     max_artifact_bytes: int = _MAX_ARTIFACT_BYTES
     max_range_bytes: int = _MAX_RANGE_BYTES
+    max_tuf_metadata_bytes: int = _MAX_TUF_METADATA_BYTES
+    max_tuf_target_bytes: int = _MAX_TUF_TARGET_BYTES
 
 
 class EnrollmentRateLimiter:
@@ -190,6 +205,7 @@ class EnrollmentListResponse(BaseModel):
 
 class AgentRuntimeIdentityRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    architecture: Literal["linux-arm64", "linux-x86_64"]
     platform_version: str = Field(
         pattern=r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
     )
@@ -197,6 +213,10 @@ class AgentRuntimeIdentityRequest(BaseModel):
     active_slot: str = Field(pattern=r"^[AB]$")
     agent_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     supervisor_generation: int = Field(ge=1, le=999_999_999, strict=True)
+    supervisor_ready_generation: int | None = Field(
+        default=None, ge=1, le=999_999_999, strict=True
+    )
+    self_test_passed: bool = Field(default=False, strict=True)
 
 
 class ClaimRequest(BaseModel):
@@ -204,7 +224,7 @@ class ClaimRequest(BaseModel):
     lease_seconds: int = Field(default=30, ge=1, le=300)
     node_id: str | None = Field(default=None, pattern=r"^spk_[0-9a-f]{32}$")
     protocol_version: int = Field(default=1, ge=1, le=2_147_483_647, strict=True)
-    capabilities: list[str] | None = Field(default=None, max_length=16)
+    capabilities: list[str] | None = Field(default=None, max_length=32)
     runtime_identity: AgentRuntimeIdentityRequest | None = None
     wait_seconds: int = Field(default=0, ge=0, le=60)
 
@@ -522,6 +542,132 @@ def _open_owned_artifact(services: AgentApiServices, identity: AgentIdentity, di
     except Exception:
         os.close(descriptor)
         raise
+
+
+def _read_tuf_file(root: Path, name: str, maximum: int) -> bytes:
+    root_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    file_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+    components = name.split("/")
+    if not components or any(component in {"", ".", ".."} for component in components):
+        raise HTTPException(status_code=404, detail="TUF file not found")
+    directory_descriptor = -1
+    try:
+        root_metadata = root.lstat()
+        if (
+            not root.is_absolute()
+            or not stat.S_ISDIR(root_metadata.st_mode)
+            or stat.S_ISLNK(root_metadata.st_mode)
+            or root_metadata.st_uid not in {0, os.geteuid()}
+            or root_metadata.st_mode & 0o022
+        ):
+            raise OSError("unsafe TUF root")
+        directory_descriptor = os.open(os.fspath(root), root_flags)
+        try:
+            opened_root = os.fstat(directory_descriptor)
+            root_identity = lambda item: (
+                item.st_dev,
+                item.st_ino,
+                item.st_mode,
+                item.st_uid,
+            )
+            if root_identity(root_metadata) != root_identity(opened_root):
+                raise OSError("TUF root changed")
+            for component in components[:-1]:
+                nested_descriptor = os.open(
+                    component,
+                    root_flags,
+                    dir_fd=directory_descriptor,
+                )
+                try:
+                    nested = os.fstat(nested_descriptor)
+                    if (
+                        not stat.S_ISDIR(nested.st_mode)
+                        or nested.st_uid not in {0, os.geteuid()}
+                        or nested.st_mode & 0o022
+                    ):
+                        raise OSError("unsafe TUF directory")
+                except Exception:
+                    os.close(nested_descriptor)
+                    raise
+                os.close(directory_descriptor)
+                directory_descriptor = nested_descriptor
+            descriptor = os.open(
+                components[-1],
+                file_flags,
+                dir_fd=directory_descriptor,
+            )
+        finally:
+            if directory_descriptor >= 0:
+                os.close(directory_descriptor)
+    except OSError:
+        raise HTTPException(status_code=404, detail="TUF file not found") from None
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_uid not in {0, os.geteuid()}
+            or before.st_mode & 0o022
+            or before.st_mode & 0o111
+        ):
+            raise HTTPException(status_code=404, detail="TUF file not found")
+        if not 0 < before.st_size <= maximum:
+            raise HTTPException(
+                status_code=413 if before.st_size > maximum else 404,
+                detail="TUF file is unavailable",
+            )
+        remaining = before.st_size
+        chunks: list[bytes] = []
+        first_digest = hashlib.sha256()
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                raise HTTPException(status_code=404, detail="TUF file changed")
+            chunks.append(chunk)
+            first_digest.update(chunk)
+            remaining -= len(chunk)
+        after = os.fstat(descriptor)
+        identity = lambda item: (
+            item.st_dev,
+            item.st_ino,
+            item.st_mode,
+            item.st_uid,
+            item.st_nlink,
+            item.st_size,
+            item.st_mtime_ns,
+            item.st_ctime_ns,
+        )
+        if identity(before) != identity(after) or os.read(descriptor, 1):
+            raise HTTPException(status_code=404, detail="TUF file changed")
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        remaining = before.st_size
+        second_digest = hashlib.sha256()
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                raise HTTPException(status_code=404, detail="TUF file changed")
+            second_digest.update(chunk)
+            remaining -= len(chunk)
+        rechecked = os.fstat(descriptor)
+        if (
+            not hmac.compare_digest(first_digest.digest(), second_digest.digest())
+            or identity(after) != identity(rechecked)
+            or os.read(descriptor, 1)
+        ):
+            raise HTTPException(status_code=404, detail="TUF file changed")
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
 
 
 def _range(value: str | None, total: int, maximum: int) -> tuple[int, int] | None:
@@ -965,6 +1111,42 @@ def install_agent_routes(
             headers["Content-Range"] = f"bytes {start}-{end}/{size}"
         snapshot = _sealed_snapshot(descriptor, size, required.max_artifact_bytes, sha256)
         return _SnapshotResponse(snapshot, start, length, status_code=code, headers=headers, media_type="application/octet-stream")
+
+    @agent.get("/tuf/metadata/{name}")
+    def tuf_metadata(name: str, request: Request) -> Response:
+        _scope_identity(request)
+        required = _require_services(services)
+        _authenticated_identity(request, required)
+        if _TUF_METADATA_NAME.fullmatch(name) is None:
+            raise HTTPException(status_code=404, detail="TUF file not found")
+        raw = _read_tuf_file(
+            required.tuf_metadata_root,
+            name,
+            required.max_tuf_metadata_bytes,
+        )
+        return Response(
+            content=raw,
+            media_type="application/json",
+            headers={"Cache-Control": "no-store", "Content-Length": str(len(raw))},
+        )
+
+    @agent.get("/tuf/targets/{name:path}")
+    def tuf_target(name: str, request: Request) -> Response:
+        _scope_identity(request)
+        required = _require_services(services)
+        _authenticated_identity(request, required)
+        if _TUF_PLATFORM_TARGET_NAME.fullmatch(name) is None:
+            raise HTTPException(status_code=404, detail="TUF file not found")
+        raw = _read_tuf_file(
+            required.tuf_target_root,
+            name,
+            required.max_tuf_target_bytes,
+        )
+        return Response(
+            content=raw,
+            media_type="application/octet-stream",
+            headers={"Cache-Control": "no-store", "Content-Length": str(len(raw))},
+        )
 
     app.include_router(human)
     app.include_router(agent)

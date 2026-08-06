@@ -8,18 +8,44 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/verify-supply-chain"
+RUNBOOK = ROOT / "docs/runbooks/supply-chain.md"
 
 
 def _copy(tmp_path: Path) -> Path:
     target = tmp_path / "repo"
     for path in (
         ".github/workflows/ci.yml",
+        ".github/workflows/workload-artifacts.yml",
         ".github/dependabot.yml",
+        "pyproject.toml",
+        "schemas/control-deployment-bundle.schema.json",
+        "schemas/platform-update-manifest.schema.json",
+        "schemas/workload-artifact-build.schema.json",
+        "src/spark_profiles/deployment_bundle.py",
+        "src/spark_profiles/platform_authority_client.py",
+        "src/spark_profiles/platform_publication.py",
+        "src/spark_profiles/platform_release.py",
+        "src/spark_profiles/schemas/control-deployment-bundle.schema.json",
+        "src/spark_profiles/schemas/platform-update-manifest.schema.json",
         "agent/pyproject.toml", "agent/uv.lock", "agent_protocol/pyproject.toml",
         ".dockerignore", "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
+        "bin/dgx-control-offline",
+        "control/src/dgx_control/offline.py",
+        "control/src/dgx_control/generation_launch.py",
+        "control/src/dgx_control/host_backup.py",
+        "control/src/dgx_control/host_commands.py",
+        "control/src/dgx_control/host_state.py",
+        "control/src/dgx_control/oci_bundle.py",
+        "control/src/dgx_control/upgrade.py",
         "control/web/package-lock.json", "control/Dockerfile",
         "deploy/compose/compose.yaml", "deploy/compose/images.lock.json",
         "deploy/compose/Caddyfile", "deploy/compose/caddy/entrypoint.sh",
+        "deploy/compose/compose.builtin-ca.yaml",
+        "deploy/compose/compose.step-ca.yaml",
+        "deploy/compose/grafana/dashboards/fleet.json",
+        "deploy/compose/grafana/dashboards/jobs.json",
+        "deploy/compose/grafana/provisioning/dashboards/default.yaml",
+        "deploy/compose/grafana/provisioning/datasources/prometheus.yaml",
         "deploy/compose/tailscale/compose.yaml",
         "deploy/compose/tailscale/configure.sh",
         "deploy/compose/tailscale/grants.example.hujson",
@@ -27,17 +53,30 @@ def _copy(tmp_path: Path) -> Path:
         "deploy/compose/hermes-agent/Dockerfile",
         "deploy/compose/hermes-agent/entrypoint.sh",
         "deploy/compose/bin/harden-hermes-egress",
-        "deploy/compose/bin/backup-control-plane",
-        "deploy/compose/bin/restore-control-plane",
         "config/hermes-agent-policy.toml",
         "deploy/compose/litellm/config.yaml",
         "deploy/compose/litellm/config_supervisor.py",
         "deploy/compose/litellm/entrypoint.sh",
+        "deploy/compose/litellm/bootstrap-config.json",
+        "deploy/compose/prometheus/alerts.yaml",
+        "deploy/compose/prometheus/prometheus.yml",
+        "deploy/compose/registry/config.yml",
+        "deploy/compose/step-ca/ca.json",
         "deploy/compose/trust/litellm-cosign.pub",
+        "scripts/build-control-deployment-bundle",
+        "scripts/build-host-updater-artifact",
+        "scripts/build-platform-manifest",
+        "scripts/collect-platform-artifact-evidence",
         "scripts/container-release-metadata",
+        "scripts/platform-release-authority",
+        "scripts/publish-platform-target",
         "scripts/refuse-existing-image-version",
         "scripts/validate-container-release-digests",
+        "scripts/verify-platform-release",
         "scripts/verify-public-image-inputs",
+        "scripts/verify-supply-chain",
+        "scripts/workload-artifact-metadata",
+        "src/spark_profiles/update_trust.py",
     ):
         destination = target / path
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -46,7 +85,12 @@ def _copy(tmp_path: Path) -> Path:
         ROOT / "agent_protocol/src",
         target / "agent_protocol/src",
     )
-    subprocess.run([SCRIPT, "--root", target, "--generate", "--json"], check=True, capture_output=True, text=True)
+    subprocess.run(
+        [SCRIPT, "--root", target, "--generate", "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
     return target
 
 
@@ -74,6 +118,162 @@ def test_verifier_accepts_locked_offline_evidence(tmp_path: Path) -> None:
     assert result.returncode == 0
     assert '"ok":true' in result.stdout
     assert "inventory/sbom/agent-protocol.spdx.json" in result.stdout
+
+
+def test_supply_chain_runbook_separates_workload_build_and_promotion() -> None:
+    text = " ".join(RUNBOOK.read_text().split())
+
+    assert "Workload artifact build and promotion boundary" in text
+    assert "build-only publisher" in text
+    assert "successful build is only a promotion candidate" in text
+    assert "workload TUF key" in text
+    assert "cannot change NAS desired state" in text
+    assert "separate from platform TUF" in text
+
+
+def test_supply_chain_manifest_binds_platform_target_publisher(
+    tmp_path: Path,
+) -> None:
+    repository = _copy(tmp_path)
+    publisher = repository / "scripts/publish-platform-target"
+    publisher.write_bytes(publisher.read_bytes() + b"\n# drift\n")
+
+    result = subprocess.run(
+        [SCRIPT, "--root", repository, "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "manifest" in " ".join(json.loads(result.stdout)["errors"]).lower()
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        ".github/workflows/workload-artifacts.yml",
+        "schemas/workload-artifact-build.schema.json",
+        "scripts/workload-artifact-metadata",
+    ),
+)
+def test_supply_chain_manifest_binds_workload_artifact_publication_contract(
+    tmp_path: Path,
+    path: str,
+) -> None:
+    repository = _copy(tmp_path)
+    for required in (
+        ".github/workflows/workload-artifacts.yml",
+        "schemas/workload-artifact-build.schema.json",
+        "scripts/workload-artifact-metadata",
+    ):
+        candidate = repository / required
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        candidate.write_text(f"baseline:{required}\n")
+    subprocess.run(
+        [SCRIPT, "--root", repository, "--generate", "--json"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    candidate = repository / path
+    candidate.write_bytes(candidate.read_bytes() + b"drift\n")
+
+    result = subprocess.run(
+        [SCRIPT, "--root", repository, "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "manifest" in " ".join(json.loads(result.stdout)["errors"]).lower()
+
+
+def test_supply_chain_manifest_binds_installed_host_updater_sources(
+    tmp_path: Path,
+) -> None:
+    repository = _copy(tmp_path)
+    updater = repository / "control/src/dgx_control/offline.py"
+    updater.write_bytes(updater.read_bytes() + b"\n# drift\n")
+
+    result = subprocess.run(
+        [SCRIPT, "--root", repository, "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "manifest" in " ".join(json.loads(result.stdout)["errors"]).lower()
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "src/spark_profiles/platform_release.py",
+        "schemas/platform-update-manifest.schema.json",
+        "src/spark_profiles/schemas/platform-update-manifest.schema.json",
+    ),
+)
+def test_supply_chain_manifest_binds_platform_parser_and_both_schemas(
+    tmp_path: Path, path: str
+) -> None:
+    repository = _copy(tmp_path)
+    candidate = repository / path
+    candidate.write_bytes(candidate.read_bytes() + b"\n")
+
+    result = subprocess.run(
+        [SCRIPT, "--root", repository, "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "manifest" in " ".join(json.loads(result.stdout)["errors"]).lower()
+
+
+def test_verifier_does_not_require_spark_profiles_to_be_installed(
+    tmp_path: Path,
+) -> None:
+    repository = _copy(tmp_path)
+
+    result = subprocess.run(
+        ["/usr/bin/python3", SCRIPT, "--root", repository, "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_supply_chain_manifest_binds_the_canonical_deployment_bundle(
+    tmp_path: Path,
+) -> None:
+    from spark_profiles.deployment_bundle import build_deployment_bundle
+
+    repository = _copy(tmp_path)
+    manifest = json.loads(
+        (repository / "inventory/sbom/manifest.json").read_bytes()
+    )
+    bundle = build_deployment_bundle(repository / "deploy/compose")
+
+    assert manifest["control_deployment_bundle_sha256"] == hashlib.sha256(
+        bundle
+    ).hexdigest()
+
+    alerts = repository / "deploy/compose/prometheus/alerts.yaml"
+    alerts.write_text(alerts.read_text() + "\n# drift\n")
+    result = subprocess.run(
+        [SCRIPT, "--root", repository, "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert "manifest" in " ".join(json.loads(result.stdout)["errors"]).lower()
 
 
 def test_verifier_rejects_floating_image(tmp_path: Path) -> None:

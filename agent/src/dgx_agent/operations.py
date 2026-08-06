@@ -8,15 +8,22 @@ from enum import StrEnum
 from typing import Any, Protocol
 
 from dgx_agent_protocol import (
+    PACKAGE_OPERATIONS,
     AgentClaim,
     AgentOperation,
     AgentProtocolError,
     AgentResult,
+    PackageOperationRequest,
     canonical_message,
 )
 
 from .deadlines import MonotonicDeadline
 from .nvidia_tools import InstalledToolSecurityError
+from .package_operations import (
+    OperationBinding,
+    PackageDisposition,
+    PackageOperationsBoundary,
+)
 from .probe import ProbeError
 from .releases import (
     ReleaseDisposition,
@@ -27,6 +34,7 @@ from .releases import (
     ReleaseValidationError,
 )
 from .state import AgentAttemptRecord, AgentStateConflict, AgentStateStore
+from .update import AgentRollbackCommand, AgentUpdateCommand, AgentUpdateError
 from .workloads import (
     WorkloadAction,
     WorkloadDisposition,
@@ -86,6 +94,24 @@ class WorkloadOperationsBoundary(Protocol):
     ) -> WorkloadInspection: ...
 
 
+class AgentUpdateOperationsBoundary(Protocol):
+    def execute(
+        self,
+        command: AgentUpdateCommand,
+        deadline: MonotonicDeadline,
+        operation_id: str,
+        fence: str,
+    ) -> Mapping[str, object]: ...
+
+    def rollback(
+        self,
+        command: AgentRollbackCommand,
+        deadline: MonotonicDeadline,
+        operation_id: str,
+        fence: str,
+    ) -> Mapping[str, object]: ...
+
+
 @dataclass(frozen=True)
 class OperationContext:
     node_id: str
@@ -93,6 +119,8 @@ class OperationContext:
     probe: NodeProbe
     releases: ReleaseInstallerBoundary | None = None
     workloads: WorkloadOperationsBoundary | None = None
+    updates: AgentUpdateOperationsBoundary | None = None
+    packages: PackageOperationsBoundary | None = None
 
 
 class InspectionDisposition(StrEnum):
@@ -290,7 +318,14 @@ class OperationRegistry:
     @staticmethod
     def _validate(
         claim: AgentClaim, context: OperationContext
-    ) -> NodeProbeRequest | ReleaseRequest | WorkloadRequest:
+    ) -> (
+        NodeProbeRequest
+        | ReleaseRequest
+        | WorkloadRequest
+        | AgentUpdateCommand
+        | AgentRollbackCommand
+        | PackageOperationRequest
+    ):
         if type(claim) is not AgentClaim:
             raise UnsupportedOperation("operation is not compiled into this agent")
         if claim.node_id != context.node_id:
@@ -308,6 +343,24 @@ class OperationRegistry:
                 return ReleaseRequest.parse(claim.payload)
             except ReleaseValidationError as error:
                 raise AgentProtocolError("release payload is invalid") from error
+        if claim.operation is AgentOperation.AGENT_UPDATE:
+            if context.updates is None:
+                raise UnsupportedOperation("agent update is unavailable")
+            try:
+                return AgentUpdateCommand.parse(claim.payload)
+            except AgentUpdateError as error:
+                raise AgentProtocolError("agent update payload is invalid") from error
+        if claim.operation is AgentOperation.AGENT_ROLLBACK:
+            if context.updates is None:
+                raise UnsupportedOperation("agent rollback is unavailable")
+            try:
+                return AgentRollbackCommand.parse(claim.payload)
+            except AgentUpdateError as error:
+                raise AgentProtocolError("agent rollback payload is invalid") from error
+        if claim.operation in PACKAGE_OPERATIONS:
+            if context.packages is None:
+                raise UnsupportedOperation("package operations are unavailable")
+            return PackageOperationRequest.parse(claim.operation, claim.payload)
         action = _WORKLOAD_ACTIONS.get(claim.operation)
         if action is not None:
             if context.workloads is None:
@@ -330,7 +383,14 @@ _WORKLOAD_ACTIONS = {
 
 def _execute_request(
     claim: AgentClaim,
-    request: NodeProbeRequest | ReleaseRequest | WorkloadRequest,
+    request: (
+        NodeProbeRequest
+        | ReleaseRequest
+        | WorkloadRequest
+        | AgentUpdateCommand
+        | AgentRollbackCommand
+        | PackageOperationRequest
+    ),
     context: OperationContext,
     deadline: MonotonicDeadline,
 ) -> Mapping[str, object]:
@@ -354,6 +414,41 @@ def _execute_request(
         return context.releases.install(
             request, deadline
         ).to_mapping()
+    if isinstance(request, AgentUpdateCommand):
+        assert context.updates is not None
+        if (
+            request.authorization.node_id != claim.node_id
+            or request.authorization.attempt != claim.attempt
+            or request.authorization.claim_deadline
+            != int(claim.deadline.timestamp())
+        ):
+            raise AgentUpdateError(
+                "activation authorization does not match the claimed node lease"
+            )
+        return context.updates.execute(
+            request, deadline, claim.operation_id, claim.fence
+        )
+    if isinstance(request, AgentRollbackCommand):
+        assert context.updates is not None
+        if (
+            request.authorization.node_id != claim.node_id
+            or request.authorization.attempt != claim.attempt
+            or request.authorization.claim_deadline
+            != int(claim.deadline.timestamp())
+        ):
+            raise AgentUpdateError(
+                "rollback authorization does not match the claimed node lease"
+            )
+        return context.updates.rollback(
+            request, deadline, claim.operation_id, claim.fence
+        )
+    if isinstance(request, PackageOperationRequest):
+        assert context.packages is not None
+        return context.packages.execute(
+            request,
+            OperationBinding.from_claim(claim),
+            deadline,
+        )
     assert context.workloads is not None
     return context.workloads.execute(
         request,
@@ -367,14 +462,41 @@ def _execute_request(
 
 def _inspect_request(
     claim: AgentClaim,
-    request: NodeProbeRequest | ReleaseRequest | WorkloadRequest,
+    request: (
+        NodeProbeRequest
+        | ReleaseRequest
+        | WorkloadRequest
+        | AgentUpdateCommand
+        | AgentRollbackCommand
+        | PackageOperationRequest
+    ),
     context: OperationContext,
 ) -> OperationInspection:
+    if isinstance(request, PackageOperationRequest):
+        assert context.packages is not None
+        inspection = context.packages.inspect(
+            request,
+            OperationBinding.from_claim(claim),
+            _recovery_deadline(),
+        )
+        mapping = {
+            PackageDisposition.READY: InspectionDisposition.OPERATOR_INTERVENTION,
+            PackageDisposition.SAFE_TO_RETRY: InspectionDisposition.SAFE_TO_RETRY,
+            PackageDisposition.COMPLETED: InspectionDisposition.COMPLETED,
+            PackageDisposition.COMPENSATE: InspectionDisposition.COMPENSATE,
+            PackageDisposition.OPERATOR_INTERVENTION: InspectionDisposition.OPERATOR_INTERVENTION,
+        }
+        return OperationInspection(
+            mapping[inspection.disposition],
+            evidence=inspection.evidence,
+        )
     if isinstance(request, NodeProbeRequest) or claim.operation in {
         AgentOperation.WORKLOAD_HEALTH,
         AgentOperation.WORKLOAD_VERIFY,
     }:
         return OperationInspection(InspectionDisposition.SAFE_TO_RETRY)
+    if isinstance(request, (AgentUpdateCommand, AgentRollbackCommand)):
+        return OperationInspection(InspectionDisposition.OPERATOR_INTERVENTION)
     if isinstance(request, ReleaseRequest):
         assert context.releases is not None
         inspection = context.releases.inspect(request, _recovery_deadline())
@@ -443,6 +565,12 @@ _PROBE_ERROR_CODES = frozenset(
 
 
 def _stable_error_code(error: Exception, operation: AgentOperation) -> str:
+    if operation in PACKAGE_OPERATIONS:
+        return "package_operation_failed"
+    if operation is AgentOperation.AGENT_UPDATE:
+        return "agent_update_failed"
+    if operation is AgentOperation.AGENT_ROLLBACK:
+        return "agent_rollback_failed"
     if operation is AgentOperation.RELEASE_INSTALL:
         code = getattr(error, "error_code", None)
         return (

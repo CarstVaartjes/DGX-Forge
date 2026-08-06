@@ -38,11 +38,13 @@ printf '%s' 'PASTE_TAILSCALE_CLIENT_SECRET' \
 chmod 0600 /srv/dgx-forge/secrets/tailscale-oauth-client-*
 ```
 
-Set only the file paths in `.env`. Start the complete project:
+Set only the file paths in the root-owned site environment. The installed host
+updater starts the complete selected generation during first install, upgrade,
+rollback, or recovery. Verify it without invoking Compose from a checkout:
 
 ```bash
-cd deploy/compose
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml up -d
+sudo dgx-control-offline doctor
+sudo dgx-control-offline maintenance status
 ```
 
 Persisted state and `TS_AUTH_ONCE=true` retain node identity. After clean state
@@ -79,17 +81,11 @@ agent presence rather than a hard-coded address.
 ## Verification
 
 ```bash
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml \
-  exec tailscale-gateway tailscale \
-  --socket=/var/run/tailscale/tailscaled.sock status --json
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml \
-  exec tailscale-gateway tailscale \
-  --socket=/var/run/tailscale/tailscaled.sock serve status --json
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml \
-  exec tailscale-gateway tailscale \
-  --socket=/var/run/tailscale/tailscaled.sock serve get-config --all
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml \
-  logs tailscale-configurator
+sudo dgx-control-offline maintenance tailscale-status
+sudo dgx-control-offline maintenance tailscale-serve-status
+sudo dgx-control-offline maintenance tailscale-serve-config
+sudo dgx-control-offline maintenance logs \
+  --service tailscale-configurator --since-minutes 30
 ```
 
 Status must report `HTTPS: true` on all three Services and never `HTTP: true`.
@@ -101,10 +97,13 @@ reach either Hermes endpoint.
 
 ## Drain, revocation, and recovery
 
-`docker compose down` stops the entire application and all tailnet ingress. Back
-up `tailscale-state` and the OAuth files with the same encrypted generation as
-the control database and Hermes state. Restore state before startup when
-possible.
+Do not run `docker compose down`; it bypasses the selected-generation journal.
+A platform transition or recovery uses the updater's fixed stop/start sequence.
+For a full host drain, withdraw Spark routes and human access, complete the
+encrypted control-host backup, then stop the Docker host through its normal OS
+shutdown procedure. Back up `tailscale-state` and the OAuth files with the same
+encrypted generation as the control database and Hermes state. Restore state
+before startup when possible.
 
 If state cannot be restored, recreate the project with the OAuth files. Verify
 exactly one current tagged node advertises all three Services and revoke the

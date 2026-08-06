@@ -6,18 +6,31 @@ import os
 import platform
 import shutil
 import subprocess
+import sys
 from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
 PROJECT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT.parent / "control/src"))
+from dgx_control.update_authority import UpdateAuthorizationAuthority
+
 SUPERVISOR = PROJECT / "supervisor" / "dgx-agent-supervisor"
 AGENT_UNIT = PROJECT / "systemd" / "dgx-forge-agent.service"
 SUPERVISOR_UNIT = PROJECT / "systemd" / "dgx-forge-agent-supervisor.service"
 ACTIVATION_UNIT = PROJECT / "systemd" / "dgx-forge-agent-activation.service"
 ACTIVATION_PATH = PROJECT / "systemd" / "dgx-forge-agent-activation.path"
+ROLLBACK_UNIT = PROJECT / "systemd" / "dgx-forge-agent-rollback.service"
+ROLLBACK_PATH = PROJECT / "systemd" / "dgx-forge-agent-rollback.path"
 SYSTEMD_VERIFY = PROJECT.parent / "scripts" / "verify-agent-systemd"
+
+
+def _platform_target(platform_version: str, target_sha256: str) -> str:
+    return f"platform/releases/{platform_version}/{target_sha256}.json"
 
 
 def _digest(path: Path) -> str:
@@ -77,6 +90,37 @@ class SupervisorHost:
             "DGX_SUPERVISOR_TEST_UID": str(os.geteuid()),
             "DGX_SUPERVISOR_POLL_SECONDS": "0.01",
         }
+        self.update_signer = ed25519.Ed25519PrivateKey.generate()
+        public = self.update_signer.public_key().public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
+        authority = self.host_root / "etc/dgx-forge-agent/update-authority.json"
+        authority.parent.mkdir(parents=True)
+        authority.write_text(
+            json.dumps(
+                {
+                    "algorithm": "ed25519",
+                    "key_id": hashlib.sha256(public).hexdigest(),
+                    "public_key": public.hex(),
+                    "schema_version": 1,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+        authority.chmod(0o444)
+        config = authority.with_name("config.json")
+        config.write_text(
+            json.dumps(
+                {"node_id": "spk_0123456789abcdef0123456789abcdef"},
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n"
+        )
+        config.chmod(0o644)
 
     @property
     def host_root(self) -> Path:
@@ -91,28 +135,94 @@ class SupervisorHost:
         return self.host_root / "run/dgx-forge-agent/readiness.json"
 
     @property
+    def challenge_path(self) -> Path:
+        return self.host_root / "run/dgx-forge-agent-supervisor/activation-challenge"
+
+    @property
+    def service_pid_path(self) -> Path:
+        return self.root / "agent-service.pid"
+
+    @property
     def activation_request_path(self) -> Path:
         return self.host_root / "run/dgx-forge-agent/activation-request.json"
 
+    @property
+    def rollback_request_path(self) -> Path:
+        return self.host_root / "run/dgx-forge-agent/rollback-request.json"
+
     def stage_update_request(
-        self, candidate: Path, *, previous: str = "A", target: str = "B"
+        self,
+        candidate: Path,
+        *,
+        previous: str = "A",
+        target: str = "B",
+        expires_at: int | None = None,
+        operation_id: str = "22222222-2222-4222-8222-222222222222",
+        fence: str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        tuf_targets_version: int = 7,
+        platform_version: str = "1.2.0",
+        platform_target_sha256: str = "b" * 64,
+        platform_target_name: str | None = None,
     ) -> str:
         digest = _digest(candidate)
         staging = self.host_root / "var/lib/dgx-forge-agent/update-staging"
-        staging.mkdir(parents=True, mode=0o700)
+        staging.mkdir(parents=True, mode=0o700, exist_ok=True)
+        staging.parent.chmod(0o700)
+        staging.chmod(0o700)
         staged = staging / f"{digest}.agent"
-        shutil.copyfile(candidate, staged)
-        staged.chmod(0o500)
+        if not staged.exists():
+            shutil.copyfile(candidate, staged)
+            staged.chmod(0o500)
         self.activation_request_path.parent.mkdir(parents=True, exist_ok=True)
         self.activation_request_path.parent.chmod(0o700)
-        request = {
+        fixed_expiry = expires_at or int(__import__("time").time()) + 60
+        generation = self.state()["generation"]
+        authorization = {
+            "architecture": (
+                "linux-arm64"
+                if self.environment.get("DGX_SUPERVISOR_TEST_ARCH") == "aarch64"
+                else "linux-x86_64"
+            ),
+            "attempt": 1,
             "build_digest": "sha256:" + digest,
-            "platform_version": "1.2.0",
+            "claim_deadline": fixed_expiry,
+            "expires_at": fixed_expiry,
+            "fence": fence,
+            "node_id": "spk_0123456789abcdef0123456789abcdef",
+            "oci_manifest_digest": "sha256:" + "a" * 64,
+            "operation_id": operation_id,
+            "payload_name": "dgx-agent",
+            "platform_target_name": platform_target_name
+            or _platform_target(platform_version, platform_target_sha256),
+            "platform_version": platform_version,
+            "platform_target_sha256": platform_target_sha256,
             "previous_slot": previous,
-            "schema_version": 1,
+            "previous_sha256": _digest(
+                self.host_root
+                / f"opt/dgx-forge/agent-slots/{previous}/dgx-forge-agent"
+            ),
+            "previous_generation": generation,
             "sha256": digest,
             "size": staged.stat().st_size,
             "target_slot": target,
+            "tuf_targets_version": tuf_targets_version,
+        }
+        signature = self.update_signer.sign(
+            (json.dumps(authorization, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        )
+        request = {
+            "authorization": authorization,
+            "schema_version": 2,
+            "signature": {
+                "algorithm": "ed25519",
+                "key_id": hashlib.sha256(
+                    self.update_signer.public_key().public_bytes(
+                        serialization.Encoding.Raw,
+                        serialization.PublicFormat.Raw,
+                    )
+                ).hexdigest(),
+                "value": signature.hex(),
+            },
         }
         self.activation_request_path.write_text(
             json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n"
@@ -155,19 +265,38 @@ class SupervisorHost:
         self.write_identity(target)
         return target
 
-    def compile_readiness_agent(self, slot: str) -> Path:
+    def compile_candidate(self, name: str, message: str) -> Path:
+        source = self.root / f"{name}.c"
+        source.write_text(
+            "#include <stdio.h>\n"
+            'int main(void) { puts("' + message + '"); return 0; }\n'
+        )
+        target = self.root / name
+        subprocess.run(
+            ["cc", "-O2", "-o", str(target), str(source)],
+            check=True,
+            capture_output=True,
+        )
+        return target
+
+    def compile_readiness_agent(self, slot: str, *, pid_delta: int = 0) -> Path:
         source = self.root / f"agent-ready-{slot}.c"
         source.write_text(
             "#include <fcntl.h>\n#include <stdio.h>\n#include <stdlib.h>\n"
+            "#include <string.h>\n"
             "#include <sys/stat.h>\n#include <unistd.h>\n"
             "int main(void) {\n"
+            'char credential[4096]; snprintf(credential, sizeof(credential), "%s/activation-challenge", getenv("CREDENTIALS_DIRECTORY"));\n'
+            "FILE *c=fopen(credential, \"r\"); if (!c) return 3;\n"
+            "char challenge[66]; if (!fgets(challenge, sizeof(challenge), c)) return 4; fclose(c); challenge[strcspn(challenge, \"\\n\")]=0;\n"
             f'FILE *f=fopen("{self.readiness_path}", "w"); if (!f) return 2;\n'
-            'fprintf(f, "{\\"generation\\":%s,\\"schema_version\\":1,'
-            '\\"sha256\\":\\"%s\\",\\"slot\\":\\"%s\\"}\\n", '
+            'fprintf(f, "{\\"challenge\\":\\"%s\\",\\"generation\\":%s,\\"pid\\":%ld,\\"schema_version\\":2,'
+            '\\"sha256\\":\\"%s\\",\\"slot\\":\\"%s\\"}\\n", challenge, '
             'getenv("DGX_AGENT_SUPERVISOR_GENERATION"), '
+            f"(long)getpid()+{pid_delta}, "
             'getenv("DGX_AGENT_SUPERVISOR_SHA256"), '
             'getenv("DGX_AGENT_SUPERVISOR_SLOT"));\n'
-            "fflush(f); fsync(fileno(f)); fchmod(fileno(f), 0600); fclose(f); return 0; }\n"
+            f"fflush(f); fsync(fileno(f)); fchmod(fileno(f), 0600); fclose(f); sleep({3 if pid_delta == 0 else 0}); return 0; }}\n"
         )
         target = self.host_root / "opt/dgx-forge/agent-slots" / slot / "dgx-forge-agent"
         target.parent.mkdir(parents=True, mode=0o755)
@@ -184,14 +313,24 @@ class SupervisorHost:
         self.systemctl.write_text(
             "#!/bin/sh\n"
             'printf \'%s\\n\' "$*" >> "$DGX_TEST_SYSTEMCTL_ACTIONS"\n'
-            'if [ "$1 $2" = "restart dgx-forge-agent.service" ]; then\n'
-            '  "$DGX_TEST_SUPERVISOR" run-agent &\n'
+            'if [ "${1:-}" = stop ]; then\n'
+            '  if [ -s "$DGX_TEST_SERVICE_PID" ]; then kill "$(cat "$DGX_TEST_SERVICE_PID")" 2>/dev/null || true; fi\n'
+            '  rm -f "$DGX_TEST_SERVICE_PID"\n'
             "fi\n"
-            'if [ "${1:-}" = is-failed ]; then exit 1; fi\n'
+            'if [ "${1:-}" = restart ] || [ "${1:-}" = start ]; then\n'
+            '  "$DGX_TEST_SUPERVISOR" run-agent &\n'
+            '  printf \'%s\\n\' "$!" > "$DGX_TEST_SERVICE_PID"\n'
+            "fi\n"
+            'if [ "${1:-}" = show ]; then cat "$DGX_TEST_SERVICE_PID" 2>/dev/null || printf \'0\\n\'; fi\n'
+            'if [ "${1:-}" = is-failed ]; then\n'
+            '  if [ -s "$DGX_TEST_SERVICE_PID" ] && kill -0 "$(cat "$DGX_TEST_SERVICE_PID")" 2>/dev/null; then exit 1; fi\n'
+            '  exit 0\n'
+            "fi\n"
             "exit 0\n"
         )
         self.systemctl.chmod(0o755)
         self.environment["DGX_TEST_SUPERVISOR"] = str(SUPERVISOR)
+        self.environment["DGX_TEST_SERVICE_PID"] = str(self.service_pid_path)
 
     def run(
         self, *arguments: str, timeout: float = 5
@@ -235,6 +374,44 @@ class SupervisorHost:
         )
         self.readiness_path.chmod(0o600)
 
+    def write_rollback_request(self, request: dict[str, object]) -> None:
+        state = self.state()
+        authorization = {
+            "action": "operator-rollback",
+            "attempt": 1,
+            "claim_deadline": int(__import__("time").time()) + 60,
+            "current_generation": state["generation"],
+            "current_sha256": request["current_sha256"],
+            "current_slot": request["current_slot"],
+            "expires_at": int(__import__("time").time()) + 60,
+            "fence": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+            "node_id": "spk_0123456789abcdef0123456789abcdef",
+            "operation_id": "22222222-2222-4222-8222-222222222222",
+        }
+        authorization["expires_at"] = authorization["claim_deadline"]
+        raw_authorization = (
+            json.dumps(authorization, sort_keys=True, separators=(",", ":")) + "\n"
+        ).encode()
+        signature = self.update_signer.sign(raw_authorization)
+        signed = {
+            "authorization": authorization,
+            "schema_version": 2,
+            "signature": {
+                "algorithm": "ed25519",
+                "key_id": hashlib.sha256(
+                    self.update_signer.public_key().public_bytes(
+                        serialization.Encoding.Raw,
+                        serialization.PublicFormat.Raw,
+                    )
+                ).hexdigest(),
+                "value": signature.hex(),
+            },
+        }
+        self.rollback_request_path.write_text(
+            json.dumps(signed, sort_keys=True, separators=(",", ":")) + "\n"
+        )
+        self.rollback_request_path.chmod(0o600)
+
 
 @pytest.fixture
 def supervisor_host(tmp_path: Path) -> SupervisorHost:
@@ -274,8 +451,12 @@ def test_run_agent_exports_verified_release_identity(
     source = supervisor_host.root / "identity-agent.c"
     source.write_text(
         "#include <stdio.h>\n#include <stdlib.h>\n"
-        "int main(void){printf(\"%s %s\\n\",getenv(\"DGX_AGENT_PLATFORM_VERSION\"),"
-        "getenv(\"DGX_AGENT_BUILD_DIGEST\"));}\n"
+        "int main(void){printf(\"%s %s %s %s %s\\n\","
+        "getenv(\"DGX_AGENT_PLATFORM_VERSION\"),"
+        "getenv(\"DGX_AGENT_BUILD_DIGEST\"),"
+        "getenv(\"DGX_AGENT_SUPERVISOR_GENERATION\"),"
+        "getenv(\"DGX_AGENT_SUPERVISOR_SLOT\"),"
+        "getenv(\"DGX_AGENT_SUPERVISOR_SHA256\"));}\n"
     )
     target = (
         supervisor_host.host_root
@@ -293,7 +474,7 @@ def test_run_agent_exports_verified_release_identity(
     launched = supervisor_host.run("run-agent")
 
     assert launched.returncode == 0, launched.stderr
-    assert launched.stdout == f"7.8.9 sha256:{digest}\n"
+    assert launched.stdout == f"7.8.9 sha256:{digest} 1 A {digest}\n"
 
 
 def test_apply_request_installs_verified_inactive_slot_and_starts_activation(
@@ -335,6 +516,245 @@ def test_apply_request_installs_verified_inactive_slot_and_starts_activation(
     )
 
 
+def test_apply_request_cleans_crash_leftovers_before_slot_publication(
+    supervisor_host: SupervisorHost,
+) -> None:
+    active = supervisor_host.compile_agent("A", "slot-a")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(active)
+    ).returncode == 0
+    candidate = supervisor_host.root / "candidate"
+    source = supervisor_host.root / "candidate.c"
+    source.write_text('int main(void){return 0;}\n')
+    subprocess.run(["cc", "-O2", "-o", candidate, source], check=True)
+    supervisor_host.stage_update_request(candidate)
+    slot = supervisor_host.host_root / "opt/dgx-forge/agent-slots/B"
+    slot.mkdir(parents=True, exist_ok=True)
+    executable_partial = slot / (".dgx-forge-agent." + "0" * 24 + ".new")
+    identity_partial = slot / (".identity.json." + "1" * 24 + ".new")
+    executable_partial.write_bytes(b"partial")
+    executable_partial.chmod(0o500)
+    identity_partial.write_bytes(b"partial")
+    identity_partial.chmod(0o400)
+
+    applied = supervisor_host.run("apply-request")
+
+    assert applied.returncode == 0, applied.stderr
+    assert not executable_partial.exists()
+    assert not identity_partial.exists()
+
+
+def test_unprivileged_agent_cannot_persist_unsigned_elf(
+    supervisor_host: SupervisorHost,
+) -> None:
+    active = supervisor_host.compile_agent("A", "slot-a")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(active)
+    ).returncode == 0
+    candidate = supervisor_host.compile_candidate("unsigned-candidate", "slot-b")
+    supervisor_host.stage_update_request(candidate)
+    request = json.loads(supervisor_host.activation_request_path.read_text())
+    request["signature"]["value"] = "0" * 128
+    supervisor_host.activation_request_path.write_text(
+        json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n"
+    )
+    before = supervisor_host.state()
+
+    rejected = supervisor_host.run("apply-request")
+
+    assert rejected.returncode == 1
+    assert "authorization signature" in rejected.stderr
+    assert supervisor_host.state() == before
+    assert not (
+        supervisor_host.host_root
+        / "opt/dgx-forge/agent-slots/B/dgx-forge-agent"
+    ).exists()
+
+
+def test_activation_rejects_mutable_root_authority_material(
+    supervisor_host: SupervisorHost,
+) -> None:
+    active = supervisor_host.compile_agent("A", "slot-a")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(active)
+    ).returncode == 0
+    candidate = supervisor_host.compile_candidate("authority-candidate", "slot-b")
+    supervisor_host.stage_update_request(candidate)
+    authority = (
+        supervisor_host.host_root
+        / "etc/dgx-forge-agent/update-authority.json"
+    )
+    authority.chmod(0o644)
+    before = supervisor_host.state()
+
+    rejected = supervisor_host.run("apply-request")
+
+    assert rejected.returncode == 1
+    assert "path mode is unsafe" in rejected.stderr
+    assert supervisor_host.state() == before
+
+
+def test_expired_and_replayed_activation_receipts_fail_before_mutation(
+    supervisor_host: SupervisorHost,
+) -> None:
+    active = supervisor_host.compile_agent("A", "slot-a")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(active)
+    ).returncode == 0
+    candidate = supervisor_host.compile_candidate("expiry-candidate", "slot-b")
+    supervisor_host.stage_update_request(candidate, expires_at=10)
+    before = supervisor_host.state()
+
+    expired = supervisor_host.run("apply-request")
+
+    assert expired.returncode == 1
+    assert "expired" in expired.stderr
+    assert supervisor_host.state() == before
+
+    supervisor_host.stage_update_request(candidate)
+    original = supervisor_host.activation_request_path.read_bytes()
+    assert supervisor_host.run("apply-request").returncode == 0
+    after_first = supervisor_host.state()
+    supervisor_host.activation_request_path.write_bytes(original)
+    supervisor_host.activation_request_path.chmod(0o600)
+
+    replayed = supervisor_host.run("apply-request")
+
+    assert replayed.returncode == 1
+    assert "already consumed" in replayed.stderr
+    assert supervisor_host.state() == after_first
+
+
+def test_candidate_verification_failure_does_not_consume_activation_receipt(
+    supervisor_host: SupervisorHost,
+) -> None:
+    active = supervisor_host.compile_agent("A", "slot-a")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(active)
+    ).returncode == 0
+    candidate = supervisor_host.compile_candidate("retry-candidate", "slot-b")
+    digest = supervisor_host.stage_update_request(candidate)
+    staged = (
+        supervisor_host.host_root
+        / f"var/lib/dgx-forge-agent/update-staging/{digest}.agent"
+    )
+    original = staged.read_bytes()
+    staged.chmod(0o700)
+    staged.write_bytes(bytes([original[0] ^ 0x01]) + original[1:])
+    staged.chmod(0o500)
+    marker = supervisor_host.state_path.with_name(
+        "authorization-"
+        + hashlib.sha256(b"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa").hexdigest()
+        + ".used"
+    )
+
+    rejected = supervisor_host.run("apply-request")
+
+    assert rejected.returncode == 1
+    assert "digest" in rejected.stderr
+    assert not marker.exists()
+    staged.chmod(0o700)
+    staged.write_bytes(original)
+    staged.chmod(0o500)
+    retried = supervisor_host.run("apply-request")
+    assert retried.returncode == 0, retried.stderr
+
+
+def test_activation_receipt_rejects_stale_tuf_metadata_version(
+    supervisor_host: SupervisorHost,
+) -> None:
+    active = supervisor_host.compile_agent("A", "slot-a")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(active)
+    ).returncode == 0
+    floor = supervisor_host.state_path.with_name("authorization-floor.json")
+    floor.write_text('{"schema_version":1,"tuf_targets_version":8}\n')
+    floor.chmod(0o444)
+    candidate = supervisor_host.compile_candidate("stale-candidate", "slot-b")
+    supervisor_host.stage_update_request(candidate, tuf_targets_version=7)
+    before = supervisor_host.state()
+
+    rejected = supervisor_host.run("apply-request")
+
+    assert rejected.returncode == 1
+    assert "metadata is stale" in rejected.stderr
+    assert supervisor_host.state() == before
+
+
+@pytest.mark.parametrize(
+    "platform_target_name",
+    (
+        "platform-release.json",
+        _platform_target("1.2.1", "b" * 64),
+        _platform_target("1.2.0", "0" * 64),
+        "platform/releases/1.2.0/../../escape.json",
+        _platform_target("1.2.0", "B" * 64),
+    ),
+)
+def test_activation_receipt_rejects_invalid_platform_target_identity(
+    supervisor_host: SupervisorHost,
+    platform_target_name: str,
+) -> None:
+    active = supervisor_host.compile_agent("A", "slot-a")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(active)
+    ).returncode == 0
+    candidate = supervisor_host.compile_candidate("wrong-target", "slot-b")
+    supervisor_host.stage_update_request(
+        candidate,
+        platform_target_name=platform_target_name,
+    )
+    before = supervisor_host.state()
+
+    rejected = supervisor_host.run("apply-request")
+
+    assert rejected.returncode == 1
+    assert "activation request is invalid" in rejected.stderr
+    assert supervisor_host.state() == before
+
+
+@pytest.mark.parametrize(
+    "binding",
+    ("sha256", "size", "slot_pair", "operation_id", "platform_target_sha256"),
+)
+def test_signed_activation_bindings_cannot_be_swapped(
+    supervisor_host: SupervisorHost, binding: str
+) -> None:
+    active = supervisor_host.compile_agent("A", "slot-a")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(active)
+    ).returncode == 0
+    candidate = supervisor_host.compile_candidate("swap-candidate", "slot-b")
+    supervisor_host.stage_update_request(candidate)
+    request = json.loads(supervisor_host.activation_request_path.read_text())
+    replacements = {
+        "sha256": "0" * 64,
+        "size": int(request["authorization"]["size"]) + 1,
+        "operation_id": "33333333-3333-4333-8333-333333333333",
+        "platform_target_sha256": "0" * 64,
+    }
+    if binding == "slot_pair":
+        request["authorization"]["previous_slot"] = "B"
+        request["authorization"]["target_slot"] = "A"
+    else:
+        request["authorization"][binding] = replacements[binding]
+    supervisor_host.activation_request_path.write_text(
+        json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n"
+    )
+    before = supervisor_host.state()
+
+    rejected = supervisor_host.run("apply-request")
+
+    assert rejected.returncode == 1
+    expected = (
+        "activation request"
+        if binding == "platform_target_sha256"
+        else "authorization signature"
+    )
+    assert expected in rejected.stderr
+    assert supervisor_host.state() == before
+
+
 @pytest.mark.parametrize(
     ("previous", "target"),
     [("B", "B"), ("A", "A")],
@@ -353,6 +773,305 @@ def test_apply_request_rejects_wrong_previous_or_active_target(
 
     assert applied.returncode == 1
     assert supervisor_host.state()["active_slot"] == "A"
+
+
+def test_apply_rollback_request_selects_only_recorded_verified_previous_slot(
+    supervisor_host: SupervisorHost,
+) -> None:
+    a = supervisor_host.compile_readiness_agent("A")
+    b = supervisor_host.compile_readiness_agent("B")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(a)
+    ).returncode == 0
+    assert supervisor_host.run(
+        "activate", "--slot", "B", "--sha256", _digest(b)
+    ).returncode == 0
+    supervisor_host.spawn_agent_from_systemctl()
+    assert supervisor_host.run("supervise").returncode == 0
+    request = {
+        "current_sha256": _digest(b),
+        "current_slot": "B",
+        "previous_sha256": _digest(a),
+        "previous_slot": "A",
+        "schema_version": 1,
+    }
+    supervisor_host.write_rollback_request(request)
+
+    applied = supervisor_host.run("apply-rollback-request")
+
+    assert applied.returncode == 0, applied.stderr
+    rolled_back = supervisor_host.state()
+    assert rolled_back["active_slot"] == "A"
+    assert rolled_back["previous_slot"] == "B"
+    assert rolled_back["status"] == "pending"
+    assert not supervisor_host.rollback_request_path.exists()
+
+
+def test_control_authority_signature_is_verified_by_root_supervisor(
+    supervisor_host: SupervisorHost,
+) -> None:
+    a, b = _stable_ab_host(supervisor_host)
+    signer = ed25519.Ed25519PrivateKey.generate()
+
+    class UnusedReleaseSource:
+        def refresh(self):
+            raise AssertionError("rollback signing must not consult platform TUF")
+
+    authority = UpdateAuthorizationAuthority(
+        signer, release_source=UnusedReleaseSource()
+    )
+    pinned = supervisor_host.host_root / "etc/dgx-forge-agent/update-authority.json"
+    pinned.chmod(0o600)
+    pinned.write_bytes(authority.public_authority_bytes())
+    pinned.chmod(0o444)
+    now = datetime.now(UTC)
+    state = supervisor_host.state()
+    payload = authority.authorize_rollback(
+        operation_id="22222222-2222-4222-8222-222222222222",
+        fence="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        expires_at=int(now.timestamp()) + 60,
+        current_slot="B",
+        current_sha256=_digest(b),
+        current_generation=int(state["generation"]),
+        node_id="spk_0123456789abcdef0123456789abcdef",
+        attempt=1,
+        claim_deadline=int(now.timestamp()) + 60,
+        now=now,
+    )
+    supervisor_host.rollback_request_path.write_text(
+        json.dumps(
+            {
+                "authorization": payload["receipt"],
+                "schema_version": 2,
+                "signature": payload["signature"],
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
+    supervisor_host.rollback_request_path.chmod(0o600)
+
+    applied = supervisor_host.run("apply-rollback-request")
+
+    assert applied.returncode == 0, applied.stderr
+    assert supervisor_host.state()["active_slot"] == "A"
+    assert _digest(a) == supervisor_host.state()["expected_sha256"]
+
+
+def _stable_ab_host(supervisor_host: SupervisorHost) -> tuple[Path, Path]:
+    a = supervisor_host.compile_readiness_agent("A")
+    b = supervisor_host.compile_readiness_agent("B")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(a)
+    ).returncode == 0
+    assert supervisor_host.run(
+        "activate", "--slot", "B", "--sha256", _digest(b)
+    ).returncode == 0
+    supervisor_host.spawn_agent_from_systemctl()
+    assert supervisor_host.run("supervise").returncode == 0
+    assert supervisor_host.state()["status"] == "stable"
+    supervisor_host.actions.write_text("")
+    return a, b
+
+
+def _rollback_request(a: Path, b: Path) -> dict[str, object]:
+    return {
+        "current_sha256": _digest(b),
+        "current_slot": "B",
+        "previous_sha256": _digest(a),
+        "previous_slot": "A",
+        "schema_version": 1,
+    }
+
+
+@pytest.mark.parametrize(
+    "malformation",
+    (
+        "boolean-schema",
+        "float-schema",
+        "unknown-field",
+        "duplicate-field",
+        "noncanonical",
+        "truncated",
+    ),
+)
+def test_apply_rollback_request_rejects_malformed_documents_without_state_change(
+    supervisor_host: SupervisorHost, malformation: str
+) -> None:
+    a, b = _stable_ab_host(supervisor_host)
+    request = _rollback_request(a, b)
+    if malformation == "boolean-schema":
+        request["schema_version"] = True
+        raw = json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n"
+    elif malformation == "float-schema":
+        request["schema_version"] = 1.0
+        raw = json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n"
+    elif malformation == "unknown-field":
+        request["unexpected"] = "unsafe"
+        raw = json.dumps(request, sort_keys=True, separators=(",", ":")) + "\n"
+    elif malformation == "duplicate-field":
+        raw = (
+            json.dumps(request, sort_keys=True, separators=(",", ":"))[:-1]
+            + ',"schema_version":1}\n'
+        )
+    elif malformation == "noncanonical":
+        raw = json.dumps(request, indent=2) + "\n"
+    else:
+        raw = '{"schema_version":1\n'
+    supervisor_host.rollback_request_path.write_text(raw)
+    supervisor_host.rollback_request_path.chmod(0o600)
+    before = supervisor_host.state()
+
+    rejected = supervisor_host.run("apply-rollback-request")
+
+    assert rejected.returncode == 1
+    assert supervisor_host.state() == before
+    assert supervisor_host.rollback_request_path.exists()
+    assert supervisor_host.actions.read_text() == ""
+
+
+@pytest.mark.parametrize("forgery", ("current_sha256", "slot_pair"))
+def test_apply_rollback_request_rejects_forged_stable_identity(
+    supervisor_host: SupervisorHost, forgery: str
+) -> None:
+    a, b = _stable_ab_host(supervisor_host)
+    request = _rollback_request(a, b)
+    if forgery == "slot_pair":
+        request["current_slot"] = "A"
+        request["previous_slot"] = "B"
+    else:
+        request[forgery] = "0" * 64
+    supervisor_host.write_rollback_request(request)
+    before = supervisor_host.state()
+
+    rejected = supervisor_host.run("apply-rollback-request")
+
+    assert rejected.returncode == 1
+    assert supervisor_host.state() == before
+    assert supervisor_host.rollback_request_path.exists()
+    assert supervisor_host.actions.read_text() == ""
+
+
+@pytest.mark.parametrize("unsafe_path", ("wrong-mode", "hardlink"))
+def test_apply_rollback_request_rejects_unsafe_unprivileged_request_path(
+    supervisor_host: SupervisorHost, unsafe_path: str
+) -> None:
+    a, b = _stable_ab_host(supervisor_host)
+    supervisor_host.write_rollback_request(_rollback_request(a, b))
+    if unsafe_path == "wrong-mode":
+        supervisor_host.rollback_request_path.chmod(0o644)
+    else:
+        os.link(
+            supervisor_host.rollback_request_path,
+            supervisor_host.rollback_request_path.with_name("rollback-hardlink.json"),
+        )
+    before = supervisor_host.state()
+
+    rejected = supervisor_host.run("apply-rollback-request")
+
+    assert rejected.returncode == 1
+    assert supervisor_host.state() == before
+    assert supervisor_host.rollback_request_path.exists()
+    assert supervisor_host.actions.read_text() == ""
+
+
+@pytest.mark.parametrize(
+    "corruption", ("invalid-identity", "boolean-identity-schema", "executable")
+)
+def test_apply_rollback_request_rejects_corrupt_recorded_slot_artifacts(
+    supervisor_host: SupervisorHost, corruption: str
+) -> None:
+    a, b = _stable_ab_host(supervisor_host)
+    request = _rollback_request(a, b)
+    if corruption in {"invalid-identity", "boolean-identity-schema"}:
+        identity = a.with_name("identity.json")
+        identity.chmod(0o644)
+        if corruption == "invalid-identity":
+            identity.write_text("{not-json}\n")
+        else:
+            document = json.loads(identity.read_text())
+            document["schema_version"] = True
+            identity.write_text(
+                json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n"
+            )
+        identity.chmod(0o444)
+    else:
+        a.chmod(0o755)
+        a.write_bytes(b"corrupt rollback slot" * 8)
+        a.chmod(0o555)
+    supervisor_host.write_rollback_request(request)
+    before = supervisor_host.state()
+
+    rejected = supervisor_host.run("apply-rollback-request")
+
+    assert rejected.returncode == 1
+    assert supervisor_host.state() == before
+    assert supervisor_host.rollback_request_path.exists()
+    assert supervisor_host.actions.read_text() == ""
+
+
+def test_stale_rollback_request_cannot_reverse_a_completed_rollback(
+    supervisor_host: SupervisorHost,
+) -> None:
+    a, b = _stable_ab_host(supervisor_host)
+    request = _rollback_request(a, b)
+    supervisor_host.write_rollback_request(request)
+    assert supervisor_host.run("apply-rollback-request").returncode == 0
+    assert supervisor_host.run("supervise").returncode == 0
+    assert supervisor_host.state()["status"] == "stable"
+    supervisor_host.actions.write_text("")
+    supervisor_host.write_rollback_request(request)
+    before = supervisor_host.state()
+
+    rejected = supervisor_host.run("apply-rollback-request")
+
+    assert rejected.returncode == 1
+    assert supervisor_host.state() == before
+    assert supervisor_host.rollback_request_path.exists()
+    assert supervisor_host.actions.read_text() == ""
+
+
+def test_explicit_rollback_requires_generation_bound_readiness_to_commit(
+    supervisor_host: SupervisorHost,
+) -> None:
+    a, b = _stable_ab_host(supervisor_host)
+    supervisor_host.write_rollback_request(_rollback_request(a, b))
+    assert supervisor_host.run("apply-rollback-request").returncode == 0
+
+    committed = supervisor_host.run("supervise")
+
+    assert committed.returncode == 0, committed.stderr
+    stable = supervisor_host.state()
+    assert stable["active_slot"] == "A"
+    assert stable["previous_slot"] == "B"
+    assert stable["status"] == "stable"
+    assert stable["rollback_performed"] is False
+
+
+def test_explicit_rollback_automatically_reverts_when_target_is_not_ready(
+    supervisor_host: SupervisorHost,
+) -> None:
+    a, b = _stable_ab_host(supervisor_host)
+    supervisor_host.write_rollback_request(_rollback_request(a, b))
+    assert supervisor_host.run("apply-rollback-request").returncode == 0
+    pending = supervisor_host.state()
+    supervisor_host.environment["DGX_SUPERVISOR_NOW"] = str(
+        float(pending["activation_deadline"]) + 1
+    )
+
+    reverted = supervisor_host.run("supervise")
+
+    assert reverted.returncode == 1
+    stable = supervisor_host.state()
+    assert stable["active_slot"] == "B"
+    assert stable["previous_slot"] == "A"
+    assert stable["expected_sha256"] == _digest(b)
+    assert stable["status"] == "stable"
+    assert stable["rollback_performed"] is True
+    assert "restart dgx-forge-agent.service" in (
+        supervisor_host.actions.read_text().splitlines()
+    )
 
 
 def test_run_agent_rejects_script_and_hardlinked_or_tampered_elf(
@@ -491,7 +1210,7 @@ def test_activation_accepts_only_exact_generation_bound_readiness(
     assert not supervisor_host.readiness_path.exists()
 
 
-def test_activation_with_exact_readiness_commits_new_slot(
+def test_preplanted_correct_looking_readiness_cannot_commit_new_slot(
     supervisor_host: SupervisorHost,
 ) -> None:
     a = supervisor_host.compile_agent("A", "slot-a")
@@ -512,22 +1231,35 @@ def test_activation_with_exact_readiness_commits_new_slot(
     supervisor_host.readiness(
         generation=int(pending["generation"]), slot="B", digest=_digest(b)
     )
+    supervisor_host.systemctl.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$*\" >> \"$DGX_TEST_SYSTEMCTL_ACTIONS\"\n"
+        "if [ \"${1:-}\" = is-failed ]; then exit 0; fi\n"
+        "exit 0\n"
+    )
+    supervisor_host.systemctl.chmod(0o755)
 
     supervised = supervisor_host.run("supervise")
 
-    assert supervised.returncode == 0, supervised.stderr
+    assert supervised.returncode != 0
     state = supervisor_host.state()
-    assert state["active_slot"] == "B"
-    assert state["previous_slot"] == "A"
+    assert state["active_slot"] == "A"
+    assert state["previous_slot"] == "B"
     assert state["status"] == "stable"
     assert state["activation_deadline"] is None
+    assert state["rollback_performed"] is True
+    assert not supervisor_host.readiness_path.exists()
+    actions = supervisor_host.actions.read_text().splitlines()
+    assert actions.index("stop dgx-forge-agent.service") < actions.index(
+        "restart dgx-forge-agent.service"
+    )
 
 
 def test_pending_slot_replacement_before_commit_rolls_back(
     supervisor_host: SupervisorHost,
 ) -> None:
     a = supervisor_host.compile_agent("A", "slot-a")
-    b = supervisor_host.compile_agent("B", "slot-b")
+    b = supervisor_host.compile_readiness_agent("B")
     assert (
         supervisor_host.run(
             "initialize", "--slot", "A", "--sha256", _digest(a)
@@ -540,14 +1272,11 @@ def test_pending_slot_replacement_before_commit_rolls_back(
         ).returncode
         == 0
     )
-    pending = supervisor_host.state()
-    supervisor_host.readiness(
-        generation=int(pending["generation"]), slot="B", digest=_digest(b)
-    )
     replacement = b.with_name(".dgx-forge-agent.commit-race")
     replacement.write_bytes(a.read_bytes())
     replacement.chmod(0o555)
     supervisor_host.environment["DGX_SUPERVISOR_SWAP_SLOT_BEFORE_COMMIT_TEST"] = "1"
+    supervisor_host.spawn_agent_from_systemctl()
 
     supervised = supervisor_host.run("supervise")
 
@@ -562,7 +1291,7 @@ def test_readiness_replacement_during_consumption_is_not_unlinked(
     supervisor_host: SupervisorHost,
 ) -> None:
     a = supervisor_host.compile_agent("A", "slot-a")
-    b = supervisor_host.compile_agent("B", "slot-b")
+    b = supervisor_host.compile_readiness_agent("B")
     assert (
         supervisor_host.run(
             "initialize", "--slot", "A", "--sha256", _digest(a)
@@ -577,8 +1306,8 @@ def test_readiness_replacement_during_consumption_is_not_unlinked(
     )
     pending = supervisor_host.state()
     generation = int(pending["generation"])
-    supervisor_host.readiness(generation=generation, slot="B", digest=_digest(b))
     replacement = supervisor_host.readiness_path.with_name("replacement.json")
+    replacement.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     replacement.write_text(
         json.dumps(
             {
@@ -594,6 +1323,7 @@ def test_readiness_replacement_during_consumption_is_not_unlinked(
     )
     replacement.chmod(0o600)
     supervisor_host.environment["DGX_SUPERVISOR_SWAP_READINESS_TEST"] = "1"
+    supervisor_host.spawn_agent_from_systemctl()
 
     supervised = supervisor_host.run("supervise")
 
@@ -608,7 +1338,7 @@ def test_readiness_replacement_after_identity_check_survives(
     supervisor_host: SupervisorHost,
 ) -> None:
     a = supervisor_host.compile_agent("A", "slot-a")
-    b = supervisor_host.compile_agent("B", "slot-b")
+    b = supervisor_host.compile_readiness_agent("B")
     assert (
         supervisor_host.run(
             "initialize", "--slot", "A", "--sha256", _digest(a)
@@ -623,8 +1353,8 @@ def test_readiness_replacement_after_identity_check_survives(
     )
     pending = supervisor_host.state()
     generation = int(pending["generation"])
-    supervisor_host.readiness(generation=generation, slot="B", digest=_digest(b))
     replacement = supervisor_host.readiness_path.with_name("replacement.json")
+    replacement.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     replacement.write_text(
         json.dumps(
             {
@@ -642,6 +1372,7 @@ def test_readiness_replacement_after_identity_check_survives(
     supervisor_host.environment[
         "DGX_SUPERVISOR_SWAP_READINESS_AFTER_STAT_TEST"
     ] = "1"
+    supervisor_host.spawn_agent_from_systemctl()
 
     supervised = supervisor_host.run("supervise")
 
@@ -677,6 +1408,255 @@ def test_supervise_releases_writer_lock_so_restarted_agent_can_emit_readiness(
 
     assert supervised.returncode == 0, supervised.stderr
     assert supervisor_host.state()["status"] == "stable"
+    assert not supervisor_host.readiness_path.exists()
+    assert supervisor_host.challenge_path.read_text() == "0" * 64 + "\n"
+    assert supervisor_host.challenge_path.stat().st_mode & 0o777 == 0o600
+    assert supervisor_host.challenge_path.stat().st_uid == os.geteuid()
+
+
+def test_activation_rejects_readiness_from_wrong_service_pid(
+    supervisor_host: SupervisorHost,
+) -> None:
+    a = supervisor_host.compile_agent("A", "slot-a")
+    b = supervisor_host.compile_readiness_agent("B", pid_delta=1)
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(a)
+    ).returncode == 0
+    assert supervisor_host.run(
+        "activate", "--slot", "B", "--sha256", _digest(b)
+    ).returncode == 0
+    supervisor_host.spawn_agent_from_systemctl()
+
+    supervised = supervisor_host.run("supervise", timeout=3)
+
+    assert supervised.returncode != 0
+    assert supervisor_host.state()["active_slot"] == "A"
+    assert supervisor_host.state()["rollback_performed"] is True
+
+
+def test_main_pid_change_after_readiness_verification_rolls_back(
+    supervisor_host: SupervisorHost,
+) -> None:
+    a = supervisor_host.compile_agent("A", "slot-a")
+    b = supervisor_host.compile_readiness_agent("B")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(a)
+    ).returncode == 0
+    assert supervisor_host.run(
+        "activate", "--slot", "B", "--sha256", _digest(b)
+    ).returncode == 0
+    show_count = supervisor_host.root / "show-count"
+    supervisor_host.systemctl.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$*\" >> \"$DGX_TEST_SYSTEMCTL_ACTIONS\"\n"
+        'if [ "${1:-}" = stop ]; then rm -f "$DGX_TEST_SERVICE_PID"; fi\n'
+        'if [ "${1:-}" = restart ]; then "$DGX_TEST_SUPERVISOR" run-agent & printf \'%s\\n\' "$!" > "$DGX_TEST_SERVICE_PID"; fi\n'
+        'if [ "${1:-}" = show ]; then\n'
+        '  count=0; if [ -s "$DGX_TEST_SHOW_COUNT" ]; then count=$(sed -n \'1p\' "$DGX_TEST_SHOW_COUNT"); fi; count=$((count + 1)); printf \'%s\\n\' "$count" > "$DGX_TEST_SHOW_COUNT"\n'
+        '  if [ "$count" -le 2 ]; then cat "$DGX_TEST_SERVICE_PID"; else printf \'0\\n\'; fi\n'
+        "fi\n"
+        'if [ "${1:-}" = is-failed ]; then exit 1; fi\n'
+        "exit 0\n"
+    )
+    supervisor_host.systemctl.chmod(0o755)
+    supervisor_host.environment.update(
+        {
+            "DGX_TEST_SERVICE_PID": str(supervisor_host.service_pid_path),
+            "DGX_TEST_SHOW_COUNT": str(show_count),
+            "DGX_TEST_SUPERVISOR": str(SUPERVISOR),
+        }
+    )
+
+    supervised = supervisor_host.run("supervise", timeout=3)
+
+    assert supervised.returncode != 0
+    assert supervisor_host.state()["active_slot"] == "A"
+    assert supervisor_host.state()["rollback_performed"] is True
+
+
+def test_activation_rejects_matching_digest_from_wrong_executable_inode(
+    supervisor_host: SupervisorHost,
+) -> None:
+    a = supervisor_host.compile_agent("A", "slot-a")
+    b = supervisor_host.compile_readiness_agent("B")
+    impostor = supervisor_host.root / "impostor-agent"
+    shutil.copyfile(b, impostor)
+    impostor.chmod(0o555)
+    assert _digest(impostor) == _digest(b)
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(a)
+    ).returncode == 0
+    assert supervisor_host.run(
+        "activate", "--slot", "B", "--sha256", _digest(b)
+    ).returncode == 0
+    pending = supervisor_host.state()
+    supervisor_host.systemctl.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$*\" >> \"$DGX_TEST_SYSTEMCTL_ACTIONS\"\n"
+        'if [ "${1:-}" = stop ]; then rm -f "$DGX_TEST_SERVICE_PID"; fi\n'
+        'if [ "${1:-}" = restart ]; then\n'
+        '  CREDENTIALS_DIRECTORY="$DGX_TEST_CREDENTIALS" DGX_AGENT_SUPERVISOR_GENERATION="$DGX_TEST_GENERATION" DGX_AGENT_SUPERVISOR_SLOT=B DGX_AGENT_SUPERVISOR_SHA256="$DGX_TEST_SHA256" "$DGX_TEST_IMPOSTOR" &\n'
+        '  printf \'%s\\n\' "$!" > "$DGX_TEST_SERVICE_PID"\n'
+        "fi\n"
+        'if [ "${1:-}" = show ]; then cat "$DGX_TEST_SERVICE_PID" 2>/dev/null || printf \'0\\n\'; fi\n'
+        'if [ "${1:-}" = is-failed ]; then\n'
+        '  if [ -s "$DGX_TEST_SERVICE_PID" ] && kill -0 "$(cat "$DGX_TEST_SERVICE_PID")" 2>/dev/null; then exit 1; fi\n'
+        '  exit 0\n'
+        "fi\n"
+        "exit 0\n"
+    )
+    supervisor_host.systemctl.chmod(0o755)
+    supervisor_host.environment.update(
+        {
+            "DGX_TEST_CREDENTIALS": str(supervisor_host.challenge_path.parent),
+            "DGX_TEST_GENERATION": str(pending["generation"]),
+            "DGX_TEST_IMPOSTOR": str(impostor),
+            "DGX_TEST_SERVICE_PID": str(supervisor_host.service_pid_path),
+            "DGX_TEST_SHA256": _digest(b),
+        }
+    )
+
+    supervised = supervisor_host.run("supervise", timeout=5)
+
+    assert supervised.returncode != 0
+    assert supervisor_host.state()["active_slot"] == "A"
+    assert supervisor_host.state()["rollback_performed"] is True
+
+
+def test_candidate_crash_without_authenticated_readiness_rolls_back(
+    supervisor_host: SupervisorHost,
+) -> None:
+    a = supervisor_host.compile_agent("A", "slot-a")
+    b = supervisor_host.compile_agent("B", "candidate-crashes-before-readiness")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(a)
+    ).returncode == 0
+    assert supervisor_host.run(
+        "activate", "--slot", "B", "--sha256", _digest(b)
+    ).returncode == 0
+    supervisor_host.spawn_agent_from_systemctl()
+
+    supervised = supervisor_host.run("supervise", timeout=3)
+
+    assert supervised.returncode != 0
+    state = supervisor_host.state()
+    assert state["active_slot"] == "A"
+    assert state["rollback_performed"] is True
+    assert supervisor_host.challenge_path.read_text() == "0" * 64 + "\n"
+
+
+def test_stale_challenge_reuse_after_readiness_clear_is_rejected(
+    supervisor_host: SupervisorHost,
+) -> None:
+    a = supervisor_host.compile_agent("A", "slot-a")
+    b = supervisor_host.compile_agent("B", "slot-b")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(a)
+    ).returncode == 0
+    assert supervisor_host.run(
+        "activate", "--slot", "B", "--sha256", _digest(b)
+    ).returncode == 0
+    captured = supervisor_host.root / "captured-activation-challenge"
+    supervisor_host.systemctl.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$*\" >> \"$DGX_TEST_SYSTEMCTL_ACTIONS\"\n"
+        'if [ "${1:-}" = restart ] && [ ! -e "$DGX_TEST_CAPTURED_CHALLENGE" ]; then cp "$DGX_TEST_CHALLENGE" "$DGX_TEST_CAPTURED_CHALLENGE"; fi\n'
+        'if [ "${1:-}" = is-failed ]; then exit 0; fi\n'
+        "exit 0\n"
+    )
+    supervisor_host.systemctl.chmod(0o755)
+    supervisor_host.environment["DGX_TEST_CAPTURED_CHALLENGE"] = str(captured)
+    supervisor_host.environment["DGX_TEST_CHALLENGE"] = str(
+        supervisor_host.challenge_path
+    )
+    assert supervisor_host.run("supervise").returncode != 0
+    stale_challenge = captured.read_text().strip()
+    assert stale_challenge != "0" * 64
+    assert supervisor_host.run(
+        "activate", "--slot", "B", "--sha256", _digest(b)
+    ).returncode == 0
+    pending = supervisor_host.state()
+    stale = supervisor_host.root / "stale-readiness.json"
+    stale.write_text(
+        json.dumps(
+            {
+                "challenge": stale_challenge,
+                "generation": pending["generation"],
+                "pid": os.getpid(),
+                "schema_version": 2,
+                "sha256": _digest(b),
+                "slot": "B",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
+    supervisor_host.systemctl.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$*\" >> \"$DGX_TEST_SYSTEMCTL_ACTIONS\"\n"
+        'if [ "${1:-}" = restart ]; then cp "$DGX_TEST_STALE_READINESS" "$DGX_TEST_READINESS"; chmod 0600 "$DGX_TEST_READINESS"; fi\n'
+        'if [ "${1:-}" = is-failed ]; then exit 0; fi\n'
+        "exit 0\n"
+    )
+    supervisor_host.systemctl.chmod(0o755)
+    supervisor_host.environment["DGX_TEST_STALE_READINESS"] = str(stale)
+    supervisor_host.environment["DGX_TEST_READINESS"] = str(
+        supervisor_host.readiness_path
+    )
+
+    supervised = supervisor_host.run("supervise")
+
+    assert supervised.returncode != 0
+    assert supervisor_host.state()["active_slot"] == "A"
+    assert supervisor_host.state()["rollback_performed"] is True
+
+
+def test_old_agent_readiness_racing_service_stop_is_cleared(
+    supervisor_host: SupervisorHost,
+) -> None:
+    a = supervisor_host.compile_agent("A", "slot-a")
+    b = supervisor_host.compile_agent("B", "slot-b")
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", _digest(a)
+    ).returncode == 0
+    assert supervisor_host.run(
+        "activate", "--slot", "B", "--sha256", _digest(b)
+    ).returncode == 0
+    pending = supervisor_host.state()
+    raced = supervisor_host.root / "old-agent-race.json"
+    raced.write_text(
+        json.dumps(
+            {
+                "challenge": supervisor_host.challenge_path.read_text().strip(),
+                "generation": pending["generation"],
+                "pid": os.getpid(),
+                "schema_version": 2,
+                "sha256": _digest(b),
+                "slot": "B",
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        + "\n"
+    )
+    supervisor_host.systemctl.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' \"$*\" >> \"$DGX_TEST_SYSTEMCTL_ACTIONS\"\n"
+        'if [ "${1:-}" = stop ]; then cp "$DGX_TEST_RACED_READINESS" "$DGX_TEST_READINESS"; chmod 0600 "$DGX_TEST_READINESS"; fi\n'
+        'if [ "${1:-}" = is-failed ]; then exit 0; fi\n'
+        "exit 0\n"
+    )
+    supervisor_host.systemctl.chmod(0o755)
+    supervisor_host.environment["DGX_TEST_RACED_READINESS"] = str(raced)
+    supervisor_host.environment["DGX_TEST_READINESS"] = str(
+        supervisor_host.readiness_path
+    )
+
+    supervised = supervisor_host.run("supervise")
+
+    assert supervised.returncode != 0
+    assert supervisor_host.state()["active_slot"] == "A"
     assert not supervisor_host.readiness_path.exists()
 
 
@@ -817,7 +1797,14 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
     shutil.copytree("/usr/lib/systemd/system", unit_root / "usr/lib/systemd/system")
     unit_directory.mkdir(parents=True)
     executable_directory.mkdir(parents=True)
-    units = (AGENT_UNIT, SUPERVISOR_UNIT, ACTIVATION_UNIT, ACTIVATION_PATH)
+    units = (
+        AGENT_UNIT,
+        SUPERVISOR_UNIT,
+        ACTIVATION_UNIT,
+        ACTIVATION_PATH,
+        ROLLBACK_UNIT,
+        ROLLBACK_PATH,
+    )
     for source in units:
         shutil.copy2(source, unit_directory / source.name)
     shutil.copy2("/bin/true", executable_directory / "dgx-agent-supervisor")
@@ -834,7 +1821,7 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
     )
     assert verified.returncode == 0, verified.stderr
     effective: dict[str, dict[str, object]] = {}
-    for unit in (AGENT_UNIT, SUPERVISOR_UNIT, ACTIVATION_UNIT):
+    for unit in (AGENT_UNIT, SUPERVISOR_UNIT, ACTIVATION_UNIT, ROLLBACK_UNIT):
         analyzed = subprocess.run(
             [
                 "systemd-analyze",
@@ -855,12 +1842,28 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
     assert effective[AGENT_UNIT.name]["UserOrDynamicUser"] is True
     assert effective[AGENT_UNIT.name]["NoNewPrivileges"] is True
     assert effective[AGENT_UNIT.name]["ProtectSystem"] is True
+    assert effective[AGENT_UNIT.name]["AmbientCapabilities"] is True
+    assert effective[AGENT_UNIT.name]["CapabilityBoundingSet_CAP_SYS_PTRACE"] is True
     assert effective[SUPERVISOR_UNIT.name]["PrivateNetwork"] is True
     assert effective[SUPERVISOR_UNIT.name]["NoNewPrivileges"] is True
     assert effective[SUPERVISOR_UNIT.name]["ProtectSystem"] is True
+    assert effective[SUPERVISOR_UNIT.name]["AmbientCapabilities"] is True
+    assert (
+        effective[SUPERVISOR_UNIT.name]["CapabilityBoundingSet_CAP_SYS_PTRACE"]
+        is False
+    )
     assert effective[ACTIVATION_UNIT.name]["PrivateNetwork"] is True
     assert effective[ACTIVATION_UNIT.name]["NoNewPrivileges"] is True
     assert effective[ACTIVATION_UNIT.name]["ProtectSystem"] is True
+    assert effective[ROLLBACK_UNIT.name]["PrivateNetwork"] is True
+    assert effective[ROLLBACK_UNIT.name]["NoNewPrivileges"] is True
+    assert effective[ROLLBACK_UNIT.name]["ProtectSystem"] is True
+    assert (
+        effective[ROLLBACK_UNIT.name][
+            "CapabilityBoundingSet_CAP_CHOWN_FSETID_SETFCAP"
+        ]
+        is True
+    )
     assert (
         effective[SUPERVISOR_UNIT.name][
             "CapabilityBoundingSet_CAP_CHOWN_FSETID_SETFCAP"
@@ -871,12 +1874,15 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
     supervisor = SUPERVISOR_UNIT.read_text()
     activation = ACTIVATION_UNIT.read_text()
     activation_path = ACTIVATION_PATH.read_text()
+    rollback = ROLLBACK_UNIT.read_text()
+    rollback_path = ROLLBACK_PATH.read_text()
     for literal in (
         "User=dgx-agent",
         "Group=dgx-agent",
         "SupplementaryGroups=",
         "PartOf=dgx-forge-agent-supervisor.service",
         "ExecStart=/usr/libexec/dgx-agent-supervisor run-agent",
+        "LoadCredential=activation-challenge:/run/dgx-forge-agent-supervisor/activation-challenge",
         "UMask=0077",
         "NoNewPrivileges=yes",
         "CapabilityBoundingSet=",
@@ -894,7 +1900,7 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
         "ExecStart=/usr/libexec/dgx-agent-supervisor supervise",
         "UMask=0077",
         "NoNewPrivileges=yes",
-        "CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE",
+        "CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_SYS_PTRACE",
         "AmbientCapabilities=",
         "PrivateNetwork=yes",
         "ProtectSystem=strict",
@@ -906,13 +1912,30 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
         "NoNewPrivileges=yes",
         "PrivateNetwork=yes",
         "ProtectSystem=strict",
-        "ReadOnlyPaths=/var/lib/dgx-forge-agent/update-staging /usr/libexec/dgx-agent-supervisor",
+        "ReadOnlyPaths=/var/lib/dgx-forge-agent/update-staging /etc/dgx-forge-agent/update-authority.json /usr/bin/openssl /usr/libexec/dgx-agent-supervisor",
         "ReadWritePaths=/opt/dgx-forge/agent-slots /var/lib/dgx-forge-agent-supervisor /run/dgx-forge-agent",
     ):
         assert literal in activation
     assert "User=" not in activation
     assert "PathExists=/run/dgx-forge-agent/activation-request.json" in activation_path
     assert "Unit=dgx-forge-agent-activation.service" in activation_path
+    assert "TriggerLimitIntervalSec=60s" in activation_path
+    assert "TriggerLimitBurst=3" in activation_path
+    for literal in (
+        "ExecStart=/usr/libexec/dgx-agent-supervisor apply-rollback-request",
+        "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE",
+        "NoNewPrivileges=yes",
+        "PrivateNetwork=yes",
+        "ProtectSystem=strict",
+        "ReadOnlyPaths=/opt/dgx-forge/agent-slots /usr/libexec/dgx-agent-supervisor",
+        "ReadWritePaths=/var/lib/dgx-forge-agent-supervisor /run/dgx-forge-agent",
+    ):
+        assert literal in rollback
+    assert "User=" not in rollback
+    assert "PathExists=/run/dgx-forge-agent/rollback-request.json" in rollback_path
+    assert "Unit=dgx-forge-agent-rollback.service" in rollback_path
+    assert "TriggerLimitIntervalSec=60s" in rollback_path
+    assert "TriggerLimitBurst=3" in rollback_path
 
 
 def test_agent_effective_device_policy_is_closed_and_read_only() -> None:
@@ -979,12 +2002,25 @@ def test_installed_systemd_harness_verifies_units_by_installed_name() -> None:
         "dgx-forge-agent-supervisor.service",
         "dgx-forge-agent-activation.service",
         "dgx-forge-agent-activation.path",
+        "dgx-forge-agent-rollback.service",
+        "dgx-forge-agent-rollback.path",
     }
     assert set(report["security_units"]) == {
         "dgx-forge-agent.service",
         "dgx-forge-agent-supervisor.service",
         "dgx-forge-agent-activation.service",
+        "dgx-forge-agent-rollback.service",
     }
+    assert report["security_units"]["dgx-forge-agent-supervisor.service"][
+        "cap_sys_ptrace"
+    ] is True
+    assert report["security_units"]["dgx-forge-agent.service"][
+        "cap_sys_ptrace"
+    ] is False
+    assert all(
+        unit["ambient_capabilities"] is False
+        for unit in report["security_units"].values()
+    )
     assert all(
         unit["exposure"] == "OK" for unit in report["security_units"].values()
     )

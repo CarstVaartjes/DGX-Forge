@@ -3,7 +3,7 @@ name = "dgx-agent"
 version = "0.1.0"
 description = "DGX Forge outbound agent runtime scaffold"
 requires-python = ">=3.12"
-dependencies = ["cryptography==50.0.0", "dgx-agent-protocol==1.0.0", "tuf==7.0.0", "securesystemslib[crypto]==1.4.0"]
+dependencies = ["cryptography==50.0.0", "dgx-agent-protocol==1.0.0", "spark-profiles==0.1.0", "tuf==7.0.0", "securesystemslib[crypto]==1.4.0"]
 
 [project.scripts]
 dgx-forge-agent = "dgx_agent.main:main"
@@ -17,3 +17,4 @@ dev = ["pyinstaller==6.15.0", "pytest==8.4.2"]
 
 [tool.uv.sources]
 dgx-agent-protocol = { path = "../inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl" }
+spark-profiles = { path = ".." }

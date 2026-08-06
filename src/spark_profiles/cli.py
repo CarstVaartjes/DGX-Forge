@@ -29,6 +29,12 @@ _BEARER = re.compile(r"(?i)\bbearer\s+[^\s,;]+")
 _SENSITIVE_OPTION = re.compile(
     r"(?i)^--(?:[a-z0-9]+-)*(?:authorization|api-key|password|secret|token|private-key)(?:=|$)"
 )
+_PLATFORM_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_UPDATE_RELEASE = re.compile(
+    r"platform/releases/"
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)/"
+    r"[0-9a-f]{64}\.json\Z"
+)
 
 
 class _UsageError(ValueError):
@@ -113,6 +119,20 @@ def _parser() -> argparse.ArgumentParser:
     )
     for name in ("fleet", "models", "profiles", "jobs", "audit"):
         _add_json(admin_commands.add_parser(name))
+    updates = admin_commands.add_parser("updates")
+    update_commands = updates.add_subparsers(
+        dest="updates_command", required=True, parser_class=_CliParser
+    )
+    _add_json(update_commands.add_parser("skew"))
+    update_plan = update_commands.add_parser("plan")
+    update_plan.add_argument("--release", required=True)
+    _add_json(update_plan)
+    update_apply = update_commands.add_parser("apply")
+    update_apply.add_argument("--plan-digest", required=True)
+    _add_json(update_apply)
+    update_status = update_commands.add_parser("status")
+    update_status.add_argument("job_id")
+    _add_json(update_status)
     proposal = admin_commands.add_parser("proposal")
     proposal.add_argument("--file", type=Path, required=True)
     _add_json(proposal)
@@ -205,6 +225,27 @@ def _control_error(error: BaseException) -> dict[str, object]:
 
 
 def _admin(args: argparse.Namespace, client: object) -> Mapping[str, object]:
+    if args.admin_command == "updates":
+        if args.updates_command == "skew":
+            return _model_payload(client.update_skew())  # type: ignore[attr-defined]
+        if args.updates_command == "plan":
+            if (
+                len(args.release) > 512
+                or _UPDATE_RELEASE.fullmatch(args.release) is None
+            ):
+                raise ControlClientError("platform update release name is invalid")
+            return _model_payload(client.plan_update(args.release))  # type: ignore[attr-defined]
+        if args.updates_command == "apply":
+            if _PLATFORM_DIGEST.fullmatch(args.plan_digest) is None:
+                raise ControlClientError("platform update plan digest is invalid")
+            return _model_payload(client.apply_update(args.plan_digest))  # type: ignore[attr-defined]
+        try:
+            rollout_id = str(uuid.UUID(args.job_id))
+        except ValueError:
+            raise ControlClientError("platform update rollout ID is invalid") from None
+        if rollout_id != args.job_id:
+            raise ControlClientError("platform update rollout ID is invalid")
+        return _model_payload(client.update_status(rollout_id))  # type: ignore[attr-defined]
     if args.admin_command == "proposal":
         path = args.file
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 1_048_576:

@@ -1,0 +1,426 @@
+name: Workload artifact build
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_path:
+        description: Reviewed workload build request below release/workloads
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  authorize-request:
+    name: Authorize reviewed workload request
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      request_path: ${{ steps.request.outputs.request_path }}
+      request_digest: ${{ steps.request.outputs.request_digest }}
+      source_commit: ${{ steps.request.outputs.source_commit }}
+      context_digest: ${{ steps.request.outputs.context_digest }}
+      context: ${{ steps.request.outputs.context }}
+      dockerfile: ${{ steps.request.outputs.dockerfile }}
+      target: ${{ steps.request.outputs.target }}
+      architecture: ${{ steps.request.outputs.architecture }}
+      output_repository: ${{ steps.request.outputs.output_repository }}
+      base_images: ${{ steps.request.outputs.base_images }}
+    steps:
+      - name: Check out reviewed request
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.1"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Validate bounded build request
+        id: request
+        shell: bash
+        env:
+          DISPATCH_REQUEST_PATH: ${{ inputs.request_path }}
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          request_path=$DISPATCH_REQUEST_PATH
+          if [[ ! "$request_path" =~ ^release/workloads/[a-z0-9][a-z0-9_.-]{0,127}\.json$ ]]; then
+            echo "request must be a canonical release/workloads JSON path" >&2
+            exit 2
+          fi
+          test ! -L "$request_path"
+          case "$request_path" in
+            release/workloads/*.json) ;;
+            *) echo "request must be below release/workloads" >&2; exit 2 ;;
+          esac
+          test -f "$request_path"
+          validated_request=$RUNNER_TEMP/workload-artifact-request.json
+          uv run --frozen scripts/workload-artifact-metadata request "$request_path" \
+            > "$validated_request"
+          request_digest=$(jq -er '.build_request_digest' "$validated_request")
+          source_commit=$(jq -er '.request.source_commit' "$validated_request")
+          output_repository=$(jq -er '.request.output_repository' "$validated_request")
+          repository_owner=${GITHUB_REPOSITORY_OWNER,,}
+          case "$output_repository" in
+            "ghcr.io/$repository_owner/"*) ;;
+            *)
+              echo "output repository must be owned by this GitHub organization" >&2
+              exit 2
+              ;;
+          esac
+
+          git fetch --no-tags origin main
+          git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main
+
+          {
+            printf 'request_path=%s\n' "$request_path"
+            printf 'request_digest=%s\n' "$request_digest"
+            printf 'source_commit=%s\n' "$source_commit"
+            printf 'context_digest=%s\n' "$(jq -er '.request.context_digest' "$validated_request")"
+            printf 'context=%s\n' "$(jq -er '.request.context' "$validated_request")"
+            printf 'dockerfile=%s\n' "$(jq -er '.request.dockerfile' "$validated_request")"
+            printf 'target=%s\n' "$(jq -er '.request.target' "$validated_request")"
+            printf 'architecture=%s\n' "$(jq -er '.request.architecture' "$validated_request")"
+            printf 'output_repository=%s\n' "$output_repository"
+            printf 'base_images=%s\n' \
+              "$(jq -cer '.request.base_images' "$validated_request")"
+          } >> "$GITHUB_OUTPUT"
+
+  read-only-ci-gate:
+    name: Require successful CI for exact source commit
+    needs: authorize-request
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - name: Verify exact commit passed CI
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_COMMIT: ${{ needs.authorize-request.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          completed_runs=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow ci.yml \
+            --commit "$SOURCE_COMMIT" \
+            --status completed \
+            --limit 20 \
+            --json conclusion,headSha)
+          jq -e --arg source_commit "$SOURCE_COMMIT" \
+            'any(.[]; .headSha == $source_commit and .conclusion == "success")' \
+            <<< "$completed_runs" >/dev/null
+
+  publish-workload-artifact:
+    name: Publish digest-only workload artifact
+    needs: [authorize-request, read-only-ci-gate]
+    runs-on: ubuntu-latest
+    concurrency:
+      group: dgx-forge-workload-artifact-publication
+      cancel-in-progress: false
+    permissions:
+      artifact-metadata: write
+      attestations: write
+      contents: read
+      id-token: write
+      packages: write
+    steps:
+      - name: Check out reviewed request definition
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: request-definition
+          persist-credentials: false
+      - name: Check out exact workload source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.authorize-request.outputs.source_commit }}
+          path: workload-source
+          persist-credentials: false
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.1"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      - name: Verify exact source context
+        shell: bash
+        env:
+          EXPECTED_CONTEXT_DIGEST: ${{ needs.authorize-request.outputs.context_digest }}
+          CONTEXT: ${{ needs.authorize-request.outputs.context }}
+          DOCKERFILE: ${{ needs.authorize-request.outputs.dockerfile }}
+          DECLARED_BASE_IMAGES: ${{ needs.authorize-request.outputs.base_images }}
+          SOURCE_COMMIT: ${{ needs.authorize-request.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          source_root=$(realpath workload-source)
+          context_path=$(realpath "workload-source/$CONTEXT")
+          dockerfile_path=$(realpath "workload-source/$DOCKERFILE")
+          case "$context_path" in
+            "$source_root"/adapters/*) ;;
+            *) echo "context resolved outside reviewed adapters" >&2; exit 2 ;;
+          esac
+          case "$dockerfile_path" in
+            "$context_path"/*) ;;
+            *) echo "Dockerfile resolved outside build context" >&2; exit 2 ;;
+          esac
+          test -d "$context_path"
+          test -f "$dockerfile_path"
+          context_archive=$RUNNER_TEMP/workload-context.tar
+          git -C workload-source archive --format=tar --output="$context_archive" \
+            "$SOURCE_COMMIT" "$CONTEXT"
+          actual_context_digest="sha256:$(sha256sum "$context_archive" | cut -d ' ' -f 1)"
+          test "$actual_context_digest" = "$EXPECTED_CONTEXT_DIGEST" || {
+            echo "checked-out context does not match context_digest" >&2
+            exit 2
+          }
+          python - "$dockerfile_path" <<'PY'
+          import json
+          import os
+          import re
+          import shlex
+          import sys
+          from pathlib import Path
+
+          dockerfile = Path(sys.argv[1])
+          if dockerfile.stat().st_size > 1024 * 1024:
+              raise SystemExit("Dockerfile exceeds the bounded input size")
+          declared = set(json.loads(os.environ["DECLARED_BASE_IMAGES"]))
+          logical_lines: list[str] = []
+          pending = ""
+          for raw_line in dockerfile.read_text().splitlines():
+              line = raw_line.strip()
+              if re.match(r"(?i)^#\s*(?:syntax|escape)\s*=", line):
+                  raise SystemExit("Dockerfile frontend directives are forbidden")
+              if not line or (line.startswith("#") and not pending):
+                  continue
+              pending = f"{pending} {line}".strip()
+              if pending.endswith("\\"):
+                  pending = pending[:-1].rstrip()
+                  continue
+              logical_lines.append(pending)
+              pending = ""
+          if pending:
+              raise SystemExit("unterminated Dockerfile continuation")
+
+          stages: set[str] = set()
+          external: set[str] = set()
+          stage_index = 0
+          for line in logical_lines:
+              if re.match(r"(?i)^ARG(?:\s|$)", line):
+                  raise SystemExit("ARG is forbidden in workload Dockerfiles")
+              fields = shlex.split(line)
+              command = fields[0].upper()
+              if command == "ONBUILD":
+                  raise SystemExit("ONBUILD is forbidden in workload Dockerfiles")
+              if command == "ADD" and re.search(
+                  r"(?i)(?:https?|git|ssh)://|git@", line
+              ):
+                  raise SystemExit("remote ADD inputs are forbidden")
+              if command == "COPY":
+                  for field in fields[1:]:
+                      if field.startswith("--from="):
+                          reference = field.removeprefix("--from=").lower()
+                          if reference not in stages:
+                              raise SystemExit(
+                                  "external COPY --from inputs are forbidden"
+                              )
+                  continue
+              if command == "RUN":
+                  for field in fields[1:]:
+                      if not field.startswith("--"):
+                          break
+                      if not field.startswith("--mount="):
+                          continue
+                      options = field.removeprefix("--mount=").split(",")
+                      for option in options:
+                          if option.startswith("from="):
+                              reference = option.removeprefix("from=").lower()
+                              if reference not in stages:
+                                  raise SystemExit(
+                                      "external RUN --mount from inputs are forbidden"
+                                  )
+                  continue
+              if command != "FROM":
+                  continue
+              if any("$" in field for field in fields[1:]):
+                  raise SystemExit("variable FROM inputs are forbidden")
+              operands = [field for field in fields[1:] if not field.startswith("--")]
+              if not operands:
+                  raise SystemExit("FROM is missing a base image")
+              image = operands[0]
+              if image.lower() not in stages:
+                  if image not in declared:
+                      raise SystemExit(f"undeclared base image: {image}")
+                  external.add(image)
+              if len(operands) >= 3 and operands[1].lower() == "as":
+                  stages.add(operands[2].lower())
+              stages.add(str(stage_index))
+              stage_index += 1
+          if not external:
+              raise SystemExit("Dockerfile must contain at least one external FROM")
+          if external != declared:
+              raise SystemExit(
+                  "declared base images must exactly match Dockerfile FROM inputs"
+              )
+          PY
+      - name: Log in to GHCR
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build digest-only OCI artifact
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: workload-source/${{ needs.authorize-request.outputs.context }}
+          file: workload-source/${{ needs.authorize-request.outputs.dockerfile }}
+          target: ${{ needs.authorize-request.outputs.target }}
+          platforms: ${{ needs.authorize-request.outputs.architecture }}
+          network: none
+          outputs: >-
+            type=image,
+            name=${{ needs.authorize-request.outputs.output_repository }},
+            push-by-digest=true,
+            name-canonical=true,
+            push=true
+          sbom: true
+          provenance: mode=max
+      - name: Collect workload artifact evidence
+        shell: bash
+        env:
+          OCI_MANIFEST_DIGEST: ${{ steps.build.outputs.digest }}
+          OUTPUT_REPOSITORY: ${{ needs.authorize-request.outputs.output_repository }}
+        run: |
+          set -euo pipefail
+          case "$OCI_MANIFEST_DIGEST" in
+            sha256:????????????????????????????????????????????????????????????????) ;;
+            *) echo "build did not return a sha256 manifest digest" >&2; exit 2 ;;
+          esac
+          install -d -m 0700 workload-artifact-output
+          reference="${OUTPUT_REPOSITORY}@${OCI_MANIFEST_DIGEST}"
+          docker buildx imagetools inspect "$reference" --raw \
+            > workload-artifact-output/oci-manifest.json
+          python - <<'PY'
+          import hashlib
+          import os
+          from pathlib import Path
+
+          path = Path("workload-artifact-output/oci-manifest.json")
+          raw = path.read_bytes()
+          expected = os.environ["OCI_MANIFEST_DIGEST"].removeprefix("sha256:")
+          if len(expected) != 64 or any(c not in "0123456789abcdef" for c in expected):
+              raise SystemExit("OCI manifest digest is not canonical")
+          candidates = (raw, raw[:-1]) if raw.endswith(b"\n") else (raw,)
+          for candidate in candidates:
+              if hashlib.sha256(candidate).hexdigest() == expected:
+                  path.write_bytes(candidate)
+                  break
+          else:
+              raise SystemExit("raw OCI manifest does not match build digest")
+          PY
+          docker buildx imagetools inspect "$reference" --format '{{ json .SBOM.SPDX }}' \
+            | jq -e -S -c 'select(type == "object" and (.spdxVersion | type == "string") and (.SPDXID | type == "string"))' \
+            > workload-artifact-output/sbom.json
+          docker buildx imagetools inspect "$reference" --format '{{ json .Provenance.SLSA }}' \
+            | jq -e -S -c 'select(type == "object" and length > 0)' \
+            > workload-artifact-output/provenance.json
+          jq -e 'if type == "object" or type == "array" then length > 0 else false end' \
+            workload-artifact-output/sbom.json >/dev/null || { echo 'SBOM evidence is empty' >&2; exit 2; }
+          jq -e 'if type == "object" or type == "array" then length > 0 else false end' \
+            workload-artifact-output/provenance.json >/dev/null || { echo 'provenance evidence is empty' >&2; exit 2; }
+      - name: Sign workload provenance
+        id: provenance-attestation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ needs.authorize-request.outputs.output_repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+      - name: Sign workload SBOM
+        id: sbom-attestation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
+        with:
+          subject-name: ${{ needs.authorize-request.outputs.output_repository }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: workload-artifact-output/sbom.json
+          push-to-registry: true
+      - name: Create workload artifact result
+        shell: bash
+        env:
+          BUILD_REQUEST_DIGEST: ${{ needs.authorize-request.outputs.request_digest }}
+          OCI_MANIFEST_DIGEST: ${{ steps.build.outputs.digest }}
+          OUTPUT_REPOSITORY: ${{ needs.authorize-request.outputs.output_repository }}
+          PROVENANCE_BUNDLE: ${{ steps.provenance-attestation.outputs.bundle-path }}
+          PROVENANCE_ATTESTATION_ID: ${{ steps.provenance-attestation.outputs.attestation-id }}
+          PROVENANCE_ATTESTATION_URL: ${{ steps.provenance-attestation.outputs.attestation-url }}
+          REQUEST_PATH: ${{ needs.authorize-request.outputs.request_path }}
+          SBOM_BUNDLE: ${{ steps.sbom-attestation.outputs.bundle-path }}
+          SBOM_ATTESTATION_ID: ${{ steps.sbom-attestation.outputs.attestation-id }}
+          SBOM_ATTESTATION_URL: ${{ steps.sbom-attestation.outputs.attestation-url }}
+          SOURCE_COMMIT: ${{ needs.authorize-request.outputs.source_commit }}
+        run: |
+          set -euo pipefail
+          test -s "$PROVENANCE_BUNDLE"
+          test -s "$SBOM_BUNDLE"
+          cp "$PROVENANCE_BUNDLE" \
+            workload-artifact-output/signed-provenance.bundle.json
+          cp "$SBOM_BUNDLE" \
+            workload-artifact-output/signed-sbom.bundle.json
+          provenance_digest="sha256:$(sha256sum "$PROVENANCE_BUNDLE" | cut -d ' ' -f 1)"
+          sbom_digest="sha256:$(sha256sum "$SBOM_BUNDLE" | cut -d ' ' -f 1)"
+          jq -n \
+            --arg build_request_digest "$BUILD_REQUEST_DIGEST" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg oci_manifest_digest "$OCI_MANIFEST_DIGEST" \
+            --arg sbom_digest "$sbom_digest" \
+            --arg provenance_digest "$provenance_digest" \
+            '{
+              schema_version: 1,
+              kind: "workload-artifact-build-result",
+              build_request_digest: $build_request_digest,
+              source_commit: $source_commit,
+              oci_manifest_digest: $oci_manifest_digest,
+              sbom_digest: $sbom_digest,
+              provenance_digest: $provenance_digest
+            }' > workload-artifact-output/result.json
+          request-definition/scripts/workload-artifact-metadata result \
+            workload-artifact-output/result.json \
+            --request "request-definition/$REQUEST_PATH" \
+            > workload-artifact-output/validated-result.json
+          jq -n \
+            --arg provenance_id "$PROVENANCE_ATTESTATION_ID" \
+            --arg provenance_url "$PROVENANCE_ATTESTATION_URL" \
+            --arg sbom_id "$SBOM_ATTESTATION_ID" \
+            --arg sbom_url "$SBOM_ATTESTATION_URL" \
+            '{
+              provenance: {id: $provenance_id, url: $provenance_url},
+              sbom: {id: $sbom_id, url: $sbom_url}
+            }' > workload-artifact-output/signed-attestations.json
+          printf '%s@%s\n' "$OUTPUT_REPOSITORY" "$OCI_MANIFEST_DIGEST" \
+            >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload workload artifact evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: workload-artifact-${{ github.run_id }}
+          retention-days: 30
+          if-no-files-found: error
+          path: |
+            workload-artifact-output/oci-manifest.json
+            workload-artifact-output/provenance.json
+            workload-artifact-output/sbom.json
+            workload-artifact-output/signed-attestations.json
+            workload-artifact-output/signed-provenance.bundle.json
+            workload-artifact-output/signed-sbom.bundle.json
+            workload-artifact-output/validated-result.json

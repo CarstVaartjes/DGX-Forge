@@ -29,6 +29,11 @@ ACTIVATION_SECONDS = 120
 MAX_BOOT_ATTEMPTS = 2
 SLOTS = ("A", "B")
 DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+PLATFORM_TARGET = re.compile(
+    r"platform/releases/"
+    r"(?P<version>(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))/"
+    r"(?P<sha256>[0-9a-f]{64})\.json\Z"
+)
 STATE_FIELDS = {
     "schema_version",
     "generation",
@@ -41,19 +46,72 @@ STATE_FIELDS = {
     "status",
     "rollback_performed",
 }
-READINESS_FIELDS = {"schema_version", "generation", "slot", "sha256"}
+READINESS_FIELDS = {
+    "challenge",
+    "generation",
+    "pid",
+    "schema_version",
+    "sha256",
+    "slot",
+}
 IDENTITY_FIELDS = {"build_digest", "platform_version", "schema_version", "sha256"}
 ACTIVATION_REQUEST_FIELDS = {
-    "build_digest",
-    "platform_version",
-    "previous_slot",
+    "authorization",
     "schema_version",
+    "signature",
+}
+ACTIVATION_AUTHORIZATION_FIELDS = {
+    "architecture",
+    "attempt",
+    "build_digest",
+    "claim_deadline",
+    "expires_at",
+    "fence",
+    "node_id",
+    "oci_manifest_digest",
+    "operation_id",
+    "payload_name",
+    "platform_target_name",
+    "platform_target_sha256",
+    "platform_version",
+    "previous_sha256",
+    "previous_generation",
+    "previous_slot",
     "sha256",
     "size",
     "target_slot",
+    "tuf_targets_version",
+}
+ACTIVATION_SIGNATURE_FIELDS = {"algorithm", "key_id", "value"}
+ROLLBACK_REQUEST_FIELDS = {
+    "authorization",
+    "schema_version",
+    "signature",
+}
+ROLLBACK_AUTHORIZATION_FIELDS = {
+    "action",
+    "attempt",
+    "claim_deadline",
+    "current_generation",
+    "current_sha256",
+    "current_slot",
+    "expires_at",
+    "fence",
+    "node_id",
+    "operation_id",
 }
 MACHINE = {"x86_64": 62, "aarch64": 183}
+ARCHITECTURE = {"x86_64": "linux-x86_64", "aarch64": "linux-arm64"}
 STAGING = re.compile(r"\.state\.[0-9a-f]{24}\.new\Z")
+SLOT_STAGING = re.compile(
+    r"\.(?:dgx-forge-agent|identity\.json)\.[0-9a-f]{24}\.new\Z"
+)
+UUID = re.compile(
+    r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z"
+)
+TOKEN = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
+SIGNATURE = re.compile(r"[0-9a-f]{128}\Z")
+AUTHORITY_FIELDS = {"algorithm", "key_id", "public_key", "schema_version"}
 
 
 class SupervisorError(RuntimeError):
@@ -133,6 +191,12 @@ SLOT_ROOT = "/opt/dgx-forge/agent-slots"
 RUNTIME_ROOT = "/run/dgx-forge-agent"
 READINESS_QUARANTINE_ROOT = "/run/dgx-forge-agent-supervisor"
 UPDATE_STAGING_ROOT = "/var/lib/dgx-forge-agent/update-staging"
+UPDATE_AUTHORITY_PATH = "/etc/dgx-forge-agent/update-authority.json"
+AGENT_CONFIG_PATH = "/etc/dgx-forge-agent/config.json"
+OPENSSL_PATH = "/usr/bin/openssl"
+AUTHORIZATION_FLOOR_NAME = "authorization-floor.json"
+ACTIVATION_CHALLENGE_NAME = "activation-challenge"
+INACTIVE_CHALLENGE = "0" * 64
 
 
 def _canonical(value: object) -> bytes:
@@ -140,6 +204,17 @@ def _canonical(value: object) -> bytes:
         json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
         + "\n"
     ).encode("ascii")
+
+
+def _platform_target_matches(name: Any, version: Any, sha256: Any) -> bool:
+    if not all(isinstance(value, str) for value in (name, version, sha256)):
+        return False
+    match = PLATFORM_TARGET.fullmatch(name)
+    return bool(
+        match
+        and match.group("version") == version
+        and match.group("sha256") == sha256
+    )
 
 
 def _unique(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -185,25 +260,76 @@ def _decode_activation_request(raw: bytes) -> dict[str, Any]:
         raise
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
         raise SupervisorError("activation request JSON is invalid") from error
+    if not isinstance(value, dict) or _canonical(value) != raw:
+        raise SupervisorError("activation request is invalid")
+    authorization = value.get("authorization")
+    signature = value.get("signature")
     if (
-        not isinstance(value, dict)
-        or set(value) != ACTIVATION_REQUEST_FIELDS
-        or _canonical(value) != raw
-        or value["schema_version"] != 1
-        or value["target_slot"] not in SLOTS
-        or value["previous_slot"] not in SLOTS
-        or not isinstance(value["sha256"], str)
-        or DIGEST.fullmatch(value["sha256"]) is None
-        or not isinstance(value["build_digest"], str)
-        or not re.fullmatch(r"sha256:[0-9a-f]{64}", value["build_digest"])
-        or not isinstance(value["platform_version"], str)
-        or not re.fullmatch(
-            r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",
-            value["platform_version"],
+        set(value) != ACTIVATION_REQUEST_FIELDS
+        or value["schema_version"] != 2
+        or not isinstance(authorization, dict)
+        or set(authorization) != ACTIVATION_AUTHORIZATION_FIELDS
+        or not isinstance(signature, dict)
+        or set(signature) != ACTIVATION_SIGNATURE_FIELDS
+        or authorization["target_slot"] not in SLOTS
+        or authorization["previous_slot"] not in SLOTS
+        or authorization["target_slot"] == authorization["previous_slot"]
+        or authorization["architecture"] not in ARCHITECTURE.values()
+        or isinstance(authorization["attempt"], bool)
+        or authorization["attempt"] != 1
+        or isinstance(authorization["claim_deadline"], bool)
+        or not isinstance(authorization["claim_deadline"], int)
+        or authorization["claim_deadline"] != authorization["expires_at"]
+        or not isinstance(authorization["node_id"], str)
+        or re.fullmatch(r"spk_[0-9a-f]{32}", authorization["node_id"]) is None
+        or isinstance(authorization["previous_generation"], bool)
+        or not isinstance(authorization["previous_generation"], int)
+        or not 1 <= authorization["previous_generation"] <= 999_999_999
+        or not isinstance(authorization["sha256"], str)
+        or DIGEST.fullmatch(authorization["sha256"]) is None
+        or not isinstance(authorization["previous_sha256"], str)
+        or DIGEST.fullmatch(authorization["previous_sha256"]) is None
+        or not isinstance(authorization["oci_manifest_digest"], str)
+        or re.fullmatch(
+            r"sha256:[0-9a-f]{64}", authorization["oci_manifest_digest"]
         )
-        or isinstance(value["size"], bool)
-        or not isinstance(value["size"], int)
-        or not 64 <= value["size"] <= EXECUTABLE_LIMIT
+        is None
+        or not isinstance(authorization["platform_target_sha256"], str)
+        or DIGEST.fullmatch(authorization["platform_target_sha256"]) is None
+        or not _platform_target_matches(
+            authorization["platform_target_name"],
+            authorization["platform_version"],
+            authorization["platform_target_sha256"],
+        )
+        or not isinstance(authorization["payload_name"], str)
+        or TOKEN.fullmatch(authorization["payload_name"]) is None
+        or not isinstance(authorization["build_digest"], str)
+        or re.fullmatch(r"sha256:[0-9a-f]{64}", authorization["build_digest"])
+        is None
+        or not isinstance(authorization["platform_version"], str)
+        or re.fullmatch(
+            r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",
+            authorization["platform_version"],
+        )
+        is None
+        or not isinstance(authorization["operation_id"], str)
+        or UUID.fullmatch(authorization["operation_id"]) is None
+        or not isinstance(authorization["fence"], str)
+        or UUID.fullmatch(authorization["fence"]) is None
+        or isinstance(authorization["expires_at"], bool)
+        or not isinstance(authorization["expires_at"], int)
+        or not 1 <= authorization["expires_at"] <= 9_007_199_254_740_991
+        or isinstance(authorization["tuf_targets_version"], bool)
+        or not isinstance(authorization["tuf_targets_version"], int)
+        or not 1 <= authorization["tuf_targets_version"] <= 2_147_483_647
+        or isinstance(authorization["size"], bool)
+        or not isinstance(authorization["size"], int)
+        or not 64 <= authorization["size"] <= EXECUTABLE_LIMIT
+        or signature["algorithm"] != "ed25519"
+        or not isinstance(signature["key_id"], str)
+        or DIGEST.fullmatch(signature["key_id"]) is None
+        or not isinstance(signature["value"], str)
+        or SIGNATURE.fullmatch(signature["value"]) is None
     ):
         raise SupervisorError("activation request is invalid")
     return value
@@ -224,6 +350,8 @@ def _decode_slot_identity(raw: bytes, expected_sha256: str) -> dict[str, Any]:
         not isinstance(value, dict)
         or set(value) != IDENTITY_FIELDS
         or _canonical(value) != raw
+        or not isinstance(value["schema_version"], int)
+        or isinstance(value["schema_version"], bool)
         or value["schema_version"] != 1
         or value["sha256"] != expected_sha256
         or not isinstance(value["build_digest"], str)
@@ -236,6 +364,59 @@ def _decode_slot_identity(raw: bytes, expected_sha256: str) -> dict[str, Any]:
         is None
     ):
         raise SupervisorError("slot identity is invalid")
+    return value
+
+
+def _decode_rollback_request(raw: bytes) -> dict[str, Any]:
+    try:
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique,
+            parse_constant=_reject_constant,
+        )
+    except SupervisorError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
+        raise SupervisorError("rollback request JSON is invalid") from error
+    if not isinstance(value, dict) or _canonical(value) != raw:
+        raise SupervisorError("rollback request is invalid")
+    authorization = value.get("authorization")
+    signature = value.get("signature")
+    if (
+        set(value) != ROLLBACK_REQUEST_FIELDS
+        or value["schema_version"] != 2
+        or not isinstance(authorization, dict)
+        or set(authorization) != ROLLBACK_AUTHORIZATION_FIELDS
+        or authorization["action"] != "operator-rollback"
+        or isinstance(authorization["attempt"], bool)
+        or authorization["attempt"] != 1
+        or isinstance(authorization["claim_deadline"], bool)
+        or not isinstance(authorization["claim_deadline"], int)
+        or authorization["claim_deadline"] != authorization["expires_at"]
+        or not isinstance(authorization["node_id"], str)
+        or re.fullmatch(r"spk_[0-9a-f]{32}", authorization["node_id"]) is None
+        or isinstance(authorization["current_generation"], bool)
+        or not isinstance(authorization["current_generation"], int)
+        or not 1 <= authorization["current_generation"] <= 999_999_999
+        or authorization["current_slot"] not in SLOTS
+        or not isinstance(authorization["current_sha256"], str)
+        or DIGEST.fullmatch(authorization["current_sha256"]) is None
+        or not isinstance(authorization["operation_id"], str)
+        or UUID.fullmatch(authorization["operation_id"]) is None
+        or not isinstance(authorization["fence"], str)
+        or UUID.fullmatch(authorization["fence"]) is None
+        or isinstance(authorization["expires_at"], bool)
+        or not isinstance(authorization["expires_at"], int)
+        or not 1 <= authorization["expires_at"] <= 9_007_199_254_740_991
+        or not isinstance(signature, dict)
+        or set(signature) != ACTIVATION_SIGNATURE_FIELDS
+        or signature["algorithm"] != "ed25519"
+        or not isinstance(signature["key_id"], str)
+        or DIGEST.fullmatch(signature["key_id"]) is None
+        or not isinstance(signature["value"], str)
+        or SIGNATURE.fullmatch(signature["value"]) is None
+    ):
+        raise SupervisorError("rollback request is invalid")
     return value
 
 
@@ -609,13 +790,17 @@ def _file_identity(metadata: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
-def _read_activation_request() -> tuple[int, dict[str, Any], tuple[int, ...]]:
+def _read_runtime_request(
+    name: str,
+    decoder: Any,
+    label: str,
+) -> tuple[int, dict[str, Any], tuple[int, ...]]:
     path = _path(RUNTIME_ROOT)
     expected_owner = _agent_owner()
     try:
         directory = _open_directory_ancestry(path, final_owner=expected_owner)
     except (FileNotFoundError, OSError) as error:
-        raise SupervisorError("activation request is unavailable") from error
+        raise SupervisorError(f"{label} request is unavailable") from error
     descriptor = -1
     try:
         runtime = os.fstat(directory)
@@ -623,9 +808,9 @@ def _read_activation_request() -> tuple[int, dict[str, Any], tuple[int, ...]]:
             runtime.st_uid != expected_owner
             or stat.S_IMODE(runtime.st_mode) != 0o700
         ):
-            raise SupervisorError("activation runtime directory is unsafe")
+            raise SupervisorError(f"{label} runtime directory is unsafe")
         descriptor = os.open(
-            "activation-request.json",
+            name,
             os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
             dir_fd=directory,
         )
@@ -637,29 +822,438 @@ def _read_activation_request() -> tuple[int, dict[str, Any], tuple[int, ...]]:
             or metadata.st_nlink != 1
             or metadata.st_size > 4096
         ):
-            raise SupervisorError("activation request path is unsafe")
+            raise SupervisorError(f"{label} request path is unsafe")
         raw = os.read(descriptor, 4097)
         if len(raw) > 4096:
-            raise SupervisorError("activation request is too large")
-        return directory, _decode_activation_request(raw), _file_identity(metadata)
+            raise SupervisorError(f"{label} request is too large")
+        return directory, decoder(raw), _file_identity(metadata)
     except SupervisorError:
         os.close(directory)
         raise
     except OSError as error:
         os.close(directory)
-        raise SupervisorError("activation request is unavailable") from error
+        raise SupervisorError(f"{label} request is unavailable") from error
     finally:
         if descriptor >= 0:
             os.close(descriptor)
 
 
+def _read_activation_request() -> tuple[int, dict[str, Any], tuple[int, ...]]:
+    return _read_runtime_request(
+        "activation-request.json", _decode_activation_request, "activation"
+    )
+
+
+def _read_rollback_request() -> tuple[int, dict[str, Any], tuple[int, ...]]:
+    return _read_runtime_request(
+        "rollback-request.json", _decode_rollback_request, "rollback"
+    )
+
+
+def _read_update_authority() -> dict[str, Any]:
+    path = _path(UPDATE_AUTHORITY_PATH)
+    try:
+        parent = _open_directory_ancestry(path.parent)
+    except (FileNotFoundError, OSError) as error:
+        raise SupervisorError("update authority is unavailable") from error
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent,
+        )
+        metadata = os.fstat(descriptor)
+        _trusted(metadata, 0o444, regular=True)
+        if metadata.st_size > 4096:
+            raise SupervisorError("update authority is unsafe")
+        raw = os.read(descriptor, 4097)
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique,
+            parse_constant=_reject_constant,
+        )
+    except SupervisorError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SupervisorError("update authority is unsafe") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        os.close(parent)
+    if (
+        not isinstance(value, dict)
+        or set(value) != AUTHORITY_FIELDS
+        or _canonical(value) != raw
+        or value["schema_version"] != 1
+        or value["algorithm"] != "ed25519"
+        or not isinstance(value["public_key"], str)
+        or DIGEST.fullmatch(value["public_key"]) is None
+        or not isinstance(value["key_id"], str)
+        or DIGEST.fullmatch(value["key_id"]) is None
+        or hashlib.sha256(bytes.fromhex(value["public_key"])).hexdigest()
+        != value["key_id"]
+    ):
+        raise SupervisorError("update authority is unsafe")
+    return value
+
+
+def _read_installed_node_id() -> str:
+    path = _path(AGENT_CONFIG_PATH)
+    try:
+        parent = _open_directory_ancestry(path.parent)
+        descriptor = os.open(
+            path.name,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent,
+        )
+        metadata = os.fstat(descriptor)
+        _trusted(metadata, 0o644, regular=True)
+        if metadata.st_size > 16 * 1024:
+            raise SupervisorError("installed agent identity is unsafe")
+        raw = os.read(descriptor, 16 * 1024 + 1)
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique,
+            parse_constant=_reject_constant,
+        )
+    except SupervisorError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SupervisorError("installed agent identity is unavailable") from error
+    finally:
+        if "descriptor" in locals():
+            os.close(descriptor)
+        if "parent" in locals():
+            os.close(parent)
+    node_id = value.get("node_id") if isinstance(value, dict) else None
+    if (
+        not isinstance(value, dict)
+        or _canonical(value) != raw
+        or not isinstance(node_id, str)
+        or re.fullmatch(r"spk_[0-9a-f]{32}", node_id) is None
+    ):
+        raise SupervisorError("installed agent identity is unsafe")
+    return node_id
+
+
+def _memfd(name: str, content: bytes) -> int:
+    try:
+        descriptor = os.memfd_create(name, os.MFD_CLOEXEC)
+        offset = 0
+        while offset < len(content):
+            offset += os.write(descriptor, content[offset:])
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        return descriptor
+    except OSError as error:
+        raise SupervisorError("authorization verifier is unavailable") from error
+
+
+def _verify_ed25519(public_key: bytes, message: bytes, signature: bytes) -> None:
+    # The supervisor intentionally has no Python package dependency.  It invokes
+    # one fixed system verifier with anonymous memfds: no caller-controlled path,
+    # shell, environment lookup, network, or persistent verification material.
+    subject_public_key_info = bytes.fromhex("302a300506032b6570032100") + public_key
+    descriptors = [
+        _memfd("dgx-update-key", subject_public_key_info),
+        _memfd("dgx-update-message", message),
+        _memfd("dgx-update-signature", signature),
+    ]
+    try:
+        try:
+            verified = subprocess.run(
+                [
+                    OPENSSL_PATH,
+                    "pkeyutl",
+                    "-verify",
+                    "-pubin",
+                    "-inkey",
+                    f"/proc/self/fd/{descriptors[0]}",
+                    "-rawin",
+                    "-in",
+                    f"/proc/self/fd/{descriptors[1]}",
+                    "-sigfile",
+                    f"/proc/self/fd/{descriptors[2]}",
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                pass_fds=tuple(descriptors),
+                env={"LANG": "C", "LC_ALL": "C"},
+                timeout=5,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise SupervisorError("authorization verifier is unavailable") from error
+        if verified.returncode != 0:
+            raise SupervisorError("activation authorization signature is invalid")
+    finally:
+        for descriptor in descriptors:
+            os.close(descriptor)
+
+
+def _authorization_marker_name(authorization: dict[str, Any]) -> str:
+    # Fences are globally one-use while an operation ID may legitimately recur
+    # on a later, explicitly signed retry attempt with a fresh fence.
+    identity = authorization["fence"].encode("ascii")
+    return f"authorization-{hashlib.sha256(identity).hexdigest()}.used"
+
+
+def _read_authorization_floor(directory: int) -> int:
+    try:
+        descriptor = os.open(
+            AUTHORIZATION_FLOOR_NAME,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=directory,
+        )
+    except FileNotFoundError:
+        return 0
+    try:
+        metadata = os.fstat(descriptor)
+        _trusted(metadata, 0o444, regular=True)
+        if metadata.st_size > 256:
+            raise SupervisorError("authorization version floor is unsafe")
+        raw = os.read(descriptor, 257)
+        value = json.loads(raw.decode("ascii"), object_pairs_hook=_unique)
+    except SupervisorError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise SupervisorError("authorization version floor is unsafe") from error
+    finally:
+        os.close(descriptor)
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"schema_version", "tuf_targets_version"}
+        or _canonical(value) != raw
+        or value["schema_version"] != 1
+        or isinstance(value["tuf_targets_version"], bool)
+        or not isinstance(value["tuf_targets_version"], int)
+        or value["tuf_targets_version"] < 1
+    ):
+        raise SupervisorError("authorization version floor is unsafe")
+    return value["tuf_targets_version"]
+
+
+def _verify_activation_authorization(
+    request: dict[str, Any], state_directory: int
+) -> None:
+    # Trust model: the installer pins this narrow update-authority public key in
+    # a root-owned file.  The NAS-side signer may issue a receipt only after its
+    # maintained TUF client authorizes the named platform target/version.  The
+    # receipt carries that TUF evidence and every mutable installation binding.
+    # This root process deliberately does not trust the agent's TUF cache: a
+    # fully compromised dgx-agent may write the request and staged ELF, but it
+    # cannot forge, extend, alter, downgrade, or replay the signed receipt.
+    authorization = request["authorization"]
+    signature = request["signature"]
+    authority = _read_update_authority()
+    if signature["key_id"] != authority["key_id"]:
+        raise SupervisorError("activation authorization key is not trusted")
+    if authorization["architecture"] != ARCHITECTURE[_architecture()]:
+        raise SupervisorError("activation authorization architecture is invalid")
+    if authorization["node_id"] != _read_installed_node_id():
+        raise SupervisorError("activation authorization node is invalid")
+    now = _now()
+    if authorization["expires_at"] <= now:
+        raise SupervisorError("activation authorization has expired")
+    if authorization["expires_at"] > now + 600:
+        raise SupervisorError("activation authorization expiry is too distant")
+    _verify_ed25519(
+        bytes.fromhex(authority["public_key"]),
+        _canonical(authorization),
+        bytes.fromhex(signature["value"]),
+    )
+    if authorization["tuf_targets_version"] < _read_authorization_floor(
+        state_directory
+    ):
+        raise SupervisorError("activation authorization metadata is stale")
+    marker = _authorization_marker_name(authorization)
+    try:
+        metadata = os.stat(marker, dir_fd=state_directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    _trusted(metadata, 0o444, regular=True)
+    raise SupervisorError("activation authorization was already consumed")
+
+
+def _consume_activation_authorization(
+    request: dict[str, Any], state_directory: int
+) -> None:
+    authorization = request["authorization"]
+    marker = _authorization_marker_name(authorization)
+    marker_document = {
+        "authorization_sha256": hashlib.sha256(
+            _canonical(authorization)
+        ).hexdigest(),
+        "fence": authorization["fence"],
+        "operation_id": authorization["operation_id"],
+        "schema_version": 1,
+        "signature_sha256": hashlib.sha256(
+            bytes.fromhex(request["signature"]["value"])
+        ).hexdigest(),
+        "tuf_targets_version": authorization["tuf_targets_version"],
+    }
+    current_floor = _read_authorization_floor(state_directory)
+    if authorization["tuf_targets_version"] > current_floor:
+        # Advancing a trusted metadata floor before recording one-time use is
+        # fail-closed across power loss: a crash may require retrying this fresh
+        # receipt, but can never reopen an older signed metadata generation.
+        _write_atomic_at(
+            state_directory,
+            AUTHORIZATION_FLOOR_NAME,
+            _canonical(
+                {
+                    "schema_version": 1,
+                    "tuf_targets_version": authorization["tuf_targets_version"],
+                }
+            ),
+            mode=0o444,
+            label="authorization version floor",
+        )
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            marker,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | os.O_NOFOLLOW
+            | os.O_CLOEXEC,
+            0o444,
+            dir_fd=state_directory,
+        )
+        os.fchmod(descriptor, 0o444)
+        raw = _canonical(marker_document)
+        offset = 0
+        while offset < len(raw):
+            offset += os.write(descriptor, raw[offset:])
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.fsync(state_directory)
+    except FileExistsError:
+        raise SupervisorError("activation authorization was already consumed") from None
+    except OSError as error:
+        raise SupervisorError("activation authorization cannot be consumed") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+def _verify_rollback_authorization(
+    request: dict[str, Any], state_directory: int
+) -> None:
+    authorization = request["authorization"]
+    signature = request["signature"]
+    authority = _read_update_authority()
+    if signature["key_id"] != authority["key_id"]:
+        raise SupervisorError("rollback authorization key is not trusted")
+    if authorization["node_id"] != _read_installed_node_id():
+        raise SupervisorError("rollback authorization node is invalid")
+    now = _now()
+    if authorization["expires_at"] <= now:
+        raise SupervisorError("rollback authorization has expired")
+    if authorization["expires_at"] > now + 600:
+        raise SupervisorError("rollback authorization expiry is too distant")
+    _verify_ed25519(
+        bytes.fromhex(authority["public_key"]),
+        _canonical(authorization),
+        bytes.fromhex(signature["value"]),
+    )
+    marker = _authorization_marker_name(authorization)
+    try:
+        metadata = os.stat(marker, dir_fd=state_directory, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    _trusted(metadata, 0o444, regular=True)
+    raise SupervisorError("rollback authorization was already consumed")
+
+
+def _consume_rollback_authorization(
+    request: dict[str, Any], state_directory: int
+) -> None:
+    authorization = request["authorization"]
+    marker = _authorization_marker_name(authorization)
+    marker_document = {
+        "authorization_sha256": hashlib.sha256(
+            _canonical(authorization)
+        ).hexdigest(),
+        "fence": authorization["fence"],
+        "operation_id": authorization["operation_id"],
+        "schema_version": 1,
+        "signature_sha256": hashlib.sha256(
+            bytes.fromhex(request["signature"]["value"])
+        ).hexdigest(),
+    }
+    try:
+        descriptor = os.open(
+            marker,
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | os.O_NOFOLLOW
+            | os.O_CLOEXEC,
+            0o444,
+            dir_fd=state_directory,
+        )
+        try:
+            os.fchmod(descriptor, 0o444)
+            raw = _canonical(marker_document)
+            offset = 0
+            while offset < len(raw):
+                offset += os.write(descriptor, raw[offset:])
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.fsync(state_directory)
+    except FileExistsError:
+        raise SupervisorError("rollback authorization was already consumed") from None
+    except OSError as error:
+        raise SupervisorError("rollback authorization cannot be consumed") from error
+
+
 def _open_staged_candidate(request: dict[str, Any]) -> int:
     root = _path(UPDATE_STAGING_ROOT)
     expected_owner = _agent_owner()
+    parent = -1
+    state_root = -1
+    directory = -1
     try:
-        directory = _open_directory_ancestry(root, final_owner=expected_owner)
+        # The unprivileged agent legitimately owns its fixed state root because
+        # operation journals, credentials, caches, and update staging live there.
+        # Walk root-owned /var/lib first, then accept only the two fixed 0700
+        # service-owned components; no caller-controlled suffix is permitted.
+        parent = _open_directory_ancestry(root.parent.parent)
+        state_root = os.open(
+            root.parent.name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=parent,
+        )
+        os.close(parent)
+        parent = -1
+        state_metadata = os.fstat(state_root)
+        if (
+            state_metadata.st_uid != expected_owner
+            or stat.S_IMODE(state_metadata.st_mode) != 0o700
+        ):
+            raise SupervisorError("candidate state root is unsafe")
+        directory = os.open(
+            root.name,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=state_root,
+        )
+        os.close(state_root)
+        state_root = -1
+    except SupervisorError:
+        raise
     except (FileNotFoundError, OSError) as error:
         raise SupervisorError("staged candidate is unavailable") from error
+    finally:
+        if parent >= 0:
+            os.close(parent)
+        if state_root >= 0:
+            os.close(state_root)
     descriptor = -1
     try:
         metadata = os.fstat(directory)
@@ -727,6 +1321,46 @@ def _write_atomic_at(
             os.close(descriptor)
 
 
+def _cleanup_slot_staging(directory: int) -> None:
+    changed = False
+    try:
+        names = os.listdir(directory)
+    except OSError as error:
+        raise SupervisorError("slot staging cleanup failed") from error
+    for name in names:
+        if SLOT_STAGING.fullmatch(name) is None:
+            continue
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                name,
+                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+                dir_fd=directory,
+            )
+            metadata = os.fstat(descriptor)
+            if (
+                metadata.st_uid != _owner()
+                or not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_nlink != 1
+                or metadata.st_size > EXECUTABLE_LIMIT
+            ):
+                raise SupervisorError("slot staging path is unsafe")
+            os.unlink(name, dir_fd=directory)
+            changed = True
+        except SupervisorError:
+            raise
+        except OSError as error:
+            raise SupervisorError("slot staging cleanup failed") from error
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+    if changed:
+        try:
+            os.fsync(directory)
+        except OSError as error:
+            raise SupervisorError("slot staging cleanup failed") from error
+
+
 def _install_candidate(request: dict[str, Any]) -> None:
     source = _open_staged_candidate(request)
     before = os.fstat(source)
@@ -736,6 +1370,7 @@ def _install_candidate(request: dict[str, Any]) -> None:
     temporary = f".dgx-forge-agent.{secrets.token_hex(12)}.new"
     destination = -1
     try:
+        _cleanup_slot_staging(target)
         destination = os.open(
             temporary,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
@@ -812,15 +1447,17 @@ def _install_candidate(request: dict[str, Any]) -> None:
 
 
 def _consume_activation_request(
-    directory: int, expected_identity: tuple[int, ...]
+    directory: int,
+    expected_identity: tuple[int, ...],
+    name: str = "activation-request.json",
 ) -> None:
     try:
         current = os.stat(
-            "activation-request.json", dir_fd=directory, follow_symlinks=False
+            name, dir_fd=directory, follow_symlinks=False
         )
         if _file_identity(current) != expected_identity:
             raise SupervisorError("activation request changed during application")
-        os.unlink("activation-request.json", dir_fd=directory)
+        os.unlink(name, dir_fd=directory)
         os.fsync(directory)
     except SupervisorError:
         raise
@@ -841,6 +1478,62 @@ def _service(*arguments: str, check: bool = True) -> subprocess.CompletedProcess
         )
     except (OSError, subprocess.SubprocessError) as error:
         raise SupervisorError("fixed service coordination failed") from error
+
+
+def _service_main_pid() -> int:
+    try:
+        result = subprocess.run(
+            [
+                _systemctl(),
+                "show",
+                "--property=MainPID",
+                "--value",
+                "dgx-forge-agent.service",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            close_fds=True,
+            timeout=10,
+            check=True,
+        )
+        rendered = result.stdout.decode("ascii").strip()
+    except (OSError, UnicodeDecodeError, subprocess.SubprocessError) as error:
+        raise SupervisorError("agent service PID is unavailable") from error
+    if not rendered.isdecimal() or not 1 <= int(rendered) <= 2**31 - 1:
+        raise SupervisorError("agent service PID is invalid")
+    return int(rendered)
+
+
+def _running_candidate_matches(
+    state: dict[str, Any], marker_pid: int
+) -> bool:
+    executable = slot = -1
+    try:
+        if _service_main_pid() != marker_pid:
+            return False
+        executable = os.open(
+            f"/proc/{marker_pid}/exe",
+            os.O_RDONLY | os.O_CLOEXEC,
+        )
+        executable_metadata = os.fstat(executable)
+        if not stat.S_ISREG(executable_metadata.st_mode):
+            return False
+        slot = _open_slot(state["active_slot"], state["expected_sha256"])
+        slot_metadata = os.fstat(slot)
+        if (
+            executable_metadata.st_dev != slot_metadata.st_dev
+            or executable_metadata.st_ino != slot_metadata.st_ino
+        ):
+            return False
+        return _service_main_pid() == marker_pid
+    except (OSError, SupervisorError):
+        return False
+    finally:
+        if executable >= 0:
+            os.close(executable)
+        if slot >= 0:
+            os.close(slot)
 
 
 def _initial_state(slot: str, digest: str) -> dict[str, Any]:
@@ -875,6 +1568,7 @@ def initialize(slot: str, digest: str) -> int:
         else:
             if current != _initial_state(slot, digest):
                 raise SupervisorError("supervisor is already initialized differently")
+        _replace_activation_challenge(INACTIVE_CHALLENGE)
     finally:
         os.close(lock)
         os.close(directory)
@@ -932,27 +1626,90 @@ def apply_request() -> int:
     try:
         _cleanup_staging(state_directory)
         state = _read_state(state_directory)
-        target = request["target_slot"]
-        previous = request["previous_slot"]
+        _verify_activation_authorization(request, state_directory)
+        authorization = request["authorization"]
+        target = authorization["target_slot"]
+        previous = authorization["previous_slot"]
         expected_target = "B" if state["active_slot"] == "A" else "A"
         if (
             state["status"] != "stable"
             or previous != state["active_slot"]
             or target != expected_target
+            or authorization["previous_sha256"]
+            != state["slot_sha256"][state["active_slot"]]
+            or authorization["previous_generation"] != state["generation"]
         ):
             raise SupervisorError("activation request does not match stable state")
         active_digest = state["slot_sha256"][state["active_slot"]]
         assert isinstance(active_digest, str)
         active = _open_slot(state["active_slot"], active_digest)
         os.close(active)
-        _install_candidate(request)
+        _install_candidate(authorization)
+        _consume_activation_authorization(request, state_directory)
         _publish(
             state_directory,
-            _pending_activation_state(state, target, request["sha256"]),
+            _pending_activation_state(state, target, authorization["sha256"]),
         )
         published = True
         try:
             _consume_activation_request(request_directory, request_identity)
+        except SupervisorError as error:
+            consumption_error = error
+    finally:
+        os.close(lock)
+        os.close(state_directory)
+        os.close(request_directory)
+    if published:
+        _service("--no-block", "restart", "dgx-forge-agent-supervisor.service")
+    if consumption_error is not None:
+        raise consumption_error
+    return 0
+
+
+def apply_rollback_request() -> int:
+    request_directory, request, request_identity = _read_rollback_request()
+    state_directory = _state_directory(create=False)
+    lock = _lock(state_directory, exclusive=True)
+    published = False
+    consumption_error: SupervisorError | None = None
+    try:
+        _cleanup_staging(state_directory)
+        state = _read_state(state_directory)
+        _verify_rollback_authorization(request, state_directory)
+        authorization = request["authorization"]
+        previous_slot = state["previous_slot"]
+        if (
+            state["status"] != "stable"
+            or previous_slot not in SLOTS
+            or previous_slot == state["active_slot"]
+            or state["active_slot"] != authorization["current_slot"]
+            or state["expected_sha256"] != authorization["current_sha256"]
+            or state["generation"] != authorization["current_generation"]
+        ):
+            raise SupervisorError("rollback request does not match stable state")
+        previous_sha256 = state["slot_sha256"][previous_slot]
+        assert isinstance(previous_sha256, str)
+        for slot, digest in (
+            (authorization["current_slot"], authorization["current_sha256"]),
+            (previous_slot, previous_sha256),
+        ):
+            executable = _open_slot(slot, digest)
+            os.close(executable)
+            _read_slot_identity(slot, digest)
+        _consume_rollback_authorization(request, state_directory)
+        _publish(
+            state_directory,
+            _pending_activation_state(
+                state, previous_slot, previous_sha256
+            ),
+        )
+        published = True
+        try:
+            _consume_activation_request(
+                request_directory,
+                request_identity,
+                "rollback-request.json",
+            )
         except SupervisorError as error:
             consumption_error = error
     finally:
@@ -1049,13 +1806,13 @@ def _publish_readiness_replacement_for_test(directory: int) -> None:
         raise SupervisorError("readiness race hook failed") from error
 
 
-def _read_readiness(state: dict[str, Any]) -> bool:
+def _read_readiness(state: dict[str, Any], challenge: str) -> int | None:
     root = _path(RUNTIME_ROOT)
     expected_owner = _owner() if _test_root() else pwd.getpwnam("dgx-agent").pw_uid
     try:
         directory = _open_directory_ancestry(root, final_owner=expected_owner)
     except FileNotFoundError:
-        return False
+        return None
     quarantine = _readiness_quarantine_directory()
     quarantine_name = f"readiness.{secrets.token_hex(12)}.consumed"
     descriptor = -1
@@ -1068,7 +1825,7 @@ def _read_readiness(state: dict[str, Any]) -> bool:
                 quarantine_name,
             )
         except FileNotFoundError:
-            return False
+            return None
         os.fsync(directory)
         os.fsync(quarantine)
         descriptor = os.open(
@@ -1095,25 +1852,32 @@ def _read_readiness(state: dict[str, Any]) -> bool:
         raw = os.read(descriptor, 4097)
         marker = _decode(raw, readiness=True)
         valid_types = (
-            marker["schema_version"] == 1
+            marker["schema_version"] == 2
+            and isinstance(marker["challenge"], str)
+            and DIGEST.fullmatch(marker["challenge"])
             and isinstance(marker["generation"], int)
             and not isinstance(marker["generation"], bool)
+            and isinstance(marker["pid"], int)
+            and not isinstance(marker["pid"], bool)
+            and marker["pid"] > 0
             and marker["slot"] in SLOTS
             and isinstance(marker["sha256"], str)
             and DIGEST.fullmatch(marker["sha256"])
         )
         accepted = bool(
             valid_types
+            and marker["challenge"] == challenge
             and marker["generation"] == state["generation"]
             and marker["slot"] == state["active_slot"]
             and marker["sha256"] == state["expected_sha256"]
+            and _running_candidate_matches(state, marker["pid"])
         )
         _publish_readiness_replacement_for_test(directory)
-        return accepted
+        return marker["pid"] if accepted else None
     except FileNotFoundError:
-        return False
+        return None
     except (KeyError, SupervisorError):
-        return False
+        return None
     finally:
         if descriptor >= 0:
             os.close(descriptor)
@@ -1123,6 +1887,116 @@ def _read_readiness(state: dict[str, Any]) -> bool:
         except FileNotFoundError:
             pass
         os.close(quarantine)
+        os.close(directory)
+
+
+def _clear_readiness() -> None:
+    root = _path(RUNTIME_ROOT)
+    expected_owner = _owner() if _test_root() else pwd.getpwnam("dgx-agent").pw_uid
+    try:
+        directory = _open_directory_ancestry(root, final_owner=expected_owner)
+    except FileNotFoundError:
+        return
+    quarantine = _readiness_quarantine_directory()
+    quarantine_name = f"readiness.{secrets.token_hex(12)}.stale"
+    try:
+        try:
+            _rename_noreplace(
+                directory, "readiness.json", quarantine, quarantine_name
+            )
+        except FileNotFoundError:
+            return
+        os.fsync(directory)
+        os.unlink(quarantine_name, dir_fd=quarantine)
+        os.fsync(quarantine)
+    finally:
+        try:
+            os.unlink(quarantine_name, dir_fd=quarantine)
+        except FileNotFoundError:
+            pass
+        os.close(quarantine)
+        os.close(directory)
+
+
+def _replace_activation_challenge(challenge: str) -> None:
+    if not DIGEST.fullmatch(challenge):
+        raise SupervisorError("activation challenge is invalid")
+    directory = _readiness_quarantine_directory()
+    temporary = f".{ACTIVATION_CHALLENGE_NAME}.{secrets.token_hex(12)}.new"
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC,
+            0o600,
+            dir_fd=directory,
+        )
+        os.fchmod(descriptor, 0o600)
+        raw = (challenge + "\n").encode("ascii")
+        offset = 0
+        while offset < len(raw):
+            offset += os.write(descriptor, raw[offset:])
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.rename(
+            temporary,
+            ACTIVATION_CHALLENGE_NAME,
+            src_dir_fd=directory,
+            dst_dir_fd=directory,
+        )
+        os.fsync(directory)
+    except OSError as error:
+        raise SupervisorError("activation challenge cannot be published") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(temporary, dir_fd=directory)
+        except FileNotFoundError:
+            pass
+        os.close(directory)
+
+
+def _new_activation_challenge() -> str:
+    challenge = secrets.token_hex(32)
+    _replace_activation_challenge(challenge)
+    return challenge
+
+
+def _consume_activation_challenge(challenge: str) -> None:
+    directory = _readiness_quarantine_directory()
+    descriptor = -1
+    consumed = f".{ACTIVATION_CHALLENGE_NAME}.{secrets.token_hex(12)}.consumed"
+    try:
+        _rename_noreplace(
+            directory, ACTIVATION_CHALLENGE_NAME, directory, consumed
+        )
+        descriptor = os.open(
+            consumed,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=directory,
+        )
+        metadata = os.fstat(descriptor)
+        raw = os.read(descriptor, 66)
+        if (
+            metadata.st_uid != _owner()
+            or not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or stat.S_IMODE(metadata.st_mode) != 0o600
+            or raw != (challenge + "\n").encode("ascii")
+        ):
+            raise SupervisorError("activation challenge changed during consumption")
+        os.unlink(consumed, dir_fd=directory)
+        os.fsync(directory)
+        _replace_activation_challenge(INACTIVE_CHALLENGE)
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            os.unlink(consumed, dir_fd=directory)
+        except FileNotFoundError:
+            pass
         os.close(directory)
 
 
@@ -1263,14 +2137,18 @@ def supervise() -> int:
                 os.close(lock)
                 lock = -1
                 _ensure_runtime_directory()
+                _service("stop", "dgx-forge-agent.service")
+                _clear_readiness()
+                challenge = _new_activation_challenge()
                 _service("restart", "dgx-forge-agent.service")
                 poll = 0.25
                 if _test_root():
                     poll = float(os.environ.get("DGX_SUPERVISOR_POLL_SECONDS", "0.01"))
-                ready = False
+                ready_pid: int | None = None
                 while _now() < state["activation_deadline"]:
-                    if _read_readiness(state):
-                        ready = True
+                    candidate_pid = _read_readiness(state, challenge)
+                    if candidate_pid is not None:
+                        ready_pid = candidate_pid
                         break
                     failed = _service(
                         "is-failed",
@@ -1286,13 +2164,13 @@ def supervise() -> int:
                             min(poll, state["activation_deadline"] - _now()),
                         )
                     )
-                if ready:
+                if ready_pid is not None:
                     _swap_pending_slot_before_commit_for_test(state)
                 lock = _lock(directory, exclusive=True)
                 current = _read_state(directory)
                 if current != state:
                     raise SupervisorError("activation state changed during supervision")
-                if ready:
+                if ready_pid is not None:
                     try:
                         pending_fd = _open_slot(
                             state["active_slot"], state["expected_sha256"]
@@ -1303,9 +2181,17 @@ def supervise() -> int:
                         result = 1
                     else:
                         os.close(pending_fd)
-                        _publish(directory, _stable(state))
-                        result = 0
+                        if not _running_candidate_matches(state, ready_pid):
+                            _replace_activation_challenge(INACTIVE_CHALLENGE)
+                            _rollback(directory, state)
+                            restart_after_rollback = True
+                            result = 1
+                        else:
+                            _consume_activation_challenge(challenge)
+                            _publish(directory, _stable(state))
+                            result = 0
                 else:
+                    _replace_activation_challenge(INACTIVE_CHALLENGE)
                     _rollback(directory, state)
                     restart_after_rollback = True
                     result = 1
@@ -1339,12 +2225,24 @@ def run_agent() -> int:
         "PATH": "/usr/bin",
         "PYTHONNOUSERSITE": "1",
         "PYTHONSAFEPATH": "1",
+        "DGX_AGENT_PLATFORM_VERSION": identity["platform_version"],
+        "DGX_AGENT_BUILD_DIGEST": identity["build_digest"],
         "DGX_AGENT_SUPERVISOR_GENERATION": str(state["generation"]),
         "DGX_AGENT_SUPERVISOR_SLOT": state["active_slot"],
         "DGX_AGENT_SUPERVISOR_SHA256": state["expected_sha256"],
-        "DGX_AGENT_PLATFORM_VERSION": identity["platform_version"],
-        "DGX_AGENT_BUILD_DIGEST": identity["build_digest"],
     }
+    if state["status"] == "pending":
+        credentials_directory = os.environ.get("CREDENTIALS_DIRECTORY")
+        if _test_root():
+            credentials_directory = str(_path(READINESS_QUARANTINE_ROOT))
+        if credentials_directory is None or not Path(credentials_directory).is_absolute():
+            os.close(executable)
+            raise SupervisorError("activation challenge credential is unavailable")
+        environment.update(
+            {
+                "CREDENTIALS_DIRECTORY": credentials_directory,
+            }
+        )
     try:
         os.execve(f"/proc/self/fd/{executable}", ["dgx-forge-agent"], environment)
     except OSError as error:
@@ -1361,6 +2259,7 @@ def _parser() -> UsageParser:
         child.add_argument("--slot", choices=SLOTS, required=True)
         child.add_argument("--sha256", required=True)
     subparsers.add_parser("apply-request")
+    subparsers.add_parser("apply-rollback-request")
     subparsers.add_parser("supervise")
     subparsers.add_parser("run-agent")
     return parser
@@ -1399,6 +2298,8 @@ def main(argv: list[str] | None = None) -> int:
             return activate(arguments.slot, arguments.sha256)
         if arguments.command == "apply-request":
             return apply_request()
+        if arguments.command == "apply-rollback-request":
+            return apply_rollback_request()
         if arguments.command == "supervise":
             return supervise()
         if arguments.command == "run-agent":

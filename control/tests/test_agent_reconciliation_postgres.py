@@ -26,12 +26,14 @@ from dgx_control.models import (
     AgentPresence,
     Base,
     Job,
+    NodeMutationLease,
     Reconciliation,
     ReconciliationCancellation,
     ReconciliationOperation,
     RoutePublication,
     RoutePublicationOwner,
 )
+from dgx_control.node_leases import NodeLeaseConflict, NodeLeaseService
 from dgx_control.pki import CertificateAuthority, IssuedCertificate
 from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
 from dgx_control.route_runtime import AtomicRouteBundlePublisher
@@ -148,6 +150,42 @@ def postgres_engine() -> Engine:
         subprocess.run(
             ["docker", "stop", container], check=False, capture_output=True
         )
+
+
+def test_postgres_node_lease_race_has_one_database_owner(
+    postgres_engine: Engine,
+) -> None:
+    Base.metadata.drop_all(postgres_engine)
+    Base.metadata.create_all(postgres_engine)
+    sessions = sessionmaker(postgres_engine, expire_on_commit=False)
+    with sessions.begin() as session:
+        session.add(AgentNode(node_id=NODE_A, state="active", capabilities=[]))
+    barrier = threading.Barrier(2)
+
+    def acquire(owner_id: str) -> str | None:
+        barrier.wait(timeout=5)
+        try:
+            with sessions.begin() as session:
+                NodeLeaseService(clock=lambda: NOW).acquire_in_session(
+                    session,
+                    (NODE_A,),
+                    owner_kind="update-rollout",
+                    owner_id=owner_id,
+                )
+            return owner_id
+        except NodeLeaseConflict:
+            return None
+
+    owners = (str(uuid.uuid4()), str(uuid.uuid4()))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = tuple(pool.map(acquire, owners))
+
+    winner = next(result for result in results if result is not None)
+    assert sum(result is not None for result in results) == 1
+    with sessions() as session:
+        row = session.get(NodeMutationLease, NODE_A)
+        assert row is not None
+        assert row.owner_id == winner
 
 
 def _source(address: str) -> AgentSource:

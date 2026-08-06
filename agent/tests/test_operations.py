@@ -19,6 +19,7 @@ from dgx_agent.releases import (
     ReleaseInspection,
 )
 from dgx_agent.state import AgentStateConflict, AgentStateStore
+from dgx_agent.update import AgentUpdateError
 from dgx_agent.workloads import (
     WorkloadAction,
     WorkloadDisposition,
@@ -33,6 +34,79 @@ from dgx_agent_protocol import (
 )
 
 NODE_ID = "spk_0123456789abcdef0123456789abcdef"
+OPERATION_ID = "22222222-2222-4222-8222-222222222222"
+FENCE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+
+
+def update_payload() -> dict[str, object]:
+    expires_at = int(time.time()) + 300
+    return {
+        "artifact": {
+            "architecture": "linux-arm64",
+            "oci_manifest_digest": "sha256:" + "f" * 64,
+            "payload_name": "dgx-agent",
+            "payload_sha256": "1" * 64,
+            "payload_size": 4096,
+        },
+        "receipt": {
+            "architecture": "linux-arm64",
+            "attempt": 1,
+            "build_digest": "sha256:" + "2" * 64,
+            "claim_deadline": expires_at,
+            "expires_at": expires_at,
+            "fence": FENCE,
+            "node_id": NODE_ID,
+            "oci_manifest_digest": "sha256:" + "f" * 64,
+            "operation_id": OPERATION_ID,
+            "payload_name": "dgx-agent",
+            "platform_target_name": (
+                "platform/releases/1.2.3/" + "3" * 64 + ".json"
+            ),
+            "platform_target_sha256": "3" * 64,
+            "platform_version": "1.2.3",
+            "previous_sha256": "4" * 64,
+            "previous_generation": 1,
+            "previous_slot": "A",
+            "sha256": "1" * 64,
+            "size": 4096,
+            "target_slot": "B",
+            "tuf_targets_version": 7,
+        },
+        "release": {
+            "build_digest": "sha256:" + "2" * 64,
+            "platform_version": "1.2.3",
+            "protocol_maximum": 1,
+            "protocol_minimum": 1,
+        },
+        "signature": {
+            "algorithm": "ed25519",
+            "key_id": "5" * 64,
+            "value": "6" * 128,
+        },
+    }
+
+
+def rollback_payload() -> dict[str, object]:
+    expires_at = int(time.time()) + 300
+    return {
+        "receipt": {
+            "action": "operator-rollback",
+            "attempt": 1,
+            "claim_deadline": expires_at,
+            "current_generation": 2,
+            "current_sha256": "4" * 64,
+            "current_slot": "B",
+            "expires_at": expires_at,
+            "fence": FENCE,
+            "node_id": NODE_ID,
+            "operation_id": OPERATION_ID,
+        },
+        "signature": {
+            "algorithm": "ed25519",
+            "key_id": "5" * 64,
+            "value": "6" * 128,
+        },
+    }
 
 
 def claim(
@@ -42,10 +116,13 @@ def claim(
     node_id: str = NODE_ID,
     deadline: datetime | None = None,
     job_id: str = "11111111-1111-4111-8111-111111111111",
-    operation_id: str = "22222222-2222-4222-8222-222222222222",
-    fence: str = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    operation_id: str = OPERATION_ID,
+    fence: str = FENCE,
 ) -> AgentClaim:
     body = {} if payload is None else payload
+    receipt = body.get("receipt") if isinstance(body, dict) else None
+    if deadline is None and isinstance(receipt, dict):
+        deadline = datetime.fromtimestamp(receipt["claim_deadline"], tz=UTC)
     return AgentClaim(
         schema_version=1,
         job_id=job_id,
@@ -114,6 +191,40 @@ class RecordingWorkloads:
     def inspect(self, request, deadline, job_id, operation_id, attempt, fence):
         self.requests.append(("inspect", request))
         return self.inspection
+
+
+class RecordingUpdates:
+    def __init__(self, error: Exception | None = None) -> None:
+        self.commands = []
+        self.rollbacks = 0
+        self.deadlines: list[MonotonicDeadline] = []
+        self.bindings: list[tuple[str, str]] = []
+        self.error = error
+
+    def execute(self, command, deadline, operation_id, fence):
+        self.commands.append(command)
+        self.deadlines.append(deadline)
+        self.bindings.append((operation_id, fence))
+        if self.error is not None:
+            raise self.error
+        return {
+            "status": "pending-activation",
+            "target_slot": "B",
+            "previous_slot": "A",
+        }
+
+    def rollback(self, command, deadline, operation_id, fence):
+        self.rollbacks += 1
+        self.commands.append(command)
+        self.deadlines.append(deadline)
+        self.bindings.append((operation_id, fence))
+        if self.error is not None:
+            raise self.error
+        return {
+            "status": "pending-activation",
+            "target_slot": "A",
+            "previous_slot": "B",
+        }
 
 
 def context(tmp_path) -> OperationContext:
@@ -192,6 +303,73 @@ def test_release_and_workload_operations_dispatch_only_to_typed_interfaces(tmp_p
         assert executed["status"] == "ok"
 
     assert [item[0].action for item in workloads.requests] == list(WorkloadAction)
+
+
+def test_agent_update_and_rollback_dispatch_only_to_typed_updater(tmp_path) -> None:
+    updates = RecordingUpdates()
+    payload = update_payload()
+    update_context = OperationContext(
+        node_id=NODE_ID,
+        state=AgentStateStore(tmp_path / "update-state"),
+        probe=NeverProbe(),
+        updates=updates,
+    )
+    rollback_context = OperationContext(
+        node_id=NODE_ID,
+        state=AgentStateStore(tmp_path / "rollback-state"),
+        probe=NeverProbe(),
+        updates=updates,
+    )
+
+    update = OperationRegistry().execute(
+        claim(operation=AgentOperation.AGENT_UPDATE, payload=payload),
+        update_context,
+    )
+    rollback = OperationRegistry().execute(
+        claim(operation=AgentOperation.AGENT_ROLLBACK, payload=rollback_payload()),
+        rollback_context,
+    )
+
+    assert update["evidence"]["target_slot"] == "B"
+    assert rollback["evidence"]["target_slot"] == "A"
+    assert len(updates.commands) == 2
+    assert updates.bindings == [(OPERATION_ID, FENCE), (OPERATION_ID, FENCE)]
+    assert updates.rollbacks == 1
+    assert len(updates.deadlines) == 2
+    assert all(type(deadline) is MonotonicDeadline for deadline in updates.deadlines)
+
+
+@pytest.mark.parametrize(
+    ("operation", "payload", "error_code"),
+    [
+        (
+            AgentOperation.AGENT_UPDATE,
+            update_payload(),
+            "agent_update_failed",
+        ),
+        (AgentOperation.AGENT_ROLLBACK, rollback_payload(), "agent_rollback_failed"),
+    ],
+)
+def test_agent_update_failures_use_operation_specific_bounded_codes(
+    tmp_path, operation, payload, error_code
+) -> None:
+    updates = RecordingUpdates(AgentUpdateError("bounded failure"))
+    operation_context = OperationContext(
+        node_id=NODE_ID,
+        state=AgentStateStore(tmp_path / operation.value),
+        probe=NeverProbe(),
+        updates=updates,
+    )
+
+    execution = OperationRegistry().execute(
+        claim(operation=operation, payload=payload), operation_context
+    )
+
+    assert execution.result.state == "failed"
+    assert execution.result.result == {
+        "error_code": error_code,
+        "status": "failed",
+    }
 
 
 @pytest.mark.parametrize(

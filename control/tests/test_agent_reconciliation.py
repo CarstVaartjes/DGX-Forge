@@ -25,12 +25,14 @@ from dgx_control.models import (
     AgentPresence,
     Base,
     Job,
+    NodeMutationLease,
     Reconciliation,
     ReconciliationCancellation,
     ReconciliationOperation,
     RoutePublication,
     RoutePublicationOwner,
 )
+from dgx_control.node_leases import NodeLeaseService
 from dgx_control.orchestration import OperationNode
 from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
 from dgx_control.route_runtime import ActivationMarker
@@ -535,6 +537,175 @@ def test_prefetched_authority_is_fetched_before_locked_identity_check(tmp_path) 
     assert events == ["clear", "prefetch", "locked-context", "locked-check"]
 
 
+def test_platform_update_lease_blocks_reconciliation_before_withdrawal_intent(
+    tmp_path,
+) -> None:
+    service, sessions, _queue, publisher, reconciliation_id, _job_id = (
+        _execution_fixture(tmp_path)
+    )
+    update_rollout_id = str(uuid.uuid4())
+    leases = NodeLeaseService(
+        clock=lambda: datetime(2026, 8, 5, tzinfo=UTC)
+    )
+    with sessions.begin() as session:
+        leases.acquire_in_session(
+            session,
+            [NODE_A],
+            owner_kind="update-rollout",
+            owner_id=update_rollout_id,
+        )
+
+    assert service.tick(reconciliation_id) is False
+
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        publication = session.get(RoutePublication, reconciliation_id)
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "planned"
+        assert publication is None
+    assert publisher.withdrawals == 0
+
+
+def test_restart_recovers_same_reconciliation_lease_before_route_withdrawal(
+    tmp_path,
+) -> None:
+    service, sessions, queue, publisher, reconciliation_id, _job_id = (
+        _execution_fixture(tmp_path)
+    )
+    now = datetime(2026, 8, 5, tzinfo=UTC)
+
+    assert service.tick(reconciliation_id) is True
+    with sessions() as session:
+        original = session.scalar(select(NodeMutationLease))
+        assert original is not None
+        original_fence = original.fence
+        assert original.owner_kind == "reconciliation"
+        assert original.owner_id == reconciliation_id
+        assert original.state == "held"
+
+    restarted = AgentReconciliationService(
+        sessions,
+        agent_jobs=queue,
+        publisher=publisher,
+        endpoint_resolver=lambda _session, _node: ("192.0.2.10", now),
+        clock=lambda: now,
+    )
+    assert restarted.tick(reconciliation_id) is True
+
+    with sessions() as session:
+        recovered = session.scalar(select(NodeMutationLease))
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        assert recovered is not None and recovered.fence == original_fence
+        assert recovered.state == "held"
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "routes-withdrawn"
+    assert publisher.withdrawals == 1
+
+
+def test_platform_update_lease_blocks_completed_route_renewal(tmp_path) -> None:
+    service, sessions, _queue, publisher, reconciliation_id, _job_id = (
+        _execution_fixture(tmp_path)
+    )
+    now = datetime(2026, 8, 5, tzinfo=UTC)
+    leases = NodeLeaseService(clock=lambda: now)
+
+    assert service.tick(reconciliation_id) is True
+    with sessions.begin() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        publication = session.get(RoutePublication, reconciliation_id)
+        assert reconciliation is not None and publication is not None
+        reconciliation.current_phase = "completed"
+        reconciliation.status = "succeeded"
+        reconciliation.completion_generation = 1
+        publication.state = "completed"
+        publication.lease_issued_at = now
+        publication.lease_expires_at = now + timedelta(minutes=5)
+        grant = leases.owned_grant_in_session(
+            session,
+            [NODE_A],
+            owner_kind="reconciliation",
+            owner_id=reconciliation_id,
+        )
+        assert grant is not None
+        leases.mark_releasing_in_session(session, grant)
+
+    assert service.tick() is True
+    update_rollout_id = str(uuid.uuid4())
+    with sessions.begin() as session:
+        leases.acquire_in_session(
+            session,
+            [NODE_A],
+            owner_kind="update-rollout",
+            owner_id=update_rollout_id,
+        )
+
+    assert service.tick(reconciliation_id) is False
+
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "completed"
+    assert publisher.withdrawals == 0
+
+
+def test_platform_update_lease_blocks_completed_cancellation_withdrawal(
+    tmp_path,
+) -> None:
+    service, sessions, _queue, publisher, reconciliation_id, _job_id = (
+        _execution_fixture(tmp_path)
+    )
+    now = datetime(2026, 8, 5, tzinfo=UTC)
+    leases = NodeLeaseService(clock=lambda: now)
+
+    assert service.tick(reconciliation_id) is True
+    with sessions.begin() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        publication = session.get(RoutePublication, reconciliation_id)
+        assert reconciliation is not None and publication is not None
+        reconciliation.current_phase = "completed"
+        reconciliation.status = "succeeded"
+        reconciliation.completion_generation = 1
+        publication.state = "completed"
+        publication.lease_issued_at = now
+        publication.lease_expires_at = now + timedelta(minutes=5)
+        grant = leases.owned_grant_in_session(
+            session,
+            [NODE_A],
+            owner_kind="reconciliation",
+            owner_id=reconciliation_id,
+        )
+        assert grant is not None
+        leases.mark_releasing_in_session(session, grant)
+        releasing = leases.owned_grant_in_session(
+            session,
+            [NODE_A],
+            owner_kind="reconciliation",
+            owner_id=reconciliation_id,
+        )
+        assert releasing is not None
+        leases.release_in_session(session, releasing)
+        session.flush()
+        leases.acquire_in_session(
+            session,
+            [NODE_A],
+            owner_kind="update-rollout",
+            owner_id=str(uuid.uuid4()),
+        )
+    service.enqueue_cancel(
+        reconciliation_id,
+        "operator cancelled",
+        actor="operator",
+        request_id="11111111-1111-4111-8111-111111111111",
+    )
+
+    assert service.tick(reconciliation_id) is False
+
+    with sessions() as session:
+        cancellation = session.get(ReconciliationCancellation, reconciliation_id)
+        assert cancellation is not None and cancellation.state == "requested"
+    assert publisher.withdrawals == 0
+
+
 def test_route_presence_drift_after_prefetch_fails_before_publication(tmp_path) -> None:
     quota = {"requests_per_minute": 20, "tokens_per_minute": 1000}
     route = {
@@ -996,6 +1167,31 @@ def test_bad_evidence_rolls_back_agent_and_projection_result_atomically(tmp_path
         assert projection is not None and projection.state == "queued"
 
 
+def test_safe_terminal_failure_releases_maintenance_lease_after_handoff(
+    tmp_path,
+) -> None:
+    service, sessions, queue, _publisher, reconciliation_id, _job_id = (
+        _execution_fixture(tmp_path, real_queue=True)
+    )
+    for _ in range(4):
+        service.tick(reconciliation_id)
+    claim = queue.claim(NODE_A, "serial-a", 30)
+    assert claim is not None
+
+    queue.fail(claim, "health-failed")
+
+    with sessions() as session:
+        reconciliation = session.get(Reconciliation, reconciliation_id)
+        lease = session.scalar(select(NodeMutationLease))
+        assert reconciliation is not None
+        assert reconciliation.current_phase == "failed"
+        assert lease is not None and lease.state == "releasing"
+
+    assert service.tick() is True
+    with sessions() as session:
+        assert session.scalar(select(NodeMutationLease)) is None
+
+
 def test_complete_graph_publishes_exact_bundle_then_terminalizes_parent(tmp_path) -> None:
     quota = {"requests_per_minute": 20, "tokens_per_minute": 1000}
     route = {
@@ -1035,9 +1231,12 @@ def test_complete_graph_publishes_exact_bundle_then_terminalizes_parent(tmp_path
     with sessions() as session:
         stored = session.get(Reconciliation, reconciliation_id)
         job = session.get(Job, job_id)
+        lease = session.scalar(select(NodeMutationLease))
         assert stored is not None and stored.current_phase == "completed"
         assert stored.status == "succeeded"
         assert stored.completion_generation == 1
+        assert lease is not None and lease.state == "releasing"
+        completed_fence = lease.fence
         assert job is not None and job.state == "succeeded"
         assert job.result == {
             "reconciliation_id": reconciliation_id,
@@ -1049,8 +1248,11 @@ def test_complete_graph_publishes_exact_bundle_then_terminalizes_parent(tmp_path
     with sessions() as session:
         stored = session.get(Reconciliation, reconciliation_id)
         job = session.get(Job, job_id)
+        lease = session.scalar(select(NodeMutationLease))
         assert stored is not None and stored.current_phase == "accepting"
         assert job is not None and job.state == "running"
+        assert lease is not None and lease.state == "held"
+        assert lease.fence != completed_fence
     assert publisher.withdrawals == 2
 
     service.tick(reconciliation_id)
@@ -1439,8 +1641,15 @@ def test_partial_start_failure_compensates_accepted_starts_in_reverse_order(
     with sessions() as session:
         stored = session.get(Reconciliation, reconciliation_id)
         job = session.get(Job, job_id)
+        lease_rows = list(
+            session.scalars(
+                select(NodeMutationLease).order_by(NodeMutationLease.node_id)
+            )
+        )
         assert stored is not None and stored.current_phase == "compensating"
         assert job is not None and job.state == "running"
+        assert [row.node_id for row in lease_rows] == [NODE_A, NODE_B]
+        assert {row.state for row in lease_rows} == {"held"}
 
     service.tick(reconciliation_id)
     compensation = queue.claim(NODE_A, "serial-a", 30)
@@ -1467,11 +1676,18 @@ def test_partial_start_failure_compensates_accepted_starts_in_reverse_order(
         )
         assert stored is not None and stored.current_phase == "failed"
         assert job is not None and job.state == "failed"
+        assert {
+            row.state for row in session.scalars(select(NodeMutationLease))
+        } == {"releasing"}
         assert len(compensations) == 1
         assert compensations[0].state == "compensated"
         assert compensations[0].graph_operation_id == (
             f"model:{NODE_A}:workload.start"
         )
+
+    assert service.tick(reconciliation_id) is True
+    with sessions() as session:
+        assert session.scalar(select(NodeMutationLease)) is None
 
 
 def test_restart_resumes_compensating_without_duplicate_stop(tmp_path) -> None:
@@ -1733,6 +1949,12 @@ def test_completed_cancellation_recovers_after_withdrawal_crash(tmp_path) -> Non
         assert reconciliation.current_phase == "cancelled"
         assert job is not None and job.state == "failed"
         assert publication is not None and publication.state == "routes-withdrawn"
+        lease_rows = list(session.scalars(select(NodeMutationLease)))
+        assert {row.state for row in lease_rows} == {"releasing"}
+
+    assert resumed_from_withdrawn.tick(reconciliation_id) is True
+    with sessions() as session:
+        assert session.scalar(select(NodeMutationLease)) is None
 
 
 def test_cancellation_quiesces_an_in_flight_mutation(tmp_path) -> None:

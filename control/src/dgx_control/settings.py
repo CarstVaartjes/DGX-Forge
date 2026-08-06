@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -13,6 +14,13 @@ from .presence import ManagementAddressPolicy, PresenceError
 
 class SettingsError(ValueError):
     pass
+
+
+class StartupMode(StrEnum):
+    """Explicit control-process mode during host generation selection."""
+
+    PRESELECTION = "preselection"
+    SELECTED = "selected"
 
 
 _AGENT_PROXY_AUTH_PATTERN = re.compile(rb"[A-Za-z0-9_-]{32,}\Z")
@@ -65,6 +73,108 @@ def _agent_proxy_auth_secret(name: str, *, production: bool) -> bytes:
     return normalized
 
 
+def _absolute_root(name: str, default: str) -> Path:
+    value = os.environ.get(name, default)
+    path = Path(value)
+    if not path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise SettingsError(f"{name} must be an absolute normalized path")
+    return path
+
+
+@dataclass(frozen=True)
+class GenerationStartupSettings:
+    """Minimal immutable identity shared by one generation's API and worker."""
+
+    database_url: str
+    startup_mode: StartupMode
+    identity_root: Path
+    operation_id: str | None
+    generation_id: str
+    release_digest: str
+    build_digest: str
+    platform_version: str
+    process_image: str
+    database_revision: str
+    start_nonce: str
+
+    @classmethod
+    def from_env_and_secrets(cls) -> GenerationStartupSettings:
+        deployment_mode = os.environ.get("DGX_DEPLOYMENT_MODE", "development")
+        if deployment_mode not in {"development", "test", "production"}:
+            raise SettingsError("DGX_DEPLOYMENT_MODE is invalid")
+        raw_mode = os.environ.get("DGX_CONTROL_STARTUP_MODE", "selected")
+        try:
+            startup_mode = StartupMode(raw_mode)
+        except ValueError as error:
+            raise SettingsError("DGX_CONTROL_STARTUP_MODE is invalid") from error
+        database_url = _secret(
+            "DGX_DATABASE_URL_FILE",
+            production=deployment_mode == "production",
+        )
+        if urlsplit(database_url).scheme not in {
+            "postgresql",
+            "postgresql+psycopg",
+        }:
+            raise SettingsError("database URL must use PostgreSQL")
+        operation_id = os.environ.get("DGX_CONTROL_OPERATION_ID")
+        if startup_mode is StartupMode.PRESELECTION:
+            if operation_id is None or re.fullmatch(
+                r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?",
+                operation_id,
+            ) is None:
+                raise SettingsError(
+                    "DGX_CONTROL_OPERATION_ID is required for preselection"
+                )
+        elif operation_id is not None:
+            raise SettingsError(
+                "DGX_CONTROL_OPERATION_ID is forbidden in selected mode"
+            )
+        generation_id = os.environ.get("DGX_CONTROL_GENERATION_ID", "")
+        database_revision = os.environ.get("DGX_DATABASE_REVISION", "")
+        version = os.environ.get("DGX_PLATFORM_VERSION", "")
+        release = os.environ.get("DGX_PLATFORM_RELEASE_DIGEST", "")
+        build = os.environ.get("DGX_PLATFORM_BUILD_DIGEST", "")
+        image = os.environ.get("DGX_CONTROL_PROCESS_IMAGE", "")
+        nonce = os.environ.get("DGX_CONTROL_START_NONCE", "")
+        if re.fullmatch(
+            r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?", generation_id
+        ) is None:
+            raise SettingsError("DGX_CONTROL_GENERATION_ID is invalid")
+        if re.fullmatch(
+            r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?", database_revision
+        ) is None:
+            raise SettingsError("DGX_DATABASE_REVISION is invalid")
+        if re.fullmatch(
+            r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version
+        ) is None:
+            raise SettingsError("DGX_PLATFORM_VERSION is invalid")
+        for name, value in (
+            ("DGX_PLATFORM_RELEASE_DIGEST", release),
+            ("DGX_PLATFORM_BUILD_DIGEST", build),
+        ):
+            if re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
+                raise SettingsError(f"{name} is invalid")
+        if re.fullmatch(r"[^\s]{1,1900}@sha256:[0-9a-f]{64}", image) is None:
+            raise SettingsError("DGX_CONTROL_PROCESS_IMAGE is invalid")
+        if re.fullmatch(r"[0-9a-f]{64}", nonce) is None:
+            raise SettingsError("DGX_CONTROL_START_NONCE is invalid")
+        return cls(
+            database_url=database_url,
+            startup_mode=startup_mode,
+            identity_root=_absolute_root(
+                "DGX_CONTROL_IDENTITY_ROOT", "/control-identity"
+            ),
+            operation_id=operation_id,
+            generation_id=generation_id,
+            release_digest=release,
+            build_digest=build,
+            platform_version=version,
+            process_image=image,
+            database_revision=database_revision,
+            start_nonce=nonce,
+        )
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str
@@ -75,6 +185,7 @@ class Settings:
     token_signing_key: bytes
     metrics_token: str
     git_signing_key_path: Path | None
+    admin_grant_private_key_path: Path | None
     deployment_branch: str
     required_checks: tuple[str, ...]
     agent_ca_provider: str
@@ -92,6 +203,8 @@ class Settings:
     agent_ca_timeout_seconds: float
     agent_ca_max_response_bytes: int
     agent_artifact_root: Path
+    agent_tuf_metadata_root: Path
+    agent_tuf_target_root: Path
     agent_proxy_auth: bytes
     worker_api_token: bytes
     management_cidrs: str
@@ -254,6 +367,36 @@ class Settings:
             _agent_proxy_auth_secret("DGX_WORKER_API_TOKEN_FILE", production=True)
             if mode == "production" else b""
         )
+        agent_artifact_root = _absolute_root(
+            "DGX_AGENT_ARTIFACT_ROOT", "/state/agent-artifacts"
+        )
+        agent_tuf_metadata_root = _absolute_root(
+            "DGX_AGENT_TUF_METADATA_ROOT", "/state/agent-tuf/metadata"
+        )
+        agent_tuf_target_root = _absolute_root(
+            "DGX_AGENT_TUF_TARGET_ROOT", "/state/agent-tuf/targets"
+        )
+        agent_roots = (
+            agent_artifact_root,
+            agent_tuf_metadata_root,
+            agent_tuf_target_root,
+        )
+        if any(
+            left == right
+            or left.is_relative_to(right)
+            or right.is_relative_to(left)
+            for index, left in enumerate(agent_roots)
+            for right in agent_roots[index + 1 :]
+        ):
+            raise SettingsError(
+                "agent artifact and TUF roots must be distinct and nonoverlapping"
+            )
+        admin_grant_private_key_path = (
+            _secret_path("DGX_ADMIN_GRANT_PRIVATE_KEY_FILE")
+            if mode == "production"
+            or os.environ.get("DGX_ADMIN_GRANT_PRIVATE_KEY_FILE")
+            else None
+        )
         return cls(
             database_url=database_url,
             repository_path=Path(os.environ.get("DGX_REPOSITORY_PATH", "/srv/dgx-forge/repository")),
@@ -263,6 +406,7 @@ class Settings:
             token_signing_key=signing_key,
             metrics_token=metrics_token,
             git_signing_key_path=git_signing_key_path,
+            admin_grant_private_key_path=admin_grant_private_key_path,
             deployment_branch=deployment_branch,
             required_checks=required_checks,
             agent_ca_provider=agent_ca_provider,
@@ -279,7 +423,9 @@ class Settings:
             agent_ca_provisioner_kid=agent_ca_provisioner_kid,
             agent_ca_timeout_seconds=agent_ca_timeout_seconds,
             agent_ca_max_response_bytes=agent_ca_max_response_bytes,
-            agent_artifact_root=Path(os.environ.get("DGX_AGENT_ARTIFACT_ROOT", "/state/agent-artifacts")),
+            agent_artifact_root=agent_artifact_root,
+            agent_tuf_metadata_root=agent_tuf_metadata_root,
+            agent_tuf_target_root=agent_tuf_target_root,
             agent_proxy_auth=agent_proxy_auth,
             worker_api_token=worker_api_token,
             management_cidrs=management_cidrs,
@@ -298,6 +444,7 @@ class WorkerSettings:
     internal_api_timeout_seconds: float
     management_cidrs: str
     direct_fabric_cidrs: str
+    update_signer_socket_path: Path
 
     @classmethod
     def from_env_and_secrets(cls) -> WorkerSettings:
@@ -371,4 +518,78 @@ class WorkerSettings:
             internal_api_timeout_seconds=timeout,
             management_cidrs=management_cidrs,
             direct_fabric_cidrs=direct_fabric_cidrs,
+            update_signer_socket_path=_absolute_root(
+                "DGX_UPDATE_SIGNER_SOCKET", "/run/dgx-signer/signer.sock"
+            ),
+        )
+
+
+@dataclass(frozen=True)
+class SignerSettings:
+    """Filesystem-only settings for the networkless update signer."""
+
+    socket_path: Path
+    update_authority_key_path: Path
+    admin_grant_public_key_path: Path
+    tuf_bootstrap_root_path: Path
+    tuf_metadata_root: Path
+    tuf_target_root: Path
+    tuf_verified_metadata_root: Path
+    tuf_verified_target_root: Path
+    control_identity_root: Path
+    platform_version: str
+    platform_release_digest: str
+    platform_build_digest: str
+    process_image: str
+
+    @classmethod
+    def from_env_and_secrets(cls) -> SignerSettings:
+        version = os.environ.get("DGX_PLATFORM_VERSION", "")
+        release = os.environ.get("DGX_PLATFORM_RELEASE_DIGEST", "")
+        build = os.environ.get("DGX_PLATFORM_BUILD_DIGEST", "")
+        image = os.environ.get("DGX_CONTROL_PROCESS_IMAGE", "")
+        if re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version) is None:
+            raise SettingsError("DGX_PLATFORM_VERSION is invalid")
+        for name, value in (
+            ("DGX_PLATFORM_RELEASE_DIGEST", release),
+            ("DGX_PLATFORM_BUILD_DIGEST", build),
+        ):
+            if re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
+                raise SettingsError(f"{name} is invalid")
+        if re.fullmatch(r"[^\s]{1,1900}@sha256:[0-9a-f]{64}", image) is None:
+            raise SettingsError("DGX_CONTROL_PROCESS_IMAGE is invalid")
+        return cls(
+            socket_path=_absolute_root(
+                "DGX_UPDATE_SIGNER_SOCKET", "/run/dgx-signer/signer.sock"
+            ),
+            update_authority_key_path=_secret_path(
+                "DGX_AGENT_UPDATE_AUTHORITY_KEY_FILE"
+            ),
+            admin_grant_public_key_path=_secret_path(
+                "DGX_ADMIN_GRANT_PUBLIC_KEY_FILE"
+            ),
+            tuf_bootstrap_root_path=_secret_path(
+                "DGX_AGENT_TUF_BOOTSTRAP_ROOT_FILE"
+            ),
+            tuf_metadata_root=_absolute_root(
+                "DGX_AGENT_TUF_METADATA_ROOT", "/state/agent-tuf/metadata"
+            ),
+            tuf_target_root=_absolute_root(
+                "DGX_AGENT_TUF_TARGET_ROOT", "/state/agent-tuf/targets"
+            ),
+            tuf_verified_metadata_root=_absolute_root(
+                "DGX_AGENT_TUF_VERIFIED_METADATA_ROOT",
+                "/state/agent-tuf-verifier/metadata",
+            ),
+            tuf_verified_target_root=_absolute_root(
+                "DGX_AGENT_TUF_VERIFIED_TARGET_ROOT",
+                "/state/agent-tuf-verifier/targets",
+            ),
+            control_identity_root=_absolute_root(
+                "DGX_CONTROL_IDENTITY_ROOT", "/control-identity"
+            ),
+            platform_version=version,
+            platform_release_digest=release,
+            platform_build_digest=build,
+            process_image=image,
         )

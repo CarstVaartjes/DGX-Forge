@@ -27,6 +27,17 @@ def _environment() -> dict[str, str]:
         "METRICS_TOKEN_FILE": "/dev/null",
         "GIT_SIGNING_KEY_FILE": "/dev/null",
         "WORKER_API_TOKEN_FILE": "/dev/null",
+        "AGENT_UPDATE_AUTHORITY_KEY_FILE": "/dev/null",
+        "ADMIN_GRANT_PRIVATE_KEY_FILE": "/dev/null",
+        "ADMIN_GRANT_PUBLIC_KEY_FILE": "/dev/null",
+        "AGENT_TUF_BOOTSTRAP_ROOT_FILE": "/dev/null",
+        "CONTROL_IDENTITY_PATH": "/srv/dgx-forge/control-identity",
+        "DGX_PLATFORM_VERSION": "1.0.0",
+        "DGX_PLATFORM_RELEASE_DIGEST": "sha256:" + "2" * 64,
+        "DGX_PLATFORM_BUILD_DIGEST": "sha256:" + "3" * 64,
+        "DGX_CONTROL_GENERATION_ID": "gen-" + "4" * 24,
+        "DGX_DATABASE_REVISION": "0012_control_process_heartbeats",
+        "DGX_CONTROL_START_NONCE": "5" * 64,
         "GRAFANA_ADMIN_PASSWORD_FILE": "/dev/null",
         "LITELLM_MASTER_KEY_FILE": "/dev/null",
         "LITELLM_UPSTREAM_KEY_FILE": "/dev/null",
@@ -153,6 +164,7 @@ def _settings_result(rendered: dict, tmp_path: Path) -> subprocess.CompletedProc
         "DGX_AGENT_INTERMEDIATE_KEY_FILE": "test-builtin-key\n",
         "DGX_AGENT_PROXY_AUTH_FILE": "A" * 30 + "_-\r\n",
         "DGX_WORKER_API_TOKEN_FILE": "W" * 32 + "\n",
+        "DGX_ADMIN_GRANT_PRIVATE_KEY_FILE": "test-admin-grant-private-key\n",
     }
     for name, value in tuple(control_environment.items()):
         if name not in secret_values:

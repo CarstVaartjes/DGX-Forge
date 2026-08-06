@@ -37,7 +37,12 @@ _TARGET_LIMIT = 1024 * 1024
 _TUF_FILE = re.compile(
     r"(?:[1-9][0-9]*\.root|timestamp|snapshot|targets|[a-z0-9][a-z0-9._-]{0,126})\.json\Z"
 )
-_TARGET_FILE = re.compile(r"[a-z0-9][a-z0-9._-]{0,126}\Z")
+_TARGET_FILE = re.compile(
+    r"(?:[a-z0-9][a-z0-9._-]{0,126}|"
+    r"platform/releases/"
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)/"
+    r"[0-9a-f]{64}\.json)\Z"
+)
 
 
 class TUFTrustError(RuntimeError):

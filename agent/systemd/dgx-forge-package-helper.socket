@@ -1,0 +1,14 @@
+[Unit]
+Description=DGX Forge package helper socket
+
+[Socket]
+ListenStream=/run/dgx-forge/package-helper.sock
+SocketUser=root
+SocketGroup=dgx-agent
+SocketMode=0660
+DirectoryMode=0710
+RemoveOnStop=yes
+Accept=no
+
+[Install]
+WantedBy=sockets.target

@@ -17,6 +17,9 @@ dependencies = [
   "uvicorn==0.35.0",
 ]
 
+[project.scripts]
+dgx-control-offline = "dgx_control.offline:main"
+
 [tool.uv.sources]
 dgx-agent-protocol = { path = "../inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl" }
 spark-profiles = { path = ".." }

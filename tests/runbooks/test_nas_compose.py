@@ -7,7 +7,10 @@ COMPOSE_README = ROOT / "deploy/compose/README.md"
 ENVIRONMENT = ROOT / "deploy/compose/.env.example"
 SUPPLY_CHAIN = ROOT / "docs/runbooks/supply-chain.md"
 CONTROL_BOOTSTRAP = ROOT / "docs/runbooks/control-plane-bootstrap.md"
+CONTROL_RECOVERY = ROOT / "docs/runbooks/control-plane-recovery.md"
 HERMES_RUNBOOK = ROOT / "docs/runbooks/hermes-agent.md"
+TAILSCALE_RUNBOOK = ROOT / "docs/runbooks/tailscale.md"
+AGENT_PKI_RUNBOOK = ROOT / "docs/runbooks/agent-pki.md"
 PRODUCTION_FILE_VARIABLES = (
     "DATABASE_URL_FILE",
     "POSTGRES_PASSWORD_FILE",
@@ -41,20 +44,24 @@ def test_nas_compose_readme_is_the_complete_operator_entry_point() -> None:
         "ghcr.io/carstvaartjes/dgx-forge-worker",
         "ghcr.io/carstvaartjes/dgx-forge-hermes",
         "NAS_LAN_IP=10.0.0.2",
-        "docker compose pull",
-        "docker compose config --quiet",
         "compose.step-ca.yaml",
-        "dgx-forge-images.env",
-        "dgx-forge-images.env.sha256",
         "latest is evaluation-only",
         "Set package visibility to Public",
         "not the Docker bridge",
         "not the public WAN address",
         "DGX_CONTAINER_RELEASES_ENABLED",
+        "DGX_PLATFORM_RELEASES_ENABLED",
         "No images are currently being published",
         "Dependabot cannot publish",
         "operator_user=$(id -un)",
-        "sudo install -d -m 0750 -o \"$operator_user\" -g \"$operator_group\" /srv/dgx-forge",
+        "/srv/dgx-forge/control-host",
+        "/srv/dgx-forge/control-identity",
+        "/srv/dgx-forge/site",
+        "upgrade --target-name",
+        "recover --apply",
+        "rollback --generation",
+        "verified OCI deployment bundle",
+        "never executes Compose from the repository checkout",
         "At least 32 bytes.",
         "At least 16 non-whitespace characters.",
         "10001:10001",
@@ -70,29 +77,10 @@ def test_nas_compose_readme_is_the_complete_operator_entry_point() -> None:
     for variable in PRODUCTION_FILE_VARIABLES:
         assert variable in text
     assert "\nsudo git clone " not in text
-    first_start = text.split("## Preflight and first start", 1)[1].split(
-        "## Upgrade and rollback", 1
-    )[0]
-    command_block = first_start.split("```bash", 1)[1].split("```", 1)[0]
-    normalized = " ".join(command_block.replace("\\\n", " ").split())
-    state_initializer = normalized.split("run --rm --no-deps ", 1)[1].split(
-        " docker compose --env-file", 1
-    )[0]
-    assert state_initializer == (
-        "--cap-add CHOWN --user 0:0 --entrypoint /bin/sh control-api "
-        "-c 'chmod 0700 /state && chown 10001:10001 /state'"
-    )
-    steps = (
-        "config --quiet",
-        state_initializer,
-        "up -d postgres",
-        "control-api -m dgx_control.offline --state-path /state init --repository /repository",
-        "control-api -m dgx_control.offline --state-path /state migrate",
-        "create-admin --subject ADMIN_ID",
-        "compose.step-ca.yaml up -d docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml ps",
-    )
-    positions = tuple(normalized.index(step) for step in steps)
-    assert positions == tuple(sorted(positions))
+    assert "cd /srv/dgx-forge/repository/deploy/compose" not in text
+    assert "docker compose --env-file" not in text
+    assert "deploy/compose/bin/backup-control-plane" not in text
+    assert "deploy/compose/bin/restore-control-plane" not in text
 
 
 def test_environment_requires_three_release_images_without_duplicate_networks() -> None:
@@ -118,15 +106,34 @@ def test_supply_chain_describes_three_target_release_or_nonpublishing_diagnostic
     assert "Publish both immutable control images" not in text
 
 
-def test_pull_only_bootstrap_delegates_to_the_compose_sequence() -> None:
+def test_pull_only_bootstrap_delegates_to_the_host_updater_sequence() -> None:
     text = CONTROL_BOOTSTRAP.read_text()
 
-    assert "../../deploy/compose/README.md#preflight-and-first-start" in text
-    assert "initializes the named `/state` volume for UID" in text
-    assert "offline init, migration, and" in text
-    assert "before the first full" in text
-    assert "Do not install or invoke a host-local control launcher" in text
-    assert "bin/dgx-control-offline" not in text
+    assert "../../deploy/compose/README.md#install-and-first-selection" in text
+    assert "upgrade --target-name" in text
+    assert "verified generation" in text
+    assert "never executes Compose from the repository checkout" in text
+    assert "docker compose --env-file" not in text
+
+
+def test_control_recovery_uses_only_the_journaled_host_boundary() -> None:
+    text = CONTROL_RECOVERY.read_text()
+
+    for required in (
+        "HostBackupBoundary",
+        "/srv/dgx-forge/control-host",
+        "recover --apply",
+        "rollback --generation",
+        "hash-chained journal",
+        "root-owned age recipients file",
+        "exact backup receipt",
+    ):
+        assert required in text
+    assert "backup-control-plane" not in text
+    assert "restore-control-plane" not in text
+    assert "ENCRYPT_COMMAND" not in text
+    assert "DECRYPT_COMMAND" not in text
+    assert "docker compose" not in text
 
 
 def test_hermes_secret_mode_matches_the_authoritative_nas_guide() -> None:
@@ -137,3 +144,15 @@ def test_hermes_secret_mode_matches_the_authoritative_nas_guide() -> None:
     assert "root-owned mode `0400`" in runbook
     assert "`root:root 0400`" in guide
     assert "root-owned mode `0600`" not in runbook
+
+
+def test_auxiliary_service_runbooks_use_the_installed_maintenance_boundary() -> None:
+    for path in (HERMES_RUNBOOK, TAILSCALE_RUNBOOK, AGENT_PKI_RUNBOOK):
+        text = path.read_text()
+        assert "dgx-control-offline maintenance" in text
+        assert "cd deploy/compose" not in text
+        assert "docker compose --" not in text
+
+    hermes = HERMES_RUNBOOK.read_text()
+    assert "--generation REPLACE_GENERATION_FROM_PLAN --apply" in hermes
+    assert "/generations/$active/bin/harden-hermes-egress" in hermes

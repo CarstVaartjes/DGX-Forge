@@ -1,11 +1,11 @@
 # Bootstrap the control plane
 
 For a NAS production deployment, begin with the authoritative
-[NAS pull-only Compose deployment guide](../../deploy/compose/README.md). It
-covers release-image assets, site-local `.env` and secrets, Tailscale-only
-access, the production step-ca overlay, startup, and rollback. This runbook
-provides control-plane context, but the NAS guide owns the executable bootstrap
-sequence so pull-only operators have one source of truth.
+[Docker control-host deployment guide](../../deploy/compose/README.md). It
+covers root-owned host state, site-local configuration and secrets,
+Tailscale-only access, the production step-ca overlay, first selection, and
+rollback. This runbook provides control-plane context, but the deployment guide
+owns the executable bootstrap sequence so operators have one source of truth.
 
 The control plane runs on any Docker Compose-capable Linux machine. The first
 host may be a NAS, but the configuration has no NAS vendor dependency.
@@ -22,8 +22,10 @@ or Hermes.
 Spark reservations are recommended, but no Spark IP belongs in Compose or fleet
 identity: authenticated agent presence supplies the current validated address.
 
-1. Copy `deploy/compose/.env.example` to a host-local `.env` and replace every
-   image placeholder with a verified digest-pinned reference.
+1. Prepare `/srv/dgx-forge/control-host` and `/srv/dgx-forge/site` with their
+   documented root ownership and copy the non-secret settings from
+   `deploy/compose/.env.example` to `/srv/dgx-forge/site/.env`. The selected
+   platform target, not this file, supplies image and deployment assets.
 2. Create the database URL, PostgreSQL password, token-signing-key, Tailscale
    OAuth, and Hermes API-key files outside Git. Restrict them
    to the service administrator. Follow the [Tailscale](tailscale.md) and
@@ -39,28 +41,19 @@ identity: authenticated agent presence supplies the current validated address.
 
    Spaces, internal line breaks, padding, and other punctuation are rejected
    by both Caddy and the control API.
-3. Run the exact Compose one-shot commands in
-   [Preflight and first start](../../deploy/compose/README.md#preflight-and-first-start).
-   That authoritative sequence initializes the named `/state` volume for UID
-   10001, starts PostgreSQL alone, and runs offline init, migration, and
-   administrator creation from the pulled control image before the first full
-   `up -d`. Do not install or invoke a host-local control launcher on a
-   pull-only NAS, and do not skip or reorder those commands.
-4. After the guide's first full production start, check `/api/v1/healthz`
+3. Run the exact root-owned updater commands in
+   [Install and first selection](../../deploy/compose/README.md#install-and-first-selection).
+   Preview `upgrade --target-name` first, then apply the same exact target. The
+   updater validates the TUF-authorized manifest, verified generation, OCI
+   bundle, images, site state, backup, migration, and readiness while holding
+   one operation lock. Production never executes Compose from the repository checkout,
+   and operators must not reproduce the updater sequence manually.
+4. After the guide's successful first selection, check `/api/v1/healthz`
    through the `svc:dgx-forge` Tailscale Service.
 
    The base file deliberately has no CA provider selection, so it is not a
-   runnable production configuration. For local bootstrap or development,
-   use the built-in provider instead; it does not require any `STEP_CA_*` or
-   `AGENT_CA_CREDENTIAL_FILE` values. Apply the same ordered Compose bootstrap
-   from the authoritative guide with `compose.builtin-ca.yaml` substituted for
-   `compose.step-ca.yaml`:
-
-   ```bash
-   cd deploy/compose
-   docker compose --env-file .env -f compose.yaml -f compose.builtin-ca.yaml up -d
-   ```
-
+   runnable production configuration. A development-only generation may use
+   `compose.builtin-ca.yaml`; production selects `compose.step-ca.yaml`.
    Select exactly one provider overlay. Combining both overlays is rejected by
    the control API at startup regardless of their order.
 

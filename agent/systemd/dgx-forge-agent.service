@@ -12,6 +12,7 @@ User=dgx-agent
 Group=dgx-agent
 SupplementaryGroups=
 ExecStart=/usr/libexec/dgx-agent-supervisor run-agent
+LoadCredential=activation-challenge:/run/dgx-forge-agent-supervisor/activation-challenge
 Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=30s

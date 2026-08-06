@@ -1,0 +1,319 @@
+import json
+import re
+import subprocess
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+WORKFLOW = ROOT / ".github/workflows/workload-artifacts.yml"
+
+
+def workflow() -> str:
+    return WORKFLOW.read_text()
+
+
+def job(job_name: str) -> str:
+    lines = workflow().splitlines()
+    job_start = lines.index(f"  {job_name}:") + 1
+    job_lines: list[str] = []
+    for line in lines[job_start:]:
+        if re.fullmatch(r"  [a-zA-Z0-9_-]+:", line):
+            break
+        job_lines.append(line)
+    return "\n".join(job_lines)
+
+
+def workflow_step(job_name: str, step_name: str) -> str:
+    lines = job(job_name).splitlines()
+    step_start = lines.index(f"      - name: {step_name}")
+    step_lines: list[str] = []
+    for line in lines[step_start:]:
+        if line.startswith("      - name: ") and step_lines:
+            break
+        step_lines.append(line)
+    return "\n".join(step_lines)
+
+
+def test_publication_accepts_only_reviewed_main_requests() -> None:
+    text = workflow()
+    authorization = job("authorize-request")
+
+    assert "name: Workload artifact build" in text
+    assert "workflow_dispatch:" in text
+    assert "push:" not in text
+    assert "workload-artifact-*" not in text
+    assert "pull_request:" not in text
+    assert "branches:" not in text
+    assert "github.event_name == 'workflow_dispatch'" in authorization
+    assert "github.ref == 'refs/heads/main'" in authorization
+    assert "refs/tags/" not in authorization
+    assert (
+        'git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main'
+        in authorization
+    )
+    assert "ref: ${{ github.sha }}" in job("publish-workload-artifact")
+
+
+def test_build_request_is_bounded_and_validated_before_any_publication() -> None:
+    authorization = job("authorize-request")
+    publisher = job("publish-workload-artifact")
+
+    assert "scripts/workload-artifact-metadata request" in authorization
+    assert "release/workloads/" in authorization
+    assert "[a-z0-9][a-z0-9_.-]{0,127}\\.json$" in authorization
+    assert 'test ! -L "$request_path"' in authorization
+    for output in (
+        "request_path",
+        "request_digest",
+        "source_commit",
+        "context_digest",
+        "context",
+        "dockerfile",
+        "target",
+        "architecture",
+        "output_repository",
+        "base_images",
+    ):
+        assert f"{output}: ${{{{ steps.request.outputs.{output} }}}}" in authorization
+    assert "jq -er '.build_request_digest'" in authorization
+    for field in (
+        "source_commit",
+        "context_digest",
+        "context",
+        "dockerfile",
+        "target",
+        "architecture",
+        "output_repository",
+        "base_images",
+    ):
+        assert f".request.{field}" in authorization
+    assert "GITHUB_REPOSITORY_OWNER" in authorization
+    assert "output repository must be owned by this GitHub organization" in authorization
+    assert "needs: [authorize-request, read-only-ci-gate]" in publisher
+
+
+def test_publication_waits_for_successful_read_only_ci_on_the_exact_commit() -> None:
+    gate = job("read-only-ci-gate")
+    publisher = job("publish-workload-artifact")
+
+    assert "needs: authorize-request" in gate
+    assert "permissions:\n      actions: read\n      contents: read" in gate
+    assert "needs.authorize-request.outputs.source_commit" in gate
+    assert "gh run list" in gate
+    assert "--workflow ci.yml" in gate
+    assert "--commit \"$SOURCE_COMMIT\"" in gate
+    assert "conclusion == \"success\"" in gate
+    assert "packages: write" not in gate
+    assert "id-token: write" not in gate
+    assert "needs: [authorize-request, read-only-ci-gate]" in publisher
+
+
+def test_only_build_job_can_write_packages_and_token_is_not_a_build_input() -> None:
+    text = workflow()
+    authorization = job("authorize-request")
+    gate = job("read-only-ci-gate")
+    publisher = job("publish-workload-artifact")
+    login = workflow_step("publish-workload-artifact", "Log in to GHCR")
+    build = workflow_step("publish-workload-artifact", "Build digest-only OCI artifact")
+
+    assert "permissions:\n  contents: read" in text
+    assert "contents: read" in publisher
+    assert "packages: write" in publisher
+    assert text.count("packages: write") == 1
+    assert "packages: write" not in authorization
+    assert "packages: write" not in gate
+    assert "password: ${{ secrets.GITHUB_TOKEN }}" in login
+    for forbidden in (
+        "secrets.GITHUB_TOKEN",
+        "build-args:",
+        "secret-envs:",
+        "secret-files:",
+        "secrets:",
+    ):
+        assert forbidden not in build
+
+
+def test_build_publishes_digest_only_with_sbom_and_provenance() -> None:
+    publisher = job("publish-workload-artifact")
+    build = workflow_step("publish-workload-artifact", "Build digest-only OCI artifact")
+    evidence = workflow_step(
+        "publish-workload-artifact", "Collect workload artifact evidence"
+    )
+    result = workflow_step(
+        "publish-workload-artifact", "Create workload artifact result"
+    )
+
+    assert "docker/build-push-action@" in build
+    assert "path: workload-source" in publisher
+    assert (
+        "context: workload-source/${{ needs.authorize-request.outputs.context }}"
+        in build
+    )
+    assert (
+        "file: workload-source/${{ needs.authorize-request.outputs.dockerfile }}"
+        in build
+    )
+    assert "target: ${{ needs.authorize-request.outputs.target }}" in build
+    assert "platforms: ${{ needs.authorize-request.outputs.architecture }}" in build
+    assert "push-by-digest=true" in build
+    assert "name-canonical=true" in build
+    assert "push=true" in build
+    assert "tags:" not in build
+    assert "sbom: true" in build
+    assert "provenance: mode=max" in build
+    assert "network: none" in build
+    assert "steps.build.outputs.digest" in evidence
+    assert "docker buildx imagetools inspect" in evidence
+    assert "workload-artifact-build-result" in result
+    assert "scripts/workload-artifact-metadata result" in result
+    assert "sha256sum" in result
+
+
+def test_exact_context_and_declared_base_images_are_verified_before_build() -> None:
+    publisher = job("publish-workload-artifact")
+    source = workflow_step("publish-workload-artifact", "Verify exact source context")
+    build = workflow_step("publish-workload-artifact", "Build digest-only OCI artifact")
+
+    assert "git -C workload-source archive" in source
+    assert "EXPECTED_CONTEXT_DIGEST" in source
+    assert "needs.authorize-request.outputs.context_digest" in source
+    assert "DECLARED_BASE_IMAGES" in source
+    assert "needs.authorize-request.outputs.base_images" in source
+    assert "Dockerfile" in source
+    assert "FROM" in source
+    assert "ARG" in source
+    assert "ARG is forbidden" in source
+    assert "variable FROM inputs are forbidden" in source
+    assert "Dockerfile frontend directives are forbidden" in source
+    assert "external COPY --from inputs are forbidden" in source
+    assert "external RUN --mount from inputs are forbidden" in source
+    assert "remote ADD inputs are forbidden" in source
+    assert "undeclared base image" in source
+    assert "declared base images must exactly match" in source
+    assert publisher.index("Verify exact source context") < publisher.index(
+        "Log in to GHCR"
+    )
+    assert publisher.index("Verify exact source context") < publisher.index(
+        "Build digest-only OCI artifact"
+    )
+    assert "build-args:" not in build
+
+
+def test_result_rejects_manifest_or_attestation_evidence_mismatch() -> None:
+    evidence = workflow_step(
+        "publish-workload-artifact", "Collect workload artifact evidence"
+    )
+
+    assert "hashlib.sha256" in evidence
+    assert "OCI_MANIFEST_DIGEST" in evidence
+    assert "removeprefix(\"sha256:\")" in evidence
+    assert "raw OCI manifest does not match build digest" in evidence
+    assert 'jq -e \'if type == "object" or type == "array"' in evidence
+    assert "SBOM evidence is empty" in evidence
+    assert "provenance evidence is empty" in evidence
+    assert ".SBOM.SPDX" in evidence
+    assert ".Provenance.SLSA" in evidence
+    assert "spdxVersion" in evidence
+
+
+def test_sbom_validation_accepts_document_and_rejects_buildx_wrapper() -> None:
+    evidence = workflow_step(
+        "publish-workload-artifact", "Collect workload artifact evidence"
+    )
+    match = re.search(r"jq -e -S -c '([^']*spdxVersion[^']*)'", evidence)
+    assert match is not None
+    jq_filter = match.group(1)
+    spdx = {
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "dataLicense": "CC0-1.0",
+        "spdxVersion": "SPDX-2.3",
+    }
+
+    valid = subprocess.run(
+        ["jq", "-e", "-S", "-c", jq_filter],
+        input=json.dumps(spdx),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    wrapped = subprocess.run(
+        ["jq", "-e", "-S", "-c", jq_filter],
+        input=json.dumps({"SPDX": spdx}),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert valid.returncode == 0, valid.stderr
+    assert json.loads(valid.stdout) == spdx
+    assert wrapped.returncode != 0
+
+
+def test_sigstore_attests_provenance_and_sbom_without_tuf_credentials() -> None:
+    publisher = job("publish-workload-artifact")
+    provenance = workflow_step(
+        "publish-workload-artifact", "Sign workload provenance"
+    )
+    sbom = workflow_step("publish-workload-artifact", "Sign workload SBOM")
+
+    assert (
+        "permissions:\n      artifact-metadata: write\n      attestations: write\n      contents: read\n"
+        "      id-token: write\n      packages: write"
+    ) in publisher
+    assert (
+        "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6" in provenance
+    )
+    assert "subject-name: ${{ needs.authorize-request.outputs.output_repository }}" in provenance
+    assert "subject-digest: ${{ steps.build.outputs.digest }}" in provenance
+    assert "push-to-registry: true" in provenance
+    assert "sbom-path: workload-artifact-output/sbom.json" in sbom
+    assert "subject-name: ${{ needs.authorize-request.outputs.output_repository }}" in sbom
+    assert "subject-digest: ${{ steps.build.outputs.digest }}" in sbom
+    assert "push-to-registry: true" in sbom
+    assert workflow().count("id-token: write") == 1
+    assert workflow().count("attestations: write") == 1
+    assert workflow().count("artifact-metadata: write") == 1
+    assert "steps.provenance-attestation.outputs.bundle-path" in publisher
+    assert "steps.sbom-attestation.outputs.bundle-path" in publisher
+    result = workflow_step(
+        "publish-workload-artifact", "Create workload artifact result"
+    )
+    assert "signed-provenance.bundle.json" in result
+    assert "signed-sbom.bundle.json" in result
+    assert 'sha256sum "$PROVENANCE_BUNDLE"' in result
+    assert 'sha256sum "$SBOM_BUNDLE"' in result
+    assert publisher.index("Collect workload artifact evidence") < publisher.index(
+        "Sign workload provenance"
+    )
+    assert publisher.index("Sign workload SBOM") < publisher.index(
+        "Create workload artifact result"
+    )
+
+
+def test_build_workflow_has_no_release_or_desired_state_authority() -> None:
+    text = workflow().lower()
+
+    for forbidden in (
+        "dgx_workload_tuf",
+        "dgx_platform_tuf",
+        "workload_tuf_key",
+        "platform_tuf_key",
+        "desired_state",
+        "desired-state",
+        "promote-workload",
+        "publish-platform-target",
+        "container-release-metadata",
+        "release-manifest:",
+    ):
+        assert forbidden not in text
+
+
+def test_workload_outputs_are_distinct_from_fixed_platform_images() -> None:
+    text = workflow()
+    publisher = job("publish-workload-artifact")
+
+    assert "group: dgx-forge-workload-artifact-publication" in publisher
+    assert "cancel-in-progress: false" in publisher
+    assert "dgx-forge-api" not in text
+    assert "dgx-forge-worker" not in text
+    assert "dgx-forge-hermes" not in text
+    assert "platform-release" not in text

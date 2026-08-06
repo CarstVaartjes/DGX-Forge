@@ -17,6 +17,7 @@ _ENVIRONMENT = {
     "sha256": "DGX_AGENT_SUPERVISOR_SHA256",
 }
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_CHALLENGE_NAME = "activation-challenge"
 
 
 class ReadinessError(RuntimeError):
@@ -59,10 +60,13 @@ class ReadinessReporter:
             or not _DIGEST.fullmatch(digest)
         ):
             raise ReadinessError("supervisor readiness environment is invalid")
+        challenge = _read_challenge_credential(environment)
         return cls(
             {
+                "challenge": challenge,
                 "generation": int(generation),
-                "schema_version": 1,
+                "pid": os.getpid(),
+                "schema_version": 2,
                 "sha256": digest,
                 "slot": slot,
             },
@@ -150,3 +154,42 @@ def _open_runtime(path: Path) -> int:
     except OSError as error:
         os.close(descriptor)
         raise ReadinessError("readiness runtime directory is unavailable") from error
+
+
+def _read_challenge_credential(environment: Mapping[str, str]) -> str:
+    directory_value = environment.get("CREDENTIALS_DIRECTORY")
+    if directory_value is None:
+        raise ReadinessError("activation challenge credential is unavailable")
+    directory_path = Path(directory_value)
+    if not directory_path.is_absolute():
+        raise ReadinessError("activation challenge credential path is invalid")
+    directory = descriptor = -1
+    try:
+        directory = os.open(
+            directory_path,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        )
+        descriptor = os.open(
+            _CHALLENGE_NAME,
+            os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            dir_fd=directory,
+        )
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise ReadinessError("activation challenge credential is unsafe")
+        raw = os.read(descriptor, 66)
+        if len(raw) != 65 or raw[-1:] != b"\n":
+            raise ReadinessError("activation challenge credential is invalid")
+        challenge = raw[:-1].decode("ascii")
+        if not _DIGEST.fullmatch(challenge):
+            raise ReadinessError("activation challenge credential is invalid")
+        return challenge
+    except ReadinessError:
+        raise
+    except (OSError, UnicodeDecodeError) as error:
+        raise ReadinessError("activation challenge credential is unavailable") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if directory >= 0:
+            os.close(directory)

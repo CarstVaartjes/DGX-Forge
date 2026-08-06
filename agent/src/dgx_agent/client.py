@@ -8,12 +8,13 @@ import http.client
 import ipaddress
 import json
 import os
+import platform
 import re
 import secrets
 import ssl
 import stat
 import uuid
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -32,9 +33,19 @@ from dgx_agent_protocol import (
 )
 
 MAX_BODY_BYTES = 64 * 1024
-_PROTOCOL_VERSION = 1
+_PROTOCOL_VERSION = 2
 _CAPABILITIES = (
+    "agent.rollback",
+    "agent.update",
     "node.probe",
+    "package.activate",
+    "package.gc",
+    "package.health",
+    "package.prepare",
+    "package.remove",
+    "package.repair",
+    "package.rollback",
+    "package.stop",
     "release.install",
     "workload.health",
     "workload.prepare",
@@ -89,45 +100,73 @@ class CredentialProvider(Protocol):
 
 @dataclass(frozen=True)
 class AgentRuntimeIdentity:
+    architecture: str
     platform_version: str
     build_digest: str
     active_slot: str
     agent_sha256: str
     supervisor_generation: int
+    supervisor_ready_generation: int | None = None
+    self_test_passed: bool = False
 
     def __post_init__(self) -> None:
         if (
-            _SEMVER.fullmatch(self.platform_version) is None
+            self.architecture not in {"linux-arm64", "linux-x86_64"}
+            or _SEMVER.fullmatch(self.platform_version) is None
             or _PREFIXED_DIGEST.fullmatch(self.build_digest) is None
             or self.active_slot not in {"A", "B"}
             or _DIGEST.fullmatch(self.agent_sha256) is None
             or isinstance(self.supervisor_generation, bool)
             or not isinstance(self.supervisor_generation, int)
             or not 1 <= self.supervisor_generation <= 999_999_999
+            or (
+                self.supervisor_ready_generation is not None
+                and (
+                    isinstance(self.supervisor_ready_generation, bool)
+                    or not isinstance(self.supervisor_ready_generation, int)
+                    or self.supervisor_ready_generation != self.supervisor_generation
+                )
+            )
+            or not isinstance(self.self_test_passed, bool)
+            or (self.self_test_passed and self.supervisor_ready_generation is None)
         ):
             raise ValueError("agent runtime identity is invalid")
 
     @classmethod
-    def from_environment(cls) -> AgentRuntimeIdentity:
+    def from_environment(
+        cls, *, machine: Callable[[], str] = platform.machine
+    ) -> AgentRuntimeIdentity:
         try:
             generation = int(os.environ["DGX_AGENT_SUPERVISOR_GENERATION"])
+            architecture = {
+                "aarch64": "linux-arm64",
+                "arm64": "linux-arm64",
+                "x86_64": "linux-x86_64",
+                "amd64": "linux-x86_64",
+            }[machine().lower()]
             return cls(
+                architecture=architecture,
                 platform_version=os.environ["DGX_AGENT_PLATFORM_VERSION"],
                 build_digest=os.environ["DGX_AGENT_BUILD_DIGEST"],
                 active_slot=os.environ["DGX_AGENT_SUPERVISOR_SLOT"],
                 agent_sha256=os.environ["DGX_AGENT_SUPERVISOR_SHA256"],
                 supervisor_generation=generation,
+                supervisor_ready_generation=generation,
+                self_test_passed=True,
             )
-        except (KeyError, ValueError) as error:
+        except (AttributeError, KeyError, ValueError) as error:
             raise ValueError("verified agent runtime identity is unavailable") from error
 
     def wire(self) -> dict[str, object]:
         return {
             "active_slot": self.active_slot,
+            "architecture": self.architecture,
             "agent_sha256": self.agent_sha256,
             "build_digest": self.build_digest,
             "platform_version": self.platform_version,
             "supervisor_generation": self.supervisor_generation,
+            "supervisor_ready_generation": self.supervisor_ready_generation,
+            "self_test_passed": self.self_test_passed,
         }
 
 
@@ -1328,7 +1367,7 @@ class AgentClient:
         return _issued(response.document, self._node_id)
 
     def heartbeat(self, progress: Any) -> Any:
-        from dgx_agent_protocol import AgentProgress
+        from dgx_agent_protocol import AgentDirective, AgentProgress
 
         if not isinstance(progress, AgentProgress):
             raise TypeError("progress message is invalid")
@@ -1340,7 +1379,7 @@ class AgentClient:
         )
         _require_status(response, {200})
         try:
-            return AgentProgress.parse(response.document)
+            return AgentDirective.parse(response.document)
         except (AgentProtocolError, TypeError, ValueError) as error:
             raise AgentProtocolResponseError(
                 "heartbeat response violates the protocol contract"

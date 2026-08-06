@@ -1,4 +1,4 @@
-# Verify the platform supply chain
+# Verify the platform and workload supply chains
 
 Standard service images are fixed by version and OCI index digest in
 `deploy/compose/images.lock.json`; Compose uses those exact references as its
@@ -80,3 +80,64 @@ images as a releasable publication. LiteLLM signatures use the checked-in key
 copied from immutable upstream commit
 `0112e53046018d726492c814b3644b7d376029d0`; verify the locked digest, never a
 mutable tag. Store scan/signature attestations with the release evidence.
+
+## Workload artifact build and promotion boundary
+
+Workload artifacts have an independent release cadence from DGX-Forge. A new
+model, adapter, runtime, wheel, environment, checkpoint, or auxiliary component
+does not require a platform release when it fits the installed workload ABI.
+The authorities are deliberately separate:
+
+1. A reviewed Git change supplies a bounded workload build request. The request
+   names an exact 40-character source commit, a content digest, reviewed source
+   paths, a digest-pinned base image, target architecture, and output repository.
+2. `.github/workflows/workload-artifacts.yml` is a build-only publisher. After
+   the read-only CI gate, its job-scoped package token may push the resulting OCI
+   artifact by digest and attach SBOM and provenance evidence. The token is not
+   a BuildKit input. The job has no platform or workload TUF key and cannot
+   change NAS desired state.
+3. The NAS promotion service independently verifies the request digest, source
+   identity, OCI manifest digest, SBOM, provenance, family policy, and validation
+   evidence. A successful build is only a promotion candidate; it is not an
+   authorized workload release.
+4. Workload TUF authorizes the exact immutable workload release lock after
+   promotion. Its roots, roles, target prefixes, and signing credentials are
+   separate from platform TUF, so a workload key cannot update DGX-Forge, its
+   agents, supervisors, protocol, or node policy.
+5. Sparks obtain authorized lock metadata from the NAS and fetch large
+   content-addressed payloads from their declared upstream or approved mirror.
+   SSH is not part of this standard path.
+
+Build requests must not contain secrets, registry credentials, free-form build
+arguments, shell commands, host paths, parent-directory traversal, mutable Git
+references, or floating OCI tags. Publication from an ordinary branch or pull
+request is forbidden. Promotion and rollback remain NAS-admin actions recorded
+through the workload release plane; neither action mutates the platform release
+manifest.
+
+Store each reviewed request as `release/workloads/<request-id>.json`. Its
+`context_digest` is the digest of the exact Git archive consumed by the builder:
+
+```bash
+workload_source_commit=$(git rev-parse HEAD)
+workload_context=adapters/<family>/<runtime>
+git archive --format=tar "$workload_source_commit" -- "$workload_context" \
+  | sha256sum
+scripts/workload-artifact-metadata request \
+  release/workloads/<request-id>.json
+```
+
+The validator prints the canonical request and its `build_request_digest`.
+Submit that request through review before manually dispatching the workload
+artifact workflow from the merged `main` revision. Tag-push publication is
+intentionally disabled because a tag can otherwise select its own unreviewed
+workflow definition. A workflow artifact result can be checked locally with:
+
+```bash
+scripts/workload-artifact-metadata result result.json \
+  --request release/workloads/<request-id>.json
+```
+
+That validation proves metadata binding only. W13 promotion remains responsible
+for verifying the registry subject, signed provenance, SBOM, family policy, and
+qualification evidence before workload TUF authorization.

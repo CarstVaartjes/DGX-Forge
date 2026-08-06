@@ -89,8 +89,10 @@ def test_test_matrix_os_assertions_reject_values_from_a_later_job() -> None:
 
 def test_agent_simulator_preserves_exact_non_linux_boundaries() -> None:
     command = (
-        "import sys; "
+        "import sys, types; "
         "sys.platform = 'darwin'; "
+        "sys.modules['_scproxy'] = types.SimpleNamespace("
+        "_get_proxy_settings=lambda: {}, _get_proxies=lambda: {}); "
         "import pytest; "
         "raise SystemExit(pytest.main(["
         "'-q', 'tests/agent/test_failure_matrix.py']))"
@@ -205,7 +207,7 @@ def test_dgx_agent_installer_preserves_exact_non_linux_boundaries(
         "test_abandoned_publication_crash_boundaries_recover_bounded_exact_staging[tree-fsync]",
         "test_abandoned_publication_crash_boundaries_recover_bounded_exact_staging[rename]",
         "test_abandoned_publication_crash_boundaries_recover_bounded_exact_staging[parent-fsync]",
-        "test_missing_unit_fails_before_target_mutation_and_both_units_are_enabled",
+        "test_missing_rollback_path_fails_before_mutation_and_all_units_are_enabled",
         "test_concurrent_first_install_is_serialized",
         "test_reinstall_rejects_unexpected_symlink_inside_immutable_tree",
         "test_distinct_explicit_node_ids_generate_distinct_configs",
@@ -227,7 +229,7 @@ def test_dgx_agent_installer_preserves_exact_non_linux_boundaries(
         assert f"::{case} SKIPPED" in result.stdout
     for case in portable_cases:
         assert f"::{case} PASSED" in result.stdout
-    assert "7 passed, 20 skipped, 1 deselected" in result.stdout
+    assert "7 passed, 21 skipped, 1 deselected" in result.stdout
 
 
 def test_image_runtime_case_skips_when_only_compose_is_available(tmp_path: Path) -> None:

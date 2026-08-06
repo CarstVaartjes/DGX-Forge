@@ -1,6 +1,7 @@
 import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -23,6 +24,17 @@ def _rendered() -> dict:
         "METRICS_TOKEN_FILE": "/dev/null",
         "GIT_SIGNING_KEY_FILE": "/dev/null",
         "WORKER_API_TOKEN_FILE": "/dev/null",
+        "AGENT_UPDATE_AUTHORITY_KEY_FILE": "/dev/null",
+        "ADMIN_GRANT_PRIVATE_KEY_FILE": "/dev/null",
+        "ADMIN_GRANT_PUBLIC_KEY_FILE": "/dev/null",
+        "AGENT_TUF_BOOTSTRAP_ROOT_FILE": "/dev/null",
+        "CONTROL_IDENTITY_PATH": "/srv/dgx-forge/control-identity",
+        "DGX_PLATFORM_VERSION": "1.0.0",
+        "DGX_PLATFORM_RELEASE_DIGEST": "sha256:" + "2" * 64,
+        "DGX_PLATFORM_BUILD_DIGEST": "sha256:" + "3" * 64,
+        "DGX_CONTROL_GENERATION_ID": "gen-" + "2" * 24,
+        "DGX_DATABASE_REVISION": "0012_control_process_heartbeats",
+        "DGX_CONTROL_START_NONCE": "4" * 64,
         "GRAFANA_ADMIN_PASSWORD_FILE": "/dev/null",
         "LITELLM_MASTER_KEY_FILE": "/dev/null",
         "LITELLM_UPSTREAM_KEY_FILE": "/dev/null",
@@ -56,15 +68,30 @@ def _rendered() -> dict:
         "HERMES_DASHBOARD_ORIGIN": "https://hermes.test.example",
     }
     result = subprocess.run(
-        ["docker", "compose", "-f", str(root / "deploy/compose/compose.yaml"), "-f", str(root / "deploy/compose/compose.step-ca.yaml"), "config", "--format", "json"],
-        check=True, capture_output=True, text=True, env=env,
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(root / "deploy/compose/compose.yaml"),
+            "-f",
+            str(root / "deploy/compose/compose.step-ca.yaml"),
+            "config",
+            "--format",
+            "json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
     )
     return json.loads(result.stdout)
 
 
 def test_only_caddy_publishes_ports_and_images_are_digest_pinned() -> None:
     rendered = _rendered()
-    published = {name for name, service in rendered["services"].items() if service.get("ports")}
+    published = {
+        name for name, service in rendered["services"].items() if service.get("ports")
+    }
     assert published == {"caddy"}
     assert all(
         "@sha256:" in service["image"] or service.get("build")
@@ -90,8 +117,16 @@ def test_caddy_publishes_only_reserved_nas_backend_listener() -> None:
 def test_database_has_only_data_network_and_ingress_is_segmented() -> None:
     services = _rendered()["services"]
     assert set(services["postgres"]["networks"]) == {"data"}
-    assert set(services["caddy"]["networks"]) == {"agent-proxy", "ingress", "registry-edge", "tailnet-web-edge"}
-    assert set(services["registry"]["networks"]) == {"registry-edge", "registry-publisher"}
+    assert set(services["caddy"]["networks"]) == {
+        "agent-proxy",
+        "ingress",
+        "registry-edge",
+        "tailnet-web-edge",
+    }
+    assert set(services["registry"]["networks"]) == {
+        "registry-edge",
+        "registry-publisher",
+    }
     assert set(services["control-worker"]["networks"]) == {"data", "worker-authority"}
     assert set(services["control-api"]["networks"]) == {
         "agent-proxy",
@@ -127,13 +162,157 @@ def test_worker_has_a_distinct_minimal_image_and_runtime_boundary() -> None:
     assert worker["image"].startswith("example/control-worker:")
     worker_secrets = {item["source"] for item in worker["secrets"]}
     assert worker_secrets == {"database-url", "worker-api-token"}
+    api_secrets = {item["source"] for item in api["secrets"]}
+    assert "agent-update-authority-key" not in api_secrets
+    assert "admin-grant-private-key" not in api_secrets
+    assert {
+        item["source"]: item.get("read_only", False)
+        for item in api["volumes"]
+    }["api-admin-grant-runtime"] is True
     assert {item["target"] for item in worker["volumes"]} == {
         "/routes",
         "/supervisor",
+        "/state",
+        "/run/dgx-signer",
+        "/run/dgx-forge/control-identity",
     }
     assert "DGX_REPOSITORY_PATH" not in worker["environment"]
     assert "DGX_GIT_SIGNING_KEY_FILE" not in worker["environment"]
     assert worker["environment"]["DGX_INTERNAL_API_URL"] == "http://control-api:8000"
+
+    signer = services["control-signer"]
+    assert signer["network_mode"] == "none"
+    assert signer["user"] == "10003:10001"
+    assert {item["source"] for item in signer["secrets"]} == {
+        "admin-grant-public-key",
+        "agent-tuf-bootstrap-root",
+        "agent-update-authority-key",
+    }
+    assert "database-url" not in {item["source"] for item in signer["secrets"]}
+    assert {item["target"] for item in signer["volumes"]} == {
+        "/control-identity",
+        "/publication",
+        "/run/dgx-signer",
+        "/verifier",
+    }
+    socket_initializer = services["signer-runtime-init"]
+    assert "os.chmod('/socket',0o710)" in " ".join(socket_initializer["command"])
+
+
+def test_selected_services_reopen_the_root_owned_identity_directory_read_only() -> None:
+    rendered = _rendered()
+    services = rendered["services"]
+    expected_mount = {
+        "type": "bind",
+        "source": "/srv/dgx-forge/control-identity",
+        "target": "/run/dgx-forge/control-identity",
+        "read_only": True,
+        "bind": {"create_host_path": False},
+    }
+
+    assert "signer-activation-init" not in services
+    assert not any(name.endswith("signer-active-control") for name in rendered["volumes"])
+    for service_name in ("control-api", "control-worker"):
+        service = services[service_name]
+        mounts = {volume["target"]: volume for volume in service["volumes"]}
+        assert mounts["/run/dgx-forge/control-identity"] == expected_mount
+        assert not any(
+            "control-host" in volume.get("source", "")
+            or "control-generations" in volume.get("source", "")
+            for volume in service["volumes"]
+        )
+
+    assert services["control-api"]["environment"]["DGX_CONTROL_IDENTITY_ROOT"] == (
+        "/run/dgx-forge/control-identity"
+    )
+    assert services["control-worker"]["environment"]["DGX_CONTROL_IDENTITY_ROOT"] == (
+        "/run/dgx-forge/control-identity"
+    )
+    signer = services["control-signer"]
+    signer_mounts = {volume["target"]: volume for volume in signer["volumes"]}
+    assert signer_mounts["/control-identity"] == expected_mount | {
+        "target": "/control-identity"
+    }
+    assert signer["environment"]["DGX_CONTROL_IDENTITY_ROOT"] == "/control-identity"
+    assert signer["environment"]["DGX_CONTROL_PROCESS_IMAGE"] == signer["image"]
+    assert "DGX_ACTIVE_CONTROL_STATE_ROOT" not in signer["environment"]
+
+
+def test_selected_api_and_worker_receive_one_dynamic_exact_generation_identity() -> None:
+    services = _rendered()["services"]
+    api = services["control-api"]
+    worker = services["control-worker"]
+    common = {
+        "DGX_CONTROL_STARTUP_MODE": "selected",
+        "DGX_CONTROL_GENERATION_ID": "gen-" + "2" * 24,
+        "DGX_DATABASE_REVISION": "0012_control_process_heartbeats",
+        "DGX_PLATFORM_VERSION": "1.0.0",
+        "DGX_PLATFORM_RELEASE_DIGEST": "sha256:" + "2" * 64,
+        "DGX_PLATFORM_BUILD_DIGEST": "sha256:" + "3" * 64,
+        "DGX_CONTROL_START_NONCE": "4" * 64,
+    }
+
+    for service in (api, worker):
+        assert common.items() <= service["environment"].items()
+    assert api["environment"]["DGX_CONTROL_PROCESS_IMAGE"] == api["image"]
+    assert worker["environment"]["DGX_CONTROL_PROCESS_IMAGE"] == worker["image"]
+
+
+def test_signer_runtime_initializer_executes_its_fixed_directory_setup(
+    tmp_path: Path,
+) -> None:
+    initializer = _rendered()["services"]["signer-runtime-init"]
+    command = " ".join(initializer["command"][2:])
+    socket_root = tmp_path / "socket"
+    verifier_root = tmp_path / "verifier"
+    publication_root = tmp_path / "publication"
+    for path in (socket_root, verifier_root, publication_root):
+        path.mkdir()
+    command = (
+        command.replace("'/socket'", repr(str(socket_root)))
+        .replace("'/verifier'", repr(str(verifier_root)))
+        .replace("'/publication'", repr(str(publication_root)))
+        .replace("10003", str(os.getuid()))
+        .replace("10001", str(os.getgid()))
+    )
+
+    subprocess.run([sys.executable, "-c", command], check=True)
+
+    assert (publication_root / "metadata").is_dir()
+    assert (publication_root / "targets").is_dir()
+    assert socket_root.stat().st_mode & 0o777 == 0o710
+    assert verifier_root.stat().st_mode & 0o777 == 0o700
+
+
+def test_admin_grant_signing_key_is_available_only_to_the_api() -> None:
+    services = _rendered()["services"]
+    secret_sources = {
+        service_name: {secret["source"] for secret in services[service_name]["secrets"]}
+        for service_name in ("control-api", "control-worker", "control-signer")
+    }
+
+    assert "admin-grant-private-key" not in secret_sources["control-api"]
+    assert "admin-grant-public-key" not in secret_sources["control-api"]
+    assert "admin-grant-private-key" not in secret_sources["control-worker"]
+    assert "admin-grant-public-key" not in secret_sources["control-worker"]
+    assert "admin-grant-private-key" not in secret_sources["control-signer"]
+    assert "admin-grant-public-key" in secret_sources["control-signer"]
+
+    initializer = services["api-admin-grant-init"]
+    assert initializer["network_mode"] == "none"
+    assert initializer["user"] == "0:0"
+    assert {secret["source"] for secret in initializer["secrets"]} == {
+        "admin-grant-private-key"
+    }
+    runtime_mount = next(
+        volume
+        for volume in services["control-api"]["volumes"]
+        if volume["target"] == "/run/dgx-api-secrets"
+    )
+    assert runtime_mount["read_only"] is True
+    assert services["control-api"]["environment"][
+        "DGX_ADMIN_GRANT_PRIVATE_KEY_FILE"
+    ] == "/run/dgx-api-secrets/admin-grant-private-key.pem"
 
 
 def test_tailnet_backends_have_readiness_checks() -> None:
@@ -156,8 +335,12 @@ def test_tailnet_backends_have_readiness_checks() -> None:
 
 def test_litellm_routes_use_a_dedicated_atomic_config_volume() -> None:
     services = _rendered()["services"]
-    worker_volumes = {volume["target"]: volume for volume in services["control-worker"]["volumes"]}
-    litellm_volumes = {volume["target"]: volume for volume in services["litellm"]["volumes"]}
+    worker_volumes = {
+        volume["target"]: volume for volume in services["control-worker"]["volumes"]
+    }
+    litellm_volumes = {
+        volume["target"]: volume for volume in services["litellm"]["volumes"]
+    }
 
     assert worker_volumes["/routes"]["source"] == "route-publications"
     assert worker_volumes["/supervisor"] == {

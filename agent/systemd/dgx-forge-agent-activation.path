@@ -5,6 +5,8 @@ After=local-fs.target
 [Path]
 PathExists=/run/dgx-forge-agent/activation-request.json
 Unit=dgx-forge-agent-activation.service
+TriggerLimitIntervalSec=60s
+TriggerLimitBurst=3
 
 [Install]
 WantedBy=multi-user.target

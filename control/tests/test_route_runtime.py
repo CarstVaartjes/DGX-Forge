@@ -480,6 +480,105 @@ def test_withdrawal_activates_an_empty_fail_closed_bundle(tmp_path: Path) -> Non
     assert config["model_list"] == []
 
 
+def test_update_boundary_fences_normal_publication_until_exact_release(
+    tmp_path: Path,
+) -> None:
+    publisher = _publisher(tmp_path)
+    publisher.publish(_request())
+    boundary_key = "d" * 64
+
+    publisher.claim_update_boundary(boundary_key)
+
+    with pytest.raises(RouteRuntimeError, match="update boundary"):
+        publisher.publish(_request(address="10.0.0.43"))
+    keyed = publisher.publish(
+        _request(address="10.0.0.43"),
+        update_boundary_key=boundary_key,
+    )
+    assert keyed.generation == 2
+    with pytest.raises(RouteRuntimeError, match="different update boundary"):
+        publisher.claim_update_boundary("e" * 64)
+    with pytest.raises(RouteRuntimeError, match="update boundary key"):
+        publisher.release_update_boundary("e" * 64)
+
+    publisher.release_update_boundary(boundary_key)
+
+    restored = publisher.publish(_request())
+    assert restored.generation == 3
+
+
+def test_update_boundary_rejects_unkeyed_disjoint_reconciliation_withdrawal(
+    tmp_path: Path,
+) -> None:
+    publisher = _publisher(tmp_path)
+    exact = publisher.publish(_request())
+    publisher.claim_update_boundary("d" * 64)
+
+    with pytest.raises(RouteRuntimeError, match="update boundary"):
+        publisher.withdraw(
+            reconciliation_id="f89f180b-0c52-4c77-b983-663d16dd3aa7",
+            plan_digest="f" * 64,
+            targets=(NODE,),
+            reason="disjoint reconciliation maintenance",
+        )
+    assert publisher.inspect() == exact
+
+
+def test_exact_update_boundary_can_force_a_fresh_generation_before_expiry(
+    tmp_path: Path,
+) -> None:
+    publisher = _publisher(tmp_path)
+    first = publisher.publish(_request())
+    publisher.claim_update_boundary("d" * 64)
+
+    renewed = publisher.publish(
+        _request(),
+        update_boundary_key="d" * 64,
+        renew_update_boundary=True,
+    )
+
+    assert renewed.generation == first.generation + 1
+    with pytest.raises(RouteRuntimeError, match="requires its exact fence"):
+        publisher.publish(_request(), renew_update_boundary=True)
+
+
+def test_update_boundary_publication_compare_and_swap_is_atomic_and_idempotent(
+    tmp_path: Path,
+) -> None:
+    publisher = _publisher(tmp_path)
+    before = publisher.publish(_request())
+    key = "d" * 64
+    publisher.claim_update_boundary(key)
+
+    desired = publisher.publish(
+        _request(address="10.0.0.43"),
+        update_boundary_key=key,
+        expected_current_digest=before.digest,
+    )
+    retried = publisher.publish(
+        _request(address="10.0.0.43"),
+        update_boundary_key=key,
+        expected_current_digest=before.digest,
+    )
+    assert retried == desired
+
+    maintenance = publisher.withdraw(
+        reconciliation_id=RECONCILIATION_ID,
+        plan_digest=PLAN_DIGEST,
+        targets=(NODE,),
+        reason="authority lost",
+        update_boundary_key=key,
+        expected_current_digest=desired.digest,
+    )
+    with pytest.raises(RouteRuntimeError, match="compare-and-swap"):
+        publisher.publish(
+            _request(address="10.0.0.44"),
+            update_boundary_key=key,
+            expected_current_digest=desired.digest,
+        )
+    assert publisher.inspect() == maintenance
+
+
 def test_commit_pinned_hermes_policy_selects_only_accepted_published_routes(
     tmp_path: Path,
 ) -> None:

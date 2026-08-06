@@ -2,12 +2,15 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://dgx-forge.invalid/schemas/platform-update-manifest.schema.json",
   "title": "DGX-Forge platform update manifest",
+  "$comment": "Schema-only validation is not authorization. Consumers MUST use PlatformRelease.from_bytes so cross-field digest, range, architecture, predecessor, and target-identity invariants are enforced.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
     "platform_version",
     "build_digest",
+    "host_updater_abi",
+    "deployment_bundle",
     "control",
     "database",
     "agents",
@@ -16,9 +19,11 @@
     "rollback"
   ],
   "properties": {
-    "schema_version": {"const": 1},
+    "schema_version": {"const": 2},
     "platform_version": {"$ref": "#/$defs/semanticVersion"},
     "build_digest": {"$ref": "#/$defs/prefixedDigest"},
+    "host_updater_abi": {"$ref": "#/$defs/protocolRange"},
+    "deployment_bundle": {"$ref": "#/$defs/ociDeploymentBundle"},
     "control": {
       "type": "object",
       "additionalProperties": false,
@@ -64,14 +69,14 @@
     "rollback": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["compatible_predecessor_builds"],
+      "required": ["predecessors"],
       "properties": {
-        "compatible_predecessor_builds": {
+        "predecessors": {
           "type": "array",
-          "minItems": 1,
+          "minItems": 0,
           "maxItems": 64,
           "uniqueItems": true,
-          "items": {"$ref": "#/$defs/prefixedDigest"}
+          "items": {"$ref": "#/$defs/authorizedPredecessor"}
         }
       }
     }
@@ -88,6 +93,10 @@
     "prefixedDigest": {
       "type": "string",
       "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "versionedPlatformTarget": {
+      "type": "string",
+      "pattern": "^platform/releases/(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)/[0-9a-f]{64}\\.json$"
     },
     "token": {
       "type": "string",
@@ -106,6 +115,50 @@
         "maximum": {"type": "integer", "minimum": 1, "maximum": 65535}
       }
     },
+    "ociDeploymentBundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "reference",
+        "manifest_digest",
+        "manifest_size",
+        "manifest_media_type",
+        "layer_digest",
+        "layer_size",
+        "layer_media_type"
+      ],
+      "properties": {
+        "reference": {
+          "type": "string",
+          "maxLength": 512,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*(?::[1-9][0-9]{0,4})?/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*@sha256:[0-9a-f]{64}$"
+        },
+        "manifest_digest": {"$ref": "#/$defs/prefixedDigest"},
+        "manifest_size": {"type": "integer", "minimum": 1, "maximum": 16777216},
+        "manifest_media_type": {"const": "application/vnd.oci.image.manifest.v1+json"},
+        "layer_digest": {"$ref": "#/$defs/prefixedDigest"},
+        "layer_size": {"type": "integer", "minimum": 1, "maximum": 67108864},
+        "layer_media_type": {"const": "application/vnd.dgx-forge.control-deployment.v1.tar"}
+      }
+    },
+    "authorizedPredecessor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "target_name",
+        "target_sha256",
+        "release_digest",
+        "build_digest",
+        "deployment_bundle_digest"
+      ],
+      "properties": {
+        "target_name": {"$ref": "#/$defs/versionedPlatformTarget"},
+        "target_sha256": {"$ref": "#/$defs/digest"},
+        "release_digest": {"$ref": "#/$defs/prefixedDigest"},
+        "build_digest": {"$ref": "#/$defs/prefixedDigest"},
+        "deployment_bundle_digest": {"$ref": "#/$defs/prefixedDigest"}
+      }
+    },
     "artifact": {
       "type": "object",
       "additionalProperties": false,
@@ -121,7 +174,8 @@
         "name": {"$ref": "#/$defs/token"},
         "reference": {
           "type": "string",
-          "pattern": "^[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9][a-z0-9._/-]*@sha256:[0-9a-f]{64}$"
+          "maxLength": 512,
+          "pattern": "^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)*(?::[1-9][0-9]{0,4})?/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*)*@sha256:[0-9a-f]{64}$"
         },
         "sha256": {"$ref": "#/$defs/digest"},
         "size": {"type": "integer", "minimum": 1, "maximum": 1099511627776},
@@ -132,20 +186,32 @@
     "architectureArtifact": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["architecture", "artifact"],
+      "required": ["architecture", "artifact", "payload"],
       "properties": {
         "architecture": {"$ref": "#/$defs/architecture"},
-        "artifact": {"$ref": "#/$defs/artifact"}
+        "artifact": {"$ref": "#/$defs/artifact"},
+        "payload": {"$ref": "#/$defs/payload"}
       }
     },
     "architectureArtifactWithProtocol": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["architecture", "protocol", "artifact"],
+      "required": ["architecture", "protocol", "artifact", "payload"],
       "properties": {
         "architecture": {"$ref": "#/$defs/architecture"},
         "protocol": {"$ref": "#/$defs/protocolRange"},
-        "artifact": {"$ref": "#/$defs/artifact"}
+        "artifact": {"$ref": "#/$defs/artifact"},
+        "payload": {"$ref": "#/$defs/payload"}
+      }
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "sha256", "size"],
+      "properties": {
+        "name": {"$ref": "#/$defs/token"},
+        "sha256": {"$ref": "#/$defs/digest"},
+        "size": {"type": "integer", "minimum": 64, "maximum": 268435456}
       }
     },
     "architectureArtifacts": {

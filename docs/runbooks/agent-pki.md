@@ -128,18 +128,13 @@ signed CRL whose update window is current and bounded to that configured hour.
 ## Start and verify the production provider
 
 Set `STEP_CA_CONFIG_FILE`, `AGENT_CA_PROVISIONER_KID`, and all file variables in
-`.env`. The normal production selection is exactly these two files:
+the root-owned site environment before selecting the generation. The installed
+updater owns start/stop and Compose rendering. Verify the active immutable
+generation through its fixed diagnostics:
 
 ```sh
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml config --quiet
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml up -d
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml ps
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml exec step-ca \
-  step ca health --ca-url https://127.0.0.1:9000 --root /run/secrets/root_ca.crt
+sudo dgx-control-offline maintenance status
+sudo dgx-control-offline maintenance step-ca-health
 ```
 
 Only Caddy publishes a port. step-ca and control-api share the internal `ca`
@@ -166,10 +161,8 @@ serial, then clear/reject the enrollment only through an audited operator
 procedure. Never automatically resubmit its authorization token.
 
 ```sh
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml logs --since 30m step-ca
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml logs --since 30m control-api
+sudo dgx-control-offline maintenance logs --service step-ca --since-minutes 30
+sudo dgx-control-offline maintenance logs --service control-api --since-minutes 30
 ```
 
 ## Expiry and identity-loss recovery
@@ -192,15 +185,11 @@ the old leaf's remaining 24 hours. Verify new issuance, then retain the old
 intermediate certificate for audit until every old leaf has expired. Never run
 two active issuers with the same provisioner private credential.
 
-```sh
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml stop control-api step-ca
-sha256sum "$PKI_SECRET_DIR/intermediate_ca.crt" "$PKI_SECRET_DIR/intermediate_ca_key"
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml up -d step-ca control-api
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml ps
-```
+Do not perform this transition with ad hoc Compose stop/start commands. Stage
+the new material under the root-owned site boundary, record its SHA-256 values,
+and execute the transition as a reviewed platform generation update. If the
+candidate cannot prove CA health and new issuance, let the updater preserve or
+restore the recorded predecessor; do not mutate the active generation in place.
 
 For root rotation, distribute an overlap trust bundle containing old and new
 root certificates to Caddy first, rotate intermediates and all leaves, wait at
@@ -215,40 +204,17 @@ To obtain a consistent CA snapshot, stop issuance/control-api, stop step-ca,
 snapshot its data, and dump PostgreSQL before restarting. Encrypt the archive
 with the operator backup system and test restoration on an isolated network.
 
-```sh
-BACKUP_DIR=/srv/dgx-forge/backups/pki-staging
-install -d -m 0700 "$BACKUP_DIR"
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml stop control-api step-ca
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml exec -T postgres \
-  pg_dump -U control -d control --format=custom > "$BACKUP_DIR/control.pgdump"
-tar -C /srv/dgx-forge -czf "$BACKUP_DIR/online-pki.tgz" \
-  step-ca secrets/agent-ca-credential secrets/agent-ca-public.jwk secrets/intermediate_ca.crt \
-  secrets/intermediate_ca_key secrets/step-ca-password secrets/step-ca-root-certificate
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml run --rm --no-deps \
-  --entrypoint /bin/sh -v "$BACKUP_DIR:/backup" step-ca \
-  -c 'tar -C /home/step/db -czf /backup/step-ca-db.tgz .'
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml up -d step-ca control-api
-```
+Use the root-owned `HostBackupBoundary` described in
+[Control-plane recovery](control-plane-recovery.md). It stops the fixed service
+set, captures PostgreSQL and the configured CA state in one authenticated,
+encrypted generation, and records the exact receipt. There is no supported
+operator-supplied `pg_dump`, tar, decrypt, or Compose restore command.
 
-Restore the step-ca data/config/secrets and PostgreSQL dump from the same backup
-generation. Verify CA health, compare intermediate and provisioner public-key
-fingerprints, and test one disposable enrollment before restoring ingress.
-
-```sh
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml stop control-api step-ca
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml run --rm --no-deps \
-  --entrypoint /bin/sh -v "$BACKUP_DIR:/backup:ro" step-ca \
-  -c 'test -z "$(find /home/step/db -mindepth 1 -print -quit)" && tar -C /home/step/db -xzf /backup/step-ca-db.tgz'
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml exec -T postgres \
-  pg_restore -U control -d control --clean --if-exists < "$BACKUP_DIR/control.pgdump"
-```
+Restore the step-ca data/config/secrets and PostgreSQL state only from that same
+verified backup generation through `dgx-control-offline recover --apply`.
+Afterward run `maintenance step-ca-health`, compare intermediate and
+provisioner public-key fingerprints, and test one disposable enrollment before
+restoring ingress.
 
 ## Built-in-to-step-ca migration
 
@@ -259,11 +225,7 @@ provisioner, validate it on an isolated network, stop control-api, and replace
 through the root trust anchor; all new issuance uses Smallstep. Do not merge both
 overlays—the settings guard rejects mixed provider material.
 
-```sh
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.builtin-ca.yaml down
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml config --quiet
-docker compose --env-file deploy/compose/.env \
-  -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml up -d
-```
+Publish and select a signed platform generation whose reviewed site selector is
+`step-ca`; the updater validates the overlay, renders it from the immutable
+generation, and performs the fixed service transition. There is no supported
+in-place Compose overlay switch.

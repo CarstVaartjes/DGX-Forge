@@ -76,6 +76,21 @@ def test_worker_runs_route_housekeeping_even_when_queue_is_idle(tmp_path) -> Non
     assert calls == ["refresh"]
 
 
+def test_worker_heartbeat_runs_after_idle_housekeeping(tmp_path) -> None:
+    jobs = _service(tmp_path)
+    calls = []
+    worker = Worker(
+        jobs,
+        "worker-1",
+        {},
+        housekeeping=lambda: calls.append("housekeeping"),
+        loop_heartbeat=lambda: calls.append("heartbeat"),
+    )
+
+    assert worker.run_once() is False
+    assert calls == ["housekeeping", "heartbeat"]
+
+
 def test_worker_ticks_durable_reconciliations_before_generic_jobs(tmp_path) -> None:
     jobs = _service(tmp_path)
     jobs.enqueue("probe", "operator", "a" * 40, ["node"], {})
@@ -149,3 +164,38 @@ def test_worker_alternates_busy_reconciliation_and_generic_job_queues(
     assert worker.run_once() is True
     assert reconciliations.calls == 1
     assert handled == ["probe"]
+
+
+def test_worker_round_robins_reconciliation_update_and_generic_without_starvation(
+    tmp_path,
+) -> None:
+    jobs = _service(tmp_path)
+    jobs.enqueue("probe", "operator", "a" * 40, ["node"], {"index": 1})
+    jobs.enqueue("probe", "operator", "a" * 40, ["node"], {"index": 2})
+    events: list[str] = []
+
+    class Source:
+        def __init__(self, name: str) -> None:
+            self.name = name
+
+        def tick(self) -> bool:
+            events.append(self.name)
+            return True
+
+    worker = Worker(
+        jobs,
+        "worker-1",
+        {"probe": lambda _request: events.append("generic") or {}},
+        reconciliations=Source("reconciliation"),
+        updates=Source("update"),
+    )
+
+    assert [worker.run_once() for _ in range(6)] == [True] * 6
+    assert events == [
+        "reconciliation",
+        "update",
+        "generic",
+        "reconciliation",
+        "update",
+        "generic",
+    ]

@@ -1,0 +1,41 @@
+[Unit]
+Description=DGX Forge root package helper
+Documentation=https://github.com/dgx-forge/dgx-forge
+Requires=dgx-forge-package-helper.socket
+
+[Service]
+Type=simple
+User=root
+Group=root
+ExecStart=/opt/dgx-forge/agent/current/bin/python -I -m dgx_agent.package_helper --listen-fd=3
+StandardInput=null
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+PrivateDevices=yes
+PrivateMounts=yes
+PrivateNetwork=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectHome=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=yes
+ProtectProc=invisible
+ProtectSystem=strict
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=CAP_SETGID CAP_SETUID
+AmbientCapabilities=
+UMask=0077
+TimeoutStartSec=95s
+RuntimeDirectory=dgx-forge
+StateDirectory=dgx-forge-package-helper
+ReadWritePaths=/var/lib/dgx-forge-package-helper

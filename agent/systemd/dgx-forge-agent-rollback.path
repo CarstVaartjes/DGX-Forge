@@ -1,0 +1,12 @@
+[Unit]
+Description=Watch for DGX Forge agent rollback requests
+After=local-fs.target
+
+[Path]
+PathExists=/run/dgx-forge-agent/rollback-request.json
+Unit=dgx-forge-agent-rollback.service
+TriggerLimitIntervalSec=60s
+TriggerLimitBurst=3
+
+[Install]
+WantedBy=multi-user.target

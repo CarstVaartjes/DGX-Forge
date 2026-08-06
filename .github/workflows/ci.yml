@@ -100,6 +100,7 @@ jobs:
     name: Validate container release tag
     if: >-
       vars.DGX_CONTAINER_RELEASES_ENABLED == 'true' &&
+      vars.DGX_PLATFORM_RELEASES_ENABLED == 'true' &&
       github.event_name == 'push' &&
       github.ref_type == 'tag' &&
       startsWith(github.ref_name, 'v')
@@ -112,6 +113,8 @@ jobs:
       api_image: ${{ steps.release.outputs.api_image }}
       worker_image: ${{ steps.release.outputs.worker_image }}
       hermes_image: ${{ steps.release.outputs.hermes_image }}
+      deployment_bundle_repository: ${{ steps.release.outputs.deployment_bundle_repository }}
+      platform_channel: ${{ steps.release.outputs.platform_channel }}
     steps:
       - name: Check out tagged commit
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -126,6 +129,7 @@ jobs:
     name: Publish public container images
     needs: [lint, generated-clients, test, release-metadata]
     runs-on: ubuntu-latest
+    environment: platform-release
     concurrency:
       group: dgx-forge-container-publication
       cancel-in-progress: false
@@ -143,6 +147,12 @@ jobs:
         run: scripts/verify-public-image-inputs
       - name: Verify supply-chain evidence
         run: scripts/verify-supply-chain --json
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.1"
+          python-version: "3.12"
+          enable-cache: true
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: Log in to GHCR
@@ -235,10 +245,179 @@ jobs:
               "HERMES_AGENT_IMAGE=${{ needs.release-metadata.outputs.hermes_image }}:${{ needs.release-metadata.outputs.version }}@${{ steps.hermes.outputs.digest }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1
+        with:
+          version: 1.3.2
+      - name: Build canonical platform release
+        shell: bash
+        env:
+          DEPLOYMENT_BUNDLE_REPOSITORY: ${{ needs.release-metadata.outputs.deployment_bundle_repository }}
+          RELEASE_VERSION: ${{ needs.release-metadata.outputs.version }}
+        run: |
+          set -euo pipefail
+          install -d -m 0700 release-output
+          release_input="release/platform/${RELEASE_VERSION}.input.json"
+          test -f "$release_input"
+          uv run --frozen scripts/build-control-deployment-bundle \
+            --source-root deploy/compose \
+            --output release-output/control-deployment.tar
+          uv run --frozen scripts/publish-platform-target describe-bundle \
+            --bundle release-output/control-deployment.tar \
+            --repository "$DEPLOYMENT_BUNDLE_REPOSITORY" \
+            > release-output/control-deployment-descriptor.json
+          for artifact in api worker hermes; do
+            case "$artifact" in
+              api)
+                repository="${{ needs.release-metadata.outputs.api_image }}"
+                digest="${{ steps.api.outputs.digest }}"
+                locator=control.images.api
+                ;;
+              worker)
+                repository="${{ needs.release-metadata.outputs.worker_image }}"
+                digest="${{ steps.worker.outputs.digest }}"
+                locator=control.images.worker
+                ;;
+              hermes)
+                repository="${{ needs.release-metadata.outputs.hermes_image }}"
+                digest="${{ steps.hermes.outputs.digest }}"
+                locator=control.assets.hermes
+                ;;
+            esac
+            image="${repository}:${RELEASE_VERSION}@${digest}"
+            release_reference="${repository}@${digest}"
+            docker buildx imagetools inspect "$image" --raw \
+              > "release-output/${artifact}-manifest.json"
+            docker buildx imagetools inspect "$image" --format '{{ json .SBOM }}' \
+              | jq -S -c . > "release-output/${artifact}-sbom.json"
+            docker buildx imagetools inspect "$image" --format '{{ json .Provenance }}' \
+              | jq -S -c . > "release-output/${artifact}-provenance.json"
+            uv run --frozen scripts/collect-platform-artifact-evidence \
+              --locator "$locator" \
+              --name "$artifact" \
+              --reference "$release_reference" \
+              --manifest "release-output/${artifact}-manifest.json" \
+              --sbom "release-output/${artifact}-sbom.json" \
+              --provenance "release-output/${artifact}-provenance.json" \
+              --output "release-output/${artifact}-evidence.json"
+          done
+          install -d -m 0700 release-output/wheels
+          uv build --offline --wheel --project . --out-dir release-output/wheels
+          uv build --offline --wheel --project control --out-dir release-output/wheels
+          uv run --frozen scripts/build-host-updater-artifact \
+            --control-wheel release-output/wheels/dgx_control-0.1.0-py3-none-any.whl \
+            --platform-wheel release-output/wheels/spark_profiles-0.1.0-py3-none-any.whl \
+            --protocol-wheel inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl \
+            --output release-output/dgx-forge-host-updater.tar
+          sha256sum release-output/dgx-forge-host-updater.tar \
+            > release-output/dgx-forge-host-updater.tar.sha256
+          uv run --frozen scripts/build-platform-manifest \
+            --input "$release_input" \
+            --bundle-descriptor release-output/control-deployment-descriptor.json \
+            --artifact-evidence release-output/api-evidence.json \
+            --artifact-evidence release-output/worker-evidence.json \
+            --artifact-evidence release-output/hermes-evidence.json \
+            --version "$RELEASE_VERSION" \
+            --output release-output/platform-release.json
+          oras_path=$(command -v oras)
+          test -x "$oras_path"
+          printf 'DGX_PLATFORM_ORAS_BIN=%s\n' "$oras_path" >> "$GITHUB_ENV"
+      - name: Publish immutable deployment bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          uv run --frozen scripts/publish-platform-target publish-bundle \
+            --manifest release-output/platform-release.json \
+            --bundle release-output/control-deployment.tar \
+            > release-output/bundle-publication.json
+      - name: Upload platform build evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: platform-build-${{ needs.release-metadata.outputs.version }}
+          retention-days: 1
+          if-no-files-found: error
+          path: |
+            release-output/*-evidence.json
+            release-output/*-manifest.json
+            release-output/*-provenance.json
+            release-output/*-sbom.json
+            release-output/bundle-publication.json
+            release-output/control-deployment-descriptor.json
+            release-output/control-deployment.tar
+            release-output/dgx-forge-host-updater.tar
+            release-output/dgx-forge-host-updater.tar.sha256
+            release-output/platform-release.json
+
+  attest-host-updater:
+    name: Attest the installable host updater
+    needs: [publish-images, release-metadata]
+    runs-on: ubuntu-latest
+    environment: platform-release
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download immutable host updater build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: platform-build-${{ needs.release-metadata.outputs.version }}
+          path: release-output
+      - name: Attest host updater provenance
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 # v4.1.0
+        with:
+          subject-path: release-output/dgx-forge-host-updater.tar
+
+  publish-platform-target:
+    name: Publish immutable platform authority state
+    needs: [publish-images, release-metadata]
+    runs-on: ubuntu-latest
+    environment: platform-release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Check out tagged publication client
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.1"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Download immutable platform build
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: platform-build-${{ needs.release-metadata.outputs.version }}
+          path: release-output
+      - name: Publish immutable platform target
+        shell: bash
+        env:
+          DGX_PLATFORM_AUTHORITY_URL: ${{ vars.DGX_PLATFORM_AUTHORITY_URL }}
+          DGX_PLATFORM_AUTHORITY_AUDIENCE: ${{ vars.DGX_PLATFORM_AUTHORITY_AUDIENCE }}
+          DGX_PLATFORM_TUF_PUBLISHER_BIN: ${{ github.workspace }}/scripts/platform-release-authority
+          DGX_PLATFORM_CHANNEL_PUBLISHER_BIN: ${{ github.workspace }}/scripts/platform-release-authority
+          PLATFORM_CHANNEL: ${{ needs.release-metadata.outputs.platform_channel }}
+        run: |
+          set -euo pipefail
+          uv run --frozen scripts/publish-platform-target publish-authority \
+            --manifest release-output/platform-release.json \
+            --bundle release-output/control-deployment.tar \
+            --channel "$PLATFORM_CHANNEL" \
+            > release-output/platform-publication.json
+      - name: Upload platform authority evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: platform-authority-${{ needs.release-metadata.outputs.version }}
+          retention-days: 1
+          if-no-files-found: error
+          path: release-output/platform-publication.json
 
   release-manifest:
     name: Publish container release manifest
-    needs: [release-metadata, publish-images]
+    needs: [release-metadata, publish-images, attest-host-updater, publish-platform-target]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -247,6 +426,16 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
+      - name: Download platform publication evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: platform-build-${{ needs.release-metadata.outputs.version }}
+          path: release-output
+      - name: Download platform authority evidence
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: platform-authority-${{ needs.release-metadata.outputs.version }}
+          path: release-output
       - name: Create digest-pinned image environment
         env:
           CONTROL_API_IMAGE: ${{ needs.release-metadata.outputs.api_image }}:${{ needs.release-metadata.outputs.version }}
@@ -267,6 +456,11 @@ jobs:
         run: >-
           gh release create "$GITHUB_REF_NAME"
           dgx-forge-images.env dgx-forge-images.env.sha256
+          release-output/control-deployment-descriptor.json
+          release-output/dgx-forge-host-updater.tar
+          release-output/dgx-forge-host-updater.tar.sha256
+          release-output/platform-release.json
+          release-output/platform-publication.json
           --repo "$GITHUB_REPOSITORY"
           --verify-tag
           --title "DGX-Forge ${{ needs.release-metadata.outputs.version }}"

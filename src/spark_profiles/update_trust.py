@@ -20,7 +20,11 @@ from tuf.api.metadata import Metadata
 from tuf.ngclient import FetcherInterface, Updater
 from tuf.ngclient.config import UpdaterConfig
 
-_TARGET_NAME = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
+_TARGET_NAME = re.compile(
+    r"platform/releases/"
+    r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)/"
+    r"[0-9a-f]{64}\.json\Z"
+)
 _MAX_TARGET_BYTES = 16 * 1024 * 1024
 _LOCK_NAME = ".platform-updater.lock"
 _STATE_NAME = "trusted-state.json"
@@ -65,87 +69,113 @@ class UpdateTrust:
 
     def refresh(self) -> None:
         with self._thread_lock, self._exclusive_cache():
-            try:
-                bootstrap = (
-                    None
-                    if (self._metadata_root / "root.json").is_file()
-                    else self._bootstrap_root
-                )
-                updater = Updater(
-                    str(self._metadata_root),
-                    self._metadata_base_url,
-                    str(self._target_root),
-                    self._target_base_url,
-                    self._fetcher,
-                    UpdaterConfig(
-                        max_root_rotations=32,
-                        max_delegations=16,
-                        root_max_length=256 * 1024,
-                        timestamp_max_length=64 * 1024,
-                        snapshot_max_length=1024 * 1024,
-                        targets_max_length=2 * 1024 * 1024,
-                        prefix_targets_with_hash=False,
-                        app_user_agent="dgx-forge-platform-updater/0.1.0",
-                    ),
-                    bootstrap=bootstrap,
-                )
-                updater.refresh()
-                state = _metadata_versions(self._metadata_root)
-                _verify_version_floor(self._metadata_root / _STATE_NAME, state)
-                _write_state(self._metadata_root, state)
-                self._updater = updater
-            except UpdateTrustError:
-                raise
-            except (DownloadError, RepositoryError, OSError, ValueError, TypeError) as error:
-                raise UpdateTrustError("platform TUF refresh failed") from error
+            self._refresh_locked()
+
+    def refresh_and_trusted_target(self, name: str) -> tuple[TrustedTarget, int]:
+        """Refresh and select a target with one exact targets-metadata version."""
+        _target_name(name)
+        with self._thread_lock, self._exclusive_cache():
+            state = self._refresh_locked()
+            target = self._trusted_target_locked(name)
+            return target, state["targets"]
 
     def trusted_target(self, name: str) -> TrustedTarget:
-        if not isinstance(name, str) or _TARGET_NAME.fullmatch(name) is None:
-            raise UpdateTrustError("platform TUF target name is invalid")
+        _target_name(name)
         with self._thread_lock, self._exclusive_cache():
-            updater = self._updater
-            if updater is None:
-                raise UpdateTrustError("platform TUF metadata has not been refreshed")
-            temporary: Path | None = None
-            try:
-                target = updater.get_targetinfo(name)
-                if target is None:
-                    raise UpdateTrustError("platform TUF target is not authorized")
-                if (
-                    isinstance(target.length, bool)
-                    or not 0 < target.length <= _MAX_TARGET_BYTES
-                    or set(target.hashes) != {"sha256"}
-                    or not re.fullmatch(r"[0-9a-f]{64}", target.hashes["sha256"])
-                ):
-                    raise UpdateTrustError("platform TUF target bounds are invalid")
-                descriptor, raw_path = tempfile.mkstemp(
-                    prefix=".platform-target-", dir=self._target_root
-                )
-                os.close(descriptor)
-                temporary = Path(raw_path)
-                updater.download_target(target, str(temporary))
-                data = temporary.read_bytes()
-                if (
-                    len(data) != target.length
-                    or hashlib.sha256(data).hexdigest() != target.hashes["sha256"]
-                ):
-                    raise UpdateTrustError("platform TUF target bytes are invalid")
-                return TrustedTarget(
-                    name=name,
-                    length=target.length,
-                    sha256=target.hashes["sha256"],
-                    data=data,
-                )
-            except UpdateTrustError:
-                raise
-            except (DownloadError, RepositoryError, OSError, ValueError, TypeError) as error:
-                raise UpdateTrustError("platform TUF target verification failed") from error
-            finally:
-                if temporary is not None:
-                    try:
-                        temporary.unlink()
-                    except FileNotFoundError:
-                        pass
+            return self._trusted_target_locked(name)
+
+    def _refresh_locked(self) -> dict[str, int]:
+        try:
+            bootstrap = (
+                None
+                if (self._metadata_root / "root.json").is_file()
+                else self._bootstrap_root
+            )
+            updater = Updater(
+                str(self._metadata_root),
+                self._metadata_base_url,
+                str(self._target_root),
+                self._target_base_url,
+                self._fetcher,
+                UpdaterConfig(
+                    max_root_rotations=32,
+                    max_delegations=16,
+                    root_max_length=256 * 1024,
+                    timestamp_max_length=64 * 1024,
+                    snapshot_max_length=1024 * 1024,
+                    targets_max_length=2 * 1024 * 1024,
+                    prefix_targets_with_hash=True,
+                    app_user_agent="dgx-forge-platform-updater/0.1.0",
+                ),
+                bootstrap=bootstrap,
+            )
+            updater.refresh()
+            state = _metadata_versions(self._metadata_root)
+            _verify_version_floor(self._metadata_root / _STATE_NAME, state)
+            _write_state(self._metadata_root, state)
+            self._updater = updater
+            return state
+        except UpdateTrustError:
+            raise
+        except (
+            DownloadError,
+            RepositoryError,
+            OSError,
+            ValueError,
+            TypeError,
+        ) as error:
+            raise UpdateTrustError("platform TUF refresh failed") from error
+
+    def _trusted_target_locked(self, name: str) -> TrustedTarget:
+        updater = self._updater
+        if updater is None:
+            raise UpdateTrustError("platform TUF metadata has not been refreshed")
+        temporary: Path | None = None
+        try:
+            target = updater.get_targetinfo(name)
+            if target is None:
+                raise UpdateTrustError("platform TUF target is not authorized")
+            if (
+                isinstance(target.length, bool)
+                or not 0 < target.length <= _MAX_TARGET_BYTES
+                or set(target.hashes) != {"sha256"}
+                or not re.fullmatch(r"[0-9a-f]{64}", target.hashes["sha256"])
+            ):
+                raise UpdateTrustError("platform TUF target bounds are invalid")
+            descriptor, raw_path = tempfile.mkstemp(
+                prefix=".platform-target-", dir=self._target_root
+            )
+            os.close(descriptor)
+            temporary = Path(raw_path)
+            updater.download_target(target, str(temporary))
+            data = temporary.read_bytes()
+            if (
+                len(data) != target.length
+                or hashlib.sha256(data).hexdigest() != target.hashes["sha256"]
+            ):
+                raise UpdateTrustError("platform TUF target bytes are invalid")
+            return TrustedTarget(
+                name=name,
+                length=target.length,
+                sha256=target.hashes["sha256"],
+                data=data,
+            )
+        except UpdateTrustError:
+            raise
+        except (
+            DownloadError,
+            RepositoryError,
+            OSError,
+            ValueError,
+            TypeError,
+        ) as error:
+            raise UpdateTrustError("platform TUF target verification failed") from error
+        finally:
+            if temporary is not None:
+                try:
+                    temporary.unlink()
+                except FileNotFoundError:
+                    pass
 
     @contextmanager
     def _exclusive_cache(self):
@@ -164,7 +194,9 @@ class UpdateTrust:
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError as error:
-                raise UpdateTrustError("platform TUF cache is already in use") from error
+                raise UpdateTrustError(
+                    "platform TUF cache is already in use"
+                ) from error
             yield
         finally:
             try:
@@ -194,6 +226,12 @@ def _repository_url(value: str, kind: str) -> str:
         or value != f"{origin}/platform/{kind}/"
     ):
         raise UpdateTrustError("platform TUF repository URL is invalid")
+    return value
+
+
+def _target_name(value: object) -> str:
+    if not isinstance(value, str) or _TARGET_NAME.fullmatch(value) is None:
+        raise UpdateTrustError("platform TUF target name is invalid")
     return value
 
 
@@ -268,7 +306,9 @@ def _write_state(root: Path, state: dict[str, int]) -> None:
         while offset < len(content):
             written = os.write(descriptor, content[offset:])
             if written <= 0:
-                raise UpdateTrustError("platform TUF version floor write was incomplete")
+                raise UpdateTrustError(
+                    "platform TUF version floor write was incomplete"
+                )
             offset += written
         os.fsync(descriptor)
     finally:

@@ -60,19 +60,24 @@ HTTP, or a fallback list.
 
 ## Apply the one-off host egress boundary
 
-Compose networks do not replace a host firewall. After Docker creates the
-networks, review the resolved plan, apply it once, and verify it:
+Compose networks do not replace a host firewall. The hardening program is part
+of the signed deployment bundle; never run the similarly named file from a Git
+checkout. After the updater has selected a generation and Docker has created
+the networks, resolve the immutable active generation, review the plan, apply
+it once, and verify it:
 
 ```bash
-cd deploy/compose
+active=$(sudo cat /srv/dgx-forge/control-host/active-generation)
+hardener="/srv/dgx-forge/control-host/generations/$active/bin/harden-hermes-egress"
 export COMPOSE_PROJECT_NAME=dgx-forge-control
 export DGX_MANAGEMENT_CIDRS=10.0.0.0/24
 export DGX_DIRECT_FABRIC_CIDRS=192.168.100.0/24,192.168.101.0/24
-bin/harden-hermes-egress --check
 sudo --preserve-env=COMPOSE_PROJECT_NAME,DGX_MANAGEMENT_CIDRS,DGX_DIRECT_FABRIC_CIDRS \
-  bin/harden-hermes-egress --apply
+  "$hardener" --check
 sudo --preserve-env=COMPOSE_PROJECT_NAME,DGX_MANAGEMENT_CIDRS,DGX_DIRECT_FABRIC_CIDRS \
-  bin/harden-hermes-egress --verify
+  "$hardener" --apply
+sudo --preserve-env=COMPOSE_PROJECT_NAME,DGX_MANAGEMENT_CIDRS,DGX_DIRECT_FABRIC_CIDRS \
+  "$hardener" --verify
 ```
 
 The owned chain denies direct access from Hermes to Spark management,
@@ -83,13 +88,18 @@ non-mutating `--check`.
 ## Run the one-time setup
 
 Provision a dedicated LiteLLM client key for Hermes; never use the LiteLLM
-master key. With LiteLLM healthy, run:
+master key. With LiteLLM healthy, review the selected-generation setup plan,
+then apply that exact allowlisted operation through the installed updater:
 
 ```bash
-cd deploy/compose
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml \
-  --profile setup run --rm hermes-setup
+sudo dgx-control-offline maintenance hermes-setup
+sudo dgx-control-offline maintenance hermes-setup \
+  --generation REPLACE_GENERATION_FROM_PLAN --apply
 ```
+
+The apply path holds the host-operation lock and invokes only the signed active
+generation's fixed `hermes-setup` profile. It cannot select another Compose
+file, profile, entrypoint, mount, environment file, or service.
 
 Configure the provider/model prompts as:
 
@@ -113,10 +123,10 @@ disposable.
 ## Start and verify
 
 ```bash
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml up -d
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml ps
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml \
-  logs --no-color hermes-agent tailscale-configurator
+sudo dgx-control-offline doctor
+sudo dgx-control-offline maintenance status
+sudo dgx-control-offline maintenance logs --service hermes-agent --since-minutes 30
+sudo dgx-control-offline maintenance logs --service tailscale-configurator --since-minutes 30
 ```
 
 Confirm Hermes and LiteLLM are healthy. Serve status must show HTTPS 443 for
@@ -142,15 +152,18 @@ acceptance checks.
 
 ## Backup and recovery
 
-`backup-control-plane` includes `data` and `workspaces` in its authenticated
-encrypted archive and excludes cache. Back up the external API-key file and
-Tailscale state/OAuth files in the same encrypted off-host generation.
+The root-owned `HostBackupBoundary` includes Hermes `data` and `workspaces` in
+the authenticated encrypted upgrade archive and excludes cache. Back up the
+external API-key file and Tailscale state/OAuth files in the same encrypted
+off-host generation.
 
-`restore-control-plane ... --apply` stops Hermes, restores verified trees with
-the configured UID/GID and owner-only permissions, and leaves Hermes stopped.
-Restore and verify the API-key file separately, then start the normal project.
-Fresh Spark presence and a new LiteLLM lease are required; restored routes do
-not become live merely because they existed in a backup.
+Journaled control-host recovery verifies the exact backup receipt before its
+fixed boundary restores the selected Hermes trees with their configured
+UID/GID and owner-only permissions. There is no repository restore script or
+operator-supplied decryption command. Restore and verify the API-key file
+separately, then let the updater start the selected generation. Fresh Spark
+presence and a new LiteLLM lease are required; restored routes do not become
+live merely because they existed in a backup.
 
 If Tailscale state is lost, the scoped OAuth client performs unattended tagged
 re-enrollment. Verify the replacement and revoke the orphan. Loss of Hermes

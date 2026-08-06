@@ -29,7 +29,9 @@ pre{max-height:28rem;overflow:auto;padding:1rem;background:#050a0f;border:1px so
 .status.good{background:#123d2c;color:#8cf0bf}
 code{color:#9bd7ff}
 .page-heading{display:flex;align-items:start;justify-content:space-between;gap:1rem}
-.native-links,.review-card,.certificate-controls,.grant-secret{margin:1.25rem 0;padding:1rem;background:#0e1924;border:1px solid #263747;border-radius:.6rem}
+.native-links,.review-card,.certificate-controls,.grant-secret,.update-notice{margin:1.25rem 0;padding:1rem;background:#0e1924;border:1px solid #263747;border-radius:.6rem}
+.update-notice{border-color:#71e6b1}
+.update-notice a{color:#9bd7ff;font-weight:700}
 .native-links a{color:#9bd7ff}
 .table-scroll{overflow-x:auto}
 .pagination{display:flex;gap:.5rem;margin:.5rem 0}
@@ -55,7 +57,7 @@ progress{width:min(36rem,100%);height:1rem;accent-color:#71e6b1}
 @media(max-width:760px){
   .shell{grid-template-columns:1fr}
   aside{position:static}
-  nav{grid-template-columns:repeat(6,auto);overflow:auto}
+  nav{grid-template-columns:repeat(7,auto);overflow:auto}
   aside footer{display:none}
   .page-heading{display:block}
 }

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import email.parser
 import hashlib
 import io
 import json
@@ -19,9 +20,9 @@ from pathlib import Path
 
 MACHINES = {"x86_64": 62, "aarch64": 183}
 MAX_WHEEL = 256 * 1024 * 1024
-MAX_ARTIFACT = 512 * 1024 * 1024
+MAX_ARTIFACT = 256 * 1024 * 1024
 PYINSTALLER = "6.15.0"
-LOCK_SHA256 = "e1faa977e3d4ea4a47e364b2d33d9b98aa34e6da2c9a96ee45d420487aa958ba"
+LOCK_SHA256 = "db2d8bffcedff7ca2abfddb1d123d7af2788950f1688d16a763488e6bf2e3648"
 PACKAGING_DISTRIBUTIONS = {
     "altgraph": "0.17.5",
     "attrs": "26.1.0",
@@ -41,9 +42,15 @@ PACKAGING_DISTRIBUTIONS = {
     "rpds-py": "2026.6.3",
     "securesystemslib": "1.4.0",
     "setuptools": "83.0.0",
+    "spark-profiles": "0.1.0",
     "tuf": "7.0.0",
     "typing-extensions": "4.16.0",
     "urllib3": "2.7.0",
+}
+INPUT_DISTRIBUTIONS = {
+    "agent wheel": ("dgx-agent", "0.1.0"),
+    "protocol wheel": ("dgx-agent-protocol", "1.0.0"),
+    "platform wheel": ("spark-profiles", "0.1.0"),
 }
 
 
@@ -135,6 +142,36 @@ def _extract_wheel(raw: bytes, destination: Path, label: str) -> None:
             target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             target.write_bytes(archive.read(info))
             target.chmod(0o400)
+
+
+def _validate_wheel(raw: bytes, label: str) -> None:
+    expected_name, expected_version = INPUT_DISTRIBUTIONS[label]
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as archive:
+            names = archive.namelist()
+            metadata_names = [
+                name for name in names if name.endswith(".dist-info/METADATA")
+            ]
+            if len(metadata_names) != 1:
+                raise BuildError(f"{label} distribution metadata is invalid")
+            metadata = email.parser.BytesParser().parsebytes(
+                archive.read(metadata_names[0])
+            )
+    except (zipfile.BadZipFile, KeyError, ValueError) as error:
+        raise BuildError(f"{label} distribution metadata is invalid") from error
+    if (
+        metadata.get("Name", "").lower().replace("_", "-") != expected_name
+        or metadata.get("Version") != expected_version
+    ):
+        raise BuildError(f"{label} distribution identity is not reviewed")
+    if label == "platform wheel":
+        required = {
+            "spark_profiles/platform_release.py",
+            "spark_profiles/update_trust.py",
+            "spark_profiles/schemas/platform-update-manifest.schema.json",
+        }
+        if not required.issubset(names):
+            raise BuildError("platform wheel release closure is incomplete")
 
 
 def _packaging_python() -> Path:
@@ -256,12 +293,20 @@ def _publish(source: Path, output: Path, architecture: str) -> None:
 
 
 def build(
-    agent_wheel: Path, protocol_wheel: Path, output: Path, architecture: str
+    agent_wheel: Path,
+    protocol_wheel: Path,
+    platform_wheel: Path,
+    output: Path,
+    architecture: str,
 ) -> None:
     if architecture not in MACHINES or architecture != _native():
         raise BuildError("cross-architecture packaging is forbidden")
     agent_snapshot = _input(agent_wheel, "agent wheel")
     protocol_snapshot = _input(protocol_wheel, "protocol wheel")
+    platform_snapshot = _input(platform_wheel, "platform wheel")
+    _validate_wheel(agent_snapshot, "agent wheel")
+    _validate_wheel(protocol_snapshot, "protocol wheel")
+    _validate_wheel(platform_snapshot, "platform wheel")
     entry = Path(__file__).resolve().parents[1] / "packaging/slot_entry.py"
     entry_snapshot = _input(entry, "packaging entry")
     substitute = os.environ.get("DGX_SLOT_SUBSTITUTE_INPUT_TEST")
@@ -274,8 +319,10 @@ def build(
         root = Path(raw)
         agent_source = root / "agent-wheel"
         protocol_source = root / "protocol-wheel"
+        platform_source = root / "platform-wheel"
         _extract_wheel(agent_snapshot, agent_source, "agent wheel")
         _extract_wheel(protocol_snapshot, protocol_source, "protocol wheel")
+        _extract_wheel(platform_snapshot, platform_source, "platform wheel")
         entry = root / "slot_entry.py"
         entry.write_bytes(entry_snapshot)
         entry.chmod(0o400)
@@ -283,6 +330,9 @@ def build(
             "HOME": str(root / "home"),
             "LANG": "C.UTF-8",
             "PATH": "/usr/bin:/bin",
+            "PYTHONPATH": os.pathsep.join(
+                (str(agent_source), str(protocol_source), str(platform_source))
+            ),
             "PYTHONNOUSERSITE": "1",
             "PYTHONSAFEPATH": "1",
             "NO_PROXY": "*",
@@ -291,7 +341,6 @@ def build(
         subprocess.run(
             [
                 str(python),
-                "-I",
                 "-m",
                 "PyInstaller",
                 "--clean",
@@ -309,6 +358,13 @@ def build(
                 str(agent_source),
                 "--paths",
                 str(protocol_source),
+                "--paths",
+                str(platform_source),
+                "--add-data",
+                (
+                    f"{platform_source / 'spark_profiles/schemas/platform-update-manifest.schema.json'}"
+                    ":spark_profiles/schemas"
+                ),
                 str(entry),
             ],
             check=True,
@@ -324,6 +380,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--agent-wheel", type=Path, required=True)
     parser.add_argument("--protocol-wheel", type=Path, required=True)
+    parser.add_argument("--platform-wheel", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--architecture", choices=tuple(MACHINES), required=True)
     arguments = parser.parse_args()
@@ -331,6 +388,7 @@ def main() -> int:
         build(
             arguments.agent_wheel,
             arguments.protocol_wheel,
+            arguments.platform_wheel,
             arguments.output,
             arguments.architecture,
         )

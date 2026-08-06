@@ -62,7 +62,7 @@ and design acceptance do not count as implementation completion.
 | Agent operation queue/fencing | Existing reconciliation services | W5/W14 | Add generic operation enum/payloads; do not create a second agent transport. |
 | Current `spark-runtime-v1` adapter path | Accepted legacy migration source | W9/W17 | Keep until generic equivalence passes; never expand its hard-coded catalog. |
 | Model/profile repository APIs | Existing admin clients | W15/W17 | Preserve public projections; new writes use family/release/deployment documents. |
-| PostgreSQL migrations | Task 29 uses `0010` | W11 uses `0011` | One linear Alembic head; rebase the filename if intervening migrations land. |
+| PostgreSQL migrations | Tasks 29–31 use `0011_update_rollouts` then `0012_control_process_heartbeats` | W11 uses `0013_workload_packages` | One linear Alembic head; rebase the filename if intervening migrations land. |
 | Metrics/Grafana | Existing bounded observability | W16 | Add bounded state/reason/backend/provider/phase labels only. |
 | Final release evidence | Tasks 32–37 | W18–W20 | First-release verifier requires both independent evidence sets. |
 
@@ -97,7 +97,7 @@ and design acceptance do not count as implementation completion.
 
 ## Integration gates
 
-- [ ] **Gate 1: Finish Tasks 26–31 and land revision `0010`**
+- [ ] **Gate 1: Finish Tasks 26–31 and land through revision `0012_control_process_heartbeats`**
 
 Require green hosted CI, the authenticated version-skew projection, persistent
 NAS-newer prompt, exact confirmation-to-`agent.update` plan, compatible-old

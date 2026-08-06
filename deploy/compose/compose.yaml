@@ -10,7 +10,19 @@ x-bounded-logging: &bounded-logging
     max-size: 10m
     max-file: "5"
 
+x-selected-generation-environment: &selected-generation-environment
+  DGX_CONTROL_STARTUP_MODE: selected
+  DGX_CONTROL_GENERATION_ID: ${DGX_CONTROL_GENERATION_ID:?set selected generation ID}
+  DGX_DATABASE_REVISION: ${DGX_DATABASE_REVISION:?set selected database revision}
+  DGX_PLATFORM_VERSION: ${DGX_PLATFORM_VERSION:?set released platform version}
+  DGX_PLATFORM_RELEASE_DIGEST: ${DGX_PLATFORM_RELEASE_DIGEST:?set released platform digest}
+  DGX_PLATFORM_BUILD_DIGEST: ${DGX_PLATFORM_BUILD_DIGEST:?set released build digest}
+  # This is per selection attempt and must be supplied by the root host updater,
+  # never persisted in the site .env file or immutable generation environment.
+  DGX_CONTROL_START_NONCE: ${DGX_CONTROL_START_NONCE:?set fresh selected start nonce}
+
 x-api-environment: &api-environment
+  <<: *selected-generation-environment
   DGX_DEPLOYMENT_MODE: production
   DGX_DATABASE_URL_FILE: /run/secrets/database-url
   DGX_TOKEN_SIGNING_KEY_FILE: /run/secrets/token-signing-key
@@ -22,15 +34,25 @@ x-api-environment: &api-environment
   DGX_REQUIRED_CHECKS: ${REQUIRED_CHECKS:-}
   DGX_MANAGEMENT_CIDRS: ${DGX_MANAGEMENT_CIDRS:?set trusted Spark management CIDRs}
   DGX_DIRECT_FABRIC_CIDRS: ${DGX_DIRECT_FABRIC_CIDRS:-}
+  DGX_AGENT_ARTIFACT_ROOT: /state/agent-artifacts
+  DGX_AGENT_TUF_METADATA_ROOT: /agent-tuf/metadata
+  DGX_AGENT_TUF_TARGET_ROOT: /agent-tuf/targets
   DGX_WORKER_API_TOKEN_FILE: /run/secrets/worker-api-token
+  DGX_ADMIN_GRANT_PRIVATE_KEY_FILE: /run/dgx-api-secrets/admin-grant-private-key.pem
+  DGX_CONTROL_IDENTITY_ROOT: /run/dgx-forge/control-identity
+  DGX_CONTROL_PROCESS_IMAGE: ${CONTROL_API_IMAGE:?set a digest-pinned control-api image}
 
 x-worker-environment: &worker-environment
+  <<: *selected-generation-environment
   DGX_DEPLOYMENT_MODE: production
   DGX_DATABASE_URL_FILE: /run/secrets/database-url
   DGX_WORKER_API_TOKEN_FILE: /run/secrets/worker-api-token
   DGX_INTERNAL_API_URL: http://control-api:8000
   DGX_MANAGEMENT_CIDRS: ${DGX_MANAGEMENT_CIDRS:?set trusted Spark management CIDRs}
   DGX_DIRECT_FABRIC_CIDRS: ${DGX_DIRECT_FABRIC_CIDRS:-}
+  DGX_UPDATE_SIGNER_SOCKET: /run/dgx-signer/signer.sock
+  DGX_CONTROL_IDENTITY_ROOT: /run/dgx-forge/control-identity
+  DGX_CONTROL_PROCESS_IMAGE: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
 
 services:
   route-publication-init:
@@ -47,7 +69,7 @@ services:
       - python
       - -c
       - >-
-        import os;
+        import os,pathlib;
         os.chown('/routes', 0, 0);
         os.chmod('/routes', 0o700);
         os.makedirs('/routes/generations', mode=0o700, exist_ok=True);
@@ -60,6 +82,49 @@ services:
     volumes:
       - route-publications:/routes
       - litellm-supervisor-state:/supervisor
+
+  signer-runtime-init:
+    image: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
+    restart: "no"
+    logging: *bounded-logging
+    user: "0:0"
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: [no-new-privileges:true]
+    command:
+      - python
+      - -c
+      - >-
+        import os,pathlib;
+        os.chown('/socket',10003,10001);
+        os.chmod('/socket',0o710);
+        os.chown('/verifier',10003,10001);
+        os.chmod('/verifier',0o700);
+        os.chown('/publication',10001,10001);
+        os.chmod('/publication',0o750);
+        [pathlib.Path('/publication',n).mkdir(mode=0o750,exist_ok=True) for n in ('metadata','targets')];
+        [os.chown(pathlib.Path('/publication',n),10001,10001) for n in ('metadata','targets')]
+    volumes:
+      - update-signer-socket:/socket
+      - signer-tuf-verifier:/verifier
+      - agent-tuf-publication:/publication
+
+  api-admin-grant-init:
+    image: ${CONTROL_API_IMAGE:?set a digest-pinned control-api image}
+    restart: "no"
+    logging: *bounded-logging
+    user: "0:0"
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: [no-new-privileges:true]
+    command: [python, -m, dgx_control.runtime_init]
+    secrets: [admin-grant-private-key]
+    volumes:
+      - api-admin-grant-runtime:/runtime
 
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:17.6@sha256:00bc86618629af00d2937fdc5a5d63db3ff8450acf52f0636ec813c7f4902929}
@@ -93,11 +158,20 @@ services:
     volumes:
       - ${REPOSITORY_PATH:?set repository path}:/repository
       - control-state:/state
+      - agent-tuf-publication:/agent-tuf
       - route-publications:/routes:ro
+      - api-admin-grant-runtime:/run/dgx-api-secrets:ro
+      - type: bind
+        source: ${CONTROL_IDENTITY_PATH:?set control identity directory path}
+        target: /run/dgx-forge/control-identity
+        read_only: true
+        bind:
+          create_host_path: false
     tmpfs: [/tmp]
     networks: [application, data, agent-proxy, worker-authority]
     depends_on:
       postgres: {condition: service_healthy}
+      api-admin-grant-init: {condition: service_completed_successfully}
     healthcheck:
       test: [CMD, python, -m, dgx_control.healthcheck]
       interval: 10s
@@ -119,11 +193,64 @@ services:
     volumes:
       - route-publications:/routes
       - litellm-supervisor-state:/supervisor:ro
+      - control-state:/state
+      - update-signer-socket:/run/dgx-signer
+      - type: bind
+        source: ${CONTROL_IDENTITY_PATH:?set control identity directory path}
+        target: /run/dgx-forge/control-identity
+        read_only: true
+        bind:
+          create_host_path: false
     tmpfs: [/tmp]
     networks: [data, worker-authority]
     depends_on:
       postgres: {condition: service_healthy}
       route-publication-init: {condition: service_completed_successfully}
+      control-signer: {condition: service_healthy}
+
+  control-signer:
+    image: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
+    restart: unless-stopped
+    logging: *bounded-logging
+    command: [python, -m, dgx_control.update_signer]
+    read_only: true
+    user: "10003:10001"
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      DGX_AGENT_UPDATE_AUTHORITY_KEY_FILE: /run/secrets/agent-update-authority-key
+      DGX_ADMIN_GRANT_PUBLIC_KEY_FILE: /run/secrets/admin-grant-public-key
+      DGX_AGENT_TUF_BOOTSTRAP_ROOT_FILE: /run/secrets/agent-tuf-bootstrap-root
+      DGX_AGENT_TUF_METADATA_ROOT: /publication/metadata
+      DGX_AGENT_TUF_TARGET_ROOT: /publication/targets
+      DGX_AGENT_TUF_VERIFIED_METADATA_ROOT: /verifier/metadata
+      DGX_AGENT_TUF_VERIFIED_TARGET_ROOT: /verifier/targets
+      DGX_CONTROL_IDENTITY_ROOT: /control-identity
+      DGX_CONTROL_PROCESS_IMAGE: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
+      DGX_UPDATE_SIGNER_SOCKET: /run/dgx-signer/signer.sock
+      DGX_PLATFORM_VERSION: ${DGX_PLATFORM_VERSION:?set released platform version}
+      DGX_PLATFORM_RELEASE_DIGEST: ${DGX_PLATFORM_RELEASE_DIGEST:?set released platform digest}
+      DGX_PLATFORM_BUILD_DIGEST: ${DGX_PLATFORM_BUILD_DIGEST:?set released build digest}
+    secrets: [agent-update-authority-key, admin-grant-public-key, agent-tuf-bootstrap-root]
+    volumes:
+      - agent-tuf-publication:/publication:ro
+      - signer-tuf-verifier:/verifier
+      - update-signer-socket:/run/dgx-signer
+      - type: bind
+        source: ${CONTROL_IDENTITY_PATH:?set control identity directory path}
+        target: /control-identity
+        read_only: true
+        bind:
+          create_host_path: false
+    tmpfs: [/tmp]
+    depends_on:
+      signer-runtime-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -c, "import os,stat; assert stat.S_ISSOCK(os.stat('/run/dgx-signer/signer.sock').st_mode)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   litellm:
     image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.82.3-stable@sha256:b959a1816fa454a14d2842242d0fa1cd0d39f96fc94d3a1f4e1de4e48e2398c6}
@@ -280,6 +407,14 @@ secrets:
     file: "${AGENT_PROXY_AUTH_FILE:?set agent proxy authentication secret file}"
   worker-api-token:
     file: "${WORKER_API_TOKEN_FILE:?set worker API token secret file}"
+  agent-update-authority-key:
+    file: "${AGENT_UPDATE_AUTHORITY_KEY_FILE:?set agent update authority private key file}"
+  agent-tuf-bootstrap-root:
+    file: "${AGENT_TUF_BOOTSTRAP_ROOT_FILE:?set trusted platform TUF bootstrap root file}"
+  admin-grant-public-key:
+    file: "${ADMIN_GRANT_PUBLIC_KEY_FILE:?set API admin-grant public key file}"
+  admin-grant-private-key:
+    file: "${ADMIN_GRANT_PRIVATE_KEY_FILE:?set API admin-grant private key file}"
 
 networks:
   ingress: {}
@@ -303,3 +438,7 @@ volumes:
   grafana-data: {}
   registry-data: {}
   route-publications: {}
+  update-signer-socket: {}
+  signer-tuf-verifier: {}
+  agent-tuf-publication: {}
+  api-admin-grant-runtime: {}

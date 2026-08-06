@@ -82,6 +82,91 @@ def test_release_metadata_is_tag_only_and_read_only() -> None:
     assert "github.ref_type == 'tag'" in text
     assert "startsWith(github.ref_name, 'v')" in text
     assert "scripts/container-release-metadata" in text
+    metadata = job("release-metadata")
+    assert (
+        "deployment_bundle_repository: "
+        "${{ steps.release.outputs.deployment_bundle_repository }}"
+    ) in metadata
+    assert "platform_channel: ${{ steps.release.outputs.platform_channel }}" in metadata
+    assert "vars.DGX_PLATFORM_RELEASES_ENABLED == 'true'" in metadata
+
+
+def test_tag_release_builds_and_publishes_exact_platform_target() -> None:
+    publisher = job("publish-images")
+    for step in (
+        "Set up ORAS",
+        "Build canonical platform release",
+        "Publish immutable deployment bundle",
+        "Upload platform build evidence",
+    ):
+        assert f"- name: {step}" in publisher
+    assert "environment: platform-release" in publisher
+    assert "id-token: write" not in publisher
+    build = workflow_step("publish-images", "Build canonical platform release")
+    assert "scripts/build-control-deployment-bundle" in build
+    assert "scripts/publish-platform-target describe-bundle" in build
+    assert "scripts/build-platform-manifest" in build
+    publish = workflow_step("publish-platform-target", "Publish immutable platform target")
+    assert "scripts/publish-platform-target publish-authority" in publish
+    assert "scripts/platform-release-authority" in publish
+    assert "DGX_PLATFORM_AUTHORITY_URL: ${{ vars.DGX_PLATFORM_AUTHORITY_URL }}" in publish
+    assert "DGX_PLATFORM_AUTHORITY_AUDIENCE:" in publish
+    assert "ROOT_KEY" not in publish
+
+
+def test_oidc_authority_is_isolated_from_image_and_bundle_builds() -> None:
+    builder = job("publish-images")
+    authority = job("publish-platform-target")
+
+    assert "id-token: write" not in builder
+    assert "packages: write" in builder
+    assert "needs: [publish-images, release-metadata]" in authority
+    assert "environment: platform-release" in authority
+    assert "permissions:\n      contents: read\n      id-token: write" in authority
+    assert "packages: write" not in authority
+    assert "docker/build-push-action" not in authority
+    assert "docker/login-action" not in authority
+    assert "scripts/publish-platform-target publish-authority" in authority
+    assert "scripts/publish-platform-target publish-bundle" in builder
+
+
+def test_host_updater_has_a_separate_minimal_provenance_attestation_job() -> None:
+    builder = job("publish-images")
+    attestor = job("attest-host-updater")
+    release = job("release-manifest")
+
+    assert "attestations: write" not in builder
+    assert "packages: write" not in attestor
+    assert "permissions:\n      contents: read\n      id-token: write\n      attestations: write" in attestor
+    assert "actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26" in attestor
+    assert "subject-path: release-output/dgx-forge-host-updater.tar" in attestor
+    assert "attest-host-updater" in release.split("needs:", 1)[1].splitlines()[0]
+
+
+def test_platform_manifest_binds_actual_build_outputs_and_attestations() -> None:
+    builder = job("publish-images")
+    build = workflow_step("publish-images", "Build canonical platform release")
+
+    assert "scripts/collect-platform-artifact-evidence" in builder
+    assert "steps.api.outputs.digest" in build
+    assert "steps.worker.outputs.digest" in build
+    assert "steps.hermes.outputs.digest" in build
+    assert "docker buildx imagetools inspect" in build
+    for name in ("api", "worker", "hermes"):
+        assert f"--artifact-evidence release-output/{name}-evidence.json" in build
+    assert "scripts/build-host-updater-artifact" in build
+
+
+def test_release_attaches_exact_platform_publication_evidence() -> None:
+    manifest = job("release-manifest")
+    assert "Download platform publication evidence" in manifest
+    release = workflow_step("release-manifest", "Create public GitHub Release")
+    for name in (
+        "control-deployment-descriptor.json",
+        "platform-release.json",
+        "platform-publication.json",
+    ):
+        assert name in release
 
 
 def test_release_chain_is_default_off_and_dependency_gated() -> None:
@@ -91,7 +176,10 @@ def test_release_chain_is_default_off_and_dependency_gated() -> None:
 
     assert "vars.DGX_CONTAINER_RELEASES_ENABLED == 'true'" in metadata
     assert "needs: [lint, generated-clients, test, release-metadata]" in publisher
-    assert "needs: [release-metadata, publish-images]" in manifest
+    assert (
+        "needs: [release-metadata, publish-images, attest-host-updater, "
+        "publish-platform-target]" in manifest
+    )
 
 
 def test_publisher_needs_every_ci_gate_and_alone_can_write_packages() -> None:
@@ -352,7 +440,10 @@ def test_manifest_accepts_valid_digests_and_checksums_the_asset(
 def test_final_job_creates_checksum_protected_public_release_asset() -> None:
     text = workflow()
     assert "release-manifest:" in text
-    assert "needs: [release-metadata, publish-images]" in text
+    assert (
+        "needs: [release-metadata, publish-images, attest-host-updater, "
+        "publish-platform-target]" in text
+    )
     assert "dgx-forge-images.env" in text
     assert "sha256sum" in text
     assert "gh release create" in text

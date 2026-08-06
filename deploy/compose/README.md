@@ -1,17 +1,21 @@
-# NAS pull-only deployment
+# Docker control-host deployment
 
 This is the authoritative operator entry point for a production NAS deployment.
-It deploys released `linux/amd64` images only: the NAS pulls a reviewed,
-digest-pinned three-image set and never builds or publishes application images.
+It applies a reviewed platform release to any supported `linux/amd64`,
+Docker-capable control host. A NAS is convenient but not required. Production
+never executes Compose from the repository checkout: the root-owned host
+updater selects a TUF-authorized platform target, loads the verified OCI deployment bundle,
+and runs only the resulting immutable generation.
 
 ## Current release state
 
-No images are currently being published. Repository variable
-`DGX_CONTAINER_RELEASES_ENABLED` is deliberately unset (default-off) until the
-entire repository is release-ready. A maintainer setting it to `true` is a
-deliberate future enablement action; it is not part of NAS setup. Dependabot cannot publish: it only opens weekly dependency-update pull requests, which a
-maintainer must review, merge, and deliberately release with a stable version
-tag after enablement.
+No images are currently being published. Repository variables
+`DGX_CONTAINER_RELEASES_ENABLED` and `DGX_PLATFORM_RELEASES_ENABLED` are
+deliberately unset (default-off) until the entire repository is release-ready.
+A maintainer must set both to `true` in a protected GitHub environment before
+the stable-tag workflow can publish. Dependabot cannot publish: it only opens
+weekly dependency-update pull requests, which a maintainer must review, merge,
+and deliberately release with a stable version tag after enablement.
 
 When enabled in the future, GitHub Actions publishes only stable version tags
 to these three packages:
@@ -22,32 +26,41 @@ ghcr.io/carstvaartjes/dgx-forge-worker
 ghcr.io/carstvaartjes/dgx-forge-hermes
 ```
 
-Do not deploy an individual package or a workflow summary. Deploy only a
-complete public GitHub Release containing both `dgx-forge-images.env` and
-`dgx-forge-images.env.sha256`.
+Do not deploy an individual package, a tag, or a workflow summary. Select the
+immutable `platform/releases/<version>/<sha256>.json` target published by the
+release workflow. That target pins all three images and one verified OCI
+deployment bundle containing the exact Compose graph and configuration assets.
+Maintainers use [Platform release publication](../../docs/runbooks/platform-release-publication.md);
+control-host operators use
+[Platform release update](../../docs/runbooks/platform-release-update.md).
 
 ## Host and network prerequisites
 
-Use a supported `linux/amd64` NAS with Docker Engine plus the Docker Compose
-plugin, `curl`, `sha256sum`, POSIX ACL tools (`setfacl` and `getfacl`), local
-DNS, and persistent storage. Keep the repository checkout and host-local
-configuration outside Git, for example:
+Use a supported `linux/amd64` machine with Docker Engine plus the Docker
+Compose plugin, ORAS 1.3, age, POSIX ACL tools (`setfacl` and `getfacl`), local
+DNS, and persistent storage. Install the reviewed host-updater package as a
+root-owned executable; neither that executable nor its Python package may be
+writable by a service UID. Keep authority, site configuration, application
+data, and the admin Git repository in separate host trees:
 
 ```bash
 operator_user=$(id -un)
 operator_group=$(id -gn)
-sudo install -d -m 0750 -o "$operator_user" -g "$operator_group" /srv/dgx-forge
-git clone https://github.com/CarstVaartjes/DGX-Forge.git /srv/dgx-forge/repository
+sudo install -d -m 0755 -o root -g root /srv/dgx-forge
+sudo install -d -m 0700 -o root -g root /srv/dgx-forge/control-host
+sudo install -d -m 0755 -o root -g root /srv/dgx-forge/control-identity
+sudo install -d -m 0700 -o root -g root /srv/dgx-forge/site
+sudo install -d -m 0750 -o "$operator_user" -g "$operator_group" /srv/dgx-forge/admin-repository
+git clone https://github.com/CarstVaartjes/DGX-Forge.git /srv/dgx-forge/admin-repository
 sudo install -d -m 0700 /srv/dgx-forge/secrets /srv/dgx-forge/hermes /srv/dgx-forge/step-ca
-cd /srv/dgx-forge/repository/deploy/compose
-cp .env.example .env
-chmod 0600 .env
 ```
 
-The deployment operator owns the checkout, so unprivileged `cp`, later reviewed
-`git` updates, and edits to `.env` work. `id -gn` records the operator's actual
-primary group; do not assume a same-named group and do not use `sudo git clone`
-and then try to edit its root-owned result.
+Use `/srv/dgx-forge/admin-repository` as the API-managed Git authoring
+repository. The deployment operator owns this checkout so later
+reviewed Git updates work. `id -gn` records the actual primary group; do not
+assume a same-named group. The updater reads site values from the root-owned
+`/srv/dgx-forge/site` boundary and release assets from verified generations,
+never from this checkout.
 
 `control-api` mounts this checkout read-write as UID `10001:10001` and
 CONTROL_API writes `.git` for signed repository administration. Preserve
@@ -56,10 +69,10 @@ recursive read/write/traverse access now and on all future files and
 directories. The access-control masks keep both named-user entries effective:
 
 ```bash
-sudo setfacl -R -m u:"$operator_user":rwX,u:10001:rwX,m::rwX /srv/dgx-forge/repository
-sudo find /srv/dgx-forge/repository -type d -exec setfacl -m \
+sudo setfacl -R -m u:"$operator_user":rwX,u:10001:rwX,m::rwX /srv/dgx-forge/admin-repository
+sudo find /srv/dgx-forge/admin-repository -type d -exec setfacl -m \
   u:"$operator_user":rwx,u:10001:rwx,m::rwx,d:u:"$operator_user":rwx,d:u:10001:rwx,d:m::rwx {} +
-sudo getfacl /srv/dgx-forge/repository /srv/dgx-forge/repository/.git
+sudo getfacl /srv/dgx-forge/admin-repository /srv/dgx-forge/admin-repository/.git
 ```
 
 The first command repairs existing operator- or UID-10001-created entries; the
@@ -94,45 +107,40 @@ general-purpose LAN record or firewall rule for it. Human control reaches the
 Tailscale `svc:dgx-forge` Service; the only published NAS LAN listener is the
 Spark-restricted TCP 8443 backend.
 
-## Get a complete release image set
+## Select a complete platform release
 
-After the future release path is enabled and a public version release exists,
-download its two assets. Substitute the exact immutable release tag, not a
-branch or a floating label:
+The protected release workflow publishes the deployment bundle first, then an
+immutable TUF target, and updates the `stable` discovery channel last. Copy the
+exact target name from signed channel metadata or the release evidence; do not
+turn the channel, a Git tag, or an OCI tag into an install target:
 
-```bash
-release_tag=vX.Y.Z
-release_url="https://github.com/CarstVaartjes/DGX-Forge/releases/download/${release_tag}"
-curl --fail --location --remote-name "$release_url/dgx-forge-images.env"
-curl --fail --location --remote-name "$release_url/dgx-forge-images.env.sha256"
-sha256sum -c dgx-forge-images.env.sha256
+```text
+platform/releases/X.Y.Z/REPLACE_MANIFEST_SHA256.json
 ```
 
-The checksum file must report `dgx-forge-images.env: OK`. Inspect the asset and
-copy all three assignments, together, into `/srv/dgx-forge/repository/deploy/compose/.env`:
-
-```bash
-grep -E '^(CONTROL_API_IMAGE|CONTROL_WORKER_IMAGE|HERMES_AGENT_IMAGE)=' \
-  dgx-forge-images.env
-```
-
-This image-only fragment does not replace the host's site-specific `.env`.
-Keep the NAS paths, hostnames, network CIDRs, and paths to local secret files
-in `.env`; replace only the complete three-reference release set. A public
-package needs no NAS GitHub token. For each newly created package, a maintainer
-performs the one-time GitHub web setting: package page → **Package settings** →
-**Danger Zone** → **Change visibility** → **Set package visibility to Public**.
-Never put a GitHub token in `.env` to work around package visibility.
+The target binds the canonical manifest bytes, all three image digests, the
+deployment-bundle manifest and layer descriptors, supported host-updater ABI,
+database revision, and exact authorized predecessors. The updater downloads
+OCI manifest and layer bytes by digest, verifies their media types, sizes, and
+digests, verifies the canonical bundle, and renders Compose inside a new
+root-owned generation. A public package needs no NAS GitHub token. For each
+newly created package, a maintainer performs the one-time GitHub web setting:
+package page → **Package settings** → **Danger Zone** → **Change visibility**
+→ **Set package visibility to Public**. Never put a GitHub token in site
+configuration to work around package visibility.
 
 ## Host-local `.env` inputs
 
-All values below are host-local configuration. `.env` contains paths and
-non-secret configuration only; **no secret value belongs in `.env`**.
+All values below are host-local configuration. Store the updater-owned site
+environment at `/srv/dgx-forge/site/.env`, mode `0600`, with paths and
+non-secret configuration only; **no secret value belongs in `.env`**. A
+release bundle supplies the Compose model. The site environment never supplies
+release asset paths or executable content.
 
 ### Images
 
-Set the three release values from the verified release asset, each including a
-version tag and `@sha256:` digest:
+The selected platform target supplies these three values, each including a
+version tag and `@sha256:` digest. Do not edit them independently:
 
 ```dotenv
 CONTROL_API_IMAGE=ghcr.io/carstvaartjes/dgx-forge-api:X.Y.Z@sha256:REPLACE
@@ -148,8 +156,14 @@ Keep the checked-in upstream image pins (`POSTGRES_IMAGE`, `CADDY_IMAGE`,
 
 Set `COMPOSE_PROJECT_NAME`, `REPOSITORY_PATH`, `HERMES_DATA_ROOT`,
 `NAS_LAN_IP`, `DGX_BACKEND_PORT`, `DGX_MANAGEMENT_CIDRS`, and optional
-`DGX_DIRECT_FABRIC_CIDRS`. `REPOSITORY_PATH` is the host checkout mounted into
-the API; `HERMES_DATA_ROOT` contains `data`, `workspaces`, and `cache`.
+`DGX_DIRECT_FABRIC_CIDRS`. `REPOSITORY_PATH` is the admin authoring checkout
+mounted into the API as data; it is not the Compose source.
+`HERMES_DATA_ROOT` contains `data`, `workspaces`, and `cache`.
+The control state volume contains the explicitly separated agent artifact and
+TUF publication roots. Active mTLS-authenticated Sparks can read only bounded,
+strictly named regular files below `/state/agent-tuf/metadata` and
+`/state/agent-tuf/targets`; never place signing keys or registry credentials in
+either publication directory.
 
 ### Hostnames
 
@@ -176,6 +190,8 @@ the mutually exclusive built-in CA overlay.
 Set every required secret path in `.env`; these are paths only, never values:
 `DATABASE_URL_FILE`, `POSTGRES_PASSWORD_FILE`, `TOKEN_SIGNING_KEY_FILE`,
 `METRICS_TOKEN_FILE`, `GIT_SIGNING_KEY_FILE`, `WORKER_API_TOKEN_FILE`,
+`AGENT_UPDATE_AUTHORITY_KEY_FILE`, `ADMIN_GRANT_PUBLIC_KEY_FILE`,
+`AGENT_TUF_BOOTSTRAP_ROOT_FILE`,
 `LITELLM_MASTER_KEY_FILE`, `LITELLM_UPSTREAM_KEY_FILE`,
 `LITELLM_DATABASE_URL_FILE`, `GRAFANA_ADMIN_PASSWORD_FILE`,
 `AGENT_CLIENT_CA_FILE`, `AGENT_INTERMEDIATE_CERTIFICATE_FILE`,
@@ -205,6 +221,7 @@ allow the **actual consuming container UID** to read it. Do not use a blanket
 LiteLLM, Prometheus, and Grafana services from reading their secret mounts.
 
 The Compose service users are `10001:10001` for control-api and control-worker,
+`10003:10001` for the networkless control-signer,
 `10002:10001` for LiteLLM, `65534:65534` for Prometheus, and `472:472` for
 Grafana. The pinned step-ca image runs as `1000:1000` (`step`); Hermes' managed
 process is fixed at `1100:1100`. PostgreSQL, Caddy, Tailscale, and the Hermes
@@ -237,6 +254,9 @@ command line.
 | `METRICS_TOKEN_FILE` → `metrics-token` | API `10001`, Prometheus `65534`; `root:root 0400` plus ACLs | At least 16 non-whitespace characters. |
 | `GIT_SIGNING_KEY_FILE` → `git-signing-key` | API `10001:10001`, `10001:10001 0400` | Private SSH signing key. |
 | `WORKER_API_TOKEN_FILE` → `worker-api-token` | API/worker `10001:10001`, `10001:10001 0400` | One unpadded base64url token, at least 32 characters. |
+| `AGENT_UPDATE_AUTHORITY_KEY_FILE` → `agent-update-authority-key` | Signer only, `10003:10001 0400` | Ed25519 PKCS#8 PEM. The API, worker, and every Spark must never receive this private key. |
+| `ADMIN_GRANT_PUBLIC_KEY_FILE` → `admin-grant-public-key` | Signer only, `10003:10001 0400` | Canonical public document for the separate API admin-action grant authority. |
+| `AGENT_TUF_BOOTSTRAP_ROOT_FILE` → `agent-tuf-bootstrap-root` | Signer only, `10003:10001 0400` | Explicit trusted public TUF root for platform releases. The corresponding offline root private key never enters the NAS. |
 | `LITELLM_MASTER_KEY_FILE`, `LITELLM_UPSTREAM_KEY_FILE`, `LITELLM_DATABASE_URL_FILE` → matching `litellm-*` files | LiteLLM `10002:10001`, `10002:10001 0400` | Respectively the master key, dedicated upstream key, and PostgreSQL URL. |
 | `GRAFANA_ADMIN_PASSWORD_FILE` → `grafana-admin-password` | Grafana `472:472`, `472:472 0400` | One Grafana administrator password. |
 | `AGENT_CLIENT_CA_FILE` → `agent-client-ca` | API `10001` and Caddy startup; `root:root 0400` plus ACL `u:10001:r` | PEM trust bundle. |
@@ -254,6 +274,51 @@ The offline root private key never enters this NAS. The generated PKI paths and
 permissions in [agent PKI](../../docs/runbooks/agent-pki.md) remain authoritative
 for the step-ca material.
 
+## Pin the Spark update authority
+
+The host updater writes the selected release identity to
+`/srv/dgx-forge/control-identity/active.json`. API, worker, and signer mount the
+identity **directory** read-only and reopen that file for each validation. They
+never mount `/srv/dgx-forge/control-host`, and no online container can select a
+generation. Do not copy version or digest values into a mutable environment
+file as an alternative authority.
+
+Create one cluster update-signing key on the NAS. Only the networkless
+`control-signer` receives the private key; `control-api`, `control-worker`,
+Caddy, and the Sparks receive no signing
+material:
+
+```bash
+sudo -u '#10003' openssl genpkey -algorithm ED25519 \
+  -out /srv/dgx-forge/secrets/agent-update-authority-key.pem
+sudo chown 10003:10001 /srv/dgx-forge/secrets/agent-update-authority-key.pem
+sudo chmod 0400 /srv/dgx-forge/secrets/agent-update-authority-key.pem
+```
+
+During first selection, the trusted updater starts the selected networkless
+signer and records its canonical public authority document in the generation
+evidence. Export that bounded public document for Spark installation; never run
+a Compose service from the authoring checkout to derive it.
+
+Provide that public document to every Spark installation with
+`install-dgx-agent --update-authority /path/to/update-authority.json` together
+with the normal enrollment and TUF bootstrap inputs. One public authority is
+valid for any number of Sparks in the cluster; receipts are still bound to one
+node, operation, attempt, fence, deadline, and observed supervisor generation.
+The signer verifies the requested agent artifact through its own persistent
+python-tuf cache before signing. It also requires a short-lived action grant
+signed by a separate API/admin authority and bound to the exact rollout, job,
+node set, action, release, expiry, and nonce. The worker receives only the
+signer's Unix socket and cannot read either private authority key, TUF bootstrap
+root, or verifier cache.
+
+Back up the private key as a high-value online recovery secret. Restoring the
+same key preserves all existing Spark pins. Replacing a lost or compromised key
+requires explicitly reinstalling or reprovisioning each Spark with the new
+public document before the worker switches signers; there is deliberately no
+unsigned remote key-rotation path. Expired, replayed, source-drifted, or retried
+receipts require a newly approved and signed operation.
+
 ## Bootstrap the production step-ca overlay
 
 Follow [agent PKI](../../docs/runbooks/agent-pki.md) first to create the
@@ -267,74 +332,83 @@ tailnet policy, and exact Services. Do this in order:
    artifacts to the paths named in `.env`.
 3. Complete Tailscale policy and OAuth secret setup; do not enable a LAN
    fallback.
-4. Copy the verified complete three-image release set into `.env`.
-5. Pull and render the complete production plan, then initialize PostgreSQL,
-   migrate, and create the first administrator while API and worker are stopped.
-6. Start the complete project with the one production overlay.
+4. Record the exact immutable TUF target name and verify that the current
+   trusted metadata retains every predecessor required for rollback.
+5. Preview first selection with the root-owned host updater and review the
+   release, bundle, image, database, space, site-config, and backup bindings.
+6. Apply that exact plan. The updater initializes PostgreSQL, migrates, starts
+   the candidate API in inert preselection mode, selects the generation, and
+   requires generation-bound API and worker readiness.
 
 The base file deliberately selects no CA provider. Select exactly one overlay:
 `compose.step-ca.yaml` for production, or the built-in CA overlay for local
 development—never both.
 
-## Preflight and first start
+## Install and first selection
 
-Run the production commands exactly from the Compose directory:
+Install ORAS and age at the absolute paths configured by the host-updater
+package. Install the package and its `dgx-control-offline` entry point as
+`root:root`, mode `0755`, from the signed first-release bootstrap artifact. The
+bootstrap artifact is the only out-of-band first-install input; after this,
+successor tooling is accepted only when the currently installed updater
+supports the target's declared updater ABI. Never install this entry point from
+an unreviewed branch checkout.
+
+Configure the trusted TUF root, metadata/target URLs, root-owned age-recipient
+file, and root-owned site environment as described in
+[Platform release update](../../docs/runbooks/platform-release-update.md).
+Preview the immutable target without mutation, then apply the same target:
 
 ```bash
-cd /srv/dgx-forge/repository/deploy/compose
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml pull
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml config --quiet
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml run --rm --no-deps \
-  --cap-add CHOWN --user 0:0 --entrypoint /bin/sh control-api \
-  -c 'chmod 0700 /state && chown 10001:10001 /state'
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml up -d postgres
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml run --rm --no-deps \
-  --entrypoint python control-api -m dgx_control.offline --state-path /state \
-  init --repository /repository
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml run --rm --no-deps \
-  --entrypoint python control-api -m dgx_control.offline --state-path /state migrate
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml run --rm --no-deps \
-  --entrypoint python control-api -m dgx_control.offline --state-path /state \
-  create-admin --subject ADMIN_ID
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml up -d
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml ps
+target_name=platform/releases/X.Y.Z/REPLACE_MANIFEST_SHA256.json
+sudo dgx-control-offline --state-path /srv/dgx-forge/control-host \
+  upgrade --target-name "$target_name"
+sudo dgx-control-offline --state-path /srv/dgx-forge/control-host \
+  upgrade --target-name "$target_name" --apply
 ```
 
-In short, the required preflight sequence is `docker compose pull`, then
-`docker compose config --quiet`, then the root one-off that initializes the
-Compose-managed `control-state` volume to mode `0700` and owner `10001:10001`, then
-PostgreSQL-only `up -d postgres`, offline init/migration/administrator creation,
-before the first full `up -d`. The root one-off attaches the named volume through
-the same Compose project and service definition, so it does not guess a raw
-Docker volume name. It uses the supported `docker compose run --cap-add CHOWN`
-override because the normal control-api service drops every capability; `chmod`
-runs first while root owns a fresh volume, and `CHOWN` is the only capability
-added. The later one-shot commands run as the production
-control-api UID and read the same Compose secrets as the service; API and worker
-remain stopped. After Docker creates its bridge, apply and verify the Hermes host-egress rule as
-documented in [Hermes Agent](../../docs/runbooks/hermes-agent.md). Check the
-Tailscale Service status and verify that ordinary LAN clients cannot reach human
-or Hermes endpoints.
+The updater holds one operation lock through TUF refresh, OCI acquisition,
+bundle validation, fixed backup, migration, candidate preselection, selection,
+and generation-bound worker readiness. It runs Compose only from the verified
+generation directory and records an immutable hash-chained journal. After the
+first successful selection, create the first administrator through the web/CLI
+admin workflow and apply the Hermes egress rule documented in
+[Hermes Agent](../../docs/runbooks/hermes-agent.md). Verify the exact Tailscale
+Services and confirm ordinary LAN clients cannot reach human or Hermes
+endpoints.
 
 ## Upgrade and rollback
 
-For an upgrade, stop treating image names as independent settings. Download and
-verify the next release assets, review all three digest references, replace all
-three values in `.env` as one release set, then pull, render, and recreate:
+For an upgrade, resolve the next signed channel document to its immutable target
+name, then preview and apply that exact name. Never edit image names or a
+Compose model as the deployment mechanism:
 
 ```bash
-cd /srv/dgx-forge/repository/deploy/compose
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml pull
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml config --quiet
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml up -d
-docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml ps
+sudo dgx-control-offline --state-path /srv/dgx-forge/control-host \
+  upgrade --target-name "$target_name"
+sudo dgx-control-offline --state-path /srv/dgx-forge/control-host \
+  upgrade --target-name "$target_name" --apply
 ```
 
-Retain the previous verified `dgx-forge-images.env` and checksum with the
-deployment record. To roll back, restore the previous complete three-reference
-set—not just one image—into `.env`, then repeat pull, `config --quiet`, and
-`up -d`. Do not deploy a partial publication, a digest copied from a registry
-page, or a release without both assets.
+If an operation is unfinished, preview and apply only its journaled recovery:
+
+```bash
+sudo dgx-control-offline --state-path /srv/dgx-forge/control-host recover
+sudo dgx-control-offline --state-path /srv/dgx-forge/control-host recover --apply
+```
+
+For an operator-requested rollback, use the recorded predecessor generation.
+The current TUF target set must still authorize its exact target and bundle:
+
+```bash
+sudo dgx-control-offline --state-path /srv/dgx-forge/control-host \
+  rollback --generation REPLACE_GENERATION_ID
+sudo dgx-control-offline --state-path /srv/dgx-forge/control-host \
+  rollback --generation REPLACE_GENERATION_ID --apply
+```
+
+Do not deploy a partial publication, a digest copied from a registry page, a
+revoked predecessor, or a release whose OCI bundle cannot be verified exactly.
 
 ## Evaluation-only `latest`
 

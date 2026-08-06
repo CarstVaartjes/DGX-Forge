@@ -2,6 +2,8 @@
 
 from .agent_summary import AgentSummary
 from .agents_response import AgentsResponse
+from .apply_platform_update_response_apply_update_api_v1_updates_post import ApplyPlatformUpdateResponseApplyUpdateApiV1UpdatesPost
+from .approve_platform_update_recovery_response_approve_update_resume_api_v1_updates_rollout_id_approve_resume_post import ApprovePlatformUpdateRecoveryResponseApproveUpdateResumeApiV1UpdatesRolloutIdApproveResumePost
 from .bounded_error_response import BoundedErrorResponse
 from .cancel_reconciliation_response_cancel_reconciliation_api_v1_reconciliations_reconciliation_id_cancel_post import CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost
 from .change_request import ChangeRequest
@@ -12,6 +14,8 @@ from .enrollment_grant_response import EnrollmentGrantResponse
 from .enrollment_list_response import EnrollmentListResponse
 from .enrollment_summary import EnrollmentSummary
 from .fleet_status_response import FleetStatusResponse
+from .get_platform_update_response_update_status_api_v1_updates_rollout_id_get import GetPlatformUpdateResponseUpdateStatusApiV1UpdatesRolloutIdGet
+from .get_platform_update_skew_response_update_skew_api_v1_updates_skew_get import GetPlatformUpdateSkewResponseUpdateSkewApiV1UpdatesSkewGet
 from .get_repository_response_repository_view_api_v1_repository_get import GetRepositoryResponseRepositoryViewApiV1RepositoryGet
 from .grant_request import GrantRequest
 from .http_validation_error import HTTPValidationError
@@ -33,6 +37,7 @@ from .plan_input_digests import PlanInputDigests
 from .plan_operation import PlanOperation
 from .plan_operation_graph import PlanOperationGraph
 from .plan_placements import PlanPlacements
+from .plan_platform_update_response_update_plan_api_v1_updates_plan_post import PlanPlatformUpdateResponseUpdatePlanApiV1UpdatesPlanPost
 from .plan_prepare_request import PlanPrepareRequest
 from .plan_quota import PlanQuota
 from .plan_release import PlanRelease
@@ -56,11 +61,16 @@ from .reconciliation_plan_response import ReconciliationPlanResponse
 from .reconciliation_request import ReconciliationRequest
 from .reject_request import RejectRequest
 from .submit_change_response_submit_change_api_v1_changes_post import SubmitChangeResponseSubmitChangeApiV1ChangesPost
+from .update_apply_request import UpdateApplyRequest
+from .update_approve_resume_request import UpdateApproveResumeRequest
+from .update_plan_request import UpdatePlanRequest
 from .validation_error import ValidationError
 
 __all__ = (
     "AgentsResponse",
     "AgentSummary",
+    "ApplyPlatformUpdateResponseApplyUpdateApiV1UpdatesPost",
+    "ApprovePlatformUpdateRecoveryResponseApproveUpdateResumeApiV1UpdatesRolloutIdApproveResumePost",
     "BoundedErrorResponse",
     "CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost",
     "ChangeRequest",
@@ -71,6 +81,8 @@ __all__ = (
     "EnrollmentListResponse",
     "EnrollmentSummary",
     "FleetStatusResponse",
+    "GetPlatformUpdateResponseUpdateStatusApiV1UpdatesRolloutIdGet",
+    "GetPlatformUpdateSkewResponseUpdateSkewApiV1UpdatesSkewGet",
     "GetRepositoryResponseRepositoryViewApiV1RepositoryGet",
     "GrantRequest",
     "HTTPValidationError",
@@ -92,6 +104,7 @@ __all__ = (
     "PlanOperation",
     "PlanOperationGraph",
     "PlanPlacements",
+    "PlanPlatformUpdateResponseUpdatePlanApiV1UpdatesPlanPost",
     "PlanPrepareRequest",
     "PlanQuota",
     "PlanRelease",
@@ -115,5 +128,8 @@ __all__ = (
     "ReconciliationRequest",
     "RejectRequest",
     "SubmitChangeResponseSubmitChangeApiV1ChangesPost",
+    "UpdateApplyRequest",
+    "UpdateApproveResumeRequest",
+    "UpdatePlanRequest",
     "ValidationError",
 )
