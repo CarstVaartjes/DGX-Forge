@@ -1433,6 +1433,42 @@ class AgentClient:
         _require_status(response, {204})
         _require_empty(response)
 
+    def package_helper_receipts(self, payload: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
+        """Fetch control-signed object receipts for one active package attempt."""
+        response = self._post(
+            self._runtime_origin,
+            "/agent/v1/package-helper/receipts",
+            payload,
+            use_client_identity=True,
+        )
+        _require_status(response, {200})
+        document = response.document
+        if not isinstance(document, Mapping) or set(document) != {"receipts"}:
+            raise AgentProtocolResponseError("package helper receipts response is invalid")
+        receipts = document.get("receipts")
+        if not isinstance(receipts, list) or not 1 <= len(receipts) <= 256:
+            raise AgentProtocolResponseError("package helper receipts response is invalid")
+        if not all(isinstance(item, Mapping) for item in receipts):
+            raise AgentProtocolResponseError("package helper receipts response is invalid")
+        return tuple(receipts)
+
+    def package_helper_grant(self, payload: Mapping[str, object]) -> Mapping[str, object]:
+        """Fetch one short-lived control-signed helper grant."""
+        response = self._post(
+            self._runtime_origin,
+            "/agent/v1/package-helper/grant",
+            payload,
+            use_client_identity=True,
+        )
+        _require_status(response, {200})
+        document = response.document
+        if not isinstance(document, Mapping) or set(document) != {"grant"}:
+            raise AgentProtocolResponseError("package helper grant response is invalid")
+        grant = document.get("grant")
+        if not isinstance(grant, Mapping):
+            raise AgentProtocolResponseError("package helper grant response is invalid")
+        return grant
+
     def _post(
         self,
         origin: str,

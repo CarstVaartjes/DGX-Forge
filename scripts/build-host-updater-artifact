@@ -17,7 +17,7 @@ from pathlib import Path
 
 _WHEEL = re.compile(
     r"(?:dgx_control-0\.1\.0|spark_profiles-0\.1\.0|"
-    r"dgx_agent_protocol-1\.0\.0)-py3-none-any\.whl\Z"
+    r"dgx_agent_protocol-2\.0\.0)-py3-none-any\.whl\Z"
 )
 _MAX_WHEEL = 256 * 1024 * 1024
 

@@ -77,6 +77,7 @@ from .operation_api import (
     job_response,
     plan_response,
 )
+from .package_api import PackageApiServices, install_package_routes
 from .proposals import DocumentChange
 from .reconcile import IneligibleCommit, StaleFleetEvidence
 from .repository import RepositoryPolicyError
@@ -593,6 +594,11 @@ def build_agent_services(
     from .agent_jobs import AgentJobService
     from .enrollment import EnrollmentService
     from .pki import BuiltinCertificateAuthority
+    from .package_helper_authority import (
+        PackageHelperAuthorityService,
+        PackageHelperGrantIssuer,
+        PackageObjectReceiptIssuer,
+    )
     from .presence import AgentPresenceService, ManagementAddressPolicy
     from .step_ca import StepCertificateAuthority
 
@@ -634,7 +640,23 @@ def build_agent_services(
         "agent_tuf_target_root",
         settings.agent_artifact_root.parent / "agent-tuf/targets",
     )
-    for root in (settings.agent_artifact_root, tuf_metadata_root, tuf_target_root):
+    workload_tuf_metadata_root = getattr(
+        settings,
+        "workload_tuf_metadata_root",
+        settings.agent_artifact_root.parent / "workload-tuf/metadata",
+    )
+    workload_tuf_target_root = getattr(
+        settings,
+        "workload_tuf_target_root",
+        settings.agent_artifact_root.parent / "workload-tuf/targets",
+    )
+    for root in (
+        settings.agent_artifact_root,
+        tuf_metadata_root,
+        tuf_target_root,
+        workload_tuf_metadata_root,
+        workload_tuf_target_root,
+    ):
         root.mkdir(mode=0o750, parents=True, exist_ok=True)
     presence = AgentPresenceService(
         sessions,
@@ -651,6 +673,24 @@ def build_agent_services(
         current_commit=current_commit,
     )
     operations.set_contact_consumer(presence.observe_in_session)
+    helper_authority = None
+    grant_key_path = getattr(settings, "package_helper_grant_private_key_path", None)
+    receipt_key_path = getattr(settings, "package_helper_receipt_private_key_path", None)
+    if (
+        getattr(settings, "deployment_mode", "") == "production"
+        and (grant_key_path is None or receipt_key_path is None)
+    ):
+        raise RuntimeError("package helper authority keys are unavailable")
+    if grant_key_path is not None and receipt_key_path is not None:
+        helper_authority = PackageHelperAuthorityService(
+            sessions,
+            PackageHelperGrantIssuer.from_private_key_file(
+                grant_key_path, clock=clock
+            ),
+            PackageObjectReceiptIssuer.from_private_key_file(receipt_key_path),
+            workload_target_root=workload_tuf_target_root,
+            clock=clock,
+        )
     return AgentApiServices(
         enrollment=EnrollmentService(sessions, authority, clock=clock),
         operations=operations,
@@ -660,6 +700,9 @@ def build_agent_services(
         artifact_root=settings.agent_artifact_root,
         tuf_metadata_root=tuf_metadata_root,
         tuf_target_root=tuf_target_root,
+        workload_tuf_metadata_root=workload_tuf_metadata_root,
+        workload_tuf_target_root=workload_tuf_target_root,
+        package_helper_authority=helper_authority,
     )
 
 
@@ -802,6 +845,7 @@ def create_app(
     generic_jobs_enabled: bool = False,
     operations: OperationApiServices | None = None,
     updates: Any | None = None,
+    packages: PackageApiServices | None = None,
 ) -> FastAPI:
     app = FastAPI(title="DGX Forge Control", version="1.0", docs_url=None, redoc_url=None)
     cursor_codec = tokens.cursor_codec()
@@ -823,6 +867,14 @@ def create_app(
     async def canonical_agent_validation_error(
         request: Request, error: RequestValidationError
     ) -> Response:
+        if request.url.path.startswith("/api/v1/packages/") or request.url.path.startswith(
+            "/api/v1/deployments"
+        ):
+            return Response(
+                content=canonical_message({"detail": "package request is invalid"}),
+                status_code=422,
+                media_type="application/json",
+            )
         if not request.url.path.startswith("/agent/v1/"):
             return await request_validation_exception_handler(request, error)
         return Response(
@@ -902,6 +954,13 @@ def create_app(
             update_grants=updates,
         )
     authenticated_actor = Depends(actor)
+
+    install_package_routes(
+        app,
+        actor_dependency=authenticated_actor,
+        audits=audits,
+        services=packages,
+    )
 
     @app.get("/api/v1/healthz")
     def healthz() -> dict[str, str]:

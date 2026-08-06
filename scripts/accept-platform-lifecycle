@@ -419,6 +419,11 @@ def run(host: str, display_name: str) -> dict[str, object]:
             plan.operation_graph.reconciliation_id,
             node_id.value,
         )
+        # Completion marks the node lease for release.  Perform the durable
+        # release tick before creating the successor plan so the successor can
+        # acquire the same Spark without relying on UUID ordering or a stale
+        # lease window.
+        assert execution.tick(plan.operation_graph.reconciliation_id)
 
         # A periodic post-start probe observes the now-running managed workload.
         # Keep it later than the pre-mutation zero-compute gate so durable replay
@@ -460,6 +465,12 @@ def run(host: str, display_name: str) -> dict[str, object]:
             },
         )
         claimed += 1
+        if os.environ.get("DGX_DEBUG_LIFECYCLE"):
+            with sessions() as debug_session:
+                from dgx_control.models import Job, AgentOperation, Reconciliation
+                print("DEBUG jobs", [(j.id, j.reconciliation_id, j.state, j.kind) for j in debug_session.query(Job).all()], file=sys.stderr)
+                print("DEBUG recs", [(r.id, r.current_phase, r.completion_generation) for r in debug_session.query(Reconciliation).all()], file=sys.stderr)
+                print("DEBUG ops", [(o.id, o.parent_job_id, o.kind, o.state) for o in debug_session.query(AgentOperation).all()], file=sys.stderr)
         durable = durable_desired_state_observations(sessions)
         assert len(durable) == 1 and len(durable[0].current_workloads) == 1
         first_current = durable[0].current_workloads[0]
@@ -475,6 +486,11 @@ def run(host: str, display_name: str) -> dict[str, object]:
         _git(repository.root, "add", ".")
         _git(repository.root, "commit", "-qm", "replace release A with B")
         replacement_commit = _git(repository.root, "rev-parse", "HEAD")
+        # The publication-owner fence orders candidates by their durable
+        # creation timestamp before UUID.  Advance the deterministic clock so
+        # the replacement is unambiguously newer even when UUID randomness
+        # happens to sort before the predecessor.
+        now += timedelta(seconds=1)
         replacement_reconciler = Reconciler(
             Policy(),
             DesiredStateResolver(repository, clock=lambda: now),

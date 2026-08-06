@@ -428,7 +428,11 @@ class PackageDesiredStateResolver:
             input_digests=input_digests,
             operation_graph=graph,
             operation_payloads=payloads,
-            agent_protocol_range=(1, 1),
+            # Package operations are part of the v2 agent ABI.  Keep legacy
+            # workload reconciliation on the v1 range, but never enqueue a
+            # package graph that a v1 Spark can claim: AgentJobService
+            # rejects package claims below protocol v2.
+            agent_protocol_range=(2, 2),
             fleet_evidence_digest=fleet_digest,
         )
 

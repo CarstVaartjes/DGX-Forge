@@ -11,6 +11,7 @@ import json
 import os
 import platform
 import secrets
+import shutil
 import stat
 import struct
 import subprocess
@@ -21,8 +22,9 @@ from pathlib import Path
 MACHINES = {"x86_64": 62, "aarch64": 183}
 MAX_WHEEL = 256 * 1024 * 1024
 MAX_ARTIFACT = 256 * 1024 * 1024
+MAX_BUILD_ATTEMPTS = 3
 PYINSTALLER = "6.15.0"
-LOCK_SHA256 = "db2d8bffcedff7ca2abfddb1d123d7af2788950f1688d16a763488e6bf2e3648"
+LOCK_SHA256 = "c4003a01cb00aafaa4bd149a777f9284101a497c68a59e2f0a0dfbd4722759d0"
 PACKAGING_DISTRIBUTIONS = {
     "altgraph": "0.17.5",
     "attrs": "26.1.0",
@@ -49,7 +51,7 @@ PACKAGING_DISTRIBUTIONS = {
 }
 INPUT_DISTRIBUTIONS = {
     "agent wheel": ("dgx-agent", "0.1.0"),
-    "protocol wheel": ("dgx-agent-protocol", "1.0.0"),
+    "protocol wheel": ("dgx-agent-protocol", "2.0.0"),
     "platform wheel": ("spark-profiles", "0.1.0"),
 }
 
@@ -237,6 +239,51 @@ def _verify_elf(path: Path, architecture: str) -> None:
         raise BuildError("packaging output architecture is invalid")
 
 
+def _verify_packaged_runtime(path: Path, home: Path) -> None:
+    """Exercise every entry point before an artifact can be published.
+
+    PyInstaller one-file archives can be syntactically valid ELF files while
+    still containing a damaged compressed member (for example after a
+    transient builder crash).  Running the same isolated commands used by
+    the install-time smoke test catches that class of corruption before the
+    artifact becomes the next slot image.
+    """
+
+    environment = {
+        "HOME": str(home),
+        "LANG": "C.UTF-8",
+        "PATH": "/usr/bin:/bin",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONPATH": "/nonexistent",
+    }
+    for arguments in (
+        ("--help",),
+        ("--packaged-module-smoke",),
+        ("--package-helper", "--help"),
+    ):
+        try:
+            checked = subprocess.run(
+                [str(path), *arguments],
+                cwd=home,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=30,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise BuildError(
+                f"packaged runtime smoke failed for {' '.join(arguments)}"
+            ) from error
+        if checked.returncode != 0:
+            detail = checked.stderr.strip() or checked.stdout.strip()
+            suffix = f": {detail[:240]}" if detail else ""
+            raise BuildError(
+                f"packaged runtime smoke failed for {' '.join(arguments)}"
+                f" (exit {checked.returncode}){suffix}"
+            )
+
+
 def _publish(source: Path, output: Path, architecture: str) -> None:
     if not output.is_absolute() or output.name in {"", ".", ".."}:
         raise BuildError("output must be an absolute file path")
@@ -338,42 +385,94 @@ def build(
             "NO_PROXY": "*",
         }
         Path(environment["HOME"]).mkdir(mode=0o700)
-        subprocess.run(
-            [
-                str(python),
-                "-m",
-                "PyInstaller",
-                "--clean",
-                "--noupx",
-                "--onefile",
-                "--name",
-                "dgx-forge-agent",
-                "--distpath",
-                str(root / "dist"),
-                "--workpath",
-                str(root / "work"),
-                "--specpath",
-                str(root / "spec"),
-                "--paths",
-                str(agent_source),
-                "--paths",
-                str(protocol_source),
-                "--paths",
-                str(platform_source),
-                "--add-data",
-                (
-                    f"{platform_source / 'spark_profiles/schemas/platform-update-manifest.schema.json'}"
-                    ":spark_profiles/schemas"
-                ),
-                str(entry),
-            ],
-            check=True,
-            cwd=root,
-            env=environment,
-        )
-        built = root / "dist/dgx-forge-agent"
-        _verify_elf(built, architecture)
-        _publish(built, output, architecture)
+        command = [
+            str(python),
+            "-m",
+            "PyInstaller",
+            "--clean",
+            "--noupx",
+            "--onefile",
+            "--name",
+            "dgx-forge-agent",
+            "--distpath",
+            str(root / "dist"),
+            "--workpath",
+            str(root / "work"),
+            "--specpath",
+            str(root / "spec"),
+            "--paths",
+            str(agent_source),
+            "--paths",
+            str(protocol_source),
+            "--paths",
+            str(platform_source),
+            "--hidden-import",
+            "dgx_agent.package_helper",
+            "--hidden-import",
+            "dgx_agent.package_helper_protocol",
+            "--hidden-import",
+            "dgx_agent.client",
+            "--hidden-import",
+            "dgx_agent.config",
+            "--hidden-import",
+            "dgx_agent.deadlines",
+            "--hidden-import",
+            "dgx_agent.main",
+            "--hidden-import",
+            "dgx_agent.nvidia_tools",
+            "--hidden-import",
+            "dgx_agent.oci",
+            "--hidden-import",
+            "dgx_agent.operations",
+            "--hidden-import",
+            "dgx_agent.probe",
+            "--hidden-import",
+            "dgx_agent.readiness",
+            "--hidden-import",
+            "dgx_agent.releases",
+            "--hidden-import",
+            "dgx_agent.runtime_policy",
+            "--hidden-import",
+            "dgx_agent.state",
+            "--hidden-import",
+            "dgx_agent.update_trust",
+            "--hidden-import",
+            "dgx_agent.workloads",
+            "--hidden-import",
+            "spark_profiles.platform_release",
+            "--hidden-import",
+            "spark_profiles.update_trust",
+            "--add-data",
+            (
+                f"{platform_source / 'spark_profiles/schemas/platform-update-manifest.schema.json'}"
+                ":spark_profiles/schemas"
+            ),
+            str(entry),
+        ]
+        last_error: Exception | None = None
+        for attempt in range(MAX_BUILD_ATTEMPTS):
+            if attempt:
+                # A crashed PyInstaller process can leave a truncated archive
+                # in its output directories.  Keep every retry isolated from
+                # that partial state while remaining inside this private
+                # temporary build root.
+                for partial in (root / "dist", root / "work", root / "spec"):
+                    shutil.rmtree(partial, ignore_errors=True)
+            try:
+                subprocess.run(command, check=True, cwd=root, env=environment)
+                built = root / "dist/dgx-forge-agent"
+                _verify_elf(built, architecture)
+                _verify_packaged_runtime(built, Path(environment["HOME"]))
+            except (BuildError, OSError, subprocess.CalledProcessError) as error:
+                last_error = error
+                continue
+            _publish(built, output, architecture)
+            return
+        if last_error is None:
+            raise BuildError("packaging failed without a diagnostic")
+        raise BuildError(
+            f"packaging failed after {MAX_BUILD_ATTEMPTS} attempts: {last_error}"
+        ) from last_error
 
 
 def main() -> int:

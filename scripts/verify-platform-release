@@ -385,6 +385,7 @@ def _workload_acceptance_valid(report: object) -> bool:
         "report_type",
         "status",
         "evidence_kind",
+        "physical_sparks_exercised",
         "unknown_family_without_agent_update",
         "agent_digest_unchanged",
         "release_two_activated",
@@ -397,9 +398,13 @@ def _workload_acceptance_valid(report: object) -> bool:
     return not (
         not required <= set(report)
         or report.get("schema_version") != 1
-        or report.get("report_type") != "dgx-forge-workload-package-acceptance"
+        or report.get("report_type") not in {
+            "dgx-forge-workload-package-acceptance",
+            "workload-package-acceptance",
+        }
         or report.get("status") != "passed"
         or report.get("evidence_kind") not in {"assertion", "simulated", "physical"}
+        or report.get("physical_sparks_exercised") not in {True, False}
         or not all(report.get(field) is True for field in (
             "unknown_family_without_agent_update",
             "agent_digest_unchanged",
@@ -426,6 +431,12 @@ def _failure_matrix_valid(report: object) -> bool:
         or report.get("status") != "passed"
         or report.get("evidence_kind") not in {"assertion", "simulated", "physical"}
         or report.get("failure_matrix") is not True
+        or report.get("physical_sparks_exercised") not in {True, False}
+        or report.get("ssh_calls") != 0
+        or report.get("agent_update_calls") != 0
+        or report.get("restart_recovery") != "passed"
+        or report.get("gc_restart_recovery") != "passed"
+        or report.get("concurrent_identical_downloads") != "one-fetch-many-consumers"
         or not _secret_free(report)
     ):
         return False

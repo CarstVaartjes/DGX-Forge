@@ -96,14 +96,71 @@ jobs:
       - name: Run Python and Bash tests
         run: uv run --python 3.12 --frozen --with pytest==9.1.1 pytest
 
+  workload-package-evidence:
+    name: Workload package acceptance evidence
+    needs: [lint, generated-clients, test]
+    if: >-
+      always() &&
+      needs.lint.result == 'success' &&
+      needs.generated-clients.result == 'success' &&
+      needs.test.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.12.1"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Run simulated unknown-package acceptance
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 inventory/reports
+          if [[ ! -x scripts/accept-workload-packages ]]; then
+            echo "::notice::W18 acceptance helper is not present on this ref; no workload evidence was generated"
+            exit 0
+          fi
+          scripts/accept-workload-packages --mode simulated --json
+      - name: Run workload failure matrix evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -x scripts/accept-workload-package-failures ]]; then
+            echo "::notice::W19 failure-matrix helper is not present on this ref; no failure evidence was generated"
+            exit 0
+          fi
+          scripts/accept-workload-package-failures \
+            --output inventory/reports/workload-package-failure-matrix.json --json \
+            > workload-package-failure-matrix.stdout.json
+      - name: Upload workload acceptance evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: workload-package-evidence-${{ github.run_id }}
+          if-no-files-found: ignore
+          retention-days: 14
+          path: |
+            inventory/reports/workload-package-acceptance.json
+            inventory/reports/workload-package-failure-matrix.json
+            workload-package-failure-matrix.stdout.json
+
   release-metadata:
     name: Validate container release tag
     if: >-
+      needs.workload-package-evidence.result == 'success' &&
+      hashFiles('scripts/accept-workload-packages') != '' &&
+      hashFiles('scripts/accept-workload-package-failures') != '' &&
       vars.DGX_CONTAINER_RELEASES_ENABLED == 'true' &&
       vars.DGX_PLATFORM_RELEASES_ENABLED == 'true' &&
       github.event_name == 'push' &&
       github.ref_type == 'tag' &&
       startsWith(github.ref_name, 'v')
+    needs: [workload-package-evidence]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -307,7 +364,7 @@ jobs:
           uv run --frozen scripts/build-host-updater-artifact \
             --control-wheel release-output/wheels/dgx_control-0.1.0-py3-none-any.whl \
             --platform-wheel release-output/wheels/spark_profiles-0.1.0-py3-none-any.whl \
-            --protocol-wheel inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl \
+            --protocol-wheel inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl \
             --output release-output/dgx-forge-host-updater.tar
           sha256sum release-output/dgx-forge-host-updater.tar \
             > release-output/dgx-forge-host-updater.tar.sha256

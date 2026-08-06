@@ -141,7 +141,7 @@ Expected: every state, process, race, readiness, and rollback case passes.
 - Create: `tests/nodes/test_install_dgx_agent.py`
 
 **Interfaces:**
-- Consumes: `--node-id`, `--agent-artifact`, `--agent-sha256`, `--oras`, `--oras-sha256`, `--nvidia-bundle`, `--health-collector`, `--health-collector-sha256`, `--site-config`, `--ca`, `--tuf-root`, `--tuf-root-sha256`, `--registry-auth`, and `--enrollment-token`; every path is absolute.
+- Consumes: `--node-id`, `--agent-artifact`, `--agent-sha256`, `--oras`, `--oras-sha256`, `--nvidia-bundle`, `--health-collector`, `--health-collector-sha256`, `--site-config`, `--ca`, `--tuf-root`, `--tuf-root-sha256`, `--workload-tuf-root`, `--workload-tuf-root-sha256`, `--registry-auth`, `--update-authority`, `--package-grant-public`, `--package-receipt-public`, and `--enrollment-token`; every path is absolute. Platform and workload TUF roots, metadata caches, and target caches are separate installed paths. The installer publishes the grant key under both the agent and root-helper trust paths (`package-grant-public.pem` and `package-fence-public.pem`) and publishes the independent object-receipt key as `package-receipt-public.pem` before enabling the helper socket.
 - Produces: immutable agent A, ORAS, NVIDIA, and collector digest roots; restrictive bootstrap/config/policy/state; installed stable supervisor/units; canonical JSON result with `schema_version`, `status`, `node_id`, `agent_sha256`, and `nvidia_sha256`.
 
 - [ ] **Step 1: Write failing installer input and NVIDIA lifecycle tests**
@@ -241,7 +241,7 @@ pass.
 
 **Interfaces:**
 - Produces: `RuntimePolicy.load(path) -> RuntimePolicy`, `RuntimePolicy._load_for_test(path)`, and `build_agent(config)` with non-null `ReleaseInstaller` and `WorkloadOperations` boundaries.
-- Runtime policy fields: schema/architecture, registry origin/repository, ORAS version/path/digest/auth path, TUF root path/digest/metadata/target roots, release/staging roots, and exact `spark-runtime-v1` adapter fields.
+- Runtime policy fields: schema/architecture, registry origin/repository, ORAS version/path/digest/auth path, independent platform and workload TUF root paths/digests/metadata/target roots, release/staging roots, and exact `spark-runtime-v1` adapter fields.
 - `BoundedHTTPSFetcher` gains an optional `credential_provider: CredentialProvider`; when present, each fetch snapshots the current CA/certificate/key and closes the per-fetch pool.
 
 - [ ] **Step 1: Write runtime-policy and production-wiring RED tests**

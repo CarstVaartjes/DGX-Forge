@@ -144,6 +144,15 @@ def test_generator_is_idempotent_and_admin_schema_is_secret_free() -> None:
     }
     assert all(operation["security"] == [{"BearerAuth": []}] for operation in operation_list)
 
+    assert {
+        "/api/v1/packages/families",
+        "/api/v1/packages/candidates",
+        "/api/v1/packages/candidates/{candidate_id}/promotion-preview",
+        "/api/v1/packages/candidates/{candidate_id}/promote",
+        "/api/v1/deployments/{deployment_id}/rollout-preview",
+        "/api/v1/deployments/{deployment_id}/rollouts",
+    } <= set(schema["paths"])
+
     by_id = {operation["operationId"]: operation for operation in operation_list}
     for operation_id in (
         "applyReconciliation",

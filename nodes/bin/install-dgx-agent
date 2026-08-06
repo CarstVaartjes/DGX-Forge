@@ -394,6 +394,42 @@ def _update_authority(raw: bytes) -> bytes:
     return raw
 
 
+_ED25519_PUBLIC_SPKI_PREFIX = bytes.fromhex("302a300506032b6570032100")
+
+
+def _ed25519_public_key(raw: bytes, name: str) -> bytes:
+    """Validate a single PEM SubjectPublicKeyInfo and return its raw key bytes.
+
+    The package helper has two consumers of the grant key (the unprivileged
+    agent and the root helper), so the installer deliberately validates the
+    key once and publishes the same immutable public material to both paths.
+    Keeping this parser local avoids making the networkless installer depend on
+    the agent's Python environment or a private signing key.
+    """
+    if not raw or len(raw) > 4096 or b"PRIVATE KEY" in raw:
+        raise InstallError(f"{name} is invalid")
+    try:
+        text = raw.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise InstallError(f"{name} is invalid") from error
+    match = re.fullmatch(
+        r"-----BEGIN PUBLIC KEY-----\n([A-Za-z0-9+/=\n]+)"
+        r"-----END PUBLIC KEY-----\n?",
+        text,
+    )
+    if match is None:
+        raise InstallError(f"{name} is invalid")
+    try:
+        der = base64.b64decode("".join(match.group(1).split()), validate=True)
+    except (binascii.Error, ValueError) as error:
+        raise InstallError(f"{name} is invalid") from error
+    if len(der) != len(_ED25519_PUBLIC_SPKI_PREFIX) + 32 or not der.startswith(
+        _ED25519_PUBLIC_SPKI_PREFIX
+    ):
+        raise InstallError(f"{name} is not an Ed25519 public key")
+    return der[-32:]
+
+
 def _lock_path() -> Path:
     override = os.environ.get("DGX_INSTALL_NVIDIA_LOCK_TEST")
     if override is not None:
@@ -1106,6 +1142,78 @@ def _service_identity() -> Identity:
     return _validate_service_account(account, primary, group_names)
 
 
+def _validate_workload_account(
+    account: pwd.struct_passwd,
+    primary: grp.struct_group,
+    group_names: set[str],
+) -> Identity:
+    if (
+        account.pw_name != "dgx-workload"
+        or not 0 < account.pw_uid <= 999
+        or account.pw_dir != "/var/lib/dgx-forge-workload"
+        or account.pw_shell != "/usr/sbin/nologin"
+        or account.pw_gid != primary.gr_gid
+        or primary.gr_name != "dgx-workload"
+        or any(member != "dgx-workload" for member in primary.gr_mem)
+        or group_names != {"dgx-workload"}
+    ):
+        raise InstallError("dgx-workload account is not a dedicated system identity")
+    return account.pw_uid, account.pw_gid
+
+
+def _workload_identity() -> Identity:
+    if _test_root() is not None:
+        # Test installations do not mutate /etc/passwd.  Reserve a synthetic
+        # non-root identity so the same collision check exercised in
+        # production still runs before any target mutation.
+        return os.geteuid() + 1, os.getegid() + 1
+    if os.geteuid() != 0:
+        raise InstallError("installation requires root")
+    try:
+        account = pwd.getpwnam("dgx-workload")
+    except KeyError:
+        try:
+            subprocess.run(
+                [
+                    "/usr/sbin/useradd",
+                    "--system",
+                    "--user-group",
+                    "--home-dir",
+                    "/var/lib/dgx-forge-workload",
+                    "--no-create-home",
+                    "--shell",
+                    "/usr/sbin/nologin",
+                    "dgx-workload",
+                ],
+                check=True,
+                stdin=subprocess.DEVNULL,
+                timeout=15,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            raise InstallError("dgx-workload account could not be created") from error
+        account = pwd.getpwnam("dgx-workload")
+    try:
+        primary = grp.getgrgid(account.pw_gid)
+        group_names = {
+            grp.getgrgid(group_id).gr_name
+            for group_id in os.getgrouplist(account.pw_name, account.pw_gid)
+        }
+    except KeyError as error:
+        raise InstallError("dgx-workload group identity is unavailable") from error
+    return _validate_workload_account(account, primary, group_names)
+
+
+def _validate_distinct_service_identities(
+    service_owner: Identity,
+    workload_owner: Identity,
+) -> None:
+    if (
+        service_owner[0] == workload_owner[0]
+        or service_owner[1] == workload_owner[1]
+    ):
+        raise InstallError("agent and workload identities are not distinct")
+
+
 def _nvidia_policy(
     lock: dict[str, Any],
     root: Path,
@@ -1162,6 +1270,8 @@ def _runtime_policy(
     auth_path: Path,
     tuf_path: Path,
     tuf_sha: str,
+    workload_tuf_path: Path,
+    workload_tuf_sha: str,
 ) -> dict[str, Any]:
     return {
         "adapter": {
@@ -1187,6 +1297,16 @@ def _runtime_policy(
             "bootstrap_root_sha256": tuf_sha,
             "metadata_root": str(_destination("/var/lib/dgx-forge-agent/tuf/metadata")),
             "target_root": str(_destination("/var/lib/dgx-forge-agent/tuf/targets")),
+        },
+        "workload_tuf": {
+            "bootstrap_root_path": str(workload_tuf_path),
+            "bootstrap_root_sha256": workload_tuf_sha,
+            "metadata_root": str(
+                _destination("/var/lib/dgx-forge-agent/workload-tuf/metadata")
+            ),
+            "target_root": str(
+                _destination("/var/lib/dgx-forge-agent/workload-tuf/targets")
+            ),
         },
     }
 
@@ -1318,8 +1438,11 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
         "site_config",
         "ca",
         "tuf_root",
+        "workload_tuf_root",
         "registry_auth",
         "update_authority",
+        "package_grant_public",
+        "package_receipt_public",
         "enrollment_token",
     ):
         if not Path(getattr(arguments, field)).is_absolute():
@@ -1350,6 +1473,11 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
         "tuf": _snapshot(
             Path(arguments.tuf_root), "TUF bootstrap root", maximum=1024 * 1024
         ),
+        "workload_tuf": _snapshot(
+            Path(arguments.workload_tuf_root),
+            "workload TUF bootstrap root",
+            maximum=1024 * 1024,
+        ),
         "auth": _snapshot(
             Path(arguments.registry_auth),
             "registry auth",
@@ -1360,6 +1488,16 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
             Path(arguments.update_authority),
             "update authority",
             maximum=MAX_JSON,
+        ),
+        "package_grant_public": _snapshot(
+            Path(arguments.package_grant_public),
+            "package helper grant public key",
+            maximum=4096,
+        ),
+        "package_receipt_public": _snapshot(
+            Path(arguments.package_receipt_public),
+            "package helper receipt public key",
+            maximum=4096,
         ),
         "token": _snapshot(
             Path(arguments.enrollment_token),
@@ -1374,12 +1512,26 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
         snapshots["health"], arguments.health_collector_sha256, "health collector"
     )
     _require_digest(snapshots["tuf"], arguments.tuf_root_sha256, "TUF bootstrap root")
+    _require_digest(
+        snapshots["workload_tuf"],
+        arguments.workload_tuf_root_sha256,
+        "workload TUF bootstrap root",
+    )
     site = _site(snapshots["site"])
     _verify_elf(snapshots["agent"], site["architecture"], "agent artifact")
     _verify_elf(snapshots["oras"], site["architecture"], "ORAS executable")
     _json(snapshots["tuf"], "TUF bootstrap root", canonical=True)
+    _json(snapshots["workload_tuf"], "workload TUF bootstrap root", canonical=True)
     _json(snapshots["auth"], "registry auth", canonical=True)
     _update_authority(snapshots["update_authority"])
+    grant_public = _ed25519_public_key(
+        snapshots["package_grant_public"], "package helper grant public key"
+    )
+    receipt_public = _ed25519_public_key(
+        snapshots["package_receipt_public"], "package helper receipt public key"
+    )
+    if grant_public == receipt_public:
+        raise InstallError("package helper grant and receipt keys must be distinct")
     _require_supervisor_signature_verifier()
     _certificate_bundle(snapshots["ca"])
     lock = _load_lock()
@@ -1403,6 +1555,8 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
             "dgx-forge-agent-activation.path",
             "dgx-forge-agent-rollback.service",
             "dgx-forge-agent-rollback.path",
+            "dgx-forge-package-helper.service",
+            "dgx-forge-package-helper.socket",
         )
     }
     lock_path = _installer_lock_path()
@@ -1440,6 +1594,8 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
         except BlockingIOError as error:
             raise InstallError("another installer is active") from error
         service_owner = _service_identity()
+        workload_owner = _workload_identity()
+        _validate_distinct_service_identities(service_owner, workload_owner)
         changed = False
         root_owner = (0, 0) if _test_root() is None else service_owner
         agent_path = _destination("/opt/dgx-forge/agent-slots/A/dgx-forge-agent")
@@ -1487,13 +1643,30 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
 
         state_root = _destination("/var/lib/dgx-forge-agent")
         changed |= _ensure_directory(state_root, 0o700, service_owner)
-        for relative in ("bootstrap", "tuf", "tuf/metadata", "tuf/targets"):
+        for relative in (
+            "bootstrap",
+            "tuf",
+            "tuf/metadata",
+            "tuf/targets",
+            "workload-tuf",
+            "workload-tuf/metadata",
+            "workload-tuf/targets",
+        ):
             changed |= _ensure_directory(state_root / relative, 0o700, service_owner)
         release_parent = _destination("/var/lib/dgx-forge")
         changed |= _ensure_directory(release_parent, 0o755, root_owner)
         changed |= _ensure_directory(release_parent / "releases", 0o700, service_owner)
         changed |= _ensure_directory(
             release_parent / "release-staging", 0o700, service_owner
+        )
+        # StateDirectory= is normally created by systemd, but provisioning it
+        # here makes the ownership boundary true before the socket can be
+        # enabled and keeps a stale/writable replay database from surviving a
+        # reinstall unnoticed.
+        changed |= _ensure_directory(
+            _destination("/var/lib/dgx-forge-package-helper"),
+            0o700,
+            root_owner,
         )
         auth_path = state_root / "registry-auth.json"
         token_path = state_root / "bootstrap/enrollment-token"
@@ -1512,6 +1685,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
         changed |= _ensure_directory(etc, 0o755, root_owner)
         ca_path = etc / "ca.pem"
         tuf_path = etc / "tuf-root.json"
+        workload_tuf_path = etc / "workload-tuf-root.json"
         changed |= _publish_file(
             ca_path, snapshots["ca"], 0o644, root_owner, parent_mode=0o755
         )
@@ -1519,8 +1693,40 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
             tuf_path, snapshots["tuf"], 0o644, root_owner, parent_mode=0o755
         )
         changed |= _publish_file(
+            workload_tuf_path,
+            snapshots["workload_tuf"],
+            0o644,
+            root_owner,
+            parent_mode=0o755,
+        )
+        changed |= _publish_file(
             etc / "update-authority.json",
             snapshots["update_authority"],
+            0o444,
+            root_owner,
+            parent_mode=0o755,
+        )
+        # The grant key is intentionally published under both consumer names:
+        # the agent verifies grants and the root helper consumes the same grant
+        # as a fence.  The receipt key is independent and verifies materialized
+        # objects only.  All are root-owned before socket activation.
+        changed |= _publish_file(
+            etc / "package-grant-public.pem",
+            snapshots["package_grant_public"],
+            0o444,
+            root_owner,
+            parent_mode=0o755,
+        )
+        changed |= _publish_file(
+            etc / "package-fence-public.pem",
+            snapshots["package_grant_public"],
+            0o444,
+            root_owner,
+            parent_mode=0o755,
+        )
+        changed |= _publish_file(
+            etc / "package-receipt-public.pem",
+            snapshots["package_receipt_public"],
             0o444,
             root_owner,
             parent_mode=0o755,
@@ -1550,6 +1756,8 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
                     auth_path,
                     tuf_path,
                     arguments.tuf_root_sha256,
+                    workload_tuf_path,
+                    arguments.workload_tuf_root_sha256,
                 )
             ),
             0o644,
@@ -1619,6 +1827,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
                         "dgx-forge-agent-supervisor.service",
                         "dgx-forge-agent-activation.path",
                         "dgx-forge-agent-rollback.path",
+                        "dgx-forge-package-helper.socket",
                     ],
                     check=True,
                     timeout=30,
@@ -1630,6 +1839,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
                         "dgx-forge-agent-supervisor.service",
                         "dgx-forge-agent-activation.path",
                         "dgx-forge-agent-rollback.path",
+                        "dgx-forge-package-helper.socket",
                     ],
                     check=True,
                     timeout=30,
@@ -1666,8 +1876,12 @@ def _parser() -> UsageParser:
         "ca",
         "tuf-root",
         "tuf-root-sha256",
+        "workload-tuf-root",
+        "workload-tuf-root-sha256",
         "registry-auth",
         "update-authority",
+        "package-grant-public",
+        "package-receipt-public",
         "enrollment-token",
     ):
         parser.add_argument(f"--{name}", required=True)

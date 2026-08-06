@@ -217,6 +217,34 @@ def test_gc_interruption_restarts_from_durable_plan(tmp_path: Path) -> None:
     assert object_store.values == {}
 
 
+def test_production_content_store_gc_deletes_only_unreachable_objects(
+    tmp_path: Path,
+) -> None:
+    content = b"gc-eligible-workload-object"
+    digest = hashlib.sha256(content).hexdigest()
+    descriptor = type(
+        "Descriptor",
+        (),
+        {"name": "gc-component", "digest": digest, "size": len(content), "kind": "model"},
+    )()
+    store = ContentStore(tmp_path / "packages", capacity_bytes=1024)
+    owner = _binding(1)
+    reservation = store.reserve_component(owner, descriptor)
+    record = store.begin_component(reservation, descriptor)
+    store.write_partial(record, content)
+    store.promote_component(record, digest)
+    store.release_reservation(reservation)
+
+    result = PackageGarbageCollector(
+        store.state,
+        store,
+        clock_ns=lambda: 1_000,
+    ).collect(_binding(2), dry_run=False, target_bytes=len(content))
+    assert result.status == "completed"
+    assert result.reclaimed_bytes == len(content)
+    assert store.lookup(digest) is None
+
+
 def test_failure_evidence_digest_is_stable_and_redacted() -> None:
     record = _failure(PackageFailureReason.DIGEST_SIZE_MISMATCH).to_mapping()
     first = hashlib.sha256(

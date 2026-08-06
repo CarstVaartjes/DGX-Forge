@@ -19,6 +19,8 @@ UNITS = (
     "dgx-forge-agent-activation.path",
     "dgx-forge-agent-rollback.service",
     "dgx-forge-agent-rollback.path",
+    "dgx-forge-package-helper.service",
+    "dgx-forge-package-helper.socket",
 )
 SECURITY_UNITS = tuple(name for name in UNITS if name.endswith(".service"))
 SUMMARY = re.compile(

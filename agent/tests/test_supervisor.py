@@ -477,6 +477,50 @@ def test_run_agent_exports_verified_release_identity(
     assert launched.stdout == f"7.8.9 sha256:{digest} 1 A {digest}\n"
 
 
+def test_run_package_helper_executes_the_verified_active_slot_with_socket_state(
+    supervisor_host: SupervisorHost,
+) -> None:
+    source = supervisor_host.root / "package-helper-agent.c"
+    source.write_text(
+        "#include <stdio.h>\n#include <stdlib.h>\n"
+        "int main(int argc, char **argv){"
+        'printf("%d %s %s %s %s %s %s\\n", argc, argv[1], argv[2], '
+        'getenv("LISTEN_FDS"), getenv("LISTEN_PID"), getenv("HOME"), '
+        'getenv("DGX_PACKAGE_HELPER_SLOT_SHA256"));}\n'
+    )
+    target = (
+        supervisor_host.host_root
+        / "opt/dgx-forge/agent-slots/A/dgx-forge-agent"
+    )
+    target.parent.mkdir(parents=True)
+    subprocess.run(["cc", "-O2", "-o", target, source], check=True)
+    target.chmod(0o555)
+    supervisor_host.write_identity(target)
+    digest = _digest(target)
+    assert supervisor_host.run(
+        "initialize", "--slot", "A", "--sha256", digest
+    ).returncode == 0
+
+    launched = subprocess.run(
+        [
+            "/bin/sh",
+            "-c",
+            f'LISTEN_PID=$$ LISTEN_FDS=1 exec "{SUPERVISOR}" run-package-helper',
+        ],
+        env=supervisor_host.environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert launched.returncode == 0, launched.stderr
+    fields = launched.stdout.strip().split()
+    assert fields[:4] == ["3", "--package-helper", "--listen-fd=3", "1"]
+    assert int(fields[4]) > 1
+    assert fields[5] == "/var/lib/dgx-forge-package-helper"
+    assert fields[6] == digest
+
+
 def test_apply_request_installs_verified_inactive_slot_and_starts_activation(
     supervisor_host: SupervisorHost,
 ) -> None:
@@ -2004,12 +2048,15 @@ def test_installed_systemd_harness_verifies_units_by_installed_name() -> None:
         "dgx-forge-agent-activation.path",
         "dgx-forge-agent-rollback.service",
         "dgx-forge-agent-rollback.path",
+        "dgx-forge-package-helper.service",
+        "dgx-forge-package-helper.socket",
     }
     assert set(report["security_units"]) == {
         "dgx-forge-agent.service",
         "dgx-forge-agent-supervisor.service",
         "dgx-forge-agent-activation.service",
         "dgx-forge-agent-rollback.service",
+        "dgx-forge-package-helper.service",
     }
     assert report["security_units"]["dgx-forge-agent-supervisor.service"][
         "cap_sys_ptrace"

@@ -207,7 +207,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "cryptography", specifier = "==50.0.0" },
-    { name = "dgx-agent-protocol", path = "../inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl" },
+    { name = "dgx-agent-protocol", path = "../inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl" },
     { name = "securesystemslib", extras = ["crypto"], specifier = "==1.4.0" },
     { name = "spark-profiles", directory = "../" },
     { name = "tuf", specifier = "==7.0.0" },
@@ -221,13 +221,13 @@ dev = [
 
 [[package]]
 name = "dgx-agent-protocol"
-version = "1.0.0"
-source = { path = "../inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl" }
+version = "2.0.0"
+source = { path = "../inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl" }
 dependencies = [
     { name = "jsonschema" },
 ]
 wheels = [
-    { filename = "dgx_agent_protocol-1.0.0-py3-none-any.whl", hash = "sha256:280e362fd38c9919d205b1c54817726f5d1e2ec2fafc24c201fddc0f8d159d1b" },
+    { filename = "dgx_agent_protocol-2.0.0-py3-none-any.whl", hash = "sha256:1111c1a410f00268344290c2b06e4e6b67d76114524aa84e399e6ce7074d566e" },
 ]
 
 [package.metadata]

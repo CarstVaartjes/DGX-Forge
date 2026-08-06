@@ -345,6 +345,7 @@ def _write_workload_evidence(repository: Path) -> None:
         "report_type": "dgx-forge-workload-package-acceptance",
         "status": "passed",
         "evidence_kind": "simulated",
+        "physical_sparks_exercised": False,
         "unknown_family_without_agent_update": True,
         "agent_digest_unchanged": True,
         "release_two_activated": True,
@@ -360,6 +361,12 @@ def _write_workload_evidence(repository: Path) -> None:
         "status": "passed",
         "evidence_kind": "simulated",
         "failure_matrix": True,
+        "physical_sparks_exercised": False,
+        "ssh_calls": 0,
+        "agent_update_calls": 0,
+        "restart_recovery": "passed",
+        "gc_restart_recovery": "passed",
+        "concurrent_identical_downloads": "one-fetch-many-consumers",
         "cases": [
             {
                 "family_id": "synthetic-stack",
@@ -550,6 +557,55 @@ def test_simulated_update_report_never_satisfies_physical_release_gates(
     assert code == 2
     assert UPDATE_GATES <= set(aggregate["missing_gates"])
     assert not any(aggregate["physical_update_gates"].values())
+
+
+def test_workload_failure_helper_emits_report_accepted_by_release_verifier(
+    tmp_path: Path,
+) -> None:
+    helper = ROOT / "scripts/accept-workload-package-failures"
+    if not helper.exists():
+        pytest.skip("W19 failure evidence helper is not present yet")
+    output = tmp_path / "workload-package-failure-matrix.json"
+    completed = subprocess.run(
+        [helper, "--output", str(output), "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    namespace = runpy.run_path(str(SCRIPT))
+    # The helper writes to its requested path; copy it into the verifier's
+    # canonical inventory location before validating the real artifact.
+    inventory = tmp_path.parent / "inventory/reports"
+    inventory.mkdir(parents=True)
+    target = inventory / output.name
+    target.write_bytes(output.read_bytes())
+    report, digest = namespace["_read_workload_report"](
+        tmp_path.parent, "workload-package-failure-matrix"
+    )
+    assert report is not None
+    assert digest == hashlib.sha256(target.read_bytes()).hexdigest()
+    assert namespace["_failure_matrix_valid"](report)
+
+
+def test_unknown_workload_acceptance_helper_runs_real_e2e_and_emits_canonical_report(
+    tmp_path: Path,
+) -> None:
+    helper = ROOT / "scripts/accept-workload-packages"
+    output = tmp_path / "workload-package-acceptance.json"
+    completed = subprocess.run(
+        [helper, "--mode", "simulated", "--output", str(output), "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    report = json.loads(output.read_text())
+    namespace = runpy.run_path(str(SCRIPT))
+    assert namespace["_workload_acceptance_valid"](report)
+    assert report["test_command"]
+    assert "test_unknown_workload_package.py" in report["test_command"]
+    assert report["physical_sparks_exercised"] is False
 
 
 def test_physical_update_evidence_must_be_complete_and_content_addressed(

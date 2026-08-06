@@ -15,14 +15,13 @@ import os
 import re
 import socket
 import ssl
-import time
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
 import urllib3
-from tuf.api.exceptions import DownloadError, DownloadHTTPError, RepositoryError
+from tuf.api.exceptions import DownloadError, RepositoryError
 from tuf.ngclient import FetcherInterface, Updater
 from tuf.ngclient.config import UpdaterConfig
 
@@ -33,7 +32,6 @@ from .deadlines import DeadlineBindingError, MonotonicDeadline
 from .package_trust import TrustedWorkloadTarget, WorkloadTrustError
 from .packages.providers import (
     ComponentDescriptor,
-    Credential,
     FetchResponse,
     NetworkHop,
     ProviderRequest,
@@ -42,11 +40,7 @@ from .packages.providers import (
     SourcePolicy,
     Validators,
 )
-from .update_trust import (
-    BoundedHTTPSFetcher,
-    _BOOTSTRAP_MARKER,
-    _LOCK_NAME,
-)
+from .update_trust import _BOOTSTRAP_MARKER, _LOCK_NAME
 
 
 # Keep these values independent of platform TUF limits.  They mirror the
@@ -56,14 +50,9 @@ WORKLOAD_METADATA_LIMIT = 2 * 1024 * 1024
 WORKLOAD_TARGET_LIMIT = 1024 * 1024
 WORKLOAD_TUF_METADATA_ROUTE = "/agent/v1/workload-tuf/metadata/"
 WORKLOAD_TUF_TARGET_ROUTE = "/agent/v1/workload-tuf/targets/"
-_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _COMMIT = re.compile(r"[0-9a-f]{40,64}\Z")
 _OCI = re.compile(r"(?P<name>[a-z0-9][a-z0-9._/-]*)@(?P<digest>sha256:[0-9a-f]{64})\Z")
-_TUF_METADATA = re.compile(
-    r"(?:[1-9][0-9]*\.root|timestamp|snapshot|targets|families|releases|"
-    r"[1-9][0-9]*\.(?:targets|families|releases))\.json\Z"
-)
 _TUF_TARGET = re.compile(r"releases/[0-9a-f]{64}\.json\Z")
 
 
@@ -124,7 +113,6 @@ def _protocol_source(
         commit = source["commit"]
         if not isinstance(commit, str) or _COMMIT.fullmatch(commit) is None:
             raise AgentProtocolError("Git source commit is invalid")
-        parsed = urlsplit(repository)
         url = f"{repository}/archive/{commit}.tar.gz"
         return SourceLocation("git", url, commit, (_host(repository),))
     if provider == "huggingface":
@@ -182,6 +170,43 @@ def protocol_component(
     )
 
 
+class ProtocolAcquisition:
+    """Adapt signed wire descriptors to the internal provider ABI.
+
+    PackageOperationRequest carries protocol ``ComponentDescriptor`` values.
+    The acquisition engine intentionally accepts a narrower internal type so
+    that untrusted wire objects cannot bypass source-policy validation.  Keep
+    this conversion at the production composition boundary and preserve all
+    operation callbacks/deadlines unchanged.
+    """
+
+    def __init__(self, engine: object, *, platform: str) -> None:
+        if not callable(getattr(engine, "fetch", None)):
+            raise TypeError("workload acquisition engine is invalid")
+        if not isinstance(platform, str) or not platform:
+            raise ValueError("workload platform is invalid")
+        self._engine = engine
+        self._platform = platform
+
+    def fetch(
+        self,
+        descriptor: ProtocolComponent,
+        binding: object,
+        progress: Callable[..., object],
+        cancelled: Callable[[], bool],
+        *,
+        deadline: object | None = None,
+    ) -> object:
+        internal = protocol_component(descriptor, platform=self._platform)
+        return self._engine.fetch(
+            internal,
+            binding,
+            progress,
+            cancelled,
+            deadline=deadline,
+        )
+
+
 class HTTPSProviderTransport(ProviderTransport):
     """Direct immutable HTTPS acquisition with no control-plane relay."""
 
@@ -189,7 +214,7 @@ class HTTPSProviderTransport(ProviderTransport):
         self,
         *,
         policy: SourcePolicy | None = None,
-        credentials: callable | None = None,
+        credentials: Callable[[str], object] | None = None,
         connect_timeout: float = 5.0,
         read_timeout: float = 15.0,
     ) -> None:
@@ -494,8 +519,5 @@ class WorkloadTUFSource(FetcherInterface):
 
 def _validate_route(url: str, suffix: str) -> None:
     parsed = urlsplit(url)
-    origin = f"https://{parsed.hostname or ''}"
-    if parsed.port is not None:
-        origin += f":{parsed.port}"
     if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.password or parsed.query or parsed.fragment or parsed.path != suffix:
         raise WorkloadTrustError("workload TUF route is invalid")

@@ -124,6 +124,9 @@ def catalog(*profiles: ClusterProfile, definition: WorkloadDefinition) -> Catalo
         maturity={definition.id: "accepted"},
         maturity_fingerprints={definition.id: definition_sha},
         accepted_profiles=accepted_profiles,
+        package_families={},
+        workload_deployments={},
+        legacy_workload_deployments={},
     )
 
 

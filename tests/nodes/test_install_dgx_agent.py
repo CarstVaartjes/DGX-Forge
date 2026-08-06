@@ -239,8 +239,38 @@ def installer_inputs(tmp_path: Path) -> dict[str, object]:
         capture_output=True,
     )
     ca.chmod(0o644)
+    package_keys: dict[str, Path] = {}
+    for name in ("grant", "receipt"):
+        private = tmp_path / f"package-{name}-private.pem"
+        public = tmp_path / f"package-{name}-public.pem"
+        subprocess.run(
+            ["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(private)],
+            check=True,
+            capture_output=True,
+        )
+        private.chmod(0o600)
+        subprocess.run(
+            [
+                "openssl",
+                "pkey",
+                "-in",
+                str(private),
+                "-pubout",
+                "-out",
+                str(public),
+            ],
+            check=True,
+            capture_output=True,
+        )
+        public.chmod(0o644)
+        package_keys[name] = public
     tuf = _write(
         tmp_path / "root.json", _canonical({"signed": {}, "signatures": []}), 0o644
+    )
+    workload_tuf = _write(
+        tmp_path / "workload-root.json",
+        _canonical({"signed": {}, "signatures": []}),
+        0o644,
     )
     auth = _write(tmp_path / "auth.json", _canonical({"auths": {}}), 0o600)
     update_public = bytes.fromhex("7" * 64)
@@ -382,10 +412,18 @@ def installer_inputs(tmp_path: Path) -> dict[str, object]:
         str(tuf),
         "--tuf-root-sha256",
         _sha(tuf),
+        "--workload-tuf-root",
+        str(workload_tuf),
+        "--workload-tuf-root-sha256",
+        _sha(workload_tuf),
         "--registry-auth",
         str(auth),
         "--update-authority",
         str(update_authority),
+        "--package-grant-public",
+        str(package_keys["grant"]),
+        "--package-receipt-public",
+        str(package_keys["receipt"]),
         "--enrollment-token",
         str(token),
     ]
@@ -403,8 +441,11 @@ def installer_inputs(tmp_path: Path) -> dict[str, object]:
             "ca": ca,
             "ca_key": ca_key,
             "tuf": tuf,
+            "workload_tuf": workload_tuf,
             "auth": auth,
             "update_authority": update_authority,
+            "package_grant_public": package_keys["grant"],
+            "package_receipt_public": package_keys["receipt"],
             "token": token,
         },
     }
@@ -453,6 +494,24 @@ def test_install_is_idempotent_generic_and_retains_license_provenance(
     runtime = json.loads((host / "etc/dgx-forge-agent/runtime-policy.json").read_text())
     assert runtime["release_root"] == str(host / "var/lib/dgx-forge/releases")
     assert runtime["staging_root"] == str(host / "var/lib/dgx-forge/release-staging")
+    assert runtime["tuf"]["bootstrap_root_path"] == str(
+        host / "etc/dgx-forge-agent/tuf-root.json"
+    )
+    assert runtime["workload_tuf"]["bootstrap_root_path"] == str(
+        host / "etc/dgx-forge-agent/workload-tuf-root.json"
+    )
+    assert runtime["tuf"]["bootstrap_root_path"] != runtime["workload_tuf"][
+        "bootstrap_root_path"
+    ]
+    assert runtime["tuf"]["metadata_root"] != runtime["workload_tuf"][
+        "metadata_root"
+    ]
+    assert runtime["tuf"]["target_root"] != runtime["workload_tuf"][
+        "target_root"
+    ]
+    assert (
+        host / "etc/dgx-forge-agent/workload-tuf-root.json"
+    ).read_bytes() == installer_inputs["paths"]["workload_tuf"].read_bytes()
     assert (host / "var/lib/dgx-forge/releases").stat().st_mode & 0o777 == 0o700
     assert (host / "var/lib/dgx-forge/release-staging").stat().st_mode & 0o777 == 0o700
     installed_authority = host / "etc/dgx-forge-agent/update-authority.json"
@@ -460,9 +519,24 @@ def test_install_is_idempotent_generic_and_retains_license_provenance(
         "update_authority"
     ].read_bytes()
     assert installed_authority.stat().st_mode & 0o777 == 0o444
+    helper_state = host / "var/lib/dgx-forge-package-helper"
+    assert helper_state.stat().st_mode & 0o777 == 0o700
+    grant = installer_inputs["paths"]["package_grant_public"].read_bytes()
+    receipt = installer_inputs["paths"]["package_receipt_public"].read_bytes()
+    assert grant != receipt
+    for filename, expected in (
+        ("package-grant-public.pem", grant),
+        ("package-fence-public.pem", grant),
+        ("package-receipt-public.pem", receipt),
+    ):
+        installed_key = host / "etc/dgx-forge-agent" / filename
+        assert installed_key.read_bytes() == expected
+        assert installed_key.stat().st_mode & 0o777 == 0o444
     for unit_name in (
         "dgx-forge-agent-rollback.service",
         "dgx-forge-agent-rollback.path",
+        "dgx-forge-package-helper.service",
+        "dgx-forge-package-helper.socket",
     ):
         installed_unit = host / "etc/systemd/system" / unit_name
         assert installed_unit.read_bytes() == (
@@ -804,8 +878,8 @@ def test_missing_rollback_path_fails_before_mutation_and_all_units_are_enabled(
     assert installed.returncode == 0, installed.stderr
     assert actions.read_text().splitlines() == [
         "daemon-reload",
-        "enable dgx-forge-agent.service dgx-forge-agent-supervisor.service dgx-forge-agent-activation.path dgx-forge-agent-rollback.path",
-        "start dgx-forge-agent-supervisor.service dgx-forge-agent-activation.path dgx-forge-agent-rollback.path",
+        "enable dgx-forge-agent.service dgx-forge-agent-supervisor.service dgx-forge-agent-activation.path dgx-forge-agent-rollback.path dgx-forge-package-helper.socket",
+        "start dgx-forge-agent-supervisor.service dgx-forge-agent-activation.path dgx-forge-agent-rollback.path dgx-forge-package-helper.socket",
     ]
 
 
@@ -838,6 +912,89 @@ def test_account_contract_rejects_root_wrong_home_group_and_admin_membership() -
             validate(account, primary, {"dgx-agent"})
     with pytest.raises(namespace["InstallError"]):
         validate(valid, primary, {"dgx-agent", "docker"})
+
+
+def test_workload_account_contract_requires_a_separate_unprivileged_identity() -> None:
+    namespace = runpy.run_path(str(INSTALLER))
+    validate = namespace["_validate_workload_account"]
+    valid = pwd.struct_passwd(
+        (
+            "dgx-workload",
+            "x",
+            997,
+            997,
+            "",
+            "/var/lib/dgx-forge-workload",
+            "/usr/sbin/nologin",
+        )
+    )
+    primary = grp.struct_group(("dgx-workload", "x", 997, []))
+
+    assert validate(valid, primary, {"dgx-workload"}) == (997, 997)
+    with pytest.raises(namespace["InstallError"]):
+        validate(valid, primary, {"dgx-workload", "docker"})
+    with pytest.raises(namespace["InstallError"]):
+        validate(
+            pwd.struct_passwd(
+                (
+                    "dgx-agent",
+                    "x",
+                    997,
+                    997,
+                    "",
+                    valid.pw_dir,
+                    valid.pw_shell,
+                )
+            ),
+            primary,
+            {"dgx-workload"},
+        )
+
+
+def test_agent_and_workload_accounts_cannot_share_uid_or_primary_gid() -> None:
+    namespace = runpy.run_path(str(INSTALLER))
+    validate = namespace["_validate_distinct_service_identities"]
+
+    assert validate((998, 998), (997, 997)) is None
+    for workload in ((998, 997), (997, 998), (998, 998)):
+        with pytest.raises(namespace["InstallError"]):
+            validate((998, 998), workload)
+
+
+def test_package_helper_public_key_parser_requires_ed25519_public_material(
+    tmp_path: Path,
+) -> None:
+    namespace = runpy.run_path(str(INSTALLER))
+    parser = namespace["_ed25519_public_key"]
+    private = tmp_path / "private.pem"
+    public = tmp_path / "public.pem"
+    subprocess.run(
+        ["openssl", "genpkey", "-algorithm", "ED25519", "-out", str(private)],
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        [
+            "openssl",
+            "pkey",
+            "-in",
+            str(private),
+            "-pubout",
+            "-out",
+            str(public),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    raw = public.read_bytes()
+    assert len(parser(raw, "grant")) == 32
+    for invalid in (
+        b"-----BEGIN PRIVATE KEY-----\ninvalid\n-----END PRIVATE KEY-----\n",
+        raw + b"unexpected\n",
+        raw.replace(b"PUBLIC KEY", b"RSA PUBLIC KEY"),
+    ):
+        with pytest.raises(namespace["InstallError"]):
+            parser(invalid, "grant")
 
 
 def test_installer_locks_before_account_resolution() -> None:

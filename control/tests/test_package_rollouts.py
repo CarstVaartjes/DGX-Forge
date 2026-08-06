@@ -147,6 +147,10 @@ def test_unknown_family_resolves_without_static_adapter_catalog() -> None:
         ("future-stack",),
         ({"node_id": NODE, "healthy": True, "labels": {"pool": "default"}},),
     )
+    # Package operations require the v2 generic package ABI.  A v1 Spark must
+    # not be selected for a package graph and would otherwise be unable to
+    # claim any of the queued package operations.
+    assert plan.agent_protocol_range == (2, 2)
     kinds = {node.kind for node in plan.operation_graph.nodes}  # type: ignore[union-attr]
     assert {"package.prepare", "package.activate", "package.health"} <= kinds
     assert "agent.update" not in kinds

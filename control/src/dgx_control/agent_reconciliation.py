@@ -527,6 +527,10 @@ class AgentReconciliationService:
                         "publication-pending",
                         "compensating",
                     }
+                    and not (
+                        phase == "withdrawal-pending"
+                        and not self._targets_are_active(session, graph)
+                    )
                     and self._ensure_node_lease(session, reconciliation, graph) is None
                 ):
                     return False
@@ -651,7 +655,25 @@ class AgentReconciliationService:
                         raise ValueError(
                             "reconciliation job base commit does not match"
                         )
-                    if self._ensure_node_lease(session, reconciliation, graph) is None:
+                    owner_id = session.scalar(
+                        select(RoutePublicationOwner.reconciliation_id).where(
+                            RoutePublicationOwner.singleton_id == 1
+                        )
+                    )
+                    owner = (
+                        None
+                        if owner_id is None
+                        else session.get(Reconciliation, owner_id)
+                    )
+                    predecessor_handoff = (
+                        owner is not None
+                        and owner.id != reconciliation.id
+                        and owner.current_phase
+                        in {"completed", "failed", "cancelled", "waiting-for-operator"}
+                    )
+                    if not predecessor_handoff and self._ensure_node_lease(
+                        session, reconciliation, graph
+                    ) is None:
                         return False
                     session.add(
                         RoutePublication(
@@ -673,7 +695,14 @@ class AgentReconciliationService:
                     if expires_at is None or _aware(expires_at) > _aware(
                         self._clock()
                     ) + timedelta(seconds=30):
-                        return released_node_lease
+                        if not released_node_lease:
+                            return False
+                        owner_id = session.scalar(
+                            select(RoutePublicationOwner.reconciliation_id).where(
+                                RoutePublicationOwner.singleton_id == 1
+                            )
+                        )
+                        return owner_id != reconciliation.id or publication.generation is None
                 if phase == "routes-withdrawn":
                     if not self._targets_are_active(session, graph):
                         self._quiesce_for_unavailable_target(
@@ -1231,8 +1260,6 @@ class AgentReconciliationService:
                 .order_by(NodeMutationLease.updated_at, Reconciliation.id)
                 .limit(1)
             )
-            if releasing_owner is not None:
-                return releasing_owner
             pending = session.scalar(
                 select(Reconciliation.id)
                 .join(
@@ -1246,6 +1273,14 @@ class AgentReconciliationService:
                 .order_by(Reconciliation.created_at.desc(), Reconciliation.id.desc())
                 .limit(1)
             )
+            if releasing_owner is not None:
+                releasing_phase = session.scalar(
+                    select(Reconciliation.current_phase).where(
+                        Reconciliation.id == releasing_owner
+                    )
+                )
+                if releasing_phase != "waiting-for-operator" or pending is None:
+                    return releasing_owner
             if pending is not None:
                 return pending
             expired_mutation = session.scalar(
@@ -1522,7 +1557,68 @@ class AgentReconciliationService:
                 owner_id=reconciliation.id,
             )
         except NodeLeaseConflict:
-            return None
+            # A terminal predecessor can leave its fenced lease in the
+            # release-pending state while a newer publication handoff is
+            # withdrawing its route.  Finalize only that explicit terminal
+            # handoff, then acquire the successor lease; held or active
+            # predecessors remain a hard conflict.
+            rows = self._node_leases._rows(  # noqa: SLF001
+                session, tuple(sorted(graph.targets))
+            )
+            if not rows:
+                return None
+            owners = {(row.owner_kind, row.owner_id, row.fence) for row in rows}
+            if len(owners) != 1:
+                return None
+            owner_kind, owner_id, fence = next(iter(owners))
+            if owner_kind != "reconciliation":
+                return None
+            predecessor = session.get(Reconciliation, owner_id)
+            if predecessor is None or predecessor.current_phase not in {
+                "completed",
+                "failed",
+                "cancelled",
+                "waiting-for-operator",
+            }:
+                return None
+            predecessor_cancel = self._cancellation(session, predecessor.id)
+            if any(row.state == "held" for row in rows) and not (
+                predecessor.current_phase == "completed"
+                and predecessor_cancel is not None
+                and predecessor_cancel.state == "withdrawal-pending"
+            ):
+                return None
+            predecessor_grant = NodeLeaseGrant(
+                owner_kind,
+                owner_id,
+                fence,
+                tuple(sorted(graph.targets)),
+                "held" if any(row.state == "held" for row in rows) else "releasing",
+            )
+            if predecessor_grant.state == "held":
+                self._node_leases.mark_releasing_in_session(
+                    session, predecessor_grant
+                )
+            self._node_leases.release_in_session(
+                session,
+                NodeLeaseGrant(
+                    owner_kind,
+                    owner_id,
+                    fence,
+                    tuple(sorted(graph.targets)),
+                    "releasing",
+                ),
+            )
+            session.flush()
+            try:
+                return self._node_leases.acquire_in_session(
+                    session,
+                    graph.targets,
+                    owner_kind="reconciliation",
+                    owner_id=reconciliation.id,
+                )
+            except NodeLeaseConflict:
+                return None
 
     def _release_pending_node_lease(
         self,
@@ -2156,6 +2252,7 @@ class AgentReconciliationService:
             self._projections(session, reconciliation.id, "compensation"),
         )
         self._wait_for_operator(reconciliation, job, reason)
+        self._mark_node_lease_releasing(session, reconciliation, graph)
 
     def _finish_failed(self, reconciliation: Reconciliation, job: Job) -> None:
         reconciliation.current_phase = "failed"

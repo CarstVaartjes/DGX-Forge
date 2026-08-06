@@ -16,7 +16,7 @@ def test_builder_packages_exact_wheel_closure_deterministically(tmp_path: Path) 
     wheels = {
         "control": tmp_path / "dgx_control-0.1.0-py3-none-any.whl",
         "platform": tmp_path / "spark_profiles-0.1.0-py3-none-any.whl",
-        "protocol": tmp_path / "dgx_agent_protocol-1.0.0-py3-none-any.whl",
+        "protocol": tmp_path / "dgx_agent_protocol-2.0.0-py3-none-any.whl",
     }
     for name, path in wheels.items():
         path.write_bytes(f"{name}-wheel".encode())

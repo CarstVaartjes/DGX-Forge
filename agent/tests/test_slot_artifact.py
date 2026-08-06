@@ -1,17 +1,19 @@
 from __future__ import annotations
 
+import importlib.util
 import os
 import platform
 import shutil
 import struct
 import subprocess
+from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILDER = ROOT / "agent/tools/build-slot-artifact"
-PROTOCOL = ROOT / "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
+PROTOCOL = ROOT / "inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl"
 
 
 def _architecture() -> str:
@@ -142,6 +144,7 @@ def test_builds_one_self_contained_native_elf_with_isolated_module_smoke(
     for arguments, expected in (
         (["--help"], None),
         (["--packaged-module-smoke"], "packaged-agent-modules-ok\n"),
+        (["--package-helper", "--help"], None),
     ):
         result = subprocess.run(
             [str(artifact), *arguments],
@@ -155,6 +158,56 @@ def test_builds_one_self_contained_native_elf_with_isolated_module_smoke(
         if expected is not None:
             assert result.stdout == expected
     assert shutil.which("dgx-forge-agent", path=str(artifact.parent)) == str(artifact)
+
+
+def test_builder_retries_transient_packaging_failure_and_smokes_before_publish(
+    tmp_path: Path,
+    slot_wheels: tuple[Path, Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient PyInstaller crash must never publish an unverified slot."""
+
+    specification = importlib.util.spec_from_loader(
+        "dgx_slot_builder", SourceFileLoader("dgx_slot_builder", str(BUILDER))
+    )
+    assert specification and specification.loader
+    builder = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(builder)
+
+    original_run = builder.subprocess.run
+    pyinstaller_failures = 0
+    runtime_smokes: list[tuple[str, ...]] = []
+
+    def run(command: object, *args: object, **kwargs: object) -> object:
+        nonlocal pyinstaller_failures
+        if isinstance(command, list) and "PyInstaller" in command:
+            if pyinstaller_failures == 0:
+                pyinstaller_failures += 1
+                raise subprocess.CalledProcessError(-11, command)
+        elif isinstance(command, list) and command and str(command[0]).endswith(
+            "dgx-forge-agent"
+        ):
+            runtime_smokes.append(tuple(str(value) for value in command[1:]))
+        return original_run(command, *args, **kwargs)
+
+    monkeypatch.setattr(builder.subprocess, "run", run)
+    wheel, platform_wheel = slot_wheels
+    artifact = tmp_path / "dgx-forge-agent"
+    builder.build(
+        wheel,
+        PROTOCOL,
+        platform_wheel,
+        artifact,
+        _architecture(),
+    )
+
+    assert pyinstaller_failures == 1
+    assert runtime_smokes == [
+        ("--help",),
+        ("--packaged-module-smoke",),
+        ("--package-helper", "--help"),
+    ]
+    assert artifact.read_bytes().startswith(b"\x7fELF")
 
 
 def test_builder_snapshots_wheels_and_ignores_hostile_path_network_and_empty_cache(

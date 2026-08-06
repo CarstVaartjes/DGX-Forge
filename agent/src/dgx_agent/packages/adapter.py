@@ -26,6 +26,7 @@ _TOKEN = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
 _UUID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z"
 )
+_NODE_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
 _RESULT_FIELDS = {
     "schema_version",
     "operation",
@@ -93,6 +94,7 @@ class AdapterInvocation:
     fence: str
     release_digest: str
     generation: str
+    node_id: str
 
     def __post_init__(self) -> None:
         for value, name in (
@@ -110,6 +112,8 @@ class AdapterInvocation:
             raise AdapterValidationError("attempt is invalid")
         _digest(self.release_digest, "release digest")
         _token(self.generation, "generation")
+        if not isinstance(self.node_id, str) or not _NODE_ID.fullmatch(self.node_id):
+            raise AdapterValidationError("node ID is invalid")
 
 
 @dataclass(frozen=True)

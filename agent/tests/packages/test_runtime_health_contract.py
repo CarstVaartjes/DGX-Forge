@@ -91,6 +91,7 @@ def _invocation() -> AdapterInvocation:
         FENCE,
         RELEASE_DIGEST,
         "generation-a",
+        "spk_" + "1" * 32,
     )
 
 

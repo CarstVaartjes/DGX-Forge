@@ -36,9 +36,14 @@ class NodeStatus:
             memory_available_bytes (int):
             profile (Union[None, str]):
             stale (bool):
+            agent_active_slot (Union[None, Unset, str]):
+            agent_build_digest (Union[None, Unset, str]):
             agent_last_seen_at (Union[None, Unset, str]):
             agent_online (Union[Unset, bool]):  Default: False.
+            agent_platform_version (Union[None, Unset, str]):
+            agent_sha256 (Union[None, Unset, str]):
             agent_state (Union[Unset, str]):  Default: 'unregistered'.
+            agent_supervisor_generation (Union[None, Unset, int]):
             certificate_expires_at (Union[None, Unset, str]):
             certificate_expiry_seconds (Union[None, Unset, float]):
             compatibility (Union[Unset, str]):  Default: 'unknown'.
@@ -57,9 +62,14 @@ class NodeStatus:
     memory_available_bytes: int
     profile: Union[None, str]
     stale: bool
+    agent_active_slot: Union[None, Unset, str] = UNSET
+    agent_build_digest: Union[None, Unset, str] = UNSET
     agent_last_seen_at: Union[None, Unset, str] = UNSET
     agent_online: Union[Unset, bool] = False
+    agent_platform_version: Union[None, Unset, str] = UNSET
+    agent_sha256: Union[None, Unset, str] = UNSET
     agent_state: Union[Unset, str] = 'unregistered'
+    agent_supervisor_generation: Union[None, Unset, int] = UNSET
     certificate_expires_at: Union[None, Unset, str] = UNSET
     certificate_expiry_seconds: Union[None, Unset, float] = UNSET
     compatibility: Union[Unset, str] = 'unknown'
@@ -95,6 +105,18 @@ class NodeStatus:
 
         stale = self.stale
 
+        agent_active_slot: Union[None, Unset, str]
+        if isinstance(self.agent_active_slot, Unset):
+            agent_active_slot = UNSET
+        else:
+            agent_active_slot = self.agent_active_slot
+
+        agent_build_digest: Union[None, Unset, str]
+        if isinstance(self.agent_build_digest, Unset):
+            agent_build_digest = UNSET
+        else:
+            agent_build_digest = self.agent_build_digest
+
         agent_last_seen_at: Union[None, Unset, str]
         if isinstance(self.agent_last_seen_at, Unset):
             agent_last_seen_at = UNSET
@@ -103,7 +125,25 @@ class NodeStatus:
 
         agent_online = self.agent_online
 
+        agent_platform_version: Union[None, Unset, str]
+        if isinstance(self.agent_platform_version, Unset):
+            agent_platform_version = UNSET
+        else:
+            agent_platform_version = self.agent_platform_version
+
+        agent_sha256: Union[None, Unset, str]
+        if isinstance(self.agent_sha256, Unset):
+            agent_sha256 = UNSET
+        else:
+            agent_sha256 = self.agent_sha256
+
         agent_state = self.agent_state
+
+        agent_supervisor_generation: Union[None, Unset, int]
+        if isinstance(self.agent_supervisor_generation, Unset):
+            agent_supervisor_generation = UNSET
+        else:
+            agent_supervisor_generation = self.agent_supervisor_generation
 
         certificate_expires_at: Union[None, Unset, str]
         if isinstance(self.certificate_expires_at, Unset):
@@ -152,12 +192,22 @@ class NodeStatus:
             "profile": profile,
             "stale": stale,
         })
+        if agent_active_slot is not UNSET:
+            field_dict["agent_active_slot"] = agent_active_slot
+        if agent_build_digest is not UNSET:
+            field_dict["agent_build_digest"] = agent_build_digest
         if agent_last_seen_at is not UNSET:
             field_dict["agent_last_seen_at"] = agent_last_seen_at
         if agent_online is not UNSET:
             field_dict["agent_online"] = agent_online
+        if agent_platform_version is not UNSET:
+            field_dict["agent_platform_version"] = agent_platform_version
+        if agent_sha256 is not UNSET:
+            field_dict["agent_sha256"] = agent_sha256
         if agent_state is not UNSET:
             field_dict["agent_state"] = agent_state
+        if agent_supervisor_generation is not UNSET:
+            field_dict["agent_supervisor_generation"] = agent_supervisor_generation
         if certificate_expires_at is not UNSET:
             field_dict["certificate_expires_at"] = certificate_expires_at
         if certificate_expiry_seconds is not UNSET:
@@ -214,6 +264,26 @@ class NodeStatus:
 
         stale = d.pop("stale")
 
+        def _parse_agent_active_slot(data: object) -> Union[None, Unset, str]:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(Union[None, Unset, str], data)
+
+        agent_active_slot = _parse_agent_active_slot(d.pop("agent_active_slot", UNSET))
+
+
+        def _parse_agent_build_digest(data: object) -> Union[None, Unset, str]:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(Union[None, Unset, str], data)
+
+        agent_build_digest = _parse_agent_build_digest(d.pop("agent_build_digest", UNSET))
+
+
         def _parse_agent_last_seen_at(data: object) -> Union[None, Unset, str]:
             if data is None:
                 return data
@@ -226,7 +296,37 @@ class NodeStatus:
 
         agent_online = d.pop("agent_online", UNSET)
 
+        def _parse_agent_platform_version(data: object) -> Union[None, Unset, str]:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(Union[None, Unset, str], data)
+
+        agent_platform_version = _parse_agent_platform_version(d.pop("agent_platform_version", UNSET))
+
+
+        def _parse_agent_sha256(data: object) -> Union[None, Unset, str]:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(Union[None, Unset, str], data)
+
+        agent_sha256 = _parse_agent_sha256(d.pop("agent_sha256", UNSET))
+
+
         agent_state = d.pop("agent_state", UNSET)
+
+        def _parse_agent_supervisor_generation(data: object) -> Union[None, Unset, int]:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(Union[None, Unset, int], data)
+
+        agent_supervisor_generation = _parse_agent_supervisor_generation(d.pop("agent_supervisor_generation", UNSET))
+
 
         def _parse_certificate_expires_at(data: object) -> Union[None, Unset, str]:
             if data is None:
@@ -291,9 +391,14 @@ class NodeStatus:
             memory_available_bytes=memory_available_bytes,
             profile=profile,
             stale=stale,
+            agent_active_slot=agent_active_slot,
+            agent_build_digest=agent_build_digest,
             agent_last_seen_at=agent_last_seen_at,
             agent_online=agent_online,
+            agent_platform_version=agent_platform_version,
+            agent_sha256=agent_sha256,
             agent_state=agent_state,
+            agent_supervisor_generation=agent_supervisor_generation,
             certificate_expires_at=certificate_expires_at,
             certificate_expiry_seconds=certificate_expiry_seconds,
             compatibility=compatibility,

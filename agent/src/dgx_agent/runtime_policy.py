@@ -44,6 +44,16 @@ class InstalledTUFPolicy:
 
 
 @dataclass(frozen=True)
+class InstalledWorkloadTUFPolicy:
+    """Independent workload TUF trust/cache roots."""
+
+    bootstrap_root_path: Path
+    bootstrap_root_sha256: str
+    metadata_root: Path
+    target_root: Path
+
+
+@dataclass(frozen=True)
 class InstalledAdapterPolicy:
     adapter_id: str
     executable_relative_path: str
@@ -59,6 +69,7 @@ class RuntimePolicy:
     repository: str
     oras: InstalledORASPolicy
     tuf: InstalledTUFPolicy
+    workload_tuf: InstalledWorkloadTUFPolicy
     release_root: Path
     staging_root: Path
     adapter: InstalledAdapterPolicy
@@ -105,6 +116,7 @@ class RuntimePolicy:
                 "repository",
                 "oras",
                 "tuf",
+                "workload_tuf",
                 "release_root",
                 "staging_root",
                 "adapter",
@@ -176,6 +188,52 @@ class RuntimePolicy:
                 installation_prefix,
             ),
         )
+        workload_tuf_raw = _object(
+            root["workload_tuf"],
+            {
+                "bootstrap_root_path",
+                "bootstrap_root_sha256",
+                "metadata_root",
+                "target_root",
+            },
+            "workload TUF policy",
+        )
+        workload_tuf = InstalledWorkloadTUFPolicy(
+            _installed_path(
+                workload_tuf_raw["bootstrap_root_path"],
+                "/etc/dgx-forge-agent/workload-tuf-root.json",
+                "workload TUF bootstrap root",
+                installation_prefix,
+            ),
+            _digest(
+                workload_tuf_raw["bootstrap_root_sha256"],
+                "workload TUF bootstrap root",
+            ),
+            _installed_path(
+                workload_tuf_raw["metadata_root"],
+                "/var/lib/dgx-forge-agent/workload-tuf/metadata",
+                "workload TUF metadata root",
+                installation_prefix,
+            ),
+            _installed_path(
+                workload_tuf_raw["target_root"],
+                "/var/lib/dgx-forge-agent/workload-tuf/targets",
+                "workload TUF target root",
+                installation_prefix,
+            ),
+        )
+        cache_roots = (
+            tuf.metadata_root,
+            tuf.target_root,
+            workload_tuf.metadata_root,
+            workload_tuf.target_root,
+        )
+        if any(
+            left == right or left in right.parents or right in left.parents
+            for index, left in enumerate(cache_roots)
+            for right in cache_roots[index + 1 :]
+        ) or workload_tuf.bootstrap_root_path == tuf.bootstrap_root_path:
+            raise RuntimePolicyError("platform and workload TUF roots overlap")
         adapter_raw = _object(
             root["adapter"],
             {
@@ -213,6 +271,7 @@ class RuntimePolicy:
             repository,
             oras,
             tuf,
+            workload_tuf,
             release_root,
             staging_root,
             InstalledAdapterPolicy(**exact_adapter),
@@ -244,11 +303,26 @@ class RuntimePolicy:
         )
         if hashlib.sha256(bootstrap).hexdigest() != self.tuf.bootstrap_root_sha256:
             raise RuntimePolicyError("TUF bootstrap root digest is invalid")
+        workload_bootstrap = _read_file(
+            self.workload_tuf.bootstrap_root_path,
+            "workload TUF bootstrap root",
+            1024 * 1024,
+            mode=0o644,
+            root_owned=True,
+            allow_unprivileged_test_files=self._allow_unprivileged_test_files,
+        )
+        if (
+            hashlib.sha256(workload_bootstrap).hexdigest()
+            != self.workload_tuf.bootstrap_root_sha256
+        ):
+            raise RuntimePolicyError("workload TUF bootstrap root digest is invalid")
         descriptors: list[int] = []
         try:
             for name, path in (
                 ("TUF metadata root", self.tuf.metadata_root),
                 ("TUF target root", self.tuf.target_root),
+                ("workload TUF metadata root", self.workload_tuf.metadata_root),
+                ("workload TUF target root", self.workload_tuf.target_root),
                 ("release root", self.release_root),
                 ("staging root", self.staging_root),
             ):
@@ -259,7 +333,7 @@ class RuntimePolicy:
                         allow_unprivileged_test_files=self._allow_unprivileged_test_files,
                     )
                 )
-            if os.fstat(descriptors[2]).st_dev != os.fstat(descriptors[3]).st_dev:
+            if os.fstat(descriptors[-2]).st_dev != os.fstat(descriptors[-1]).st_dev:
                 raise RuntimePolicyError(
                     "release and staging roots use different filesystems"
                 )
@@ -284,6 +358,23 @@ class RuntimePolicy:
         )
         if hashlib.sha256(raw).hexdigest() != self.tuf.bootstrap_root_sha256:
             raise RuntimePolicyError("TUF bootstrap root digest is invalid")
+        return raw
+
+    def read_workload_bootstrap_root(self) -> bytes:
+        """Return a freshly verified workload-TUF bootstrap root snapshot."""
+        raw = _read_file(
+            self.workload_tuf.bootstrap_root_path,
+            "workload TUF bootstrap root",
+            1024 * 1024,
+            mode=0o644,
+            root_owned=True,
+            allow_unprivileged_test_files=self._allow_unprivileged_test_files,
+        )
+        if (
+            hashlib.sha256(raw).hexdigest()
+            != self.workload_tuf.bootstrap_root_sha256
+        ):
+            raise RuntimePolicyError("workload TUF bootstrap root digest is invalid")
         return raw
 
 

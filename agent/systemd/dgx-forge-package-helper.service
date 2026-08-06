@@ -1,13 +1,15 @@
 [Unit]
 Description=DGX Forge root package helper
 Documentation=https://github.com/dgx-forge/dgx-forge
-Requires=dgx-forge-package-helper.socket
+Requires=dgx-forge-package-helper.socket dgx-forge-agent-supervisor.service
+After=dgx-forge-agent-supervisor.service
+PartOf=dgx-forge-agent.service dgx-forge-agent-supervisor.service
 
 [Service]
 Type=simple
 User=root
 Group=root
-ExecStart=/opt/dgx-forge/agent/current/bin/python -I -m dgx_agent.package_helper --listen-fd=3
+ExecStart=/usr/libexec/dgx-agent-supervisor run-package-helper
 StandardInput=null
 StandardOutput=journal
 StandardError=journal
@@ -17,6 +19,7 @@ MemoryDenyWriteExecute=yes
 PrivateDevices=yes
 PrivateMounts=yes
 PrivateNetwork=yes
+PrivateTmp=yes
 ProtectClock=yes
 ProtectControlGroups=yes
 ProtectHome=yes
@@ -32,7 +35,7 @@ RestrictRealtime=yes
 RestrictSUIDSGID=yes
 SystemCallArchitectures=native
 SystemCallFilter=@system-service
-CapabilityBoundingSet=CAP_SETGID CAP_SETUID
+CapabilityBoundingSet=CAP_CHOWN
 AmbientCapabilities=
 UMask=0077
 TimeoutStartSec=95s

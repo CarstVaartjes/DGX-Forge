@@ -239,6 +239,9 @@ def accepted_catalog(
         }
         if profile_evidence
         else {},
+        package_families={},
+        workload_deployments={},
+        legacy_workload_deployments={},
     )
 
 
@@ -287,6 +290,9 @@ def legacy_exclusive_colocation_catalog() -> Catalog:
         accepted_profiles={
             profile_fingerprint: tuple(sorted(definition_fingerprints.values()))
         },
+        package_families={},
+        workload_deployments={},
+        legacy_workload_deployments={},
     )
 
 
@@ -307,6 +313,9 @@ def accepted_empty_catalog(*, endpoint_target: str | None = None) -> Catalog:
         maturity=base.maturity,
         maturity_fingerprints=base.maturity_fingerprints,
         accepted_profiles={profile_fingerprint: ()},
+        package_families={},
+        workload_deployments={},
+        legacy_workload_deployments={},
     )
 
 

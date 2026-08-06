@@ -7,6 +7,8 @@ from .approve_platform_update_recovery_response_approve_update_resume_api_v1_upd
 from .bounded_error_response import BoundedErrorResponse
 from .cancel_reconciliation_response_cancel_reconciliation_api_v1_reconciliations_reconciliation_id_cancel_post import CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost
 from .change_request import ChangeRequest
+from .deployment_response import DeploymentResponse
+from .deployments_response import DeploymentsResponse
 from .endpoint_response import EndpointResponse
 from .enrollment_decision_response import EnrollmentDecisionResponse
 from .enrollment_decision_response_state import EnrollmentDecisionResponseState
@@ -31,6 +33,23 @@ from .list_audit_events_response_audit_view_api_v1_audit_get import ListAuditEve
 from .list_documents_response_document_view_api_v1_documents_get import ListDocumentsResponseDocumentViewApiV1DocumentsGet
 from .node_status import NodeStatus
 from .node_status_labels import NodeStatusLabels
+from .package_candidate_response import PackageCandidateResponse
+from .package_candidate_response_metadata import PackageCandidateResponseMetadata
+from .package_candidates_response import PackageCandidatesResponse
+from .package_compatibility_response import PackageCompatibilityResponse
+from .package_component_response import PackageComponentResponse
+from .package_families_response import PackageFamiliesResponse
+from .package_family_response import PackageFamilyResponse
+from .package_node_progress import PackageNodeProgress
+from .package_plan_request import PackagePlanRequest
+from .package_plan_response import PackagePlanResponse
+from .package_progress import PackageProgress
+from .package_progress_response import PackageProgressResponse
+from .package_promotion_request import PackagePromotionRequest
+from .package_promotion_response import PackagePromotionResponse
+from .package_provenance_response import PackageProvenanceResponse
+from .package_release_metadata import PackageReleaseMetadata
+from .package_resolution_response import PackageResolutionResponse
 from .plan_endpoint import PlanEndpoint
 from .plan_endpoint_scheme import PlanEndpointScheme
 from .plan_input_digests import PlanInputDigests
@@ -74,6 +93,8 @@ __all__ = (
     "BoundedErrorResponse",
     "CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost",
     "ChangeRequest",
+    "DeploymentResponse",
+    "DeploymentsResponse",
     "EndpointResponse",
     "EnrollmentDecisionResponse",
     "EnrollmentDecisionResponseState",
@@ -98,6 +119,23 @@ __all__ = (
     "ListDocumentsResponseDocumentViewApiV1DocumentsGet",
     "NodeStatus",
     "NodeStatusLabels",
+    "PackageCandidateResponse",
+    "PackageCandidateResponseMetadata",
+    "PackageCandidatesResponse",
+    "PackageCompatibilityResponse",
+    "PackageComponentResponse",
+    "PackageFamiliesResponse",
+    "PackageFamilyResponse",
+    "PackageNodeProgress",
+    "PackagePlanRequest",
+    "PackagePlanResponse",
+    "PackageProgress",
+    "PackageProgressResponse",
+    "PackagePromotionRequest",
+    "PackagePromotionResponse",
+    "PackageProvenanceResponse",
+    "PackageReleaseMetadata",
+    "PackageResolutionResponse",
     "PlanEndpoint",
     "PlanEndpointScheme",
     "PlanInputDigests",

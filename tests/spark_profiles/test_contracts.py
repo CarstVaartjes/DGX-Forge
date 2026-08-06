@@ -207,6 +207,9 @@ def test_repository_schema_mirrors_match_canonical_package_schemas() -> None:
     repository_names = {
         path.name for path in REPOSITORY_SCHEMA_ROOT.glob("*.json")
     }
+    # Workflow-only schemas are consumed by repository tooling and are not
+    # part of the spark_profiles runtime contract package.
+    repository_names.discard("workload-artifact-build.schema.json")
 
     assert repository_names == canonical_names
     for name in sorted(canonical_names):

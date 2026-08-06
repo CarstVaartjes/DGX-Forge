@@ -11,13 +11,14 @@ import re
 import secrets
 import shutil
 import stat
+import subprocess
 import tarfile
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Self
 
 from tuf.ngclient import Urllib3Fetcher
@@ -97,6 +98,169 @@ _MAINTENANCE_ACTIONS = (
 
 class OfflineConflict(RuntimeError):
     pass
+
+
+# These small, content-addressed helpers are retained as the portable
+# acceptance boundary used by ``scripts/accept-control-recovery``.  The
+# production HostBackupBoundary below adds generation identity, age
+# encryption, and host ownership checks; the helpers intentionally expose no
+# host paths or command output and are useful for a disposable recovery drill.
+def _portable_backup_files(paths: Sequence[Path]) -> list[tuple[str, bytes]]:
+    collected: list[tuple[str, bytes]] = []
+    for source in paths:
+        source = Path(source)
+        if source.is_symlink() or not source.exists():
+            raise BackupError("backup source is unsafe or missing")
+        if source.is_file():
+            collected.append((source.name, source.read_bytes()))
+            continue
+        for child in sorted(source.rglob("*")):
+            if child.is_symlink():
+                raise BackupError("backup source contains a symlink")
+            if child.is_file():
+                collected.append(
+                    (f"{source.name}/{child.relative_to(source).as_posix()}", child.read_bytes())
+                )
+    return collected
+
+
+def _portable_transform(command: Sequence[str], content: bytes, action: str) -> bytes:
+    if not command or not all(isinstance(item, str) and item for item in command):
+        raise BackupError(f"external {action} command is required")
+    try:
+        completed = subprocess.run(
+            tuple(command), input=content, capture_output=True, check=False, timeout=30
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise BackupError(f"external {action} command failed") from error
+    if completed.returncode != 0:
+        raise BackupError(f"external {action} command failed")
+    return completed.stdout
+
+
+def _portable_archive(entries: Sequence[tuple[str, bytes]]) -> bytes:
+    archive = io.BytesIO()
+    with tarfile.open(fileobj=archive, mode="w:") as bundle:
+        for name, content in entries:
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            info.mode = 0o600
+            info.mtime = 0
+            bundle.addfile(info, io.BytesIO(content))
+    return archive.getvalue()
+
+
+def create_backup(
+    database_dump: Path,
+    config_paths: Sequence[Path],
+    output: Path,
+    *,
+    encrypt_command: Sequence[str],
+) -> None:
+    """Create a deterministic disposable backup through a fixed transform."""
+    output = Path(output)
+    if output.exists() or output.is_symlink():
+        raise BackupError("backup output must be a new path")
+    entries = sorted(_portable_backup_files((Path(database_dump), *config_paths)))
+    hashes = {name: hashlib.sha256(content).hexdigest() for name, content in entries}
+    manifest = json.dumps(
+        {"format": "dgx-control-backup-v1", "files": hashes},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("ascii") + b"\n"
+    encrypted = _portable_transform(
+        encrypt_command,
+        _portable_archive([*entries, ("manifest.json", manifest)]),
+        "encryption",
+    )
+    output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor = os.open(
+        output, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600
+    )
+    try:
+        with os.fdopen(descriptor, "wb") as destination:
+            destination.write(encrypted)
+            destination.flush()
+            os.fsync(destination.fileno())
+    except Exception:
+        try:
+            output.unlink()
+        except OSError:
+            pass
+        raise
+
+
+def _portable_verified_files(
+    backup: Path, decrypt_command: Sequence[str]
+) -> tuple[dict[str, object], dict[str, bytes]]:
+    decrypted = _portable_transform(decrypt_command, Path(backup).read_bytes(), "decryption")
+    try:
+        with tarfile.open(fileobj=io.BytesIO(decrypted), mode="r:") as bundle:
+            members = bundle.getmembers()
+            files: dict[str, bytes] = {}
+            for member in members:
+                path = PurePosixPath(member.name)
+                if (
+                    member.issym()
+                    or member.islnk()
+                    or member.isdir()
+                    or path.is_absolute()
+                    or ".." in path.parts
+                    or not member.isfile()
+                    or member.name in files
+                ):
+                    raise BackupError("backup archive contains an unsafe member")
+                source = bundle.extractfile(member)
+                if source is None:
+                    raise BackupError("backup archive member is unreadable")
+                files[member.name] = source.read()
+        manifest_raw = files.pop("manifest.json")
+        manifest = json.loads(manifest_raw)
+        expected = manifest.get("files") if isinstance(manifest, dict) else None
+        if manifest.get("format") != "dgx-control-backup-v1" or not isinstance(expected, dict):
+            raise BackupError("backup manifest is invalid")
+        if set(expected) != set(files) or any(
+            not isinstance(name, str)
+            or not isinstance(digest, str)
+            or digest != hashlib.sha256(files[name]).hexdigest()
+            for name, digest in expected.items()
+        ):
+            raise BackupError("backup checksum verification failed")
+        canonical_entries = [*((name, files[name]) for name in sorted(files)), ("manifest.json", manifest_raw)]
+        if decrypted != _portable_archive(canonical_entries):
+            raise BackupError("backup archive is not canonical or was modified")
+        return manifest, files
+    except BackupError:
+        raise
+    except (OSError, tarfile.TarError, TypeError, ValueError, KeyError) as error:
+        raise BackupError("backup archive or manifest is unreadable") from error
+
+
+def inspect_backup(backup: Path, *, decrypt_command: Sequence[str]) -> dict[str, object]:
+    return _portable_verified_files(backup, decrypt_command)[0]
+
+
+def extract_backup(
+    backup: Path, destination: Path, *, decrypt_command: Sequence[str]
+) -> dict[str, object]:
+    manifest, files = _portable_verified_files(backup, decrypt_command)
+    destination = Path(destination)
+    if destination.exists() or destination.is_symlink():
+        raise BackupError("restore staging destination must not already exist")
+    destination.mkdir(parents=True, mode=0o700)
+    try:
+        for name, content in files.items():
+            target = destination.joinpath(*PurePosixPath(name).parts)
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            descriptor = os.open(
+                target, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600
+            )
+            with os.fdopen(descriptor, "wb") as output:
+                output.write(content)
+    except Exception:
+        shutil.rmtree(destination, ignore_errors=True)
+        raise
+    return manifest
 
 
 def _canonical(value: object) -> bytes:

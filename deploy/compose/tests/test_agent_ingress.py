@@ -29,6 +29,8 @@ def _environment() -> dict[str, str]:
         "WORKER_API_TOKEN_FILE": "/dev/null",
         "AGENT_UPDATE_AUTHORITY_KEY_FILE": "/dev/null",
         "ADMIN_GRANT_PRIVATE_KEY_FILE": "/dev/null",
+        "PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE": "/dev/null",
+        "PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE": "/dev/null",
         "ADMIN_GRANT_PUBLIC_KEY_FILE": "/dev/null",
         "AGENT_TUF_BOOTSTRAP_ROOT_FILE": "/dev/null",
         "CONTROL_IDENTITY_PATH": "/srv/dgx-forge/control-identity",
@@ -165,6 +167,8 @@ def _settings_result(rendered: dict, tmp_path: Path) -> subprocess.CompletedProc
         "DGX_AGENT_PROXY_AUTH_FILE": "A" * 30 + "_-\r\n",
         "DGX_WORKER_API_TOKEN_FILE": "W" * 32 + "\n",
         "DGX_ADMIN_GRANT_PRIVATE_KEY_FILE": "test-admin-grant-private-key\n",
+        "DGX_PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE": "test-package-grant-key\n",
+        "DGX_PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE": "test-package-receipt-key\n",
     }
     for name, value in tuple(control_environment.items()):
         if name not in secret_values:

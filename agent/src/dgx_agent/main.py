@@ -13,6 +13,7 @@ import signal
 import stat
 import threading
 import time
+from uuid import uuid4
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,6 +22,11 @@ from typing import Protocol
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from dgx_agent_protocol import AgentClaim, AgentDirective, AgentProgress, AgentResult
+from dgx_agent_protocol.workload_packages import (
+    PackageHelperOperation,
+    SignedPackageHelperGrant,
+    SignedPackageObjectReceipt,
+)
 
 from spark_profiles.update_trust import UpdateTrust
 
@@ -53,6 +59,18 @@ from .update import (
 from .update_trust import BoundedHTTPSFetcher, TUFReleaseTrust
 from .workloads import WorkloadOperations
 from .package_trust import WorkloadTrust
+from .package_helper_client import (
+    PackageHelperAdapterFactory,
+    PackageHelperAuthorityVerifier,
+    UnixPackageHelperClient,
+)
+from .package_helper_protocol import HelperExecutionBody, HelperRequest
+from .packages.backends import (
+    Backend,
+    BackendInvocation,
+    NetworkPolicy,
+    ResourcePolicy,
+)
 from .packages.engine import PackageEngine
 from .packages.fetch import AcquisitionEngine
 from .packages.gc import PackageGarbageCollector
@@ -77,6 +95,14 @@ from .workload_runtime import (
 
 class AgentControl(Protocol):
     def claim(self) -> AgentClaim | None: ...
+
+    def package_helper_receipts(
+        self, payload: Mapping[str, object]
+    ) -> tuple[Mapping[str, object], ...]: ...
+
+    def package_helper_grant(
+        self, payload: Mapping[str, object]
+    ) -> Mapping[str, object]: ...
 
     def heartbeat(
         self, progress: AgentProgress
@@ -477,8 +503,8 @@ def build_agent(
     config.state_root.mkdir(mode=0o700, parents=True, exist_ok=True)
     os.chmod(config.state_root, 0o700)
     package_store = ContentStore(package_root)
-    workload_metadata_root = runtime.tuf.metadata_root / "workload"
-    workload_target_root = runtime.tuf.target_root / "workload"
+    workload_metadata_root = runtime.workload_tuf.metadata_root
+    workload_target_root = runtime.workload_tuf.target_root
     workload_fetcher = BoundedHTTPSFetcher(
         config.control_origin,
         credential_provider=credentials,
@@ -488,7 +514,7 @@ def build_agent(
         workload_target_root,
         f"{config.control_origin}/agent/v1/workload-tuf/metadata/",
         f"{config.control_origin}/agent/v1/workload-tuf/targets/",
-        runtime.read_bootstrap_root(),
+        runtime.read_workload_bootstrap_root(),
         workload_fetcher,
     )
     workload_transport = HTTPSProviderTransport(policy=SourcePolicy())
@@ -536,11 +562,115 @@ def build_agent(
         except Exception:
             return False
 
-    def package_adapter_factory(_lock, _generation, _generation_path, _objects):
-        # Adapter execution is a privileged boundary.  The helper-client
-        # implementation is installed with the package-helper socket; until
-        # its signed grant/receipt key material is available, fail closed.
-        raise RuntimeError("workload package helper authority is unavailable")
+    helper_client: UnixPackageHelperClient | None = None
+
+    def package_helper() -> UnixPackageHelperClient:
+        nonlocal helper_client
+        if helper_client is None:
+            # Public keys are installed by the host installer and are read
+            # lazily so constructing an agent for inspection never creates a
+            # local authority or silently falls back to an unsigned helper.
+            verifier = PackageHelperAuthorityVerifier.from_files()
+            helper_client = UnixPackageHelperClient(verifier)
+        return helper_client
+
+    def package_request_factory(
+        lock,
+        generation_id,
+        _generation_path,
+        _objects,
+        operation,
+        invocation,
+        _deadline,
+    ) -> HelperRequest:
+        adapter = getattr(lock, "adapter", None)
+        compatibility = getattr(lock, "compatibility", {})
+        backend_names = (
+            compatibility.get("backends", ("native",))
+            if isinstance(compatibility, Mapping)
+            else ("native",)
+        )
+        if not isinstance(backend_names, (tuple, list)) or not backend_names:
+            raise RuntimeError("workload backend policy is invalid")
+        try:
+            backend = Backend(backend_names[0])
+        except (TypeError, ValueError) as error:
+            raise RuntimeError("workload backend policy is invalid") from error
+        adapter_name = getattr(adapter, "name", None)
+        if not isinstance(adapter_name, str):
+            raise RuntimeError("workload adapter identity is invalid")
+        # The package ABI gives every executable adapter a deterministic path;
+        # the name is release data, never a model catalog compiled into Forge.
+        backend_invocation = BackendInvocation(
+            schema_version=1,
+            backend=backend,
+            release_digest=invocation.release_digest,
+            generation=invocation.generation,
+            entrypoint=f"components/{adapter_name}/{adapter_name}",
+            arguments=(),
+            resources=ResourcePolicy(1000, 1024**3, 256, 900, 64 * 1024),
+            mounts=(),
+            devices=(),
+            network=NetworkPolicy("none"),
+        )
+        descriptors = tuple(
+            item
+            for item in (*tuple(getattr(lock, "components", ())), adapter)
+            if item is not None
+        )
+        object_payload = [
+            {
+                "object_digest": str(item.digest).removeprefix("sha256:"),
+                "size": item.size,
+            }
+            for item in descriptors
+        ]
+        common = {
+            "schema_version": 1,
+            "request_id": str(uuid4()),
+            "node_id": invocation.node_id,
+            "job_id": invocation.job_id,
+            "operation_id": invocation.operation_id,
+            "attempt": invocation.attempt,
+            "fence": invocation.fence,
+            "release_digest": invocation.release_digest,
+            "generation": generation_id,
+        }
+        receipts = client.package_helper_receipts(
+            {**common, "objects": object_payload}
+        )
+        parsed_receipts = tuple(
+            SignedPackageObjectReceipt.parse(item) for item in receipts
+        )
+        body = HelperExecutionBody(
+            schema_version=1,
+            request_id=common["request_id"],
+            node_id=invocation.node_id,
+            job_id=invocation.job_id,
+            operation_id=invocation.operation_id,
+            attempt=invocation.attempt,
+            fence=invocation.fence,
+            operation=PackageHelperOperation(operation.value),
+            invocation=backend_invocation,
+            receipts=parsed_receipts,
+        )
+        grant_document = client.package_helper_grant(
+            {
+                **common,
+                "operation": body.operation.value,
+                "request_digest": body.digest,
+                "expires_in_seconds": 30,
+            }
+        )
+        return HelperRequest(body, SignedPackageHelperGrant.parse(grant_document))
+
+    class _LazyPackageHelperClient:
+        def submit(self, request, *, deadline=None):
+            return package_helper().submit(request, deadline=deadline)
+
+    package_adapter_factory = PackageHelperAdapterFactory(
+        _LazyPackageHelperClient(), package_request_factory
+    )
 
     packages = PackageEngine(
         state=package_store.state,

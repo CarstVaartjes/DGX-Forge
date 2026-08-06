@@ -16,7 +16,7 @@ INPUTS = (
     "control/pyproject.toml",
     "control/src",
     "control/web",
-    "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl",
+    "inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl",
     "deploy/compose/hermes-agent/Dockerfile",
     "deploy/compose/hermes-agent/entrypoint.sh",
 )

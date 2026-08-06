@@ -2251,6 +2251,44 @@ def run_agent() -> int:
     return 1
 
 
+def run_package_helper() -> int:
+    if (
+        os.environ.get("LISTEN_PID") != str(os.getpid())
+        or os.environ.get("LISTEN_FDS") != "1"
+    ):
+        raise SupervisorError("package helper socket activation is invalid")
+    directory = _state_directory(create=False)
+    lock = _lock(directory, exclusive=False)
+    executable = -1
+    try:
+        state = _read_state(directory)
+        executable = _open_slot(state["active_slot"], state["expected_sha256"])
+    finally:
+        os.close(lock)
+        os.close(directory)
+    environment = {
+        "DGX_PACKAGE_HELPER_SLOT_SHA256": state["expected_sha256"],
+        "HOME": "/var/lib/dgx-forge-package-helper",
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "LISTEN_FDS": "1",
+        "LISTEN_PID": str(os.getpid()),
+        "PATH": "/usr/bin",
+        "PYTHONNOUSERSITE": "1",
+        "PYTHONSAFEPATH": "1",
+    }
+    try:
+        os.execve(
+            f"/proc/self/fd/{executable}",
+            ["dgx-forge-agent", "--package-helper", "--listen-fd=3"],
+            environment,
+        )
+    except OSError as error:
+        os.close(executable)
+        raise SupervisorError("verified package helper slot could not be executed") from error
+    return 1
+
+
 def _parser() -> UsageParser:
     parser = UsageParser(description="stable DGX Forge agent A/B supervisor")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -2262,6 +2300,7 @@ def _parser() -> UsageParser:
     subparsers.add_parser("apply-rollback-request")
     subparsers.add_parser("supervise")
     subparsers.add_parser("run-agent")
+    subparsers.add_parser("run-package-helper")
     return parser
 
 
@@ -2304,6 +2343,8 @@ def main(argv: list[str] | None = None) -> int:
             return supervise()
         if arguments.command == "run-agent":
             return run_agent()
+        if arguments.command == "run-package-helper":
+            return run_package_helper()
         raise SupervisorError("unknown command")
     except SupervisorError as error:
         print(f"ERROR: {error}", file=sys.stderr)

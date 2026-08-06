@@ -4,15 +4,18 @@ from __future__ import annotations
 
 import fcntl
 import hashlib
+import json
+import math
 import os
 import pwd
+import re
 import socket
 import sqlite3
 import stat
 import struct
 import subprocess
 import threading
-from base64 import urlsafe_b64decode
+import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
@@ -21,6 +24,11 @@ from typing import Protocol
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from dgx_agent_protocol.workload_packages import (
+    SignedPackageObjectReceipt,
+    package_helper_grant_signing_bytes,
+    package_object_receipt_signing_bytes,
+)
 
 from .package_helper_protocol import (
     HelperProtocolError,
@@ -34,6 +42,7 @@ from .package_helper_protocol import (
 from .packages.sandbox import SandboxPolicy
 
 MAX_REPLAY_ENTRIES = 65_536
+MAX_SUPERVISOR_STATE_BYTES = 64 * 1024
 
 
 class ReceiptVerifier(Protocol):
@@ -48,6 +57,132 @@ class BackendLauncher(Protocol):
     def launch(
         self, request: HelperRequest, sandbox: SandboxPolicy
     ) -> Mapping[str, object]: ...
+
+
+class ActiveSlotBoundary(Protocol):
+    def verify(self) -> None: ...
+
+
+class ActiveSlotVerifier:
+    """Revalidate the running helper against root-owned active-slot state."""
+
+    def __init__(
+        self,
+        expected_sha256: str,
+        state_path: Path = Path(
+            "/var/lib/dgx-forge-agent-supervisor/state.json"
+        ),
+        *,
+        allow_unprivileged_test_file: bool = False,
+    ) -> None:
+        if (
+            not isinstance(expected_sha256, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_sha256) is None
+        ):
+            raise HelperProtocolError("package helper slot digest is invalid")
+        path = Path(state_path)
+        if not path.is_absolute():
+            raise HelperProtocolError("supervisor state path is invalid")
+        self._expected_sha256 = expected_sha256
+        self._state_path = path
+        self._owner_uid = os.geteuid() if allow_unprivileged_test_file else 0
+
+    def verify(self) -> None:
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                self._state_path,
+                os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
+            )
+            before = os.fstat(descriptor)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_nlink != 1
+                or before.st_uid != self._owner_uid
+                or stat.S_IMODE(before.st_mode) != 0o644
+                or not 1 <= before.st_size <= MAX_SUPERVISOR_STATE_BYTES
+            ):
+                raise HelperProtocolError("supervisor state file is unsafe")
+            raw = os.read(descriptor, MAX_SUPERVISOR_STATE_BYTES + 1)
+            after = os.fstat(descriptor)
+            identity = lambda value: (
+                value.st_dev,
+                value.st_ino,
+                value.st_size,
+                value.st_mtime_ns,
+                value.st_ctime_ns,
+            )
+            if len(raw) > MAX_SUPERVISOR_STATE_BYTES or identity(before) != identity(
+                after
+            ):
+                raise HelperProtocolError("supervisor state changed while read")
+        except HelperProtocolError:
+            raise
+        except OSError as error:
+            raise HelperProtocolError("supervisor state is unavailable") from error
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+        try:
+            document = json.loads(
+                raw.decode("ascii"),
+                object_pairs_hook=_unique_state,
+                parse_constant=_reject_state_constant,
+            )
+        except HelperProtocolError:
+            raise
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
+            raise HelperProtocolError("supervisor state is invalid") from error
+        canonical = (
+            json.dumps(
+                document,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=True,
+                allow_nan=False,
+            )
+            + "\n"
+        ).encode("ascii")
+        expected_fields = {
+            "activation_deadline",
+            "active_slot",
+            "boot_attempts",
+            "expected_sha256",
+            "generation",
+            "previous_slot",
+            "rollback_performed",
+            "schema_version",
+            "slot_sha256",
+            "status",
+        }
+        active = document.get("active_slot") if isinstance(document, dict) else None
+        slots = document.get("slot_sha256") if isinstance(document, dict) else None
+        if (
+            not isinstance(document, dict)
+            or set(document) != expected_fields
+            or canonical != raw
+            or document.get("schema_version") != 1
+            or active not in {"A", "B"}
+            or not isinstance(slots, dict)
+            or set(slots) != {"A", "B"}
+            or slots.get(active) != document.get("expected_sha256")
+            or document.get("expected_sha256") != self._expected_sha256
+            or document.get("status") not in {"stable", "pending"}
+        ):
+            raise HelperProtocolError("supervisor state active slot is stale")
+
+
+def _unique_state(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise HelperProtocolError("supervisor state contains duplicate fields")
+        result[key] = value
+    return result
+
+
+def _reject_state_constant(_value: str) -> None:
+    raise HelperProtocolError("supervisor state contains a nonfinite number")
 
 
 class SystemdCommandRunner:
@@ -121,6 +256,7 @@ class SystemdBackendLauncher:
         *,
         objects_root: Path | None = None,
         runner=None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         root = Path(generations_root)
         if not root.is_absolute():
@@ -130,6 +266,9 @@ class SystemdBackendLauncher:
         if not self._objects_root.is_absolute():
             raise HelperProtocolError("package object root is invalid")
         self._runner = runner or SystemdCommandRunner()
+        if not callable(clock):
+            raise HelperProtocolError("package launcher clock is invalid")
+        self._clock = clock
         if not callable(getattr(self._runner, "run", None)) or not callable(
             getattr(self._runner, "cleanup", None)
         ):
@@ -146,7 +285,16 @@ class SystemdBackendLauncher:
                 raise HelperProtocolError(
                     "restricted network requires an installed network-policy boundary"
                 )
-            generation_fd, executable_fd = _open_backend_content(self._root, request)
+            absolute_deadline = (
+                self._clock() + request.invocation.resources.timeout_seconds
+            )
+            _helper_deadline(self._clock, absolute_deadline)
+            generation_fd, executable_fd = _open_backend_content(
+                self._root,
+                request,
+                clock=self._clock,
+                absolute_deadline=absolute_deadline,
+            )
             plan = sandbox.plan(request.invocation, generation_fd, executable_fd)
             try:
                 os.fchown(executable_fd, plan.uid, plan.gid)
@@ -190,7 +338,11 @@ class SystemdBackendLauncher:
             argv.append("--property=PrivateNetwork=yes")
             for mount in request.invocation.mounts:
                 mount_fd = _open_mount_object(
-                    self._objects_root, mount.object_digest, request
+                    self._objects_root,
+                    mount.object_digest,
+                    request,
+                    clock=self._clock,
+                    absolute_deadline=absolute_deadline,
                 )
                 mount_fds.append(mount_fd)
                 source = f"/proc/{helper_pid}/fd/{mount_fd}"
@@ -204,11 +356,14 @@ class SystemdBackendLauncher:
                 ("--", "/run/dgx-forge/entrypoint", *request.invocation.arguments)
             )
             fixed_argv = tuple(argv)
+            remaining_seconds = math.ceil(absolute_deadline - self._clock())
+            if remaining_seconds <= 0:
+                raise HelperProtocolError("package helper launch deadline elapsed")
             try:
                 returncode = self._runner.run(
                     fixed_argv,
                     pass_fds=(generation_fd, executable_fd, *mount_fds),
-                    timeout_seconds=resources.timeout_seconds,
+                    timeout_seconds=remaining_seconds,
                 )
             except HelperProtocolError:
                 self._runner.cleanup(unit_name)
@@ -241,11 +396,17 @@ class SystemdBackendLauncher:
 
 
 def _open_mount_object(
-    objects_root: Path, object_digest: str, request: HelperRequest
+    objects_root: Path,
+    object_digest: str,
+    request: HelperRequest,
+    *,
+    clock: Callable[[], float],
+    absolute_deadline: float,
 ) -> int:
     root_fd = -1
     descriptor = -1
     try:
+        _helper_deadline(clock, absolute_deadline)
         receipt = next(
             (item for item in request.receipts if item.object_digest == object_digest),
             None,
@@ -271,11 +432,13 @@ def _open_mount_object(
             raise HelperProtocolError("mount object is unsafe")
         digest = hashlib.sha256()
         while True:
+            _helper_deadline(clock, absolute_deadline)
             chunk = os.read(descriptor, 1024 * 1024)
             if not chunk:
                 break
             digest.update(chunk)
         after = os.fstat(descriptor)
+        _helper_deadline(clock, absolute_deadline)
         if digest.hexdigest() != object_digest or (
             before.st_dev,
             before.st_ino,
@@ -305,7 +468,11 @@ def _open_mount_object(
 
 
 def _open_backend_content(
-    generations_root: Path, request: HelperRequest
+    generations_root: Path,
+    request: HelperRequest,
+    *,
+    clock: Callable[[], float],
+    absolute_deadline: float,
 ) -> tuple[int, int]:
     root_fd = -1
     generation_fd = -1
@@ -313,6 +480,7 @@ def _open_backend_content(
     snapshot_fd = -1
     directory_fd = -1
     try:
+        _helper_deadline(clock, absolute_deadline)
         root_fd = os.open(
             generations_root,
             os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
@@ -333,6 +501,7 @@ def _open_backend_content(
         directory_fd = os.dup(generation_fd)
         parts = PurePosixPath(request.invocation.entrypoint).parts
         for part in parts[:-1]:
+            _helper_deadline(clock, absolute_deadline)
             child = os.open(
                 part,
                 os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
@@ -358,6 +527,7 @@ def _open_backend_content(
         os.fchmod(snapshot_fd, 0o500)
         digest = hashlib.sha256()
         while True:
+            _helper_deadline(clock, absolute_deadline)
             chunk = os.read(source_fd, 64 * 1024)
             if not chunk:
                 break
@@ -369,6 +539,7 @@ def _open_backend_content(
                     raise HelperProtocolError("backend snapshot is incomplete")
                 view = view[written:]
         after = os.fstat(source_fd)
+        _helper_deadline(clock, absolute_deadline)
         exact_receipt = next(
             (
                 receipt
@@ -420,6 +591,20 @@ def _open_backend_content(
                 os.close(descriptor)
 
 
+def _helper_deadline(clock: Callable[[], float], absolute_deadline: float) -> None:
+    try:
+        current = clock()
+    except Exception as error:
+        raise HelperProtocolError("package helper clock failed") from error
+    if (
+        not isinstance(current, (int, float))
+        or isinstance(current, bool)
+        or not math.isfinite(current)
+        or current >= absolute_deadline
+    ):
+        raise HelperProtocolError("package helper launch deadline elapsed")
+
+
 class Ed25519ReceiptVerifier:
     """Verify canonical object receipts with one installed public key."""
 
@@ -427,6 +612,20 @@ class Ed25519ReceiptVerifier:
         if not isinstance(public_key, Ed25519PublicKey):
             raise HelperProtocolError("receipt public key is invalid")
         self._public_key = public_key
+        self._key_id = hashlib.sha256(
+            public_key.public_bytes(
+                serialization.Encoding.Raw,
+                serialization.PublicFormat.Raw,
+            )
+        ).hexdigest()
+
+    @property
+    def public_key_bytes(self) -> bytes:
+        """Return the raw public key for startup role-separation checks."""
+        return self._public_key.public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
 
     @classmethod
     def from_file(
@@ -476,15 +675,17 @@ class Ed25519ReceiptVerifier:
                 os.close(descriptor)
 
     def verify(self, receipt: SignedObjectReceipt) -> bool:
-        if type(receipt) is not SignedObjectReceipt:
+        if type(receipt) is not SignedPackageObjectReceipt:
             return False
         try:
-            signature = urlsafe_b64decode(receipt.signature + "==")
+            if receipt.signature.key_id != self._key_id:
+                return False
+            signature = bytes.fromhex(receipt.signature.value)
             self._public_key.verify(
-                signature, canonical_helper_document(receipt.unsigned_mapping())
+                signature, package_object_receipt_signing_bytes(receipt.claims)
             )
             return True
-        except (InvalidSignature, ValueError):
+        except (InvalidSignature, ValueError, TypeError):
             return False
 
 
@@ -503,6 +704,12 @@ class SignedFenceAuthorizer:
         if not isinstance(public_key, Ed25519PublicKey):
             raise HelperProtocolError("fence public key is invalid")
         self._public_key = public_key
+        self._key_id = hashlib.sha256(
+            public_key.public_bytes(
+                serialization.Encoding.Raw,
+                serialization.PublicFormat.Raw,
+            )
+        ).hexdigest()
         if (
             not isinstance(max_entries, int)
             or isinstance(max_entries, bool)
@@ -529,6 +736,14 @@ class SignedFenceAuthorizer:
                 )
         except sqlite3.DatabaseError as error:
             raise HelperProtocolError("helper replay database is invalid") from error
+
+    @property
+    def public_key_bytes(self) -> bytes:
+        """Return the raw public key for startup role-separation checks."""
+        return self._public_key.public_bytes(
+            serialization.Encoding.Raw,
+            serialization.PublicFormat.Raw,
+        )
 
     @classmethod
     def from_file(
@@ -559,22 +774,22 @@ class SignedFenceAuthorizer:
         if not isinstance(now, datetime) or now.tzinfo is None:
             raise HelperProtocolError("helper authority clock is invalid")
         now = now.astimezone(UTC)
-        try:
-            expires_at = datetime.strptime(
-                request.expires_at, "%Y-%m-%dT%H:%M:%SZ"
-            ).replace(tzinfo=UTC)
-        except ValueError:
-            return False
-        if expires_at <= now or expires_at > now.replace(microsecond=0) + timedelta(
-            minutes=15
+        claims = request.grant.claims
+        expires_at = datetime.fromtimestamp(claims.expires_at, tz=UTC)
+        issued_at = datetime.fromtimestamp(claims.issued_at, tz=UTC)
+        if (
+            expires_at <= now
+            or issued_at > now
+            or expires_at > issued_at + timedelta(minutes=15)
+            or request.grant.signature.key_id != self._key_id
         ):
             return False
         try:
-            signature = urlsafe_b64decode(request.authorization + "==")
+            signature = bytes.fromhex(request.grant.signature.value)
             self._public_key.verify(
-                signature, canonical_helper_document(request.unsigned_mapping())
+                signature, package_helper_grant_signing_bytes(claims)
             )
-        except (InvalidSignature, ValueError):
+        except (InvalidSignature, ValueError, TypeError):
             return False
         with self._lock:
             try:
@@ -659,6 +874,7 @@ class PackageHelper:
         *,
         agent_uid: int,
         sandbox: SandboxPolicy,
+        active_slot_verifier: ActiveSlotBoundary,
         receipt_verifier: ReceiptVerifier,
         fence_authorizer: FenceAuthorizer,
         launcher: BackendLauncher,
@@ -671,6 +887,7 @@ class PackageHelper:
         ):
             raise HelperProtocolError("agent peer UID is invalid")
         for boundary, method, name in (
+            (active_slot_verifier, "verify", "active slot verifier"),
             (receipt_verifier, "verify", "receipt verifier"),
             (fence_authorizer, "authorize", "fence authorizer"),
             (launcher, "launch", "backend launcher"),
@@ -679,6 +896,7 @@ class PackageHelper:
                 raise HelperProtocolError(f"{name} is invalid")
         self._agent_uid = agent_uid
         self._sandbox = sandbox
+        self._active_slot_verifier = active_slot_verifier
         self._receipt_verifier = receipt_verifier
         self._fence_authorizer = fence_authorizer
         self._launcher = launcher
@@ -688,15 +906,15 @@ class PackageHelper:
     def handle(self, peer_uid: int, raw: bytes) -> bytes:
         if type(peer_uid) is not int or peer_uid != self._agent_uid:
             raise HelperProtocolError("package helper peer is not the agent")
+        self._active_slot_verifier.verify()
         request = HelperRequest.parse(raw)
-        request_digest = hashlib.sha256(raw).hexdigest()
         key = (request.request_id, request.fence)
         with self._lock:
             if key in self._seen:
                 raise HelperProtocolError("package helper request replay was rejected")
             if len(self._seen) >= MAX_REPLAY_ENTRIES:
                 raise HelperProtocolError("package helper replay state is full")
-            if not self._fence_authorizer.authorize(request, request_digest):
+            if not self._fence_authorizer.authorize(request, request.digest):
                 raise HelperProtocolError("package helper operation fence is stale")
             for receipt in request.receipts:
                 if not self._receipt_verifier.verify(receipt):
@@ -727,6 +945,7 @@ class PackageHelper:
                 outcome["status"],
                 outcome["evidence_digest"],
                 outcome["fence"],
+                request.digest,
             )
         except (TypeError, ValueError) as error:
             raise HelperProtocolError("package helper result is invalid") from error
@@ -828,16 +1047,29 @@ def main(argv: list[str] | None = None) -> int:
             *(f"nvidia{index}" for index in range(16)),
         ),
     )
+    receipt_verifier = Ed25519ReceiptVerifier.from_file(
+        Path("/etc/dgx-forge-agent/package-receipt-public.pem")
+    )
+    fence_authorizer = SignedFenceAuthorizer.from_file(
+        Path("/etc/dgx-forge-agent/package-fence-public.pem"),
+        Path("/var/lib/dgx-forge-package-helper/replay.sqlite3"),
+    )
+    receipt_key = getattr(receipt_verifier, "public_key_bytes", None)
+    fence_key = getattr(fence_authorizer, "public_key_bytes", None)
+    if receipt_key is None or fence_key is None:
+        raise HelperProtocolError("package helper authority key boundary is invalid")
+    if not isinstance(receipt_key, bytes) or not isinstance(fence_key, bytes):
+        raise HelperProtocolError("package helper authority key boundary is invalid")
+    if receipt_key == fence_key:
+        raise HelperProtocolError("package helper grant and receipt keys are not distinct")
     helper = PackageHelper(
         agent_uid=agent_uid,
         sandbox=sandbox,
-        receipt_verifier=Ed25519ReceiptVerifier.from_file(
-            Path("/etc/dgx-forge-agent/package-receipt-public.pem")
+        active_slot_verifier=ActiveSlotVerifier(
+            os.environ.get("DGX_PACKAGE_HELPER_SLOT_SHA256", "")
         ),
-        fence_authorizer=SignedFenceAuthorizer.from_file(
-            Path("/etc/dgx-forge-agent/package-fence-public.pem"),
-            Path("/var/lib/dgx-forge-package-helper/replay.sqlite3"),
-        ),
+        receipt_verifier=receipt_verifier,
+        fence_authorizer=fence_authorizer,
         launcher=SystemdBackendLauncher(
             Path("/var/lib/dgx-forge-agent/packages/generations")
         ),

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 IMAGE = re.compile(r"^[^\s@]+(?::[^\s@]+)?@sha256:[0-9a-f]{64}$")
-PROTOCOL_WHEEL = "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"
+PROTOCOL_WHEEL = "inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl"
 
 
 def canonical(value: object) -> bytes:
@@ -92,6 +92,53 @@ def packages_web(lock: bytes) -> list[tuple[str, str]]:
     return sorted(packages)
 
 
+def workload_package_inputs(root: Path) -> tuple[str, ...]:
+    """Return generic package implementation files bound by release evidence.
+
+    The verifier is also used by small isolated fixture repositories in the
+    test suite, so absent package trees are treated as an older baseline.  A
+    complete DGX-Forge checkout always has all three boundaries and therefore
+    gets every package implementation file hashed into the supply-chain
+    manifest.
+    """
+
+    paths: list[str] = []
+    roots = (
+        root / "agent/src/dgx_agent/packages",
+        root / "control/src/dgx_control",
+        root / "src/spark_profiles/workload_packages",
+    )
+    for directory in roots:
+        if not directory.is_dir():
+            continue
+        for path in sorted(directory.glob("package_*.py")):
+            paths.append(path.relative_to(root).as_posix())
+        if directory.name == "packages" or directory.name == "workload_packages":
+            for path in sorted(directory.glob("*.py")):
+                paths.append(path.relative_to(root).as_posix())
+    for relative in (
+        "agent/src/dgx_agent/workload_runtime.py",
+        "agent/src/dgx_agent/package_operations.py",
+        "agent/src/dgx_agent/package_trust.py",
+        "agent/src/dgx_agent/package_helper.py",
+        "agent/src/dgx_agent/package_helper_protocol.py",
+        "agent/src/dgx_agent/package_helper_client.py",
+    ):
+        path = root / relative
+        if path.is_file():
+            paths.append(relative)
+    protocol = root / "agent_protocol/src/dgx_agent_protocol/workload_packages.py"
+    if protocol.is_file():
+        paths.append(protocol.relative_to(root).as_posix())
+    for acceptance in (
+        root / "scripts/accept-workload-packages",
+        root / "scripts/accept-workload-package-failures",
+    ):
+        if acceptance.is_file():
+            paths.append(acceptance.relative_to(root).as_posix())
+    return tuple(dict.fromkeys(paths))
+
+
 def protocol_wheel(root: Path) -> bytes:
     """Build the release wheel in a temporary directory and return its bytes."""
     with tempfile.TemporaryDirectory(prefix="dgx-agent-protocol-") as directory:
@@ -117,7 +164,7 @@ def protocol_version(lock: bytes) -> str:
         package for package in raw.get("package", [])
         if package.get("name") == "dgx-agent-protocol"
     ]
-    if len(packages) != 1 or packages[0].get("source") != {"path": "../inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl"}:
+    if len(packages) != 1 or packages[0].get("source") != {"path": "../inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl"}:
         raise ValueError("control and agent must resolve the verified protocol wheel")
     version = packages[0].get("version")
     if not isinstance(version, str):
@@ -289,6 +336,7 @@ def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
         "scripts/workload-artifact-metadata",
         "src/spark_profiles/update_trust.py",
     )
+    input_paths += workload_package_inputs(root)
     deployment_bundle = control_deployment_bundle(root)
     manifest = {
         "schema_version": 2,

@@ -10,7 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from dgx_agent_protocol import AgentOperation, PackageOperationRequest, PackageReleaseLock
+from dgx_agent_protocol import (
+    AgentOperation,
+    PackageOperationRequest,
+    PackageReleaseLock,
+)
 
 from ..package_operations import (
     OperationBinding,
@@ -18,8 +22,8 @@ from ..package_operations import (
     PackageInspection,
 )
 from .adapter import AdapterInvocation, AdapterOperation
-from .state import GenerationRecord, PackageState, PackageStateConflict
 from .gc import PackageGarbageCollector
+from .state import GenerationRecord, PackageState, PackageStateConflict
 
 
 class PackageEngineError(RuntimeError):
@@ -521,6 +525,7 @@ class PackageEngine:
             fence=binding.fence,
             release_digest=release_digest,
             generation=generation_id,
+            node_id=binding.node_id,
         )
         return adapter.execute(operation, invocation, deadline)
 

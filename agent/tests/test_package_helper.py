@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import socket
 import threading
-from base64 import urlsafe_b64encode
+from configparser import ConfigParser
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -30,39 +32,109 @@ from dgx_agent.package_helper_protocol import (
 )
 from dgx_agent.packages.backends import BackendInvocation
 from dgx_agent.packages.sandbox import SandboxPolicy
+from dgx_agent_protocol.workload_packages import (
+    PACKAGE_HELPER_AUTHORITY,
+    PackageHelperGrantClaims,
+    PackageHelperOperation,
+    PackageHelperSignature,
+    PackageObjectReceiptClaims,
+    SignedPackageHelperGrant,
+    SignedPackageObjectReceipt,
+    package_helper_grant_signing_bytes,
+    package_object_receipt_signing_bytes,
+)
 from packages.test_backends import OBJECT, invocation_document
 
 REQUEST_ID = "11111111-1111-4111-8111-111111111111"
 JOB_ID = "22222222-2222-4222-8222-222222222222"
 OPERATION_ID = "33333333-3333-4333-8333-333333333333"
 FENCE = "44444444-4444-4444-8444-444444444444"
-SIGNATURE = "A" * 86
+NODE_ID = "spk_" + "1" * 32
+KEY_ID = "b" * 64
+SIGNATURE = "a" * 128
+
+
+def receipt_document(
+    digest: str = OBJECT, size: int = 4096
+) -> dict[str, object]:
+    return {
+        "claims": {
+            "schema_version": 1,
+            "authority": PACKAGE_HELPER_AUTHORITY,
+            "object_digest": digest,
+            "size": size,
+            "relative_name": f"objects/sha256/{digest}",
+        },
+        "signature": {
+            "algorithm": "ed25519",
+            "key_id": KEY_ID,
+            "value": SIGNATURE,
+        },
+    }
 
 
 def request_document() -> dict[str, object]:
-    return {
+    body = {
         "schema_version": 1,
         "request_id": REQUEST_ID,
+        "node_id": NODE_ID,
         "job_id": JOB_ID,
         "operation_id": OPERATION_ID,
         "attempt": 1,
         "fence": FENCE,
+        "operation": "health",
         "invocation": invocation_document(),
-        "receipts": [
-            {
-                "schema_version": 1,
-                "object_digest": OBJECT,
-                "size": 4096,
-                "relative_name": f"objects/sha256/{OBJECT}",
-                "signature": SIGNATURE,
-            }
-        ],
-        "authorization": SIGNATURE,
-        "expires_at": (datetime.now(UTC) + timedelta(minutes=5))
-        .replace(microsecond=0)
-        .isoformat()
-        .replace("+00:00", "Z"),
+        "receipts": [receipt_document()],
     }
+    document = {"schema_version": 1, "body": body, "grant": {}}
+    return _bind_request(document)
+
+
+def _bind_request(
+    document: dict[str, object],
+    *,
+    private: Ed25519PrivateKey | None = None,
+    issued_at: int | None = None,
+    expires_at: int | None = None,
+) -> dict[str, object]:
+    body = document["body"]
+    assert isinstance(body, dict)
+    invocation = body["invocation"]
+    assert isinstance(invocation, dict)
+    now = int(datetime.now(UTC).timestamp()) if issued_at is None else issued_at
+    claims = PackageHelperGrantClaims(
+        1,
+        PACKAGE_HELPER_AUTHORITY,
+        body["request_id"],
+        body["node_id"],
+        body["job_id"],
+        body["operation_id"],
+        body["attempt"],
+        body["fence"],
+        invocation["release_digest"],
+        invocation["generation"],
+        PackageHelperOperation(body["operation"]),
+        hashlib.sha256(canonical_helper_document(body)).hexdigest(),
+        now,
+        now + 300 if expires_at is None else expires_at,
+    )
+    if private is None:
+        key_id = KEY_ID
+        signature = SIGNATURE
+    else:
+        key_id = hashlib.sha256(private.public_key().public_bytes_raw()).hexdigest()
+        signature = private.sign(package_helper_grant_signing_bytes(claims)).hex()
+    document["grant"] = SignedPackageHelperGrant(
+        claims,
+        PackageHelperSignature("ed25519", key_id, signature),
+    ).to_mapping()
+    return document
+
+
+def _request(document: dict[str, object]) -> HelperRequest:
+    return HelperRequest.parse(
+        canonical_helper_document(_bind_request(document))
+    )
 
 
 def test_helper_protocol_requires_duplicate_free_canonical_json() -> None:
@@ -71,11 +143,11 @@ def test_helper_protocol_requires_duplicate_free_canonical_json() -> None:
 
     assert request.invocation == BackendInvocation.parse(invocation_document())
     assert request.receipts == (
-        SignedObjectReceipt(1, OBJECT, 4096, f"objects/sha256/{OBJECT}", SIGNATURE),
+        SignedPackageObjectReceipt.parse(receipt_document()),
     )
 
     reordered = json.dumps(request_document(), separators=(",", ":")).encode()
-    duplicate = raw.replace(b'{"attempt":1,', b'{"attempt":1,"attempt":1,', 1)
+    duplicate = raw.replace(b'"attempt":1,', b'"attempt":1,"attempt":1,', 1)
     with pytest.raises(HelperProtocolError, match="canonical"):
         HelperRequest.parse(reordered)
     with pytest.raises(HelperProtocolError, match="duplicate"):
@@ -85,6 +157,7 @@ def test_helper_protocol_requires_duplicate_free_canonical_json() -> None:
 class ReceiptVerifier:
     def __init__(self) -> None:
         self.checked: list[SignedObjectReceipt] = []
+        self.public_key_bytes = b"r" * 32
 
     def verify(self, receipt: SignedObjectReceipt) -> bool:
         self.checked.append(receipt)
@@ -94,9 +167,15 @@ class ReceiptVerifier:
 class FenceAuthorizer:
     def __init__(self, permitted: bool = True) -> None:
         self.permitted = permitted
+        self.public_key_bytes = b"f" * 32
 
     def authorize(self, request: HelperRequest, request_digest: str) -> bool:
         return self.permitted and len(request_digest) == 64
+
+
+class ActiveSlotBoundary:
+    def verify(self) -> None:
+        pass
 
 
 class Launcher:
@@ -122,6 +201,7 @@ def _helper(*, permitted: bool = True, agent_uid: int = 64000):
             workload_gid=64001,
             allowed_devices=("nvidia0",),
         ),
+        active_slot_verifier=ActiveSlotBoundary(),
         receipt_verifier=verifier,
         fence_authorizer=FenceAuthorizer(permitted),
         launcher=launcher,
@@ -175,6 +255,7 @@ def test_helper_rejects_unsigned_receipt_and_cross_fence_launcher_result() -> No
     helper = PackageHelper(
         agent_uid=64000,
         sandbox=SandboxPolicy(64001, 64001, allowed_devices=("nvidia0",)),
+        active_slot_verifier=ActiveSlotBoundary(),
         receipt_verifier=RejectingVerifier(),
         fence_authorizer=FenceAuthorizer(),
         launcher=launcher,
@@ -193,6 +274,7 @@ def test_helper_rejects_unsigned_receipt_and_cross_fence_launcher_result() -> No
     helper = PackageHelper(
         agent_uid=64000,
         sandbox=SandboxPolicy(64001, 64001, allowed_devices=("nvidia0",)),
+        active_slot_verifier=ActiveSlotBoundary(),
         receipt_verifier=ReceiptVerifier(),
         fence_authorizer=FenceAuthorizer(),
         launcher=WrongFenceLauncher(),
@@ -215,14 +297,8 @@ def test_signed_fence_authorizer_rejects_invalid_and_replayed_grants_after_resta
     public_path.chmod(0o644)
     replay = tmp_path / "helper-replay.sqlite3"
     document = request_document()
-    document["invocation"]["network"] = {"mode": "none", "egress": []}
-    unsigned = dict(document)
-    del unsigned["authorization"]
-    document["authorization"] = (
-        urlsafe_b64encode(private.sign(canonical_helper_document(unsigned)))
-        .decode()
-        .rstrip("=")
-    )
+    document["body"]["invocation"]["network"] = {"mode": "none", "egress": []}
+    _bind_request(document, private=private)
     request = HelperRequest.parse(canonical_helper_document(document))
 
     first = SignedFenceAuthorizer.from_file(
@@ -235,9 +311,44 @@ def test_signed_fence_authorizer_rejects_invalid_and_replayed_grants_after_resta
     assert restarted.authorize(request, request.digest) is False
 
     changed = request_document()
-    changed["attempt"] = 2
+    changed["body"]["attempt"] = 2
+    _bind_request(changed, private=private)
+    changed["grant"]["signature"]["value"] = "f" * 128
     stale = HelperRequest.parse(canonical_helper_document(changed))
     assert restarted.authorize(stale, stale.digest) is False
+
+
+def test_helper_accepts_body_digest_bound_by_real_signed_authorizer(
+    tmp_path: Path,
+) -> None:
+    private = Ed25519PrivateKey.generate()
+    public_path = tmp_path / "fence-public.pem"
+    public_path.write_bytes(
+        private.public_key().public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+    )
+    public_path.chmod(0o644)
+    document = request_document()
+    _bind_request(document, private=private)
+    request = HelperRequest.parse(canonical_helper_document(document))
+    helper = PackageHelper(
+        agent_uid=64000,
+        sandbox=SandboxPolicy(64001, 64001, allowed_devices=("nvidia0",)),
+        active_slot_verifier=ActiveSlotBoundary(),
+        receipt_verifier=ReceiptVerifier(),
+        fence_authorizer=SignedFenceAuthorizer.from_file(
+            public_path,
+            tmp_path / "helper-replay.sqlite3",
+            allow_unprivileged_test_files=True,
+        ),
+        launcher=Launcher(),
+    )
+
+    response = HelperResponse.parse(helper.handle(64000, request.to_bytes()))
+
+    assert response.request_digest == request.digest
 
 
 def test_signed_fence_authorizer_rejects_expired_grants_and_caps_replay_state(
@@ -256,15 +367,15 @@ def test_signed_fence_authorizer_rejects_expired_grants_and_caps_replay_state(
 
     def signed_document(request_id: str, fence: str, expires_at: datetime):
         document = request_document()
-        document["request_id"] = request_id
-        document["fence"] = fence
-        document["expires_at"] = expires_at.isoformat().replace("+00:00", "Z")
-        unsigned = dict(document)
-        del unsigned["authorization"]
-        document["authorization"] = (
-            urlsafe_b64encode(private.sign(canonical_helper_document(unsigned)))
-            .decode()
-            .rstrip("=")
+        document["body"]["request_id"] = request_id
+        document["body"]["fence"] = fence
+        expiry_epoch = int(expires_at.timestamp())
+        issued_epoch = min(int(now.timestamp()), expiry_epoch - 300)
+        _bind_request(
+            document,
+            private=private,
+            issued_at=issued_epoch,
+            expires_at=expiry_epoch,
         )
         return HelperRequest.parse(canonical_helper_document(document))
 
@@ -300,18 +411,17 @@ def test_ed25519_receipt_verifier_accepts_only_exact_canonical_receipt_signature
         )
     )
     public_path.chmod(0o644)
-    unsigned = SignedObjectReceipt(
-        1, OBJECT, 4096, f"objects/sha256/{OBJECT}", SIGNATURE
+    key_id = hashlib.sha256(private.public_key().public_bytes_raw()).hexdigest()
+    claims = PackageObjectReceiptClaims(
+        1,
+        PACKAGE_HELPER_AUTHORITY,
+        OBJECT,
+        4096,
+        f"objects/sha256/{OBJECT}",
     )
-    signature = (
-        urlsafe_b64encode(
-            private.sign(canonical_helper_document(unsigned.unsigned_mapping()))
-        )
-        .decode()
-        .rstrip("=")
-    )
-    receipt = SignedObjectReceipt(
-        1, OBJECT, 4096, f"objects/sha256/{OBJECT}", signature
+    signature = private.sign(package_object_receipt_signing_bytes(claims)).hex()
+    receipt = SignedPackageObjectReceipt(
+        claims, PackageHelperSignature("ed25519", key_id, signature)
     )
     verifier = Ed25519ReceiptVerifier.from_file(
         public_path, allow_unprivileged_test_file=True
@@ -320,7 +430,16 @@ def test_ed25519_receipt_verifier_accepts_only_exact_canonical_receipt_signature
     assert verifier.verify(receipt) is True
     assert (
         verifier.verify(
-            SignedObjectReceipt(1, OBJECT, 4097, f"objects/sha256/{OBJECT}", signature)
+            SignedPackageObjectReceipt(
+                PackageObjectReceiptClaims(
+                    1,
+                    PACKAGE_HELPER_AUTHORITY,
+                    OBJECT,
+                    4097,
+                    f"objects/sha256/{OBJECT}",
+                ),
+                PackageHelperSignature("ed25519", key_id, signature),
+            )
         )
         is False
     )
@@ -375,31 +494,19 @@ def test_concrete_launcher_uses_sealed_content_and_fixed_systemd_sandbox(
     mount_object.write_bytes(mount_content)
     mount_object.chmod(0o400)
     document = request_document()
-    document["invocation"]["network"] = {"mode": "none", "egress": []}
-    document["invocation"]["mounts"] = [
+    document["body"]["invocation"]["network"] = {"mode": "none", "egress": []}
+    document["body"]["invocation"]["mounts"] = [
         {
             "object_digest": mount_digest,
             "target": "models/primary",
             "read_only": True,
         }
     ]
-    document["receipts"] = [
-        {
-            "schema_version": 1,
-            "object_digest": digest,
-            "size": executable.stat().st_size,
-            "relative_name": f"objects/sha256/{digest}",
-            "signature": SIGNATURE,
-        },
-        {
-            "schema_version": 1,
-            "object_digest": mount_digest,
-            "size": len(mount_content),
-            "relative_name": f"objects/sha256/{mount_digest}",
-            "signature": SIGNATURE,
-        },
+    document["body"]["receipts"] = [
+        receipt_document(digest, executable.stat().st_size),
+        receipt_document(mount_digest, len(mount_content)),
     ]
-    request = HelperRequest.parse(canonical_helper_document(document))
+    request = _request(document)
 
     class Runner:
         def __init__(self):
@@ -481,18 +588,12 @@ def test_launcher_cleans_failed_transient_unit(tmp_path: Path) -> None:
     executable.chmod(0o500)
     digest = __import__("hashlib").sha256(executable.read_bytes()).hexdigest()
     document = request_document()
-    document["invocation"]["network"] = {"mode": "none", "egress": []}
-    document["invocation"]["mounts"] = []
-    document["receipts"] = [
-        {
-            "schema_version": 1,
-            "object_digest": digest,
-            "size": executable.stat().st_size,
-            "relative_name": f"objects/sha256/{digest}",
-            "signature": SIGNATURE,
-        }
+    document["body"]["invocation"]["network"] = {"mode": "none", "egress": []}
+    document["body"]["invocation"]["mounts"] = []
+    document["body"]["receipts"] = [
+        receipt_document(digest, executable.stat().st_size)
     ]
-    request = HelperRequest.parse(canonical_helper_document(document))
+    request = _request(document)
 
     class FailingRunner:
         def __init__(self):
@@ -523,3 +624,168 @@ def test_helper_cli_requires_exact_systemd_socket_activation(monkeypatch) -> Non
 
     with pytest.raises(HelperProtocolError, match="systemd socket activation"):
         main(["--listen-fd=3"])
+
+
+def test_helper_cli_rejects_same_grant_and_receipt_public_key(monkeypatch) -> None:
+    import dgx_agent.package_helper as helper_module
+
+    monkeypatch.setenv("LISTEN_PID", str(os.getpid()))
+    monkeypatch.setenv("LISTEN_FDS", "1")
+    monkeypatch.setattr(helper_module.os, "geteuid", lambda: 0)
+    identities = {
+        "dgx-agent": SimpleNamespace(pw_uid=64000, pw_gid=64000),
+        "dgx-workload": SimpleNamespace(pw_uid=64001, pw_gid=64001),
+    }
+    monkeypatch.setattr(helper_module.pwd, "getpwnam", identities.__getitem__)
+
+    class ReceiptBoundary:
+        @classmethod
+        def from_file(cls, _path):
+            return SimpleNamespace(public_key_bytes=b"k" * 32)
+
+    class FenceBoundary:
+        @classmethod
+        def from_file(cls, _key, _replay):
+            return SimpleNamespace(public_key_bytes=b"k" * 32)
+
+    monkeypatch.setattr(helper_module, "Ed25519ReceiptVerifier", ReceiptBoundary)
+    monkeypatch.setattr(helper_module, "SignedFenceAuthorizer", FenceBoundary)
+
+    with pytest.raises(HelperProtocolError, match="not distinct"):
+        main(["--listen-fd=3"])
+
+
+def test_helper_cli_builds_only_fixed_installed_boundaries_and_fd3(
+    monkeypatch,
+) -> None:
+    import dgx_agent.package_helper as helper_module
+
+    monkeypatch.setenv("LISTEN_PID", str(os.getpid()))
+    monkeypatch.setenv("LISTEN_FDS", "1")
+    monkeypatch.setenv("DGX_PACKAGE_HELPER_SLOT_SHA256", "d" * 64)
+    monkeypatch.setattr(helper_module.os, "geteuid", lambda: 0)
+    identities = {
+        "dgx-agent": SimpleNamespace(pw_uid=64000, pw_gid=64000),
+        "dgx-workload": SimpleNamespace(pw_uid=64001, pw_gid=64001),
+    }
+    monkeypatch.setattr(helper_module.pwd, "getpwnam", identities.__getitem__)
+    seen: dict[str, object] = {}
+
+    class SlotBoundary:
+        def __init__(self, digest):
+            seen["slot_digest"] = digest
+
+        def verify(self):
+            pass
+
+    class ReceiptBoundary:
+        @classmethod
+        def from_file(cls, path):
+            seen["receipt_key"] = path
+            return ReceiptVerifier()
+
+    class FenceBoundary:
+        @classmethod
+        def from_file(cls, key, replay):
+            seen["fence_key"] = key
+            seen["replay"] = replay
+            return FenceAuthorizer()
+
+    class LauncherBoundary:
+        def __init__(self, root):
+            seen["generation_root"] = root
+
+        def launch(self, request, sandbox):
+            raise AssertionError("listener fixture must not launch")
+
+    class Listener:
+        family = socket.AF_UNIX
+        type = socket.SOCK_STREAM
+
+        def detach(self):
+            seen["detached"] = True
+
+    def open_listener(*, fileno):
+        seen["listen_fd"] = fileno
+        return Listener()
+
+    def serve(helper, listener):
+        seen["helper"] = helper
+        seen["listener"] = listener
+
+    monkeypatch.setattr(helper_module, "Ed25519ReceiptVerifier", ReceiptBoundary)
+    monkeypatch.setattr(helper_module, "SignedFenceAuthorizer", FenceBoundary)
+    monkeypatch.setattr(helper_module, "ActiveSlotVerifier", SlotBoundary)
+    monkeypatch.setattr(helper_module, "SystemdBackendLauncher", LauncherBoundary)
+    monkeypatch.setattr(helper_module.socket, "socket", open_listener)
+    monkeypatch.setattr(helper_module, "serve_listener", serve)
+
+    assert main(["--listen-fd=3"]) == 0
+    assert seen == {
+        "receipt_key": Path("/etc/dgx-forge-agent/package-receipt-public.pem"),
+        "fence_key": Path("/etc/dgx-forge-agent/package-fence-public.pem"),
+        "slot_digest": "d" * 64,
+        "replay": Path("/var/lib/dgx-forge-package-helper/replay.sqlite3"),
+        "generation_root": Path("/var/lib/dgx-forge-agent/packages/generations"),
+        "listen_fd": 3,
+        "helper": seen["helper"],
+        "listener": seen["listener"],
+        "detached": True,
+    }
+
+
+def test_package_helper_units_define_one_persistent_bounded_authority() -> None:
+    root = Path(__file__).parents[1] / "systemd"
+    socket_unit = ConfigParser(interpolation=None, strict=True)
+    service_unit = ConfigParser(interpolation=None, strict=True)
+    assert socket_unit.read(root / "dgx-forge-package-helper.socket")
+    assert service_unit.read(root / "dgx-forge-package-helper.service")
+
+    assert socket_unit["Socket"]["Accept"] == "no"
+    assert socket_unit["Socket"]["SocketMode"] == "0660"
+    assert service_unit["Service"]["Type"] == "simple"
+    assert set(service_unit["Unit"]["Requires"].split()) == {
+        "dgx-forge-package-helper.socket",
+        "dgx-forge-agent-supervisor.service",
+    }
+    assert service_unit["Service"]["ExecStart"] == (
+        "/usr/libexec/dgx-agent-supervisor run-package-helper"
+    )
+    assert set(service_unit["Unit"]["PartOf"].split()) == {
+        "dgx-forge-agent.service",
+        "dgx-forge-agent-supervisor.service",
+    }
+    assert service_unit["Unit"]["After"] == "dgx-forge-agent-supervisor.service"
+    assert service_unit["Service"]["NoNewPrivileges"] == "yes"
+    assert service_unit["Service"]["PrivateTmp"] == "yes"
+    capabilities = set(service_unit["Service"]["CapabilityBoundingSet"].split())
+    assert capabilities == {"CAP_CHOWN"}
+
+
+def test_launcher_deadline_covers_content_verification_before_systemd(
+    tmp_path: Path,
+) -> None:
+    document = request_document()
+    document["body"]["invocation"]["network"] = {"mode": "none", "egress": []}
+    document["body"]["invocation"]["mounts"] = []
+    request = _request(document)
+    ticks = iter((0.0, 61.0))
+
+    class Runner:
+        def run(self, *args, **kwargs):
+            raise AssertionError("expired content verification must not launch")
+
+        def cleanup(self, unit_name):
+            raise AssertionError("no unit exists before content verification")
+
+    launcher = SystemdBackendLauncher(
+        tmp_path / "missing",
+        runner=Runner(),
+        clock=lambda: next(ticks),
+    )
+
+    with pytest.raises(HelperProtocolError, match="deadline"):
+        launcher.launch(
+            request,
+            SandboxPolicy(64001, 64001, allowed_devices=("nvidia0",)),
+        )

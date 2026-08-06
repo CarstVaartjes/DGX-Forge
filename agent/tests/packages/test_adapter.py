@@ -46,7 +46,15 @@ class RecordingProcess:
 
 
 def _invocation() -> AdapterInvocation:
-    return AdapterInvocation(JOB, OPERATION, 2, FENCE, RELEASE, "gen-a")
+    return AdapterInvocation(
+        JOB,
+        OPERATION,
+        2,
+        FENCE,
+        RELEASE,
+        "gen-a",
+        "spk_" + "1" * 32,
+    )
 
 
 def _result(**changes: object) -> dict[str, object]:

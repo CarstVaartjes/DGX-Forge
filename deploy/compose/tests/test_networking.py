@@ -26,6 +26,8 @@ def _rendered() -> dict:
         "WORKER_API_TOKEN_FILE": "/dev/null",
         "AGENT_UPDATE_AUTHORITY_KEY_FILE": "/dev/null",
         "ADMIN_GRANT_PRIVATE_KEY_FILE": "/dev/null",
+        "PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE": "/dev/null",
+        "PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE": "/dev/null",
         "ADMIN_GRANT_PUBLIC_KEY_FILE": "/dev/null",
         "AGENT_TUF_BOOTSTRAP_ROOT_FILE": "/dev/null",
         "CONTROL_IDENTITY_PATH": "/srv/dgx-forge/control-identity",

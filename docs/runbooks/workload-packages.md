@@ -84,6 +84,8 @@ The plan shows canary nodes, batches, offline nodes, storage/download
 requirements, compatibility, and the predecessor release.
 
 ```bash
+sparkctl admin deployments rollout-preview \
+  --deployment synthetic-canary --json
 sparkctl admin deployments rollout \
   --deployment synthetic-canary \
   --plan-digest sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
@@ -114,6 +116,8 @@ generation.
 ## Rollback, repair, and Garbage collection
 
 ```bash
+sparkctl admin deployments rollback-preview \
+  --deployment synthetic-canary --rollout ROLLOUT_ID --json
 sparkctl admin deployments rollback \
   --deployment synthetic-canary \
   --rollout ROLLOUT_ID \
@@ -199,10 +203,15 @@ not treat a simulator as physical Spark acceptance.
 
 ```bash
 scripts/accept-workload-packages --mode simulated --json
+scripts/accept-workload-package-failures --json
 scripts/verify-platform-release --candidate 1.0.0 --json
 ```
 
 A blocked result names the exact missing gate. Keep the redacted JSON output,
 source commit, release digests, and test command in the protected release
-artifact. Do not synthesize physical hardware evidence; record it later with
-the approved Spark inventory procedure.
+artifact. Hosted CI stores the two canonical outputs as
+`workload-package-acceptance.json` and
+`workload-package-failure-matrix.json`; the release verifier checks their
+content digests instead of trusting an unrecorded console result. Do not
+synthesize physical hardware evidence; record it later with the approved Spark
+inventory procedure.

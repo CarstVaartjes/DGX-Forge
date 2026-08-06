@@ -54,11 +54,23 @@ def policy_fixture(tmp_path: Path) -> tuple[Path, dict[str, object]]:
         tmp_path / "var/lib/dgx-forge-agent/registry-auth.json", b"{}\n", 0o600
     )
     bootstrap = _write(tmp_path / "etc/dgx-forge-agent/tuf-root.json", b"{}\n", 0o644)
+    workload_bootstrap = _write(
+        tmp_path / "etc/dgx-forge-agent/workload-tuf-root.json", b"{}\n", 0o644
+    )
     metadata = tmp_path / "var/lib/dgx-forge-agent/tuf/metadata"
     targets = tmp_path / "var/lib/dgx-forge-agent/tuf/targets"
+    workload_metadata = tmp_path / "var/lib/dgx-forge-agent/workload-tuf/metadata"
+    workload_targets = tmp_path / "var/lib/dgx-forge-agent/workload-tuf/targets"
     releases = tmp_path / "var/lib/dgx-forge/releases"
     staging = tmp_path / "var/lib/dgx-forge/release-staging"
-    for directory in (metadata, targets, releases, staging):
+    for directory in (
+        metadata,
+        targets,
+        workload_metadata,
+        workload_targets,
+        releases,
+        staging,
+    ):
         directory.mkdir(parents=True, exist_ok=True)
         directory.chmod(0o700)
     document = {
@@ -85,6 +97,14 @@ def policy_fixture(tmp_path: Path) -> tuple[Path, dict[str, object]]:
             "bootstrap_root_sha256": hashlib.sha256(bootstrap.read_bytes()).hexdigest(),
             "metadata_root": str(metadata),
             "target_root": str(targets),
+        },
+        "workload_tuf": {
+            "bootstrap_root_path": str(workload_bootstrap),
+            "bootstrap_root_sha256": hashlib.sha256(
+                workload_bootstrap.read_bytes()
+            ).hexdigest(),
+            "metadata_root": str(workload_metadata),
+            "target_root": str(workload_targets),
         },
     }
     policy = _write(
@@ -143,6 +163,9 @@ def test_runtime_policy_rejects_unknown_unreviewed_or_unsafe_values(
         ("tuf", "bootstrap_root_path"),
         ("tuf", "metadata_root"),
         ("tuf", "target_root"),
+        ("workload_tuf", "bootstrap_root_path"),
+        ("workload_tuf", "metadata_root"),
+        ("workload_tuf", "target_root"),
         (None, "release_root"),
         (None, "staging_root"),
     ],
@@ -185,6 +208,14 @@ def test_runtime_policy_rejects_duplicate_symlink_hardlink_and_tampered_artifact
     executable.write_bytes(b"tampered")
     executable.chmod(0o555)
     with pytest.raises(RuntimePolicyError):
+        RuntimePolicy._load_for_test(path, tmp_path).verify_installed()
+
+
+def test_runtime_policy_rejects_tampered_workload_bootstrap_root(tmp_path: Path) -> None:
+    path, document = policy_fixture(tmp_path)
+    workload_root = Path(document["workload_tuf"]["bootstrap_root_path"])
+    workload_root.write_bytes(b"tampered\n")
+    with pytest.raises(RuntimePolicyError, match="workload TUF bootstrap root digest"):
         RuntimePolicy._load_for_test(path, tmp_path).verify_installed()
 
 
@@ -253,3 +284,4 @@ def test_build_agent_constructs_all_closed_handlers_with_one_credential_store(
         "aarch64": "linux-arm64",
         "x86_64": "linux-x86_64",
     }[runtime.architecture]
+    assert agent._context.packages is not None

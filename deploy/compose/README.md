@@ -256,6 +256,8 @@ command line.
 | `WORKER_API_TOKEN_FILE` → `worker-api-token` | API/worker `10001:10001`, `10001:10001 0400` | One unpadded base64url token, at least 32 characters. |
 | `AGENT_UPDATE_AUTHORITY_KEY_FILE` → `agent-update-authority-key` | Signer only, `10003:10001 0400` | Ed25519 PKCS#8 PEM. The API, worker, and every Spark must never receive this private key. |
 | `ADMIN_GRANT_PUBLIC_KEY_FILE` → `admin-grant-public-key` | Signer only, `10003:10001 0400` | Canonical public document for the separate API admin-action grant authority. |
+| `PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE` → `package-helper-grant-private-key` | Control API `10001:10001`, `10001:10001 0400` | Dedicated Ed25519 PKCS#8 PEM for short-lived workload-helper grants; never install on a Spark. |
+| `PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE` → `package-helper-receipt-private-key` | Control API `10001:10001`, `10001:10001 0400` | Independent Ed25519 PKCS#8 PEM for object receipts; never reuse the grant key or install on a Spark. |
 | `AGENT_TUF_BOOTSTRAP_ROOT_FILE` → `agent-tuf-bootstrap-root` | Signer only, `10003:10001 0400` | Explicit trusted public TUF root for platform releases. The corresponding offline root private key never enters the NAS. |
 | `LITELLM_MASTER_KEY_FILE`, `LITELLM_UPSTREAM_KEY_FILE`, `LITELLM_DATABASE_URL_FILE` → matching `litellm-*` files | LiteLLM `10002:10001`, `10002:10001 0400` | Respectively the master key, dedicated upstream key, and PostgreSQL URL. |
 | `GRAFANA_ADMIN_PASSWORD_FILE` → `grafana-admin-password` | Grafana `472:472`, `472:472 0400` | One Grafana administrator password. |

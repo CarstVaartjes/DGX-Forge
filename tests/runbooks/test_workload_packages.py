@@ -53,17 +53,42 @@ def test_first_release_plan_declares_independent_workload_evidence() -> None:
     assert "agent.update" in plan
 
 
+def test_hosted_ci_uploads_independent_workload_evidence() -> None:
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    assert "workload-package-evidence" in workflow
+    assert "scripts/accept-workload-packages --mode simulated --json" in workflow
+    assert "scripts/accept-workload-package-failures" in workflow
+    assert "workload-package-acceptance.json" in workflow
+    assert "workload-package-failure-matrix.json" in workflow
+    assert "actions/upload-artifact" in workflow
+    assert "hashFiles('scripts/accept-workload-packages')" in workflow
+    assert "hashFiles('scripts/accept-workload-package-failures')" in workflow
+
+
 def test_release_verifier_output_has_non_claiming_workload_defaults() -> None:
     namespace = runpy.run_path(str(ROOT / "scripts/verify-platform-release"))
     report, missing = namespace["verify"](ROOT, "1.0.0")
     assert missing
     workload = report["workload_packages"]
-    assert workload["unknown_family_without_agent_update"] is False
-    assert workload["release_two_activated"] is False
-    assert workload["offline_release_one_rollback"] is False
-    assert workload["unsigned_release_rejected"] is False
+    if any(gate.startswith("workload-package-acceptance") for gate in missing):
+        assert workload["unknown_family_without_agent_update"] is False
+        assert workload["release_two_activated"] is False
+        assert workload["offline_release_one_rollback"] is False
+        assert workload["unsigned_release_rejected"] is False
+    else:
+        # A preceding acceptance command may have intentionally left its
+        # canonical report in the working tree; in that case the verifier
+        # should reflect the observed evidence rather than call it missing.
+        assert workload["unknown_family_without_agent_update"] is True
+        assert workload["release_two_activated"] is True
+        assert workload["offline_release_one_rollback"] is True
+        assert workload["unsigned_release_rejected"] is True
     assert workload["failure_matrix"] is False
-    assert workload["ssh_calls"] is None
-    assert workload["agent_update_calls"] is None
+    if any(gate.startswith("workload-package-acceptance") for gate in missing):
+        assert workload["ssh_calls"] is None
+        assert workload["agent_update_calls"] is None
+    else:
+        assert workload["ssh_calls"] == 0
+        assert workload["agent_update_calls"] == 0
     schema = json.loads((ROOT / "schemas/platform-release-evidence.schema.json").read_text())
     jsonschema.validate(report, schema)

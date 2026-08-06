@@ -24,6 +24,11 @@ from dgx_agent_protocol import (
     AgentResult,
     canonical_message,
 )
+from dgx_agent_protocol.workload_packages import (
+    PackageHelperOperation,
+    SignedPackageHelperGrant,
+    SignedPackageObjectReceipt,
+)
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from sqlalchemy import and_, or_, select
@@ -47,6 +52,7 @@ from .enrollment import (
     RenewalInProgress,
 )
 from .models import AgentCertificate, AgentEnrollment, AgentNode, AgentOperation
+from .package_helper_authority import PackageHelperAuthorityError, PackageHelperAuthorityService
 from .operation_api import bounded_error_responses
 from .pki import IssuedCertificate
 from .presence import AgentPresenceService, PresenceError
@@ -104,6 +110,7 @@ class AgentApiServices:
     max_tuf_target_bytes: int = _MAX_TUF_TARGET_BYTES
     max_workload_tuf_metadata_bytes: int = 2 * 1024 * 1024
     max_workload_tuf_target_bytes: int = 1024 * 1024
+    package_helper_authority: PackageHelperAuthorityService | None = None
 
 
 class EnrollmentRateLimiter:
@@ -1019,6 +1026,66 @@ def install_agent_routes(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
         return Response(status_code=status.HTTP_204_NO_CONTENT) if result is None else _json_response(_wire(result))
+
+    def package_helper_service() -> PackageHelperAuthorityService:
+        required = services.package_helper_authority if services is not None else None
+        if required is None:
+            raise HTTPException(status_code=503, detail="package helper authority unavailable")
+        return required
+
+    def package_helper_identity(request: Request) -> AgentIdentity:
+        _scope_identity(request)
+        required = _require_services(services)
+        return _authenticated_identity(request, required)
+
+    @agent.post("/package-helper/receipts")
+    def package_helper_receipts(
+        body: dict[str, object], request: Request
+    ) -> Response:
+        identity = package_helper_identity(request)
+        required = package_helper_service()
+        try:
+            receipts = required.issue_receipts(
+                node_id=body["node_id"],
+                job_id=body["job_id"],
+                operation_id=body["operation_id"],
+                attempt=body["attempt"],
+                fence=body["fence"],
+                release_digest=body["release_digest"],
+                objects=body["objects"],
+                certificate_serial=identity.certificate_serial,
+            )
+            return _json_response(
+                {"receipts": [item.to_mapping() for item in receipts]}
+            )
+        except (KeyError, TypeError, ValueError, PackageHelperAuthorityError):
+            raise HTTPException(status_code=409, detail="package helper authority rejected request") from None
+
+    @agent.post("/package-helper/grant")
+    def package_helper_grant(
+        body: dict[str, object], request: Request
+    ) -> Response:
+        identity = package_helper_identity(request)
+        required = package_helper_service()
+        try:
+            operation = PackageHelperOperation(body["operation"])
+            grant = required.issue_grant(
+                request_id=body["request_id"],
+                node_id=body["node_id"],
+                job_id=body["job_id"],
+                operation_id=body["operation_id"],
+                attempt=body["attempt"],
+                fence=body["fence"],
+                release_digest=body["release_digest"],
+                generation=body["generation"],
+                operation=operation,
+                request_digest=body["request_digest"],
+                certificate_serial=identity.certificate_serial,
+                expires_in_seconds=body.get("expires_in_seconds", 30),
+            )
+            return _json_response({"grant": grant.to_mapping()})
+        except (KeyError, TypeError, ValueError, PackageHelperAuthorityError):
+            raise HTTPException(status_code=409, detail="package helper authority rejected request") from None
 
     @agent.post("/heartbeat")
     def heartbeat(body: dict[str, object], request: Request) -> Response:

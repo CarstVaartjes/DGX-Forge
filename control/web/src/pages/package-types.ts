@@ -1,0 +1,74 @@
+/**
+ * W16's narrow view contract.  The generated ControlApi should implement this
+ * once W15 publishes the package route declarations; pages deliberately do
+ * not construct paths or inspect raw source metadata themselves.
+ */
+export type PackageFamily = {
+  id: string;
+  channel: string;
+  candidate_count: number;
+  deployment_count: number;
+};
+
+export type PackageCandidateSummary = {
+  id: string;
+  family_id: string;
+  channel: string | null;
+  provider: string;
+  state: string;
+  reason_code: string | null;
+  upstream_version: string;
+  updated_at: string;
+};
+
+export type PackageCandidate = PackageCandidateSummary & {
+  lock: null | {digest: string; components: string[]; dependencies: string[]; provenance: string};
+  compatibility: {compatible: string[]; incompatible_count: number};
+  validations: {backend: string; state: string; reason_code: string | null}[];
+  audit: {action: string; request_id: string}[];
+};
+
+export type PackagePreview = {
+  digest: string;
+  release_digest?: string;
+  expires_at?: string;
+  diff?: string;
+};
+
+export type PackageDeployment = {
+  id: string;
+  family_id: string;
+  release_digest: string;
+  previous_release_digest: string | null;
+  state: string;
+};
+
+export type PackageRolloutPreview = PackagePreview & {
+  canary: string[];
+  batches: string[][];
+  offline_pending: string[];
+  download_remaining_bytes: number;
+  storage_required_bytes: number;
+};
+
+export type PackageRollout = {
+  id: string;
+  state: string;
+  phase: string;
+  failure_reason: string | null;
+  nodes: {name: string; state: string}[];
+};
+
+export interface PackageApi {
+  packageFamilies(): Promise<PackageFamily[]>;
+  packageCandidates(): Promise<PackageCandidateSummary[]>;
+  packageCandidate(candidateId: string): Promise<PackageCandidate>;
+  previewPackagePromotion(candidateId: string): Promise<PackagePreview>;
+  promotePackage(candidateId: string, previewDigest: string): Promise<{release_digest: string}>;
+  deployments(): Promise<PackageDeployment[]>;
+  previewPackageRollout(deploymentId: string): Promise<PackageRolloutPreview>;
+  startPackageRollout(deploymentId: string, previewDigest: string): Promise<{id: string; plan_digest: string}>;
+  packageRollout(rolloutId: string): Promise<PackageRollout>;
+  previewPackageRollback(deploymentId: string): Promise<PackagePreview>;
+  rollbackPackage(deploymentId: string, previewDigest: string): Promise<{id: string}>;
+}

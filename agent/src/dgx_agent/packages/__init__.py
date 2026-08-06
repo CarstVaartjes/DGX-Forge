@@ -1,5 +1,11 @@
 """Generic durable workload-package engine primitives."""
 
+from .failures import (
+    PackageFailure,
+    PackageFailureDisposition,
+    PackageFailureReason,
+    failure,
+)
 from .python_env import (
     PythonEnvironmentBuilder,
     PythonEnvironmentCancelled,
@@ -36,6 +42,9 @@ __all__ = [
     "GenerationRecord",
     "OperationBinding",
     "PackageCapacityError",
+    "PackageFailure",
+    "PackageFailureDisposition",
+    "PackageFailureReason",
     "PackageState",
     "PackageStateConflict",
     "PackageStateError",
@@ -48,4 +57,5 @@ __all__ = [
     "Reservation",
     "SourceBuild",
     "StoreObject",
+    "failure",
 ]

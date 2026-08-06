@@ -8,19 +8,29 @@ from .contracts import (
     schema_validator,
     validate_schema_message,
 )
-from .workload_packages import (
-    ComponentDescriptor,
-    PackageReleaseGraph,
-    PackageReleaseLock,
-)
 from .package_operations import (
     PACKAGE_OPERATIONS,
     RELEASE_BOUND_PACKAGE_OPERATIONS,
     AgentDirective,
     PackageOperationRequest,
 )
+from .workload_packages import (
+    ComponentDescriptor,
+    PackageHelperGrantClaims,
+    PackageHelperOperation,
+    PackageHelperSignature,
+    PackageObjectReceiptClaims,
+    PackageReleaseGraph,
+    PackageReleaseLock,
+    SignedPackageHelperGrant,
+    SignedPackageObjectReceipt,
+    package_helper_grant_signing_bytes,
+    package_object_receipt_signing_bytes,
+)
 
 __all__ = [
+    "PACKAGE_OPERATIONS",
+    "RELEASE_BOUND_PACKAGE_OPERATIONS",
     "AgentClaim",
     "AgentDirective",
     "AgentOperation",
@@ -28,12 +38,18 @@ __all__ = [
     "AgentProtocolError",
     "AgentResult",
     "ComponentDescriptor",
+    "PackageHelperGrantClaims",
+    "PackageHelperOperation",
+    "PackageHelperSignature",
+    "PackageObjectReceiptClaims",
+    "PackageOperationRequest",
     "PackageReleaseGraph",
     "PackageReleaseLock",
-    "PACKAGE_OPERATIONS",
-    "RELEASE_BOUND_PACKAGE_OPERATIONS",
-    "PackageOperationRequest",
+    "SignedPackageHelperGrant",
+    "SignedPackageObjectReceipt",
     "canonical_message",
+    "package_helper_grant_signing_bytes",
+    "package_object_receipt_signing_bytes",
     "schema_validator",
     "validate_schema_message",
 ]

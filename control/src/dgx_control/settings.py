@@ -211,6 +211,8 @@ class Settings:
     worker_api_token: bytes
     management_cidrs: str
     direct_fabric_cidrs: str
+    package_helper_grant_private_key_path: Path | None = None
+    package_helper_receipt_private_key_path: Path | None = None
 
     @property
     def database_host(self) -> str | None:
@@ -407,6 +409,16 @@ class Settings:
             or os.environ.get("DGX_ADMIN_GRANT_PRIVATE_KEY_FILE")
             else None
         )
+        package_helper_grant_private_key_path = (
+            _secret_path("DGX_PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE")
+            if os.environ.get("DGX_PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE")
+            else None
+        )
+        package_helper_receipt_private_key_path = (
+            _secret_path("DGX_PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE")
+            if os.environ.get("DGX_PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE")
+            else None
+        )
         return cls(
             database_url=database_url,
             repository_path=Path(os.environ.get("DGX_REPOSITORY_PATH", "/srv/dgx-forge/repository")),
@@ -442,6 +454,8 @@ class Settings:
             worker_api_token=worker_api_token,
             management_cidrs=management_cidrs,
             direct_fabric_cidrs=direct_fabric_cidrs,
+            package_helper_grant_private_key_path=package_helper_grant_private_key_path,
+            package_helper_receipt_private_key_path=package_helper_receipt_private_key_path,
         )
 
 

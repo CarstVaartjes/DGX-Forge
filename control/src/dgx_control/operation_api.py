@@ -68,6 +68,25 @@ _ADMIN_OPERATION_IDS = {
         "post",
         "/api/v1/updates/{rollout_id}/approve-resume",
     ): "approvePlatformUpdateRecovery",
+    ("get", "/api/v1/packages/families"): "listPackageFamilies",
+    ("get", "/api/v1/packages/candidates"): "listPackageCandidates",
+    ("get", "/api/v1/packages/candidates/{candidate_id}"): "getPackageCandidate",
+    ("get", "/api/v1/packages/candidates/{candidate_id}/resolution"): "getPackageResolution",
+    ("get", "/api/v1/packages/candidates/{candidate_id}/compatibility"): "getPackageCompatibility",
+    ("post", "/api/v1/packages/candidates/{candidate_id}/validation-preview"): "previewPackageValidation",
+    ("post", "/api/v1/packages/candidates/{candidate_id}/validate"): "validatePackageCandidate",
+    ("post", "/api/v1/packages/candidates/{candidate_id}/promotion-preview"): "previewPackagePromotion",
+    ("post", "/api/v1/packages/candidates/{candidate_id}/promote"): "promotePackage",
+    ("get", "/api/v1/deployments"): "listPackageDeployments",
+    ("post", "/api/v1/deployments/{deployment_id}/rollout-preview"): "previewPackageRollout",
+    ("post", "/api/v1/deployments/{deployment_id}/rollouts"): "rolloutPackageDeployment",
+    ("get", "/api/v1/deployments/{deployment_id}/rollouts/{rollout_id}"): "getPackageRollout",
+    ("post", "/api/v1/deployments/{deployment_id}/rollouts/{rollout_id}/rollback-preview"): "previewPackageRollback",
+    ("post", "/api/v1/deployments/{deployment_id}/rollouts/{rollout_id}/rollback"): "rollbackPackageDeployment",
+    ("post", "/api/v1/deployments/{deployment_id}/repair-preview"): "previewPackageRepair",
+    ("post", "/api/v1/deployments/{deployment_id}/repair"): "repairPackage",
+    ("post", "/api/v1/packages/gc-preview"): "previewPackageGc",
+    ("post", "/api/v1/packages/gc"): "applyPackageGc",
 }
 _HTTP_METHODS = frozenset({"delete", "get", "patch", "post", "put"})
 BoundedIdentifier = Annotated[str, Field(min_length=1, max_length=128)]
@@ -856,6 +875,14 @@ class NodeStatus(StrictModel):
     last_seen_age_seconds: float | None = Field(default=None, ge=0)
     agent_last_seen_at: str | None = None
     agent_online: bool = False
+    # Version-skew projection is deliberately nullable for pre-enrollment and
+    # legacy observations.  Keeping these fields in the typed public model
+    # prevents the dashboard from losing authenticated agent identity data.
+    agent_platform_version: str | None = None
+    agent_build_digest: str | None = None
+    agent_active_slot: str | None = None
+    agent_sha256: str | None = None
+    agent_supervisor_generation: int | None = None
     certificate_expires_at: str | None = None
     certificate_expiry_seconds: float | None = Field(default=None, ge=0)
     compatibility: str = "unknown"
