@@ -39,6 +39,7 @@ _CAPABILITIES = (
     "agent.update",
     "node.probe",
     "package-abi-v1",
+    "package-backend-native-v1",
     "package.activate",
     "package.gc",
     "package.health",

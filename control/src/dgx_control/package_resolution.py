@@ -397,7 +397,6 @@ class PackageResolver:
             str(item).removeprefix("linux-") for item in compatibility["architectures"]
         ]
         compatibility["operating_systems"] = list(compatibility["operating_systems"])
-        compatibility["required_capabilities"] = ["package-abi-v1"]
         compatibility["minimum_storage_bytes"] = compatibility.pop("min_storage_bytes")
         if "min_memory_bytes" in compatibility:
             compatibility["minimum_memory_bytes"] = compatibility.pop("min_memory_bytes")
@@ -411,6 +410,10 @@ class PackageResolver:
         backend = family.execution.get("backend")
         if not isinstance(backend, str):
             raise TypeError("family execution backend is invalid")
+        compatibility["required_capabilities"] = [
+            "package-abi-v1",
+            f"package-backend-{backend}-v1",
+        ]
         compatibility["backends"] = [backend]
         # The authoring schema includes timeout policy; the wire lock carries
         # only the stable validation identity and optional evidence binding.

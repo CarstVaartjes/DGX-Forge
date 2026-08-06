@@ -1,10 +1,12 @@
 # Spark Workload Package Engine Implementation Plan
 
-> **Implementation status (2026-08-06): complete.** W5–W10 are implemented on
-> `main`, including the generic operation ABI, durable store, resumable
-> acquisition, immutable environments, unprivileged adapters, atomic
-> generations, rollback, repair, and garbage collection. Verification results
-> are tracked in the [roadmap status ledger](2026-08-05-generalized-workload-package-roadmap.md#implementation-status-2026-08-06).
+> **Implementation status (2026-08-06): complete for the installed capability
+> set.** W5–W8 and W10 are implemented on `main`; W9 provides the generic ABI,
+> signed deployment-policy propagation, and a reviewed native backend. OCI and
+> python-venv requests are validated and fail closed until a future privileged
+> runtime capability supplies an OCI rootfs/runc boundary or an immutable
+> interpreter boundary. Verification results are tracked in the [roadmap
+> status ledger](2026-08-05-generalized-workload-package-roadmap.md#implementation-status-2026-08-06).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 

@@ -186,7 +186,10 @@ def _validate_workload_compatibility(
         isinstance(value, str) for value in required_capabilities
     ):
         raise ValueError("workload capability policy is invalid")
-    if not set(required_capabilities) <= {"package-abi-v1"}:
+    if not set(required_capabilities) <= {
+        "package-abi-v1",
+        "package-backend-native-v1",
+    }:
         raise ValueError("workload capability is unavailable")
     backends = compatibility.get("backends", ())
     if not isinstance(backends, (tuple, list)) or len(backends) != 1 or backends[0] not in {
@@ -195,6 +198,8 @@ def _validate_workload_compatibility(
         "python-venv",
     }:
         raise ValueError("workload backend policy is invalid")
+    if backends[0] != "native":
+        raise ValueError("workload backend runtime capability is unavailable")
     if getattr(lock, "adapter_abi", None) != 1:
         raise ValueError("workload adapter ABI is unsupported")
     for field, actual in (

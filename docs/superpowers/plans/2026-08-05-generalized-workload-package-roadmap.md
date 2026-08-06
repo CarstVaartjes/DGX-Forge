@@ -56,7 +56,8 @@ design acceptance are not counted as implementation completion.
 | --- | --- | --- | --- |
 | Existing platform lane | Tasks 1–31 | Complete in the repository | Platform update, NAS generation, agent A/B, rollout, CLI/web, and version-skew suites |
 | Workload contracts and trust | W1–W4 | Complete | Canonical locks, Git/TUF separation, promotion, artifact provenance, and supply-chain verification |
-| Spark package engine | W5–W10 | Complete | Agent/protocol suites, resumable acquisition, immutable environments, generic adapters, generations, rollback, and GC |
+| Spark package engine | W5–W8, W10 | Complete | Agent/protocol suites, resumable acquisition, immutable environments, generic adapter ABI, generations, rollback, and GC |
+| Backend execution capability | W9 | ABI and native backend complete; OCI/python-venv fail closed | Signed deployment policy propagation, ABI/capability/compatibility preflight, and explicit non-native rejection; OCI rootfs/runtime and Python interpreter helpers remain a separate privileged platform capability |
 | Workload control plane | W11–W16 | Complete | Alembic `0013_workload_packages`, discovery/resolution, validation, reconciliation, API/CLI/web, metrics |
 | Migration and acceptance | W17–W20 | Complete | Mia/DS4-compatible generic projection, unknown-family E2E, failure/scale/security matrix, operator runbooks |
 | Final hardening | Tasks 32–37 | Implemented locally; release-gated | Simulated evidence passes; physical/protected-host evidence remains external |
@@ -66,6 +67,14 @@ The reproducible workload acceptance report records zero SSH calls and zero
 checkpoint, or adapter release is therefore independent of the DGX-Forge
 platform release unless it requires a genuinely new privileged capability or
 ABI.
+
+W9 deliberately does not treat an enum value as an installed runtime. The
+current Spark helper executes the reviewed native backend and rejects OCI or
+python-venv requests before opening content or invoking a process. Adding an
+OCI rootfs/runtime boundary or an immutable Python interpreter boundary is a
+future DGX-Forge platform capability; once that capability is installed, new
+workload releases selecting it remain NAS-admin-driven and do not require a
+model-specific agent release.
 
 ## Ownership and overlap matrix
 
@@ -137,7 +146,10 @@ workload key cannot update the platform.
 
 Require an installed agent to fetch, materialize, validate, activate, health
 check, roll back, repair, and garbage-collect an unknown package through the
-generic ABI with resumable progress and no SSH.
+generic ABI with resumable progress and no SSH. The first-release capability
+set must be explicit: native workloads pass; OCI/python-venv workloads are
+rejected unless their reviewed privileged runtime capability and evidence are
+installed on the Spark.
 
 - [ ] **Gate 4: Complete W11–W16**
 

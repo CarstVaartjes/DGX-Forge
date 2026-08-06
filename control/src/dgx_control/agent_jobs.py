@@ -118,6 +118,7 @@ _SAFE_AUTOMATIC_RECLAIM = frozenset({
 _PACKAGE_CAPABILITIES = frozenset(
     {
         "package-abi-v1",
+        "package-backend-native-v1",
         AgentOperation.PACKAGE_PREPARE.value,
         AgentOperation.PACKAGE_ACTIVATE.value,
         AgentOperation.PACKAGE_HEALTH.value,
