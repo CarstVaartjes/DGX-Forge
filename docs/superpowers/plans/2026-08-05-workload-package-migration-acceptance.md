@@ -1,5 +1,11 @@
 # Workload Package Migration and Acceptance Implementation Plan
 
+> **Implementation status (2026-08-06): complete locally.** W17–W20 are
+> implemented on `main`, with generic Mia/DS4 projections, unknown-family E2E,
+> failure/scale/security acceptance, operator documentation, and release
+> evidence. Physical/protected-host release gates remain intentionally external;
+> see the [roadmap status ledger](2026-08-05-generalized-workload-package-roadmap.md#implementation-status-2026-08-06).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Migrate current Mia, DS4, and repository model state onto the generalized package path, prove an entirely unknown workload can be delivered without SSH or a DGX-Forge update, and make the result a first-release gate.

@@ -1,5 +1,11 @@
 # Spark Workload Package Engine Implementation Plan
 
+> **Implementation status (2026-08-06): complete.** W5–W10 are implemented on
+> `main`, including the generic operation ABI, durable store, resumable
+> acquisition, immutable environments, unprivileged adapters, atomic
+> generations, rollback, repair, and garbage collection. Verification results
+> are tracked in the [roadmap status ledger](2026-08-05-generalized-workload-package-roadmap.md#implementation-status-2026-08-06).
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Give every Spark one durable, resumable, content-addressed package engine that can materialize and run arbitrary signed workload releases through stable unprivileged backends.

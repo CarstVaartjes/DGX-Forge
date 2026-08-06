@@ -45,9 +45,27 @@ W17–W20 are specified in
 [`2026-08-05-workload-package-migration-acceptance.md`](2026-08-05-workload-package-migration-acceptance.md).
 
 The original roadmap therefore expands from 37 to 57 implementation tasks
-without renumbering the existing 37. At the integration point, Tasks 1–25 are
-complete and Tasks 26–37 plus W1–W20 remain: 25/57 complete (43.9%). Planning
-and design acceptance do not count as implementation completion.
+without renumbering the existing 37. The implementation and local acceptance
+work for all 57 tasks is now landed on `main`; the remaining release status is
+limited to the physical/protected-host evidence listed below. Planning and
+design acceptance are not counted as implementation completion.
+
+## Implementation status (2026-08-06)
+
+| Lane | Tasks | Current status | Evidence |
+| --- | --- | --- | --- |
+| Existing platform lane | Tasks 1–31 | Complete in the repository | Platform update, NAS generation, agent A/B, rollout, CLI/web, and version-skew suites |
+| Workload contracts and trust | W1–W4 | Complete | Canonical locks, Git/TUF separation, promotion, artifact provenance, and supply-chain verification |
+| Spark package engine | W5–W10 | Complete | Agent/protocol suites, resumable acquisition, immutable environments, generic adapters, generations, rollback, and GC |
+| Workload control plane | W11–W16 | Complete | Alembic `0013_workload_packages`, discovery/resolution, validation, reconciliation, API/CLI/web, metrics |
+| Migration and acceptance | W17–W20 | Complete | Mia/DS4-compatible generic projection, unknown-family E2E, failure/scale/security matrix, operator runbooks |
+| Final hardening | Tasks 32–37 | Implemented locally; release-gated | Simulated evidence passes; physical/protected-host evidence remains external |
+
+The reproducible workload acceptance report records zero SSH calls and zero
+`agent.update` calls. A new workload family, runtime, image, environment,
+checkpoint, or adapter release is therefore independent of the DGX-Forge
+platform release unless it requires a genuinely new privileged capability or
+ABI.
 
 ## Ownership and overlap matrix
 
@@ -96,6 +114,11 @@ and design acceptance do not count as implementation completion.
 | Unknown-family decisive E2E and first-release acceptance | W18–W20, Tasks 32–37 |
 
 ## Integration gates
+
+The per-step checkboxes in the linked implementation plans are retained as
+historical execution checklists. The status table above is the current
+implementation ledger. The gates below distinguish code completion from the
+external evidence required before a real release.
 
 - [ ] **Gate 1: Finish Tasks 26–31 and land through revision `0012_control_process_heartbeats`**
 
