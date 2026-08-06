@@ -58,7 +58,10 @@ class RepositoryService:
         if root.is_symlink() or not root.is_dir() or not (root / ".git").exists():
             raise RepositoryPolicyError("repository root is invalid")
         self._root = root.resolve()
-        if "\n" in str(self._root) or (self._root / ".git/objects").is_symlink() or not (self._root / ".git/objects").is_dir():
+        if "\n" in str(self._root):
+            raise RepositoryPolicyError("repository root is invalid")
+        self._object_store = self._resolve_object_store()
+        if self._object_store.is_symlink() or not self._object_store.is_dir():
             raise RepositoryPolicyError("repository object store is invalid")
         self._environment = os.environ | {
             "GIT_CONFIG_NOSYSTEM": "1",
@@ -71,7 +74,53 @@ class RepositoryService:
 
     @property
     def object_store(self) -> Path:
-        return self._root / ".git/objects"
+        return self._object_store
+
+    def _resolve_object_store(self) -> Path:
+        marker = self._root / ".git"
+        if marker.is_symlink():
+            raise RepositoryPolicyError("repository object store is invalid")
+        if marker.is_dir():
+            common_directory = marker
+        elif marker.is_file():
+            git_directory = self._read_git_path(marker, prefix="gitdir: ", relative_to=self._root)
+            if git_directory.is_symlink() or not git_directory.is_dir():
+                raise RepositoryPolicyError("repository object store is invalid")
+            back_reference = self._read_git_path(
+                git_directory / "gitdir", prefix="", relative_to=git_directory
+            )
+            if back_reference != marker.resolve():
+                raise RepositoryPolicyError("repository object store is invalid")
+            common_file = git_directory / "commondir"
+            common_directory = (
+                self._read_git_path(common_file, prefix="", relative_to=git_directory)
+                if common_file.is_file() and not common_file.is_symlink()
+                else git_directory
+            )
+            if common_directory.is_symlink() or not common_directory.is_dir():
+                raise RepositoryPolicyError("repository object store is invalid")
+        else:
+            raise RepositoryPolicyError("repository object store is invalid")
+        object_store = common_directory / "objects"
+        if object_store.is_symlink() or not object_store.is_dir():
+            raise RepositoryPolicyError("repository object store is invalid")
+        return object_store.resolve()
+
+    @staticmethod
+    def _read_git_path(path: Path, *, prefix: str, relative_to: Path) -> Path:
+        if path.is_symlink() or not path.is_file() or path.stat().st_size > 4096:
+            raise RepositoryPolicyError("repository object store is invalid")
+        try:
+            content = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError as error:
+            raise RepositoryPolicyError("repository object store is invalid") from error
+        line = content.rstrip("\r\n")
+        if not line.startswith(prefix) or not line.removeprefix(prefix) or "\n" in line or "\x00" in line:
+            raise RepositoryPolicyError("repository object store is invalid")
+        target = Path(line.removeprefix(prefix))
+        if not target.is_absolute():
+            target = relative_to / target
+        return target.resolve()
 
     def validate_path(self, path: str) -> str:
         return self._path(path)
