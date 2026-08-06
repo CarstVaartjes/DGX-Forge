@@ -294,6 +294,7 @@ installed and quality-verified, but deliberately remain `verified` rather than
 `accepted` until final performance, thermal, lifecycle and reboot gates run.
 Mia is the restored home runtime; no accepted profile may select DS4 yet. The
 next model-runtime phase is the remaining model catalog. Caddy, LiteLLM, the
-browser UI, and Tailscale remain
-deferred until the new external container host is available; none is required
-for initial local model testing.
+browser UI, and optional Tailscale ingress are implemented as separate,
+tested Compose services; their physical deployment remains deferred until the
+new external container host is available. None is required for initial local
+model testing.
