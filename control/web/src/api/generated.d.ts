@@ -243,6 +243,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/catalog/recipes/{recipe_id}/resolve-import": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve Imported */
+        post: operations["resolveSparkRunImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/changes": {
         parameters: {
             query?: never;
@@ -2172,6 +2189,15 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /** ResolveImportRequest */
+        ResolveImportRequest: {
+            /** Expected Revision */
+            expected_revision: number;
+            /** Overlays */
+            overlays: {
+                [key: string]: unknown;
+            };
+        };
         /** ResolveRecipeRequest */
         ResolveRecipeRequest: {
             /** Expected Revision */
@@ -3030,6 +3056,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+        };
+    };
+    resolveSparkRunImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recipe_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

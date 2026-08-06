@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from .catalog_repository import CatalogRepository, sensitive_document_path
-from .models import LocalRecipe, LocalRecipeRevision
+from .models import LocalRecipe, LocalRecipeRevision, RecipeImport, RecipeImportItem
 from .recipe_contract import (
     RecipeContractError,
     recipe_content_sha256,
@@ -248,6 +248,21 @@ class CatalogService:
                 raise CatalogConflict("catalog.stale_revision", "recipe revision changed")
             if latest.revision_number != expected_revision:
                 raise CatalogConflict("catalog.stale_revision", "recipe revision changed")
+            if recipe.source_kind == "sparkrun":
+                unresolved = session.scalar(
+                    select(RecipeImportItem.id)
+                    .join(RecipeImport, RecipeImport.id == RecipeImportItem.import_id)
+                    .where(
+                        RecipeImport.recipe_id == recipe_id,
+                        RecipeImportItem.disposition.in_(("resolution_required", "overlay_required", "unsupported_blocking")),
+                    )
+                    .limit(1)
+                )
+                if unresolved is not None:
+                    raise CatalogConflict(
+                        "catalog.import_unresolved",
+                        "import report must be resolved before this recipe can run",
+                    )
             clean = self._validated_document(latest.document, slug=recipe.slug)
             digest = recipe_content_sha256(clean)
             revision = LocalRecipeRevision(

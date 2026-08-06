@@ -95,6 +95,7 @@ _ADMIN_OPERATION_IDS = {
     ("post", "/api/v1/catalog/recipes/{recipe_id}/fork"): "forkLocalRecipe",
     ("post", "/api/v1/catalog/imports/sparkrun/preview"): "previewSparkRunImport",
     ("post", "/api/v1/catalog/imports/sparkrun"): "applySparkRunImport",
+    ("post", "/api/v1/catalog/recipes/{recipe_id}/resolve-import"): "resolveSparkRunImport",
 }
 _HTTP_METHODS = frozenset({"delete", "get", "patch", "post", "put"})
 BoundedIdentifier = Annotated[str, Field(min_length=1, max_length=128)]

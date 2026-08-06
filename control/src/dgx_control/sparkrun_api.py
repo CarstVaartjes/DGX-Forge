@@ -24,12 +24,15 @@ class PreviewRequest(StrictModel): source_yaml: str = Field(min_length=1, max_le
 class ApplyRequest(PreviewRequest):
     source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     report_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
+class ResolveImportRequest(StrictModel):
+    expected_revision: int = Field(ge=1, strict=True)
+    overlays: dict[str, object]
 
 
 def install_sparkrun_routes(app: FastAPI, *, actor_dependency: Any, audits: AuditSink, workflow: SparkRunWorkflow | None) -> None:
     authenticated = actor_dependency
     from .operation_api import _ADMIN_OPERATION_IDS
-    _ADMIN_OPERATION_IDS.update({("post", "/api/v1/catalog/imports/sparkrun/preview"): "previewSparkRunImport", ("post", "/api/v1/catalog/imports/sparkrun"): "applySparkRunImport"})
+    _ADMIN_OPERATION_IDS.update({("post", "/api/v1/catalog/imports/sparkrun/preview"): "previewSparkRunImport", ("post", "/api/v1/catalog/imports/sparkrun"): "applySparkRunImport", ("post", "/api/v1/catalog/recipes/{recipe_id}/resolve-import"): "resolveSparkRunImport"})
 
     def service() -> SparkRunWorkflow:
         if workflow is None: raise HTTPException(status_code=503, detail="SparkRun import unavailable")
@@ -54,4 +57,13 @@ def install_sparkrun_routes(app: FastAPI, *, actor_dependency: Any, audits: Audi
         except SparkRunWorkflowError as error: return problem(request, error.code, str(error), 409)
         except SparkRunParseError as error: return problem(request, "sparkrun.invalid_source", str(error), 422)
         audits.append(AuditRecord(request.state.request_id, actor.subject, "catalog.sparkrun.import", None, (result.import_id, result.recipe_id, result.source_sha256)))
+        return asdict(result)
+
+    @app.post("/api/v1/catalog/recipes/{recipe_id}/resolve-import", operation_id="resolveSparkRunImport")
+    def resolve_imported(body: ResolveImportRequest, request: Request, recipe_id: str, actor: Actor = authenticated):
+        admin(actor)
+        try: result = service().resolve(recipe_id, expected_revision=body.expected_revision, overlays=body.overlays, actor=actor.subject)
+        except KeyError: raise HTTPException(status_code=404, detail="recipe not found") from None
+        except SparkRunWorkflowError as error: return problem(request, error.code, str(error), 409 if error.code in {"catalog.stale_revision", "sparkrun.import_blocked"} else 503)
+        audits.append(AuditRecord(request.state.request_id, actor.subject, "catalog.sparkrun.resolve", None, (result.recipe_id, result.revision_id, result.content_sha256)))
         return asdict(result)

@@ -107,6 +107,8 @@ from .reconciliation_plan_request import ReconciliationPlanRequest
 from .reconciliation_plan_response import ReconciliationPlanResponse
 from .reconciliation_request import ReconciliationRequest
 from .reject_request import RejectRequest
+from .resolve_import_request import ResolveImportRequest
+from .resolve_import_request_overlays import ResolveImportRequestOverlays
 from .resolve_recipe_request import ResolveRecipeRequest
 from .submit_change_response_submit_change_api_v1_changes_post import SubmitChangeResponseSubmitChangeApiV1ChangesPost
 from .update_apply_request import UpdateApplyRequest
@@ -224,6 +226,8 @@ __all__ = (
     "ReconciliationPlanResponse",
     "ReconciliationRequest",
     "RejectRequest",
+    "ResolveImportRequest",
+    "ResolveImportRequestOverlays",
     "ResolveRecipeRequest",
     "SubmitChangeResponseSubmitChangeApiV1ChangesPost",
     "UpdateApplyRequest",

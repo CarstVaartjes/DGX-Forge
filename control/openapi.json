@@ -3891,6 +3891,27 @@
         "title": "RejectRequest",
         "type": "object"
       },
+      "ResolveImportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "overlays": {
+            "additionalProperties": true,
+            "title": "Overlays",
+            "type": "object"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "overlays"
+        ],
+        "title": "ResolveImportRequest",
+        "type": "object"
+      },
       "ResolveRecipeRequest": {
         "additionalProperties": false,
         "properties": {
@@ -5097,6 +5118,58 @@
           }
         ],
         "summary": "Resolve Recipe"
+      }
+    },
+    "/api/v1/catalog/recipes/{recipe_id}/resolve-import": {
+      "post": {
+        "operationId": "resolveSparkRunImport",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recipe_id",
+            "required": true,
+            "schema": {
+              "title": "Recipe Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Resolve Imported"
       }
     },
     "/api/v1/changes": {
