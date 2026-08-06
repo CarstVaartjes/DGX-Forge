@@ -61,9 +61,9 @@ def _insert_candidate(connection, *, candidate_id: str = "candidate-1") -> None:
 def test_w11_is_the_sole_linear_alembic_head() -> None:
     root = Path(__file__).resolve().parents[1]
     script = ScriptDirectory.from_config(_config("sqlite://"))
-    assert script.get_heads() == ["0016_recipe_deployment_authority"]
-    revision = script.get_revision("0016_recipe_deployment_authority")
-    assert revision.down_revision == "0015_recipe_catalog"
+    assert script.get_heads() == ["0017_admission_and_run_state"]
+    revision = script.get_revision("0017_admission_and_run_state")
+    assert revision.down_revision == "0016_recipe_deployment_authority"
     assert root.joinpath("migrations/versions/0013_workload_packages.py").exists()
     assert root.joinpath("migrations/versions/0014_package_action_plans.py").exists()
 

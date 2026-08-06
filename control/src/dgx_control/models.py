@@ -25,6 +25,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -1685,3 +1686,48 @@ class MaterializedDeploymentNode(Base):
     observed_memory_bytes: Mapped[int | None] = mapped_column(BigInteger)
     endpoint: Mapped[dict[str, object] | None] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class NodeInventorySnapshot(Base):
+    __tablename__ = "node_inventory_snapshots"
+    __table_args__ = (UniqueConstraint("node_id", "observed_at", name="uq_inventory_node_observed"), CheckConstraint("disk_total_bytes>=0 AND disk_free_bytes>=0 AND disk_free_bytes<=disk_total_bytes", name="ck_inventory_disk"), CheckConstraint("host_memory_total_bytes>=0 AND host_memory_free_bytes>=0 AND host_memory_free_bytes<=host_memory_total_bytes", name="ck_inventory_host_memory"), CheckConstraint("gpu_memory_total_bytes>=0 AND gpu_memory_free_bytes>=0 AND gpu_memory_free_bytes<=gpu_memory_total_bytes AND gpu_count>=0", name="ck_inventory_gpu_memory"), CheckConstraint(_lower_hex("evidence_digest", 64), name="ck_inventory_digest"), Index("ix_inventory_node_observed", "node_id", "observed_at"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    node_id: Mapped[str] = mapped_column(ForeignKey("agent_nodes.node_id", ondelete="CASCADE"), nullable=False)
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    disk_total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False); disk_free_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    host_memory_total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False); host_memory_free_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    gpu_memory_total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False); gpu_memory_free_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False); gpu_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    artifact_store_read_only: Mapped[bool] = mapped_column(Boolean, nullable=False); capabilities: Mapped[list[str]] = mapped_column(JSON, nullable=False); evidence_digest: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+
+
+class NodeArtifact(Base):
+    __tablename__ = "node_artifacts"
+    __table_args__ = (UniqueConstraint("node_id", "digest", name="uq_node_artifact_digest"), CheckConstraint("kind IN ('image','image-layer','model','auxiliary')", name="ck_node_artifacts_kind"), CheckConstraint("state IN ('partial','verified','missing','corrupt')", name="ck_node_artifacts_state"), CheckConstraint("size_bytes>=0 AND ref_count>=0", name="ck_node_artifacts_sizes"), CheckConstraint(_lower_hex("digest", 64), name="ck_node_artifacts_digest"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4())); node_id: Mapped[str] = mapped_column(ForeignKey("agent_nodes.node_id", ondelete="CASCADE"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(24), nullable=False); digest: Mapped[str] = mapped_column(String(64), nullable=False); source: Mapped[str] = mapped_column(Text, nullable=False); size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False); state: Mapped[str] = mapped_column(String(24), nullable=False); ref_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0"); verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True)); updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RecipeInstallation(Base):
+    __tablename__ = "recipe_installations"; __table_args__ = (CheckConstraint(_lower_hex("plan_digest", 64), name="ck_recipe_installations_digest"), CheckConstraint("state IN ('planned','installing','installed','partial','failed','uninstalled')", name="ck_recipe_installations_state"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4())); recipe_revision_id: Mapped[str] = mapped_column(ForeignKey("local_recipe_revisions.id", ondelete="RESTRICT"), nullable=False, index=True); plan_digest: Mapped[str] = mapped_column(String(64), nullable=False, unique=True); plan: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False); state: Mapped[str] = mapped_column(String(24), nullable=False); actor: Mapped[str] = mapped_column(String(200), nullable=False); created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False); updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class InstallationNode(Base):
+    __tablename__ = "installation_nodes"; __table_args__ = (UniqueConstraint("installation_id", "node_id", name="uq_installation_node"), CheckConstraint("required_bytes>=0 AND installed_bytes>=0", name="ck_installation_nodes_bytes"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4())); installation_id: Mapped[str] = mapped_column(ForeignKey("recipe_installations.id", ondelete="CASCADE"), nullable=False, index=True); node_id: Mapped[str] = mapped_column(ForeignKey("agent_nodes.node_id", ondelete="RESTRICT"), nullable=False, index=True); state: Mapped[str] = mapped_column(String(24), nullable=False); required_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False); installed_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0, server_default="0"); evidence_digest: Mapped[str | None] = mapped_column(String(64)); updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RecipeRun(Base):
+    __tablename__ = "recipe_runs"; __table_args__ = (CheckConstraint(_lower_hex("plan_digest", 64), name="ck_recipe_runs_digest"), CheckConstraint("state IN ('planned','starting','running','stopping','stopped','failed','lost')", name="ck_recipe_runs_state"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4())); installation_id: Mapped[str] = mapped_column(ForeignKey("recipe_installations.id", ondelete="RESTRICT"), nullable=False, index=True); alias: Mapped[str] = mapped_column(String(128), nullable=False); plan_digest: Mapped[str] = mapped_column(String(64), nullable=False, unique=True); plan: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False); state: Mapped[str] = mapped_column(String(24), nullable=False); actor: Mapped[str] = mapped_column(String(200), nullable=False); created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False); updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False); stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RunNode(Base):
+    __tablename__ = "run_nodes"; __table_args__ = (UniqueConstraint("run_id", "node_id", name="uq_run_node"), UniqueConstraint("run_id", "rank", name="uq_run_rank"), CheckConstraint("rank>=0 AND port BETWEEN 1024 AND 65535 AND reserved_memory_bytes>=0 AND (observed_memory_bytes IS NULL OR observed_memory_bytes>=0)", name="ck_run_nodes_resources"), CheckConstraint("role IN ('entrypoint','worker')", name="ck_run_nodes_role"))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4())); run_id: Mapped[str] = mapped_column(ForeignKey("recipe_runs.id", ondelete="CASCADE"), nullable=False, index=True); node_id: Mapped[str] = mapped_column(ForeignKey("agent_nodes.node_id", ondelete="RESTRICT"), nullable=False, index=True); rank: Mapped[int] = mapped_column(Integer, nullable=False); role: Mapped[str] = mapped_column(String(16), nullable=False); state: Mapped[str] = mapped_column(String(24), nullable=False); port: Mapped[int] = mapped_column(Integer, nullable=False); reserved_memory_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False); observed_memory_bytes: Mapped[int | None] = mapped_column(BigInteger); endpoint: Mapped[dict[str, object] | None] = mapped_column(JSON); evidence_digest: Mapped[str | None] = mapped_column(String(64)); updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ResourceReservation(Base):
+    __tablename__ = "resource_reservations"; __table_args__ = (CheckConstraint("kind IN ('disk','host-memory','gpu-memory','port')", name="ck_reservations_kind"), CheckConstraint("state IN ('active','released','expired') AND amount_bytes>=0", name="ck_reservations_state"), CheckConstraint(_lower_hex("plan_digest", 64), name="ck_reservations_digest"), Index("ix_reservations_node_state", "node_id", "state"), Index("uq_active_node_resource", "node_id", "kind", "resource_key", unique=True, postgresql_where=text("state='active'"), sqlite_where=text("state='active'")))
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4())); node_id: Mapped[str] = mapped_column(ForeignKey("agent_nodes.node_id", ondelete="RESTRICT"), nullable=False); kind: Mapped[str] = mapped_column(String(16), nullable=False); resource_key: Mapped[str] = mapped_column(String(128), nullable=False); amount_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False); owner_kind: Mapped[str] = mapped_column(String(24), nullable=False); owner_id: Mapped[str] = mapped_column(String(36), nullable=False); state: Mapped[str] = mapped_column(String(16), nullable=False); plan_digest: Mapped[str] = mapped_column(String(64), nullable=False); created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False); released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
