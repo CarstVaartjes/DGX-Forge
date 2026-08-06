@@ -1682,12 +1682,6 @@ def production_app() -> FastAPI:
         orchestrator=ReconciliationOrchestrator(sessions, clock=clock),
     )
     dashboard = DashboardService(repository, sessions)
-    package_services = ProductionPackageProjectionService(
-        repository,
-        sessions,
-        fleet=dashboard.fleet,
-        clock=clock,
-    )
     metrics = MetricsRegistry()
     operational_metrics = OperationalMetricsCollector(metrics, sessions, clock=clock)
     commit_eligible = lambda commit: git_policy.eligible(commit).ok
@@ -1698,6 +1692,13 @@ def production_app() -> FastAPI:
         clock,
         commit_eligible=commit_eligible,
         current_commit=current_commit,
+    )
+    package_services = ProductionPackageProjectionService(
+        repository,
+        sessions,
+        fleet=dashboard.fleet,
+        clock=clock,
+        agent_jobs=agent_services.operations,
     )
     if settings.admin_grant_private_key_path is None:
         raise RuntimeError("production admin grant private key is unavailable")

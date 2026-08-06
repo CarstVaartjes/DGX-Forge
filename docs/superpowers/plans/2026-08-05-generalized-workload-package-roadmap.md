@@ -53,9 +53,9 @@ without renumbering the existing 37. The implementation and local acceptance
 work for the original 57 task areas is landed on `main` for the installed capability
 set; Python virtual-environment execution now has a signed interpreter and
 environment-tree boundary, while OCI runc execution remains explicitly
-release-gated rather than silently treated as native. W21 remains pending until
-its inventory, capacity-envelope, safe-removal, and visual acceptance is
-landed. The remaining release status is limited to
+release-gated rather than silently treated as native. W21's inventory,
+capacity-envelope, safe-removal, and visual acceptance are landed locally; the
+remaining release status is limited to
 the physical/protected-host and capability evidence listed below. Planning and
 design acceptance are not counted as implementation completion.
 
@@ -67,9 +67,9 @@ design acceptance are not counted as implementation completion.
 | Workload contracts and trust | W1–W4 | Complete | Canonical locks, Git/TUF separation, promotion, artifact provenance, and supply-chain verification |
 | Spark package engine | W5–W8, W10 | Complete | Agent/protocol suites, resumable acquisition, immutable environments, generic adapter ABI, generations, rollback, and GC |
 | Backend execution capability | W9 | ABI/native/python-venv complete; OCI runc capability release-gated | Signed deployment policy propagation, immutable Python interpreter/environment-tree verification, and an OCI bundle/rootfs planner with a fixed-runc capability boundary |
-| Workload control plane | W11–W16 | Read/projection and UI complete; worker mutation injection remains release-gated | Alembic `0013_workload_packages`, Git/SQL projections, discovery/resolution, typed API/CLI/web, metrics; production mutators fail closed until signer/validation/rollout worker boundaries are injected |
+| Workload control plane | W11–W16 | Read/projection/UI and worker-owned removal/GC dispatch complete; release mutation remains trust-gated | Alembic `0014_package_action_plans`, Git/SQL projections, discovery/resolution, typed API/CLI/web, metrics, digest-bound removal/GC jobs; publication, validation, promotion, and rollout still require their signer/runner boundaries |
 | Migration and acceptance | W17–W20 | Complete | Mia/DS4-compatible generic projection, unknown-family E2E, failure/scale/security matrix, operator runbooks |
-| Operator experience | W21 | Implemented locally; acceptance evidence landed | Per-Spark inventory, resource-envelope/co-residency projections, guarded removal/GC, rollback identity, and polished responsive web UX; 53 web tests passed and build is green |
+| Operator experience | W21 | Implemented locally; acceptance evidence landed | Per-Spark inventory, resource-envelope/co-residency projections, digest-bound removal/GC dispatch, rollback identity, and polished responsive web UX; focused API/worker tests and web build are green |
 | Final hardening | Tasks 32–37 | Implemented locally; release-gated | Simulated evidence passes; physical/protected-host evidence remains external |
 
 The reproducible workload acceptance report records zero SSH calls and zero

@@ -1442,3 +1442,51 @@ class PackageObservation(Base):
         DateTime(timezone=True), nullable=False, index=True
     )
     expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class PackageActionPlan(Base):
+    """Durable preview/apply fence for package administration mutations.
+
+    The preview digest is the identity of the canonical request projection;
+    keeping that projection in PostgreSQL makes removal/GC and other plan-only
+    endpoints restart-safe without storing release bytes or credentials.
+    """
+
+    __tablename__ = "package_action_plans"
+    __table_args__ = (
+        CheckConstraint(
+            _lower_hex("plan_digest", 64),
+            name="ck_package_action_plans_plan_digest",
+        ),
+        CheckConstraint(
+            "action IN ('package.validate', 'package.promote', 'package.rollout', "
+            "'package.rollback', 'package.repair', 'package.remove', 'package.gc')",
+            name="ck_package_action_plans_action",
+        ),
+        CheckConstraint(
+            "state IN ('planned', 'applying', 'applied', 'expired', 'failed')",
+            name="ck_package_action_plans_state",
+        ),
+        CheckConstraint(
+            "length(subject) BETWEEN 1 AND 128",
+            name="ck_package_action_plans_subject_length",
+        ),
+        CheckConstraint(
+            "length(CAST(request AS TEXT)) BETWEEN 2 AND 65536",
+            name="ck_package_action_plans_request_size",
+        ),
+        CheckConstraint(
+            "result IS NULL OR length(CAST(result AS TEXT)) <= 16384",
+            name="ck_package_action_plans_result_size",
+        ),
+    )
+    plan_digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    action: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    subject: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    request: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    actor: Mapped[str | None] = mapped_column(String(200))
+    result: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

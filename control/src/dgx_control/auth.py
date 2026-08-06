@@ -81,6 +81,12 @@ MUTATION_ROLES = {
     ),
     ("POST", "/api/v1/packages/gc-preview"): frozenset({"administrator"}),
     ("POST", "/api/v1/packages/gc"): frozenset({"administrator"}),
+    ("POST", "/api/v1/packages/inventory/remove-preview"): frozenset(
+        {"operator", "administrator"}
+    ),
+    ("POST", "/api/v1/packages/inventory/remove"): frozenset(
+        {"operator", "administrator"}
+    ),
 }
 
 

@@ -3,9 +3,10 @@
 The package routes are intentionally thin.  This module is the production
 adapter that binds them to the existing Git repository and operational
 database; it does not add a second queue, reconciler, or trust root.  Read
-projections are available in the API process.  Mutations that require a
-durable workload signer/validation runner remain fail-closed until those
-existing worker-owned capabilities are supplied to this adapter.
+projections are available in the API process.  Removal and garbage collection
+are dispatched through the existing worker-owned agent-job boundary; release
+publication and validation remain trust-gated until their signer/runner is
+installed.
 """
 
 from __future__ import annotations
@@ -13,10 +14,12 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
+import uuid
 from collections.abc import Callable, Mapping
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+from dgx_agent_protocol import AgentOperation, canonical_message
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -24,7 +27,9 @@ from spark_profiles.workload_packages import PackageFamily, WorkloadDeployment
 
 from .models import (
     AgentNode,
+    Job,
     Observation,
+    PackageActionPlan,
     PackageCandidate,
     PackageObservation,
     PackageResolution,
@@ -32,6 +37,7 @@ from .models import (
     PackageRolloutNode,
     PackageValidationRun,
 )
+from .package_rollouts import package_operation_payload
 
 
 def _digest(value: object) -> str:
@@ -42,7 +48,9 @@ def _digest(value: object) -> str:
 
 def _raw_digest(value: object) -> str | None:
     if isinstance(value, str):
-        return value.removeprefix("sha256:")
+        raw = value.removeprefix("sha256:")
+        if len(raw) == 64 and all(character in "0123456789abcdef" for character in raw):
+            return raw
     return None
 
 
@@ -73,9 +81,9 @@ class ProductionPackageProjectionService:
 
     ``repository`` is the same immutable ``RepositoryService`` used by
     desired-state reconciliation.  ``sessions`` is the existing control DB
-    session factory.  The service deliberately does not create an alternate
-    worker or transport: mutating methods fail closed unless a future caller
-    injects the corresponding worker-owned operation boundaries.
+    session factory.  Mutations are submitted through the existing
+    worker-owned agent-job boundary; no alternate queue or transport is
+    created here.
     """
 
     def __init__(
@@ -85,6 +93,7 @@ class ProductionPackageProjectionService:
         *,
         fleet: Callable[[], Mapping[str, object]] | None = None,
         clock: Callable[[], datetime] | None = None,
+        agent_jobs: Any | None = None,
     ) -> None:
         if not callable(getattr(repository, "head", None)):
             raise TypeError("package repository is required")
@@ -92,8 +101,266 @@ class ProductionPackageProjectionService:
         self._sessions = sessions
         self._fleet = fleet or (lambda: {"nodes": []})
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._agent_jobs = agent_jobs
         self._idempotency_lock = threading.RLock()
         self._idempotent: dict[tuple[object, ...], Mapping[str, object]] = {}
+
+    def create_action_plan(
+        self,
+        action: str,
+        subject: str,
+        request: Mapping[str, object],
+        *,
+        actor: str | None = None,
+        ttl: timedelta = timedelta(minutes=15),
+    ) -> str:
+        """Persist and return the exact digest for one preview projection."""
+        if action not in {
+            "package.validate",
+            "package.promote",
+            "package.rollout",
+            "package.rollback",
+            "package.repair",
+            "package.remove",
+            "package.gc",
+        }:
+            raise ValueError("package action is invalid")
+        if not isinstance(subject, str) or not subject or len(subject) > 128:
+            raise ValueError("package action subject is invalid")
+        if not isinstance(request, Mapping):
+            raise TypeError("package action request is invalid")
+        canonical = {"action": action, "subject": subject, "request": dict(request)}
+        encoded = json.dumps(
+            canonical,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ).encode("utf-8")
+        if not 2 <= len(encoded) <= 65_536:
+            raise ValueError("package action request is too large")
+        digest = hashlib.sha256(encoded).hexdigest()
+        now = self._clock()
+        expires_at = now + ttl
+        if ttl <= timedelta(0) or ttl > timedelta(hours=1):
+            raise ValueError("package action plan TTL is invalid")
+        with self._sessions.begin() as session:
+            existing = session.get(PackageActionPlan, digest)
+            if existing is None:
+                session.add(
+                    PackageActionPlan(
+                        plan_digest=digest,
+                        action=action,
+                        subject=subject,
+                        request=dict(request),
+                        state="planned",
+                        actor=actor,
+                        expires_at=expires_at,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+            elif (
+                existing.action != action
+                or existing.subject != subject
+                or existing.request != dict(request)
+            ):
+                raise ValueError("package action digest collision")
+        return "sha256:" + digest
+
+    def consume_action_plan(
+        self, digest: str, action: str, subject: str | None = None
+    ) -> Mapping[str, object]:
+        """Atomically fence an exact preview for an apply operation."""
+        raw_digest = _raw_digest(digest)
+        if raw_digest is None:
+            raise ValueError("package action digest is invalid")
+        now = self._clock()
+        with self._sessions.begin() as session:
+            plan = session.scalar(
+                select(PackageActionPlan)
+                .where(PackageActionPlan.plan_digest == raw_digest)
+                .with_for_update()
+            )
+            if plan is None:
+                raise KeyError(digest)
+            if plan.action != action or (subject is not None and plan.subject != subject):
+                raise ValueError("package action plan action or subject changed")
+            expires_at = plan.expires_at
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=UTC)
+            if expires_at <= now and plan.state not in {"applied", "failed"}:
+                plan.state = "expired"
+                plan.updated_at = now
+                raise KeyError(digest)
+            if plan.state in {"planned", "applying"}:
+                plan.state = "applying"
+                plan.updated_at = now
+            elif plan.state == "applied":
+                return dict(plan.request)
+            else:
+                raise ValueError("package action plan is no longer applicable")
+            return dict(plan.request)
+
+    def _action_plan(self, digest: str, action: str) -> PackageActionPlan:
+        raw_digest = _raw_digest(digest)
+        if raw_digest is None:
+            raise ValueError("package action digest is invalid")
+        with self._sessions() as session:
+            plan = session.get(PackageActionPlan, raw_digest)
+            if plan is None or plan.action != action:
+                raise KeyError(digest)
+            return plan
+
+    def _queue_package_operations(
+        self,
+        *,
+        action: str,
+        plan_digest: str,
+        request: Mapping[str, object],
+        actor: str,
+        request_id: str,
+    ) -> Mapping[str, object]:
+        """Create one fenced parent job and typed outbound operations."""
+        if self._agent_jobs is None:
+            raise RuntimeError("package worker operation service is not installed")
+        node_ids = request.get("node_ids")
+        if not isinstance(node_ids, list) or not node_ids or any(
+            not isinstance(node_id, str) for node_id in node_ids
+        ):
+            raise ValueError("package action node set is invalid")
+        base_commit = self._repository.head()
+        now = self._clock()
+        job_id = str(uuid.uuid4())
+        targets = tuple(sorted(set(node_ids)))
+        payload = {
+            "schema_version": 1,
+            "action": action,
+            "plan_digest": _raw_digest(plan_digest),
+            "request": dict(request),
+        }
+        deployment = None
+        if action == "package.remove":
+            deployment_id = request.get("deployment_id")
+            release_digest = request.get("release_digest")
+            if not isinstance(deployment_id, str) or not isinstance(release_digest, str):
+                raise ValueError("package removal identity is invalid")
+            deployment = self._deployment_for_release(deployment_id, release_digest)
+        with self._sessions.begin() as session:
+            session.add(
+                Job(
+                    id=job_id,
+                    request_id=request_id,
+                    kind=action,
+                    state="running",
+                    actor=actor,
+                    base_commit=base_commit,
+                    targets=list(targets),
+                    payload_digest=hashlib.sha256(canonical_message(payload)).hexdigest(),
+                    payload=payload,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            for node_id in targets:
+                if action == "package.remove":
+                    assert deployment is not None
+                    operation_payload = package_operation_payload(
+                        deployment, AgentOperation.PACKAGE_REMOVE.value
+                    )
+                    operation = AgentOperation.PACKAGE_REMOVE.value
+                elif action == "package.gc":
+                    targets_by_node = request.get("target_bytes_by_node")
+                    target_bytes = (
+                        targets_by_node.get(node_id, 0)
+                        if isinstance(targets_by_node, Mapping)
+                        else request.get("target_bytes", 0)
+                    )
+                    if not isinstance(target_bytes, int) or target_bytes < 0:
+                        raise ValueError("package GC target is invalid")
+                    if target_bytes < 1:
+                        continue
+                    operation_payload = {
+                        "schema_version": 1,
+                        "dry_run": False,
+                        "target_bytes": target_bytes,
+                    }
+                    operation = AgentOperation.PACKAGE_GC.value
+                else:
+                    raise ValueError("package action dispatch is unsupported")
+                self._agent_jobs.enqueue_in_session(
+                    session,
+                    job_id,
+                    node_id,
+                    operation,
+                    base_commit,
+                    operation_payload,
+                    operation_id=str(uuid.uuid4()),
+                )
+        self._agent_jobs.notify_available()
+        return {
+            "id": job_id,
+            "state": "planned",
+            "plan_digest": plan_digest,
+            "progress": {
+                "completed": 0,
+                "failed": 0,
+                "running": 0,
+                "total": len(targets),
+            },
+            "nodes": [
+                {
+                    "node_id": node_id,
+                    "state": "queued",
+                    "batch_index": 0,
+                    "completed": 0,
+                    "total": 1,
+                }
+                for node_id in targets
+            ],
+            "failure": None,
+            "job_id": job_id,
+            "audit_request_id": request_id,
+            "rollback_rollout_id": None,
+            "rollback_selector": None,
+        }
+
+    def _deployment_for_release(
+        self, deployment_id: str, release_digest: str
+    ) -> WorkloadDeployment:
+        snapshot = self._snapshot()
+        path = f"config/workload-deployments/{deployment_id}.toml"
+        document = self._repository.read_document(snapshot.commit, path)
+        if not isinstance(document.parsed, Mapping):
+            raise TypeError("workload deployment document is invalid")
+        deployment = WorkloadDeployment.load(document.parsed)
+        target = _raw_digest(release_digest)
+        if target is None:
+            raise ValueError("package release digest is invalid")
+        if deployment.release_digest == target:
+            return deployment
+        updated = dict(json.loads(deployment.canonical_bytes))
+        updated["release_digest"] = target
+        return WorkloadDeployment.load(updated)
+
+    def finish_action_plan(
+        self,
+        digest: str,
+        *,
+        result: Mapping[str, object],
+        failed: bool = False,
+    ) -> None:
+        raw_digest = _raw_digest(digest)
+        if raw_digest is None:
+            raise ValueError("package action digest is invalid")
+        now = self._clock()
+        with self._sessions.begin() as session:
+            plan = session.get(PackageActionPlan, raw_digest)
+            if plan is None:
+                raise KeyError(digest)
+            plan.state = "failed" if failed else "applied"
+            plan.result = dict(result)
+            plan.updated_at = now
 
     # ---- Git-backed definitions -------------------------------------------------
 
@@ -549,9 +816,16 @@ class ProductionPackageProjectionService:
                     "blocked_reason": blocked,
                 }
             )
-        digest = "sha256:" + _digest(
-            {"deployment_id": deployment_id, "release_digest": release_digest, "nodes": rows}
-        )
+        normalized_release = _raw_digest(release_digest)
+        if normalized_release is None:
+            raise ValueError("package release digest is invalid")
+        request = {
+            "deployment_id": deployment_id,
+            "release_digest": normalized_release,
+            "node_ids": sorted(wanted),
+            "inventory_digest": _digest(rows),
+        }
+        digest = self.create_action_plan("package.remove", deployment_id, request)
         return {
             "digest": digest,
             "state": "blocked" if any(item["blocked_reason"] for item in rows) else "ready",
@@ -561,6 +835,121 @@ class ProductionPackageProjectionService:
             "reclaimable_bytes": sum(int(item["reclaimable_bytes"]) for item in rows),
             "blocked_nodes": [item["node_id"] for item in rows if item["blocked_reason"]],
         }
+
+    def _progress_replay(self, digest: str, action: str) -> Mapping[str, object] | None:
+        plan = self._action_plan(digest, action)
+        if plan.state == "applied" and isinstance(plan.result, Mapping):
+            return dict(plan.result)
+        return None
+
+    def remove(
+        self, plan_digest: str, actor: str, request_id: str
+    ) -> Mapping[str, object]:
+        replay = self._progress_replay(plan_digest, "package.remove")
+        if replay is not None:
+            return replay
+        request = self.consume_action_plan(plan_digest, "package.remove")
+        deployment_id = request.get("deployment_id")
+        release_digest = request.get("release_digest")
+        node_ids = request.get("node_ids")
+        if (
+            not isinstance(deployment_id, str)
+            or not isinstance(release_digest, str)
+            or not isinstance(node_ids, list)
+            or any(not isinstance(node_id, str) for node_id in node_ids)
+        ):
+            raise ValueError("package removal plan is invalid")
+        preview = self.removal_preview(
+            deployment_id, "sha256:" + release_digest, tuple(node_ids)
+        )
+        if preview.get("digest") != plan_digest or preview.get("state") == "blocked":
+            result = {
+                "id": str(uuid.uuid4()),
+                "state": "failed",
+                "plan_digest": plan_digest,
+                "progress": {"completed": 0, "failed": 1, "running": 0, "total": len(node_ids)},
+                "failure": "package removal preview is stale or blocked",
+                "job_id": None,
+                "audit_request_id": request_id,
+                "nodes": [],
+                "rollback_rollout_id": None,
+                "rollback_selector": None,
+            }
+            self.finish_action_plan(plan_digest, result=result, failed=True)
+            raise ValueError("package removal preview is stale or blocked")
+        result = self._queue_package_operations(
+            action="package.remove",
+            plan_digest=plan_digest,
+            request=request,
+            actor=actor,
+            request_id=request_id,
+        )
+        self.finish_action_plan(plan_digest, result=result)
+        return result
+
+    def gc_preview(self) -> Mapping[str, object]:
+        inventory = self.inventory(None, None, None, 512)
+        node_targets: dict[str, int] = {}
+        for node in inventory.get("nodes", []):
+            if not isinstance(node, Mapping) or not node.get("online"):
+                continue
+            storage = node.get("storage")
+            if not isinstance(storage, Mapping):
+                continue
+            reclaimable = storage.get("reclaimable_bytes", 0)
+            if isinstance(reclaimable, int) and reclaimable > 0:
+                node_id = node.get("node_id")
+                if isinstance(node_id, str):
+                    node_targets[node_id] = reclaimable
+        request = {
+            "node_ids": sorted(node_targets),
+            "target_bytes_by_node": node_targets,
+            "target_bytes": sum(node_targets.values()),
+        }
+        digest = self.create_action_plan("package.gc", "cluster", request)
+        return {
+            "digest": digest,
+            "state": "ready" if node_targets else "empty",
+            "storage_bytes": request["target_bytes"],
+            "download_bytes": 0,
+            "reclaim_bytes": request["target_bytes"],
+        }
+
+    def gc(self, plan_digest: str, actor: str, request_id: str) -> Mapping[str, object]:
+        replay = self._progress_replay(plan_digest, "package.gc")
+        if replay is not None:
+            return replay
+        request = self.consume_action_plan(plan_digest, "package.gc")
+        node_ids = request.get("node_ids")
+        target_bytes = request.get("target_bytes", 0)
+        if not isinstance(node_ids, list) or any(not isinstance(item, str) for item in node_ids):
+            raise ValueError("package GC plan is invalid")
+        if not isinstance(target_bytes, int) or target_bytes < 0:
+            raise ValueError("package GC target is invalid")
+        if not node_ids or target_bytes == 0:
+            result = {
+                "id": str(uuid.uuid4()),
+                "state": "succeeded",
+                "plan_digest": plan_digest,
+                "progress": {"completed": 0, "failed": 0, "running": 0, "total": 0},
+                "failure": None,
+                "job_id": None,
+                "audit_request_id": request_id,
+                "nodes": [],
+                "rollback_rollout_id": None,
+                "rollback_selector": None,
+            }
+            self.finish_action_plan(plan_digest, result=result)
+            return result
+        result = self._queue_package_operations(
+            action="package.gc",
+            plan_digest=plan_digest,
+            request=request,
+            actor=actor,
+            request_id=request_id,
+        )
+        self.finish_action_plan(plan_digest, result=result)
+        return result
 
     # ---- Explicitly fail-closed mutation boundary ------------------------------
 
@@ -578,9 +967,6 @@ class ProductionPackageProjectionService:
     rollback = _mutation_unavailable
     repair_preview = _mutation_unavailable
     repair = _mutation_unavailable
-    gc_preview = _mutation_unavailable
-    gc = _mutation_unavailable
-    remove = _mutation_unavailable
 
     def idempotency(
         self,

@@ -359,10 +359,10 @@ def test_0009_is_the_sole_linear_head() -> None:
     scripts = ScriptDirectory.from_config(config)
     heads = scripts.get_heads()
 
-    assert heads == ["0013_workload_packages"]
+    assert heads == ["0014_package_action_plans"]
     revision = ScriptDirectory.from_config(config).get_revision(heads[0])
     assert revision is not None
-    assert revision.down_revision == "0012_control_process_heartbeats"
+    assert revision.down_revision == "0013_workload_packages"
     assert [item.revision for item in reversed(tuple(scripts.walk_revisions()))] == [
         "0001_operational_state",
         "0002_agent_operations",
@@ -375,9 +375,10 @@ def test_0009_is_the_sole_linear_head() -> None:
         "0009_reconciliation_execution",
         "0010_agent_runtime_identity",
         "0011_update_rollouts",
-        "0012_control_process_heartbeats",
-        "0013_workload_packages",
-    ]
+            "0012_control_process_heartbeats",
+            "0013_workload_packages",
+            "0014_package_action_plans",
+        ]
 
 
 def test_execution_models_expose_durable_links_and_bounded_fields() -> None:

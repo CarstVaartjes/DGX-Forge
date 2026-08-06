@@ -61,10 +61,11 @@ def _insert_candidate(connection, *, candidate_id: str = "candidate-1") -> None:
 def test_w11_is_the_sole_linear_alembic_head() -> None:
     root = Path(__file__).resolve().parents[1]
     script = ScriptDirectory.from_config(_config("sqlite://"))
-    assert script.get_heads() == ["0013_workload_packages"]
-    revision = script.get_revision("0013_workload_packages")
-    assert revision.down_revision == "0012_control_process_heartbeats"
+    assert script.get_heads() == ["0014_package_action_plans"]
+    revision = script.get_revision("0014_package_action_plans")
+    assert revision.down_revision == "0013_workload_packages"
     assert root.joinpath("migrations/versions/0013_workload_packages.py").exists()
+    assert root.joinpath("migrations/versions/0014_package_action_plans.py").exists()
 
 
 def test_workload_tables_upgrade_and_downgrade_as_one_boundary(tmp_path: Path) -> None:

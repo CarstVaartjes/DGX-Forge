@@ -1,9 +1,12 @@
 # Workload Package Control Plane Implementation Plan
 
-> **Implementation status (2026-08-06): complete.** W11–W16 are implemented on
-> `main`, including migration `0013_workload_packages`, discovery/resolution,
-> validation and promotion, digest-driven reconciliation, API/CLI parity, web
-> administration, and bounded metrics. See the [roadmap status ledger](2026-08-05-generalized-workload-package-roadmap.md#implementation-status-2026-08-06).
+> **Implementation status (2026-08-06): core surfaces complete.** W11–W16 are
+> implemented on `main`, including migration `0014_package_action_plans`,
+> discovery/resolution, API/CLI parity, web administration, bounded metrics,
+> and digest-bound removal/GC dispatch through the existing agent-job queue.
+> Release publication, validation, promotion, and rollout remain explicitly
+> trust/worker-gated until their signer and runner boundaries are installed. See
+> the [roadmap status ledger](2026-08-05-generalized-workload-package-roadmap.md#implementation-status-2026-08-06).
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
