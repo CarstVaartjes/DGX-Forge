@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from types import MappingProxyType
 
+from dgx_agent_protocol import AgentProtocolError, PackageReleaseLock
+
 from .workload_trust import TrustedWorkloadTarget, WorkloadTrustError
 
 
@@ -68,6 +70,15 @@ def _now(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
     return value.astimezone(UTC)
+
+
+def _validate_resource_envelope(lock: bytes) -> None:
+    try:
+        parsed = PackageReleaseLock.parse(lock)
+    except (AgentProtocolError, ValueError, TypeError) as error:
+        raise PublicationError("candidate release lock is invalid") from error
+    if parsed.resource_envelope is None:
+        raise PublicationError("candidate resource envelope is missing")
 
 
 @dataclass(frozen=True)
@@ -191,6 +202,7 @@ class PackagePublicationService:
             raise PublicationError("workload Git commit is invalid")
         candidate = self._candidate(candidate_id)
         lock = _lock_bytes(candidate)
+        _validate_resource_envelope(lock)
         release_digest = hashlib.sha256(lock).hexdigest()
         candidate_digest = _get(candidate, "release_digest")
         if isinstance(candidate_digest, str) and candidate_digest != release_digest:
@@ -272,6 +284,7 @@ class PackagePublicationService:
         lock = _lock_bytes(candidate)
         if hashlib.sha256(lock).hexdigest() != preview.release_digest or lock != preview.lock_bytes:
             raise PublicationError("candidate lock bytes changed")
+        _validate_resource_envelope(lock)
         if self._head() != preview.base_commit:
             raise PublicationError("publication preview is stale")
         if not self._commit_eligible(preview.base_commit):

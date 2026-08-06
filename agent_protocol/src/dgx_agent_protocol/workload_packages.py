@@ -770,6 +770,110 @@ def _parse_resolver(value: Any) -> Mapping[str, object]:
     )
 
 
+_RESOURCE_FIELDS = (
+    "download_bytes",
+    "installed_bytes",
+    "transient_bytes",
+    "output_bytes",
+    "host_memory_bytes",
+    "gpu_memory_bytes",
+    "kv_cache_base_bytes",
+    "kv_cache_per_token_bytes",
+)
+
+
+def _parse_resource_envelope(value: Any) -> Mapping[str, object]:
+    envelope = _mapping(value, name="resource_envelope")
+    _exact_fields(
+        envelope,
+        required={
+            "schema_version",
+            "per_node",
+            "aggregate",
+            "required_sparks",
+            "topology",
+            "measurement",
+            "evidence",
+        },
+        name="resource_envelope",
+    )
+    if envelope["schema_version"] != 1 or isinstance(
+        envelope["schema_version"], bool
+    ):
+        raise AgentProtocolError("resource_envelope schema_version is invalid")
+    required_sparks = _positive_integer(
+        envelope["required_sparks"],
+        name="resource_envelope required_sparks",
+        maximum=512,
+    )
+    topology = envelope["topology"]
+    if topology not in {"single", "replicated", "gang"}:
+        raise AgentProtocolError("resource_envelope topology is invalid")
+    if topology == "single" and required_sparks != 1:
+        raise AgentProtocolError("single resource_envelope requires one Spark")
+    if topology == "gang" and required_sparks < 2:
+        raise AgentProtocolError("gang resource_envelope requires multiple Sparks")
+    measurement = envelope["measurement"]
+    if measurement not in {"declared", "measured"}:
+        raise AgentProtocolError("resource_envelope measurement is invalid")
+
+    def parse_values(raw: Any, *, name: str) -> dict[str, int]:
+        values = _mapping(raw, name=name)
+        missing = set(_RESOURCE_FIELDS) - set(values)
+        unknown = set(values) - set(_RESOURCE_FIELDS)
+        if missing:
+            raise AgentProtocolError(
+                f"{name} missing fields: {', '.join(sorted(missing))}"
+            )
+        if unknown:
+            raise AgentProtocolError(
+                f"{name} unknown fields: {', '.join(sorted(unknown))}"
+            )
+        result: dict[str, int] = {}
+        for field in _RESOURCE_FIELDS:
+            value = values[field]
+            if (
+                not isinstance(value, int)
+                or isinstance(value, bool)
+                or value < 0
+                or value > MAX_COMPONENT_SIZE
+            ):
+                raise AgentProtocolError(f"{name} {field} must be bounded")
+            result[field] = value
+        return result
+
+    per_node = parse_values(envelope["per_node"], name="resource_envelope per_node")
+    aggregate = parse_values(
+        envelope["aggregate"], name="resource_envelope aggregate"
+    )
+    for field in _RESOURCE_FIELDS:
+        minimum = per_node[field] * required_sparks
+        if aggregate[field] < minimum:
+            raise AgentProtocolError(
+                f"resource_envelope aggregate {field} is below per-node total"
+            )
+    evidence = tuple(
+        _parse_evidence(item, name="resource_envelope evidence")
+        for item in _sequence(
+            envelope["evidence"],
+            name="resource_envelope evidence",
+            minimum=1,
+            maximum=MAX_EVIDENCE,
+        )
+    )
+    return _freeze(
+        {
+            "schema_version": 1,
+            "per_node": per_node,
+            "aggregate": aggregate,
+            "required_sparks": required_sparks,
+            "topology": topology,
+            "measurement": measurement,
+            "evidence": evidence,
+        }
+    )
+
+
 class PackageHelperOperation(StrEnum):
     """Closed workload-only operation vocabulary accepted by the root helper."""
 
@@ -1075,10 +1179,27 @@ class PackageReleaseLock:
     validation: tuple[Mapping[str, object], ...]
     provenance: tuple[Mapping[str, object], ...]
     resolver: Mapping[str, object]
+    resource_envelope: Mapping[str, object] | None = None
 
     @property
     def canonical_bytes(self) -> bytes:
-        return canonical_message(self)
+        document: dict[str, object] = {
+            "schema_version": self.schema_version,
+            "family_id": self.family_id,
+            "upstream_version": self.upstream_version,
+            "upstream_identity": self.upstream_identity,
+            "components": self.components,
+            "dependency_digests": self.dependency_digests,
+            "adapter": self.adapter,
+            "adapter_abi": self.adapter_abi,
+            "compatibility": self.compatibility,
+            "validation": self.validation,
+            "provenance": self.provenance,
+            "resolver": self.resolver,
+        }
+        if self.resource_envelope is not None:
+            document["resource_envelope"] = self.resource_envelope
+        return canonical_message(document)
 
     @property
     def digest(self) -> str:
@@ -1101,7 +1222,12 @@ class PackageReleaseLock:
             "provenance",
             "resolver",
         }
-        _exact_fields(document, required=required, name="workload release lock")
+        _exact_fields(
+            document,
+            required=required,
+            optional={"resource_envelope"},
+            name="workload release lock",
+        )
         if document["schema_version"] != 1 or isinstance(
             document["schema_version"], bool
         ):
@@ -1166,6 +1292,11 @@ class PackageReleaseLock:
             validation=validation,
             provenance=provenance,
             resolver=_parse_resolver(document["resolver"]),
+            resource_envelope=(
+                _parse_resource_envelope(document["resource_envelope"])
+                if "resource_envelope" in document
+                else None
+            ),
         )
         if len(lock.canonical_bytes) > MAX_RELEASE_LOCK_BYTES:
             raise AgentProtocolError("workload release lock is too large")

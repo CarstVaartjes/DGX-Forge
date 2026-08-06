@@ -83,6 +83,28 @@ def lock_document(
     }
 
 
+def resource_envelope() -> dict[str, object]:
+    fields = {
+        "download_bytes": 4096,
+        "installed_bytes": 8192,
+        "transient_bytes": 1024,
+        "output_bytes": 2048,
+        "host_memory_bytes": 16 * 1024**3,
+        "gpu_memory_bytes": 12 * 1024**3,
+        "kv_cache_base_bytes": 1024,
+        "kv_cache_per_token_bytes": 4096,
+    }
+    return {
+        "schema_version": 1,
+        "per_node": fields,
+        "aggregate": {key: value * 2 for key, value in fields.items()},
+        "required_sparks": 2,
+        "topology": "gang",
+        "measurement": "declared",
+        "evidence": [{"kind": "capacity", "digest": "sha256:" + SHA_C}],
+    }
+
+
 def reversed_maps(value: object) -> object:
     if isinstance(value, dict):
         return {
@@ -101,6 +123,36 @@ def test_release_lock_digest_is_stable_for_reordered_maps() -> None:
     assert reordered.digest == original.digest
     assert original.compatibility["minimum_memory_bytes"] == 4096
     assert hashlib.sha256(original.canonical_bytes).hexdigest() == original.digest
+
+
+def test_release_lock_parses_signed_resource_envelope() -> None:
+    document = lock_document()
+    document["resource_envelope"] = resource_envelope()
+
+    lock = PackageReleaseLock.parse(document)
+
+    assert lock.resource_envelope is not None
+    assert lock.resource_envelope["required_sparks"] == 2
+    assert lock.resource_envelope["per_node"]["kv_cache_per_token_bytes"] == 4096
+
+
+@pytest.mark.parametrize(
+    "mutate, message",
+    [
+        (lambda envelope: envelope["per_node"].pop("host_memory_bytes"), "host_memory"),
+        (lambda envelope: envelope["per_node"].update({"download_bytes": -1}), "download"),
+        (lambda envelope: envelope.update({"measurement": "unknown"}), "measurement"),
+        (lambda envelope: envelope.update({"aggregate": {**envelope["aggregate"], "installed_bytes": 1}}), "aggregate"),
+    ],
+)
+def test_release_lock_rejects_unbounded_resource_envelope(mutate, message: str) -> None:
+    document = lock_document()
+    envelope = resource_envelope()
+    mutate(envelope)
+    document["resource_envelope"] = envelope
+
+    with pytest.raises(AgentProtocolError, match=message):
+        PackageReleaseLock.parse(document)
 
 
 def test_release_lock_accepts_signed_python_runtime_metadata() -> None:

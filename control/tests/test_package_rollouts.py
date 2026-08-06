@@ -92,6 +92,33 @@ def _lock() -> PackageReleaseLock:
             "validation": [],
             "provenance": [],
             "resolver": {"name": "resolver", "version": 1},
+            "resource_envelope": {
+                "schema_version": 1,
+                "per_node": {
+                    "download_bytes": 1,
+                    "installed_bytes": 1,
+                    "transient_bytes": 1,
+                    "output_bytes": 0,
+                    "host_memory_bytes": 1,
+                    "gpu_memory_bytes": 1,
+                    "kv_cache_base_bytes": 0,
+                    "kv_cache_per_token_bytes": 0,
+                },
+                "aggregate": {
+                    "download_bytes": 1,
+                    "installed_bytes": 1,
+                    "transient_bytes": 1,
+                    "output_bytes": 0,
+                    "host_memory_bytes": 1,
+                    "gpu_memory_bytes": 1,
+                    "kv_cache_base_bytes": 0,
+                    "kv_cache_per_token_bytes": 0,
+                },
+                "required_sparks": 1,
+                "topology": "single",
+                "measurement": "declared",
+                "evidence": [{"kind": "capacity", "digest": "sha256:" + "2" * 64}],
+            },
         }
     )
 
@@ -104,15 +131,21 @@ class _Document:
 
 
 class _Repository:
-    def __init__(self, deployment: dict[str, object], lock: PackageReleaseLock):
+    def __init__(
+        self,
+        deployment: dict[str, object],
+        lock: PackageReleaseLock,
+        raw_lock: bytes | None = None,
+    ):
         self.deployment = deployment
         self.lock = lock
+        self.raw_lock = raw_lock
 
     def read_document(self, commit: str, path: str) -> _Document:
         if path.startswith("config/workload-deployments/"):
             raw = json.dumps(self.deployment, sort_keys=True).encode()
         else:
-            raw = self.lock.canonical_bytes
+            raw = self.raw_lock or self.lock.canonical_bytes
         parsed = json.loads(raw)
         return _Document(parsed, raw, hashlib.sha256(raw).hexdigest())
 
@@ -162,6 +195,24 @@ def test_unknown_family_resolves_without_static_adapter_catalog() -> None:
         payload["release_digest"] == lock.digest
         for payload in plan.operation_payloads.values()
     )
+
+
+def test_release_without_resource_envelope_is_rejected_before_graph_creation() -> None:
+    lock = _lock()
+    legacy_document = json.loads(lock.canonical_bytes)
+    legacy_document.pop("resource_envelope")
+    raw_lock = json.dumps(legacy_document, sort_keys=True, separators=(",", ":")).encode()
+    legacy_lock = PackageReleaseLock.parse(raw_lock)
+    resolver = PackageDesiredStateResolver(
+        _Repository(_deployment(hashlib.sha256(raw_lock).hexdigest()), legacy_lock, raw_lock),
+        trust=lambda *_: True,
+    )
+    with pytest.raises(PackageRolloutError, match="resource envelope"):
+        resolver.resolve(
+            COMMIT,
+            ("future-stack",),
+            ({"node_id": NODE, "healthy": True, "labels": {"pool": "default"}},),
+        )
 
 
 def test_unsigned_release_is_rejected_before_graph_creation() -> None:

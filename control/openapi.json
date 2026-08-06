@@ -2244,6 +2244,11 @@
             "title": "Kv Cache Per Token Bytes",
             "type": "integer"
           },
+          "output_bytes": {
+            "minimum": 0.0,
+            "title": "Output Bytes",
+            "type": "integer"
+          },
           "required_sparks": {
             "maximum": 512.0,
             "minimum": 1.0,
@@ -2266,6 +2271,7 @@
           "download_bytes",
           "installed_bytes",
           "transient_bytes",
+          "output_bytes",
           "host_memory_bytes",
           "gpu_memory_bytes",
           "kv_cache_base_bytes",

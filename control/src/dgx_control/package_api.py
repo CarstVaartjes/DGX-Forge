@@ -204,6 +204,7 @@ class PackageResourceEnvelope(StrictModel):
     download_bytes: int = Field(ge=0)
     installed_bytes: int = Field(ge=0)
     transient_bytes: int = Field(ge=0)
+    output_bytes: int = Field(ge=0)
     host_memory_bytes: int = Field(ge=0)
     gpu_memory_bytes: int = Field(ge=0)
     kv_cache_base_bytes: int = Field(ge=0)
