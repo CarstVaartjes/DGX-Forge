@@ -1,4 +1,9 @@
-"""Operational database models; Git remains definition authority."""
+"""Local catalog authority and operational database state.
+
+PostgreSQL is authoritative for recipes, revisions, placement, and runtime
+state. Git remains an immutable source for legacy package definitions and
+signed release evidence while those adapters are migrated.
+"""
 
 from __future__ import annotations
 
@@ -17,6 +22,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -1489,4 +1495,156 @@ class PackageActionPlan(Base):
     result: Mapped[dict[str, object] | None] = mapped_column(JSON)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PackageFamily(Base):
+    __tablename__ = "package_families"
+    __table_args__ = (
+        CheckConstraint("schema_version >= 1", name="ck_package_families_schema"),
+        CheckConstraint("length(id) BETWEEN 1 AND 128", name="ck_package_families_id"),
+    )
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    provider_kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    definition: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class LocalRecipe(Base):
+    __tablename__ = "local_recipes"
+    __table_args__ = (
+        CheckConstraint("source_kind IN ('local','sparkrun','global')", name="ck_local_recipes_source_kind"),
+        CheckConstraint("slug = lower(slug) AND length(slug) BETWEEN 2 AND 128", name="ck_local_recipes_slug"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    slug: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class LocalRecipeRevision(Base):
+    __tablename__ = "local_recipe_revisions"
+    __table_args__ = (
+        UniqueConstraint("recipe_id", "revision_number", name="uq_local_recipe_revision_number"),
+        UniqueConstraint("recipe_id", "content_sha256", name="uq_local_recipe_revision_content"),
+        CheckConstraint("revision_number >= 1", name="ck_local_recipe_revisions_number"),
+        CheckConstraint("schema_version >= 1", name="ck_local_recipe_revisions_schema"),
+        CheckConstraint("lifecycle IN ('draft','blocked','resolved','deprecated')", name="ck_local_recipe_revisions_lifecycle"),
+        CheckConstraint("lifecycle != 'resolved' OR content_sha256 IS NOT NULL", name="ck_local_recipe_revisions_resolved_digest"),
+        CheckConstraint(_nullable_lower_hex("content_sha256", 64), name="ck_local_recipe_revisions_content_digest"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    recipe_id: Mapped[str] = mapped_column(ForeignKey("local_recipes.id", ondelete="CASCADE"), nullable=False, index=True)
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    lifecycle: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    document: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    content_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+@event.listens_for(LocalRecipeRevision, "before_update")
+@event.listens_for(LocalRecipeRevision, "before_delete")
+def _resolved_recipe_revision_is_immutable(_mapper, _connection, target: LocalRecipeRevision) -> None:
+    if target.lifecycle == "resolved":
+        raise ValueError("resolved recipe revisions are immutable")
+
+
+class RecipeImport(Base):
+    __tablename__ = "recipe_imports"
+    __table_args__ = (
+        CheckConstraint("source_kind IN ('local','sparkrun','global')", name="ck_recipe_imports_source_kind"),
+        CheckConstraint(_lower_hex("source_sha256", 64), name="ck_recipe_imports_source_digest"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    recipe_id: Mapped[str] = mapped_column(ForeignKey("local_recipes.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    redacted_source: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RecipeImportItem(Base):
+    __tablename__ = "recipe_import_items"
+    __table_args__ = (
+        CheckConstraint(
+            "disposition IN ('imported','transformed','resolution_required',"
+            "'overlay_required','unsupported_blocking','dropped_redundant')",
+            name="ck_recipe_import_items_disposition",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    import_id: Mapped[str] = mapped_column(ForeignKey("recipe_imports.id", ondelete="CASCADE"), nullable=False, index=True)
+    source_path: Mapped[str] = mapped_column(Text, nullable=False)
+    disposition: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    destination_path: Mapped[str | None] = mapped_column(Text)
+    reason_code: Mapped[str] = mapped_column(String(128), nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False)
+    blocking: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class RecipeGlobalLink(Base):
+    __tablename__ = "recipe_global_links"
+    __table_args__ = (
+        CheckConstraint("global_revision >= 1", name="ck_recipe_global_links_revision"),
+        CheckConstraint(_lower_hex("global_content_sha256", 64), name="ck_recipe_global_links_digest"),
+        CheckConstraint("sync_state IN ('current','local-ahead','remote-ahead','unavailable')", name="ck_recipe_global_links_state"),
+    )
+    recipe_id: Mapped[str] = mapped_column(ForeignKey("local_recipes.id", ondelete="CASCADE"), primary_key=True)
+    global_recipe_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    global_publisher: Mapped[str] = mapped_column(String(63), nullable=False)
+    global_slug: Mapped[str] = mapped_column(String(63), nullable=False)
+    global_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    global_content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    sync_state: Mapped[str] = mapped_column(String(24), nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class MaterializedDeployment(Base):
+    __tablename__ = "materialized_deployments"
+    __table_args__ = (
+        CheckConstraint("state IN ('planned','installing','installed','starting','running','stopping','stopped','failed')", name="ck_materialized_deployments_state"),
+        CheckConstraint(_lower_hex("placement_digest", 64), name="ck_materialized_deployments_placement_digest"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    recipe_revision_id: Mapped[str] = mapped_column(ForeignKey("local_recipe_revisions.id", ondelete="RESTRICT"), nullable=False, index=True)
+    alias: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    state: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    placement_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    config: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class MaterializedDeploymentNode(Base):
+    __tablename__ = "materialized_deployment_nodes"
+    __table_args__ = (
+        UniqueConstraint("deployment_id", "node_id", name="uq_materialized_deployment_node"),
+        UniqueConstraint("deployment_id", "rank", name="uq_materialized_deployment_rank"),
+        CheckConstraint("rank >= 0", name="ck_materialized_deployment_nodes_rank"),
+        CheckConstraint("role IN ('entrypoint','worker')", name="ck_materialized_deployment_nodes_role"),
+        CheckConstraint("reserved_disk_bytes >= 0 AND reserved_memory_bytes >= 0", name="ck_materialized_deployment_nodes_reservations"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    deployment_id: Mapped[str] = mapped_column(ForeignKey("materialized_deployments.id", ondelete="CASCADE"), nullable=False, index=True)
+    node_id: Mapped[str] = mapped_column(ForeignKey("agent_nodes.node_id", ondelete="RESTRICT"), nullable=False, index=True)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(16), nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    reserved_disk_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    reserved_memory_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    observed_memory_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    endpoint: Mapped[dict[str, object] | None] = mapped_column(JSON)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
