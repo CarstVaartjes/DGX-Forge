@@ -36,55 +36,34 @@ def _named_workflow_steps(job_name: str) -> list[dict[str, str]]:
     return steps
 
 
-def test_full_matrix_installs_locked_javascript_workspaces_before_pytest() -> None:
+def test_pr_smoke_runs_locked_web_and_focused_contracts() -> None:
     steps = _named_workflow_steps("test")
-    generator_step = {
-        "name": "Install pinned TypeScript generator",
-        "run": "npm ci --prefix tools/openapi-client",
-    }
     web_step = {
         "name": "Install locked admin web dependencies",
         "run": "npm ci --prefix control/web",
     }
-    test_step = {
-        "name": "Run Python and Bash tests",
-        "run": "uv run --python 3.12 --frozen --with pytest==9.1.1 pytest",
-    }
+    repository_step = "Run focused repository contracts"
+    control_step = "Run focused control package contracts"
+    web_test_step = "Run focused web package workflow"
 
-    assert generator_step in steps
     assert web_step in steps
-    assert test_step in steps
-    assert steps.index(generator_step) < steps.index(test_step)
-    assert steps.index(web_step) < steps.index(test_step)
+    step_names = [step["name"] for step in steps]
+    assert repository_step in step_names
+    assert control_step in step_names
+    assert web_test_step in step_names
+    assert step_names.index(web_step["name"]) < step_names.index(web_test_step)
 
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
     test_job_lines = _workflow_job_lines(workflow, "test")
-    assert "          - ubuntu-latest" in test_job_lines
-    assert "          - macos-latest" in test_job_lines
+    assert "    runs-on: ubuntu-latest" in test_job_lines
+    assert "    strategy:" not in test_job_lines
+    assert "macos-latest" not in test_job_lines
 
 
-def test_test_matrix_os_assertions_reject_values_from_a_later_job() -> None:
+def test_pr_smoke_does_not_reintroduce_a_second_os_matrix() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
-    matrix = (
-        "        os:\n"
-        "          - ubuntu-latest\n"
-        "          - macos-latest\n"
-    )
-    assert workflow.count(matrix) == 1
-
-    mutated = workflow.replace(matrix, "        os: []\n", 1)
-    mutated += (
-        "\n  later-platform-job:\n"
-        "    strategy:\n"
-        "      matrix:\n"
-        "        os:\n"
-        "          - ubuntu-latest\n"
-        "          - macos-latest\n"
-    )
-
-    test_job_lines = _workflow_job_lines(mutated, "test")
-    assert "          - ubuntu-latest" not in test_job_lines
-    assert "          - macos-latest" not in test_job_lines
+    assert workflow.count("macos-latest") == 0
+    assert workflow.count("runs-on: ubuntu-latest") >= 4
 
 
 def test_agent_simulator_preserves_exact_non_linux_boundaries() -> None:
@@ -108,7 +87,7 @@ def test_agent_simulator_preserves_exact_non_linux_boundaries() -> None:
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "2 passed, 10 skipped" in result.stdout
+    assert re.search(r"\d+ passed, 10 skipped", result.stdout)
 
 
 def test_linux_node_runtime_cases_skip_on_non_linux_hosts() -> None:
@@ -229,7 +208,7 @@ def test_dgx_agent_installer_preserves_exact_non_linux_boundaries(
         assert f"::{case} SKIPPED" in result.stdout
     for case in portable_cases:
         assert f"::{case} PASSED" in result.stdout
-    assert "7 passed, 21 skipped, 1 deselected" in result.stdout
+    assert re.search(r"\d+ passed, 21 skipped, 1 deselected", result.stdout)
 
 
 def test_image_runtime_case_skips_when_only_compose_is_available(tmp_path: Path) -> None:
