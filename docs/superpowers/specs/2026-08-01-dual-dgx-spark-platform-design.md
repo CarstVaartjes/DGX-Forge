@@ -1,5 +1,13 @@
 # Dual DGX Spark Model Platform Design
 
+> **Historical two-Spark baseline.** This document records the original
+> physical lab inventory and early bring-up choices. It is superseded for
+> architecture and operations by the [scalable Spark platform and control
+> plane design](2026-08-03-scalable-spark-platform-control-plane-design.md)
+> and the [generalized workload package system](2026-08-05-generalized-workload-package-system-design.md).
+> Its addresses, names, and SSH/bootstrap procedures are not application
+> defaults and must not be copied into a generalized fleet deployment.
+
 Date: 2026-08-01
 
 ## Purpose
