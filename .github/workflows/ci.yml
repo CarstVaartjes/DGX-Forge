@@ -68,7 +68,7 @@ jobs:
       - name: Install pinned TypeScript generator
         run: npm ci --prefix tools/openapi-client
       - name: Verify generated OpenAPI and clients
-        run: uv run --project control --frozen pytest tests/control/test_openapi_clients.py -v
+        run: uv run --project control --frozen --with-editable . pytest tests/control/test_openapi_clients.py -v
       - name: Reject generated drift
         run: git diff --exit-code -- control/openapi.json src/spark_profiles/generated_control control/web/src/api/generated.d.ts
 

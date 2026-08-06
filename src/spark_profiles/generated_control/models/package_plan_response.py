@@ -11,6 +11,8 @@ from typing import cast
 from typing import cast, Union
 from typing import Union
 
+if TYPE_CHECKING:
+  from ..models.package_rollout_resource_envelope import PackageRolloutResourceEnvelope
 
 
 
@@ -34,6 +36,7 @@ class PackagePlanResponse:
             offline_pending (Union[Unset, list[str]]):
             reclaim_bytes (Union[None, Unset, int]):
             release_digest (Union[None, Unset, str]):
+            resource_envelope (Union['PackageRolloutResourceEnvelope', None, Unset]):
             storage_bytes (Union[None, Unset, int]):
             validation_id (Union[None, Unset, str]):
      """
@@ -48,6 +51,7 @@ class PackagePlanResponse:
     offline_pending: Union[Unset, list[str]] = UNSET
     reclaim_bytes: Union[None, Unset, int] = UNSET
     release_digest: Union[None, Unset, str] = UNSET
+    resource_envelope: Union['PackageRolloutResourceEnvelope', None, Unset] = UNSET
     storage_bytes: Union[None, Unset, int] = UNSET
     validation_id: Union[None, Unset, str] = UNSET
 
@@ -56,6 +60,7 @@ class PackagePlanResponse:
 
 
     def to_dict(self) -> dict[str, Any]:
+        from ..models.package_rollout_resource_envelope import PackageRolloutResourceEnvelope
         digest = self.digest
 
         state = self.state
@@ -113,6 +118,14 @@ class PackagePlanResponse:
         else:
             release_digest = self.release_digest
 
+        resource_envelope: Union[None, Unset, dict[str, Any]]
+        if isinstance(self.resource_envelope, Unset):
+            resource_envelope = UNSET
+        elif isinstance(self.resource_envelope, PackageRolloutResourceEnvelope):
+            resource_envelope = self.resource_envelope.to_dict()
+        else:
+            resource_envelope = self.resource_envelope
+
         storage_bytes: Union[None, Unset, int]
         if isinstance(self.storage_bytes, Unset):
             storage_bytes = UNSET
@@ -148,6 +161,8 @@ class PackagePlanResponse:
             field_dict["reclaim_bytes"] = reclaim_bytes
         if release_digest is not UNSET:
             field_dict["release_digest"] = release_digest
+        if resource_envelope is not UNSET:
+            field_dict["resource_envelope"] = resource_envelope
         if storage_bytes is not UNSET:
             field_dict["storage_bytes"] = storage_bytes
         if validation_id is not UNSET:
@@ -159,6 +174,7 @@ class PackagePlanResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
+        from ..models.package_rollout_resource_envelope import PackageRolloutResourceEnvelope
         d = dict(src_dict)
         digest = d.pop("digest")
 
@@ -235,6 +251,26 @@ class PackagePlanResponse:
         release_digest = _parse_release_digest(d.pop("release_digest", UNSET))
 
 
+        def _parse_resource_envelope(data: object) -> Union['PackageRolloutResourceEnvelope', None, Unset]:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            try:
+                if not isinstance(data, dict):
+                    raise TypeError()
+                resource_envelope_type_0 = PackageRolloutResourceEnvelope.from_dict(data)
+
+
+
+                return resource_envelope_type_0
+            except: # noqa: E722
+                pass
+            return cast(Union['PackageRolloutResourceEnvelope', None, Unset], data)
+
+        resource_envelope = _parse_resource_envelope(d.pop("resource_envelope", UNSET))
+
+
         def _parse_storage_bytes(data: object) -> Union[None, Unset, int]:
             if data is None:
                 return data
@@ -266,6 +302,7 @@ class PackagePlanResponse:
             offline_pending=offline_pending,
             reclaim_bytes=reclaim_bytes,
             release_digest=release_digest,
+            resource_envelope=resource_envelope,
             storage_bytes=storage_bytes,
             validation_id=validation_id,
         )

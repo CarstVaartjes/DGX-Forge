@@ -1741,6 +1741,16 @@
             ],
             "title": "Release Digest"
           },
+          "resource_envelope": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PackageRolloutResourceEnvelope"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "state": {
             "maxLength": 64,
             "minLength": 1,
@@ -2212,7 +2222,7 @@
       },
       "PackageResourceEnvelope": {
         "additionalProperties": false,
-        "description": "Bounded resource requirements supplied by a promoted workload release.",
+        "description": "Bounded per-Spark resource requirements from a promoted release.",
         "properties": {
           "download_bytes": {
             "minimum": 0.0,
@@ -2280,6 +2290,120 @@
           "topology"
         ],
         "title": "PackageResourceEnvelope",
+        "type": "object"
+      },
+      "PackageResourceValues": {
+        "additionalProperties": false,
+        "properties": {
+          "download_bytes": {
+            "minimum": 0.0,
+            "title": "Download Bytes",
+            "type": "integer"
+          },
+          "gpu_memory_bytes": {
+            "minimum": 0.0,
+            "title": "Gpu Memory Bytes",
+            "type": "integer"
+          },
+          "host_memory_bytes": {
+            "minimum": 0.0,
+            "title": "Host Memory Bytes",
+            "type": "integer"
+          },
+          "installed_bytes": {
+            "minimum": 0.0,
+            "title": "Installed Bytes",
+            "type": "integer"
+          },
+          "kv_cache_base_bytes": {
+            "minimum": 0.0,
+            "title": "Kv Cache Base Bytes",
+            "type": "integer"
+          },
+          "kv_cache_per_token_bytes": {
+            "minimum": 0.0,
+            "title": "Kv Cache Per Token Bytes",
+            "type": "integer"
+          },
+          "output_bytes": {
+            "minimum": 0.0,
+            "title": "Output Bytes",
+            "type": "integer"
+          },
+          "transient_bytes": {
+            "minimum": 0.0,
+            "title": "Transient Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "download_bytes",
+          "installed_bytes",
+          "transient_bytes",
+          "output_bytes",
+          "host_memory_bytes",
+          "gpu_memory_bytes",
+          "kv_cache_base_bytes",
+          "kv_cache_per_token_bytes"
+        ],
+        "title": "PackageResourceValues",
+        "type": "object"
+      },
+      "PackageRolloutResourceEnvelope": {
+        "additionalProperties": false,
+        "description": "Signed release sizing for one-node and aggregate placement views.",
+        "properties": {
+          "aggregate": {
+            "$ref": "#/components/schemas/PackageResourceValues"
+          },
+          "evidence": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "maxItems": 16,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "measurement": {
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Measurement",
+            "type": "string"
+          },
+          "per_node": {
+            "$ref": "#/components/schemas/PackageResourceValues"
+          },
+          "required_sparks": {
+            "maximum": 512.0,
+            "minimum": 1.0,
+            "title": "Required Sparks",
+            "type": "integer"
+          },
+          "schema_version": {
+            "minimum": 1.0,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "topology": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Topology",
+            "type": "string"
+          }
+        },
+        "required": [
+          "schema_version",
+          "per_node",
+          "aggregate",
+          "required_sparks",
+          "topology",
+          "measurement",
+          "evidence"
+        ],
+        "title": "PackageRolloutResourceEnvelope",
         "type": "object"
       },
       "PackageSparkInventory": {

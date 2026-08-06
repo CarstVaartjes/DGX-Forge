@@ -22,6 +22,32 @@ function api() {
       offline_pending: ["Gamma Spark"],
       download_remaining_bytes: 8 * 1024 ** 3,
       storage_required_bytes: 12 * 1024 ** 3,
+      resource_envelope: {
+        per_node: {
+          download_bytes: 8 * 1024 ** 3,
+          installed_bytes: 12 * 1024 ** 3,
+          transient_bytes: 2 * 1024 ** 3,
+          output_bytes: 0,
+          host_memory_bytes: 16 * 1024 ** 3,
+          gpu_memory_bytes: 12 * 1024 ** 3,
+          kv_cache_base_bytes: 1 * 1024 ** 3,
+          kv_cache_per_token_bytes: 4096,
+        },
+        aggregate: {
+          download_bytes: 16 * 1024 ** 3,
+          installed_bytes: 24 * 1024 ** 3,
+          transient_bytes: 4 * 1024 ** 3,
+          output_bytes: 0,
+          host_memory_bytes: 32 * 1024 ** 3,
+          gpu_memory_bytes: 24 * 1024 ** 3,
+          kv_cache_base_bytes: 2 * 1024 ** 3,
+          kv_cache_per_token_bytes: 8192,
+        },
+        required_sparks: 2,
+        topology: "gang",
+        measurement: "declared",
+        evidence: [],
+      },
     }),
     startPackageRollout: async (_id: string, supplied: string) => ({id: "rollout-1", plan_digest: supplied}),
     packageRollout: async () => ({
@@ -46,6 +72,9 @@ it("shows aggregate capacity, offline progress, and stops at a canary failure", 
   await user.click(screen.getByRole("button", {name: "Preview rollout for chat"}));
   const preview = await screen.findByRole("region", {name: "Package rollout preview"});
   expect(preview).toHaveTextContent("8.0 GiB remaining");
+  expect(preview).toHaveTextContent("2 Spark(s), gang");
+  expect(preview).toHaveTextContent("12.0 GiB GPU memory");
+  expect(preview).toHaveTextContent("1.0 GiB KV base");
   expect(preview).toHaveTextContent("Gamma Spark");
   await user.type(screen.getByLabelText("Type the exact rollout preview digest"), digest);
   await user.click(screen.getByRole("button", {name: "Start exact rollout"}));
