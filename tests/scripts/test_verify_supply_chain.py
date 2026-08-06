@@ -66,10 +66,12 @@ def _copy(tmp_path: Path) -> Path:
         "scripts/build-control-deployment-bundle",
         "scripts/build-host-updater-artifact",
         "scripts/build-platform-manifest",
+        "scripts/build-spark-platform-payloads",
         "scripts/collect-platform-artifact-evidence",
         "scripts/container-release-metadata",
         "scripts/platform-release-authority",
         "scripts/publish-platform-target",
+        "scripts/publish-spark-platform-artifacts",
         "scripts/refuse-existing-image-version",
         "scripts/validate-container-release-digests",
         "scripts/verify-platform-release",
@@ -137,6 +139,31 @@ def test_supply_chain_manifest_binds_platform_target_publisher(
     repository = _copy(tmp_path)
     publisher = repository / "scripts/publish-platform-target"
     publisher.write_bytes(publisher.read_bytes() + b"\n# drift\n")
+
+    result = subprocess.run(
+        [SCRIPT, "--root", repository, "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "manifest" in " ".join(json.loads(result.stdout)["errors"]).lower()
+
+
+@pytest.mark.parametrize(
+    "path",
+    (
+        "scripts/build-spark-platform-payloads",
+        "scripts/publish-spark-platform-artifacts",
+    ),
+)
+def test_supply_chain_manifest_binds_spark_platform_artifact_tools(
+    tmp_path: Path, path: str
+) -> None:
+    repository = _copy(tmp_path)
+    candidate = repository / path
+    candidate.write_bytes(candidate.read_bytes() + b"\n# drift\n")
 
     result = subprocess.run(
         [SCRIPT, "--root", repository, "--json"],

@@ -62,6 +62,9 @@ def release_expressions() -> dict[str, str]:
         "${{ needs.release-metadata.outputs.api_image }}": "ghcr.io/example/api",
         "${{ needs.release-metadata.outputs.worker_image }}": "ghcr.io/example/worker",
         "${{ needs.release-metadata.outputs.hermes_image }}": "ghcr.io/example/hermes",
+        "${{ needs.release-metadata.outputs.agent_artifact }}": "ghcr.io/example/agent",
+        "${{ needs.release-metadata.outputs.supervisor_artifact }}": "ghcr.io/example/supervisor",
+        "${{ needs.release-metadata.outputs.tooling_artifact }}": "ghcr.io/example/tooling",
         "${{ needs.publish-images.outputs.api_digest }}": digest,
         "${{ needs.publish-images.outputs.worker_digest }}": digest,
         "${{ needs.publish-images.outputs.hermes_digest }}": digest,
@@ -88,7 +91,24 @@ def test_release_metadata_is_tag_only_and_read_only() -> None:
         "${{ steps.release.outputs.deployment_bundle_repository }}"
     ) in metadata
     assert "platform_channel: ${{ steps.release.outputs.platform_channel }}" in metadata
+    for output in ("agent_artifact", "supervisor_artifact", "tooling_artifact"):
+        assert f"{output}: ${{{{ steps.release.outputs.{output} }}}}" in metadata
     assert "vars.DGX_PLATFORM_RELEASES_ENABLED == 'true'" in metadata
+
+
+def test_native_arm64_payload_builder_has_no_publication_authority() -> None:
+    builder = job("build-spark-platform-payloads")
+
+    assert "needs: [release-metadata]" in builder
+    assert "runs-on: ubuntu-24.04-arm" in builder
+    assert "permissions:\n      contents: read" in builder
+    assert "packages: write" not in builder
+    assert "id-token: write" not in builder
+    assert "agent/tools/build-slot-artifact" in builder
+    assert "scripts/build-spark-platform-payloads" in builder
+    assert "--architecture linux-arm64" in builder
+    assert "spark-platform-payloads.tar" in builder
+    assert "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02" in builder
 
 
 def test_tag_release_builds_and_publishes_exact_platform_target() -> None:
@@ -152,9 +172,29 @@ def test_platform_manifest_binds_actual_build_outputs_and_attestations() -> None
     assert "steps.worker.outputs.digest" in build
     assert "steps.hermes.outputs.digest" in build
     assert "docker buildx imagetools inspect" in build
-    for name in ("api", "worker", "hermes"):
+    for name in ("api", "worker", "hermes", "agent", "supervisor", "tooling"):
         assert f"--artifact-evidence release-output/{name}-evidence.json" in build
+    assert "--build-digest \"$source_build_digest\"" in build
     assert "scripts/build-host-updater-artifact" in build
+
+
+def test_publisher_downloads_and_publishes_exact_native_spark_payloads() -> None:
+    publisher = job("publish-images")
+    publication = workflow_step(
+        "publish-images", "Publish immutable Spark platform artifacts"
+    )
+
+    assert "build-spark-platform-payloads" in publisher.split("needs:", 1)[1].splitlines()[0]
+    assert "Download native Spark platform payloads" in publisher
+    assert "spark-platform-payloads.tar.sha256" in publisher
+    assert "scripts/publish-spark-platform-artifacts" in publication
+    for repository in (
+        "agent_artifact",
+        "supervisor_artifact",
+        "tooling_artifact",
+    ):
+        assert f"needs.release-metadata.outputs.{repository}" in publication
+    assert "spark-platform-publication.json" in publication
 
 
 def test_release_attaches_exact_platform_publication_evidence() -> None:
@@ -175,7 +215,10 @@ def test_release_chain_is_default_off_and_dependency_gated() -> None:
     manifest = job("release-manifest")
 
     assert "vars.DGX_CONTAINER_RELEASES_ENABLED == 'true'" in metadata
-    assert "needs: [lint, generated-clients, test, release-metadata]" in publisher
+    assert (
+        "needs: [lint, generated-clients, test, release-metadata, "
+        "build-spark-platform-payloads]" in publisher
+    )
     assert (
         "needs: [release-metadata, publish-images, attest-host-updater, "
         "publish-platform-target]" in manifest
@@ -187,7 +230,10 @@ def test_publisher_needs_every_ci_gate_and_alone_can_write_packages() -> None:
     publisher = job("publish-images")
     manifest = job("release-manifest")
 
-    assert "needs: [lint, generated-clients, test, release-metadata]" in publisher
+    assert (
+        "needs: [lint, generated-clients, test, release-metadata, "
+        "build-spark-platform-payloads]" in publisher
+    )
     assert "permissions:\n      contents: read\n      packages: write" in publisher
     assert "packages: write" not in metadata
     assert "packages: write" not in manifest
@@ -215,6 +261,7 @@ def test_all_container_publications_are_serialized_without_cancellation() -> Non
 def test_publisher_uses_pinned_docker_actions_and_exact_artifacts() -> None:
     text = workflow()
     for action in (
+        "docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8",
         "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f",
         "docker/login-action@dbcb813823bdd20940b903addbd779551569679f",
         "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a",
@@ -227,7 +274,13 @@ def test_publisher_uses_pinned_docker_actions_and_exact_artifacts() -> None:
         "dgx-forge-hermes",
     ):
         assert package in text
-    assert text.count("platforms: linux/amd64") == 3
+    assert text.count("platforms: linux/amd64,linux/arm64") == 3
+    qemu = workflow_step("publish-images", "Set up QEMU")
+    assert (
+        "docker.io/tonistiigi/binfmt:qemu-v10.0.4@"
+        "sha256:8f58e6214f4cc9dc83ce8f5acad1ece508eb6b20e696a8c1e9f274481982c541"
+        in qemu
+    )
     assert text.count("provenance: mode=max") == 3
     assert text.count("sbom: true") == 3
     assert text.count("push: true") == 3
@@ -310,6 +363,9 @@ def test_existing_version_guard_allows_only_known_absence(
         "CONTROL_API_IMAGE": "ghcr.io/example/api",
         "CONTROL_WORKER_IMAGE": "ghcr.io/example/worker",
         "HERMES_AGENT_IMAGE": "ghcr.io/example/hermes",
+        "SPARK_AGENT_ARTIFACT": "ghcr.io/example/agent",
+        "SPARK_SUPERVISOR_ARTIFACT": "ghcr.io/example/supervisor",
+        "SPARK_TOOLING_ARTIFACT": "ghcr.io/example/tooling",
     }
 
     results = {

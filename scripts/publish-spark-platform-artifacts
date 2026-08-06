@@ -1,0 +1,411 @@
+#!/usr/bin/env python3
+"""Publish exact Spark platform payloads and bind their release evidence."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import stat
+import subprocess
+import sys
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+
+_SEMVER = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\Z")
+_COMMIT = re.compile(r"[0-9a-f]{40}\Z")
+_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_REPOSITORY = re.compile(r"[a-z0-9.-]+(?::[1-9][0-9]{0,4})?/[a-z0-9._/-]+\Z")
+_MAX_JSON_BYTES = 1024 * 1024
+_ARTIFACT_TYPE = "application/vnd.dgx-forge.platform-payload.v1"
+_LAYER_TYPE = "application/vnd.dgx-forge.platform-payload.v1"
+
+
+class PublishError(RuntimeError):
+    """Spark artifacts cannot be published with complete exact evidence."""
+
+
+@dataclass(frozen=True)
+class Payload:
+    key: str
+    filename: str
+    locator: str
+    artifact_name: str
+    repository: str
+    path: Path
+    sha256: str
+    size: int
+
+
+def _canonical(value: object) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def _read(path: Path, label: str, maximum: int = _MAX_JSON_BYTES) -> bytes:
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW)
+    except OSError as error:
+        raise PublishError(f"{label} is unavailable or unsafe") from error
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or not 0 < before.st_size <= maximum
+        ):
+            raise PublishError(f"{label} is unavailable or unsafe")
+        raw = b""
+        while len(raw) < before.st_size:
+            chunk = os.read(descriptor, before.st_size - len(raw))
+            if not chunk:
+                raise PublishError(f"{label} changed while read")
+            raw += chunk
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            raise PublishError(f"{label} changed while read")
+        return raw
+    finally:
+        os.close(descriptor)
+
+
+def _document(path: Path, label: str) -> dict[str, Any]:
+    raw = _read(path, label)
+    try:
+        value = json.loads(raw)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise PublishError(f"{label} is invalid") from error
+    if not isinstance(value, dict) or raw != _canonical(value):
+        raise PublishError(f"{label} must use canonical JSON")
+    return value
+
+
+def _write_new(path: Path, value: object) -> None:
+    raw = _canonical(value)
+    descriptor = os.open(
+        path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o644,
+    )
+    try:
+        offset = 0
+        while offset < len(raw):
+            offset += os.write(descriptor, raw[offset:])
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _payloads(
+    payload_root: Path,
+    receipt: dict[str, Any],
+    repositories: dict[str, str],
+) -> tuple[Payload, ...]:
+    if set(receipt) != {"architecture", "payloads", "schema_version"} or (
+        receipt.get("architecture") != "linux-arm64"
+        or receipt.get("schema_version") != 1
+        or not isinstance(receipt.get("payloads"), dict)
+    ):
+        raise PublishError("Spark payload receipt is invalid")
+    definitions = (
+        ("agent", "dgx-agent", "agents.linux-arm64", "agent-linux-arm64"),
+        (
+            "supervisor",
+            "dgx-agent-supervisor",
+            "supervisors.linux-arm64",
+            "supervisor-linux-arm64",
+        ),
+        (
+            "tooling",
+            "dgx-forge-tooling",
+            "tooling.linux-arm64",
+            "tooling-linux-arm64",
+        ),
+    )
+    receipt_payloads = receipt["payloads"]
+    if set(receipt_payloads) != {item[0] for item in definitions}:
+        raise PublishError("Spark payload receipt is invalid")
+    result: list[Payload] = []
+    for key, filename, locator, artifact_name in definitions:
+        selected = receipt_payloads.get(key)
+        repository = repositories[key]
+        if (
+            not isinstance(selected, dict)
+            or set(selected) != {"name", "sha256", "size"}
+            or selected.get("name") != filename
+            or not isinstance(selected.get("sha256"), str)
+            or _SHA256.fullmatch(selected["sha256"]) is None
+            or isinstance(selected.get("size"), bool)
+            or not isinstance(selected.get("size"), int)
+            or not 64 <= selected["size"] <= 256 * 1024 * 1024
+            or _REPOSITORY.fullmatch(repository) is None
+        ):
+            raise PublishError("Spark payload receipt is invalid")
+        path = payload_root / filename
+        raw = _read(path, f"{key} payload", 256 * 1024 * 1024)
+        if len(raw) != selected["size"] or hashlib.sha256(raw).hexdigest() != selected[
+            "sha256"
+        ]:
+            raise PublishError("Spark payload disagrees with receipt")
+        result.append(
+            Payload(
+                key,
+                filename,
+                locator,
+                artifact_name,
+                repository,
+                path,
+                selected["sha256"],
+                selected["size"],
+            )
+        )
+    return tuple(result)
+
+
+def _run(command: list[str], *, cwd: Path | None = None) -> str:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd,
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as error:
+        raise PublishError("artifact publisher is unavailable") from error
+    if result.returncode != 0 or len(result.stdout) > 64 * 1024:
+        raise PublishError("artifact publication failed")
+    return result.stdout
+
+
+def _sbom(payload: Payload, *, created: str, source_url: str, version: str) -> dict[str, object]:
+    return {
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "creationInfo": {
+            "created": created,
+            "creators": ["Tool: DGX-Forge protected release workflow"],
+        },
+        "dataLicense": "CC0-1.0",
+        "documentNamespace": f"{source_url}/spdx/{version}/{payload.key}",
+        "files": [
+            {
+                "SPDXID": "SPDXRef-Payload",
+                "checksums": [
+                    {"algorithm": "SHA256", "checksumValue": payload.sha256}
+                ],
+                "fileName": payload.filename,
+            }
+        ],
+        "name": f"dgx-forge-{payload.key}-{version}",
+        "relationships": [
+            {
+                "relatedSpdxElement": "SPDXRef-Payload",
+                "relationshipType": "DESCRIBES",
+                "spdxElementId": "SPDXRef-DOCUMENT",
+            }
+        ],
+        "spdxVersion": "SPDX-2.3",
+    }
+
+
+def _provenance(
+    payload: Payload,
+    *,
+    commit: str,
+    source_sha256: str,
+    version: str,
+    builder_id: str,
+) -> dict[str, object]:
+    return {
+        "_type": "https://in-toto.io/Statement/v1",
+        "predicate": {
+            "buildDefinition": {
+                "buildType": "https://dgx-forge.dev/build-types/platform-payload/v1",
+                "externalParameters": {
+                    "commit": commit,
+                    "platform_version": version,
+                },
+                "internalParameters": {"source_archive_sha256": source_sha256},
+                "resolvedDependencies": [],
+            },
+            "runDetails": {
+                "builder": {"id": builder_id},
+                "metadata": {"invocationId": builder_id},
+            },
+        },
+        "predicateType": "https://slsa.dev/provenance/v1",
+        "subject": [{"digest": {"sha256": payload.sha256}, "name": payload.filename}],
+    }
+
+
+def publish(args: argparse.Namespace) -> dict[str, object]:
+    if (
+        not args.payload_root.is_absolute()
+        or not args.output_root.is_absolute()
+        or not args.payload_root.is_dir()
+        or not args.output_root.is_dir()
+        or _SEMVER.fullmatch(args.version) is None
+        or _COMMIT.fullmatch(args.commit) is None
+        or _SHA256.fullmatch(args.source_sha256) is None
+        or not args.created
+        or not args.builder_id.startswith("https://")
+        or not args.source_url.startswith("https://")
+    ):
+        raise PublishError("publication input is invalid")
+    oras_value = os.environ.get("DGX_PLATFORM_ORAS_BIN", "")
+    oras = Path(oras_value)
+    if not oras.is_absolute() or not oras.is_file() or not os.access(oras, os.X_OK):
+        raise PublishError("ORAS publisher is unavailable")
+    collector = Path(__file__).with_name("collect-platform-artifact-evidence")
+    receipt = _document(
+        args.payload_root / "spark-platform-payloads.json", "Spark payload receipt"
+    )
+    repositories = {
+        "agent": args.agent_repository,
+        "supervisor": args.supervisor_repository,
+        "tooling": args.tooling_repository,
+    }
+    payloads = _payloads(args.payload_root, receipt, repositories)
+    for payload in payloads:
+        for suffix in ("manifest", "sbom", "provenance", "evidence"):
+            if (args.output_root / f"{payload.key}-{suffix}.json").exists():
+                raise PublishError("publication output already exists")
+
+    references: dict[str, str] = {}
+    for payload in payloads:
+        manifest = args.output_root / f"{payload.key}-manifest.json"
+        output = _run(
+            [
+                str(oras),
+                "push",
+                "--artifact-platform",
+                "linux/arm64",
+                "--artifact-type",
+                _ARTIFACT_TYPE,
+                "--export-manifest",
+                str(manifest),
+                "--format",
+                "json",
+                (
+                    f"{payload.repository}:{args.version},"
+                    f"sha-{args.commit},latest"
+                ),
+                f"{payload.filename}:{_LAYER_TYPE}",
+            ],
+            cwd=args.payload_root,
+        )
+        try:
+            push_receipt = json.loads(output)
+        except json.JSONDecodeError as error:
+            raise PublishError("artifact publisher receipt is invalid") from error
+        manifest_raw = _read(manifest, "OCI artifact manifest", 16 * 1024 * 1024)
+        expected_reference = (
+            f"{payload.repository}@sha256:{hashlib.sha256(manifest_raw).hexdigest()}"
+        )
+        if not isinstance(push_receipt, dict) or push_receipt.get(
+            "reference"
+        ) != expected_reference:
+            raise PublishError("artifact publisher receipt is invalid")
+        sbom = args.output_root / f"{payload.key}-sbom.json"
+        provenance = args.output_root / f"{payload.key}-provenance.json"
+        _write_new(
+            sbom,
+            _sbom(
+                payload,
+                created=args.created,
+                source_url=args.source_url,
+                version=args.version,
+            ),
+        )
+        _write_new(
+            provenance,
+            _provenance(
+                payload,
+                commit=args.commit,
+                source_sha256=args.source_sha256,
+                version=args.version,
+                builder_id=args.builder_id,
+            ),
+        )
+        _run(
+            [
+                str(oras),
+                "attach",
+                "--artifact-type",
+                "application/spdx+json",
+                expected_reference,
+                f"{sbom}:application/spdx+json",
+            ]
+        )
+        _run(
+            [
+                str(oras),
+                "attach",
+                "--artifact-type",
+                "application/vnd.in-toto+json",
+                expected_reference,
+                f"{provenance}:application/vnd.in-toto+json",
+            ]
+        )
+        _run(
+            [
+                str(collector),
+                "--locator",
+                payload.locator,
+                "--name",
+                payload.artifact_name,
+                "--reference",
+                expected_reference,
+                "--manifest",
+                str(manifest),
+                "--sbom",
+                str(sbom),
+                "--provenance",
+                str(provenance),
+                "--output",
+                str(args.output_root / f"{payload.key}-evidence.json"),
+            ]
+        )
+        references[payload.key] = expected_reference
+    return {"artifacts": references, "schema_version": 1}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="publish-spark-platform-artifacts")
+    parser.add_argument("--payload-root", required=True, type=Path)
+    parser.add_argument("--output-root", required=True, type=Path)
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--commit", required=True)
+    parser.add_argument("--source-sha256", required=True)
+    parser.add_argument("--created", required=True)
+    parser.add_argument("--builder-id", required=True)
+    parser.add_argument("--source-url", required=True)
+    parser.add_argument("--agent-repository", required=True)
+    parser.add_argument("--supervisor-repository", required=True)
+    parser.add_argument("--tooling-repository", required=True)
+    args = parser.parse_args()
+    try:
+        result = publish(args)
+    except (PublishError, OSError) as error:
+        print(f"publish-spark-platform-artifacts: {error}", file=sys.stderr)
+        return 2
+    print(_canonical(result).decode(), end="")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
