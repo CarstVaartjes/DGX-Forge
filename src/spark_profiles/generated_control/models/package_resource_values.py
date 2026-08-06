@@ -12,14 +12,13 @@ from ..types import UNSET, Unset
 
 
 
-T = TypeVar("T", bound="PackageResourceEnvelope")
+T = TypeVar("T", bound="PackageResourceValues")
 
 
 
 @_attrs_define
-class PackageResourceEnvelope:
-    """ Bounded per-Spark resource requirements from a promoted release.
-
+class PackageResourceValues:
+    """
         Attributes:
             download_bytes (int):
             gpu_memory_bytes (int):
@@ -28,8 +27,6 @@ class PackageResourceEnvelope:
             kv_cache_base_bytes (int):
             kv_cache_per_token_bytes (int):
             output_bytes (int):
-            required_sparks (int):
-            topology (str):
             transient_bytes (int):
      """
 
@@ -40,8 +37,6 @@ class PackageResourceEnvelope:
     kv_cache_base_bytes: int
     kv_cache_per_token_bytes: int
     output_bytes: int
-    required_sparks: int
-    topology: str
     transient_bytes: int
 
 
@@ -63,10 +58,6 @@ class PackageResourceEnvelope:
 
         output_bytes = self.output_bytes
 
-        required_sparks = self.required_sparks
-
-        topology = self.topology
-
         transient_bytes = self.transient_bytes
 
 
@@ -80,8 +71,6 @@ class PackageResourceEnvelope:
             "kv_cache_base_bytes": kv_cache_base_bytes,
             "kv_cache_per_token_bytes": kv_cache_per_token_bytes,
             "output_bytes": output_bytes,
-            "required_sparks": required_sparks,
-            "topology": topology,
             "transient_bytes": transient_bytes,
         })
 
@@ -106,13 +95,9 @@ class PackageResourceEnvelope:
 
         output_bytes = d.pop("output_bytes")
 
-        required_sparks = d.pop("required_sparks")
-
-        topology = d.pop("topology")
-
         transient_bytes = d.pop("transient_bytes")
 
-        package_resource_envelope = cls(
+        package_resource_values = cls(
             download_bytes=download_bytes,
             gpu_memory_bytes=gpu_memory_bytes,
             host_memory_bytes=host_memory_bytes,
@@ -120,9 +105,7 @@ class PackageResourceEnvelope:
             kv_cache_base_bytes=kv_cache_base_bytes,
             kv_cache_per_token_bytes=kv_cache_per_token_bytes,
             output_bytes=output_bytes,
-            required_sparks=required_sparks,
-            topology=topology,
             transient_bytes=transient_bytes,
         )
 
-        return package_resource_envelope
+        return package_resource_values

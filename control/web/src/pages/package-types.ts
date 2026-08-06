@@ -56,6 +56,25 @@ export type PackageRolloutPreview = PackagePreview & {
   offline_pending: string[];
   download_remaining_bytes: number;
   storage_required_bytes: number;
+  resource_envelope?: {
+    per_node: PackageResourceValues;
+    aggregate: PackageResourceValues;
+    required_sparks: number;
+    topology: string;
+    measurement: string;
+    evidence: {kind: string; digest: string}[];
+  };
+};
+
+export type PackageResourceValues = {
+  download_bytes: number;
+  installed_bytes: number;
+  transient_bytes: number;
+  output_bytes: number;
+  host_memory_bytes: number;
+  gpu_memory_bytes: number;
+  kv_cache_base_bytes: number;
+  kv_cache_per_token_bytes: number;
 };
 
 export type PackageRollout = {
@@ -94,6 +113,7 @@ export type PackageInventoryEntry = {
     download_bytes: number;
     installed_bytes: number;
     transient_bytes: number;
+    output_bytes: number;
     host_memory_bytes: number;
     gpu_memory_bytes: number;
     kv_cache_base_bytes: number;

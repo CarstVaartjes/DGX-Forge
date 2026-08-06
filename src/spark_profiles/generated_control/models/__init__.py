@@ -56,6 +56,9 @@ from .package_removal_preview_response import PackageRemovalPreviewResponse
 from .package_removal_request import PackageRemovalRequest
 from .package_resolution_response import PackageResolutionResponse
 from .package_resource_envelope import PackageResourceEnvelope
+from .package_resource_values import PackageResourceValues
+from .package_rollout_resource_envelope import PackageRolloutResourceEnvelope
+from .package_rollout_resource_envelope_evidence_item import PackageRolloutResourceEnvelopeEvidenceItem
 from .package_spark_inventory import PackageSparkInventory
 from .package_spark_resources import PackageSparkResources
 from .package_spark_storage import PackageSparkStorage
@@ -151,6 +154,9 @@ __all__ = (
     "PackageRemovalRequest",
     "PackageResolutionResponse",
     "PackageResourceEnvelope",
+    "PackageResourceValues",
+    "PackageRolloutResourceEnvelope",
+    "PackageRolloutResourceEnvelopeEvidenceItem",
     "PackageSparkInventory",
     "PackageSparkResources",
     "PackageSparkStorage",

@@ -38,7 +38,7 @@ class PackageInventoryItem:
             reclaimable_bytes (int):
             release_digest (str):
             reserved_bytes (int):
-            resources (PackageResourceEnvelope): Bounded resource requirements supplied by a promoted workload release.
+            resources (PackageResourceEnvelope): Bounded per-Spark resource requirements from a promoted release.
             retained (bool):
             state (str):
             family_id (Union[None, Unset, str]):

@@ -1364,6 +1364,7 @@ export interface components {
             reclaim_bytes?: number | null;
             /** Release Digest */
             release_digest?: string | null;
+            resource_envelope?: components["schemas"]["PackageRolloutResourceEnvelope"] | null;
             /** State */
             state: string;
             /** Storage Bytes */
@@ -1496,7 +1497,7 @@ export interface components {
         };
         /**
          * PackageResourceEnvelope
-         * @description Bounded resource requirements supplied by a promoted workload release.
+         * @description Bounded per-Spark resource requirements from a promoted release.
          */
         PackageResourceEnvelope: {
             /** Download Bytes */
@@ -1519,6 +1520,45 @@ export interface components {
             topology: string;
             /** Transient Bytes */
             transient_bytes: number;
+        };
+        /** PackageResourceValues */
+        PackageResourceValues: {
+            /** Download Bytes */
+            download_bytes: number;
+            /** Gpu Memory Bytes */
+            gpu_memory_bytes: number;
+            /** Host Memory Bytes */
+            host_memory_bytes: number;
+            /** Installed Bytes */
+            installed_bytes: number;
+            /** Kv Cache Base Bytes */
+            kv_cache_base_bytes: number;
+            /** Kv Cache Per Token Bytes */
+            kv_cache_per_token_bytes: number;
+            /** Output Bytes */
+            output_bytes: number;
+            /** Transient Bytes */
+            transient_bytes: number;
+        };
+        /**
+         * PackageRolloutResourceEnvelope
+         * @description Signed release sizing for one-node and aggregate placement views.
+         */
+        PackageRolloutResourceEnvelope: {
+            aggregate: components["schemas"]["PackageResourceValues"];
+            /** Evidence */
+            evidence: {
+                [key: string]: string;
+            }[];
+            /** Measurement */
+            measurement: string;
+            per_node: components["schemas"]["PackageResourceValues"];
+            /** Required Sparks */
+            required_sparks: number;
+            /** Schema Version */
+            schema_version: number;
+            /** Topology */
+            topology: string;
         };
         /** PackageSparkInventory */
         PackageSparkInventory: {

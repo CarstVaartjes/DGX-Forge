@@ -125,6 +125,36 @@ class PackageCompatibilityResponse(StrictModel):
     compatible_node_ids: list[str] = Field(max_length=512)
 
 
+class PackageResourceValues(StrictModel):
+    download_bytes: int = Field(ge=0)
+    installed_bytes: int = Field(ge=0)
+    transient_bytes: int = Field(ge=0)
+    output_bytes: int = Field(ge=0)
+    host_memory_bytes: int = Field(ge=0)
+    gpu_memory_bytes: int = Field(ge=0)
+    kv_cache_base_bytes: int = Field(ge=0)
+    kv_cache_per_token_bytes: int = Field(ge=0)
+
+
+class PackageResourceEnvelope(PackageResourceValues):
+    """Bounded per-Spark resource requirements from a promoted release."""
+
+    required_sparks: int = Field(ge=1, le=512)
+    topology: str = Field(min_length=1, max_length=128)
+
+
+class PackageRolloutResourceEnvelope(StrictModel):
+    """Signed release sizing for one-node and aggregate placement views."""
+
+    schema_version: int = Field(ge=1)
+    per_node: PackageResourceValues
+    aggregate: PackageResourceValues
+    required_sparks: int = Field(ge=1, le=512)
+    topology: str = Field(min_length=1, max_length=128)
+    measurement: str = Field(min_length=1, max_length=32)
+    evidence: list[dict[str, str]] = Field(max_length=16)
+
+
 class PackagePlanResponse(StrictModel):
     digest: str = Field(pattern=_DIGEST)
     state: str = Field(min_length=1, max_length=64)
@@ -138,6 +168,7 @@ class PackagePlanResponse(StrictModel):
     offline_pending: list[str] = Field(default_factory=list, max_length=512)
     storage_bytes: int | None = Field(default=None, ge=0)
     download_bytes: int | None = Field(default=None, ge=0)
+    resource_envelope: PackageRolloutResourceEnvelope | None = None
 
 
 class PackagePlanRequest(StrictModel):
@@ -196,21 +227,6 @@ class PackageProgressResponse(StrictModel):
     nodes: list[PackageNodeProgress] = Field(default_factory=list, max_length=512)
     rollback_rollout_id: str | None = Field(default=None, pattern=_UUID)
     rollback_selector: str | None = Field(default=None, max_length=128)
-
-
-class PackageResourceEnvelope(StrictModel):
-    """Bounded resource requirements supplied by a promoted workload release."""
-
-    download_bytes: int = Field(ge=0)
-    installed_bytes: int = Field(ge=0)
-    transient_bytes: int = Field(ge=0)
-    output_bytes: int = Field(ge=0)
-    host_memory_bytes: int = Field(ge=0)
-    gpu_memory_bytes: int = Field(ge=0)
-    kv_cache_base_bytes: int = Field(ge=0)
-    kv_cache_per_token_bytes: int = Field(ge=0)
-    required_sparks: int = Field(ge=1, le=512)
-    topology: str = Field(min_length=1, max_length=128)
 
 
 class PackageInventoryItem(StrictModel):
