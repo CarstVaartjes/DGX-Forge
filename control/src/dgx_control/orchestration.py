@@ -32,6 +32,18 @@ _IMPLEMENTED_OPERATIONS = frozenset(
         AgentOperation.WORKLOAD_STOP.value,
         AgentOperation.WORKLOAD_HEALTH.value,
         AgentOperation.WORKLOAD_VERIFY.value,
+        # Workload-package operations use the same persisted graph and agent
+        # queue as the legacy workload actions.  Keeping them in this registry
+        # makes the graph validator family-agnostic without adding a second
+        # transport.
+        AgentOperation.PACKAGE_PREPARE.value,
+        AgentOperation.PACKAGE_ACTIVATE.value,
+        AgentOperation.PACKAGE_HEALTH.value,
+        AgentOperation.PACKAGE_STOP.value,
+        AgentOperation.PACKAGE_ROLLBACK.value,
+        AgentOperation.PACKAGE_REMOVE.value,
+        AgentOperation.PACKAGE_REPAIR.value,
+        AgentOperation.PACKAGE_GC.value,
     }
 )
 _PHASE_TRANSITIONS = {
@@ -157,9 +169,7 @@ class ReconciliationOrchestrator:
                 stored.route_withdrawal_generation = route_withdrawal_generation
             stored.current_phase = phase
             if phase == "completed":
-                stored.completion_generation = self._next_completion_generation(
-                    session
-                )
+                stored.completion_generation = self._next_completion_generation(session)
                 stored.status = "succeeded"
             else:
                 stored.status = "running"
@@ -258,9 +268,7 @@ class ReconciliationOrchestrator:
             return None
         with self._sessions() as session:
             stored = session.scalar(
-                select(Reconciliation).where(
-                    Reconciliation.plan_digest == plan_digest
-                )
+                select(Reconciliation).where(Reconciliation.plan_digest == plan_digest)
             )
             if stored is None or stored.resolved_plan is None:
                 return None
@@ -303,10 +311,12 @@ class ReconciliationOrchestrator:
         if counter is None:
             try:
                 with session.begin_nested():
-                    session.add(ReconciliationCompletionGeneration(
-                        singleton_id=1,
-                        last_generation=0,
-                    ))
+                    session.add(
+                        ReconciliationCompletionGeneration(
+                            singleton_id=1,
+                            last_generation=0,
+                        )
+                    )
                     session.flush()
             except IntegrityError:
                 pass
@@ -400,7 +410,9 @@ def validate_persisted_resolved_plan(
     if (
         not isinstance(protocol, list)
         or len(protocol) != 2
-        or not all(isinstance(value, int) and not isinstance(value, bool) for value in protocol)
+        or not all(
+            isinstance(value, int) and not isinstance(value, bool) for value in protocol
+        )
         or protocol[0] < 1
         or protocol[0] > protocol[1]
     ):
@@ -435,7 +447,23 @@ def validate_persisted_resolved_plan(
     for node in nodes:
         payload = payloads[node.operation_id]
         if not isinstance(payload, Mapping) or _digest(payload) != node.payload_digest:
-            raise ValueError("persisted resolved plan operation payload digest is invalid")
+            raise ValueError(
+                "persisted resolved plan operation payload digest is invalid"
+            )
+    package_nodes = tuple(node for node in nodes if node.kind.startswith("package."))
+    if package_nodes:
+        _validate_package_plan(nodes, payloads)
+        return (
+            OperationGraph(
+                reconciliation_id,
+                base_commit,
+                targets,
+                nodes,
+                graph_digest,
+            ),
+            document,
+        )
+
     stop_nodes = tuple(
         node for node in nodes if node.kind == AgentOperation.WORKLOAD_STOP.value
     )
@@ -449,14 +477,11 @@ def validate_persisted_resolved_plan(
         or node.workload_id == "node-gate"
     )
     if any(
-        node.kind != AgentOperation.NODE_PROBE.value
-        or node.workload_id != "node-gate"
+        node.kind != AgentOperation.NODE_PROBE.value or node.workload_id != "node-gate"
         for node in gate_nodes
     ):
         raise ValueError("persisted resolved plan node gate identity is invalid")
-    required_gate_targets = {
-        node.node_id for node in (*stop_nodes, *install_nodes)
-    }
+    required_gate_targets = {node.node_id for node in (*stop_nodes, *install_nodes)}
     actual_gate_targets = {node.node_id for node in gate_nodes}
     if (
         len(gate_nodes) != len(actual_gate_targets)
@@ -484,6 +509,84 @@ def validate_persisted_resolved_plan(
         ),
         document,
     )
+
+
+def _validate_package_plan(
+    nodes: tuple[OperationNode, ...],
+    payloads: Mapping[str, object],
+) -> None:
+    """Validate the generic package graph without a model catalog.
+
+    Package identities are carried only as exact digests in the request.  The
+    graph validator deliberately does not enumerate adapters, models, or
+    releases; those are authorized by the workload trust plane and checked by
+    the Spark package engine.
+    """
+
+    from dgx_agent_protocol import PackageOperationRequest
+
+    allowed = {
+        AgentOperation.PACKAGE_PREPARE.value,
+        AgentOperation.PACKAGE_ACTIVATE.value,
+        AgentOperation.PACKAGE_HEALTH.value,
+        AgentOperation.PACKAGE_STOP.value,
+        AgentOperation.PACKAGE_ROLLBACK.value,
+        AgentOperation.PACKAGE_REMOVE.value,
+        AgentOperation.PACKAGE_REPAIR.value,
+    }
+    by_target: dict[tuple[str, str], dict[str, OperationNode]] = {}
+    for node in nodes:
+        if node.kind not in allowed:
+            continue
+        payload = payloads.get(node.operation_id)
+        if not isinstance(payload, Mapping):
+            raise TypeError("persisted package operation payload is invalid")
+        try:
+            request = PackageOperationRequest.parse(AgentOperation(node.kind), payload)
+        except Exception as error:
+            raise ValueError(
+                "persisted package operation payload is invalid"
+            ) from error
+        if request.deployment_id != node.workload_id:
+            raise ValueError("package operation deployment identity is inconsistent")
+        deployment = request.deployment_id
+        assert deployment is not None
+        family = by_target.setdefault((deployment, node.node_id), {})
+        if node.kind in family:
+            raise ValueError("duplicate package operation for deployment and node")
+        family[node.kind] = node
+
+    if not by_target:
+        raise ValueError("package graph has no package operations")
+    for (deployment, _node_id), operations in by_target.items():
+        prepares = operations.get(AgentOperation.PACKAGE_PREPARE.value)
+        activates = operations.get(AgentOperation.PACKAGE_ACTIVATE.value)
+        health = operations.get(AgentOperation.PACKAGE_HEALTH.value)
+        if prepares is None and activates is None and health is not None:
+            if health.dependencies:
+                raise ValueError("retained package health must not have dependencies")
+            continue
+        if prepares is None or activates is None or health is None:
+            raise ValueError("package graph lifecycle is incomplete")
+        if prepares.node_id != activates.node_id or activates.node_id != health.node_id:
+            raise ValueError("package graph lifecycle target is inconsistent")
+        if activates.dependencies != (prepares.operation_id,):
+            raise ValueError("package activation must depend on preparation")
+        if health.dependencies != (activates.operation_id,):
+            raise ValueError("package health must depend on activation")
+        if activates.compensation_kind not in {
+            AgentOperation.PACKAGE_ROLLBACK.value,
+            None,
+        }:
+            raise ValueError("package activation compensation is invalid")
+        if activates.compensation_kind == AgentOperation.PACKAGE_ROLLBACK.value and any(
+            node.kind == AgentOperation.PACKAGE_ROLLBACK.value
+            and node.workload_id == deployment
+            for node in nodes
+        ):
+            # The rollback node is represented by the compensation kind on
+            # activation; it must never be dispatched as a primary operation.
+            raise ValueError("package rollback must be compensation-only")
 
 
 def _parse_plan(
@@ -567,18 +670,25 @@ def _operation(raw: Any) -> OperationNode:
     dependencies = raw["dependencies"]
     compensation = raw["compensation_kind"]
     payload_digest = raw["payload_digest"]
-    if not isinstance(operation_id, str) or _OPERATION_ID.fullmatch(operation_id) is None:
+    if (
+        not isinstance(operation_id, str)
+        or _OPERATION_ID.fullmatch(operation_id) is None
+    ):
         raise ValueError("reconciliation operation ID is invalid")
     if not isinstance(node_id, str) or _NODE_ID.fullmatch(node_id) is None:
         raise ValueError("reconciliation operation target is invalid")
     if not isinstance(workload_id, str) or _WORKLOAD_ID.fullmatch(workload_id) is None:
         raise ValueError("reconciliation workload ID is invalid")
     if not isinstance(kind, str) or kind not in _IMPLEMENTED_OPERATIONS:
-        raise ValueError("reconciliation operation kind is absent from the agent registry")
+        raise ValueError(
+            "reconciliation operation kind is absent from the agent registry"
+        )
     if compensation is not None and (
         not isinstance(compensation, str) or compensation not in _IMPLEMENTED_OPERATIONS
     ):
-        raise ValueError("reconciliation compensation kind is absent from the agent registry")
+        raise ValueError(
+            "reconciliation compensation kind is absent from the agent registry"
+        )
     if not isinstance(payload_digest, str) or _DIGEST.fullmatch(payload_digest) is None:
         raise ValueError("reconciliation payload digest is invalid")
     if not isinstance(dependencies, list) or not all(

@@ -11,7 +11,7 @@ from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from dgx_agent_protocol import AgentResult, canonical_message
+from dgx_agent_protocol import AgentOperation, AgentResult, canonical_message
 from sqlalchemy import and_, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
@@ -56,6 +56,15 @@ _WORKLOAD_ACTIONS = {
     "workload.health": "health",
     "workload.verify": "verify",
 }
+_PACKAGE_ACTIONS = {
+    "package.prepare": "prepare",
+    "package.activate": "activate",
+    "package.health": "health",
+    "package.stop": "stop",
+    "package.rollback": "rollback",
+    "package.remove": "remove",
+    "package.repair": "repair",
+}
 _MUTATIONS = frozenset(
     {
         "agent.rollback",
@@ -64,6 +73,12 @@ _MUTATIONS = frozenset(
         "workload.prepare",
         "workload.start",
         "workload.stop",
+        "package.prepare",
+        "package.activate",
+        "package.stop",
+        "package.rollback",
+        "package.remove",
+        "package.repair",
     }
 )
 _REQUIRED_AGENT_CAPABILITIES = frozenset(
@@ -169,7 +184,9 @@ def ready_operation_ids(
 ) -> tuple[str, ...]:
     """Return the deterministic next wave using accepted projections only."""
 
-    accepted = {operation_id for operation_id, state in states.items() if state == "accepted"}
+    accepted = {
+        operation_id for operation_id, state in states.items() if state == "accepted"
+    }
     pending = {
         node.operation_id
         for node in nodes
@@ -210,6 +227,8 @@ def accepted_result_digests(
         _release_evidence(payload, evidence)
     elif kind in _WORKLOAD_ACTIONS:
         _workload_evidence(kind, payload, evidence)
+    elif kind in _PACKAGE_ACTIONS:
+        _package_evidence(kind, payload, evidence)
     elif kind == "node.probe":
         _probe_evidence(payload, evidence)
     else:
@@ -267,10 +286,61 @@ def _workload_evidence(
         or _DIGEST.fullmatch(evidence_digest) is None
     ):
         raise ValueError("workload evidence does not match the request")
-    if kind == "workload.verify" and evidence_digest != payload.get(
-        "expected_digest"
-    ):
+    if kind == "workload.verify" and evidence_digest != payload.get("expected_digest"):
         raise ValueError("workload verify evidence digest does not match the request")
+
+
+def _package_evidence(
+    kind: str,
+    payload: Mapping[str, object],
+    evidence: Mapping[str, object],
+) -> None:
+    """Authenticate the generic package-engine result contract.
+
+    The package engine intentionally returns only bounded lifecycle evidence;
+    the deployment digest remains request-bound and is not copied into the
+    result.  This prevents an agent from claiming a different desired state
+    while retaining the existing exact operation/fence checks.
+    """
+
+    required = {
+        "operation",
+        "deployment_id",
+        "release_digest",
+        "generation",
+        "status",
+        "evidence_digest",
+    }
+    if set(evidence) != required:
+        raise ValueError("package evidence is invalid")
+    deployment = payload.get("deployment_id")
+    release = payload.get("release_digest")
+    evidence_digest = evidence.get("evidence_digest")
+    operation = evidence.get("operation")
+    expected_statuses = {
+        "package.prepare": {"validated", "completed"},
+        "package.activate": {"active"},
+        "package.health": {"ok", "healthy", "active"},
+        "package.stop": {"ok", "stopped", "active", "removed"},
+        "package.rollback": {"active", "rolled-back"},
+        "package.remove": {"removed"},
+        "package.repair": {"validated", "repaired", "active", "healthy"},
+    }
+    if (
+        operation != kind
+        or evidence.get("deployment_id") != deployment
+        or evidence.get("release_digest") != release
+        or not isinstance(evidence.get("status"), str)
+        or evidence["status"] not in expected_statuses[kind]
+        or evidence.get("generation") is not None
+        and not isinstance(evidence.get("generation"), str)
+        or not isinstance(evidence_digest, str)
+        or _DIGEST.fullmatch(evidence_digest) is None
+        or not isinstance(deployment, str)
+        or not isinstance(release, str)
+        or _DIGEST.fullmatch(release) is None
+    ):
+        raise ValueError("package evidence does not match the request")
 
 
 def _probe_evidence(
@@ -306,9 +376,7 @@ class AgentReconciliationService:
         publication_lease_seconds: int = 60,
         commit_eligible: Callable[[str], bool] | None = None,
         current_commit: Callable[[], str] | None = None,
-        authority_prefetch: Callable[
-            [str, str, str, tuple[PublishedRoute, ...]], None
-        ]
+        authority_prefetch: Callable[[str, str, str, tuple[PublishedRoute, ...]], None]
         | None = None,
         authority_check: Callable[
             [str, str, str, tuple[PublishedRoute, ...]], bool | str
@@ -446,35 +514,32 @@ class AgentReconciliationService:
                 ):
                     return True
                 if phase in {"failed", "cancelled"} and (
-                    self._mark_node_lease_releasing(
-                        session, reconciliation, graph
-                    )
+                    self._mark_node_lease_releasing(session, reconciliation, graph)
                 ):
                     return True
-                if phase in {
-                    "withdrawal-pending",
-                    "routes-withdrawn",
-                    "dispatching",
-                    "accepting",
-                    "publication-pending",
-                    "compensating",
-                } and self._ensure_node_lease(
-                    session, reconciliation, graph
-                ) is None:
+                if (
+                    phase
+                    in {
+                        "withdrawal-pending",
+                        "routes-withdrawn",
+                        "dispatching",
+                        "accepting",
+                        "publication-pending",
+                        "compensating",
+                    }
+                    and self._ensure_node_lease(session, reconciliation, graph) is None
+                ):
                     return False
                 if cancellation is not None:
                     if (
                         phase == "completed"
-                        and cancellation.state
-                        in {"requested", "withdrawal-pending"}
+                        and cancellation.state in {"requested", "withdrawal-pending"}
                         and self._owns_publication(
                             session,
                             reconciliation,
                             may_supersede=False,
                         )
-                        and self._ensure_node_lease(
-                            session, reconciliation, graph
-                        )
+                        and self._ensure_node_lease(session, reconciliation, graph)
                         is None
                     ):
                         return False
@@ -493,9 +558,7 @@ class AgentReconciliationService:
                         return cancellation_advanced
                 if phase in {"failed", "cancelled", "waiting-for-operator"}:
                     return released_node_lease
-                if self._sweep_expired_mutations(
-                    session, reconciliation, job, graph
-                ):
+                if self._sweep_expired_mutations(session, reconciliation, job, graph):
                     return True
                 publication_owner = self._publication_owner(session)
                 if (
@@ -538,9 +601,10 @@ class AgentReconciliationService:
                         and phase in {"completed", "publication-pending"}
                         and self._publisher is not None
                     ):
-                        if self._ensure_node_lease(
-                            session, reconciliation, graph
-                        ) is None:
+                        if (
+                            self._ensure_node_lease(session, reconciliation, graph)
+                            is None
+                        ):
                             return False
                         publication = self._publication(session, reconciliation.id)
                         marker = self._publisher.withdraw(
@@ -584,10 +648,10 @@ class AgentReconciliationService:
                     return False
                 if phase == "planned":
                     if job.base_commit != reconciliation.base_commit:
-                        raise ValueError("reconciliation job base commit does not match")
-                    if self._ensure_node_lease(
-                        session, reconciliation, graph
-                    ) is None:
+                        raise ValueError(
+                            "reconciliation job base commit does not match"
+                        )
+                    if self._ensure_node_lease(session, reconciliation, graph) is None:
                         return False
                     session.add(
                         RoutePublication(
@@ -622,7 +686,9 @@ class AgentReconciliationService:
                         return True
                     existing = {
                         row.graph_operation_id
-                        for row in self._projections(session, reconciliation.id, "primary")
+                        for row in self._projections(
+                            session, reconciliation.id, "primary"
+                        )
                     }
                     for node in graph.nodes:
                         if node.operation_id not in existing:
@@ -697,13 +763,9 @@ class AgentReconciliationService:
                         "bundle_digest": marker.manifest_sha256,
                     }
                     job.updated_at = self._clock()
-                    self._mark_node_lease_releasing(
-                        session, reconciliation, graph
-                    )
+                    self._mark_node_lease_releasing(session, reconciliation, graph)
                 elif phase == "completed":
-                    if self._ensure_node_lease(
-                        session, reconciliation, graph
-                    ) is None:
+                    if self._ensure_node_lease(session, reconciliation, graph) is None:
                         return released_node_lease
                     marker = self._publisher.withdraw(
                         reconciliation_id=reconciliation.id,
@@ -730,9 +792,7 @@ class AgentReconciliationService:
                         session, reconciliation, job, graph, document
                     )
                     if reconciliation.current_phase == "failed":
-                        self._mark_node_lease_releasing(
-                            session, reconciliation, graph
-                        )
+                        self._mark_node_lease_releasing(session, reconciliation, graph)
                 elif phase in {
                     "failed",
                     "cancelled",
@@ -794,7 +854,15 @@ class AgentReconciliationService:
             kind = node.compensation_kind
             payload = self._compensation_payload(payload)
         self._validate_operation_binding(
-            operation, attempt, message, reconciliation, job, projection, node, kind, payload
+            operation,
+            attempt,
+            message,
+            reconciliation,
+            job,
+            projection,
+            node,
+            kind,
+            payload,
         )
         expected_phase = (
             "compensating" if projection.role == "compensation" else "dispatching"
@@ -806,9 +874,7 @@ class AgentReconciliationService:
         )
         if authority_reason is not None:
             terminal = (
-                "waiting-for-operator"
-                if operation.kind in _MUTATIONS
-                else "failed"
+                "waiting-for-operator" if operation.kind in _MUTATIONS else "failed"
             )
             attempt.state = terminal
             operation.state = terminal
@@ -864,9 +930,7 @@ class AgentReconciliationService:
             return
         self._handle_primary_failure(session, reconciliation, job, graph, node, reason)
         if reconciliation.current_phase in {"failed", "cancelled"}:
-            self._mark_node_lease_releasing(
-                session, reconciliation, graph
-            )
+            self._mark_node_lease_releasing(session, reconciliation, graph)
 
     def request_cancel(self, reconciliation_id: str, reason: str) -> None:
         self.enqueue_cancel(
@@ -906,8 +970,7 @@ class AgentReconciliationService:
             existing = session.scalar(
                 select(ReconciliationCancellation)
                 .where(
-                    ReconciliationCancellation.reconciliation_id
-                    == reconciliation_id
+                    ReconciliationCancellation.reconciliation_id == reconciliation_id
                 )
                 .with_for_update(of=ReconciliationCancellation)
             )
@@ -954,8 +1017,7 @@ class AgentReconciliationService:
                 return False
             cancellation.state = (
                 "withdrawal-pending"
-                if reconciliation.current_phase
-                in {"completed", "publication-pending"}
+                if reconciliation.current_phase in {"completed", "publication-pending"}
                 and owns_publication
                 else "processing"
             )
@@ -991,14 +1053,10 @@ class AgentReconciliationService:
         if cancellation.state == "withdrawn":
             cancellation.state = "processing"
             cancellation.updated_at = now
-            self._apply_cancellation(
-                session, reconciliation, job, graph, cancellation
-            )
+            self._apply_cancellation(session, reconciliation, job, graph, cancellation)
             return True
         if cancellation.state == "processing":
-            self._apply_cancellation(
-                session, reconciliation, job, graph, cancellation
-            )
+            self._apply_cancellation(session, reconciliation, job, graph, cancellation)
             return True
         if cancellation.state == "compensating":
             if reconciliation.current_phase == "failed":
@@ -1020,9 +1078,7 @@ class AgentReconciliationService:
         cancellation: ReconciliationCancellation,
     ) -> None:
         projections = self._projections(session, reconciliation.id, "primary")
-        compensations = self._projections(
-            session, reconciliation.id, "compensation"
-        )
+        compensations = self._projections(session, reconciliation.id, "compensation")
         if not self._owns_publication(
             session,
             reconciliation,
@@ -1088,13 +1144,9 @@ class AgentReconciliationService:
             }
             for row in compensations
         )
-        uncertain = self._quiesce_pending(
-            session, reconciliation, graph, projections
-        )
+        uncertain = self._quiesce_pending(session, reconciliation, graph, projections)
         uncertain = (
-            self._quiesce_pending(
-                session, reconciliation, graph, compensations
-            )
+            self._quiesce_pending(session, reconciliation, graph, compensations)
             or uncertain
         )
         mutated = [
@@ -1206,8 +1258,7 @@ class AgentReconciliationService:
                 .join(
                     AgentOperationAttempt,
                     and_(
-                        AgentOperationAttempt.operation_id
-                        == StoredAgentOperation.id,
+                        AgentOperationAttempt.operation_id == StoredAgentOperation.id,
                         AgentOperationAttempt.attempt
                         == StoredAgentOperation.current_attempt,
                     ),
@@ -1227,13 +1278,10 @@ class AgentReconciliationService:
                 select(Reconciliation.id)
                 .join(
                     ReconciliationCancellation,
-                    ReconciliationCancellation.reconciliation_id
-                    == Reconciliation.id,
+                    ReconciliationCancellation.reconciliation_id == Reconciliation.id,
                 )
                 .where(
-                    ReconciliationCancellation.state.in_(
-                        _ACTIVE_CANCELLATION_STATES
-                    )
+                    ReconciliationCancellation.state.in_(_ACTIVE_CANCELLATION_STATES)
                 )
                 .order_by(Reconciliation.created_at, Reconciliation.id)
                 .limit(1)
@@ -1310,9 +1358,7 @@ class AgentReconciliationService:
             return False
         candidate_order = (_aware(reconciliation.created_at), reconciliation.id)
         current_order = (
-            None
-            if current is None
-            else (_aware(current.created_at), current.id)
+            None if current is None else (_aware(current.created_at), current.id)
         )
         if current_order is not None and (
             not may_supersede or candidate_order <= current_order
@@ -1606,9 +1652,7 @@ class AgentReconciliationService:
         return None
 
     @classmethod
-    def _require_active_targets(
-        cls, session: Session, graph: OperationGraph
-    ) -> None:
+    def _require_active_targets(cls, session: Session, graph: OperationGraph) -> None:
         if not cls._targets_are_active(session, graph):
             raise ValueError("reconciliation target agent is unavailable")
 
@@ -1649,10 +1693,7 @@ class AgentReconciliationService:
     ) -> ReconciliationCancellation | None:
         return session.scalar(
             select(ReconciliationCancellation)
-            .where(
-                ReconciliationCancellation.reconciliation_id
-                == reconciliation_id
-            )
+            .where(ReconciliationCancellation.reconciliation_id == reconciliation_id)
             .with_for_update(of=ReconciliationCancellation)
         )
 
@@ -1886,6 +1927,23 @@ class AgentReconciliationService:
     def _compensation_payload(
         payload: Mapping[str, object],
     ) -> dict[str, object]:
+        if payload.get("schema_version") == 1 and {
+            "deployment_id",
+            "release_digest",
+            "deployment_digest",
+        }.issubset(payload):
+            # Package rollback is a release-bound protocol operation.  The
+            # package engine resolves the retained predecessor generation from
+            # its journal; no mutable adapter/path is introduced here.
+            return {
+                key: payload[key]
+                for key in (
+                    "schema_version",
+                    "deployment_id",
+                    "release_digest",
+                    "deployment_digest",
+                )
+            }
         required = {"schema_version", "workload_id", "release_digest", "adapter_id"}
         if not required.issubset(payload):
             raise ValueError("workload compensation payload is incomplete")
@@ -1940,7 +1998,17 @@ class AgentReconciliationService:
             return
         accepted = {row.graph_operation_id: row.state for row in projections}
         compensatable = compensation_order(graph.nodes, accepted)
-        if failed_node.kind in {"workload.start", "workload.health", "workload.verify"} and compensatable:
+        if (
+            failed_node.kind
+            in {
+                "workload.start",
+                "workload.health",
+                "workload.verify",
+                AgentOperation.PACKAGE_ACTIVATE.value,
+                AgentOperation.PACKAGE_HEALTH.value,
+            }
+            and compensatable
+        ):
             reconciliation.current_phase = "compensating"
             reconciliation.status = "running"
             reconciliation.terminal_reason = reason
@@ -2018,9 +2086,7 @@ class AgentReconciliationService:
         """Project expired mutation leases without requiring another claim."""
 
         primary = self._projections(session, reconciliation.id, "primary")
-        compensation = self._projections(
-            session, reconciliation.id, "compensation"
-        )
+        compensation = self._projections(session, reconciliation.id, "compensation")
         now = self._clock()
         expired = False
         for projection in (*primary, *compensation):
@@ -2118,7 +2184,9 @@ class AgentReconciliationService:
         reason = message.result.get("reason")
         if not isinstance(reason, str):
             reason = message.result.get("error_code")
-        return cls._safe_reason(reason if isinstance(reason, str) and reason else "agent operation failed")
+        return cls._safe_reason(
+            reason if isinstance(reason, str) and reason else "agent operation failed"
+        )
 
 
 def bind_reconciliation_result_consumer(
