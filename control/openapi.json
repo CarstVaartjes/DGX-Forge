@@ -1399,6 +1399,181 @@
         "title": "PackageFamilyResponse",
         "type": "object"
       },
+      "PackageInventoryItem": {
+        "additionalProperties": false,
+        "description": "One release/content group as observed on one Spark.",
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "bytes_complete": {
+            "minimum": 0.0,
+            "title": "Bytes Complete",
+            "type": "integer"
+          },
+          "bytes_remaining": {
+            "minimum": 0.0,
+            "title": "Bytes Remaining",
+            "type": "integer"
+          },
+          "bytes_total": {
+            "minimum": 0.0,
+            "title": "Bytes Total",
+            "type": "integer"
+          },
+          "content_group": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Content Group",
+            "type": "string"
+          },
+          "deployment_id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,126}$",
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "family_id": {
+            "anyOf": [
+              {
+                "pattern": "^[a-z0-9][a-z0-9._-]{0,126}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Family Id"
+          },
+          "installed_bytes": {
+            "minimum": 0.0,
+            "title": "Installed Bytes",
+            "type": "integer"
+          },
+          "last_operation_error": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Operation Error"
+          },
+          "last_operation_state": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Operation State"
+          },
+          "leased": {
+            "title": "Leased",
+            "type": "boolean"
+          },
+          "operation_id": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Operation Id"
+          },
+          "reclaimable_bytes": {
+            "minimum": 0.0,
+            "title": "Reclaimable Bytes",
+            "type": "integer"
+          },
+          "release_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Release Digest",
+            "type": "string"
+          },
+          "reserved_bytes": {
+            "minimum": 0.0,
+            "title": "Reserved Bytes",
+            "type": "integer"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/PackageResourceEnvelope"
+          },
+          "retained": {
+            "title": "Retained",
+            "type": "boolean"
+          },
+          "state": {
+            "pattern": "^(downloading|staged|available|active|retained|leased|removable|failed)$",
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deployment_id",
+          "release_digest",
+          "content_group",
+          "state",
+          "bytes_total",
+          "bytes_complete",
+          "bytes_remaining",
+          "installed_bytes",
+          "reclaimable_bytes",
+          "reserved_bytes",
+          "active",
+          "retained",
+          "leased",
+          "resources"
+        ],
+        "title": "PackageInventoryItem",
+        "type": "object"
+      },
+      "PackageInventoryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/PackageSparkInventory"
+            },
+            "maxItems": 512,
+            "title": "Nodes",
+            "type": "array"
+          },
+          "total": {
+            "maximum": 10000000.0,
+            "minimum": 0.0,
+            "title": "Total",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "nodes",
+          "total"
+        ],
+        "title": "PackageInventoryResponse",
+        "type": "object"
+      },
       "PackageNodeProgress": {
         "additionalProperties": false,
         "properties": {
@@ -1831,6 +2006,158 @@
         "title": "PackageReleaseMetadata",
         "type": "object"
       },
+      "PackageRemovalNode": {
+        "additionalProperties": false,
+        "properties": {
+          "active": {
+            "title": "Active",
+            "type": "boolean"
+          },
+          "blocked_reason": {
+            "anyOf": [
+              {
+                "maxLength": 256,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked Reason"
+          },
+          "dependencies": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 256,
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "leased": {
+            "title": "Leased",
+            "type": "boolean"
+          },
+          "node_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Node Id",
+            "type": "string"
+          },
+          "reclaimable_bytes": {
+            "minimum": 0.0,
+            "title": "Reclaimable Bytes",
+            "type": "integer"
+          },
+          "retained": {
+            "title": "Retained",
+            "type": "boolean"
+          },
+          "state": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_id",
+          "state",
+          "active",
+          "retained",
+          "leased",
+          "reclaimable_bytes"
+        ],
+        "title": "PackageRemovalNode",
+        "type": "object"
+      },
+      "PackageRemovalPreviewResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "blocked_nodes": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 512,
+            "title": "Blocked Nodes",
+            "type": "array"
+          },
+          "deployment_id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,126}$",
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Digest",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/PackageRemovalNode"
+            },
+            "maxItems": 512,
+            "title": "Nodes",
+            "type": "array"
+          },
+          "reclaimable_bytes": {
+            "minimum": 0.0,
+            "title": "Reclaimable Bytes",
+            "type": "integer"
+          },
+          "release_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Release Digest",
+            "type": "string"
+          },
+          "state": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "digest",
+          "state",
+          "deployment_id",
+          "release_digest",
+          "nodes",
+          "reclaimable_bytes"
+        ],
+        "title": "PackageRemovalPreviewResponse",
+        "type": "object"
+      },
+      "PackageRemovalRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "deployment_id": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,126}$",
+            "title": "Deployment Id",
+            "type": "string"
+          },
+          "node_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 512,
+            "minItems": 1,
+            "title": "Node Ids",
+            "type": "array"
+          },
+          "release_digest": {
+            "pattern": "^sha256:[0-9a-f]{64}$",
+            "title": "Release Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "deployment_id",
+          "release_digest",
+          "node_ids"
+        ],
+        "title": "PackageRemovalRequest",
+        "type": "object"
+      },
       "PackageResolutionResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1857,6 +2184,212 @@
           "state"
         ],
         "title": "PackageResolutionResponse",
+        "type": "object"
+      },
+      "PackageResourceEnvelope": {
+        "additionalProperties": false,
+        "description": "Bounded resource requirements supplied by a promoted workload release.",
+        "properties": {
+          "download_bytes": {
+            "minimum": 0.0,
+            "title": "Download Bytes",
+            "type": "integer"
+          },
+          "gpu_memory_bytes": {
+            "minimum": 0.0,
+            "title": "Gpu Memory Bytes",
+            "type": "integer"
+          },
+          "host_memory_bytes": {
+            "minimum": 0.0,
+            "title": "Host Memory Bytes",
+            "type": "integer"
+          },
+          "installed_bytes": {
+            "minimum": 0.0,
+            "title": "Installed Bytes",
+            "type": "integer"
+          },
+          "kv_cache_base_bytes": {
+            "minimum": 0.0,
+            "title": "Kv Cache Base Bytes",
+            "type": "integer"
+          },
+          "kv_cache_per_token_bytes": {
+            "minimum": 0.0,
+            "title": "Kv Cache Per Token Bytes",
+            "type": "integer"
+          },
+          "required_sparks": {
+            "maximum": 512.0,
+            "minimum": 1.0,
+            "title": "Required Sparks",
+            "type": "integer"
+          },
+          "topology": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Topology",
+            "type": "string"
+          },
+          "transient_bytes": {
+            "minimum": 0.0,
+            "title": "Transient Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "download_bytes",
+          "installed_bytes",
+          "transient_bytes",
+          "host_memory_bytes",
+          "gpu_memory_bytes",
+          "kv_cache_base_bytes",
+          "kv_cache_per_token_bytes",
+          "required_sparks",
+          "topology"
+        ],
+        "title": "PackageResourceEnvelope",
+        "type": "object"
+      },
+      "PackageSparkInventory": {
+        "additionalProperties": false,
+        "properties": {
+          "current_generation": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Generation"
+          },
+          "node_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Node Id",
+            "type": "string"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "online": {
+            "title": "Online",
+            "type": "boolean"
+          },
+          "packages": {
+            "items": {
+              "$ref": "#/components/schemas/PackageInventoryItem"
+            },
+            "maxItems": 2048,
+            "title": "Packages",
+            "type": "array"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/PackageSparkResources"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/PackageSparkStorage"
+          }
+        },
+        "required": [
+          "node_id",
+          "online",
+          "storage",
+          "resources"
+        ],
+        "title": "PackageSparkInventory",
+        "type": "object"
+      },
+      "PackageSparkResources": {
+        "additionalProperties": false,
+        "properties": {
+          "gpu_count": {
+            "maximum": 512.0,
+            "minimum": 0.0,
+            "title": "Gpu Count",
+            "type": "integer"
+          },
+          "gpu_memory_free_bytes": {
+            "minimum": 0.0,
+            "title": "Gpu Memory Free Bytes",
+            "type": "integer"
+          },
+          "gpu_memory_total_bytes": {
+            "minimum": 0.0,
+            "title": "Gpu Memory Total Bytes",
+            "type": "integer"
+          },
+          "host_memory_free_bytes": {
+            "minimum": 0.0,
+            "title": "Host Memory Free Bytes",
+            "type": "integer"
+          },
+          "host_memory_total_bytes": {
+            "minimum": 0.0,
+            "title": "Host Memory Total Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "host_memory_total_bytes",
+          "host_memory_free_bytes",
+          "gpu_memory_total_bytes",
+          "gpu_memory_free_bytes",
+          "gpu_count"
+        ],
+        "title": "PackageSparkResources",
+        "type": "object"
+      },
+      "PackageSparkStorage": {
+        "additionalProperties": false,
+        "properties": {
+          "free_bytes": {
+            "minimum": 0.0,
+            "title": "Free Bytes",
+            "type": "integer"
+          },
+          "reclaimable_bytes": {
+            "minimum": 0.0,
+            "title": "Reclaimable Bytes",
+            "type": "integer"
+          },
+          "reserved_bytes": {
+            "minimum": 0.0,
+            "title": "Reserved Bytes",
+            "type": "integer"
+          },
+          "total_bytes": {
+            "minimum": 0.0,
+            "title": "Total Bytes",
+            "type": "integer"
+          },
+          "used_bytes": {
+            "minimum": 0.0,
+            "title": "Used Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_bytes",
+          "used_bytes",
+          "free_bytes",
+          "reserved_bytes",
+          "reclaimable_bytes"
+        ],
+        "title": "PackageSparkStorage",
         "type": "object"
       },
       "PlanEndpoint": {
@@ -5832,6 +6365,310 @@
           }
         ],
         "summary": "Preview Gc"
+      }
+    },
+    "/api/v1/packages/inventory": {
+      "get": {
+        "operationId": "listPackageInventory",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "node_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Node Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "deployment_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "pattern": "^[a-z0-9][a-z0-9._-]{0,126}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Deployment Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 512,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackageInventoryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List Inventory"
+      }
+    },
+    "/api/v1/packages/inventory/remove": {
+      "post": {
+        "operationId": "removePackageInventory",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PackagePlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackageProgressResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Remove Inventory"
+      }
+    },
+    "/api/v1/packages/inventory/remove-preview": {
+      "post": {
+        "operationId": "previewPackageRemoval",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PackageRemovalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PackageRemovalPreviewResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview Removal"
       }
     },
     "/api/v1/packages/validations/{validation_id}": {

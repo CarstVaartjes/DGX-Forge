@@ -12,7 +12,7 @@ export type PackageFamily = {
 
 export type PackageCandidateSummary = {
   id: string;
-  family_id: string;
+  family_id: string | null;
   channel: string | null;
   provider: string;
   state: string;
@@ -59,6 +59,82 @@ export type PackageRollout = {
   nodes: {name: string; state: string}[];
 };
 
+/**
+ * Read-only projection of the package store on each Spark.  The projection is
+ * deliberately separate from deployment state: a package can be downloaded
+ * (and useful for a future activation) without being the process currently
+ * serving traffic.
+ */
+export type PackageInventoryEntry = {
+  deployment_id: string;
+  family_id: string;
+  release_digest: string;
+  content_group: string;
+  state: "downloading" | "staged" | "available" | "active" | "retained" | "leased" | "failed" | string;
+  bytes_total: number;
+  bytes_complete: number;
+  bytes_remaining: number;
+  installed_bytes: number;
+  reclaimable_bytes: number;
+  reserved_bytes: number;
+  active: boolean;
+  retained: boolean;
+  leased: boolean;
+  operation_id?: string | null;
+  last_operation_state?: string | null;
+  last_operation_error?: string | null;
+  resources: {
+    download_bytes: number;
+    installed_bytes: number;
+    transient_bytes: number;
+    host_memory_bytes: number;
+    gpu_memory_bytes: number;
+    kv_cache_base_bytes: number;
+    kv_cache_per_token_bytes: number;
+    required_sparks: number;
+    topology: string;
+  };
+};
+
+export type PackageInventoryNode = {
+  node_id: string;
+  display_name?: string;
+  storage: {
+    total_bytes: number;
+    available_bytes?: number;
+    used_bytes: number;
+    free_bytes?: number;
+    reserved_bytes: number;
+    reclaimable_bytes?: number;
+  };
+  packages?: PackageInventoryEntry[];
+  online?: boolean;
+  current_generation?: string | null;
+  resources?: {
+    host_memory_total_bytes: number;
+    host_memory_free_bytes: number;
+    gpu_memory_total_bytes: number;
+    gpu_memory_free_bytes: number;
+    gpu_count: number;
+  };
+  observed_at?: string | null;
+};
+
+export type PackageGcPreview = PackagePreview & {
+  reclaim_bytes?: number;
+  storage_bytes?: number;
+  nodes?: Array<{node_id: string; state?: string; reclaimable_bytes?: number; blocked_reason?: string | null}>;
+  blocked_nodes?: string[];
+};
+
+export type PackageGcProgress = {
+  id: string;
+  state: string;
+  phase?: string;
+  failure_reason?: string | null;
+  nodes?: Array<{name?: string; node_id?: string; state: string}>;
+};
+
 export interface PackageApi {
   packageFamilies(): Promise<PackageFamily[]>;
   packageCandidates(): Promise<PackageCandidateSummary[]>;
@@ -71,4 +147,10 @@ export interface PackageApi {
   packageRollout(rolloutId: string): Promise<PackageRollout>;
   previewPackageRollback(deploymentId: string): Promise<PackagePreview>;
   rollbackPackage(deploymentId: string, previewDigest: string): Promise<{id: string}>;
+  /** Optional until the control-plane inventory projection is available. */
+  packageInventory?(): Promise<PackageInventoryNode[] | {nodes: PackageInventoryNode[]; total?: number; next_cursor?: string | null}>;
+  previewPackageGc?(): Promise<PackageGcPreview>;
+  applyPackageGc?(previewDigest: string): Promise<PackageGcProgress>;
+  previewPackageRemoval?(input: {deployment_id: string; release_digest: string; node_ids: string[]}): Promise<PackagePreview>;
+  removePackageInventory?(previewDigest: string): Promise<PackageGcProgress>;
 }

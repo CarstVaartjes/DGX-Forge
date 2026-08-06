@@ -185,12 +185,15 @@ Preparation is an explicit operation separate from profile switching. It may:
 4. generate and verify per-file manifests; and
 5. create only the declared writable directories.
 
-Preparation may not start a serving container. It is serialized against profile
-transitions and unavailable while a Cluster Profile is active, but artifact
-pulls and checkpoint materialization run concurrently on both Sparks. One node
-must never wait for the other node's full download. Progress and resumability
-are required because each node receives approximately 155.4 GiB of checkpoint
-artifacts.
+Preparation may not start or stop a serving container. It is an independent
+download/install operation and remains available while an unchanged Cluster
+Profile is serving: artifact pulls, checkpoint materialization, and offline
+validation run in a separate generation while the current generation keeps
+serving. Activation is the only operation that may change the serving
+generation, and it is explicitly requested after preparation succeeds. One
+node must never wait for the other node's full download. Progress and
+resumability are required because each node receives approximately 155.4 GiB
+of checkpoint artifacts.
 
 Bootstrapping the node-local adapter is a separate developer-machine operation:
 

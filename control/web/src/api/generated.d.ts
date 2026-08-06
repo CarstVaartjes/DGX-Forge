@@ -633,6 +633,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/packages/inventory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Inventory */
+        get: operations["listPackageInventory"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/packages/inventory/remove": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Remove Inventory */
+        post: operations["removePackageInventory"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/packages/inventory/remove-preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Removal */
+        post: operations["previewPackageRemoval"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/packages/validations/{validation_id}": {
         parameters: {
             query?: never;
@@ -1223,6 +1274,56 @@ export interface components {
             /** Promotion Mode */
             promotion_mode: string;
         };
+        /**
+         * PackageInventoryItem
+         * @description One release/content group as observed on one Spark.
+         */
+        PackageInventoryItem: {
+            /** Active */
+            active: boolean;
+            /** Bytes Complete */
+            bytes_complete: number;
+            /** Bytes Remaining */
+            bytes_remaining: number;
+            /** Bytes Total */
+            bytes_total: number;
+            /** Content Group */
+            content_group: string;
+            /** Deployment Id */
+            deployment_id: string;
+            /** Family Id */
+            family_id?: string | null;
+            /** Installed Bytes */
+            installed_bytes: number;
+            /** Last Operation Error */
+            last_operation_error?: string | null;
+            /** Last Operation State */
+            last_operation_state?: string | null;
+            /** Leased */
+            leased: boolean;
+            /** Operation Id */
+            operation_id?: string | null;
+            /** Reclaimable Bytes */
+            reclaimable_bytes: number;
+            /** Release Digest */
+            release_digest: string;
+            /** Reserved Bytes */
+            reserved_bytes: number;
+            resources: components["schemas"]["PackageResourceEnvelope"];
+            /** Retained */
+            retained: boolean;
+            /** State */
+            state: string;
+        };
+        /** PackageInventoryResponse */
+        PackageInventoryResponse: {
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /** Nodes */
+            nodes: components["schemas"]["PackageSparkInventory"][];
+            /** Total */
+            total: number;
+        };
         /** PackageNodeProgress */
         PackageNodeProgress: {
             /** Batch Index */
@@ -1335,6 +1436,51 @@ export interface components {
             /** Release Digest */
             release_digest: string;
         };
+        /** PackageRemovalNode */
+        PackageRemovalNode: {
+            /** Active */
+            active: boolean;
+            /** Blocked Reason */
+            blocked_reason?: string | null;
+            /** Dependencies */
+            dependencies?: string[];
+            /** Leased */
+            leased: boolean;
+            /** Node Id */
+            node_id: string;
+            /** Reclaimable Bytes */
+            reclaimable_bytes: number;
+            /** Retained */
+            retained: boolean;
+            /** State */
+            state: string;
+        };
+        /** PackageRemovalPreviewResponse */
+        PackageRemovalPreviewResponse: {
+            /** Blocked Nodes */
+            blocked_nodes?: string[];
+            /** Deployment Id */
+            deployment_id: string;
+            /** Digest */
+            digest: string;
+            /** Nodes */
+            nodes: components["schemas"]["PackageRemovalNode"][];
+            /** Reclaimable Bytes */
+            reclaimable_bytes: number;
+            /** Release Digest */
+            release_digest: string;
+            /** State */
+            state: string;
+        };
+        /** PackageRemovalRequest */
+        PackageRemovalRequest: {
+            /** Deployment Id */
+            deployment_id: string;
+            /** Node Ids */
+            node_ids: string[];
+            /** Release Digest */
+            release_digest: string;
+        };
         /** PackageResolutionResponse */
         PackageResolutionResponse: {
             /** Candidate Id */
@@ -1343,6 +1489,71 @@ export interface components {
             release_digest: string;
             /** State */
             state: string;
+        };
+        /**
+         * PackageResourceEnvelope
+         * @description Bounded resource requirements supplied by a promoted workload release.
+         */
+        PackageResourceEnvelope: {
+            /** Download Bytes */
+            download_bytes: number;
+            /** Gpu Memory Bytes */
+            gpu_memory_bytes: number;
+            /** Host Memory Bytes */
+            host_memory_bytes: number;
+            /** Installed Bytes */
+            installed_bytes: number;
+            /** Kv Cache Base Bytes */
+            kv_cache_base_bytes: number;
+            /** Kv Cache Per Token Bytes */
+            kv_cache_per_token_bytes: number;
+            /** Required Sparks */
+            required_sparks: number;
+            /** Topology */
+            topology: string;
+            /** Transient Bytes */
+            transient_bytes: number;
+        };
+        /** PackageSparkInventory */
+        PackageSparkInventory: {
+            /** Current Generation */
+            current_generation?: string | null;
+            /** Node Id */
+            node_id: string;
+            /** Observed At */
+            observed_at?: string | null;
+            /** Online */
+            online: boolean;
+            /** Packages */
+            packages?: components["schemas"]["PackageInventoryItem"][];
+            resources: components["schemas"]["PackageSparkResources"];
+            storage: components["schemas"]["PackageSparkStorage"];
+        };
+        /** PackageSparkResources */
+        PackageSparkResources: {
+            /** Gpu Count */
+            gpu_count: number;
+            /** Gpu Memory Free Bytes */
+            gpu_memory_free_bytes: number;
+            /** Gpu Memory Total Bytes */
+            gpu_memory_total_bytes: number;
+            /** Host Memory Free Bytes */
+            host_memory_free_bytes: number;
+            /** Host Memory Total Bytes */
+            host_memory_total_bytes: number;
+        };
+        /** PackageSparkStorage */
+        PackageSparkStorage: {
+            /** Free Bytes */
+            free_bytes: number;
+            /** Reclaimable Bytes */
+            reclaimable_bytes: number;
+            /** Reserved Bytes */
+            reserved_bytes: number;
+            /** Total Bytes */
+            total_bytes: number;
+            /** Used Bytes */
+            used_bytes: number;
         };
         /** PlanEndpoint */
         PlanEndpoint: {
@@ -3843,6 +4054,214 @@ export interface operations {
             };
             /** @description Forbidden */
             403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+        };
+    };
+    listPackageInventory: {
+        parameters: {
+            query?: {
+                node_id?: string | null;
+                deployment_id?: string | null;
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackageInventoryResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+        };
+    };
+    removePackageInventory: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackagePlanRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackageProgressResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Service Unavailable */
+            503: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+        };
+    };
+    previewPackageRemoval: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PackageRemovalRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PackageRemovalPreviewResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BoundedErrorResponse"];
+                };
+            };
+            /** @description Not Found */
+            404: {
                 headers: {
                     [name: string]: unknown;
                 };

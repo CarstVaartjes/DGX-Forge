@@ -167,6 +167,115 @@ class Packages:
             raise KeyError(digest)
         return {"id": "40000000-0000-4000-8000-000000000004", "state": "planned", "plan_digest": digest, "progress": {"completed": 0, "failed": 0, "running": 0, "total": 0}}
 
+    def inventory(
+        self,
+        node_id: str | None,
+        deployment_id: str | None,
+        cursor: str | None,
+        limit: int,
+    ) -> dict[str, object]:
+        del cursor, limit
+        node = "spk_" + "1" * 32
+        if node_id is not None and node_id != node:
+            return {"nodes": [], "next_cursor": None, "total": 0}
+        if deployment_id is not None and deployment_id != "synthetic-canary":
+            return {"nodes": [], "next_cursor": None, "total": 0}
+        return {
+            "nodes": [
+                {
+                    "node_id": node,
+                    "online": True,
+                    "observed_at": "2026-08-06T12:00:00Z",
+                    "storage": {
+                        "total_bytes": 1000,
+                        "used_bytes": 400,
+                        "free_bytes": 600,
+                        "reserved_bytes": 100,
+                        "reclaimable_bytes": 50,
+                    },
+                    "resources": {
+                        "host_memory_total_bytes": 1000,
+                        "host_memory_free_bytes": 700,
+                        "gpu_memory_total_bytes": 800,
+                        "gpu_memory_free_bytes": 500,
+                        "gpu_count": 1,
+                    },
+                    "current_generation": RELEASE,
+                    "packages": [
+                        {
+                            "deployment_id": "synthetic-canary",
+                            "family_id": "synthetic-stack",
+                            "release_digest": RELEASE,
+                            "content_group": "weights",
+                            "state": "available",
+                            "bytes_total": 200,
+                            "bytes_complete": 200,
+                            "bytes_remaining": 0,
+                            "installed_bytes": 200,
+                            "reclaimable_bytes": 200,
+                            "reserved_bytes": 0,
+                            "active": False,
+                            "retained": False,
+                            "leased": False,
+                            "operation_id": None,
+                            "last_operation_state": "completed",
+                            "last_operation_error": None,
+                            "resources": {
+                                "download_bytes": 200,
+                                "installed_bytes": 200,
+                                "transient_bytes": 20,
+                                "host_memory_bytes": 100,
+                                "gpu_memory_bytes": 300,
+                                "kv_cache_base_bytes": 40,
+                                "kv_cache_per_token_bytes": 1,
+                                "required_sparks": 1,
+                                "topology": "single",
+                            },
+                        }
+                    ],
+                }
+            ],
+            "next_cursor": None,
+            "total": 1,
+        }
+
+    def removal_preview(
+        self, deployment_id: str, release_digest: str, node_ids: tuple[str, ...]
+    ) -> dict[str, object]:
+        assert deployment_id == "synthetic-canary"
+        assert release_digest == RELEASE
+        return {
+            "digest": PLAN,
+            "state": "ready",
+            "deployment_id": deployment_id,
+            "release_digest": release_digest,
+            "nodes": [
+                {
+                    "node_id": node_ids[0],
+                    "state": "removable",
+                    "active": False,
+                    "retained": False,
+                    "leased": False,
+                    "reclaimable_bytes": 200,
+                    "dependencies": [],
+                    "blocked_reason": None,
+                }
+            ],
+            "reclaimable_bytes": 200,
+            "blocked_nodes": [],
+        }
+
+    def remove(self, digest: str, actor: str, request_id: str) -> dict[str, object]:
+        self.calls.append(("remove", digest, actor, request_id))
+        if digest != PLAN:
+            raise KeyError(digest)
+        return {
+            "id": "50000000-0000-4000-8000-000000000005",
+            "state": "planned",
+            "plan_digest": digest,
+            "progress": {"completed": 0, "failed": 0, "running": 0, "total": 1},
+        }
+
 
 def _client(role: str, service: Packages | None = None):
     codec = TokenCodec(b"x" * 32)
@@ -255,6 +364,61 @@ def test_package_operation_ids_are_registered_when_the_app_is_mounted() -> None:
     schema = admin_openapi_schema(client.app)
 
     assert schema["paths"]["/api/v1/packages/candidates"]["get"]["operationId"] == "listPackageCandidates"
+
+
+def test_inventory_projects_spark_storage_resource_and_package_lifecycle() -> None:
+    client, headers, _packages, _audits = _client("viewer")
+
+    response = client.get(
+        "/api/v1/packages/inventory?node_id=spk_11111111111111111111111111111111",
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    node = response.json()["nodes"][0]
+    assert node["storage"] == {
+        "total_bytes": 1000,
+        "used_bytes": 400,
+        "free_bytes": 600,
+        "reserved_bytes": 100,
+        "reclaimable_bytes": 50,
+    }
+    package = node["packages"][0]
+    assert package["state"] == "available"
+    assert package["bytes_remaining"] == 0
+    assert package["resources"]["kv_cache_per_token_bytes"] == 1
+
+
+def test_removal_requires_operator_and_digest_bound_preview() -> None:
+    viewer, viewer_headers, _packages, _audits = _client("viewer")
+    operator, operator_headers, packages, audits = _client("operator")
+    node = "spk_" + "1" * 32
+    body = {"deployment_id": "synthetic-canary", "release_digest": RELEASE, "node_ids": [node]}
+
+    denied = viewer.post("/api/v1/packages/inventory/remove-preview", headers=viewer_headers, json=body)
+    assert denied.status_code == 403
+
+    preview = operator.post(
+        "/api/v1/packages/inventory/remove-preview", headers=operator_headers, json=body
+    )
+    assert preview.status_code == 200
+    assert preview.json()["reclaimable_bytes"] == 200
+    assert preview.json()["nodes"][0]["state"] == "removable"
+
+    stale = operator.post(
+        "/api/v1/packages/inventory/remove",
+        headers=operator_headers,
+        json={"plan_digest": "sha256:" + "e" * 64},
+    )
+    applied = operator.post(
+        "/api/v1/packages/inventory/remove",
+        headers={**operator_headers, "x-request-id": REQUEST_ID},
+        json={"plan_digest": preview.json()["digest"]},
+    )
+    assert stale.status_code == 409
+    assert applied.status_code == 202
+    assert packages.calls.count(("remove", PLAN, "operator", REQUEST_ID)) == 1
+    assert audits.for_request(REQUEST_ID).action == "package.remove"
 
 
 def test_package_progress_reads_redact_service_failure_details() -> None:

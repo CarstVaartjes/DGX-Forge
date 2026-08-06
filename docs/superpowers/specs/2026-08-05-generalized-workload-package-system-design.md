@@ -219,6 +219,72 @@ digest and adds operational configuration, including:
 Secrets, node assignments, live scaling, and site-specific routing are never
 part of a package release.
 
+### Placement topology and gang lifecycle
+
+Deployments use a typed topology projection independent of package family
+names:
+
+- `single` runs one workload instance on one Spark;
+- `replicated` runs independent replicas and may select any compatible set; and
+- `gang` runs one logical workload across a placement group.  A gang declares
+  world size, release-defined roles/ranks, required fabric/topology, and a
+  group resource envelope.  The control plane assigns certificate-bound Spark
+  node IDs and rank identities; deployments cannot provide arbitrary peer
+  addresses.
+
+The existing selector remains the generic node filter, while topology adds the
+placement group, role/rank, world size, and fabric requirements.  Preparation
+is parallel and resumable on every selected Spark.  Activation is a fenced
+barrier: every rank must report the same release/deployment/group digest and
+healthy readiness before any route is published.  A failed rank causes the
+whole gang activation to stop and compensates to the recorded prior healthy
+generation.  Replicas do not imply gang semantics, and a pairwise acceptance
+result never authorizes a larger group.
+
+The same topology contract is used by the CLI, API, web UI, reconciliation
+graph, and agent operation payloads.  The agent receives only typed rank,
+world-size, group-fence, and fabric projections; it never discovers peers via
+SSH or a workload-provided command.
+
+### Resource envelopes, co-residency, and Spark inventory
+
+Every promoted release publishes a bounded, signed `resource_envelope` that is
+generic package data rather than a compiled model catalog.  It includes
+download, installed, transient-staging, and output bytes; resident,
+auxiliary, activation/workspace, and KV/cache memory (base plus bounded
+per-token/per-request increments); CPU/accelerator limits; and per-node versus
+aggregate values for distributed workloads.  Values are marked declared or
+measured and reference evidence.  An unknown or unbounded value is
+unsupported, never zero.
+
+The planner evaluates the envelope against authenticated free memory,
+accelerator memory, storage, reservations, and all co-resident workloads.  It
+accounts for shared digests once for storage only when unleased; memory is not
+deduplicated without evidence.  Installation reserves the complete temporary
+and staged-generation peak while retaining the active generation.  A preview
+must explain aggregate resident/activation/KV/transient/storage shortfalls and
+show the exact fit for one, two, or larger Spark groups before activation.
+
+Each Spark reports a bounded inventory for every release/content group:
+`downloading`, `staged`, `available`, `active`, `retained`, `leased`, or
+`removable`, with bytes complete/remaining, installed/reserved/reclaimable
+space, memory observations, and the last operation result.  Preparation may
+download and validate a new generation while the current one serves traffic;
+it does not stop the process, withdraw routes, or mutate the active pointer.
+Fetch and materialization run in a Spark-local, bounded operation scope: they
+reserve disk before transfer, cap staging memory and temporary CPU/IO/network
+use, and do not claim serving accelerators.  This prevents a large download
+from silently exhausting the resources of an active workload; admission may
+defer or throttle preparation when the signed headroom contract cannot be
+met.
+
+Removal is explicit and digest-bound.  A preview identifies affected Sparks,
+reclaimable bytes, shared dependencies, active/retained generations, and
+leases.  Apply refuses active, leased, retained, staged, or dependency-
+reachable objects unless an explicit stop/switch/rollback transition has
+completed.  Cache deletion remains a separate GC preview/apply operation and
+never interrupts a running service.
+
 ## Package composition
 
 A solution release may depend on other package releases. For example, a
@@ -620,6 +686,16 @@ Automated and end-to-end verification must prove that:
   invalid signatures are rejected;
 - an incompatible CUDA, driver, architecture, or storage requirement prevents
   activation with a structured result;
+- a new release can be downloaded, verified, and staged while the current
+  generation continues serving traffic, with no route withdrawal or restart;
+- each Spark reports staged/available/active/retained/removable inventory,
+  free/reserved/reclaimable storage, and resumable byte progress;
+- removal preview/apply refuses active, leased, retained, or dependency-
+  reachable content and proves that a safe removal does not interrupt the
+  running generation;
+- placement explains aggregate co-resident memory, GPU-memory, KV-cache,
+  transient-install, storage, and multi-Spark topology requirements for one,
+  two, and sixteen-node fixtures;
 - preparation and validation failure preserve the active generation;
 - activation is atomic across the complete dependency graph;
 - a previous healthy generation can be reactivated without network access;

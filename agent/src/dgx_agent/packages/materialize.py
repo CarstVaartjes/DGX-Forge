@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Protocol
 
-from dgx_agent_protocol.workload_packages import PackageReleaseLock
+from dgx_agent_protocol.workload_packages import OciBundleMetadata, PackageReleaseLock
 
 _DIGEST = re.compile(r"(?:sha256:)?([0-9a-f]{64})\Z")
 _NAME = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
@@ -104,6 +104,7 @@ class Materializer:
             (partial / "components").mkdir(mode=0o700)
             used: set[str] = set()
             environment_digest: str | None = None
+            oci_bundles: list[tuple[OciBundleMetadata, Path]] = []
             entries: list[dict[str, object]] = []
             names: set[str] = set()
             for descriptor in components:
@@ -153,6 +154,19 @@ class Materializer:
                         _canonical(document),
                         executable=False,
                     )
+                elif method == "oci-bundle":
+                    metadata = _oci_metadata(descriptor)
+                    if metadata.component != name:
+                        raise MaterializationError(
+                            "OCI bundle component identity is inconsistent"
+                        )
+                    _extract_archive(
+                        source,
+                        destination,
+                        maximum_bytes=_unpacked_limit(descriptor),
+                        cancelled=self._cancelled,
+                    )
+                    oci_bundles.append((metadata, destination))
                 elif method in {"configuration", "file", "wheel", "executable"}:
                     filename = {
                         "configuration": "configuration",
@@ -171,7 +185,12 @@ class Materializer:
                         f"component {name} materialization method is unsupported"
                     )
                 used.add(digest)
+            for metadata, destination in oci_bundles:
+                _publish_oci_metadata(destination, metadata)
             _seal_tree(partial)
+            _verify_python_environment_tree(lock, partial)
+            for metadata, destination in oci_bundles:
+                _verify_oci_bundle_archive(destination, metadata)
             entries = _tree_manifest(partial)
             root_digest = hashlib.sha256(_canonical(entries)).hexdigest()
             result = MaterializedGeneration(
@@ -278,12 +297,187 @@ def _objects(values: Mapping[str, StoredObject]) -> dict[str, StoredObject]:
 
 def _method(descriptor: object) -> str:
     value = getattr(descriptor, "materialization", None)
-    if not isinstance(value, Mapping) or set(value) != {"method"}:
+    if not isinstance(value, Mapping) or "method" not in value:
         raise MaterializationError("component materialization method is invalid")
     method = value.get("method")
     if not isinstance(method, str):
         raise MaterializationError("component materialization method is invalid")
     return method
+
+
+def _oci_metadata(descriptor: object) -> OciBundleMetadata:
+    value = getattr(descriptor, "materialization", None)
+    if not isinstance(value, Mapping) or value.get("method") != "oci-bundle":
+        raise MaterializationError("OCI bundle materialization metadata is missing")
+    try:
+        return OciBundleMetadata.parse(
+            {key: item for key, item in value.items() if key != "method"}
+        )
+    except (TypeError, ValueError, RuntimeError) as error:
+        raise MaterializationError("OCI bundle materialization metadata is invalid") from error
+
+
+def _verify_python_environment_tree(lock: PackageReleaseLock, generation: Path) -> None:
+    compatibility = getattr(lock, "compatibility", {})
+    runtime = compatibility.get("python_runtime") if isinstance(compatibility, Mapping) else None
+    if runtime is None:
+        return
+    if not isinstance(runtime, Mapping):
+        raise MaterializationError("Python runtime metadata is invalid")
+    component = runtime.get("environment_component")
+    expected = runtime.get("environment_tree_digest")
+    if not isinstance(component, str) or not isinstance(expected, str):
+        raise MaterializationError("Python environment tree metadata is invalid")
+    expected = expected.removeprefix("sha256:")
+    environment = generation / "components" / component
+    _safe_child(generation / "components", component, "Python environment component")
+    try:
+        entries = _tree_manifest(environment)
+    except (OSError, MaterializationError) as error:
+        raise MaterializationError("Python environment tree is unavailable") from error
+    digest = hashlib.sha256(_canonical(entries)).hexdigest()
+    if digest != expected:
+        raise MaterializationError("Python environment tree digest is not authorized")
+
+
+def _verify_oci_bundle_archive(
+    destination: Path,
+    metadata: OciBundleMetadata,
+    *,
+    publish_manifest: bool = False,
+) -> None:
+    """Verify the signed OCI-rootfs archive after immutable tree sealing.
+
+    This intentionally treats the OCI config as descriptive metadata only. The
+    helper creates the execution config from the signed deployment policy, so
+    image-provided command, environment, identity, mounts, and capabilities
+    cannot widen the DGX-Forge sandbox.
+    """
+
+    expected_names = {"oci-manifest.json", "config.json", metadata.rootfs}
+    if not publish_manifest:
+        expected_names.add("oci-bundle.json")
+    try:
+        entries = {item.name for item in destination.iterdir()}
+    except OSError as error:
+        raise MaterializationError("OCI bundle archive is unavailable") from error
+    if entries != expected_names:
+        raise MaterializationError("OCI bundle archive layout is invalid")
+    oci_manifest_path = destination / "oci-manifest.json"
+    config_path = destination / "config.json"
+    manifest_path = destination / "oci-bundle.json"
+    if not publish_manifest:
+        manifest_raw = _read_canonical_json(manifest_path, "OCI bundle manifest")
+        try:
+            manifest = OciBundleMetadata.parse(manifest_raw)
+        except (TypeError, ValueError, RuntimeError) as error:
+            raise MaterializationError("OCI bundle manifest is invalid") from error
+        if manifest != metadata:
+            raise MaterializationError("OCI bundle manifest does not match signed metadata")
+    oci_manifest = _read_canonical_json(oci_manifest_path, "OCI image manifest")
+    if (
+        not isinstance(oci_manifest, dict)
+        or oci_manifest.get("schemaVersion") != 2
+        or not isinstance(oci_manifest.get("config"), dict)
+        or oci_manifest["config"].get("digest") != metadata.config_digest
+        or not isinstance(oci_manifest.get("layers"), list)
+    ):
+        raise MaterializationError("OCI image manifest is not an object")
+    if hashlib.sha256(_canonical(oci_manifest)).hexdigest() != metadata.manifest_digest.removeprefix("sha256:"):
+        raise MaterializationError("OCI bundle manifest digest is invalid")
+    config = _read_canonical_json(config_path, "OCI bundle config")
+    if not isinstance(config, dict):
+        raise MaterializationError("OCI bundle config is not an object")
+    if hashlib.sha256(_canonical(config)).hexdigest() != metadata.config_digest.removeprefix("sha256:"):
+        raise MaterializationError("OCI bundle config digest is invalid")
+    rootfs = _safe_child(destination, metadata.rootfs, "OCI bundle rootfs")
+    rootfs_stat = rootfs.stat(follow_symlinks=False)
+    if not stat.S_ISDIR(rootfs_stat.st_mode):
+        raise MaterializationError("OCI bundle rootfs is not a directory")
+    rootfs_entries = _tree_manifest(rootfs)
+    rootfs_digest = hashlib.sha256(_canonical(rootfs_entries)).hexdigest()
+    if rootfs_digest != metadata.rootfs_digest.removeprefix("sha256:"):
+        raise MaterializationError("OCI bundle rootfs digest is invalid")
+    entrypoint = _safe_child(rootfs, metadata.entrypoint, "OCI bundle entrypoint")
+    entry_stat = entrypoint.stat(follow_symlinks=False)
+    if (
+        not stat.S_ISREG(entry_stat.st_mode)
+        or not entry_stat.st_mode & 0o111
+        or entry_stat.st_nlink != 1
+    ):
+        raise MaterializationError("OCI bundle entrypoint is not executable")
+    if publish_manifest:
+        _write_file(manifest_path, _canonical(metadata.to_mapping()), executable=False)
+
+
+def _publish_oci_metadata(destination: Path, metadata: OciBundleMetadata) -> None:
+    """Publish lock-signed OCI metadata into an archive-derived component.
+
+    The archive is not allowed to provide this file.  Keeping this write
+    separate from verification lets the generation be sealed only after the
+    metadata has been bound to the lock, while the subsequent full verifier
+    checks the rootfs digest after sealing has normalized modes.
+    """
+    try:
+        entries = {item.name for item in destination.iterdir()}
+    except OSError as error:
+        raise MaterializationError("OCI bundle archive is unavailable") from error
+    if entries != {"oci-manifest.json", "config.json", metadata.rootfs}:
+        raise MaterializationError("OCI bundle archive layout is invalid")
+    _write_file(destination / "oci-bundle.json", _canonical(metadata.to_mapping()), executable=False)
+
+
+def _read_canonical_json(path: Path, name: str) -> object:
+    try:
+        raw = path.read_bytes()
+        if not 2 <= len(raw) <= 256 * 1024:
+            raise MaterializationError(f"{name} is too large")
+        value = json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=_unique_json_pairs,
+            parse_constant=_reject_json_constant,
+        )
+        if raw != _canonical(value):
+            raise MaterializationError(f"{name} is not canonical")
+        return value
+    except MaterializationError:
+        raise
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
+        raise MaterializationError(f"{name} is invalid") from error
+
+
+def _unique_json_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise MaterializationError("OCI bundle JSON contains duplicate fields")
+        result[key] = value
+    return result
+
+
+def _reject_json_constant(_value: str) -> None:
+    raise MaterializationError("OCI bundle JSON contains a nonfinite value")
+
+
+def _safe_child(root: Path, relative: str, name: str) -> Path:
+    path = PurePosixPath(relative)
+    if (
+        path.is_absolute()
+        or not path.parts
+        or any(part in {"", ".", ".."} for part in path.parts)
+        or "\\" in relative
+    ):
+        raise MaterializationError(f"{name} is invalid")
+    current = root
+    for part in path.parts:
+        current = current / part
+        try:
+            metadata = current.stat(follow_symlinks=False)
+        except OSError as error:
+            raise MaterializationError(f"{name} is unavailable") from error
+        if stat.S_ISLNK(metadata.st_mode):
+            raise MaterializationError(f"{name} contains a symlink")
+    return current
 
 
 def _unpacked_limit(descriptor: object) -> int:

@@ -14,6 +14,9 @@ import type {
   JobsResponse,
   ProposalInput,
   ProposalPreview,
+  PackageInventory,
+  PackageRemovalProgress,
+  PackageRemovalPreview,
   ReconciliationAccepted,
   ReconciliationPlan,
   UpdatePlan,
@@ -196,5 +199,23 @@ export class ApiClient implements ControlApi {
     return this.request<UpdateRollout>(`/api/v1/updates/${encodeURIComponent(rolloutId)}/approve-resume`, {
       method: "POST", body: JSON.stringify({}),
     });
+  }
+
+  async packageInventory(nodeId?: string, deploymentId?: string, cursor?: string): Promise<PackageInventory> {
+    return resultData(await this.generated.GET("/api/v1/packages/inventory", {
+      params: {query: {node_id: nodeId, deployment_id: deploymentId, cursor, limit: 100}},
+    }));
+  }
+
+  async previewPackageRemoval(input: {deployment_id: string; release_digest: string; node_ids: string[]}): Promise<PackageRemovalPreview> {
+    return resultData(await this.generated.POST("/api/v1/packages/inventory/remove-preview", {
+      body: input,
+    }));
+  }
+
+  async removePackageInventory(planDigest: string): Promise<PackageRemovalProgress> {
+    return resultData(await this.generated.POST("/api/v1/packages/inventory/remove", {
+      body: {plan_digest: planDigest},
+    }));
   }
 }

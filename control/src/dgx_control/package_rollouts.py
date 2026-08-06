@@ -530,7 +530,15 @@ def _package_graph(
                 )
                 payloads[operation_id] = MappingProxyType(payload)
                 if kind == AgentOperation.PACKAGE_STOP.value:
-                    dependencies: tuple[str, ...] = ()
+                    # Never withdraw the currently serving generation merely
+                    # because a replacement download is planned.  The stop
+                    # transition is explicitly fenced behind prepare so a
+                    # fetch, capacity, trust, or materialization failure
+                    # leaves the old process and route untouched even if a
+                    # scheduler changes operation ordering.
+                    dependencies = (
+                        f"{deployment_id}:{node_id}:{AgentOperation.PACKAGE_PREPARE.value}",
+                    )
                     compensation = None
                 elif kind == AgentOperation.PACKAGE_PREPARE.value:
                     dependencies = ()

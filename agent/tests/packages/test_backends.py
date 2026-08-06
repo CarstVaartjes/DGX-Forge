@@ -11,13 +11,27 @@ from dgx_agent.packages.backends import (
     NetworkPolicy,
     ResourcePolicy,
 )
+from dgx_agent_protocol import OciBundleMetadata
 
 RELEASE = "a" * 64
 OBJECT = "b" * 64
+INTERPRETER = "c" * 64
+
+
+def python_runtime_document() -> dict[str, object]:
+    return {
+        "environment_component": "python-environment",
+        "environment_digest": OBJECT,
+        "environment_tree_digest": OBJECT,
+        "interpreter_component": "python-interpreter",
+        "interpreter_component_digest": INTERPRETER,
+        "interpreter_entrypoint": "bin/python3",
+        "interpreter_digest": INTERPRETER,
+    }
 
 
 def invocation_document(backend: str = "native") -> dict[str, object]:
-    return {
+    document = {
         "schema_version": 1,
         "backend": backend,
         "release_digest": RELEASE,
@@ -41,6 +55,22 @@ def invocation_document(backend: str = "native") -> dict[str, object]:
         "devices": ["nvidia0"],
         "network": {"mode": "restricted", "egress": ["models.example:443"]},
     }
+    if backend == "python-venv":
+        document["python_runtime"] = python_runtime_document()
+    if backend == "oci":
+        document["oci_bundle"] = OciBundleMetadata(
+            1,
+            "runtime",
+            "sha256:" + "d" * 64,
+            "sha256:" + "e" * 64,
+            "sha256:" + "f" * 64,
+            "linux-arm64",
+            "runc",
+            "rootfs",
+            "bin/server",
+        ).to_mapping()
+        document["oci_bundle_digest"] = OBJECT
+    return document
 
 
 @pytest.mark.parametrize("backend", ["oci", "python-venv", "native"])
@@ -53,6 +83,49 @@ def test_backend_invocation_accepts_only_the_compiled_backend_vocabulary(
     assert invocation.entrypoint == "bin/future-adapter"
     assert invocation.mounts == (MountPolicy(OBJECT, "models/primary", True),)
     assert invocation.network == NetworkPolicy("restricted", ("models.example:443",))
+
+
+def test_python_venv_requires_signed_interpreter_runtime_metadata() -> None:
+    document = invocation_document("python-venv")
+    invocation = BackendInvocation.parse(document)
+
+    assert invocation.python_runtime is not None
+    assert invocation.python_runtime.interpreter_digest == INTERPRETER
+    assert invocation.python_runtime.interpreter_entrypoint == "bin/python3"
+
+    missing = invocation_document("python-venv")
+    del missing["python_runtime"]
+    with pytest.raises(BackendValidationError, match="(?i)runtime|python"):
+        BackendInvocation.parse(missing)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("environment_component", "../environment"),
+        ("interpreter_component", "python/../../runtime"),
+        ("interpreter_entrypoint", "/usr/bin/python3"),
+        ("interpreter_digest", "not-a-digest"),
+    ],
+)
+def test_python_runtime_metadata_rejects_ambient_or_untrusted_interpreter(
+    field: str, value: str
+) -> None:
+    document = invocation_document("python-venv")
+    runtime = dict(document["python_runtime"])
+    runtime[field] = value
+    document["python_runtime"] = runtime
+
+    with pytest.raises(BackendValidationError, match="(?i)runtime|python"):
+        BackendInvocation.parse(document)
+
+
+def test_non_python_backend_cannot_smuggle_python_runtime_metadata() -> None:
+    document = invocation_document("native")
+    document["python_runtime"] = python_runtime_document()
+
+    with pytest.raises(BackendValidationError, match="(?i)runtime|python"):
+        BackendInvocation.parse(document)
 
 
 @pytest.mark.parametrize("backend", ["shell", "apt", "cuda-installer", "NATIVE"])
@@ -122,4 +195,5 @@ def test_backend_mapping_round_trips_without_names_or_ambient_configuration() ->
         "mounts",
         "devices",
         "network",
+        "python_runtime",
     }

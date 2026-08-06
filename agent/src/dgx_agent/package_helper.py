@@ -39,11 +39,13 @@ from .package_helper_protocol import (
     frame_helper_message,
     receive_helper_message,
 )
-from .packages.backends import Backend
+from .packages.backends import Backend, PythonRuntimePolicy
+from .packages.oci_backend import OciBackendLauncher, OciRuntimeCapability
 from .packages.sandbox import SandboxPolicy
 
 MAX_REPLAY_ENTRIES = 65_536
 MAX_SUPERVISOR_STATE_BYTES = 64 * 1024
+OCI_RUNTIME_DIGEST_PATH = Path("/etc/dgx-forge-agent/oci-runtime.sha256")
 
 
 class ReceiptVerifier(Protocol):
@@ -258,6 +260,7 @@ class SystemdBackendLauncher:
         objects_root: Path | None = None,
         runner=None,
         clock: Callable[[], float] = time.monotonic,
+        oci_runtime_digest: str | None = None,
     ) -> None:
         root = Path(generations_root)
         if not root.is_absolute():
@@ -270,6 +273,21 @@ class SystemdBackendLauncher:
         if not callable(clock):
             raise HelperProtocolError("package launcher clock is invalid")
         self._clock = clock
+        self._oci_launcher = None
+        runtime_digest = oci_runtime_digest or _installed_oci_runtime_digest()
+        if runtime_digest is not None:
+            try:
+                self._oci_launcher = OciBackendLauncher(
+                    self._root,
+                    self._root.parent / "oci-runtime",
+                    capability=OciRuntimeCapability(runtime_digest),
+                    objects_root=self._objects_root,
+                    clock=self._clock,
+                )
+            except HelperProtocolError:
+                # A malformed optional capability must never make the native
+                # helper unavailable; OCI requests remain fail-closed.
+                self._oci_launcher = None
         if not callable(getattr(self._runner, "run", None)) or not callable(
             getattr(self._runner, "cleanup", None)
         ):
@@ -280,9 +298,19 @@ class SystemdBackendLauncher:
     ) -> Mapping[str, object]:
         generation_fd = -1
         executable_fd = -1
+        interpreter_fd = -1
         mount_fds: list[int] = []
         try:
-            if request.invocation.backend is not Backend.NATIVE:
+            if request.invocation.backend is Backend.OCI:
+                if self._oci_launcher is None:
+                    raise HelperProtocolError(
+                        "OCI runtime capability is not installed"
+                    )
+                return self._oci_launcher.launch(request, sandbox)
+            if request.invocation.backend not in {
+                Backend.NATIVE,
+                Backend.PYTHON_VENV,
+            }:
                 raise HelperProtocolError(
                     "package backend is not implemented by the systemd launcher"
                 )
@@ -300,10 +328,31 @@ class SystemdBackendLauncher:
                 clock=self._clock,
                 absolute_deadline=absolute_deadline,
             )
+            if request.invocation.backend is Backend.PYTHON_VENV:
+                runtime = request.invocation.python_runtime
+                if type(runtime) is not PythonRuntimePolicy:
+                    raise HelperProtocolError("Python runtime policy is invalid")
+                _validate_python_environment(
+                    generation_fd,
+                    runtime.environment_component,
+                    request,
+                    clock=self._clock,
+                    absolute_deadline=absolute_deadline,
+                )
+                interpreter_fd = _open_python_interpreter(
+                    self._root,
+                    request,
+                    runtime,
+                    clock=self._clock,
+                    absolute_deadline=absolute_deadline,
+                )
             plan = sandbox.plan(request.invocation, generation_fd, executable_fd)
             try:
                 os.fchown(executable_fd, plan.uid, plan.gid)
                 os.fchmod(executable_fd, 0o500)
+                if interpreter_fd >= 0:
+                    os.fchown(interpreter_fd, plan.uid, plan.gid)
+                    os.fchmod(interpreter_fd, 0o500)
             except OSError as error:
                 raise HelperProtocolError(
                     "backend snapshot identity could not be applied"
@@ -311,6 +360,11 @@ class SystemdBackendLauncher:
             helper_pid = os.getpid()
             source_executable = f"/proc/{helper_pid}/fd/{executable_fd}"
             source_generation = f"/proc/{helper_pid}/fd/{generation_fd}"
+            source_interpreter = (
+                f"/proc/{helper_pid}/fd/{interpreter_fd}"
+                if interpreter_fd >= 0
+                else None
+            )
             resources = request.invocation.resources
             unit_name = f"dgx-workload-{request.request_id}.service"
             argv = [
@@ -341,6 +395,24 @@ class SystemdBackendLauncher:
                 "--working-directory=/run/dgx-forge/generation",
             ]
             argv.append("--property=PrivateNetwork=yes")
+            if interpreter_fd >= 0:
+                runtime = request.invocation.python_runtime
+                assert runtime is not None
+                environment_root = (
+                    f"/run/dgx-forge/generation/components/"
+                    f"{runtime.environment_component}"
+                )
+                assert source_interpreter is not None
+                argv.extend(
+                    (
+                        f"--property=BindReadOnlyPaths={source_interpreter}:/run/dgx-forge/interpreter",
+                        f"--property=WorkingDirectory={environment_root}",
+                        "--setenv=PYTHONNOUSERSITE=1",
+                        f"--setenv=VIRTUAL_ENV={environment_root}",
+                        f"--setenv=PATH={environment_root}/bin:/usr/bin:/bin",
+                        f"--setenv=PYTHONPATH={environment_root}/lib/python/site-packages",
+                    )
+                )
             for mount in request.invocation.mounts:
                 mount_fd = _open_mount_object(
                     self._objects_root,
@@ -357,17 +429,25 @@ class SystemdBackendLauncher:
                 f"--property=DeviceAllow=/dev/{device} rw"
                 for device in request.invocation.devices
             )
-            argv.extend(
-                ("--", "/run/dgx-forge/entrypoint", *request.invocation.arguments)
+            command = (
+                ("/run/dgx-forge/interpreter", "/run/dgx-forge/entrypoint")
+                if interpreter_fd >= 0
+                else ("/run/dgx-forge/entrypoint",)
             )
+            argv.extend(("--", *command, *request.invocation.arguments))
             fixed_argv = tuple(argv)
             remaining_seconds = math.ceil(absolute_deadline - self._clock())
             if remaining_seconds <= 0:
                 raise HelperProtocolError("package helper launch deadline elapsed")
             try:
                 returncode = self._runner.run(
-                    fixed_argv,
-                    pass_fds=(generation_fd, executable_fd, *mount_fds),
+                fixed_argv,
+                    pass_fds=(
+                        generation_fd,
+                        executable_fd,
+                        *((interpreter_fd,) if interpreter_fd >= 0 else ()),
+                        *mount_fds,
+                    ),
                     timeout_seconds=remaining_seconds,
                 )
             except HelperProtocolError:
@@ -392,12 +472,44 @@ class SystemdBackendLauncher:
                 "fence": request.fence,
             }
         finally:
+            if interpreter_fd >= 0:
+                os.close(interpreter_fd)
             if executable_fd >= 0:
                 os.close(executable_fd)
             if generation_fd >= 0:
                 os.close(generation_fd)
             for mount_fd in mount_fds:
                 os.close(mount_fd)
+
+
+def _installed_oci_runtime_digest() -> str | None:
+    """Read the optional root-owned OCI capability pin, never process env."""
+
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            OCI_RUNTIME_DIGEST_PATH,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+        metadata = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_nlink != 1
+            or metadata.st_uid != 0
+            or stat.S_IMODE(metadata.st_mode) != 0o444
+            or not 65 <= metadata.st_size <= 66
+        ):
+            return None
+        raw = os.read(descriptor, 67)
+        value = raw.decode("ascii").strip()
+        if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            return None
+        return value
+    except (OSError, UnicodeDecodeError):
+        return None
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _open_mount_object(
@@ -584,6 +696,345 @@ def _open_backend_content(
         raise
     except OSError as error:
         raise HelperProtocolError("backend content is unavailable") from error
+    finally:
+        for descriptor in (
+            directory_fd,
+            source_fd,
+            generation_fd,
+            snapshot_fd,
+            root_fd,
+        ):
+            if descriptor >= 0:
+                os.close(descriptor)
+
+
+def _validate_python_environment(
+    generation_fd: int,
+    component: str,
+    request: HelperRequest,
+    *,
+    clock: Callable[[], float],
+    absolute_deadline: float,
+) -> None:
+    """Require the signed Python environment component to be a real directory."""
+
+    descriptor = -1
+    components_fd = -1
+    receipt_fd = -1
+    try:
+        _helper_deadline(clock, absolute_deadline)
+        receipt_fd = os.open(
+            ".dgx-generation.json",
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=generation_fd,
+        )
+        receipt_metadata = os.fstat(receipt_fd)
+        if (
+            not stat.S_ISREG(receipt_metadata.st_mode)
+            or receipt_metadata.st_nlink != 1
+            or receipt_metadata.st_size > 1024 * 1024
+            or receipt_metadata.st_mode & 0o022
+        ):
+            raise HelperProtocolError("Python generation receipt is unsafe")
+        raw_receipt = os.read(receipt_fd, receipt_metadata.st_size + 1)
+        try:
+            receipt = json.loads(raw_receipt.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as error:
+            raise HelperProtocolError("Python generation receipt is invalid") from error
+        if (
+            not isinstance(receipt, dict)
+            or canonical_helper_document(receipt) + b"\n" != raw_receipt
+            or receipt.get("release_digest") != request.invocation.release_digest
+            or receipt.get("environment_digest")
+            != request.invocation.python_runtime.environment_digest
+        ):
+            raise HelperProtocolError("Python generation receipt is unbound")
+        files = receipt.get("files")
+        if not isinstance(files, list) or _generation_tree_digest(generation_fd, clock, absolute_deadline) != files:
+            raise HelperProtocolError("Python generation tree is inconsistent")
+        root_digest = hashlib.sha256(
+            json.dumps(
+                files,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        ).hexdigest()
+        if receipt.get("root_object_digest") != root_digest:
+            raise HelperProtocolError("Python generation tree digest is invalid")
+        prefix = f"components/{component}/"
+        environment_files = [
+            {
+                **item,
+                "path": item["path"][len(prefix) :],
+            }
+            for item in files
+            if isinstance(item, dict)
+            and isinstance(item.get("path"), str)
+            and item["path"].startswith(prefix)
+        ]
+        environment_tree_digest = hashlib.sha256(
+            json.dumps(
+                environment_files,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+            + b"\n"
+        ).hexdigest()
+        if (
+            environment_tree_digest
+            != request.invocation.python_runtime.environment_tree_digest
+        ):
+            raise HelperProtocolError("Python environment tree digest is not authorized")
+        components_fd = os.open(
+            "components",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=generation_fd,
+        )
+        descriptor = os.open(
+            component,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=components_fd,
+        )
+        metadata = os.fstat(descriptor)
+        if not stat.S_ISDIR(metadata.st_mode):
+            raise HelperProtocolError("Python environment component is unsafe")
+    except HelperProtocolError:
+        raise
+    except OSError as error:
+        raise HelperProtocolError("Python environment component is unavailable") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if components_fd >= 0:
+            os.close(components_fd)
+        if receipt_fd >= 0:
+            os.close(receipt_fd)
+
+
+def _generation_tree_digest(
+    generation_fd: int,
+    clock: Callable[[], float],
+    absolute_deadline: float,
+) -> list[dict[str, object]]:
+    """Recompute the immutable materializer manifest without following links."""
+
+    result: list[dict[str, object]] = []
+
+    def walk(directory_fd: int, prefix: str) -> None:
+        try:
+            names = sorted(os.listdir(f"/proc/{os.getpid()}/fd/{directory_fd}"))
+        except OSError as error:
+            raise HelperProtocolError("Python generation tree is unavailable") from error
+        if len(result) + len(names) > 100_000:
+            raise HelperProtocolError("Python generation tree is too large")
+        for name in names:
+            _helper_deadline(clock, absolute_deadline)
+            relative = f"{prefix}/{name}" if prefix else name
+            metadata = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+            mode = stat.S_IMODE(metadata.st_mode)
+            if stat.S_ISDIR(metadata.st_mode):
+                result.append({"kind": "directory", "mode": mode, "path": relative})
+                child = os.open(
+                    name,
+                    os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+                try:
+                    walk(child, relative)
+                finally:
+                    os.close(child)
+            elif stat.S_ISREG(metadata.st_mode):
+                descriptor = os.open(
+                    name,
+                    os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                    dir_fd=directory_fd,
+                )
+                try:
+                    digest = hashlib.sha256()
+                    while True:
+                        _helper_deadline(clock, absolute_deadline)
+                        chunk = os.read(descriptor, 1024 * 1024)
+                        if not chunk:
+                            break
+                        digest.update(chunk)
+                    after = os.fstat(descriptor)
+                    if (
+                        after.st_dev != metadata.st_dev
+                        or after.st_ino != metadata.st_ino
+                        or after.st_size != metadata.st_size
+                        or after.st_mtime_ns != metadata.st_mtime_ns
+                        or after.st_ctime_ns != metadata.st_ctime_ns
+                    ):
+                        raise HelperProtocolError("Python generation changed while read")
+                finally:
+                    os.close(descriptor)
+                result.append(
+                    {
+                        "digest": digest.hexdigest(),
+                        "kind": "file",
+                        "mode": mode,
+                        "path": relative,
+                        "size": metadata.st_size,
+                    }
+                )
+            else:
+                raise HelperProtocolError("Python generation contains a special file")
+
+    walk(generation_fd, "")
+    return [item for item in result if item["path"] != ".dgx-generation.json"]
+
+
+def _open_python_interpreter(
+    generations_root: Path,
+    request: HelperRequest,
+    runtime: PythonRuntimePolicy,
+    *,
+    clock: Callable[[], float],
+    absolute_deadline: float,
+) -> int:
+    """Open and seal the interpreter named by the signed Python policy."""
+
+    relative = PurePosixPath(
+        "components",
+        runtime.interpreter_component,
+        runtime.interpreter_entrypoint,
+    )
+    descriptor = _open_generation_file(
+        generations_root,
+        request,
+        relative,
+        expected_digest=runtime.interpreter_digest,
+        clock=clock,
+        absolute_deadline=absolute_deadline,
+        label="Python interpreter",
+        require_receipt=False,
+    )
+    return descriptor
+
+
+def _open_generation_file(
+    generations_root: Path,
+    request: HelperRequest,
+    relative: PurePosixPath,
+    *,
+    expected_digest: str,
+    clock: Callable[[], float],
+    absolute_deadline: float,
+    label: str,
+    require_receipt: bool = True,
+) -> int:
+    """Snapshot one regular generation file and bind it to a signed receipt."""
+
+    root_fd = -1
+    generation_fd = -1
+    directory_fd = -1
+    source_fd = -1
+    snapshot_fd = -1
+    try:
+        _helper_deadline(clock, absolute_deadline)
+        root_fd = os.open(
+            generations_root,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+        release_fd = os.open(
+            request.invocation.release_digest,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=root_fd,
+        )
+        try:
+            generation_fd = os.open(
+                request.invocation.generation,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=release_fd,
+            )
+        finally:
+            os.close(release_fd)
+        directory_fd = os.dup(generation_fd)
+        for part in relative.parts[:-1]:
+            _helper_deadline(clock, absolute_deadline)
+            child = os.open(
+                part,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+                dir_fd=directory_fd,
+            )
+            os.close(directory_fd)
+            directory_fd = child
+        source_fd = os.open(
+            relative.parts[-1],
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=directory_fd,
+        )
+        before = os.fstat(source_fd)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_mode & 0o022
+            or not before.st_mode & 0o100
+            or not 1 <= before.st_size <= 256 * 1024 * 1024
+        ):
+            raise HelperProtocolError(f"{label} is unsafe")
+        snapshot_fd = os.memfd_create(
+            "dgx-package-interpreter",
+            os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING,
+        )
+        os.fchmod(snapshot_fd, 0o500)
+        digest = hashlib.sha256()
+        while True:
+            _helper_deadline(clock, absolute_deadline)
+            chunk = os.read(source_fd, 64 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+            view = memoryview(chunk)
+            while view:
+                written = os.write(snapshot_fd, view)
+                if written <= 0:
+                    raise HelperProtocolError(f"{label} snapshot is incomplete")
+                view = view[written:]
+        after = os.fstat(source_fd)
+        exact_receipt = next(
+            (
+                receipt
+                for receipt in request.receipts
+                if receipt.object_digest == digest.hexdigest()
+                and receipt.object_digest == expected_digest
+                and receipt.size == before.st_size
+            ),
+            None,
+        )
+        if (require_receipt and exact_receipt is None) or digest.hexdigest() != expected_digest or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
+            raise HelperProtocolError(f"{label} has no signed receipt")
+        fcntl.fcntl(
+            snapshot_fd,
+            fcntl.F_ADD_SEALS,
+            fcntl.F_SEAL_SEAL
+            | fcntl.F_SEAL_SHRINK
+            | fcntl.F_SEAL_GROW
+            | fcntl.F_SEAL_WRITE,
+        )
+        os.lseek(snapshot_fd, 0, os.SEEK_SET)
+        result, snapshot_fd = snapshot_fd, -1
+        return result
+    except HelperProtocolError:
+        raise
+    except OSError as error:
+        raise HelperProtocolError(f"{label} is unavailable") from error
     finally:
         for descriptor in (
             directory_fd,

@@ -16,6 +16,7 @@ from .package_operations import (
 )
 from .workload_packages import (
     ComponentDescriptor,
+    OciBundleMetadata,
     PackageHelperGrantClaims,
     PackageHelperOperation,
     PackageHelperSignature,
@@ -38,6 +39,7 @@ __all__ = [
     "AgentProtocolError",
     "AgentResult",
     "ComponentDescriptor",
+    "OciBundleMetadata",
     "PackageHelperGrantClaims",
     "PackageHelperOperation",
     "PackageHelperSignature",

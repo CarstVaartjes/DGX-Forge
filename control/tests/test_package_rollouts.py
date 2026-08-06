@@ -201,7 +201,9 @@ def test_replacement_stops_previous_digest_before_activation() -> None:
     )
     operations = {node.kind: node for node in plan.operation_graph.nodes}  # type: ignore[union-attr]
     assert "package.stop" in operations
-    assert operations["package.stop"].dependencies == ()
+    assert operations["package.stop"].dependencies == (
+        operations["package.prepare"].operation_id,
+    )
     assert operations["package.activate"].dependencies == tuple(
         sorted(
             {

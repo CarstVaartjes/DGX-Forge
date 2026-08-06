@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from types import SimpleNamespace
 import hashlib
-from dgx_agent_protocol import AgentOperation, PackageOperationRequest, canonical_message
+from types import SimpleNamespace
 
 import pytest
 from dgx_agent import main
+from dgx_agent_protocol import (
+    AgentOperation,
+    PackageOperationRequest,
+    canonical_message,
+)
 
 
 def _lock(*operating_systems: str) -> SimpleNamespace:
@@ -90,3 +94,99 @@ def test_backend_invocation_rejects_missing_deployment_projection() -> None:
         main._backend_invocation_for_workload(
             lock, None, release_digest="a" * 64, generation="gen-future"
         )
+
+
+def test_python_backend_invocation_projects_only_signed_runtime_components() -> None:
+    deployment = {
+        "schema_version": 1,
+        "deployment_id": "future-stack",
+        "family_id": "future-family",
+        "release_digest": "a" * 64,
+        "selector": {"node_count": 1, "required_labels": {}, "preferred_node_ids": []},
+        "secrets": {},
+        "ports": {"http": 8080},
+        "arguments": ["serve"],
+        "routing": {"alias": "future", "port": "http"},
+        "resources": {"memory_bytes": 4096, "storage_bytes": 8192, "gpu_count": 1},
+    }
+    digest = hashlib.sha256(canonical_message(deployment) + b"\n").hexdigest()
+    request = PackageOperationRequest.parse(
+        AgentOperation.PACKAGE_PREPARE,
+        {
+            "schema_version": 1,
+            "deployment_id": "future-stack",
+            "release_digest": "a" * 64,
+            "deployment_digest": digest,
+            "deployment": deployment,
+            "deployment_config_digest": digest,
+        },
+    )
+    interpreter_digest = "c" * 64
+    lock = SimpleNamespace(
+        adapter=SimpleNamespace(name="future-adapter"),
+        adapter_abi=1,
+        compatibility={
+            "backends": ("python-venv",),
+            "python_runtime": {
+                "environment_component": "python-environment",
+                "environment_digest": "b" * 64,
+                "environment_tree_digest": "e" * 64,
+                "interpreter_component": "python-interpreter",
+                "interpreter_component_digest": "c" * 64,
+                "interpreter_entrypoint": "bin/python3",
+                "interpreter_digest": interpreter_digest,
+            },
+        },
+        components=(
+            SimpleNamespace(
+                name="python-environment",
+                digest="b" * 64,
+                materialization={"method": "pylock-environment"},
+            ),
+            SimpleNamespace(
+                name="python-interpreter",
+                digest=interpreter_digest,
+                materialization={"method": "archive"},
+            ),
+        ),
+    )
+
+    invocation = main._backend_invocation_for_workload(
+        lock, request, release_digest="a" * 64, generation="gen-future"
+    )
+
+    assert invocation.python_runtime is not None
+    assert invocation.python_runtime.interpreter_digest == interpreter_digest
+
+
+def test_python_backend_invocation_rejects_runtime_component_digest_drift() -> None:
+    lock = SimpleNamespace(
+        adapter=SimpleNamespace(name="future-adapter"),
+        adapter_abi=1,
+        compatibility={
+            "backends": ("python-venv",),
+            "python_runtime": {
+                "environment_component": "python-environment",
+                "environment_digest": "b" * 64,
+                "environment_tree_digest": "e" * 64,
+                "interpreter_component": "python-interpreter",
+                "interpreter_component_digest": "c" * 64,
+                "interpreter_entrypoint": "bin/python3",
+                "interpreter_digest": "c" * 64,
+            },
+        },
+        components=(
+            SimpleNamespace(
+                name="python-environment",
+                digest="b" * 64,
+                materialization={"method": "pylock-environment"},
+            ),
+            SimpleNamespace(
+                name="python-interpreter",
+                digest="d" * 64,
+                materialization={"method": "archive"},
+            ),
+        ),
+    )
+    with pytest.raises(ValueError, match="interpreter"):
+        main._python_runtime_policy(lock)

@@ -283,7 +283,7 @@
           "pattern": "^[a-z0-9][a-z0-9!#$&^_.+-]*/[a-z0-9][a-z0-9!#$&^_.+-]*$"
         },
         "materialization": {
-          "enum": ["file", "archive", "oci-image", "python-wheel", "executable"]
+          "enum": ["file", "archive", "oci-image", "oci-bundle", "python-wheel", "executable"]
         },
         "platforms": {
           "type": "array",

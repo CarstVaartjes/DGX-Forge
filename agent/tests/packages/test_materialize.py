@@ -17,7 +17,11 @@ from dgx_agent.packages.materialize import (
     MaterializedGeneration,
     Materializer,
 )
-from dgx_agent_protocol.workload_packages import ComponentDescriptor, PackageReleaseLock
+from dgx_agent_protocol.workload_packages import (
+    ComponentDescriptor,
+    OciBundleMetadata,
+    PackageReleaseLock,
+)
 
 
 @dataclass(frozen=True)
@@ -270,6 +274,75 @@ def test_materializes_typed_components_as_one_immutable_generation(
         stat.S_IMODE((root / "components/runtime/bin/runtime").stat().st_mode) == 0o555
     )
     assert not list((tmp_path / "generations").glob("*.partial-*"))
+
+
+def test_materializes_and_verifies_signed_oci_rootfs_bundle(tmp_path: Path) -> None:
+    store = ObjectStore(tmp_path / "store")
+    executable = b"#!/bin/sh\necho future\n"
+    rootfs_entries = [
+        {"kind": "directory", "mode": 0o555, "path": "usr"},
+        {"kind": "directory", "mode": 0o555, "path": "usr/bin"},
+        {
+            "digest": hashlib.sha256(executable).hexdigest(),
+            "kind": "file",
+            "mode": 0o555,
+            "path": "usr/bin/server",
+            "size": len(executable),
+        },
+    ]
+    rootfs_digest = hashlib.sha256(
+        (json.dumps(rootfs_entries, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    ).hexdigest()
+    config = {"architecture": "arm64", "root": {"readonly": True}}
+    config_raw = (json.dumps(config, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    image_manifest = {
+        "schemaVersion": 2,
+        "config": {"digest": "sha256:" + hashlib.sha256(config_raw).hexdigest()},
+        "layers": [],
+    }
+    image_manifest_raw = (json.dumps(image_manifest, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    metadata_without_digests = {
+        "schema_version": 1,
+        "component": "runtime",
+        "manifest_digest": "sha256:" + hashlib.sha256(image_manifest_raw).hexdigest(),
+        "config_digest": "sha256:" + hashlib.sha256(config_raw).hexdigest(),
+        "rootfs_digest": "sha256:" + rootfs_digest,
+        "architecture": "linux-arm64",
+        "runtime": "runc",
+        "rootfs": "rootfs",
+        "entrypoint": "usr/bin/server",
+    }
+    metadata = OciBundleMetadata.parse(metadata_without_digests)
+    archive = _archive(
+        [
+            ("oci-manifest.json", image_manifest_raw, 0o644),
+            ("config.json", config_raw, 0o644),
+            ("rootfs/usr/bin/server", executable, 0o755),
+        ]
+    )
+    bundle = store.add(archive, kind="oci-bundle")
+    descriptor = ComponentDescriptor.parse(
+        {
+            "name": "runtime",
+            "kind": "oci-bundle",
+            "media_type": "application/vnd.oci.image.layer.v1.tar",
+            "sources": [{"provider": "https", "url": "https://packages.example.invalid/runtime"}],
+            "digest": "sha256:" + bundle.digest,
+            "size": bundle.size,
+            "unpacked_size": 4096,
+            "platforms": ["linux/arm64"],
+            "materialization": {"method": "oci-bundle", **metadata.to_mapping()},
+            "evidence": [],
+        }
+    )
+    lock = _lock(bundle.digest, (descriptor,))
+    result = Materializer(store).materialize(
+        lock, {bundle.digest: bundle, descriptor.digest.removeprefix("sha256:"): bundle}, tmp_path / "generations"
+    )
+    root = tmp_path / "generations" / lock.digest / "components/runtime"
+    assert result.release_digest == lock.digest
+    assert (root / "oci-bundle.json").exists()
+    assert (root / "rootfs/usr/bin/server").stat().st_mode & 0o111
 
 
 def test_consumes_the_shared_release_lock_without_a_compiled_family_catalog(

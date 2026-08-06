@@ -24,6 +24,7 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from dgx_agent_protocol import AgentClaim, AgentDirective, AgentProgress, AgentResult
 from dgx_agent_protocol.workload_packages import (
+    OciBundleMetadata,
     PackageHelperOperation,
     SignedPackageHelperGrant,
     SignedPackageObjectReceipt,
@@ -57,6 +58,7 @@ from .packages.backends import (
     BackendInvocation,
     MountPolicy,
     NetworkPolicy,
+    PythonRuntimePolicy,
     ResourcePolicy,
 )
 from .packages.engine import PackageEngine
@@ -189,6 +191,8 @@ def _validate_workload_compatibility(
     if not set(required_capabilities) <= {
         "package-abi-v1",
         "package-backend-native-v1",
+        "package-backend-python-venv-v1",
+        "package-backend-oci-v1",
     }:
         raise ValueError("workload capability is unavailable")
     backends = compatibility.get("backends", ())
@@ -198,7 +202,15 @@ def _validate_workload_compatibility(
         "python-venv",
     }:
         raise ValueError("workload backend policy is invalid")
-    if backends[0] != "native":
+    if backends[0] == "python-venv":
+        if "package-backend-python-venv-v1" not in required_capabilities:
+            raise ValueError("workload Python runtime capability is unavailable")
+        _validate_python_runtime_components(lock)
+    elif backends[0] == "oci":
+        if "package-backend-oci-v1" not in required_capabilities:
+            raise ValueError("workload OCI runtime capability is unavailable")
+        _oci_bundle_metadata(lock)
+    elif backends[0] != "native":
         raise ValueError("workload backend runtime capability is unavailable")
     if getattr(lock, "adapter_abi", None) != 1:
         raise ValueError("workload adapter ABI is unsupported")
@@ -291,18 +303,150 @@ def _backend_invocation_for_workload(
     adapter_name = getattr(adapter, "name", None)
     if not isinstance(adapter_name, str):
         raise TypeError("workload adapter identity is invalid")
+    python_runtime = None
+    oci_bundle = None
+    oci_bundle_digest = None
+    if backend is Backend.PYTHON_VENV:
+        python_runtime = _python_runtime_policy(lock)
+    elif backend is Backend.OCI:
+        oci_bundle = _oci_bundle_metadata(lock)
+        components = getattr(lock, "components", ())
+        bundle_components = [
+            item
+            for item in components
+            if (
+                isinstance(getattr(item, "materialization", None), Mapping)
+                and getattr(item, "materialization", {}).get("method")
+                == "oci-bundle"
+            )
+        ]
+        if len(bundle_components) != 1:
+            raise RuntimeError("signed OCI bundle component is missing or ambiguous")
+        oci_bundle_digest = str(bundle_components[0].digest).removeprefix("sha256:")
+    entrypoint = (
+        oci_bundle.entrypoint
+        if oci_bundle is not None
+        else f"components/{adapter_name}/{adapter_name}"
+    )
     return BackendInvocation(
         schema_version=1,
         backend=backend,
         release_digest=release_digest,
         generation=generation,
-        entrypoint=f"components/{adapter_name}/{adapter_name}",
+        entrypoint=entrypoint,
         arguments=arguments,
         resources=resources,
         mounts=mounts,
         devices=devices,
         network=network,
+        python_runtime=python_runtime,
+        oci_bundle=oci_bundle,
+        oci_bundle_digest=oci_bundle_digest,
     )
+
+
+def _python_runtime_policy(lock: object) -> PythonRuntimePolicy:
+    """Project lock-signed Python runtime metadata after descriptor binding."""
+    compatibility = getattr(lock, "compatibility", {})
+    runtime = (
+        compatibility.get("python_runtime")
+        if isinstance(compatibility, Mapping)
+        else None
+    )
+    runtime = _python_runtime_document(runtime)
+    try:
+        policy = PythonRuntimePolicy.parse(runtime)
+    except (TypeError, ValueError) as error:
+        raise RuntimeError("signed Python runtime metadata is invalid") from error
+    _validate_python_runtime_components(lock, policy)
+    return policy
+
+
+def _oci_bundle_metadata(lock: object) -> OciBundleMetadata:
+    components = getattr(lock, "components", ())
+    if not isinstance(components, (tuple, list)):
+        raise TypeError("OCI bundle components are unavailable")
+    matches = []
+    for component in components:
+        materialization = getattr(component, "materialization", None)
+        if (
+            isinstance(materialization, Mapping)
+            and materialization.get("method") == "oci-bundle"
+        ):
+            matches.append(materialization)
+    if len(matches) != 1:
+        raise ValueError("signed OCI bundle component is missing or ambiguous")
+    try:
+        return OciBundleMetadata.parse(
+            {key: value for key, value in matches[0].items() if key != "method"}
+        )
+    except (TypeError, ValueError) as error:
+        raise ValueError("signed OCI bundle metadata is invalid") from error
+
+
+def _validate_python_runtime_components(
+    lock: object, policy: PythonRuntimePolicy | None = None
+) -> None:
+    if policy is None:
+        compatibility = getattr(lock, "compatibility", {})
+        runtime = (
+            compatibility.get("python_runtime")
+            if isinstance(compatibility, Mapping)
+            else None
+        )
+        try:
+            policy = PythonRuntimePolicy.parse(_python_runtime_document(runtime))
+        except (TypeError, ValueError) as error:
+            raise ValueError("signed Python runtime metadata is invalid") from error
+    components = getattr(lock, "components", ())
+    if not isinstance(components, (tuple, list)):
+        raise TypeError("Python runtime components are unavailable")
+    by_name = {
+        getattr(item, "name", None): item
+        for item in components
+        if isinstance(getattr(item, "name", None), str)
+    }
+    environment = by_name.get(policy.environment_component)
+    interpreter = by_name.get(policy.interpreter_component)
+    if environment is None or interpreter is None:
+        raise ValueError("signed Python runtime component is missing")
+    environment_method = getattr(environment, "materialization", None)
+    interpreter_method = getattr(interpreter, "materialization", None)
+    if environment_method != {"method": "pylock-environment"}:
+        raise ValueError("Python environment component materialization is invalid")
+    if not isinstance(interpreter_method, Mapping):
+        raise TypeError("Python interpreter component materialization is invalid")
+    method = interpreter_method.get("method")
+    if method not in {"archive", "native-archive", "executable"}:
+        raise ValueError("Python interpreter component materialization is invalid")
+    if method == "executable" and policy.interpreter_entrypoint != interpreter.name:
+        raise ValueError("Python executable interpreter entrypoint is invalid")
+    interpreter_digest = str(getattr(interpreter, "digest", "")).removeprefix("sha256:")
+    if interpreter_digest != policy.interpreter_component_digest:
+        raise ValueError("Python interpreter component digest is not lock-bound")
+    environment_digest = str(getattr(environment, "digest", "")).removeprefix("sha256:")
+    if environment_digest != policy.environment_digest:
+        raise ValueError("Python environment digest is not lock-bound")
+
+
+def _python_runtime_document(value: object) -> object:
+    if not isinstance(value, Mapping):
+        return value
+    return {
+        **value,
+        "environment_digest": str(
+            value.get("environment_digest", "")
+        ).removeprefix("sha256:"),
+        "environment_tree_digest": str(
+            value.get("environment_tree_digest", "")
+        ).removeprefix("sha256:"),
+        "interpreter_digest": str(value.get("interpreter_digest", "")).removeprefix(
+            "sha256:"
+        ),
+        "interpreter_component_digest": str(
+            value.get("interpreter_component_digest", "")
+        ).removeprefix("sha256:"),
+    }
 
 
 class Interrupt(Protocol):

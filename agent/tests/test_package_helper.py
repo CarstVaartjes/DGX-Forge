@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import socket
+import stat
 import threading
 from configparser import ConfigParser
 from datetime import UTC, datetime, timedelta
@@ -554,6 +555,122 @@ def test_concrete_launcher_uses_sealed_content_and_fixed_systemd_sandbox(
     assert runner.cleaned == []
 
 
+def test_python_launcher_uses_signed_generation_interpreter_and_environment(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    generations = tmp_path / "generations"
+    release = generations / ("a" * 64) / "gen-20260806-a"
+    adapter = release / "components" / "future-adapter" / "future-adapter"
+    interpreter = (
+        release / "components" / "python-interpreter" / "bin" / "python3"
+    )
+    environment = release / "components" / "python-environment"
+    adapter.parent.mkdir(parents=True)
+    interpreter.parent.mkdir(parents=True)
+    environment.mkdir(parents=True)
+    adapter.write_bytes(b"python adapter")
+    interpreter.write_bytes(b"signed python interpreter")
+    adapter.chmod(0o500)
+    interpreter.chmod(0o500)
+    adapter_digest = hashlib.sha256(adapter.read_bytes()).hexdigest()
+    interpreter_digest = hashlib.sha256(interpreter.read_bytes()).hexdigest()
+    environment_digest = "d" * 64
+    environment_tree_digest = hashlib.sha256(b"[]\n").hexdigest()
+    files: list[dict[str, object]] = []
+    for path in sorted(release.rglob("*")):
+        relative = path.relative_to(release).as_posix()
+        metadata = path.stat(follow_symlinks=False)
+        mode = stat.S_IMODE(metadata.st_mode)
+        if stat.S_ISDIR(metadata.st_mode):
+            files.append({"kind": "directory", "mode": mode, "path": relative})
+        else:
+            files.append(
+                {
+                    "digest": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "kind": "file",
+                    "mode": mode,
+                    "path": relative,
+                    "size": metadata.st_size,
+                }
+            )
+    root_digest = hashlib.sha256(
+        json.dumps(
+            files, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+        ).encode()
+    ).hexdigest()
+    (release / ".dgx-generation.json").write_bytes(
+        canonical_helper_document(
+            {
+                "environment_digest": environment_digest,
+                "environment_tree_digest": environment_tree_digest,
+                "files": files,
+                "object_digests": [adapter_digest, interpreter_digest],
+                "release_digest": "a" * 64,
+                "root_object_digest": root_digest,
+                "schema_version": 1,
+            }
+        ) + b"\n"
+    )
+    (release / ".dgx-generation.json").chmod(0o444)
+    document = request_document()
+    document["body"]["invocation"] = {
+        **invocation_document("python-venv"),
+        "entrypoint": "components/future-adapter/future-adapter",
+        "network": {"mode": "none", "egress": []},
+        "mounts": [],
+        "python_runtime": {
+            "environment_component": "python-environment",
+            "environment_digest": environment_digest,
+            "environment_tree_digest": environment_tree_digest,
+            "interpreter_component": "python-interpreter",
+            "interpreter_component_digest": interpreter_digest,
+            "interpreter_entrypoint": "bin/python3",
+            "interpreter_digest": interpreter_digest,
+        },
+    }
+    document["body"]["receipts"] = [
+        receipt_document(adapter_digest, adapter.stat().st_size),
+        receipt_document(interpreter_digest, interpreter.stat().st_size),
+    ]
+    request = _request(document)
+
+    class Runner:
+        def __init__(self):
+            self.calls = []
+
+        def run(self, argv, *, pass_fds, timeout_seconds):
+            self.calls.append((argv, pass_fds, timeout_seconds))
+            return 0
+
+        def cleanup(self, unit_name):
+            pass
+
+    # The launcher still verifies and applies the dedicated workload identity;
+    # this fixture keeps the test runnable under root CI as well.
+    monkeypatch.setattr("dgx_agent.package_helper.os.fchown", lambda *_: None)
+    monkeypatch.setattr("dgx_agent.package_helper.os.fchmod", lambda *_: None)
+    runner = Runner()
+    launcher = SystemdBackendLauncher(generations, runner=runner)
+    result = launcher.launch(
+        request,
+        SandboxPolicy(os.geteuid() or 64001, os.getegid() or 64001, allowed_devices=("nvidia0",)),
+    )
+
+    assert result["status"] == "launched"
+    argv, pass_fds, _timeout = runner.calls[0]
+    assert "/run/dgx-forge/interpreter" in argv
+    assert argv[-4:] == (
+        "/run/dgx-forge/interpreter",
+        "/run/dgx-forge/entrypoint",
+        "serve",
+        "--port",
+        "8080",
+    )[-4:]
+    assert "--setenv=PYTHONPATH=/run/dgx-forge/generation/components/python-environment/lib/python/site-packages" in argv
+    assert len(pass_fds) == 3
+
+
 def test_launcher_rejects_restricted_network_before_content_or_side_effects(
     tmp_path: Path,
 ) -> None:
@@ -580,7 +697,7 @@ def test_launcher_rejects_restricted_network_before_content_or_side_effects(
     assert runner.calls == []
 
 
-@pytest.mark.parametrize("backend", ["oci", "python-venv"])
+@pytest.mark.parametrize("backend", ["oci"])
 def test_launcher_rejects_declared_non_native_backend_before_content(
     tmp_path: Path, backend: str
 ) -> None:
@@ -597,16 +714,8 @@ def test_launcher_rejects_declared_non_native_backend_before_content(
 
     document = request_document()
     document["body"]["invocation"]["backend"] = backend
-    request = _request(document)
-    runner = Runner()
-    launcher = SystemdBackendLauncher(tmp_path / "missing", runner=runner)
-
-    with pytest.raises(HelperProtocolError, match="not implemented"):
-        launcher.launch(
-            request,
-            SandboxPolicy(64001, 64001, allowed_devices=("nvidia0",)),
-        )
-    assert runner.calls == []
+    with pytest.raises(HelperProtocolError, match="backend invocation"):
+        _request(document)
 
 
 def test_launcher_cleans_failed_transient_unit(tmp_path: Path) -> None:

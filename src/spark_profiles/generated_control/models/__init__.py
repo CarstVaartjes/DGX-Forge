@@ -40,6 +40,8 @@ from .package_compatibility_response import PackageCompatibilityResponse
 from .package_component_response import PackageComponentResponse
 from .package_families_response import PackageFamiliesResponse
 from .package_family_response import PackageFamilyResponse
+from .package_inventory_item import PackageInventoryItem
+from .package_inventory_response import PackageInventoryResponse
 from .package_node_progress import PackageNodeProgress
 from .package_plan_request import PackagePlanRequest
 from .package_plan_response import PackagePlanResponse
@@ -49,7 +51,14 @@ from .package_promotion_request import PackagePromotionRequest
 from .package_promotion_response import PackagePromotionResponse
 from .package_provenance_response import PackageProvenanceResponse
 from .package_release_metadata import PackageReleaseMetadata
+from .package_removal_node import PackageRemovalNode
+from .package_removal_preview_response import PackageRemovalPreviewResponse
+from .package_removal_request import PackageRemovalRequest
 from .package_resolution_response import PackageResolutionResponse
+from .package_resource_envelope import PackageResourceEnvelope
+from .package_spark_inventory import PackageSparkInventory
+from .package_spark_resources import PackageSparkResources
+from .package_spark_storage import PackageSparkStorage
 from .plan_endpoint import PlanEndpoint
 from .plan_endpoint_scheme import PlanEndpointScheme
 from .plan_input_digests import PlanInputDigests
@@ -126,6 +135,8 @@ __all__ = (
     "PackageComponentResponse",
     "PackageFamiliesResponse",
     "PackageFamilyResponse",
+    "PackageInventoryItem",
+    "PackageInventoryResponse",
     "PackageNodeProgress",
     "PackagePlanRequest",
     "PackagePlanResponse",
@@ -135,7 +146,14 @@ __all__ = (
     "PackagePromotionResponse",
     "PackageProvenanceResponse",
     "PackageReleaseMetadata",
+    "PackageRemovalNode",
+    "PackageRemovalPreviewResponse",
+    "PackageRemovalRequest",
     "PackageResolutionResponse",
+    "PackageResourceEnvelope",
+    "PackageSparkInventory",
+    "PackageSparkResources",
+    "PackageSparkStorage",
     "PlanEndpoint",
     "PlanEndpointScheme",
     "PlanInputDigests",

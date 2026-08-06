@@ -56,6 +56,12 @@
     },
     "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "content_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "relative_path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.?(?:/|$))(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"
+    },
     "platform": {
       "type": "string",
       "pattern": "^[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*$"
@@ -122,13 +128,37 @@
       }
     },
     "materialization": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["method"],
+          "properties": {
+            "method": {
+              "enum": ["file", "snapshot", "archive", "oci-content", "configuration", "native-archive", "wheel", "pylock-environment", "executable"]
+            }
+          }
+        },
+        {
+          "$ref": "#/$defs/oci_bundle_materialization"
+        }
+      ]
+    },
+    "oci_bundle_materialization": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["method"],
+      "required": ["method", "schema_version", "component", "manifest_digest", "config_digest", "rootfs_digest", "architecture", "runtime", "rootfs", "entrypoint"],
       "properties": {
-        "method": {
-          "enum": ["file", "snapshot", "archive", "oci-content", "configuration", "native-archive", "wheel", "pylock-environment", "executable"]
-        }
+        "method": {"const": "oci-bundle"},
+        "schema_version": {"const": 1},
+        "component": {"$ref": "#/$defs/identifier"},
+        "manifest_digest": {"$ref": "#/$defs/content_digest"},
+        "config_digest": {"$ref": "#/$defs/content_digest"},
+        "rootfs_digest": {"$ref": "#/$defs/content_digest"},
+        "architecture": {"enum": ["linux-arm64", "linux-x86_64"]},
+        "runtime": {"const": "runc"},
+        "rootfs": {"$ref": "#/$defs/relative_path"},
+        "entrypoint": {"$ref": "#/$defs/relative_path"}
       }
     },
     "component": {
@@ -214,7 +244,22 @@
         "minimum_memory_bytes": {"type": "integer", "minimum": 1, "maximum": 9223372036854775807},
         "minimum_driver": {"type": "string", "minLength": 1, "maxLength": 64},
         "minimum_cuda": {"type": "string", "minLength": 1, "maxLength": 64},
-        "backends": {"type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"enum": ["oci", "python-venv", "native"]}}
+        "backends": {"type": "array", "minItems": 1, "maxItems": 32, "uniqueItems": true, "items": {"enum": ["oci", "python-venv", "native"]}},
+        "python_runtime": {"$ref": "#/$defs/python_runtime"}
+      }
+    },
+    "python_runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["environment_component", "environment_digest", "environment_tree_digest", "interpreter_component", "interpreter_component_digest", "interpreter_entrypoint", "interpreter_digest"],
+      "properties": {
+        "environment_component": {"$ref": "#/$defs/identifier"},
+        "environment_digest": {"$ref": "#/$defs/content_digest"},
+        "environment_tree_digest": {"$ref": "#/$defs/content_digest"},
+        "interpreter_component": {"$ref": "#/$defs/identifier"},
+        "interpreter_component_digest": {"$ref": "#/$defs/content_digest"},
+        "interpreter_entrypoint": {"type": "string", "minLength": 1, "maxLength": 256, "pattern": "^(?!/)(?!.*(?:^|/)\\.?(?:/|$))(?!.*(?:^|/)\\.\\.(?:/|$))[^\\\\]+$"},
+        "interpreter_digest": {"$ref": "#/$defs/content_digest"}
       }
     },
     "validation": {

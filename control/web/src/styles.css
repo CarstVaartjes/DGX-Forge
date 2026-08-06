@@ -49,6 +49,17 @@ code{color:#9bd7ff}
 .grant-secret{display:grid;gap:.75rem;border-color:#71e6b1}
 .grant-secret code{font-size:1.1rem;overflow-wrap:anywhere}
 .reconciliation-workflow,.plan-review,.job-detail,.operation-card{margin:1.25rem 0;padding:1rem;background:#0e1924;border:1px solid #263747;border-radius:.6rem}
+.inventory-shell{margin:1.25rem 0;padding:1.1rem;background:#0b1621;border:1px solid #263747;border-radius:.7rem}
+.inventory-heading{align-items:center}
+.inventory-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:.65rem;margin:1rem 0}
+.inventory-summary>div{padding:.8rem;border:1px solid #263747;border-radius:.5rem;background:#0e1924}
+.inventory-summary span,.inventory-summary strong{display:block}.inventory-summary span{color:#8fa4b7;font-size:.8rem}.inventory-summary strong{font-size:1.25rem;margin-top:.25rem}
+.inventory-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(22rem,1fr));gap:.9rem}
+.inventory-node{padding:1rem;border:1px solid #263747;border-radius:.6rem;background:#0e1924;min-width:0}
+.inventory-node-heading,.inventory-package-heading{display:flex;justify-content:space-between;gap:.75rem;align-items:start}.inventory-node h4,.inventory-package strong{margin:.1rem 0}.inventory-node small,.inventory-package small{display:block;color:#8fa4b7;overflow-wrap:anywhere}.inventory-node-heading .status{white-space:nowrap}
+.storage-meter,.download-meter{max-width:none;margin:.9rem 0}.storage-meter progress,.download-meter progress{display:block;width:100%;margin:.35rem 0}.storage-meter small,.download-meter small{color:#8fa4b7}
+.inventory-packages{display:grid;gap:.65rem}.inventory-package{padding:.8rem;background:#0a141e;border:1px solid #263747;border-radius:.5rem}.inventory-package-heading code{font-size:.78rem}.package-resources{display:flex;flex-wrap:wrap;gap:.4rem .8rem;margin:.7rem 0;color:#8fa4b7;font-size:.8rem}.package-resources strong{color:#e7edf5;font-size:.85rem}.inventory-actions{display:flex;align-items:center;justify-content:flex-end;min-height:2rem}.inventory-actions small{color:#d5b878}.inventory-observed{display:block;margin-top:.8rem}.gc-card,.removal-card{margin:1rem 0;background:#0e1924}.gc-preview,.removal-card{display:grid;gap:.65rem}.gc-preview code,.removal-card code{overflow-wrap:anywhere}.gc-preview label,.removal-card label{max-width:none}
+.status.warning{background:#5a4520;color:#f3d38b}
 .plan-review section{margin:1.5rem 0}
 .operation-card{background:#0a141e;overflow-wrap:anywhere}
 .operation-card h5{margin-top:0}

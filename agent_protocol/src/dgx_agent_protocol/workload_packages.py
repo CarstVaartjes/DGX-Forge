@@ -6,6 +6,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Any
 from urllib.parse import urlsplit
@@ -34,6 +35,7 @@ NODE_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
 ED25519_SIGNATURE = re.compile(r"[0-9a-f]{128}\Z")
 GIT_COMMIT = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
 OCI_REFERENCE = re.compile(r"[a-z0-9][a-z0-9._:/-]{0,510}@sha256:[0-9a-f]{64}\Z")
+OCI_ARCHITECTURE = re.compile(r"(?:linux-arm64|linux-x86_64)\Z")
 HF_REPOSITORY = re.compile(
     r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,95})/"
     r"[A-Za-z0-9](?:[A-Za-z0-9._-]{0,95})\Z"
@@ -277,19 +279,109 @@ def _parse_evidence(value: Any, *, name: str) -> Mapping[str, object]:
     )
 
 
+@dataclass(frozen=True)
+class OciBundleMetadata:
+    """Signed metadata for an immutable OCI-rootfs workload component.
+
+    Workload locks carry this metadata in the component's materialization
+    object.  The archive itself must repeat the same canonical document as
+    ``oci-bundle.json``; the agent verifies both before a helper can launch it.
+    ``component`` is an identifier, never a host path.  The agent derives the
+    actual generation path from its fixed package root.
+    """
+
+    schema_version: int
+    component: str
+    manifest_digest: str
+    config_digest: str
+    rootfs_digest: str
+    architecture: str
+    runtime: str
+    rootfs: str
+    entrypoint: str
+
+    def __post_init__(self) -> None:
+        if self.schema_version != 1 or isinstance(self.schema_version, bool):
+            raise AgentProtocolError("OCI bundle schema_version is invalid")
+        _identifier(self.component, name="OCI bundle component")
+        for value, name in (
+            (self.manifest_digest, "OCI manifest digest"),
+            (self.config_digest, "OCI config digest"),
+            (self.rootfs_digest, "OCI rootfs digest"),
+        ):
+            _sha256(value, name=name, prefixed=True)
+        if not isinstance(self.architecture, str) or OCI_ARCHITECTURE.fullmatch(
+            self.architecture
+        ) is None:
+            raise AgentProtocolError("OCI bundle architecture is invalid")
+        if self.runtime != "runc":
+            raise AgentProtocolError("OCI bundle runtime is unsupported")
+        for value, name in ((self.rootfs, "OCI bundle rootfs"), (self.entrypoint, "OCI bundle entrypoint")):
+            if (
+                not isinstance(value, str)
+                or not 1 <= len(value) <= 256
+                or value.startswith("/")
+                or "\\" in value
+                or any(part in {"", ".", ".."} for part in value.split("/"))
+                or any(ord(character) < 0x20 or ord(character) == 0x7F for character in value)
+            ):
+                raise AgentProtocolError(f"{name} is invalid")
+
+    @classmethod
+    def parse(cls, value: Any) -> OciBundleMetadata:
+        document = _mapping(value, name="OCI bundle metadata")
+        _exact_fields(
+            document,
+            required={
+                "schema_version",
+                "component",
+                "manifest_digest",
+                "config_digest",
+                "rootfs_digest",
+                "architecture",
+                "runtime",
+                "rootfs",
+                "entrypoint",
+            },
+            name="OCI bundle metadata",
+        )
+        return cls(
+            document["schema_version"],
+            document["component"],
+            document["manifest_digest"],
+            document["config_digest"],
+            document["rootfs_digest"],
+            document["architecture"],
+            document["runtime"],
+            document["rootfs"],
+            document["entrypoint"],
+        )
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "schema_version": 1,
+            "component": self.component,
+            "manifest_digest": self.manifest_digest,
+            "config_digest": self.config_digest,
+            "rootfs_digest": self.rootfs_digest,
+            "architecture": self.architecture,
+            "runtime": self.runtime,
+            "rootfs": self.rootfs,
+            "entrypoint": self.entrypoint,
+        }
+
+
 def _parse_materialization(value: Any) -> Mapping[str, object]:
     materialization = _mapping(value, name="component materialization")
-    _exact_fields(
-        materialization,
-        required={"method"},
-        name="component materialization",
-    )
+    if "method" not in materialization:
+        raise AgentProtocolError("component materialization missing method")
     method = materialization["method"]
     allowed = {
         "file",
         "snapshot",
         "archive",
         "oci-content",
+        "oci-bundle",
         "configuration",
         "native-archive",
         "wheel",
@@ -298,7 +390,17 @@ def _parse_materialization(value: Any) -> Mapping[str, object]:
     }
     if method not in allowed:
         raise AgentProtocolError("component materialization method is not supported")
-    return MappingProxyType({"method": method})
+    if method != "oci-bundle":
+        _exact_fields(
+            materialization,
+            required={"method"},
+            name="component materialization",
+        )
+        return MappingProxyType({"method": method})
+    metadata = OciBundleMetadata.parse(
+        {"schema_version": 1, **{key: value for key, value in materialization.items() if key != "method"}}
+    )
+    return MappingProxyType({"method": method, **metadata.to_mapping()})
 
 
 @dataclass(frozen=True)
@@ -498,6 +600,7 @@ def _parse_compatibility(value: Any) -> Mapping[str, object]:
         "minimum_driver",
         "minimum_cuda",
         "backends",
+        "python_runtime",
     }
     _exact_fields(
         compatibility,
@@ -544,7 +647,86 @@ def _parse_compatibility(value: Any) -> Mapping[str, object]:
         if not set(backends) <= {"oci", "python-venv", "native"}:
             raise AgentProtocolError("compatibility backend is not supported")
         result["backends"] = backends
+    if "python_runtime" in compatibility:
+        if "backends" not in result or "python-venv" not in result["backends"]:
+            raise AgentProtocolError(
+                "Python runtime metadata requires the python-venv backend"
+            )
+        result["python_runtime"] = _parse_python_runtime(
+            compatibility["python_runtime"]
+        )
+    elif "backends" in result and "python-venv" in result["backends"]:
+        raise AgentProtocolError(
+            "python-venv compatibility requires Python runtime metadata"
+        )
     return _freeze(result)
+
+
+def _parse_python_runtime(value: Any) -> Mapping[str, object]:
+    runtime = _mapping(value, name="Python runtime metadata")
+    required = {
+        "environment_component",
+        "environment_digest",
+        "environment_tree_digest",
+        "interpreter_component",
+        "interpreter_component_digest",
+        "interpreter_entrypoint",
+        "interpreter_digest",
+    }
+    if set(runtime) != required:
+        raise AgentProtocolError("Python runtime metadata fields are invalid")
+    environment_component = _identifier(
+        runtime["environment_component"], name="Python environment component"
+    )
+    interpreter_component = _identifier(
+        runtime["interpreter_component"], name="Python interpreter component"
+    )
+    if environment_component == interpreter_component:
+        raise AgentProtocolError(
+            "Python environment and interpreter components must differ"
+        )
+    entrypoint = runtime["interpreter_entrypoint"]
+    if (
+        not isinstance(entrypoint, str)
+        or not 1 <= len(entrypoint) <= 256
+        or "\\" in entrypoint
+    ):
+        raise AgentProtocolError("Python interpreter entrypoint is invalid")
+    path = PurePosixPath(entrypoint)
+    if (
+        path.is_absolute()
+        or str(path) != entrypoint
+        or any(part in {"", ".", ".."} for part in path.parts)
+        or path.name in {"apt", "apt-get", "bash", "dash", "sh", "sudo"}
+    ):
+        raise AgentProtocolError("Python interpreter entrypoint is invalid")
+    return _freeze(
+        {
+            "environment_component": environment_component,
+            "environment_digest": _sha256(
+                runtime["environment_digest"],
+                name="Python environment digest",
+                prefixed=True,
+            ),
+            "environment_tree_digest": _sha256(
+                runtime["environment_tree_digest"],
+                name="Python environment tree digest",
+                prefixed=True,
+            ),
+            "interpreter_component": interpreter_component,
+            "interpreter_component_digest": _sha256(
+                runtime["interpreter_component_digest"],
+                name="Python interpreter component digest",
+                prefixed=True,
+            ),
+            "interpreter_entrypoint": entrypoint,
+            "interpreter_digest": _sha256(
+                runtime["interpreter_digest"],
+                name="Python interpreter digest",
+                prefixed=True,
+            ),
+        }
+    )
 
 
 def _parse_validation(value: Any, *, component_names: set[str]) -> Mapping[str, object]:
@@ -1052,6 +1234,7 @@ __all__ = [
     "MAX_PACKAGE_HELPER_GRANT_SECONDS",
     "PACKAGE_HELPER_AUTHORITY",
     "ComponentDescriptor",
+    "OciBundleMetadata",
     "PackageHelperGrantClaims",
     "PackageHelperOperation",
     "PackageHelperSignature",

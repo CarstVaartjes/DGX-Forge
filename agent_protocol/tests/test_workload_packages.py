@@ -103,6 +103,49 @@ def test_release_lock_digest_is_stable_for_reordered_maps() -> None:
     assert hashlib.sha256(original.canonical_bytes).hexdigest() == original.digest
 
 
+def test_release_lock_accepts_signed_python_runtime_metadata() -> None:
+    document = lock_document()
+    document["compatibility"] = {
+        **document["compatibility"],
+        "backends": ["python-venv"],
+        "python_runtime": {
+            "environment_component": "python-environment",
+            "environment_digest": "sha256:" + SHA_B,
+            "environment_tree_digest": "sha256:" + SHA_B,
+            "interpreter_component": "python-interpreter",
+            "interpreter_component_digest": "sha256:" + SHA_A,
+            "interpreter_entrypoint": "bin/python3",
+            "interpreter_digest": "sha256:" + SHA_A,
+        },
+    }
+
+    lock = PackageReleaseLock.parse(document)
+
+    assert lock.compatibility["backends"] == ("python-venv",)
+    runtime = lock.compatibility["python_runtime"]
+    assert runtime["interpreter_component"] == "python-interpreter"
+
+
+def test_release_lock_rejects_untrusted_python_runtime_metadata() -> None:
+    document = lock_document()
+    document["compatibility"] = {
+        **document["compatibility"],
+        "backends": ["python-venv"],
+        "python_runtime": {
+            "environment_component": "../environment",
+            "environment_digest": "sha256:" + SHA_B,
+            "environment_tree_digest": "sha256:" + SHA_B,
+            "interpreter_component": "python-interpreter",
+            "interpreter_component_digest": "sha256:" + SHA_A,
+            "interpreter_entrypoint": "/usr/bin/python3",
+            "interpreter_digest": "sha256:" + SHA_A,
+        },
+    }
+
+    with pytest.raises(AgentProtocolError, match="(?i)python|runtime"):
+        PackageReleaseLock.parse(document)
+
+
 def test_release_lock_rejects_duplicate_json_keys() -> None:
     raw = json.dumps(lock_document(), separators=(",", ":"))
     duplicate = raw.replace(

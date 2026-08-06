@@ -73,3 +73,34 @@ it("requires the exact promotion preview digest and projects audit evidence", as
   expect(calls).toEqual([digest]);
   expect(await screen.findByRole("status")).toHaveTextContent("Package promotion accepted");
 });
+
+it("separates downloads from active generations and requires an exact removal preview", async () => {
+  const removalDigest = `sha256:${"f".repeat(64)}`;
+  const calls: string[] = [];
+  const control = {
+    ...api(),
+    packageInventory: async () => ({nodes: [{
+      node_id: "spark-a",
+      online: true,
+      storage: {total_bytes: 1000, used_bytes: 650, free_bytes: 350, reserved_bytes: 50, reclaimable_bytes: 200},
+      resources: {host_memory_total_bytes: 1000, host_memory_free_bytes: 500, gpu_memory_total_bytes: 1000, gpu_memory_free_bytes: 700, gpu_count: 1},
+      packages: [
+        {deployment_id: "chat", family_id: "llm-runtime", release_digest: removalDigest, content_group: "weights", state: "available", bytes_total: 1000, bytes_complete: 1000, bytes_remaining: 0, installed_bytes: 400, reclaimable_bytes: 400, reserved_bytes: 0, active: false, retained: false, leased: false, resources: {download_bytes: 1000, installed_bytes: 400, transient_bytes: 100, host_memory_bytes: 100, gpu_memory_bytes: 200, kv_cache_base_bytes: 10, kv_cache_per_token_bytes: 1, required_sparks: 1, topology: "single"}},
+        {deployment_id: "chat", family_id: "llm-runtime", release_digest: removalDigest, content_group: "active", state: "active", bytes_total: 100, bytes_complete: 100, bytes_remaining: 0, installed_bytes: 100, reclaimable_bytes: 0, reserved_bytes: 0, active: true, retained: false, leased: true, resources: {download_bytes: 100, installed_bytes: 100, transient_bytes: 0, host_memory_bytes: 100, gpu_memory_bytes: 300, kv_cache_base_bytes: 10, kv_cache_per_token_bytes: 1, required_sparks: 1, topology: "single"}},
+      ],
+    }], total: 1}),
+    previewPackageRemoval: async (input: {deployment_id: string; release_digest: string; node_ids: string[]}) => { calls.push(JSON.stringify(input)); return {digest: removalDigest}; },
+    removePackageInventory: async (digest: string) => { calls.push(digest); return {id: "remove-1", state: "accepted", phase: "remove", failure_reason: null, nodes: []}; },
+  };
+  render(<PackagesPage api={control}/>);
+  const user = userEvent.setup();
+  expect(await screen.findByText("Available")).toBeVisible();
+  expect(screen.getByText("Active generation — protected while serving")).toBeVisible();
+  await user.click(screen.getByRole("button", {name: "Preview removal"}));
+  expect(await screen.findByLabelText("Type the exact removal preview digest")).toBeVisible();
+  const input = screen.getByLabelText("Type the exact removal preview digest");
+  expect(screen.getByRole("button", {name: "Remove exact generation"})).toBeDisabled();
+  await user.type(input, removalDigest);
+  await user.click(screen.getByRole("button", {name: "Remove exact generation"}));
+  expect(calls).toEqual([JSON.stringify({deployment_id: "chat", release_digest: removalDigest, node_ids: ["spark-a"]}), removalDigest]);
+});

@@ -9,6 +9,8 @@ from enum import StrEnum
 from pathlib import PurePosixPath
 from typing import Any
 
+from dgx_agent_protocol import OciBundleMetadata
+
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _IDENTIFIER = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
 _DEVICE = re.compile(r"[a-z][a-z0-9._-]{0,63}\Z")
@@ -137,6 +139,82 @@ class NetworkPolicy:
 
 
 @dataclass(frozen=True)
+class PythonRuntimePolicy:
+    """Signed, generation-local Python interpreter selection."""
+
+    environment_component: str
+    environment_digest: str
+    environment_tree_digest: str
+    interpreter_component: str
+    interpreter_component_digest: str
+    interpreter_entrypoint: str
+    interpreter_digest: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.environment_component, "Python environment component")
+        _digest(self.environment_digest, "Python environment digest")
+        _digest(self.environment_tree_digest, "Python environment tree digest")
+        _identifier(self.interpreter_component, "Python interpreter component")
+        _digest(
+            self.interpreter_component_digest,
+            "Python interpreter component digest",
+        )
+        if self.environment_component == self.interpreter_component:
+            raise BackendValidationError(
+                "Python environment and interpreter components must differ"
+            )
+        _relative_path(
+            self.interpreter_entrypoint, "Python interpreter entrypoint"
+        )
+        if PurePosixPath(self.interpreter_entrypoint).name in {
+            "apt",
+            "apt-get",
+            "bash",
+            "dash",
+            "sh",
+            "sudo",
+        }:
+            raise BackendValidationError("Python interpreter entrypoint is forbidden")
+        _digest(self.interpreter_digest, "Python interpreter digest")
+
+    @classmethod
+    def parse(cls, value: object) -> PythonRuntimePolicy:
+        document = _object(
+            value,
+            {
+                "environment_component",
+                "environment_digest",
+                "environment_tree_digest",
+                "interpreter_component",
+                "interpreter_component_digest",
+                "interpreter_entrypoint",
+                "interpreter_digest",
+            },
+            "Python runtime fields",
+        )
+        return cls(
+            document["environment_component"],
+            document["environment_digest"],
+            document["environment_tree_digest"],
+            document["interpreter_component"],
+            document["interpreter_component_digest"],
+            document["interpreter_entrypoint"],
+            document["interpreter_digest"],
+        )
+
+    def to_mapping(self) -> dict[str, str]:
+        return {
+            "environment_component": self.environment_component,
+            "environment_digest": self.environment_digest,
+            "environment_tree_digest": self.environment_tree_digest,
+            "interpreter_component": self.interpreter_component,
+            "interpreter_component_digest": self.interpreter_component_digest,
+            "interpreter_entrypoint": self.interpreter_entrypoint,
+            "interpreter_digest": self.interpreter_digest,
+        }
+
+
+@dataclass(frozen=True)
 class BackendInvocation:
     schema_version: int
     backend: Backend
@@ -148,6 +226,9 @@ class BackendInvocation:
     mounts: tuple[MountPolicy, ...]
     devices: tuple[str, ...]
     network: NetworkPolicy
+    python_runtime: PythonRuntimePolicy | None = None
+    oci_bundle: OciBundleMetadata | None = None
+    oci_bundle_digest: str | None = None
 
     def __post_init__(self) -> None:
         if self.schema_version != 1 or isinstance(self.schema_version, bool):
@@ -186,25 +267,51 @@ class BackendInvocation:
             raise BackendValidationError("devices are invalid")
         if type(self.network) is not NetworkPolicy:
             raise BackendValidationError("network policy is invalid")
+        if self.backend is Backend.PYTHON_VENV:
+            if type(self.python_runtime) is not PythonRuntimePolicy:
+                raise BackendValidationError(
+                    "Python runtime metadata is required for python-venv"
+                )
+        elif self.python_runtime is not None:
+            raise BackendValidationError(
+                "Python runtime metadata belongs only to python-venv"
+            )
+        if self.oci_bundle is not None and type(self.oci_bundle) is not OciBundleMetadata:
+            raise BackendValidationError("OCI bundle metadata is invalid")
+        if self.oci_bundle is not None and self.backend is not Backend.OCI:
+            raise BackendValidationError("OCI bundle metadata belongs only to OCI")
+        if self.backend is Backend.OCI:
+            if self.oci_bundle is None or self.oci_bundle_digest is None:
+                raise BackendValidationError("OCI bundle digest is required")
+            _digest(self.oci_bundle_digest, "OCI bundle digest")
+        elif self.oci_bundle_digest is not None:
+            raise BackendValidationError("OCI bundle digest belongs only to OCI")
 
     @classmethod
     def parse(cls, value: object) -> BackendInvocation:
-        document = _object(
-            value,
-            {
-                "schema_version",
-                "backend",
-                "release_digest",
-                "generation",
-                "entrypoint",
-                "arguments",
-                "resources",
-                "mounts",
-                "devices",
-                "network",
-            },
-            "backend invocation fields",
+        if not isinstance(value, Mapping):
+            raise BackendValidationError("backend invocation fields are invalid")
+        fields = {
+            "schema_version",
+            "backend",
+            "release_digest",
+            "generation",
+            "entrypoint",
+            "arguments",
+            "resources",
+            "mounts",
+            "devices",
+            "network",
+        }
+        allowed = (
+            fields,
+            fields | {"python_runtime"},
+            fields | {"oci_bundle", "oci_bundle_digest"},
+            fields | {"python_runtime", "oci_bundle", "oci_bundle_digest"},
         )
+        if set(value) not in allowed:
+            raise BackendValidationError("backend invocation fields are invalid")
+        document = value
         try:
             backend = Backend(document["backend"])
         except (TypeError, ValueError) as error:
@@ -222,10 +329,19 @@ class BackendInvocation:
             tuple(MountPolicy.parse(item) for item in mounts_raw),
             devices,
             NetworkPolicy.parse(document["network"]),
+            None
+            if document.get("python_runtime") is None
+            else PythonRuntimePolicy.parse(document["python_runtime"]),
+            None
+            if document.get("oci_bundle") is None
+            else OciBundleMetadata.parse(document["oci_bundle"]),
+            None
+            if document.get("oci_bundle_digest") is None
+            else document["oci_bundle_digest"],
         )
 
     def to_mapping(self) -> dict[str, object]:
-        return {
+        document: dict[str, object] = {
             "schema_version": 1,
             "backend": self.backend.value,
             "release_digest": self.release_digest,
@@ -237,6 +353,12 @@ class BackendInvocation:
             "devices": list(self.devices),
             "network": self.network.to_mapping(),
         }
+        if self.python_runtime is not None:
+            document["python_runtime"] = self.python_runtime.to_mapping()
+        if self.oci_bundle is not None:
+            document["oci_bundle"] = self.oci_bundle.to_mapping()
+            document["oci_bundle_digest"] = self.oci_bundle_digest
+        return document
 
 
 def _object(value: object, fields: set[str], name: str) -> Mapping[str, Any]:

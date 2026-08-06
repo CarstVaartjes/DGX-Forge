@@ -257,7 +257,7 @@ Expected: FAIL because desired state still requires `spark-runtime-v1` and fixed
 
 - [ ] **Step 3: Implement digest-driven package graphs**
 
-Read package family/release/deployment documents only from the eligible commit, verify the lock through workload TUF, plan placement from complete graph compatibility/resources, and persist canonical graph/payload/plan bytes. Prepare can occur before route withdrawal; activation requires drain/withdrawal and node leases. Accept only exact fenced agent evidence, switch routes after fleet health, and compensate to recorded previous generation on failure.
+Read package family/release/deployment documents only from the eligible commit, verify the lock through workload TUF, plan placement from complete graph compatibility/resources, and persist canonical graph/payload/plan bytes. Prepare and verify all selected nodes (and all gang ranks) before any route withdrawal or stop; activation then uses an explicit group barrier, drain/withdrawal, and node leases. Accept only exact fenced agent evidence, switch routes after fleet health, and compensate to recorded previous generation on failure. A scheduler must not reorder a stop ahead of preparation merely because operation IDs sort lexically.
 
 ```python
 def package_operation_payload(deployment: WorkloadDeployment, operation: str) -> dict[str, object]:
@@ -295,12 +295,12 @@ git commit -m "feat: reconcile generic workload packages"
 - Modify: `tests/control/test_openapi_clients.py`
 
 **Interfaces:**
-- API resources cover families, candidates, resolutions, validation, promotion preview/apply, deployments, rollouts, rollback, repair, GC preview/apply, and bounded progress.
+- API resources cover families, candidates, resolutions, validation, promotion preview/apply, deployments, rollouts, rollback, repair, GC preview/apply, per-Spark package inventory/removal, and bounded progress.  Deployment projections expose the signed resource envelope and typed topology (`single`, `replicated`, or `gang`, including placement group, role/rank, world size, and fabric requirements).
 - CLI surface is `sparkctl admin packages ...` and `sparkctl admin deployments ...`; every apply command consumes an exact preview/plan digest.
 
 - [ ] **Step 1: Write RED authorization, idempotency, and equivalence tests**
 
-Cover viewer/operator/admin roles, manual promotion admin-only, operator rollout of already approved state, stale preview/commit, duplicate request IDs, bounded pagination/errors, redaction, API/CLI canonical digest equality, and absence of payload proxy/upload endpoints.
+Cover viewer/operator/admin roles, manual promotion admin-only, operator rollout of already approved state, stale preview/commit, duplicate request IDs, bounded pagination/errors, redaction, API/CLI canonical digest equality, and absence of payload proxy/upload endpoints.  Include resource-envelope admission (resident/auxiliary/activation/workspace/KV peak, staging/storage headroom, declared-vs-measured evidence), topology validation (gang rank/world-size/fabric and barrier fencing), and remove-vs-deactivate semantics.  A remove preview must show affected Sparks, active/leased blockers, shared-object reference counts, and reclaimable bytes; applying it cannot delete bytes still reachable from another deployment.
 
 ```python
 preview = client.preview_package_promotion(candidate_id)
@@ -352,12 +352,13 @@ git commit -m "feat: administer workload packages by API and CLI"
 - Test: `control/tests/test_package_metrics.py`
 
 **Interfaces:**
-- Web shows family/channel, upstream candidate, structured unsupported reason, immutable lock/components/dependencies/provenance, compatibility, validation, promotion diff, rollout/canary/progress, retained rollback generation, and repair/GC previews.
+- Web shows family/channel, upstream candidate, structured unsupported reason, immutable lock/components/dependencies/provenance, compatibility, signed resource envelope, topology and co-residency fit, validation, promotion diff, rollout/canary/progress, retained rollback generation, and repair/GC previews.
+- Web exposes a per-Spark package inventory: downloaded/verified/staged/active/retained/deletable state, free/used/reserved storage and memory, installation headroom, leases, and a safe remove/deactivate flow.  Removing a deployment is distinct from deleting shared cache objects; cache deletion remains an explicit GC preview/apply operation.
 - Metrics use bounded labels only: state/reason/backend/provider/phase, never family/model/component/digest/source URL or credential.
 
 - [ ] **Step 1: Write RED UI and cardinality tests**
 
-Test manual promotion confirmation with exact digest, unsupported candidate visibility, aggregate download/storage plan, canary failure stop, rollback selection, offline pending node, safe progress rendering, role restrictions, secret/source redaction, keyboard/accessibility checks, and metric label bounds.
+Test manual promotion confirmation with exact digest, unsupported candidate visibility, aggregate download/storage plan, resource-envelope and co-residency fit, gang rank/barrier status, canary failure stop, rollback selection, offline pending node, safe progress rendering, per-Spark inventory and remove confirmation, role restrictions, secret/source redaction, keyboard/accessibility checks, and metric label bounds.
 
 ```tsx
 expect(screen.getByText("Awaiting administrator approval")).toBeVisible()

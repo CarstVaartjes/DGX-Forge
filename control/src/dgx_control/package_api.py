@@ -45,6 +45,9 @@ PACKAGE_OPERATION_IDS = {
     ("post", "/api/v1/deployments/{deployment_id}/repair"): "repairPackageDeployment",
     ("post", "/api/v1/packages/gc-preview"): "previewPackageGc",
     ("post", "/api/v1/packages/gc"): "applyPackageGc",
+    ("get", "/api/v1/packages/inventory"): "listPackageInventory",
+    ("post", "/api/v1/packages/inventory/remove-preview"): "previewPackageRemoval",
+    ("post", "/api/v1/packages/inventory/remove"): "removePackageInventory",
 }
 
 
@@ -190,6 +193,104 @@ class PackageProgressResponse(StrictModel):
     rollback_selector: str | None = Field(default=None, max_length=128)
 
 
+class PackageResourceEnvelope(StrictModel):
+    """Bounded resource requirements supplied by a promoted workload release."""
+
+    download_bytes: int = Field(ge=0)
+    installed_bytes: int = Field(ge=0)
+    transient_bytes: int = Field(ge=0)
+    host_memory_bytes: int = Field(ge=0)
+    gpu_memory_bytes: int = Field(ge=0)
+    kv_cache_base_bytes: int = Field(ge=0)
+    kv_cache_per_token_bytes: int = Field(ge=0)
+    required_sparks: int = Field(ge=1, le=512)
+    topology: str = Field(min_length=1, max_length=128)
+
+
+class PackageInventoryItem(StrictModel):
+    """One release/content group as observed on one Spark."""
+
+    deployment_id: str = Field(pattern=_IDENTIFIER)
+    family_id: str | None = Field(default=None, pattern=_IDENTIFIER)
+    release_digest: str = Field(pattern=_DIGEST)
+    content_group: str = Field(min_length=1, max_length=128)
+    state: str = Field(
+        pattern=r"^(downloading|staged|available|active|retained|leased|removable|failed)$"
+    )
+    bytes_total: int = Field(ge=0)
+    bytes_complete: int = Field(ge=0)
+    bytes_remaining: int = Field(ge=0)
+    installed_bytes: int = Field(ge=0)
+    reclaimable_bytes: int = Field(ge=0)
+    reserved_bytes: int = Field(ge=0)
+    active: bool
+    retained: bool
+    leased: bool
+    operation_id: str | None = Field(default=None, max_length=128)
+    last_operation_state: str | None = Field(default=None, max_length=64)
+    last_operation_error: str | None = Field(default=None, max_length=256)
+    resources: PackageResourceEnvelope
+
+
+class PackageSparkStorage(StrictModel):
+    total_bytes: int = Field(ge=0)
+    used_bytes: int = Field(ge=0)
+    free_bytes: int = Field(ge=0)
+    reserved_bytes: int = Field(ge=0)
+    reclaimable_bytes: int = Field(ge=0)
+
+
+class PackageSparkResources(StrictModel):
+    host_memory_total_bytes: int = Field(ge=0)
+    host_memory_free_bytes: int = Field(ge=0)
+    gpu_memory_total_bytes: int = Field(ge=0)
+    gpu_memory_free_bytes: int = Field(ge=0)
+    gpu_count: int = Field(ge=0, le=512)
+
+
+class PackageSparkInventory(StrictModel):
+    node_id: str = Field(min_length=1, max_length=128)
+    online: bool
+    observed_at: str | None = Field(default=None, max_length=64)
+    storage: PackageSparkStorage
+    resources: PackageSparkResources
+    current_generation: str | None = Field(default=None, pattern=_DIGEST)
+    packages: list[PackageInventoryItem] = Field(default_factory=list, max_length=2048)
+
+
+class PackageInventoryResponse(StrictModel):
+    nodes: list[PackageSparkInventory] = Field(max_length=512)
+    next_cursor: str | None = Field(default=None, max_length=512)
+    total: int = Field(ge=0, le=10_000_000)
+
+
+class PackageRemovalRequest(StrictModel):
+    deployment_id: str = Field(pattern=_IDENTIFIER)
+    release_digest: str = Field(pattern=_DIGEST)
+    node_ids: list[str] = Field(min_length=1, max_length=512)
+
+
+class PackageRemovalNode(StrictModel):
+    node_id: str = Field(min_length=1, max_length=128)
+    state: str = Field(min_length=1, max_length=64)
+    active: bool
+    retained: bool
+    leased: bool
+    reclaimable_bytes: int = Field(ge=0)
+    dependencies: list[str] = Field(default_factory=list, max_length=256)
+    blocked_reason: str | None = Field(default=None, max_length=256)
+
+
+class PackageRemovalPreviewResponse(StrictModel):
+    digest: str = Field(pattern=_DIGEST)
+    state: str = Field(min_length=1, max_length=64)
+    deployment_id: str = Field(pattern=_IDENTIFIER)
+    release_digest: str = Field(pattern=_DIGEST)
+    nodes: list[PackageRemovalNode] = Field(max_length=512)
+    reclaimable_bytes: int = Field(ge=0)
+    blocked_nodes: list[str] = Field(default_factory=list, max_length=512)
+
+
 def _safe_metadata(value: object) -> dict[str, str | int | float | bool | None]:
     if not isinstance(value, Mapping):
         return {}
@@ -238,6 +339,100 @@ def _release_document(value: Mapping[str, object]) -> dict[str, object]:
     }
 
 
+def _inventory_document(value: Mapping[str, object]) -> dict[str, object]:
+    """Project agent inventory into the bounded, UI-safe wire shape."""
+
+    nodes: list[dict[str, object]] = []
+    raw_nodes = value.get("nodes")
+    if isinstance(raw_nodes, list):
+        for raw_node in raw_nodes[:512]:
+            if not isinstance(raw_node, Mapping):
+                continue
+            storage = raw_node.get("storage")
+            resources = raw_node.get("resources")
+            packages: list[dict[str, object]] = []
+            raw_packages = raw_node.get("packages")
+            if isinstance(raw_packages, list):
+                for raw_package in raw_packages[:2048]:
+                    if not isinstance(raw_package, Mapping):
+                        continue
+                    envelope = raw_package.get("resources")
+                    packages.append(
+                        {
+                            "deployment_id": raw_package.get("deployment_id"),
+                            "family_id": raw_package.get("family_id"),
+                            "release_digest": raw_package.get("release_digest"),
+                            "content_group": raw_package.get("content_group"),
+                            "state": raw_package.get("state"),
+                            "bytes_total": raw_package.get("bytes_total"),
+                            "bytes_complete": raw_package.get("bytes_complete"),
+                            "bytes_remaining": raw_package.get("bytes_remaining"),
+                            "installed_bytes": raw_package.get("installed_bytes"),
+                            "reclaimable_bytes": raw_package.get("reclaimable_bytes"),
+                            "reserved_bytes": raw_package.get("reserved_bytes"),
+                            "active": raw_package.get("active"),
+                            "retained": raw_package.get("retained"),
+                            "leased": raw_package.get("leased"),
+                            "operation_id": raw_package.get("operation_id"),
+                            "last_operation_state": raw_package.get("last_operation_state"),
+                            "last_operation_error": raw_package.get("last_operation_error"),
+                            "resources": dict(envelope) if isinstance(envelope, Mapping) else {},
+                        }
+                    )
+            nodes.append(
+                {
+                    "node_id": raw_node.get("node_id"),
+                    "online": raw_node.get("online"),
+                    "observed_at": raw_node.get("observed_at"),
+                    "storage": dict(storage) if isinstance(storage, Mapping) else {},
+                    "resources": dict(resources) if isinstance(resources, Mapping) else {},
+                    "current_generation": raw_node.get("current_generation"),
+                    "packages": packages,
+                }
+            )
+    return {
+        "nodes": nodes,
+        "next_cursor": value.get("next_cursor"),
+        "total": value.get("total", len(nodes)),
+    }
+
+
+def _removal_preview_document(value: Mapping[str, object]) -> dict[str, object]:
+    nodes: list[dict[str, object]] = []
+    raw_nodes = value.get("nodes")
+    if isinstance(raw_nodes, list):
+        for raw_node in raw_nodes[:512]:
+            if not isinstance(raw_node, Mapping):
+                continue
+            dependencies = raw_node.get("dependencies")
+            nodes.append(
+                {
+                    "node_id": raw_node.get("node_id"),
+                    "state": raw_node.get("state"),
+                    "active": raw_node.get("active"),
+                    "retained": raw_node.get("retained"),
+                    "leased": raw_node.get("leased"),
+                    "reclaimable_bytes": raw_node.get("reclaimable_bytes", 0),
+                    "dependencies": [item for item in dependencies if isinstance(item, str)][:256]
+                    if isinstance(dependencies, list)
+                    else [],
+                    "blocked_reason": raw_node.get("blocked_reason"),
+                }
+            )
+    blocked_nodes = value.get("blocked_nodes")
+    return {
+        "digest": value.get("digest"),
+        "state": value.get("state"),
+        "deployment_id": value.get("deployment_id"),
+        "release_digest": value.get("release_digest"),
+        "nodes": nodes,
+        "reclaimable_bytes": value.get("reclaimable_bytes", 0),
+        "blocked_nodes": [item for item in blocked_nodes if isinstance(item, str)][:512]
+        if isinstance(blocked_nodes, list)
+        else [],
+    }
+
+
 @dataclass(frozen=True)
 class PackageApiServices:
     """Narrow route-facing boundary over W11--W14 durable package services."""
@@ -263,6 +458,9 @@ class PackageApiServices:
     repair: Callable[[str, str, str, str], Mapping[str, object]]
     gc_preview: Callable[[], Mapping[str, object]]
     gc: Callable[[str, str, str], Mapping[str, object]]
+    inventory: Callable[[str | None, str | None, str | None, int], Mapping[str, object]]
+    removal_preview: Callable[[str, str, tuple[str, ...]], Mapping[str, object]]
+    remove: Callable[[str, str, str], Mapping[str, object]]
     idempotency: Callable[
         [str, str, tuple[object, ...], Callable[[], Mapping[str, object]]],
         tuple[Mapping[str, object], bool],
@@ -274,7 +472,8 @@ class PackageApiServices:
             "families", "candidates", "candidate", "resolution", "compatibility",
             "validation_preview", "validate", "validation_status", "promotion_preview", "promote",
             "deployments", "deployment", "rollout_preview", "rollout", "rollout_status",
-            "rollback_preview", "rollback", "repair_preview", "repair", "gc_preview", "gc", "idempotency",
+            "rollback_preview", "rollback", "repair_preview", "repair", "gc_preview", "gc",
+            "inventory", "removal_preview", "remove", "idempotency",
         )
         methods = {name: getattr(value, name, None) for name in names}
         if any(not callable(method) for method in methods.values()):
@@ -442,6 +641,54 @@ def install_package_routes(
         operator(authenticated)
         return mutate("package.repair", request, authenticated, lambda: package_services().repair(deployment_id, body.plan_digest, authenticated.subject, request.state.request_id), targets=(deployment_id,), digest=body.plan_digest)
 
+    @app.get("/api/v1/packages/inventory", response_model=PackageInventoryResponse, responses=bounded_error_responses(401, 422, 503), operation_id="listPackageInventory")
+    def list_inventory(
+        node_id: str | None = Query(default=None, max_length=128),
+        deployment_id: str | None = Query(default=None, pattern=_IDENTIFIER),
+        cursor: str | None = Query(default=None, max_length=512),
+        limit: int = Query(default=20, ge=1, le=100),
+        _actor: Actor = authenticated,
+    ) -> Mapping[str, object]:
+        return _inventory_document(
+            read(
+                lambda: package_services().inventory(node_id, deployment_id, cursor, limit),
+                "package inventory projection unavailable",
+            )
+        )
+
+    @app.post("/api/v1/packages/inventory/remove-preview", response_model=PackageRemovalPreviewResponse, responses=bounded_error_responses(401, 403, 404, 409, 422, 503), operation_id="previewPackageRemoval")
+    def preview_removal(
+        body: PackageRemovalRequest,
+        authenticated: Actor = authenticated,
+    ) -> Mapping[str, object]:
+        operator(authenticated)
+        return _removal_preview_document(
+            read(
+                lambda: package_services().removal_preview(
+                    body.deployment_id, body.release_digest, tuple(body.node_ids)
+                ),
+                "package removal preview unavailable",
+            )
+        )
+
+    @app.post("/api/v1/packages/inventory/remove", response_model=PackageProgressResponse, responses=bounded_error_responses(401, 403, 404, 409, 422, 503), status_code=status.HTTP_202_ACCEPTED, operation_id="removePackageInventory")
+    def remove_inventory(
+        body: PackagePlanRequest,
+        request: Request,
+        authenticated: Actor = authenticated,
+    ) -> Mapping[str, object]:
+        operator(authenticated)
+        return mutate(
+            "package.remove",
+            request,
+            authenticated,
+            lambda: package_services().remove(
+                body.plan_digest, authenticated.subject, request.state.request_id
+            ),
+            targets=(body.plan_digest,),
+            digest=body.plan_digest,
+        )
+
     @app.post("/api/v1/packages/gc-preview", response_model=PackagePlanResponse, responses=bounded_error_responses(401, 403, 409, 422, 503), operation_id="previewPackageGc")
     def preview_gc(authenticated: Actor = authenticated) -> Mapping[str, object]:
         administrator(authenticated)
@@ -457,8 +704,10 @@ __all__ = [
     "PACKAGE_OPERATION_IDS",
     "PackageApiServices",
     "PackageCompatibilityResponse",
+    "PackageInventoryResponse",
     "PackagePlanResponse",
     "PackageProgressResponse",
     "PackagePromotionResponse",
+    "PackageRemovalPreviewResponse",
     "install_package_routes",
 ]

@@ -1,5 +1,6 @@
 import {useEffect, useState} from "react";
 import type {PackageApi, PackageCandidateSummary, PackageFamily} from "./package-types";
+import {PackageInventory} from "../components/package-inventory";
 
 const MAX_TEXT = 160;
 
@@ -8,7 +9,9 @@ function bounded(value: string | null | undefined): string {
   return value.length > MAX_TEXT ? `${value.slice(0, MAX_TEXT)}…` : value;
 }
 
-export function PackagesPage({api}: {api: Pick<PackageApi, "packageFamilies" | "packageCandidates">}) {
+type PackagesPageApi = Pick<PackageApi, "packageFamilies" | "packageCandidates"> & Partial<Pick<PackageApi, "packageInventory" | "previewPackageGc" | "applyPackageGc" | "previewPackageRemoval" | "removePackageInventory">>;
+
+export function PackagesPage({api}: {api: PackagesPageApi}) {
   const [families, setFamilies] = useState<PackageFamily[]>([]);
   const [candidates, setCandidates] = useState<PackageCandidateSummary[]>([]);
   const [error, setError] = useState("");
@@ -28,6 +31,7 @@ export function PackagesPage({api}: {api: Pick<PackageApi, "packageFamilies" | "
   return <>
     <div className="page-heading"><div><h2>Workload packages</h2><p>Review discovered package candidates before a signed promotion.</p></div></div>
     {error && <p role="alert">{error}</p>}
+    <PackageInventory api={api}/>
     <section aria-labelledby="package-families-heading">
       <h3 id="package-families-heading">Families and channels</h3>
       <div className="table-scroll"><table aria-label="Package families">

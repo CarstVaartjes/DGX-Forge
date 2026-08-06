@@ -81,6 +81,9 @@ export type UpdateRollout = {
   resume_required: boolean;
   state: string;
 };
+export type PackageInventory = components["schemas"]["PackageInventoryResponse"];
+export type PackageRemovalPreview = components["schemas"]["PackageRemovalPreviewResponse"];
+export type PackageRemovalProgress = components["schemas"]["PackageProgressResponse"];
 export interface ControlApi {
   fleet(): Promise<FleetResponse>; documents(kind: "models" | "profiles"): Promise<DocumentList>;
   jobs(cursor?: string): Promise<JobsResponse>;
@@ -101,4 +104,7 @@ export interface ControlApi {
   applyUpdate(planDigest: string): Promise<UpdateRollout>;
   updateStatus(rolloutId: string): Promise<UpdateRollout>;
   approveUpdateResume(rolloutId: string): Promise<UpdateRollout>;
+  packageInventory(nodeId?: string, deploymentId?: string, cursor?: string): Promise<PackageInventory>;
+  previewPackageRemoval(input: {deployment_id: string; release_digest: string; node_ids: string[]}): Promise<PackageRemovalPreview>;
+  removePackageInventory(planDigest: string): Promise<PackageRemovalProgress>;
 }
