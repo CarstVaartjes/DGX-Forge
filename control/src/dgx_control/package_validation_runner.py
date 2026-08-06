@@ -17,7 +17,6 @@ from sqlalchemy import select
 from .models import AgentOperation as StoredAgentOperation
 from .models import AgentOperationAttempt, Job, PackageValidationRun
 
-
 _VALIDATION_OPERATIONS = (
     AgentOperation.PACKAGE_PREPARE.value,
     AgentOperation.PACKAGE_HEALTH.value,

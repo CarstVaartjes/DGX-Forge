@@ -329,6 +329,66 @@ def test_package_operation_requires_protocol_v2_and_its_exact_capability(
     assert claim.operation.value == "package.prepare"
 
 
+def test_package_validation_result_is_not_sent_to_reconciliation_consumer(service) -> None:
+    _, sessions, clock = service
+    consumed: list[str] = []
+    jobs = AgentJobService(
+        sessions,
+        clock=clock,
+        result_consumer=lambda _session, operation, _attempt, _message: consumed.append(
+            operation.id
+        ),
+    )
+    validation_parent = parent(sessions, clock)
+    with sessions.begin() as session:
+        stored = session.get(Job, validation_parent.id)
+        assert stored is not None
+        stored.kind = "package.validation"
+    operation = jobs.enqueue(
+        validation_parent.id,
+        NODE_A,
+        "package.prepare",
+        COMMIT,
+        {
+            "schema_version": 1,
+            "deployment_id": "future-family",
+            "release_digest": "a" * 64,
+            "deployment_digest": "b" * 64,
+        },
+    )
+    claim = jobs.claim(
+        NODE_A,
+        "serial-a",
+        30,
+        protocol_version=2,
+        capabilities=[
+            "node.probe",
+            "release.install",
+            "workload.health",
+            "workload.prepare",
+            "workload.start",
+            "workload.stop",
+            "workload.verify",
+            "package.prepare",
+            "package.health",
+            "package.activate",
+            "package.stop",
+            "package.rollback",
+            "package.remove",
+            "package.gc",
+            "package.repair",
+        ],
+    )
+    assert claim is not None
+
+    jobs.succeed(claim, {"status": "ok"})
+
+    assert consumed == []
+    with sessions() as session:
+        stored_operation = session.get(AgentOperation, operation.id)
+        assert stored_operation is not None and stored_operation.state == "succeeded"
+
+
 def test_update_enqueue_persists_one_signed_payload_and_claims_its_reserved_fence(
     service,
 ) -> None:

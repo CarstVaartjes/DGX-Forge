@@ -4,9 +4,9 @@
 > implemented on `main`, including migration `0014_package_action_plans`,
 > discovery/resolution, API/CLI parity, web administration, bounded metrics,
 > digest-bound removal/GC dispatch, and TUF-authorized rollout dispatch through
-> the existing agent-job queue. Promotion now has a durable digest-bound
-> preview/apply boundary, but release publication remains signer-gated and
-> validation remains runner-gated until those isolated boundaries are installed.
+> the existing agent-job queue. Promotion now has durable digest-bound
+> preview/apply boundaries; publication remains isolated-signer-gated, while
+> validation is dispatched by the worker-owned generic validation runner.
 > See
 > the [roadmap status ledger](2026-08-05-generalized-workload-package-roadmap.md#implementation-status-2026-08-06).
 
