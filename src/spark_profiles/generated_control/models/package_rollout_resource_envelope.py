@@ -11,6 +11,8 @@ from typing import cast
 if TYPE_CHECKING:
   from ..models.package_resource_values import PackageResourceValues
   from ..models.package_rollout_resource_envelope_evidence_item import PackageRolloutResourceEnvelopeEvidenceItem
+  from ..models.package_rank import PackageRank
+  from ..models.package_fabric import PackageFabric
 
 
 
@@ -27,20 +29,26 @@ class PackageRolloutResourceEnvelope:
         Attributes:
             aggregate (PackageResourceValues):
             evidence (list['PackageRolloutResourceEnvelopeEvidenceItem']):
+            fabric (PackageFabric):
             measurement (str):
             per_node (PackageResourceValues):
+            ranks (list['PackageRank']):
             required_sparks (int):
             schema_version (int):
             topology (str):
+            world_size (int):
      """
 
     aggregate: 'PackageResourceValues'
     evidence: list['PackageRolloutResourceEnvelopeEvidenceItem']
+    fabric: 'PackageFabric'
     measurement: str
     per_node: 'PackageResourceValues'
+    ranks: list['PackageRank']
     required_sparks: int
     schema_version: int
     topology: str
+    world_size: int
 
 
 
@@ -49,6 +57,8 @@ class PackageRolloutResourceEnvelope:
     def to_dict(self) -> dict[str, Any]:
         from ..models.package_resource_values import PackageResourceValues
         from ..models.package_rollout_resource_envelope_evidence_item import PackageRolloutResourceEnvelopeEvidenceItem
+        from ..models.package_rank import PackageRank
+        from ..models.package_fabric import PackageFabric
         aggregate = self.aggregate.to_dict()
 
         evidence = []
@@ -58,9 +68,18 @@ class PackageRolloutResourceEnvelope:
 
 
 
+        fabric = self.fabric.to_dict()
+
         measurement = self.measurement
 
         per_node = self.per_node.to_dict()
+
+        ranks = []
+        for ranks_item_data in self.ranks:
+            ranks_item = ranks_item_data.to_dict()
+            ranks.append(ranks_item)
+
+
 
         required_sparks = self.required_sparks
 
@@ -68,17 +87,22 @@ class PackageRolloutResourceEnvelope:
 
         topology = self.topology
 
+        world_size = self.world_size
+
 
         field_dict: dict[str, Any] = {}
 
         field_dict.update({
             "aggregate": aggregate,
             "evidence": evidence,
+            "fabric": fabric,
             "measurement": measurement,
             "per_node": per_node,
+            "ranks": ranks,
             "required_sparks": required_sparks,
             "schema_version": schema_version,
             "topology": topology,
+            "world_size": world_size,
         })
 
         return field_dict
@@ -89,6 +113,8 @@ class PackageRolloutResourceEnvelope:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.package_resource_values import PackageResourceValues
         from ..models.package_rollout_resource_envelope_evidence_item import PackageRolloutResourceEnvelopeEvidenceItem
+        from ..models.package_rank import PackageRank
+        from ..models.package_fabric import PackageFabric
         d = dict(src_dict)
         aggregate = PackageResourceValues.from_dict(d.pop("aggregate"))
 
@@ -105,11 +131,26 @@ class PackageRolloutResourceEnvelope:
             evidence.append(evidence_item)
 
 
+        fabric = PackageFabric.from_dict(d.pop("fabric"))
+
+
+
+
         measurement = d.pop("measurement")
 
         per_node = PackageResourceValues.from_dict(d.pop("per_node"))
 
 
+
+
+        ranks = []
+        _ranks = d.pop("ranks")
+        for ranks_item_data in (_ranks):
+            ranks_item = PackageRank.from_dict(ranks_item_data)
+
+
+
+            ranks.append(ranks_item)
 
 
         required_sparks = d.pop("required_sparks")
@@ -118,14 +159,19 @@ class PackageRolloutResourceEnvelope:
 
         topology = d.pop("topology")
 
+        world_size = d.pop("world_size")
+
         package_rollout_resource_envelope = cls(
             aggregate=aggregate,
             evidence=evidence,
+            fabric=fabric,
             measurement=measurement,
             per_node=per_node,
+            ranks=ranks,
             required_sparks=required_sparks,
             schema_version=schema_version,
             topology=topology,
+            world_size=world_size,
         )
 
         return package_rollout_resource_envelope

@@ -90,7 +90,13 @@ def resource_envelope() -> dict[str, object]:
         "transient_bytes": 1024,
         "output_bytes": 2048,
         "host_memory_bytes": 16 * 1024**3,
+        "resident_memory_bytes": 8 * 1024**3,
+        "auxiliary_memory_bytes": 2 * 1024**3,
+        "activation_memory_bytes": 4 * 1024**3,
+        "workspace_memory_bytes": 2 * 1024**3,
         "gpu_memory_bytes": 12 * 1024**3,
+        "gpu_count": 1,
+        "cpu_millicores": 2000,
         "kv_cache_base_bytes": 1024,
         "kv_cache_per_token_bytes": 4096,
     }
@@ -100,6 +106,12 @@ def resource_envelope() -> dict[str, object]:
         "aggregate": {key: value * 2 for key, value in fields.items()},
         "required_sparks": 2,
         "topology": "gang",
+        "world_size": 2,
+        "ranks": [
+            {"rank": 0, "role": "leader"},
+            {"rank": 1, "role": "worker"},
+        ],
+        "fabric": {"kind": "rdma", "min_bandwidth_mbps": 100000},
         "measurement": "declared",
         "evidence": [{"kind": "capacity", "digest": "sha256:" + SHA_C}],
     }
@@ -134,6 +146,10 @@ def test_release_lock_parses_signed_resource_envelope() -> None:
     assert lock.resource_envelope is not None
     assert lock.resource_envelope["required_sparks"] == 2
     assert lock.resource_envelope["per_node"]["kv_cache_per_token_bytes"] == 4096
+    assert lock.resource_envelope["per_node"]["resident_memory_bytes"] == 8 * 1024**3
+    assert lock.resource_envelope["world_size"] == 2
+    assert lock.resource_envelope["ranks"][1]["role"] == "worker"
+    assert lock.resource_envelope["fabric"]["kind"] == "rdma"
 
 
 @pytest.mark.parametrize(

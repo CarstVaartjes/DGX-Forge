@@ -1343,6 +1343,29 @@
         "title": "PackageComponentResponse",
         "type": "object"
       },
+      "PackageFabric": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Kind",
+            "type": "string"
+          },
+          "min_bandwidth_mbps": {
+            "maximum": 1000000000.0,
+            "minimum": 0.0,
+            "title": "Min Bandwidth Mbps",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "kind",
+          "min_bandwidth_mbps"
+        ],
+        "title": "PackageFabric",
+        "type": "object"
+      },
       "PackageFamiliesResponse": {
         "additionalProperties": false,
         "properties": {
@@ -1995,6 +2018,29 @@
         "title": "PackageProvenanceResponse",
         "type": "object"
       },
+      "PackageRank": {
+        "additionalProperties": false,
+        "properties": {
+          "rank": {
+            "maximum": 511.0,
+            "minimum": 0.0,
+            "title": "Rank",
+            "type": "integer"
+          },
+          "role": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "rank",
+          "role"
+        ],
+        "title": "PackageRank",
+        "type": "object"
+      },
       "PackageReleaseMetadata": {
         "additionalProperties": false,
         "properties": {
@@ -2224,9 +2270,32 @@
         "additionalProperties": false,
         "description": "Bounded per-Spark resource requirements from a promoted release.",
         "properties": {
+          "activation_memory_bytes": {
+            "minimum": 0.0,
+            "title": "Activation Memory Bytes",
+            "type": "integer"
+          },
+          "auxiliary_memory_bytes": {
+            "minimum": 0.0,
+            "title": "Auxiliary Memory Bytes",
+            "type": "integer"
+          },
+          "cpu_millicores": {
+            "minimum": 0.0,
+            "title": "Cpu Millicores",
+            "type": "integer"
+          },
           "download_bytes": {
             "minimum": 0.0,
             "title": "Download Bytes",
+            "type": "integer"
+          },
+          "fabric": {
+            "$ref": "#/components/schemas/PackageFabric"
+          },
+          "gpu_count": {
+            "minimum": 0.0,
+            "title": "Gpu Count",
             "type": "integer"
           },
           "gpu_memory_bytes": {
@@ -2259,10 +2328,23 @@
             "title": "Output Bytes",
             "type": "integer"
           },
+          "ranks": {
+            "items": {
+              "$ref": "#/components/schemas/PackageRank"
+            },
+            "maxItems": 512,
+            "title": "Ranks",
+            "type": "array"
+          },
           "required_sparks": {
             "maximum": 512.0,
             "minimum": 1.0,
             "title": "Required Sparks",
+            "type": "integer"
+          },
+          "resident_memory_bytes": {
+            "minimum": 0.0,
+            "title": "Resident Memory Bytes",
             "type": "integer"
           },
           "topology": {
@@ -2275,6 +2357,17 @@
             "minimum": 0.0,
             "title": "Transient Bytes",
             "type": "integer"
+          },
+          "workspace_memory_bytes": {
+            "minimum": 0.0,
+            "title": "Workspace Memory Bytes",
+            "type": "integer"
+          },
+          "world_size": {
+            "maximum": 512.0,
+            "minimum": 1.0,
+            "title": "World Size",
+            "type": "integer"
           }
         },
         "required": [
@@ -2283,11 +2376,20 @@
           "transient_bytes",
           "output_bytes",
           "host_memory_bytes",
+          "resident_memory_bytes",
+          "auxiliary_memory_bytes",
+          "activation_memory_bytes",
+          "workspace_memory_bytes",
           "gpu_memory_bytes",
+          "gpu_count",
+          "cpu_millicores",
           "kv_cache_base_bytes",
           "kv_cache_per_token_bytes",
           "required_sparks",
-          "topology"
+          "topology",
+          "world_size",
+          "ranks",
+          "fabric"
         ],
         "title": "PackageResourceEnvelope",
         "type": "object"
@@ -2295,9 +2397,29 @@
       "PackageResourceValues": {
         "additionalProperties": false,
         "properties": {
+          "activation_memory_bytes": {
+            "minimum": 0.0,
+            "title": "Activation Memory Bytes",
+            "type": "integer"
+          },
+          "auxiliary_memory_bytes": {
+            "minimum": 0.0,
+            "title": "Auxiliary Memory Bytes",
+            "type": "integer"
+          },
+          "cpu_millicores": {
+            "minimum": 0.0,
+            "title": "Cpu Millicores",
+            "type": "integer"
+          },
           "download_bytes": {
             "minimum": 0.0,
             "title": "Download Bytes",
+            "type": "integer"
+          },
+          "gpu_count": {
+            "minimum": 0.0,
+            "title": "Gpu Count",
             "type": "integer"
           },
           "gpu_memory_bytes": {
@@ -2330,9 +2452,19 @@
             "title": "Output Bytes",
             "type": "integer"
           },
+          "resident_memory_bytes": {
+            "minimum": 0.0,
+            "title": "Resident Memory Bytes",
+            "type": "integer"
+          },
           "transient_bytes": {
             "minimum": 0.0,
             "title": "Transient Bytes",
+            "type": "integer"
+          },
+          "workspace_memory_bytes": {
+            "minimum": 0.0,
+            "title": "Workspace Memory Bytes",
             "type": "integer"
           }
         },
@@ -2342,7 +2474,13 @@
           "transient_bytes",
           "output_bytes",
           "host_memory_bytes",
+          "resident_memory_bytes",
+          "auxiliary_memory_bytes",
+          "activation_memory_bytes",
+          "workspace_memory_bytes",
           "gpu_memory_bytes",
+          "gpu_count",
+          "cpu_millicores",
           "kv_cache_base_bytes",
           "kv_cache_per_token_bytes"
         ],
@@ -2367,6 +2505,9 @@
             "title": "Evidence",
             "type": "array"
           },
+          "fabric": {
+            "$ref": "#/components/schemas/PackageFabric"
+          },
           "measurement": {
             "maxLength": 32,
             "minLength": 1,
@@ -2375,6 +2516,14 @@
           },
           "per_node": {
             "$ref": "#/components/schemas/PackageResourceValues"
+          },
+          "ranks": {
+            "items": {
+              "$ref": "#/components/schemas/PackageRank"
+            },
+            "maxItems": 512,
+            "title": "Ranks",
+            "type": "array"
           },
           "required_sparks": {
             "maximum": 512.0,
@@ -2392,6 +2541,12 @@
             "minLength": 1,
             "title": "Topology",
             "type": "string"
+          },
+          "world_size": {
+            "maximum": 512.0,
+            "minimum": 1.0,
+            "title": "World Size",
+            "type": "integer"
           }
         },
         "required": [
@@ -2400,6 +2555,9 @@
           "aggregate",
           "required_sparks",
           "topology",
+          "world_size",
+          "ranks",
+          "fabric",
           "measurement",
           "evidence"
         ],

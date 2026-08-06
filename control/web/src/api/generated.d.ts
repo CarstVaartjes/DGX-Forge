@@ -1258,6 +1258,13 @@ export interface components {
             /** Name */
             name: string;
         };
+        /** PackageFabric */
+        PackageFabric: {
+            /** Kind */
+            kind: string;
+            /** Min Bandwidth Mbps */
+            min_bandwidth_mbps: number;
+        };
         /** PackageFamiliesResponse */
         PackageFamiliesResponse: {
             /** Families */
@@ -1428,6 +1435,13 @@ export interface components {
             /** Kind */
             kind: string;
         };
+        /** PackageRank */
+        PackageRank: {
+            /** Rank */
+            rank: number;
+            /** Role */
+            role: string;
+        };
         /** PackageReleaseMetadata */
         PackageReleaseMetadata: {
             /** Components */
@@ -1500,8 +1514,17 @@ export interface components {
          * @description Bounded per-Spark resource requirements from a promoted release.
          */
         PackageResourceEnvelope: {
+            /** Activation Memory Bytes */
+            activation_memory_bytes: number;
+            /** Auxiliary Memory Bytes */
+            auxiliary_memory_bytes: number;
+            /** Cpu Millicores */
+            cpu_millicores: number;
             /** Download Bytes */
             download_bytes: number;
+            fabric: components["schemas"]["PackageFabric"];
+            /** Gpu Count */
+            gpu_count: number;
             /** Gpu Memory Bytes */
             gpu_memory_bytes: number;
             /** Host Memory Bytes */
@@ -1514,17 +1537,33 @@ export interface components {
             kv_cache_per_token_bytes: number;
             /** Output Bytes */
             output_bytes: number;
+            /** Ranks */
+            ranks: components["schemas"]["PackageRank"][];
             /** Required Sparks */
             required_sparks: number;
+            /** Resident Memory Bytes */
+            resident_memory_bytes: number;
             /** Topology */
             topology: string;
             /** Transient Bytes */
             transient_bytes: number;
+            /** Workspace Memory Bytes */
+            workspace_memory_bytes: number;
+            /** World Size */
+            world_size: number;
         };
         /** PackageResourceValues */
         PackageResourceValues: {
+            /** Activation Memory Bytes */
+            activation_memory_bytes: number;
+            /** Auxiliary Memory Bytes */
+            auxiliary_memory_bytes: number;
+            /** Cpu Millicores */
+            cpu_millicores: number;
             /** Download Bytes */
             download_bytes: number;
+            /** Gpu Count */
+            gpu_count: number;
             /** Gpu Memory Bytes */
             gpu_memory_bytes: number;
             /** Host Memory Bytes */
@@ -1537,8 +1576,12 @@ export interface components {
             kv_cache_per_token_bytes: number;
             /** Output Bytes */
             output_bytes: number;
+            /** Resident Memory Bytes */
+            resident_memory_bytes: number;
             /** Transient Bytes */
             transient_bytes: number;
+            /** Workspace Memory Bytes */
+            workspace_memory_bytes: number;
         };
         /**
          * PackageRolloutResourceEnvelope
@@ -1550,15 +1593,20 @@ export interface components {
             evidence: {
                 [key: string]: string;
             }[];
+            fabric: components["schemas"]["PackageFabric"];
             /** Measurement */
             measurement: string;
             per_node: components["schemas"]["PackageResourceValues"];
+            /** Ranks */
+            ranks: components["schemas"]["PackageRank"][];
             /** Required Sparks */
             required_sparks: number;
             /** Schema Version */
             schema_version: number;
             /** Topology */
             topology: string;
+            /** World Size */
+            world_size: number;
         };
         /** PackageSparkInventory */
         PackageSparkInventory: {
