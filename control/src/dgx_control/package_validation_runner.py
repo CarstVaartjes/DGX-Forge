@@ -60,6 +60,7 @@ class PackageValidationRunner:
         base_commit = request.get("base_commit")
         node_ids = request.get("node_ids")
         operations = request.get("operations")
+        required_evidence = request.get("required_evidence", [])
         if (
             not isinstance(validation_id, str)
             or not isinstance(candidate_id, str)
@@ -69,6 +70,8 @@ class PackageValidationRunner:
             or not all(isinstance(node_id, str) for node_id in node_ids)
             or not isinstance(operations, list)
             or len(operations) != len(_VALIDATION_OPERATIONS)
+            or not isinstance(required_evidence, list)
+            or not all(isinstance(item, str) and item for item in required_evidence)
         ):
             raise ValueError("validation request identity is invalid")
         try:
@@ -111,6 +114,7 @@ class PackageValidationRunner:
                 "validation_id": validation_id,
                 "candidate_id": candidate_id,
                 "release_digest": request.get("release_digest"),
+                "required_evidence": list(dict.fromkeys(required_evidence)),
             }
             session.add(
                 Job(
@@ -149,6 +153,7 @@ class PackageValidationRunner:
                 "job_id": job_id,
                 "operation_ids": operation_ids,
                 "operation_kinds": [kind for kind, _payload in parsed_operations],
+                "required_evidence": list(dict.fromkeys(required_evidence)),
             }
             run.updated_at = now
         self._agent_jobs.notify_available()
@@ -200,8 +205,30 @@ class PackageValidationRunner:
                     )
                     if attempt is None or not isinstance(attempt.result, Mapping):
                         continue
-                    key = operation.kind.removeprefix("package.")
-                    evidence[key] = dict(attempt.result)
+                    result = dict(attempt.result)
+                    nested = result.get("evidence")
+                    if isinstance(nested, Mapping):
+                        evidence.update(nested)
+                    else:
+                        key = operation.kind.removeprefix("package.")
+                        evidence[key] = result
+                required = progress.get("required_evidence", [])
+                if isinstance(required, list):
+                    missing = [item for item in required if item not in evidence]
+                else:
+                    missing = []
+                if missing:
+                    run.state = "failed"
+                    run.reason_code = "validation-evidence-missing"
+                    run.failure_detail = {"missing": missing[:32]}
+                    run.progress = {
+                        **dict(progress),
+                        "completed": 0,
+                        "failed": 1,
+                        "running": 0,
+                    }
+                    run.updated_at = self._clock()
+                    return True
                 run.state = "passed"
                 run.reason_code = None
                 run.evidence = evidence

@@ -1565,6 +1565,26 @@ class ProductionPackageProjectionService:
             "fleet_digest": plan.compatibility_digest,
             "node_ids": list(plan.node_ids),
             "operations": [dict(operation) for operation in plan.operations],
+            "required_evidence": list(
+                dict.fromkeys(
+                    [
+                        *(
+                            item
+                            for item in candidate.get("policy", {}).get(
+                                "required_evidence", []
+                            )
+                            if isinstance(item, str)
+                        ),
+                        *(
+                            item.get("kind")
+                            for item in lock.validation
+                            if isinstance(item, Mapping)
+                            and item.get("required") is True
+                            and isinstance(item.get("kind"), str)
+                        ),
+                    ]
+                )
+            ),
         }
         digest = self.create_action_plan("package.validate", candidate_id, request)
         return {
