@@ -1,7 +1,7 @@
 schema_version = 1
 deployment_id = "ds4-deepseek-single"
 family_id = "ds4-deepseek"
-release_digest = "3dc0d24c21684e1c21eaa4ca3271d94be19cf536063502d755bc68e531d7374f"
+release_digest = "5298dc3e36e4c1d210c28ec661268414e2f39177b619f3441e6cb03a01c5fd83"
 arguments = []
 
 [selector]

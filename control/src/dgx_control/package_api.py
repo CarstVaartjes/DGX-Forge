@@ -131,9 +131,25 @@ class PackageResourceValues(StrictModel):
     transient_bytes: int = Field(ge=0)
     output_bytes: int = Field(ge=0)
     host_memory_bytes: int = Field(ge=0)
+    resident_memory_bytes: int = Field(ge=0)
+    auxiliary_memory_bytes: int = Field(ge=0)
+    activation_memory_bytes: int = Field(ge=0)
+    workspace_memory_bytes: int = Field(ge=0)
     gpu_memory_bytes: int = Field(ge=0)
+    gpu_count: int = Field(ge=0)
+    cpu_millicores: int = Field(ge=0)
     kv_cache_base_bytes: int = Field(ge=0)
     kv_cache_per_token_bytes: int = Field(ge=0)
+
+
+class PackageRank(StrictModel):
+    rank: int = Field(ge=0, le=511)
+    role: str = Field(min_length=1, max_length=128)
+
+
+class PackageFabric(StrictModel):
+    kind: str = Field(min_length=1, max_length=128)
+    min_bandwidth_mbps: int = Field(ge=0, le=1_000_000_000)
 
 
 class PackageResourceEnvelope(PackageResourceValues):
@@ -141,6 +157,9 @@ class PackageResourceEnvelope(PackageResourceValues):
 
     required_sparks: int = Field(ge=1, le=512)
     topology: str = Field(min_length=1, max_length=128)
+    world_size: int = Field(ge=1, le=512)
+    ranks: list[PackageRank] = Field(max_length=512)
+    fabric: PackageFabric
 
 
 class PackageRolloutResourceEnvelope(StrictModel):
@@ -151,6 +170,9 @@ class PackageRolloutResourceEnvelope(StrictModel):
     aggregate: PackageResourceValues
     required_sparks: int = Field(ge=1, le=512)
     topology: str = Field(min_length=1, max_length=128)
+    world_size: int = Field(ge=1, le=512)
+    ranks: list[PackageRank] = Field(max_length=512)
+    fabric: PackageFabric
     measurement: str = Field(min_length=1, max_length=32)
     evidence: list[dict[str, str]] = Field(max_length=16)
 

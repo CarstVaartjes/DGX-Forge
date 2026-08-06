@@ -286,14 +286,20 @@
     "resource_values": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["download_bytes", "installed_bytes", "transient_bytes", "output_bytes", "host_memory_bytes", "gpu_memory_bytes", "kv_cache_base_bytes", "kv_cache_per_token_bytes"],
+      "required": ["download_bytes", "installed_bytes", "transient_bytes", "output_bytes", "host_memory_bytes", "resident_memory_bytes", "auxiliary_memory_bytes", "activation_memory_bytes", "workspace_memory_bytes", "gpu_memory_bytes", "gpu_count", "cpu_millicores", "kv_cache_base_bytes", "kv_cache_per_token_bytes"],
       "properties": {
         "download_bytes": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
         "installed_bytes": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
         "transient_bytes": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
         "output_bytes": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
         "host_memory_bytes": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+        "resident_memory_bytes": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+        "auxiliary_memory_bytes": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+        "activation_memory_bytes": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+        "workspace_memory_bytes": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
         "gpu_memory_bytes": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
+        "gpu_count": {"type": "integer", "minimum": 0, "maximum": 65535},
+        "cpu_millicores": {"type": "integer", "minimum": 0, "maximum": 1000000},
         "kv_cache_base_bytes": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807},
         "kv_cache_per_token_bytes": {"type": "integer", "minimum": 0, "maximum": 9223372036854775807}
       }
@@ -301,13 +307,37 @@
     "resource_envelope": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schema_version", "per_node", "aggregate", "required_sparks", "topology", "measurement", "evidence"],
+      "required": ["schema_version", "per_node", "aggregate", "required_sparks", "topology", "world_size", "ranks", "fabric", "measurement", "evidence"],
       "properties": {
         "schema_version": {"const": 1},
         "per_node": {"$ref": "#/$defs/resource_values"},
         "aggregate": {"$ref": "#/$defs/resource_values"},
         "required_sparks": {"type": "integer", "minimum": 1, "maximum": 512},
         "topology": {"enum": ["single", "replicated", "gang"]},
+        "world_size": {"type": "integer", "minimum": 1, "maximum": 512},
+        "ranks": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 512,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["rank", "role"],
+            "properties": {
+              "rank": {"type": "integer", "minimum": 0, "maximum": 511},
+              "role": {"$ref": "#/$defs/identifier"}
+            }
+          }
+        },
+        "fabric": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "min_bandwidth_mbps"],
+          "properties": {
+            "kind": {"$ref": "#/$defs/identifier"},
+            "min_bandwidth_mbps": {"type": "integer", "minimum": 0, "maximum": 1000000000}
+          }
+        },
         "measurement": {"enum": ["declared", "measured"]},
         "evidence": {"type": "array", "minItems": 1, "maxItems": 16, "items": {"$ref": "#/$defs/evidence"}}
       }

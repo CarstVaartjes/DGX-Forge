@@ -1136,7 +1136,13 @@ class ProductionPackageProjectionService:
             "transient_bytes",
             "output_bytes",
             "host_memory_bytes",
+            "resident_memory_bytes",
+            "auxiliary_memory_bytes",
+            "activation_memory_bytes",
+            "workspace_memory_bytes",
             "gpu_memory_bytes",
+            "gpu_count",
+            "cpu_millicores",
             "kv_cache_base_bytes",
             "kv_cache_per_token_bytes",
         )
@@ -1158,6 +1164,10 @@ class ProductionPackageProjectionService:
             raise RuntimeError("package resource envelope topology is incomplete")
         result["required_sparks"] = required_sparks
         result["topology"] = topology
+        for field in ("world_size", "ranks", "fabric"):
+            if field not in raw:
+                raise RuntimeError(f"package resource envelope is missing {field}")
+            result[field] = raw[field]
         return result
 
     def _signed_package_resource_envelope(
@@ -1192,6 +1202,9 @@ class ProductionPackageProjectionService:
                     **dict(per_node),
                     "required_sparks": lock.resource_envelope["required_sparks"],
                     "topology": lock.resource_envelope["topology"],
+                    "world_size": lock.resource_envelope["world_size"],
+                    "ranks": lock.resource_envelope["ranks"],
+                    "fabric": lock.resource_envelope["fabric"],
                 }
             }
         )

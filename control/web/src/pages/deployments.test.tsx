@@ -29,7 +29,13 @@ function api() {
           transient_bytes: 2 * 1024 ** 3,
           output_bytes: 0,
           host_memory_bytes: 16 * 1024 ** 3,
+          resident_memory_bytes: 8 * 1024 ** 3,
+          auxiliary_memory_bytes: 2 * 1024 ** 3,
+          activation_memory_bytes: 4 * 1024 ** 3,
+          workspace_memory_bytes: 2 * 1024 ** 3,
           gpu_memory_bytes: 12 * 1024 ** 3,
+          gpu_count: 1,
+          cpu_millicores: 2000,
           kv_cache_base_bytes: 1 * 1024 ** 3,
           kv_cache_per_token_bytes: 4096,
         },
@@ -39,12 +45,21 @@ function api() {
           transient_bytes: 4 * 1024 ** 3,
           output_bytes: 0,
           host_memory_bytes: 32 * 1024 ** 3,
+          resident_memory_bytes: 16 * 1024 ** 3,
+          auxiliary_memory_bytes: 4 * 1024 ** 3,
+          activation_memory_bytes: 8 * 1024 ** 3,
+          workspace_memory_bytes: 4 * 1024 ** 3,
           gpu_memory_bytes: 24 * 1024 ** 3,
+          gpu_count: 2,
+          cpu_millicores: 4000,
           kv_cache_base_bytes: 2 * 1024 ** 3,
           kv_cache_per_token_bytes: 8192,
         },
         required_sparks: 2,
         topology: "gang",
+        world_size: 2,
+        ranks: [{rank: 0, role: "leader"}, {rank: 1, role: "worker"}],
+        fabric: {kind: "rdma", min_bandwidth_mbps: 100000},
         measurement: "declared",
         evidence: [],
       },
@@ -75,6 +90,8 @@ it("shows aggregate capacity, offline progress, and stops at a canary failure", 
   expect(preview).toHaveTextContent("2 Spark(s), gang");
   expect(preview).toHaveTextContent("12.0 GiB GPU memory");
   expect(preview).toHaveTextContent("1.0 GiB KV base");
+  expect(preview).toHaveTextContent("8.0 GiB resident");
+  expect(preview).toHaveTextContent("0:leader, 1:worker");
   expect(preview).toHaveTextContent("Gamma Spark");
   await user.type(screen.getByLabelText("Type the exact rollout preview digest"), digest);
   await user.click(screen.getByRole("button", {name: "Start exact rollout"}));

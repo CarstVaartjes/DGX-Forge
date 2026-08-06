@@ -776,7 +776,13 @@ _RESOURCE_FIELDS = (
     "transient_bytes",
     "output_bytes",
     "host_memory_bytes",
+    "resident_memory_bytes",
+    "auxiliary_memory_bytes",
+    "activation_memory_bytes",
+    "workspace_memory_bytes",
     "gpu_memory_bytes",
+    "gpu_count",
+    "cpu_millicores",
     "kv_cache_base_bytes",
     "kv_cache_per_token_bytes",
 )
@@ -792,6 +798,9 @@ def _parse_resource_envelope(value: Any) -> Mapping[str, object]:
             "aggregate",
             "required_sparks",
             "topology",
+            "world_size",
+            "ranks",
+            "fabric",
             "measurement",
             "evidence",
         },
@@ -813,6 +822,62 @@ def _parse_resource_envelope(value: Any) -> Mapping[str, object]:
         raise AgentProtocolError("single resource_envelope requires one Spark")
     if topology == "gang" and required_sparks < 2:
         raise AgentProtocolError("gang resource_envelope requires multiple Sparks")
+    world_size = _positive_integer(
+        envelope["world_size"],
+        name="resource_envelope world_size",
+        maximum=512,
+    )
+    if topology == "single" and world_size != 1:
+        raise AgentProtocolError("single resource_envelope requires world_size one")
+    if topology == "replicated" and world_size != 1:
+        raise AgentProtocolError(
+            "replicated resource_envelope requires world_size one per replica"
+        )
+    if topology == "gang" and world_size < required_sparks:
+        raise AgentProtocolError(
+            "gang resource_envelope world_size cannot be below required Sparks"
+        )
+
+    ranks_raw = _sequence(
+        envelope["ranks"], name="resource_envelope ranks", minimum=1, maximum=512
+    )
+    if len(ranks_raw) != world_size:
+        raise AgentProtocolError("resource_envelope ranks must match world_size")
+    ranks: list[dict[str, object]] = []
+    for expected_rank, raw_rank in enumerate(ranks_raw):
+        rank = _mapping(raw_rank, name="resource_envelope rank")
+        _exact_fields(rank, required={"rank", "role"}, name="resource_envelope rank")
+        parsed_rank = rank["rank"]
+        if (
+            not isinstance(parsed_rank, int)
+            or isinstance(parsed_rank, bool)
+            or not 0 <= parsed_rank <= 511
+        ):
+            raise AgentProtocolError("resource_envelope rank must be bounded")
+        if parsed_rank != expected_rank:
+            raise AgentProtocolError("resource_envelope ranks must be contiguous")
+        ranks.append(
+            {"rank": parsed_rank, "role": _identifier(rank["role"], name="resource role")}
+        )
+    fabric = _mapping(envelope["fabric"], name="resource_envelope fabric")
+    _exact_fields(
+        fabric,
+        required={"kind", "min_bandwidth_mbps"},
+        name="resource_envelope fabric",
+    )
+    min_bandwidth = fabric["min_bandwidth_mbps"]
+    if (
+        not isinstance(min_bandwidth, int)
+        or isinstance(min_bandwidth, bool)
+        or not 0 <= min_bandwidth <= 1_000_000_000
+    ):
+        raise AgentProtocolError(
+            "resource_envelope fabric min_bandwidth_mbps must be bounded"
+        )
+    fabric_value = {
+        "kind": _identifier(fabric["kind"], name="resource fabric kind"),
+        "min_bandwidth_mbps": min_bandwidth,
+    }
     measurement = envelope["measurement"]
     if measurement not in {"declared", "measured"}:
         raise AgentProtocolError("resource_envelope measurement is invalid")
@@ -840,6 +905,19 @@ def _parse_resource_envelope(value: Any) -> Mapping[str, object]:
             ):
                 raise AgentProtocolError(f"{name} {field} must be bounded")
             result[field] = value
+        memory_total = sum(
+            result[field]
+            for field in (
+                "resident_memory_bytes",
+                "auxiliary_memory_bytes",
+                "activation_memory_bytes",
+                "workspace_memory_bytes",
+            )
+        )
+        if result["host_memory_bytes"] < memory_total:
+            raise AgentProtocolError(
+                f"{name} host_memory_bytes is below memory breakdown"
+            )
         return result
 
     per_node = parse_values(envelope["per_node"], name="resource_envelope per_node")
@@ -868,6 +946,9 @@ def _parse_resource_envelope(value: Any) -> Mapping[str, object]:
             "aggregate": aggregate,
             "required_sparks": required_sparks,
             "topology": topology,
+            "world_size": world_size,
+            "ranks": ranks,
+            "fabric": fabric_value,
             "measurement": measurement,
             "evidence": evidence,
         }

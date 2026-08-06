@@ -226,6 +226,9 @@ def test_rollout_preview_and_apply_use_digest_plan_and_existing_orchestrator(tmp
     assert preview["download_bytes"] == 93_691_352_994
     assert preview["storage_bytes"] == 213_691_352_994
     assert preview["resource_envelope"]["required_sparks"] == 1
+    assert preview["resource_envelope"]["per_node"]["resident_memory_bytes"] > 0
+    assert preview["resource_envelope"]["world_size"] == 1
+    assert preview["resource_envelope"]["fabric"]["kind"] == "none"
     result = service.rollout(
         "ds4-deepseek-single", preview["digest"], "admin", "request-rollout"
     )
@@ -280,7 +283,7 @@ def test_inventory_projects_resource_envelope_from_signed_release_not_agent_summ
             PackageObservation(
                 node_id=node_id,
                 deployment_id="ds4-deepseek-single",
-                release_digest="3dc0d24c21684e1c21eaa4ca3271d94be19cf536063502d755bc68e531d7374f",
+                release_digest="5298dc3e36e4c1d210c28ec661268414e2f39177b619f3441e6cb03a01c5fd83",
                 observation_digest="f" * 64,
                 state="active",
                 summary={
@@ -379,7 +382,7 @@ def test_publication_candidate_reads_lock_from_git_and_validation_from_sql(tmp_p
     Base.metadata.create_all(engine)
     sessions = session_factory(engine)
     root = RepositoryService(Path(__file__).resolve().parents[2])
-    release_digest = "3dc0d24c21684e1c21eaa4ca3271d94be19cf536063502d755bc68e531d7374f"
+    release_digest = "5298dc3e36e4c1d210c28ec661268414e2f39177b619f3441e6cb03a01c5fd83"
     candidate_id = "00000000-0000-4000-8000-000000000007"
     now = datetime.now(UTC)
     with sessions.begin() as session:
@@ -451,7 +454,7 @@ def test_validation_preview_persists_a_digest_bound_run(tmp_path) -> None:
     Base.metadata.create_all(engine)
     sessions = session_factory(engine)
     candidate_id = "00000000-0000-4000-8000-000000000010"
-    release_digest = "3dc0d24c21684e1c21eaa4ca3271d94be19cf536063502d755bc68e531d7374f"
+    release_digest = "5298dc3e36e4c1d210c28ec661268414e2f39177b619f3441e6cb03a01c5fd83"
     now = datetime.now(UTC)
     with sessions.begin() as session:
         session.add(

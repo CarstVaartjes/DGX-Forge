@@ -61,6 +61,9 @@ export type PackageRolloutPreview = PackagePreview & {
     aggregate: PackageResourceValues;
     required_sparks: number;
     topology: string;
+    world_size: number;
+    ranks: {rank: number; role: string}[];
+    fabric: {kind: string; min_bandwidth_mbps: number};
     measurement: string;
     evidence: {kind: string; digest: string}[];
   };
@@ -72,7 +75,13 @@ export type PackageResourceValues = {
   transient_bytes: number;
   output_bytes: number;
   host_memory_bytes: number;
+  resident_memory_bytes: number;
+  auxiliary_memory_bytes: number;
+  activation_memory_bytes: number;
+  workspace_memory_bytes: number;
   gpu_memory_bytes: number;
+  gpu_count: number;
+  cpu_millicores: number;
   kv_cache_base_bytes: number;
   kv_cache_per_token_bytes: number;
 };
@@ -115,11 +124,20 @@ export type PackageInventoryEntry = {
     transient_bytes: number;
     output_bytes: number;
     host_memory_bytes: number;
+    resident_memory_bytes: number;
+    auxiliary_memory_bytes: number;
+    activation_memory_bytes: number;
+    workspace_memory_bytes: number;
     gpu_memory_bytes: number;
+    gpu_count: number;
+    cpu_millicores: number;
     kv_cache_base_bytes: number;
     kv_cache_per_token_bytes: number;
     required_sparks: number;
     topology: string;
+    world_size: number;
+    ranks: {rank: number; role: string}[];
+    fabric: {kind: string; min_bandwidth_mbps: number};
   };
 };
 

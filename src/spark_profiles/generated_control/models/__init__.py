@@ -38,6 +38,7 @@ from .package_candidate_response_metadata import PackageCandidateResponseMetadat
 from .package_candidates_response import PackageCandidatesResponse
 from .package_compatibility_response import PackageCompatibilityResponse
 from .package_component_response import PackageComponentResponse
+from .package_fabric import PackageFabric
 from .package_families_response import PackageFamiliesResponse
 from .package_family_response import PackageFamilyResponse
 from .package_inventory_item import PackageInventoryItem
@@ -50,6 +51,7 @@ from .package_progress_response import PackageProgressResponse
 from .package_promotion_request import PackagePromotionRequest
 from .package_promotion_response import PackagePromotionResponse
 from .package_provenance_response import PackageProvenanceResponse
+from .package_rank import PackageRank
 from .package_release_metadata import PackageReleaseMetadata
 from .package_removal_node import PackageRemovalNode
 from .package_removal_preview_response import PackageRemovalPreviewResponse
@@ -136,6 +138,7 @@ __all__ = (
     "PackageCandidatesResponse",
     "PackageCompatibilityResponse",
     "PackageComponentResponse",
+    "PackageFabric",
     "PackageFamiliesResponse",
     "PackageFamilyResponse",
     "PackageInventoryItem",
@@ -148,6 +151,7 @@ __all__ = (
     "PackagePromotionRequest",
     "PackagePromotionResponse",
     "PackageProvenanceResponse",
+    "PackageRank",
     "PackageReleaseMetadata",
     "PackageRemovalNode",
     "PackageRemovalPreviewResponse",
