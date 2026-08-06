@@ -383,6 +383,7 @@ def test_claim_uses_fixed_mtls_post_and_parses_canonical_protocol_claim(
                 "agent.update",
                 "node.probe",
                 "package-abi-v1",
+                "package-backend-native-v1",
                 "package.activate",
                 "package.gc",
                 "package.health",
