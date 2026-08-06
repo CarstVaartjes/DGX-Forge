@@ -45,6 +45,7 @@ _MAX_PHYSICAL_EVIDENCE_BYTES = 1024 * 1024
 _MAX_REPORT_BYTES = 1024 * 1024
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _PREFIXED_SHA256 = re.compile(r"sha256:[0-9a-f]{64}\Z")
+_COMMIT = re.compile(r"[0-9a-f]{40}\Z")
 _SIGNATURE = re.compile(r"[0-9a-f]{128}\Z")
 _SEMVER = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?\Z")
 _OBSERVED_AT = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
@@ -521,6 +522,40 @@ def _workload_evidence(root: Path) -> tuple[dict[str, object], dict[str, str], l
     )
 
 
+def _code_host_pr_lifecycle_valid(
+    value: object, required_checks: object
+) -> bool:
+    """Validate optional evidence that a protected PR path was exercised."""
+
+    if not isinstance(value, dict) or value.get("status") != "passed":
+        return False
+    pull_request = value.get("pull_request")
+    merge_commit = value.get("merge_commit")
+    checks = value.get("checks")
+    if (
+        isinstance(pull_request, bool)
+        or not isinstance(pull_request, int)
+        or pull_request < 1
+        or not isinstance(merge_commit, str)
+        or _COMMIT.fullmatch(merge_commit) is None
+        or not isinstance(required_checks, list)
+        or not required_checks
+        or not isinstance(checks, list)
+    ):
+        return False
+    observed = {
+        item.get("name")
+        for item in checks
+        if isinstance(item, dict)
+        and item.get("conclusion") == "SUCCESS"
+        and isinstance(item.get("name"), str)
+    }
+    return (
+        all(isinstance(item, str) and item for item in required_checks)
+        and set(required_checks) <= observed
+    )
+
+
 def _physical_evidence_key(
     path: Path | None,
 ) -> tuple[ed25519.Ed25519PublicKey | None, str | None]:
@@ -745,6 +780,7 @@ def verify(
     missing: list[str] = []
     digests: dict[str, str] = {}
     evidence_kinds: dict[str, str] = {}
+    code_host_pr_lifecycle = False
     if _SEMVER.fullmatch(candidate) is None:
         missing.append("candidate-semver")
     for name in REPORTS:
@@ -796,6 +832,10 @@ def verify(
                 or not assertion.get("required_checks")
             ):
                 missing.append("protected-code-host")
+            else:
+                code_host_pr_lifecycle = _code_host_pr_lifecycle_valid(
+                    assertion.get("pr_lifecycle"), assertion.get("required_checks")
+                )
         except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
             missing.append("protected-code-host")
     evidence_kinds["code-host-protection"] = "assertion"
@@ -812,6 +852,12 @@ def verify(
     workload, workload_kinds, workload_missing = _workload_evidence(root)
     evidence_kinds.update(workload_kinds)
     missing.extend(workload_missing)
+    if code_host_pr_lifecycle:
+        missing = [
+            gate
+            for gate in missing
+            if gate != "protected-code-host-pr-lifecycle"
+        ]
     supply = subprocess.run(
         [root / "scripts/verify-supply-chain", "--root", root, "--json"],
         capture_output=True,
