@@ -29,6 +29,11 @@ not treated as production-ready until its evidence gates are accepted.
 - Configure and validate the direct RoCE/NCCL fabric between Spark nodes.
 - Build and operate model-specific runtime adapters, including the checked-in
   DeepSeek Mia and DS4 definitions.
+- Publish and operate generic, signed workload packages independently from
+  DGX-Forge platform releases; ordinary model/runtime releases do not require
+  an agent update.
+- Review and apply NAS-to-Spark platform skew updates through the Admin web UX
+  or `sparkctl`, with explicit signed fan-out over the outbound agent channel.
 
 ## Prerequisites
 
@@ -101,6 +106,11 @@ reconciled by the repository-less worker.
 - [Spark agent PKI and recovery runbook](docs/runbooks/agent-pki.md)
 - [Tailnet-only NAS ingress runbook](docs/runbooks/tailscale.md)
 - [Hermes Agent runbook](docs/runbooks/hermes-agent.md)
+- [Workload package operations](docs/runbooks/workload-packages.md) — generic
+  family/release publication, rollout, rollback, repair, GC, and first-release
+  evidence
+- [Platform update runbook](docs/runbooks/platform-update.md) — NAS/Spark
+  platform skew and recovery boundaries
 
 ## Security
 

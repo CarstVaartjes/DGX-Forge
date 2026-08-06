@@ -1,0 +1,69 @@
+"""Executable assertions for the workload-package operator contract."""
+
+from __future__ import annotations
+
+import json
+import runpy
+from pathlib import Path
+
+import jsonschema
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_workload_runbook_covers_generic_lifecycle_and_recovery_boundaries() -> None:
+    text = (ROOT / "docs/runbooks/workload-packages.md").read_text()
+    required = (
+        "family_id",
+        "signed workload",
+        "Candidate review and promotion",
+        "Rollout and progress",
+        "offline",
+        "repair",
+        "Garbage collection",
+        "Credentials, licenses",
+        "sparkctl admin packages",
+        "sparkctl admin deployments",
+        "outbound mTLS",
+        "SSH is permitted only",
+        "simulated",
+        "physical",
+    )
+    for phrase in required:
+        assert phrase in text
+
+
+def test_top_level_docs_link_the_two_admin_surfaces_and_workload_runbook() -> None:
+    readme = (ROOT / "README.md").read_text()
+    assert "docs/runbooks/workload-packages.md" in readme
+    assert "sparkctl admin" in readme
+    assert "web UX" in readme
+    platform = (ROOT / "docs/runbooks/platform-update.md").read_text()
+    assert "NAS-to-Spark platform skew" in platform
+    assert "outbound mTLS channel" in platform
+    assert "workload package path remains independent" in platform
+
+
+def test_first_release_plan_declares_independent_workload_evidence() -> None:
+    plan = (ROOT / "docs/superpowers/plans/2026-08-03-platform-release-hardening.md").read_text()
+    assert "workload-package-acceptance.json" in plan
+    assert "workload-package-failure-matrix.json" in plan
+    assert "release 2" in plan
+    assert "offline" in plan
+    assert "agent.update" in plan
+
+
+def test_release_verifier_output_has_non_claiming_workload_defaults() -> None:
+    namespace = runpy.run_path(str(ROOT / "scripts/verify-platform-release"))
+    report, missing = namespace["verify"](ROOT, "1.0.0")
+    assert missing
+    workload = report["workload_packages"]
+    assert workload["unknown_family_without_agent_update"] is False
+    assert workload["release_two_activated"] is False
+    assert workload["offline_release_one_rollback"] is False
+    assert workload["unsigned_release_rejected"] is False
+    assert workload["failure_matrix"] is False
+    assert workload["ssh_calls"] is None
+    assert workload["agent_update_calls"] is None
+    schema = json.loads((ROOT / "schemas/platform-release-evidence.schema.json").read_text())
+    jsonschema.validate(report, schema)

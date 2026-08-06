@@ -6,6 +6,13 @@ completely before changing Spark 1. Never run a distributed model during this
 procedure, and never use ad-hoc `apt` or `fwupdmgr` updates while the Dashboard
 path is available.
 
+This document covers the platform plane only. Workload packages (models,
+adapters, runtimes, images, checkpoints, environments, and configuration) are
+published from the NAS Git/TUF authority and rolled out independently through
+the workload package API. Follow [Workload package operations](workload-packages.md)
+for that flow; do not use this runbook, SSH, or `agent.update` for an ordinary
+new model/runtime release.
+
 The authoritative NVIDIA references checked on 2026-08-01 are:
 
 - [DGX Spark release notes](https://docs.nvidia.com/dgx/dgx-spark/release-notes.html)
@@ -397,3 +404,27 @@ codes: `LoadState=not-found`/0, `is-enabled=not-found`/4,
 both meet the DeepSeek earlyoom gate without a mutation. The staged script
 used SHA-256
 `e9a16bce353cf85600b48dc4641db64635035c67328b8f10a2cb9d06d377657f`.
+
+## NAS-to-Spark platform skew
+
+The NAS Docker services and Spark worker code are updated as a platform
+operation. In the Admin → Updates page, or with the CLI below, compare the
+NAS's signed platform target with each authenticated Spark agent:
+
+```bash
+sparkctl admin updates skew --json
+sparkctl admin updates plan --target-version 2.0.0 --json
+sparkctl admin updates apply --plan-digest PLAN_DIGEST --json
+sparkctl admin updates status --json
+```
+
+When the NAS is newer, the UI shows the exact target digest, affected node
+IDs, compatibility result, canary order, and predecessor. Nothing is sent
+until an administrator explicitly confirms the signed plan. The control plane
+then fans out `agent.update` over each Spark's outbound mTLS channel using the
+supervisor's A/B slots; SSH is not used for this standard path. A compatible
+older agent may continue serving workload packages while the operator reviews
+the skew. The workload package path remains independent and must be used for
+new models, adapters, runtimes, images, checkpoints, and environments. A
+workload only requires a platform update when it declares a genuinely new
+privileged ABI or protocol capability.

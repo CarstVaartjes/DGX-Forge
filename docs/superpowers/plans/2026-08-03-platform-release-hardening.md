@@ -255,6 +255,16 @@ git commit -m "test: accept repository-driven platform lifecycle"
 
 ### Task 6: Aggregate release gates and enable PR-only mode
 
+The aggregate is a two-plane first-release gate. In addition to the platform
+reports below, it consumes the independent workload acceptance artifacts
+`inventory/reports/workload-package-acceptance.json` and
+`inventory/reports/workload-package-failure-matrix.json`. The former must prove
+an unknown family can activate release 2, roll back to release 1 while
+offline, and reject unsigned/unapproved releases without SSH or `agent.update`;
+the latter must prove the generic failure/recovery matrix with secret-free,
+typed dispositions. A workload artifact is never treated as a platform image
+or as evidence of physical Spark acceptance.
+
 **Files:**
 - Create: `scripts/verify-platform-release`
 - Create: `tests/scripts/test_verify_platform_release.py`
@@ -289,6 +299,13 @@ Expected: FAIL.
 - [ ] **Step 3: Implement aggregate evidence verifier and release transition**
 
 Validate report schema/digests/timestamps, exact version, supply-chain output, recovery/scale/lifecycle results, protected branch and required checks, and clean Git tree. Emit one signed or content-addressed release evidence document; then enable PR-only mode through an audited administrator operation.
+
+The verifier records workload evidence separately under `workload_packages` and
+fails closed when either independent report is absent, malformed, unsigned,
+secret-bearing, or missing the release-2/rollback/rejection assertions. It must
+not execute an acceptance run as a substitute for a checked-in, content-
+addressed report; hosted CI uploads the run output and the release job verifies
+that exact digest.
 
 - [ ] **Step 4: Run complete release verification**
 

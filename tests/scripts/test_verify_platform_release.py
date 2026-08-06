@@ -338,6 +338,49 @@ def _write_update_report(repository: Path, report: dict[str, object]) -> None:
     )
 
 
+def _write_workload_evidence(repository: Path) -> None:
+    reports = repository / "inventory/reports"
+    acceptance: dict[str, object] = {
+        "schema_version": 1,
+        "report_type": "dgx-forge-workload-package-acceptance",
+        "status": "passed",
+        "evidence_kind": "simulated",
+        "unknown_family_without_agent_update": True,
+        "agent_digest_unchanged": True,
+        "release_two_activated": True,
+        "offline_release_one_rollback": True,
+        "unsigned_release_rejected": True,
+        "unapproved_release_rejected": True,
+        "ssh_calls": 0,
+        "agent_update_calls": 0,
+    }
+    failure: dict[str, object] = {
+        "schema_version": 1,
+        "report_type": "dgx-forge-workload-package-failure-matrix",
+        "status": "passed",
+        "evidence_kind": "simulated",
+        "failure_matrix": True,
+        "cases": [
+            {
+                "family_id": "synthetic-stack",
+                "release_digest": "sha256:" + "a" * 64,
+                "node_id": "spk_" + "1" * 32,
+                "fence": "fence-1",
+                "reason_code": "transport-unavailable",
+                "disposition": "safe-to-retry",
+            }
+        ],
+    }
+    for filename, report in (
+        ("workload-package-acceptance.json", acceptance),
+        ("workload-package-failure-matrix.json", failure),
+    ):
+        report["digest"] = "sha256:" + hashlib.sha256(
+            _canonical(report)
+        ).hexdigest()
+        (reports / filename).write_bytes(_canonical(report))
+
+
 def _write_physical_evidence(repository: Path, report: dict[str, object]) -> Path:
     mapping = {
         "control_host_update_recovery": (
@@ -515,6 +558,7 @@ def test_physical_update_evidence_must_be_complete_and_content_addressed(
     repository = tmp_path / "repo"
     _copy_verifier(repository)
     _passing_baseline_reports(repository)
+    _write_workload_evidence(repository)
     report = _acceptance_report()
     report["evidence_kind"] = "physical"
     report["remaining_release_gates"] = []
