@@ -10,7 +10,11 @@ import pytest
 
 from spark_profiles import control_client
 from spark_profiles.cli import main
-from spark_profiles.control_client import ControlClient, ControlClientError
+from spark_profiles.control_client import (
+    ControlClient,
+    ControlClientError,
+    PackagePlanResponse,
+)
 from spark_profiles.generated_control.models.agents_response import AgentsResponse
 from spark_profiles.generated_control.models.endpoint_response import EndpointResponse
 from spark_profiles.generated_control.models.fleet_status_response import (
@@ -1032,6 +1036,24 @@ def test_apply_rejects_noncanonical_request_id_before_network(
         client.apply_plan(
             PLAN_DIGEST, FLEET_EVIDENCE_DIGEST, request_id="not-a-uuid"
         )
+
+
+def test_package_plan_accepts_durable_uuid_candidate_and_validation_identity() -> None:
+    candidate_id = "00000000-0000-4000-8000-000000000010"
+    validation_id = "00000000-0000-4000-8000-000000000011"
+    plan = PackagePlanResponse.from_dict(
+        {
+            "candidate_id": candidate_id,
+            "validation_id": validation_id,
+            "digest": "sha256:" + "a" * 64,
+            "state": "ready",
+        }
+    )
+    assert plan.candidate_id == candidate_id
+    assert plan.validation_id == validation_id
+
+    client = object.__new__(ControlClient)
+    assert client._package_candidate_id(candidate_id) == candidate_id
 
 
 class FakeAdminClient:

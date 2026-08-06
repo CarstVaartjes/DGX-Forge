@@ -65,6 +65,9 @@ _UPDATE_RELEASE = re.compile(
     r"(?P<sha256>[0-9a-f]{64})\.json\Z"
 )
 _RAW_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+_CANDIDATE_ID = re.compile(
+    r"(?:[0-9a-f]{64}|[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})\Z"
+)
 _MAX_UPDATE_NODES = 1024
 
 
@@ -428,6 +431,7 @@ class PackagePlanResponse:
     release_digest: str | None
     candidate_id: str | None
     deployment_id: str | None
+    validation_id: str | None
     state: str
     _document: dict[str, object]
 
@@ -444,7 +448,7 @@ class PackagePlanResponse:
             release = _platform_digest(release, "package release")
         candidate_id = document.get("candidate_id")
         if candidate_id is not None and (
-            not isinstance(candidate_id, str) or _RAW_SHA256.fullmatch(candidate_id) is None
+            not isinstance(candidate_id, str) or _CANDIDATE_ID.fullmatch(candidate_id) is None
         ):
             raise ControlMalformedResponse("control API package candidate ID is invalid")
         deployment_id = document.get("deployment_id")
@@ -452,7 +456,17 @@ class PackagePlanResponse:
             not isinstance(deployment_id, str) or not deployment_id or len(deployment_id) > 128
         ):
             raise ControlMalformedResponse("control API package deployment ID is invalid")
-        return cls(digest, release, candidate_id, deployment_id, state, document)
+        validation_id = document.get("validation_id")
+        if validation_id is not None:
+            try:
+                parsed_validation_id = str(uuid.UUID(validation_id))
+            except (AttributeError, TypeError, ValueError):
+                raise ControlMalformedResponse("control API validation ID is invalid") from None
+            if parsed_validation_id != validation_id:
+                raise ControlMalformedResponse("control API validation ID is invalid")
+        else:
+            parsed_validation_id = None
+        return cls(digest, release, candidate_id, deployment_id, parsed_validation_id, state, document)
 
     def to_dict(self) -> dict[str, object]:
         return _json_object_copy(self._document, "package plan response")
@@ -478,7 +492,7 @@ class PackagePromotionResponse:
         )
         candidate_id = document["candidate_id"]
         state = document["state"]
-        if not isinstance(candidate_id, str) or _RAW_SHA256.fullmatch(candidate_id) is None:
+        if not isinstance(candidate_id, str) or _CANDIDATE_ID.fullmatch(candidate_id) is None:
             raise ControlMalformedResponse("control API package candidate ID is invalid")
         if not isinstance(state, str) or not 0 < len(state) <= 64:
             raise ControlMalformedResponse("control API package promotion state is invalid")
@@ -1064,7 +1078,7 @@ class ControlClient:
 
     @staticmethod
     def _package_candidate_id(candidate_id: str) -> str:
-        if not isinstance(candidate_id, str) or _RAW_SHA256.fullmatch(candidate_id) is None:
+        if not isinstance(candidate_id, str) or _CANDIDATE_ID.fullmatch(candidate_id) is None:
             raise ControlClientError("package candidate ID is invalid")
         return candidate_id
 
