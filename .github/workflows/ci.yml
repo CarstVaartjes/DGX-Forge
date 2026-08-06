@@ -72,8 +72,11 @@ jobs:
           uv run --project control --frozen pytest -q
           control/tests/test_package_api.py
           control/tests/test_package_action_plans.py
+          control/tests/test_package_validation.py
+          control/tests/test_package_validation_runner.py
           control/tests/test_package_rollout_worker.py
           control/tests/test_production_worker.py
+          control/tests/test_agent_jobs.py -k package_validation
       - name: Run focused web package workflow
         run: npm test --prefix control/web -- --run src/pages/packages.test.tsx
 
