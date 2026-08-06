@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "identity": {"publisher": "vonk", "slug": "deepseek-v4-flash"},
+  "metadata": {
+    "title": "DeepSeek V4 Flash",
+    "description": "A two-node gang-scheduled DeepSeek runtime.",
+    "tags": ["text", "deepseek", "multinode"]
+  },
+  "workload": {"family": "deepseek-v4", "capabilities": ["openai.chat"]},
+  "artifacts": [
+    {
+      "kind": "huggingface.snapshot",
+      "repository": "deepseek-ai/DeepSeek-V4-Flash",
+      "revision": "fedcba9876543210fedcba9876543210fedcba98",
+      "expected_bytes": 180000000000
+    }
+  ],
+  "runtime": {
+    "family": "sglang",
+    "image": "ghcr.io/vonk-forge/sglang@sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "architecture": "linux/arm64",
+    "arguments": [{"name": "tensor_parallel_size", "value": 2}]
+  },
+  "resources": {
+    "per_node": {
+      "download_bytes": 90000000000,
+      "installed_bytes": 96000000000,
+      "staging_bytes": 12000000000,
+      "resident_memory_bytes": 96000000000,
+      "activation_memory_bytes": 12000000000
+    },
+    "measurement": "declared"
+  },
+  "topology": {
+    "kind": "gang",
+    "min_nodes": 2,
+    "max_nodes": 2,
+    "tested_node_counts": [2],
+    "fabric": {"transport": "tcp", "minimum_bandwidth_mbps": 10000},
+    "ranks": [{"rank": 0, "role": "entrypoint"}, {"rank": 1, "role": "worker"}]
+  },
+  "endpoint": {
+    "protocol": "openai",
+    "port": 8000,
+    "model_aliases": ["deepseek-v4-flash"],
+    "health_path": "/v1/models"
+  },
+  "security": {
+    "devices": ["nvidia.com/gpu=all"],
+    "capabilities": [],
+    "host_network": false,
+    "privileged": false,
+    "mounts": [{"source": "model", "target": "/models", "read_only": true}]
+  },
+  "provenance": {
+    "source_kind": "sparkrun",
+    "source_reference": "sparkrun:deepseek-v4-flash",
+    "attribution": ["Imported from a SparkRun profile"]
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "schema_version": 1,
+  "identity": {"publisher": "vonk", "slug": "qwen3-vllm"},
+  "metadata": {
+    "title": "Qwen3 on vLLM",
+    "description": "A single-node OpenAI-compatible Qwen3 runtime.",
+    "tags": ["text", "qwen"]
+  },
+  "workload": {"family": "qwen3", "capabilities": ["openai.chat"]},
+  "artifacts": [
+    {
+      "kind": "huggingface.snapshot",
+      "repository": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+      "revision": "0123456789abcdef0123456789abcdef01234567",
+      "expected_bytes": 61000000000
+    }
+  ],
+  "runtime": {
+    "family": "vllm",
+    "image": "ghcr.io/vonk-forge/vllm@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "architecture": "linux/arm64",
+    "arguments": [{"name": "max_model_len", "value": 32768}]
+  },
+  "resources": {
+    "per_node": {
+      "download_bytes": 61000000000,
+      "installed_bytes": 66000000000,
+      "staging_bytes": 8000000000,
+      "resident_memory_bytes": 72000000000,
+      "activation_memory_bytes": 8000000000
+    },
+    "measurement": "declared"
+  },
+  "topology": {"kind": "single", "min_nodes": 1, "max_nodes": 1, "tested_node_counts": [1]},
+  "endpoint": {
+    "protocol": "openai",
+    "port": 8000,
+    "model_aliases": ["qwen3"],
+    "health_path": "/v1/models"
+  },
+  "security": {
+    "devices": ["nvidia.com/gpu=all"],
+    "capabilities": [],
+    "host_network": false,
+    "privileged": false,
+    "mounts": [{"source": "model", "target": "/models", "read_only": true}]
+  },
+  "provenance": {"source_kind": "local", "source_reference": null, "attribution": []}
+}

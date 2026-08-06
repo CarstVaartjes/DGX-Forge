@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://api.vonkforge.ai/schemas/recipe/v1.schema.json",
+  "title": "Vonk Forge Recipe v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "identity",
+    "metadata",
+    "workload",
+    "artifacts",
+    "runtime",
+    "resources",
+    "topology",
+    "endpoint",
+    "security",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["publisher", "slug"],
+      "properties": {
+        "publisher": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"},
+        "slug": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,62}$"}
+      }
+    },
+    "metadata": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["title", "description", "tags"],
+      "properties": {
+        "title": {"type": "string", "minLength": 1, "maxLength": 120},
+        "description": {"type": "string", "minLength": 1, "maxLength": 4000},
+        "tags": {
+          "type": "array",
+          "maxItems": 20,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,39}$"}
+        }
+      }
+    },
+    "workload": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["family", "capabilities"],
+      "properties": {
+        "family": {"type": "string", "pattern": "^[a-z0-9][a-z0-9.-]{0,63}$"},
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"}
+        }
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 16,
+      "items": {"$ref": "#/$defs/artifact"}
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["family", "image", "architecture", "arguments"],
+      "properties": {
+        "family": {"enum": ["vllm", "sglang", "llama.cpp", "ds4"]},
+        "image": {
+          "type": "string",
+          "pattern": "^[a-z0-9.-]+(?::[0-9]+)?/[A-Za-z0-9_./-]+@sha256:[a-f0-9]{64}$",
+          "maxLength": 512
+        },
+        "architecture": {"const": "linux/arm64"},
+        "arguments": {
+          "type": "array",
+          "maxItems": 128,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "value"],
+            "properties": {
+              "name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
+              "value": {"type": ["string", "integer", "boolean"], "maxLength": 1024}
+            }
+          }
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["per_node", "measurement"],
+      "properties": {
+        "per_node": {"$ref": "#/$defs/resourceSet"},
+        "measurement": {"enum": ["declared", "measured", "derived"]}
+      }
+    },
+    "topology": {
+      "oneOf": [
+        {"$ref": "#/$defs/singleTopology"},
+        {"$ref": "#/$defs/gangTopology"}
+      ]
+    },
+    "endpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["protocol", "port", "model_aliases", "health_path"],
+      "properties": {
+        "protocol": {"const": "openai"},
+        "port": {"type": "integer", "minimum": 1024, "maximum": 65535},
+        "model_aliases": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 120}
+        },
+        "health_path": {"type": "string", "pattern": "^/[A-Za-z0-9_./-]+$", "maxLength": 256}
+      }
+    },
+    "security": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["devices", "capabilities", "host_network", "privileged", "mounts"],
+      "properties": {
+        "devices": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {"enum": ["nvidia.com/gpu=all"]}
+        },
+        "capabilities": {"type": "array", "maxItems": 0},
+        "host_network": {"const": false},
+        "privileged": {"const": false},
+        "mounts": {
+          "type": "array",
+          "maxItems": 8,
+          "items": {"$ref": "#/$defs/mount"}
+        }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_kind", "source_reference", "attribution"],
+      "properties": {
+        "source_kind": {"enum": ["local", "sparkrun", "global", "fork"]},
+        "source_reference": {"type": ["string", "null"], "maxLength": 2048},
+        "attribution": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {"type": "string", "minLength": 1, "maxLength": 512}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "repository", "revision", "expected_bytes"],
+      "properties": {
+        "kind": {"enum": ["huggingface.snapshot", "http.file", "oci.artifact"]},
+        "repository": {"type": "string", "minLength": 1, "maxLength": 512},
+        "revision": {"type": "string", "pattern": "^[A-Za-z0-9._:-]{8,128}$"},
+        "expected_bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "resourceSet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "download_bytes",
+        "installed_bytes",
+        "staging_bytes",
+        "resident_memory_bytes",
+        "activation_memory_bytes"
+      ],
+      "properties": {
+        "download_bytes": {"type": "integer", "minimum": 1},
+        "installed_bytes": {"type": "integer", "minimum": 1},
+        "staging_bytes": {"type": "integer", "minimum": 1},
+        "resident_memory_bytes": {"type": "integer", "minimum": 1},
+        "activation_memory_bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "singleTopology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "min_nodes", "max_nodes", "tested_node_counts"],
+      "properties": {
+        "kind": {"const": "single"},
+        "min_nodes": {"const": 1},
+        "max_nodes": {"const": 1},
+        "tested_node_counts": {"type": "array", "const": [1]}
+      }
+    },
+    "gangTopology": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "min_nodes", "max_nodes", "tested_node_counts", "fabric", "ranks"],
+      "properties": {
+        "kind": {"const": "gang"},
+        "min_nodes": {"type": "integer", "minimum": 2, "maximum": 16},
+        "max_nodes": {"type": "integer", "minimum": 2, "maximum": 16},
+        "tested_node_counts": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"type": "integer", "minimum": 2, "maximum": 16}
+        },
+        "fabric": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["transport", "minimum_bandwidth_mbps"],
+          "properties": {
+            "transport": {"enum": ["tcp", "rdma"]},
+            "minimum_bandwidth_mbps": {"type": "integer", "minimum": 1}
+          }
+        },
+        "ranks": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 16,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["rank", "role"],
+            "properties": {
+              "rank": {"type": "integer", "minimum": 0, "maximum": 15},
+              "role": {"enum": ["entrypoint", "worker"]}
+            }
+          }
+        }
+      }
+    },
+    "mount": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "target", "read_only"],
+      "properties": {
+        "source": {"enum": ["model", "state"]},
+        "target": {"type": "string", "pattern": "^/(models|state)(/[A-Za-z0-9_.-]+)*$"},
+        "read_only": {"type": "boolean"}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"source": {"const": "model"}}},
+          "then": {"properties": {"read_only": {"const": true}}}
+        }
+      ]
+    }
+  }
+}
