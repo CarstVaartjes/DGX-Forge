@@ -80,7 +80,7 @@ it("starts validation through an exact plan and keeps the run inspectable", asyn
     ...api(),
     previewPackageValidation: async () => ({digest: `sha256:${"v".repeat(64)}`, candidate_id: "candidate-1", validation_id: "validation-1"}),
     validatePackage: async (_id: string, supplied: string) => { calls.push(supplied); return {id: "validation-1", state: "running", progress: {completed: 0, failed: 0, running: 2, total: 2}}; },
-    packageValidation: async () => ({id: "validation-1", state: "passed", progress: {completed: 2, failed: 0, running: 0, total: 2}}),
+    packageValidation: async () => ({id: "validation-1", state: "passed", job_id: "job-validation-1", progress: {completed: 2, failed: 0, running: 0, total: 2}, nodes: [{node_id: "spark-a", state: "succeeded", batch_index: 0, completed: 2, total: 2}]}),
   };
   render(<PackageCandidatePage api={control} candidateId="candidate-1"/>);
   const user = userEvent.setup();
@@ -94,6 +94,7 @@ it("starts validation through an exact plan and keeps the run inspectable", asyn
   expect(within(validationSection!).getByRole("status")).toHaveTextContent("Validation state: running");
   await user.click(within(validationSection!).getByRole("button", {name: "Refresh validation"}));
   expect(within(validationSection!).getByRole("status")).toHaveTextContent("Validation state: passed");
+  expect(within(validationSection!).getByText("spark-a — succeeded (2/2)")).toBeVisible();
 });
 
 it("separates downloads from active generations and requires an exact removal preview", async () => {

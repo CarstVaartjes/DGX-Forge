@@ -31,7 +31,10 @@ jobs:
         with:
           version: "0.12.1"
           python-version: "3.12"
-          enable-cache: true
+          # Ruff is executed through uvx and has no project dependency cache.
+          # Enabling setup-uv's cache here can fail post-job when no cache path
+          # is created; dependency-using jobs below keep caching enabled.
+          enable-cache: false
       - name: Run Ruff
         shell: bash
         run: |
@@ -94,8 +97,9 @@ jobs:
           tests/e2e/test_workload_package_failure_matrix.py
       - name: Run focused control package contracts
         run: >-
-          uv run --project control --frozen pytest -q
+          uv run --project control --frozen --with-editable . pytest -q
           control/tests/test_package_api.py
+          control/tests/test_package_services.py
           control/tests/test_package_action_plans.py
           control/tests/test_package_validation.py
           control/tests/test_package_validation_runner.py

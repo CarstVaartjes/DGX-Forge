@@ -37,6 +37,7 @@ from .models import (
     PackageRolloutNode,
     PackageValidationRun,
 )
+from .models import AgentOperation as StoredAgentOperation
 from .package_rollouts import (
     PackageDesiredStateResolver,
     PackageRolloutOrchestrator,
@@ -677,21 +678,7 @@ class ProductionPackageProjectionService:
             plan_digest = _digest(
                 {"candidate_id": row.candidate_id, "release_digest": row.release_digest}
             )
-        progress = self._progress(row.progress)
-        if progress["total"] == 0:
-            progress["total"] = 1
-        return {
-            "id": row.id,
-            "state": row.state,
-            "plan_digest": "sha256:" + plan_digest,
-            "progress": progress,
-            "failure": row.reason_code,
-            "job_id": None,
-            "audit_request_id": None,
-            "nodes": [],
-            "rollback_rollout_id": None,
-            "rollback_selector": None,
-        }
+        return self._validation_response(row, plan_digest=plan_digest)
 
     # ---- Repository deployment projections -------------------------------------
 
@@ -1494,22 +1481,65 @@ class ProductionPackageProjectionService:
             clock=self._clock,
         )
 
-    @staticmethod
     def _validation_response(
-        run: PackageValidationRun, *, plan_digest: str, failure: str | None = None
+        self,
+        run: PackageValidationRun,
+        *,
+        plan_digest: str,
+        failure: str | None = None,
     ) -> Mapping[str, object]:
         progress = ProductionPackageProjectionService._progress(run.progress)
         if progress["total"] == 0:
             progress["total"] = 1
+        job_id: str | None = None
+        nodes: list[dict[str, object]] = []
+        with self._sessions() as session:
+            job = session.scalar(
+                select(Job).where(
+                    Job.request_id == run.id,
+                    Job.kind == "package.validation",
+                )
+            )
+            if job is not None:
+                job_id = job.id
+                grouped: dict[str, dict[str, object]] = {}
+                operations = session.scalars(
+                    select(StoredAgentOperation)
+                    .where(StoredAgentOperation.parent_job_id == job.id)
+                    .order_by(StoredAgentOperation.created_at, StoredAgentOperation.id)
+                )
+                for operation in operations:
+                    item = grouped.setdefault(
+                        operation.node_id,
+                        {
+                            "node_id": operation.node_id,
+                            "state": "queued",
+                            "batch_index": 0,
+                            "completed": 0,
+                            "total": 0,
+                        },
+                    )
+                    item["total"] = int(item["total"]) + 1
+                    if operation.state in {"succeeded", "compensated"}:
+                        item["completed"] = int(item["completed"]) + 1
+                    current = str(item["state"])
+                    if operation.state in {"failed", "waiting-for-operator"}:
+                        item["state"] = "failed"
+                    elif current != "failed" and operation.state == "running":
+                        item["state"] = "running"
+                for item in grouped.values():
+                    if item["state"] == "queued" and item["completed"] == item["total"]:
+                        item["state"] = "succeeded"
+                nodes = list(grouped.values())[:512]
         return {
             "id": run.id,
             "state": run.state,
             "plan_digest": "sha256:" + _raw_digest(plan_digest),
             "progress": progress,
             "failure": failure if failure is not None else run.reason_code,
-            "job_id": None,
-            "audit_request_id": None,
-            "nodes": [],
+            "job_id": job_id,
+            "audit_request_id": run.id,
+            "nodes": nodes,
             "rollback_rollout_id": None,
             "rollback_selector": None,
         }
