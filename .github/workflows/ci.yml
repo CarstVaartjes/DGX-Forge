@@ -10,10 +10,17 @@ on:
 permissions:
   contents: read
 
+# A new commit supersedes an older PR check. Release/manual evidence must not
+# be cancelled because it is an intentional publication or operator run.
+concurrency:
+  group: dgx-forge-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     name: Ruff
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -29,6 +36,7 @@ jobs:
   generated-clients:
     name: Generated control clients
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -48,6 +56,7 @@ jobs:
   test:
     name: PR contract smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

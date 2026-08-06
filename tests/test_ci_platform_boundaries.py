@@ -59,6 +59,10 @@ def test_pr_smoke_runs_locked_web_and_focused_contracts() -> None:
     assert "    strategy:" not in test_job_lines
     assert "macos-latest" not in test_job_lines
 
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in workflow
+    assert "timeout-minutes: 15" in workflow
+
 
 def test_pr_smoke_does_not_reintroduce_a_second_os_matrix() -> None:
     workflow = (ROOT / ".github/workflows/ci.yml").read_text()
