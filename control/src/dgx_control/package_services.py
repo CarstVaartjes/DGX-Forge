@@ -19,7 +19,7 @@ from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from dgx_agent_protocol import AgentOperation, canonical_message
+from dgx_agent_protocol import AgentOperation, PackageReleaseLock, canonical_message
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -40,8 +40,10 @@ from .models import (
 from .package_rollouts import (
     PackageDesiredStateResolver,
     PackageRolloutOrchestrator,
+    _package_payload_for_identity,
     package_operation_payload,
 )
+from .package_validation import ValidationController, ValidationError
 
 
 def _digest(value: object) -> str:
@@ -100,6 +102,7 @@ class ProductionPackageProjectionService:
         agent_jobs: Any | None = None,
         package_trust: Any | Callable[[str, bytes, str], bool] | None = None,
         publication: Any | None = None,
+        validation_runner: Any | None = None,
     ) -> None:
         if not callable(getattr(repository, "head", None)):
             raise TypeError("package repository is required")
@@ -112,6 +115,11 @@ class ProductionPackageProjectionService:
         # Publication is deliberately injected from a separate workload-TUF
         # signer boundary.  The API process never owns private release keys.
         self._publication = publication
+        # Validation execution is a separate, worker-owned boundary.  The API
+        # can persist an exact plan without receiving arbitrary package code or
+        # turning a preview into an activation.  A missing runner is a hard
+        # failure at apply time, never an implicit local/no-op validation.
+        self._validation_runner = validation_runner
         self._rollouts = (
             PackageRolloutOrchestrator(sessions, agent_jobs, clock=self._clock)
             if agent_jobs is not None
@@ -119,6 +127,16 @@ class ProductionPackageProjectionService:
         )
         self._idempotency_lock = threading.RLock()
         self._idempotent: dict[tuple[object, ...], Mapping[str, object]] = {}
+
+    def install_publication(self, publication: Any) -> None:
+        """Attach the isolated workload publication service exactly once."""
+        if not callable(getattr(publication, "preview", None)) or not callable(
+            getattr(publication, "promote", None)
+        ):
+            raise TypeError("workload publication service is invalid")
+        if self._publication is not None and self._publication is not publication:
+            raise RuntimeError("workload publication service is already installed")
+        self._publication = publication
 
     def create_action_plan(
         self,
@@ -255,7 +273,7 @@ class ProductionPackageProjectionService:
             "request": dict(request),
         }
         deployment = None
-        if action in {"package.remove", "package.repair"}:
+        if action in {"package.remove", "package.repair", "package.rollback"}:
             deployment_id = request.get("deployment_id")
             release_digest = request.get("release_digest")
             if not isinstance(deployment_id, str) or not isinstance(release_digest, str):
@@ -278,16 +296,25 @@ class ProductionPackageProjectionService:
                 )
             )
             for node_id in targets:
-                if action in {"package.remove", "package.repair"}:
+                if action in {"package.remove", "package.repair", "package.rollback"}:
                     assert deployment is not None
-                    operation = (
-                        AgentOperation.PACKAGE_REMOVE.value
-                        if action == "package.remove"
-                        else AgentOperation.PACKAGE_REPAIR.value
-                    )
-                    operation_payload = package_operation_payload(
-                        deployment, operation
-                    )
+                    operation = {
+                        "package.remove": AgentOperation.PACKAGE_REMOVE.value,
+                        "package.repair": AgentOperation.PACKAGE_REPAIR.value,
+                        "package.rollback": AgentOperation.PACKAGE_ROLLBACK.value,
+                    }[action]
+                    if action == "package.rollback":
+                        previous_deployment_digest = request.get("deployment_digest")
+                        operation_payload = _package_payload_for_identity(
+                            deployment,
+                            operation,
+                            deployment.release_digest,
+                            previous_deployment_digest
+                            if isinstance(previous_deployment_digest, str)
+                            else None,
+                        )
+                    else:
+                        operation_payload = package_operation_payload(deployment, operation)
                 elif action == "package.gc":
                     targets_by_node = request.get("target_bytes_by_node")
                     target_bytes = (
@@ -489,6 +516,86 @@ class ProductionPackageProjectionService:
         with self._sessions() as session:
             return self._candidate_value(self._candidate_row(session, candidate_id))
 
+    def publication_candidate(self, candidate_id: str) -> Mapping[str, object]:
+        """Load the bounded publication view from SQL plus Git authority.
+
+        Release locks are never copied into the operational database.  The
+        publication service re-reads the exact manifest from the current Git
+        commit and binds its bytes to the SQL resolution and validation rows.
+        """
+        commit = self._repository.head()
+        with self._sessions() as session:
+            candidate = self._candidate_row(session, candidate_id)
+            resolution = self._resolution_row(session, candidate_id)
+            if resolution.state != "resolved" or not isinstance(resolution.release_digest, str):
+                raise ValueError("candidate resolution is not publishable")
+            validation = session.scalar(
+                select(PackageValidationRun)
+                .where(
+                    PackageValidationRun.candidate_id == candidate_id,
+                    PackageValidationRun.release_digest == resolution.release_digest,
+                    PackageValidationRun.state == "passed",
+                )
+                .order_by(PackageValidationRun.updated_at.desc(), PackageValidationRun.id.desc())
+            )
+        path = f"manifests/workload-releases/{candidate.family_id}/{resolution.release_digest}.json"
+        document = self._repository.read_document(commit, path)
+        if not isinstance(document.parsed, Mapping):
+            raise TypeError("workload release lock is invalid")
+        try:
+            canonical_lock = json.dumps(
+                document.parsed,
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, ValueError, UnicodeEncodeError) as error:
+            raise TypeError("workload release lock is not canonical") from error
+        if document.content not in {canonical_lock, canonical_lock + b"\n"}:
+            raise ValueError("workload release lock formatting changed")
+        if hashlib.sha256(canonical_lock).hexdigest() != resolution.release_digest:
+            raise ValueError("workload release lock digest changed")
+        family = self._families().get(candidate.family_id)
+        if family is None:
+            raise KeyError(candidate.family_id)
+        policy = dict(family.policy)
+        policy.update(
+            {
+                "mode": family.promotion.mode,
+                "automation_identity": family.promotion.automation_identity,
+                "failure_budget": family.promotion.failure_budget,
+                "canary": dict(family.promotion.canary)
+                if isinstance(family.promotion.canary, Mapping)
+                else {},
+            }
+        )
+        summary = _bounded_mapping(candidate.summary)
+        evidence = summary.get("evidence")
+        if not isinstance(evidence, Mapping) and validation is not None:
+            evidence = validation.evidence
+        return {
+            "id": candidate.id,
+            "state": candidate.state,
+            "family_id": candidate.family_id,
+            "release_digest": resolution.release_digest,
+            "lock_bytes": canonical_lock,
+            "policy": policy,
+            "validation": {
+                "state": validation.state,
+                "digest": _digest(validation.evidence or validation.progress or {}),
+            }
+            if validation is not None
+            else None,
+            "evidence": dict(evidence) if isinstance(evidence, Mapping) else None,
+            "evidence_digests": tuple(
+                str(item)
+                for item in summary.get("evidence_digests", ())
+                if isinstance(item, str)
+            ),
+            "builder_identity": summary.get("builder_identity"),
+        }
+
     def _resolution_row(self, session: Session, candidate_id: str) -> PackageResolution:
         self._candidate_row(session, candidate_id)
         row = session.scalar(
@@ -550,15 +657,33 @@ class ProductionPackageProjectionService:
             row = session.get(PackageValidationRun, validation_id)
         if row is None:
             raise KeyError(validation_id)
+        with self._sessions() as session:
+            plans = list(
+                session.scalars(
+                    select(PackageActionPlan)
+                    .where(
+                        PackageActionPlan.action == "package.validate",
+                        PackageActionPlan.subject == row.candidate_id,
+                    )
+                    .order_by(PackageActionPlan.updated_at.desc())
+                )
+            )
+        plan_digest = None
+        for plan in plans:
+            if isinstance(plan.request, Mapping) and plan.request.get("validation_id") == validation_id:
+                plan_digest = plan.plan_digest
+                break
+        if plan_digest is None:
+            plan_digest = _digest(
+                {"candidate_id": row.candidate_id, "release_digest": row.release_digest}
+            )
         progress = self._progress(row.progress)
         if progress["total"] == 0:
             progress["total"] = 1
         return {
             "id": row.id,
             "state": row.state,
-            "plan_digest": "sha256:" + _digest(
-                {"candidate_id": row.candidate_id, "release_digest": row.release_digest}
-            ),
+            "plan_digest": "sha256:" + plan_digest,
             "progress": progress,
             "failure": row.reason_code,
             "job_id": None,
@@ -650,7 +775,12 @@ class ProductionPackageProjectionService:
             seen.add(key)
             current_packages.setdefault(row.node_id, {})[row.deployment_id] = {
                 "release_digest": row.release_digest,
-                "deployment_digest": "0" * 64,
+                "deployment_digest": (
+                    row.summary.get("deployment_digest")
+                    if isinstance(row.summary, Mapping)
+                    and isinstance(row.summary.get("deployment_digest"), str)
+                    else "0" * 64
+                ),
             }
         result: list[Mapping[str, object]] = []
         if not isinstance(raw_nodes, (list, tuple)):
@@ -1253,16 +1383,389 @@ class ProductionPackageProjectionService:
         self.finish_action_plan(plan_digest, result=result)
         return result
 
-    # ---- Explicitly fail-closed mutation boundary ------------------------------
+    # ---- Durable validation boundary -------------------------------------------
+
+    def _validation_inputs(self, candidate_id: str) -> tuple[dict[str, object], str, str, object]:
+        """Load one candidate, exact lock, policy, and resolution binding.
+
+        The lock is parsed from the eligible Git document on every preview and
+        apply.  SQL contributes only the candidate/resolution projection; it
+        never supplies release bytes or execution policy.
+        """
+        commit = self._repository.head()
+        with self._sessions() as session:
+            candidate = self._candidate_row(session, candidate_id)
+            resolution = self._resolution_row(session, candidate_id)
+            if resolution.state != "resolved" or not isinstance(resolution.release_digest, str):
+                raise ValidationError("candidate resolution is not resolved")
+            summary = _bounded_mapping(candidate.summary)
+            resolution_id = resolution.id
+            release_digest = resolution.release_digest
+        path = f"manifests/workload-releases/{candidate.family_id}/{release_digest}.json"
+        document = self._repository.read_document(commit, path)
+        try:
+            lock = PackageReleaseLock.parse(document.parsed)
+        except Exception as error:
+            raise ValidationError("candidate release lock is invalid") from error
+        if lock.family_id != candidate.family_id or lock.digest != release_digest:
+            raise ValidationError("candidate release lock identity changed")
+        if document.content not in {lock.canonical_bytes, lock.canonical_bytes + b"\n"}:
+            raise ValidationError("candidate release lock formatting changed")
+        family = self._families().get(candidate.family_id)
+        if family is None:
+            raise ValidationError("candidate package family is unavailable")
+        policy = dict(family.policy)
+        # Keep the family policy authoritative, while carrying the family
+        # validation suite as a bounded requirement for the runner.
+        policy["validation"] = [dict(item) for item in family.validation]
+        evidence = summary.get("evidence")
+        candidate_value: dict[str, object] = {
+            "id": candidate.id,
+            "family_id": candidate.family_id,
+            "state": candidate.state,
+            "lock": lock,
+            "policy": policy,
+            "signature_verified": True,
+            "provenance_verified": True,
+            "license_accepted": summary.get("license_accepted", True),
+            "evidence": dict(evidence) if isinstance(evidence, Mapping) else {},
+        }
+        return candidate_value, commit, resolution_id, lock
+
+    def _validation_fleet(self) -> object:
+        """Return an authenticated, bounded fleet projection for compatibility."""
+        value = self._fleet()
+        if not isinstance(value, Mapping):
+            return value
+        raw_nodes = value.get("nodes")
+        if not isinstance(raw_nodes, (list, tuple)):
+            return value
+        with self._sessions() as session:
+            stored = {
+                node.node_id: node
+                for node in session.scalars(select(AgentNode))
+            }
+        nodes: list[dict[str, object]] = []
+        for raw in raw_nodes:
+            if not isinstance(raw, Mapping):
+                continue
+            node = dict(raw)
+            node_id = node.get("node_id", node.get("id"))
+            if not isinstance(node_id, str):
+                continue
+            node["node_id"] = node_id
+            stored_node = stored.get(node_id)
+            if "capabilities" not in node and stored_node is not None:
+                node["capabilities"] = list(stored_node.capabilities or ())
+            if "architecture" not in node and stored_node is not None:
+                node["architecture"] = stored_node.architecture
+            node.setdefault("authenticated", node.get("agent_online") is True)
+            node.setdefault("online", node.get("agent_online") is True)
+            nodes.append(node)
+        return {"nodes": nodes}
+
+    def _validation_controller(self, candidate: Mapping[str, object]) -> ValidationController:
+        return ValidationController(
+            candidate_loader=lambda _candidate_id: candidate,
+            fleet_loader=self._validation_fleet,
+            clock=self._clock,
+        )
 
     @staticmethod
-    def _mutation_unavailable(*_args: object, **_kwargs: object) -> Mapping[str, object]:
-        raise RuntimeError("durable workload mutation service is not installed")
+    def _validation_response(
+        run: PackageValidationRun, *, plan_digest: str, failure: str | None = None
+    ) -> Mapping[str, object]:
+        progress = ProductionPackageProjectionService._progress(run.progress)
+        if progress["total"] == 0:
+            progress["total"] = 1
+        return {
+            "id": run.id,
+            "state": run.state,
+            "plan_digest": "sha256:" + _raw_digest(plan_digest),
+            "progress": progress,
+            "failure": failure if failure is not None else run.reason_code,
+            "job_id": None,
+            "audit_request_id": None,
+            "nodes": [],
+            "rollback_rollout_id": None,
+            "rollback_selector": None,
+        }
 
-    validation_preview = _mutation_unavailable
-    validate = _mutation_unavailable
-    rollback_preview = _mutation_unavailable
-    rollback = _mutation_unavailable
+    def validation_preview(self, candidate_id: str) -> Mapping[str, object]:
+        candidate, commit, resolution_id, lock = self._validation_inputs(candidate_id)
+        controller = self._validation_controller(candidate)
+        plan = controller.plan(candidate_id)
+        now = self._clock()
+        with self._sessions.begin() as session:
+            run = session.scalar(
+                select(PackageValidationRun)
+                .where(
+                    PackageValidationRun.candidate_id == candidate_id,
+                    PackageValidationRun.resolution_id == resolution_id,
+                    PackageValidationRun.validation_kind == "artifact",
+                    PackageValidationRun.release_digest == lock.digest,
+                    PackageValidationRun.policy_digest == plan.policy_digest,
+                    PackageValidationRun.fleet_digest == plan.compatibility_digest,
+                )
+                .order_by(PackageValidationRun.updated_at.desc(), PackageValidationRun.id.desc())
+            )
+            if run is None or run.state in {"failed", "rejected", "cancelled"}:
+                run = PackageValidationRun(
+                    id=str(uuid.uuid4()),
+                    candidate_id=candidate_id,
+                    resolution_id=resolution_id,
+                    validation_kind="artifact",
+                    release_digest=lock.digest,
+                    policy_digest=plan.policy_digest,
+                    fleet_digest=plan.compatibility_digest,
+                    state="planned",
+                    attempt=0,
+                    actor="package-validation",
+                    progress={
+                        "completed": 0,
+                        "failed": 0,
+                        "running": 0,
+                        "total": len(plan.operations),
+                    },
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(run)
+            run_id = run.id
+        request = {
+            "candidate_id": candidate_id,
+            "validation_id": run_id,
+            "validation_plan_digest": plan.digest,
+            "release_digest": lock.digest,
+            "base_commit": commit,
+            "policy_digest": plan.policy_digest,
+            "fleet_digest": plan.compatibility_digest,
+            "node_ids": list(plan.node_ids),
+            "operations": [dict(operation) for operation in plan.operations],
+        }
+        digest = self.create_action_plan("package.validate", candidate_id, request)
+        return {
+            "digest": digest,
+            "state": "ready",
+            "candidate_id": candidate_id,
+            "release_digest": "sha256:" + lock.digest,
+            "validation_id": run_id,
+            "batches": [list(plan.node_ids)],
+            "canary_node": plan.node_ids[0] if plan.node_ids else None,
+            "offline_pending": [],
+            "storage_bytes": 0,
+            "download_bytes": 0,
+        }
+
+    def validate(
+        self, candidate_id: str, plan_digest: str, actor: str, request_id: str
+    ) -> Mapping[str, object]:
+        del request_id
+        replay = self._progress_replay(plan_digest, "package.validate")
+        if replay is not None:
+            return replay
+        request = self.consume_action_plan(plan_digest, "package.validate", candidate_id)
+        if request.get("candidate_id") != candidate_id:
+            raise ValueError("package validation candidate changed")
+        candidate, commit, _resolution_id, lock = self._validation_inputs(candidate_id)
+        controller = self._validation_controller(candidate)
+        plan = controller.plan(candidate_id)
+        if (
+            request.get("validation_plan_digest") != plan.digest
+            or request.get("base_commit") != commit
+            or request.get("release_digest") != lock.digest
+        ):
+            raise ValueError("package validation preview is stale")
+        validation_id = request.get("validation_id")
+        if not isinstance(validation_id, str):
+            raise TypeError("package validation identity is invalid")
+        with self._sessions.begin() as session:
+            run = session.get(PackageValidationRun, validation_id)
+            if run is None or run.candidate_id != candidate_id or run.release_digest != lock.digest:
+                raise ValueError("package validation run is invalid")
+            run.actor = actor
+            run.state = "running"
+            run.attempt += 1
+            run.started_at = run.started_at or self._clock()
+            run.updated_at = self._clock()
+            run.progress = {
+                "completed": 0,
+                "failed": 0,
+                "running": len(plan.operations),
+                "total": len(plan.operations),
+            }
+        if self._validation_runner is None:
+            with self._sessions.begin() as session:
+                run = session.get(PackageValidationRun, validation_id)
+                assert run is not None
+                run.state = "retryable"
+                run.reason_code = "validation-runner-unavailable"
+                run.progress = {
+                    "completed": 0,
+                    "failed": 0,
+                    "running": 0,
+                    "total": len(plan.operations),
+                }
+                run.updated_at = self._clock()
+                result = self._validation_response(run, plan_digest=plan.digest)
+            self.finish_action_plan(plan_digest, result=result, failed=True)
+            raise RuntimeError("workload validation runner is not installed")
+        runner = self._validation_runner
+        try:
+            if callable(runner):
+                outcome = runner(dict(request))
+            else:
+                outcome = runner.run(dict(request))
+        except (OSError, RuntimeError, TimeoutError, ConnectionError) as error:
+            outcome = {"status": "retryable", "reason_code": "validation-runner-failed"}
+            del error
+        if not isinstance(outcome, Mapping):
+            raise TypeError("package validation runner result is invalid")
+        status = outcome.get("status")
+        if status not in {"running", "passed", "failed", "retryable", "rejected"}:
+            raise ValueError("package validation runner status is invalid")
+        evidence = outcome.get("evidence", {})
+        if not isinstance(evidence, Mapping) or len(canonical_message(evidence)) > 16_384:
+            raise ValueError("package validation runner evidence is invalid")
+        required_evidence = candidate.get("policy", {}).get("required_evidence", ())
+        required_validation = [
+            item.get("kind")
+            for item in lock.validation
+            if isinstance(item, Mapping) and item.get("required") is True
+        ]
+        missing_evidence = [
+            str(kind)
+            for kind in (*required_evidence, *required_validation)
+            if isinstance(kind, str) and kind not in evidence
+        ]
+        if status == "passed" and missing_evidence:
+            status = "failed"
+            outcome = {
+                "status": "failed",
+                "reason_code": "validation-evidence-missing",
+                "evidence": {},
+            }
+            evidence = {}
+        with self._sessions.begin() as session:
+            run = session.get(PackageValidationRun, validation_id)
+            assert run is not None
+            run.state = str(status)
+            run.reason_code = (
+                str(outcome.get("reason_code"))[:80]
+                if isinstance(outcome.get("reason_code"), str)
+                else None
+            )
+            run.evidence = dict(evidence) if status == "passed" else None
+            run.failure_detail = None
+            run.progress = {
+                "completed": len(plan.operations) if status == "passed" else 0,
+                "failed": 1 if status in {"failed", "rejected"} else 0,
+                "running": 0 if status != "running" else len(plan.operations),
+                "total": len(plan.operations),
+            }
+            run.completed_at = self._clock() if status in {"passed", "failed", "rejected"} else None
+            run.updated_at = self._clock()
+            result = self._validation_response(run, plan_digest=plan.digest)
+        self.finish_action_plan(plan_digest, result=result, failed=status in {"failed", "rejected"})
+        return result
+
+    # ---- Durable retained-release rollback boundary ---------------------------
+
+    def _rollback_inputs(self, deployment_id: str, rollout_id: str) -> tuple[PackageRollout, tuple[str, ...], str, str | None]:
+        with self._sessions() as session:
+            rollout = session.get(PackageRollout, rollout_id)
+            if rollout is None or rollout.deployment_id != deployment_id:
+                raise KeyError(rollout_id)
+            if not rollout.previous_release_digest:
+                raise ValueError("package rollout has no retained predecessor")
+            if rollout.state in {"planned", "preparing", "activating", "health-checking", "soaking", "rolling-back"}:
+                raise ValueError("package rollout is still active")
+            nodes = tuple(
+                node.node_id
+                for node in session.scalars(
+                    select(PackageRolloutNode)
+                    .where(PackageRolloutNode.rollout_id == rollout_id)
+                    .order_by(PackageRolloutNode.batch_index, PackageRolloutNode.node_order)
+                )
+            )
+        if not nodes:
+            raise ValueError("package rollout has no retained nodes")
+        previous_deployment_digest = None
+        plan = rollout.plan if isinstance(rollout.plan, Mapping) else {}
+        release = plan.get("release") if isinstance(plan, Mapping) else None
+        if isinstance(release, Mapping) and isinstance(release.get("previous_deployment_digest"), str):
+            previous_deployment_digest = release["previous_deployment_digest"]
+        return rollout, nodes, rollout.previous_release_digest, previous_deployment_digest
+
+    def rollback_preview(self, deployment_id: str, rollout_id: str) -> Mapping[str, object]:
+        rollout, nodes, release_digest, deployment_digest = self._rollback_inputs(
+            deployment_id, rollout_id
+        )
+        request = {
+            "deployment_id": deployment_id,
+            "rollout_id": rollout_id,
+            "release_digest": release_digest,
+            "deployment_digest": deployment_digest,
+            "node_ids": list(nodes),
+            "base_commit": rollout.base_commit,
+            "rollout_plan_digest": rollout.plan_digest,
+        }
+        digest = self.create_action_plan("package.rollback", deployment_id, request)
+        return {
+            "digest": digest,
+            "state": "ready",
+            "deployment_id": deployment_id,
+            "release_digest": "sha256:" + release_digest,
+            "batches": [list(nodes)],
+            "canary_node": None,
+            "offline_pending": [],
+            "storage_bytes": 0,
+            "download_bytes": 0,
+        }
+
+    def rollback(
+        self,
+        deployment_id: str,
+        rollout_id: str,
+        plan_digest: str,
+        actor: str,
+        request_id: str,
+    ) -> Mapping[str, object]:
+        replay = self._progress_replay(plan_digest, "package.rollback")
+        if replay is not None:
+            return replay
+        request = self.consume_action_plan(plan_digest, "package.rollback", deployment_id)
+        if request.get("rollout_id") != rollout_id or request.get("deployment_id") != deployment_id:
+            raise ValueError("package rollback identity changed")
+        rollout, nodes, release_digest, deployment_digest = self._rollback_inputs(
+            deployment_id, rollout_id
+        )
+        if (
+            request.get("release_digest") != release_digest
+            or request.get("node_ids") != list(nodes)
+            or request.get("base_commit") != rollout.base_commit
+            or request.get("rollout_plan_digest") != rollout.plan_digest
+            or (deployment_digest is not None and request.get("deployment_digest") != deployment_digest)
+            or self._repository.head() != rollout.base_commit
+        ):
+            raise ValueError("package rollback preview is stale")
+        result = self._queue_package_operations(
+            action="package.rollback",
+            plan_digest=plan_digest,
+            request=request,
+            actor=actor,
+            request_id=request_id,
+        )
+        result = dict(result)
+        result["rollback_rollout_id"] = rollout_id
+        result["rollback_selector"] = "retained"
+        with self._sessions.begin() as session:
+            stored = session.get(PackageRollout, rollout_id)
+            if stored is not None:
+                stored.state = "rolling-back"
+                stored.updated_at = self._clock()
+        self.finish_action_plan(plan_digest, result=result)
+        return result
 
     def idempotency(
         self,

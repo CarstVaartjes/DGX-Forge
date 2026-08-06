@@ -35,6 +35,7 @@ class PackagePlanResponse:
             reclaim_bytes (Union[None, Unset, int]):
             release_digest (Union[None, Unset, str]):
             storage_bytes (Union[None, Unset, int]):
+            validation_id (Union[None, Unset, str]):
      """
 
     digest: str
@@ -48,6 +49,7 @@ class PackagePlanResponse:
     reclaim_bytes: Union[None, Unset, int] = UNSET
     release_digest: Union[None, Unset, str] = UNSET
     storage_bytes: Union[None, Unset, int] = UNSET
+    validation_id: Union[None, Unset, str] = UNSET
 
 
 
@@ -117,6 +119,12 @@ class PackagePlanResponse:
         else:
             storage_bytes = self.storage_bytes
 
+        validation_id: Union[None, Unset, str]
+        if isinstance(self.validation_id, Unset):
+            validation_id = UNSET
+        else:
+            validation_id = self.validation_id
+
 
         field_dict: dict[str, Any] = {}
 
@@ -142,6 +150,8 @@ class PackagePlanResponse:
             field_dict["release_digest"] = release_digest
         if storage_bytes is not UNSET:
             field_dict["storage_bytes"] = storage_bytes
+        if validation_id is not UNSET:
+            field_dict["validation_id"] = validation_id
 
         return field_dict
 
@@ -235,6 +245,16 @@ class PackagePlanResponse:
         storage_bytes = _parse_storage_bytes(d.pop("storage_bytes", UNSET))
 
 
+        def _parse_validation_id(data: object) -> Union[None, Unset, str]:
+            if data is None:
+                return data
+            if isinstance(data, Unset):
+                return data
+            return cast(Union[None, Unset, str], data)
+
+        validation_id = _parse_validation_id(d.pop("validation_id", UNSET))
+
+
         package_plan_response = cls(
             digest=digest,
             state=state,
@@ -247,6 +267,7 @@ class PackagePlanResponse:
             reclaim_bytes=reclaim_bytes,
             release_digest=release_digest,
             storage_bytes=storage_bytes,
+            validation_id=validation_id,
         )
 
         return package_plan_response

@@ -129,6 +129,7 @@ class PackagePlanResponse(StrictModel):
     digest: str = Field(pattern=_DIGEST)
     state: str = Field(min_length=1, max_length=64)
     candidate_id: str | None = Field(default=None, pattern=_CANDIDATE_ID)
+    validation_id: str | None = Field(default=None, pattern=_UUID)
     deployment_id: str | None = Field(default=None, pattern=_IDENTIFIER)
     release_digest: str | None = Field(default=None, pattern=_DIGEST)
     reclaim_bytes: int | None = Field(default=None, ge=0)

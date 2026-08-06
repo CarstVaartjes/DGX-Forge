@@ -213,6 +213,7 @@ class Settings:
     direct_fabric_cidrs: str
     package_helper_grant_private_key_path: Path | None = None
     package_helper_receipt_private_key_path: Path | None = None
+    workload_signer_socket_path: Path = Path("/run/dgx-workload-signer/signer.sock")
 
     @property
     def database_host(self) -> str | None:
@@ -456,6 +457,10 @@ class Settings:
             direct_fabric_cidrs=direct_fabric_cidrs,
             package_helper_grant_private_key_path=package_helper_grant_private_key_path,
             package_helper_receipt_private_key_path=package_helper_receipt_private_key_path,
+            workload_signer_socket_path=_absolute_root(
+                "DGX_WORKLOAD_SIGNER_SOCKET",
+                "/run/dgx-workload-signer/signer.sock",
+            ),
         )
 
 

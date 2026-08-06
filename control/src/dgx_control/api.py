@@ -1598,6 +1598,7 @@ def production_app() -> FastAPI:
     from .offline import OnlineLock
     from .operation_api import durable_operation_services
     from .orchestration import ReconciliationOrchestrator
+    from .package_publication import PackagePublicationService
     from .package_services import ProductionPackageProjectionService
     from .proposals import ProposalService
     from .reconcile import ChangeService, Reconciler
@@ -1616,6 +1617,7 @@ def production_app() -> FastAPI:
     from .update_grants import AdminActionGrantIssuer
     from .updates import UpdateOrchestrator
     from .worker_authority import RepositoryAuthorityService
+    from .workload_signer import UnixWorkloadSignerClient
     from .workload_trust import WorkloadTrustDelivery
 
     generation = GenerationStartupSettings.from_env_and_secrets()
@@ -1705,6 +1707,15 @@ def production_app() -> FastAPI:
             target_root=settings.workload_tuf_target_root,
             clock=clock,
         ),
+    )
+    package_services.install_publication(
+        PackagePublicationService(
+            candidate_loader=package_services.publication_candidate,
+            head=current_commit,
+            commit_eligible=commit_eligible,
+            publisher=UnixWorkloadSignerClient(settings.workload_signer_socket_path),
+            clock=clock,
+        )
     )
     if settings.admin_grant_private_key_path is None:
         raise RuntimeError("production admin grant private key is unavailable")

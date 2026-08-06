@@ -1368,6 +1368,8 @@ export interface components {
             state: string;
             /** Storage Bytes */
             storage_bytes?: number | null;
+            /** Validation Id */
+            validation_id?: string | null;
         };
         /** PackageProgress */
         PackageProgress: {

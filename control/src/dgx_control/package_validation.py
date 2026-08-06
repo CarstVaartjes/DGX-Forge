@@ -189,15 +189,25 @@ class ValidationController:
             if _get(candidate, name, default=True) is False or _get(lock, name, default=True) is False:
                 raise ValidationError("trust evidence is not verified")
         provenance = _get(lock, "provenance", default=())
-        if (
-            not isinstance(provenance, Sequence)
-            or isinstance(provenance, (str, bytes))
-            or not provenance
-        ):
+        if not isinstance(provenance, Sequence) or isinstance(provenance, (str, bytes)):
             raise ValidationError("provenance-missing")
+        records: list[object] = list(provenance)
+        # Checksum and similar component-scoped evidence lives on each
+        # immutable descriptor, while provenance records live at lock level.
+        # The policy vocabulary is intentionally generic; it must not assume a
+        # fixed model/runtime catalog.
+        for descriptor_name in ("components", "adapter"):
+            descriptors = _get(lock, descriptor_name, default=())
+            if descriptor_name == "adapter":
+                descriptors = (descriptors,)
+            if isinstance(descriptors, Sequence) and not isinstance(descriptors, (str, bytes)):
+                for descriptor in descriptors:
+                    evidence = _get(descriptor, "evidence", default=())
+                    if isinstance(evidence, Sequence) and not isinstance(evidence, (str, bytes)):
+                        records.extend(evidence)
         provenance_kinds = {
             str(_get(item, "kind"))
-            for item in provenance
+            for item in records
             if _get(item, "kind") is not None
         }
         missing_evidence = sorted(set(self._required_evidence(candidate_id, candidate)) - provenance_kinds)

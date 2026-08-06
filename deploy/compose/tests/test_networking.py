@@ -28,6 +28,9 @@ def _rendered() -> dict:
         "ADMIN_GRANT_PRIVATE_KEY_FILE": "/dev/null",
         "PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE": "/dev/null",
         "PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE": "/dev/null",
+        "WORKLOAD_RELEASES_KEY_FILE": "/dev/null",
+        "WORKLOAD_SNAPSHOT_KEY_FILE": "/dev/null",
+        "WORKLOAD_TIMESTAMP_KEY_FILE": "/dev/null",
         "ADMIN_GRANT_PUBLIC_KEY_FILE": "/dev/null",
         "AGENT_TUF_BOOTSTRAP_ROOT_FILE": "/dev/null",
         "CONTROL_IDENTITY_PATH": "/srv/dgx-forge/control-identity",
@@ -199,6 +202,27 @@ def test_worker_has_a_distinct_minimal_image_and_runtime_boundary() -> None:
     }
     socket_initializer = services["signer-runtime-init"]
     assert "os.chmod('/socket',0o710)" in " ".join(socket_initializer["command"])
+
+
+def test_workload_signer_isolated_from_api_and_platform_signer() -> None:
+    services = _rendered()["services"]
+    signer = services["workload-signer"]
+    assert signer["network_mode"] == "none"
+    assert signer["user"] == "10003:10001"
+    assert signer["cap_drop"] == ["ALL"]
+    assert {item["source"] for item in signer["secrets"]} == {
+        "workload-releases-key",
+        "workload-snapshot-key",
+        "workload-timestamp-key",
+    }
+    api = services["control-api"]
+    assert not {
+        "workload-releases-key",
+        "workload-snapshot-key",
+        "workload-timestamp-key",
+    } & {item["source"] for item in api["secrets"]}
+    assert services["workload-signer-runtime-init"]["network_mode"] == "none"
+    assert services["control-signer"]["secrets"] != signer["secrets"]
 
 
 def test_selected_services_reopen_the_root_owned_identity_directory_read_only() -> None:

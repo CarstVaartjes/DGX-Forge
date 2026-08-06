@@ -12,6 +12,9 @@ from dgx_control.models import (
     Observation,
     PackageActionPlan,
     PackageCandidate,
+    PackageObservation,
+    PackageResolution,
+    PackageValidationRun,
 )
 from dgx_control.models import AgentOperation as StoredAgentOperation
 from dgx_control.package_services import ProductionPackageProjectionService
@@ -322,3 +325,284 @@ def test_promotion_preview_and_apply_are_fenced_to_publication_service(tmp_path)
     }
     assert published == [("e" * 64, "admin")]
     assert service.promote(candidate_id, preview["digest"], "admin", "request-promote") == result
+
+
+def test_publication_candidate_reads_lock_from_git_and_validation_from_sql(tmp_path) -> None:
+    engine = build_engine(f"sqlite:///{tmp_path / 'plans.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = session_factory(engine)
+    root = RepositoryService(Path(__file__).resolve().parents[2])
+    release_digest = "29f0f3e1c16dcac6884a18abce08840b06c233394a23a2a56204b2ea10434f3a"
+    candidate_id = "00000000-0000-4000-8000-000000000007"
+    now = datetime.now(UTC)
+    with sessions.begin() as session:
+        session.add(
+            PackageCandidate(
+                id=candidate_id,
+                family_id="ds4-deepseek",
+                upstream_identity_digest="a" * 64,
+                metadata_digest="b" * 64,
+                upstream_version="2026.08.legacy-ds4",
+                source_provider="git",
+                source_reference="ds4",
+                state="resolved",
+                summary={
+                    "evidence": {
+                        "lock_digest": release_digest,
+                        "provenance_digest": "b" * 64,
+                        "sbom_digest": "c" * 64,
+                        "schema_version": 1,
+                    }
+                },
+                discovered_by="test",
+                first_seen_at=now,
+                last_seen_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        resolution_id = "00000000-0000-4000-8000-000000000008"
+        session.add(
+            PackageResolution(
+                id=resolution_id,
+                candidate_id=candidate_id,
+                resolver_id="test",
+                resolver_schema_version=1,
+                state="resolved",
+                release_digest=release_digest,
+                resolved_by="test",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add(
+            PackageValidationRun(
+                id="00000000-0000-4000-8000-000000000009",
+                candidate_id=candidate_id,
+                resolution_id=resolution_id,
+                validation_kind="artifact",
+                release_digest=release_digest,
+                policy_digest="d" * 64,
+                fleet_digest="e" * 64,
+                state="passed",
+                actor="test",
+                evidence={"artifact": "verified"},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    service = ProductionPackageProjectionService(root, sessions)
+    value = service.publication_candidate(candidate_id)
+    assert value["release_digest"] == release_digest
+    assert isinstance(value["lock_bytes"], bytes)
+    assert value["evidence"]["provenance_digest"] == "b" * 64
+    assert value["validation"]["state"] == "passed"
+
+
+def test_validation_preview_persists_a_digest_bound_run(tmp_path) -> None:
+    engine = build_engine(f"sqlite:///{tmp_path / 'validation.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = session_factory(engine)
+    candidate_id = "00000000-0000-4000-8000-000000000010"
+    release_digest = "29f0f3e1c16dcac6884a18abce08840b06c233394a23a2a56204b2ea10434f3a"
+    now = datetime.now(UTC)
+    with sessions.begin() as session:
+        session.add(
+            PackageCandidate(
+                id=candidate_id,
+                family_id="ds4-deepseek",
+                upstream_identity_digest="a" * 64,
+                metadata_digest="b" * 64,
+                upstream_version="2026.08.legacy-ds4",
+                source_provider="git",
+                source_reference="ds4",
+                state="resolved",
+                summary={
+                    "evidence": {
+                        "lock_digest": release_digest,
+                        "provenance_digest": "b" * 64,
+                        "sbom_digest": "c" * 64,
+                    }
+                },
+                discovered_by="test",
+                first_seen_at=now,
+                last_seen_at=now,
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add(
+            PackageResolution(
+                id="00000000-0000-4000-8000-000000000011",
+                candidate_id=candidate_id,
+                resolver_id="test",
+                resolver_schema_version=1,
+                state="resolved",
+                release_digest=release_digest,
+                resolved_by="test",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        session.add(
+            AgentNode(
+                node_id="spk_" + "1" * 32,
+                state="active",
+                capabilities=["package-abi-v1", "package-backend-oci-v1"],
+                architecture="linux-arm64",
+            )
+        )
+        session.add(
+            Observation(
+                node_id="spk_" + "1" * 32,
+                kind="health",
+                payload={
+                    "status": "healthy",
+                    "authenticated": True,
+                    "online": True,
+                    "architecture": "linux-arm64",
+                    "operating_system": "linux",
+                    "memory_available_bytes": 200_000_000_000,
+                    "disk_available_bytes": 200_000_000_000,
+                    "storage_available_bytes": 200_000_000_000,
+                },
+                observed_at=now,
+            )
+        )
+
+    service = ProductionPackageProjectionService(
+        RepositoryService(Path(__file__).resolve().parents[2]),
+        sessions,
+        fleet=lambda: {
+            "nodes": [
+                {
+                    "node_id": "spk_" + "1" * 32,
+                    "healthy": True,
+                    "agent_online": True,
+                    "authenticated": True,
+                    "architecture": "linux-arm64",
+                    "operating_system": "linux",
+                    "memory_available_bytes": 200_000_000_000,
+                    "disk_available_bytes": 200_000_000_000,
+                    "storage_available_bytes": 200_000_000_000,
+                    "capabilities": ["package-abi-v1", "package-backend-oci-v1"],
+                }
+            ]
+        },
+        validation_runner=lambda _request: {
+            "status": "passed",
+            "evidence": {
+                "checksum": "a" * 64,
+                "provenance": "b" * 64,
+                "artifact": "c" * 64,
+                "health": "d" * 64,
+                "inference": "e" * 64,
+            },
+        },
+    )
+
+    preview = service.validation_preview(candidate_id)
+
+    assert preview["candidate_id"] == candidate_id
+    assert preview["release_digest"] == "sha256:" + release_digest
+    assert preview["state"] == "ready"
+    assert preview["digest"].startswith("sha256:")
+    result = service.validate(
+        candidate_id, preview["digest"], "admin", "request-validation"
+    )
+    assert result["state"] == "passed"
+    with sessions() as session:
+        run = session.get(PackageValidationRun, preview["validation_id"])
+        assert run is not None
+        assert run.state == "passed"
+        assert run.release_digest == release_digest
+        assert run.progress["total"] == 2
+
+
+def test_rollback_preview_binds_retained_rollout_predecessor(tmp_path) -> None:
+    engine = build_engine(f"sqlite:///{tmp_path / 'rollback.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = session_factory(engine)
+    node_id = "spk_" + "6" * 32
+    queued: list[tuple[str, str, dict[str, object]]] = []
+
+    class Jobs:
+        def enqueue_in_session(self, session, job_id, node_id, operation, base_commit, payload, *, operation_id):
+            del session, job_id, base_commit
+            queued.append((node_id, operation, dict(payload)))
+            return type("Stored", (), {"id": operation_id})()
+
+        def notify_available(self):
+            return None
+
+    with sessions.begin() as session:
+        session.add(
+            AgentNode(
+                node_id=node_id,
+                state="active",
+                capabilities=["package-abi-v1"],
+                architecture="linux-arm64",
+            )
+        )
+        session.add(
+            PackageObservation(
+                node_id=node_id,
+                deployment_id="ds4-deepseek-single",
+                release_digest="c" * 64,
+                observation_digest="e" * 64,
+                state="active",
+                summary={"deployment_digest": "d" * 64},
+                observed_at=datetime.now(UTC),
+            )
+        )
+
+    service = ProductionPackageProjectionService(
+        RepositoryService(Path(__file__).resolve().parents[2]),
+        sessions,
+        fleet=lambda: {
+            "nodes": [
+                {
+                    "id": node_id,
+                    "healthy": True,
+                    "agent_state": "active",
+                    "agent_online": True,
+                    "memory_available_bytes": 2_000_000_000_000,
+                    "disk_available_bytes": 2_000_000_000_000,
+                    "labels": {},
+                    "capabilities": ["package-abi-v1"],
+                    "architecture": "arm64",
+                    "operating_system": "linux",
+                    "current_packages": {
+                        "ds4-deepseek-single": {
+                            "release_digest": "c" * 64,
+                            "deployment_digest": "d" * 64,
+                        }
+                    },
+                }
+            ]
+        },
+        agent_jobs=Jobs(),
+        package_trust=lambda _release, _lock, _commit: True,
+    )
+    rollout_preview = service.rollout_preview("ds4-deepseek-single")
+    rollout = service.rollout(
+        "ds4-deepseek-single", rollout_preview["digest"], "admin", "request-rollout"
+    )
+
+    rollback_preview = service.rollback_preview(
+        "ds4-deepseek-single", rollout["id"]
+    )
+
+    assert rollback_preview["state"] == "ready"
+    assert rollback_preview["release_digest"] == "sha256:" + "c" * 64
+    result = service.rollback(
+        "ds4-deepseek-single",
+        rollout["id"],
+        rollback_preview["digest"],
+        "admin",
+        "request-rollback",
+    )
+    assert result["state"] == "planned"
+    assert queued[-1][1] == "package.rollback"
+    assert queued[-1][2]["release_digest"] == "c" * 64
+    assert queued[-1][2]["deployment_digest"] == "d" * 64

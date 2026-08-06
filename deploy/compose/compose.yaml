@@ -37,6 +37,9 @@ x-api-environment: &api-environment
   DGX_AGENT_ARTIFACT_ROOT: /state/agent-artifacts
   DGX_AGENT_TUF_METADATA_ROOT: /agent-tuf/metadata
   DGX_AGENT_TUF_TARGET_ROOT: /agent-tuf/targets
+  DGX_WORKLOAD_TUF_METADATA_ROOT: /workload-tuf/metadata
+  DGX_WORKLOAD_TUF_TARGET_ROOT: /workload-tuf/targets
+  DGX_WORKLOAD_SIGNER_SOCKET: /run/dgx-workload-signer/signer.sock
   DGX_WORKER_API_TOKEN_FILE: /run/secrets/worker-api-token
   DGX_ADMIN_GRANT_PRIVATE_KEY_FILE: /run/dgx-api-secrets/admin-grant-private-key.pem
   DGX_PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE: /run/secrets/package-helper-grant-private-key
@@ -161,6 +164,8 @@ services:
       - ${REPOSITORY_PATH:?set repository path}:/repository
       - control-state:/state
       - agent-tuf-publication:/agent-tuf
+      - workload-tuf-publication:/workload-tuf:ro
+      - workload-signer-socket:/run/dgx-workload-signer:ro
       - route-publications:/routes:ro
       - api-admin-grant-runtime:/run/dgx-api-secrets:ro
       - type: bind
@@ -174,6 +179,7 @@ services:
     depends_on:
       postgres: {condition: service_healthy}
       api-admin-grant-init: {condition: service_completed_successfully}
+      workload-signer: {condition: service_healthy}
     healthcheck:
       test: [CMD, python, -m, dgx_control.healthcheck]
       interval: 10s
@@ -209,6 +215,65 @@ services:
       postgres: {condition: service_healthy}
       route-publication-init: {condition: service_completed_successfully}
       control-signer: {condition: service_healthy}
+
+  workload-signer-runtime-init:
+    image: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
+    restart: "no"
+    logging: *bounded-logging
+    user: "0:0"
+    read_only: true
+    network_mode: none
+    cap_drop: [ALL]
+    cap_add: [CHOWN, FOWNER]
+    security_opt: [no-new-privileges:true]
+    command:
+      - python
+      - -c
+      - >-
+        import os,pathlib;
+        os.chown('/socket',10003,10001);
+        os.chmod('/socket',0o710);
+        pathlib.Path('/publication/metadata').mkdir(mode=0o750,parents=True,exist_ok=True);
+        pathlib.Path('/publication/targets').mkdir(mode=0o750,parents=True,exist_ok=True);
+        [os.chown(pathlib.Path('/publication',n),10003,10001) for n in ('metadata','targets')];
+        [os.chmod(pathlib.Path('/publication',n),0o750) for n in ('metadata','targets')]
+    volumes:
+      - workload-signer-socket:/socket
+      - workload-tuf-publication:/publication
+
+  workload-signer:
+    image: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
+    restart: unless-stopped
+    logging: *bounded-logging
+    command: [python, -m, dgx_control.workload_signer]
+    read_only: true
+    user: "10003:10001"
+    network_mode: none
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      DGX_WORKLOAD_SIGNER_SOCKET: /run/dgx-workload-signer/signer.sock
+      DGX_WORKLOAD_TUF_METADATA_ROOT: /workload-tuf/metadata
+      DGX_WORKLOAD_TUF_TARGET_ROOT: /workload-tuf/targets
+      DGX_WORKLOAD_REPOSITORY_PATH: /repository
+      DGX_DEPLOYMENT_BRANCH: ${DEPLOYMENT_BRANCH:-deploy}
+      DGX_WORKLOAD_SIGNER_PEER_UID: "10001"
+      DGX_WORKLOAD_RELEASES_KEY_FILE: /run/secrets/workload-releases-key
+      DGX_WORKLOAD_SNAPSHOT_KEY_FILE: /run/secrets/workload-snapshot-key
+      DGX_WORKLOAD_TIMESTAMP_KEY_FILE: /run/secrets/workload-timestamp-key
+    secrets: [workload-releases-key, workload-snapshot-key, workload-timestamp-key]
+    volumes:
+      - ${REPOSITORY_PATH:?set repository path}:/repository:ro
+      - workload-tuf-publication:/workload-tuf
+      - workload-signer-socket:/run/dgx-workload-signer
+    tmpfs: [/tmp]
+    depends_on:
+      workload-signer-runtime-init: {condition: service_completed_successfully}
+    healthcheck:
+      test: [CMD, python, -c, "import os,stat; assert stat.S_ISSOCK(os.stat('/run/dgx-workload-signer/signer.sock').st_mode)"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
 
   control-signer:
     image: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
@@ -421,6 +486,12 @@ secrets:
     file: "${PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE:?set workload package helper grant private key file}"
   package-helper-receipt-private-key:
     file: "${PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE:?set workload package helper receipt private key file}"
+  workload-releases-key:
+    file: "${WORKLOAD_RELEASES_KEY_FILE:?set workload TUF releases signing key file}"
+  workload-snapshot-key:
+    file: "${WORKLOAD_SNAPSHOT_KEY_FILE:?set workload TUF snapshot signing key file}"
+  workload-timestamp-key:
+    file: "${WORKLOAD_TIMESTAMP_KEY_FILE:?set workload TUF timestamp signing key file}"
 
 networks:
   ingress: {}
@@ -447,4 +518,6 @@ volumes:
   update-signer-socket: {}
   signer-tuf-verifier: {}
   agent-tuf-publication: {}
+  workload-tuf-publication: {}
+  workload-signer-socket: {}
   api-admin-grant-runtime: {}
