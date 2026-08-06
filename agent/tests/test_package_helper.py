@@ -499,7 +499,7 @@ def test_launcher_cleans_failed_transient_unit(tmp_path: Path) -> None:
             self.cleaned = []
 
         def run(self, argv, *, pass_fds, timeout_seconds):
-            return 1
+            raise HelperProtocolError("package backend launch timed out")
 
         def cleanup(self, unit_name):
             self.cleaned.append(unit_name)
@@ -509,7 +509,7 @@ def test_launcher_cleans_failed_transient_unit(tmp_path: Path) -> None:
         pytest.skip("snapshot ownership test requires an unprivileged test UID")
     launcher = SystemdBackendLauncher(generations, runner=runner)
 
-    with pytest.raises(HelperProtocolError, match="launch failed"):
+    with pytest.raises(HelperProtocolError, match="timed out"):
         launcher.launch(
             request,
             SandboxPolicy(os.geteuid(), os.getegid(), allowed_devices=("nvidia0",)),
