@@ -228,13 +228,28 @@ class CompatibilityEvaluator:
                 _get(node, "cuda", "cuda_version"), minimum_cuda
             ):
                 reasons.append("cuda-incompatible")
-            backends = set(_tuple_strings(_get(node, "backends", "available_backends", default=())))
+            backends = set(
+                _tuple_strings(
+                    _get(node, "backends", "available_backends", default=())
+                )
+            )
+            if not backends:
+                # Agent observations advertise the stable capability token;
+                # older projections do not have a separate backend field.
+                backends = {
+                    capability.removeprefix("package-backend-").removesuffix("-v1")
+                    for capability in capabilities
+                    if capability.startswith("package-backend-")
+                    and capability.endswith("-v1")
+                }
             if required_backends and not required_backends.issubset(backends):
                 reasons.append("backend-missing")
             if adapter_abi is not None:
                 adapter_abis = _get(node, "adapter_abis", "supported_adapter_abis", default=())
                 if isinstance(adapter_abis, int):
                     adapter_abis = (adapter_abis,)
+                if not adapter_abis and "package-abi-v1" in capabilities:
+                    adapter_abis = (1,)
                 if adapter_abi not in set(adapter_abis):
                     reasons.append("adapter-abi-incompatible")
             if reasons:

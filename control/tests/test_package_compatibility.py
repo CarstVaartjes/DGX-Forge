@@ -77,3 +77,35 @@ def test_evaluator_rejects_missing_fleet_and_reports_all_reasons() -> None:
         "capability-missing",
     }
     assert report.compatible_node_ids == ()
+
+
+def test_evaluator_derives_backend_and_abi_from_authenticated_agent_capabilities() -> None:
+    lock = {
+        **LOCK,
+        "compatibility": {
+            **LOCK["compatibility"],
+            "required_capabilities": [
+                "package-abi-v1",
+                "package-backend-native-v1",
+            ],
+            "backends": ["native"],
+        },
+    }
+    fleet = {
+        "spk_" + "4" * 32: {
+            "architecture": "linux-arm64",
+            "operating_system": "ubuntu-24.04",
+            "memory_bytes": 400,
+            "storage_available_bytes": 500,
+            "cuda": "12.6",
+            "driver": "550.76",
+            "capabilities": ["package-abi-v1", "package-backend-native-v1"],
+            "authenticated": True,
+            "online": True,
+            "healthy": True,
+        }
+    }
+
+    report = CompatibilityEvaluator().evaluate(lock, fleet)
+
+    assert report.compatible_node_ids == ("spk_" + "4" * 32,)
