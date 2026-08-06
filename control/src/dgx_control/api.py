@@ -1582,6 +1582,7 @@ def production_app() -> FastAPI:
     )
     from .audit import SqlAuditStore
     from .code_host import RepositoryCodeHost
+    from .catalog_seeds import seed_standard_families
     from .dashboard import DashboardService
     from .db import build_engine, session_factory
     from .desired_state import (
@@ -1656,6 +1657,12 @@ def production_app() -> FastAPI:
     )
     if generation.startup_mode is StartupMode.PRESELECTION:
         return create_preselection_app(generation_readiness)
+
+    actual_revision = database_revision()
+    if actual_revision != generation.database_revision:
+        raise RuntimeError("selected database revision does not match generation")
+    with sessions.begin() as session:
+        seed_standard_families(session, clock())
 
     online_lock = OnlineLock(settings.state_path / "offline.lock")
     online_lock.__enter__()

@@ -141,7 +141,7 @@ git commit -m "feat: add local recipe catalog tables"
 **Files:**
 - Create: `control/src/dgx_control/catalog_seeds.py`
 - Create: `control/tests/test_catalog_seeds.py`
-- Modify: `control/src/dgx_control/runtime_init.py`
+- Modify: `control/src/dgx_control/api.py`
 
 **Interfaces:**
 - Produces: `seed_standard_families(session: Session, now: datetime) -> SeedResult`
@@ -176,14 +176,14 @@ Run seeding in the control initialization transaction after Alembic head is veri
 
 - [ ] **Step 5: Verify seed and startup behavior**
 
-Run: `uv run --project control pytest control/tests/test_catalog_seeds.py control/tests/test_runtime_init.py -v`
+Run: `uv run --project control pytest control/tests/test_catalog_seeds.py control/tests/test_generation_readiness.py -v`
 
 Expected: PASS for empty, already-seeded, user-edited, interrupted-transaction, and concurrent-start cases.
 
 - [ ] **Step 6: Commit seeds**
 
 ```bash
-git add control/src/dgx_control/catalog_seeds.py control/src/dgx_control/runtime_init.py control/tests
+git add control/src/dgx_control/catalog_seeds.py control/src/dgx_control/api.py control/tests
 git commit -m "feat: seed standard recipe families"
 ```
 
