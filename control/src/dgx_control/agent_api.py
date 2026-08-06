@@ -71,6 +71,11 @@ _TUF_PLATFORM_TARGET_NAME = re.compile(
     r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)/"
     r"[0-9a-f]{64}\.json\Z"
 )
+_WORKLOAD_TUF_METADATA_NAME = re.compile(
+    r"(?:[1-9][0-9]*\.root|timestamp|snapshot|targets|families|releases|"
+    r"[1-9][0-9]*\.(?:targets|families|releases))\.json\Z"
+)
+_WORKLOAD_TUF_TARGET_NAME = re.compile(r"releases/[0-9a-f]{64}\.json\Z")
 
 
 class _ActorDependency(Protocol):
@@ -91,10 +96,14 @@ class AgentApiServices:
     artifact_root: Path
     tuf_metadata_root: Path = Path("/state/agent-tuf/metadata")
     tuf_target_root: Path = Path("/state/agent-tuf/targets")
+    workload_tuf_metadata_root: Path = Path("/state/workload-tuf/metadata")
+    workload_tuf_target_root: Path = Path("/state/workload-tuf/targets")
     max_artifact_bytes: int = _MAX_ARTIFACT_BYTES
     max_range_bytes: int = _MAX_RANGE_BYTES
     max_tuf_metadata_bytes: int = _MAX_TUF_METADATA_BYTES
     max_tuf_target_bytes: int = _MAX_TUF_TARGET_BYTES
+    max_workload_tuf_metadata_bytes: int = 2 * 1024 * 1024
+    max_workload_tuf_target_bytes: int = 1024 * 1024
 
 
 class EnrollmentRateLimiter:
@@ -1142,6 +1151,47 @@ def install_agent_routes(
             name,
             required.max_tuf_target_bytes,
         )
+        return Response(
+            content=raw,
+            media_type="application/octet-stream",
+            headers={"Cache-Control": "no-store", "Content-Length": str(len(raw))},
+        )
+
+    @agent.get("/workload-tuf/metadata/{name}")
+    def workload_tuf_metadata(name: str, request: Request) -> Response:
+        """Deliver only workload trust metadata over the node mTLS boundary."""
+        _scope_identity(request)
+        required = _require_services(services)
+        _authenticated_identity(request, required)
+        if _WORKLOAD_TUF_METADATA_NAME.fullmatch(name) is None:
+            raise HTTPException(status_code=404, detail="workload TUF file not found")
+        raw = _read_tuf_file(
+            required.workload_tuf_metadata_root,
+            name,
+            required.max_workload_tuf_metadata_bytes,
+        )
+        return Response(
+            content=raw,
+            media_type="application/json",
+            headers={"Cache-Control": "no-store", "Content-Length": str(len(raw))},
+        )
+
+    @agent.get("/workload-tuf/targets/{name:path}")
+    def workload_tuf_target(name: str, request: Request) -> Response:
+        """Deliver one digest-addressed workload lock, never model payloads."""
+        _scope_identity(request)
+        required = _require_services(services)
+        _authenticated_identity(request, required)
+        if _WORKLOAD_TUF_TARGET_NAME.fullmatch(name) is None:
+            raise HTTPException(status_code=404, detail="workload TUF target not found")
+        digest = name.removeprefix("releases/").removesuffix(".json")
+        raw = _read_tuf_file(
+            required.workload_tuf_target_root,
+            digest,
+            required.max_workload_tuf_target_bytes,
+        )
+        if hashlib.sha256(raw).hexdigest() != digest:
+            raise HTTPException(status_code=404, detail="workload TUF target not found")
         return Response(
             content=raw,
             media_type="application/octet-stream",

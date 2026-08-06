@@ -205,6 +205,8 @@ class Settings:
     agent_artifact_root: Path
     agent_tuf_metadata_root: Path
     agent_tuf_target_root: Path
+    workload_tuf_metadata_root: Path
+    workload_tuf_target_root: Path
     agent_proxy_auth: bytes
     worker_api_token: bytes
     management_cidrs: str
@@ -376,10 +378,18 @@ class Settings:
         agent_tuf_target_root = _absolute_root(
             "DGX_AGENT_TUF_TARGET_ROOT", "/state/agent-tuf/targets"
         )
+        workload_tuf_metadata_root = _absolute_root(
+            "DGX_WORKLOAD_TUF_METADATA_ROOT", "/state/workload-tuf/metadata"
+        )
+        workload_tuf_target_root = _absolute_root(
+            "DGX_WORKLOAD_TUF_TARGET_ROOT", "/state/workload-tuf/targets"
+        )
         agent_roots = (
             agent_artifact_root,
             agent_tuf_metadata_root,
             agent_tuf_target_root,
+            workload_tuf_metadata_root,
+            workload_tuf_target_root,
         )
         if any(
             left == right
@@ -426,6 +436,8 @@ class Settings:
             agent_artifact_root=agent_artifact_root,
             agent_tuf_metadata_root=agent_tuf_metadata_root,
             agent_tuf_target_root=agent_tuf_target_root,
+            workload_tuf_metadata_root=workload_tuf_metadata_root,
+            workload_tuf_target_root=workload_tuf_target_root,
             agent_proxy_auth=agent_proxy_auth,
             worker_api_token=worker_api_token,
             management_cidrs=management_cidrs,

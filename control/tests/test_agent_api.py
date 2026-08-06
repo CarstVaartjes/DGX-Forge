@@ -168,12 +168,16 @@ def agent_system(tmp_path):
         artifact_root=tmp_path / "artifacts",
         tuf_metadata_root=tmp_path / "tuf-metadata",
         tuf_target_root=tmp_path / "tuf-targets",
+        workload_tuf_metadata_root=tmp_path / "workload-tuf-metadata",
+        workload_tuf_target_root=tmp_path / "workload-tuf-targets",
         max_tuf_metadata_bytes=128,
         max_tuf_target_bytes=128,
     )
     services.artifact_root.mkdir()
     services.tuf_metadata_root.mkdir()
     services.tuf_target_root.mkdir()
+    services.workload_tuf_metadata_root.mkdir()
+    services.workload_tuf_target_root.mkdir()
     codec = TokenCodec(b"k" * 32)
     audits = MemoryAuditStore()
     app = create_app(jobs=Jobs(), tokens=codec, audits=audits, fleet=dict, now=lambda: 0, agent=services, trusted_agent_proxy_auth=b"p" * 32)
@@ -1530,6 +1534,39 @@ def test_authenticated_agents_can_fetch_bounded_platform_tuf_files(
     assert target_response.headers["content-type"] == "application/octet-stream"
     assert client.get("/agent/v1/tuf/metadata/timestamp.json").status_code == 401
     assert client.get(f"/agent/v1/tuf/targets/{target_name}").status_code == 401
+
+
+def test_authenticated_agents_can_fetch_only_signed_workload_tuf_targets(
+    agent_system,
+) -> None:
+    client, services, _, _ = agent_system
+    raw = b'{"schema_version":1,"workload":"unknown"}'
+    digest = hashlib.sha256(raw).hexdigest()
+    services.workload_tuf_metadata_root.mkdir(parents=True, exist_ok=True)
+    services.workload_tuf_target_root.mkdir(parents=True, exist_ok=True)
+    (services.workload_tuf_metadata_root / "timestamp.json").write_bytes(
+        b'{"signed":{"_type":"timestamp"}}'
+    )
+    (services.workload_tuf_target_root / digest).write_bytes(raw)
+
+    metadata = client.get(
+        "/agent/v1/workload-tuf/metadata/timestamp.json",
+        headers=agent_headers(NODE_A, "serial-a"),
+    )
+    target = client.get(
+        f"/agent/v1/workload-tuf/targets/releases/{digest}.json",
+        headers=agent_headers(NODE_A, "serial-a"),
+    )
+    assert metadata.status_code == 200
+    assert metadata.content == b'{"signed":{"_type":"timestamp"}}'
+    assert target.status_code == 200
+    assert target.content == raw
+    assert client.get(
+        "/agent/v1/workload-tuf/targets/platform/releases/1.2.3/"
+        + "a" * 64
+        + ".json",
+        headers=agent_headers(NODE_A, "serial-a"),
+    ).status_code == 404
 
 
 @pytest.mark.parametrize(
