@@ -153,8 +153,6 @@ jobs:
     name: Validate container release tag
     if: >-
       needs.workload-package-evidence.result == 'success' &&
-      hashFiles('scripts/accept-workload-packages') != '' &&
-      hashFiles('scripts/accept-workload-package-failures') != '' &&
       vars.DGX_CONTAINER_RELEASES_ENABLED == 'true' &&
       vars.DGX_PLATFORM_RELEASES_ENABLED == 'true' &&
       github.event_name == 'push' &&
