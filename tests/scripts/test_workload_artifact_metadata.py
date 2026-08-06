@@ -87,6 +87,33 @@ def test_schema_and_parser_accept_the_same_request_and_result() -> None:
     module.WorkloadArtifactResult.parse(result_document, request=request)
 
 
+@pytest.mark.parametrize("segment", (".", ".."))
+def test_schema_and_parser_both_reject_dot_path_segments(segment: str) -> None:
+    module = _load_script()
+    document = _request_document()
+    document["context"] = f"adapters/{segment}/ds4"
+    document["dockerfile"] = f"adapters/{segment}/ds4/Dockerfile"
+    schema = json.loads(SCHEMA.read_text())
+
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(document, schema)
+    with pytest.raises(ValueError, match="path"):
+        module.WorkloadArtifactBuild.parse(document)
+
+
+@pytest.mark.parametrize("value", (0, 1))
+def test_schema_and_parser_both_require_real_attestation_booleans(value: int) -> None:
+    module = _load_script()
+    document = _request_document()
+    document["attestations"]["provenance"] = value
+    schema = json.loads(SCHEMA.read_text())
+
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(document, schema)
+    with pytest.raises(ValueError, match="attestations"):
+        module.WorkloadArtifactBuild.parse(document)
+
+
 @pytest.mark.parametrize("field", ["build_args", "credentials", "secrets", "token"])
 def test_request_rejects_unreviewed_or_secret_bearing_inputs(field: str) -> None:
     module = _load_script()

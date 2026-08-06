@@ -241,6 +241,11 @@ jobs:
                   for field in fields[1:]:
                       if not field.startswith("--"):
                           break
+                      network = field.lower()
+                      if network.startswith("--network"):
+                          if network != "--network=none":
+                              raise SystemExit("RUN network overrides are forbidden")
+                          continue
                       if not field.startswith("--mount="):
                           continue
                       options = field.removeprefix("--mount=").split(",")

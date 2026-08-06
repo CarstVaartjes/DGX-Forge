@@ -44,7 +44,8 @@ COMMIT = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 TARGET = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
 SOURCE_PATH = re.compile(
-    r"^adapters/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
+    r"^adapters/(?!(?:\.{1,2})(?:/|$))[A-Za-z0-9_.-]+"
+    r"(?:/(?!(?:\.{1,2})(?:/|$))[A-Za-z0-9_.-]+)*$"
 )
 OUTPUT_REPOSITORY = re.compile(
     r"^ghcr\.io/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
@@ -133,7 +134,10 @@ class WorkloadArtifactBuild:
         attestations = _exact_mapping(
             data["attestations"], ATTESTATION_FIELDS, label="attestations"
         )
-        if attestations != {"provenance": True, "sbom": True}:
+        if (
+            attestations["provenance"] is not True
+            or attestations["sbom"] is not True
+        ):
             raise ValueError("attestations must require SBOM and provenance")
 
         context = _safe_source_path(data["context"], label="context")

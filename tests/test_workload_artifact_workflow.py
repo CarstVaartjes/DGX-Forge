@@ -1,7 +1,12 @@
 import json
+import os
 import re
 import subprocess
+import sys
+import textwrap
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/workload-artifacts.yml"
@@ -186,6 +191,7 @@ def test_exact_context_and_declared_base_images_are_verified_before_build() -> N
     assert "Dockerfile frontend directives are forbidden" in source
     assert "external COPY --from inputs are forbidden" in source
     assert "external RUN --mount from inputs are forbidden" in source
+    assert "RUN network overrides are forbidden" in source
     assert "remote ADD inputs are forbidden" in source
     assert "undeclared base image" in source
     assert "declared base images must exactly match" in source
@@ -196,6 +202,39 @@ def test_exact_context_and_declared_base_images_are_verified_before_build() -> N
         "Build digest-only OCI artifact"
     )
     assert "build-args:" not in build
+
+
+@pytest.mark.parametrize(
+    "run_instruction",
+    (
+        "RUN --network=default curl https://example.invalid/payload",
+        "RUN --network=defa\\\nult curl https://example.invalid/payload",
+    ),
+)
+def test_dockerfile_validator_rejects_run_network_override(
+    tmp_path: Path, run_instruction: str
+) -> None:
+    source = workflow_step("publish-workload-artifact", "Verify exact source context")
+    marker = '          python - "$dockerfile_path" <<\'PY\'\n'
+    script = source.split(marker, maxsplit=1)[1].split("\n          PY", maxsplit=1)[0]
+    script = textwrap.dedent(script)
+    base = f"nvcr.io/nvidia/cuda@sha256:{'a' * 64}"
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(f"FROM {base} AS runtime\n{run_instruction}\n")
+    env = os.environ.copy()
+    env["DECLARED_BASE_IMAGES"] = json.dumps([base])
+
+    result = subprocess.run(
+        [sys.executable, "-", str(dockerfile)],
+        input=script,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode != 0
+    assert "RUN network overrides are forbidden" in result.stderr
 
 
 def test_result_rejects_manifest_or_attestation_evidence_mismatch() -> None:
