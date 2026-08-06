@@ -58,7 +58,7 @@ def upgrade() -> None:
         sa.Column("owner_kind", sa.String(24), nullable=False), sa.Column("owner_id", sa.String(36), nullable=False), sa.Column("state", sa.String(16), nullable=False), sa.Column("plan_digest", sa.String(64), nullable=False), sa.Column("created_at", sa.DateTime(timezone=True), nullable=False), sa.Column("released_at", sa.DateTime(timezone=True)),
         sa.CheckConstraint("kind IN ('disk','host-memory','gpu-memory','port')", name="ck_reservations_kind"), sa.CheckConstraint("state IN ('active','released','expired') AND amount_bytes>=0", name="ck_reservations_state"), sa.CheckConstraint(digest("plan_digest"), name="ck_reservations_digest"))
     op.create_index("ix_reservations_node_state", "resource_reservations", ["node_id", "state"])
-    op.create_index("uq_active_node_resource", "resource_reservations", ["node_id", "kind", "resource_key"], unique=True, postgresql_where=sa.text("state='active'"), sqlite_where=sa.text("state='active'"))
+    op.create_index("uq_active_node_port", "resource_reservations", ["node_id", "kind", "resource_key"], unique=True, postgresql_where=sa.text("state='active' AND kind='port'"), sqlite_where=sa.text("state='active' AND kind='port'"))
 
 
 def downgrade() -> None:
