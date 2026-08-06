@@ -43,6 +43,9 @@ ARCHITECTURES = frozenset({"linux/amd64", "linux/arm64"})
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 TARGET = re.compile(r"^[a-z][a-z0-9_.-]{0,127}$")
+SOURCE_PATH = re.compile(
+    r"^adapters/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*$"
+)
 OUTPUT_REPOSITORY = re.compile(
     r"^ghcr\.io/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*"
     r"(?:/[a-z0-9]+(?:(?:[._]|__|-+)[a-z0-9]+)*){1,7}$"
@@ -89,7 +92,12 @@ def _exact_string(value: object, pattern: re.Pattern[str], *, label: str) -> str
 
 
 def _safe_source_path(value: object, *, label: str) -> PurePosixPath:
-    if not isinstance(value, str) or not value or len(value) > 512 or "\\" in value:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 512
+        or SOURCE_PATH.fullmatch(value) is None
+    ):
         raise ValueError(f"{label} path is invalid")
     path = PurePosixPath(value)
     if (

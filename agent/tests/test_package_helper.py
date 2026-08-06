@@ -435,7 +435,7 @@ def test_concrete_launcher_uses_sealed_content_and_fixed_systemd_sandbox(
     assert "--property=CapabilityBoundingSet=" in argv
     assert "--property=AmbientCapabilities=" in argv
     assert "--property=DevicePolicy=closed" in argv
-    assert "--property=PrivateNetwork=yes" in argv
+    assert argv.count("--property=PrivateNetwork=yes") == 1
     assert "--property=RuntimeMaxSec=60" in argv
     assert len(pass_fds) == 3
     mount_source = f"/proc/{os.getpid()}/fd/{pass_fds[2]}"
