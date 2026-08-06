@@ -267,6 +267,49 @@ def test_repair_preview_and_apply_queues_package_repair(tmp_path) -> None:
     assert queued[0][1] == "package.repair"
 
 
+def test_inventory_projects_resource_envelope_from_signed_release_not_agent_summary(tmp_path) -> None:
+    engine = build_engine(f"sqlite:///{tmp_path / 'inventory.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = session_factory(engine)
+    node_id = "spk_" + "7" * 32
+    now = datetime.now(UTC)
+    with sessions.begin() as session:
+        session.add(AgentNode(node_id=node_id, state="active", capabilities=[]))
+        session.add(
+            PackageObservation(
+                node_id=node_id,
+                deployment_id="ds4-deepseek-single",
+                release_digest="3dc0d24c21684e1c21eaa4ca3271d94be19cf536063502d755bc68e531d7374f",
+                observation_digest="f" * 64,
+                state="active",
+                summary={
+                    "family_id": "ds4-deepseek",
+                    "resources": {
+                        "download_bytes": 0,
+                        "installed_bytes": 0,
+                        "transient_bytes": 0,
+                        "output_bytes": 0,
+                        "host_memory_bytes": 0,
+                        "gpu_memory_bytes": 0,
+                        "kv_cache_base_bytes": 0,
+                        "kv_cache_per_token_bytes": 0,
+                        "required_sparks": 1,
+                        "topology": "single",
+                    },
+                },
+                observed_at=now,
+            )
+        )
+    service = ProductionPackageProjectionService(
+        RepositoryService(Path(__file__).resolve().parents[2]), sessions
+    )
+
+    package = service.inventory(node_id, None, None, 10)["nodes"][0]["packages"][0]
+
+    assert package["resources"]["download_bytes"] == 93_691_352_994
+    assert package["resources"]["host_memory_bytes"] == 120_000_000_000
+
+
 def test_promotion_preview_and_apply_are_fenced_to_publication_service(tmp_path) -> None:
     engine = build_engine(f"sqlite:///{tmp_path / 'plans.sqlite'}")
     Base.metadata.create_all(engine)

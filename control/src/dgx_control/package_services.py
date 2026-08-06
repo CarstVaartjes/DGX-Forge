@@ -1160,6 +1160,44 @@ class ProductionPackageProjectionService:
         result["topology"] = topology
         return result
 
+    def _signed_package_resource_envelope(
+        self,
+        family_id: str,
+        release_digest: str,
+        cache: dict[tuple[str, str], dict[str, object]],
+    ) -> dict[str, object]:
+        """Project sizing only from the immutable, digest-bound release lock."""
+        raw_digest = _raw_digest(release_digest)
+        if raw_digest is None or not isinstance(family_id, str) or not family_id:
+            raise TypeError("package observation release identity is invalid")
+        key = (family_id, raw_digest)
+        if key in cache:
+            return dict(cache[key])
+        path = f"manifests/workload-releases/{family_id}/{raw_digest}.json"
+        try:
+            document = self._repository.read_document(self._repository.head(), path)
+            lock = PackageReleaseLock.parse(document.content)
+        except Exception as error:
+            raise TypeError("signed package resource envelope is unavailable") from error
+        if lock.family_id != family_id or lock.digest != raw_digest:
+            raise TypeError("signed package resource envelope identity changed")
+        if lock.resource_envelope is None:
+            raise TypeError("signed package resource envelope is missing")
+        per_node = lock.resource_envelope.get("per_node")
+        if not isinstance(per_node, Mapping):
+            raise TypeError("signed package resource envelope is invalid")
+        envelope = self._package_resource_envelope(
+            {
+                "resources": {
+                    **dict(per_node),
+                    "required_sparks": lock.resource_envelope["required_sparks"],
+                    "topology": lock.resource_envelope["topology"],
+                }
+            }
+        )
+        cache[key] = envelope
+        return dict(envelope)
+
     def inventory(
         self,
         node_id: str | None,
@@ -1187,6 +1225,11 @@ class ProductionPackageProjectionService:
         for row in package_rows:
             if deployment_id is None or row.deployment_id == deployment_id:
                 grouped.setdefault(row.node_id, []).append(row)
+        deployment_families = {
+            deployment.deployment_id: deployment.family_id
+            for deployment in self._deployments().values()
+        }
+        envelope_cache: dict[tuple[str, str], dict[str, object]] = {}
         values = []
         for node in nodes:
             if node_id is not None and node.node_id != node_id:
@@ -1209,11 +1252,18 @@ class ProductionPackageProjectionService:
                     "prepared": "staged",
                     "failed": "failed",
                 }.get(row.state, "available")
-                envelope = self._package_resource_envelope(summary)
+                family_id = summary.get("family_id")
+                if not isinstance(family_id, str):
+                    family_id = deployment_families.get(row.deployment_id)
+                if not isinstance(family_id, str):
+                    raise TypeError("package observation family identity is missing")
+                envelope = self._signed_package_resource_envelope(
+                    family_id, row.release_digest, envelope_cache
+                )
                 packages.append(
                     {
                         "deployment_id": row.deployment_id,
-                        "family_id": summary.get("family_id"),
+                        "family_id": family_id,
                         "release_digest": "sha256:" + row.release_digest,
                         "content_group": str(summary.get("content_group", "workload")),
                         "state": package_state,
