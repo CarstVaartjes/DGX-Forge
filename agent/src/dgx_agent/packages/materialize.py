@@ -74,11 +74,17 @@ class Materializer:
         objects: Mapping[str, StoredObject],
         staging: Path,
     ) -> MaterializedGeneration:
-        if isinstance(lock, PackageReleaseLock):
-            try:
-                lock = PackageReleaseLock.parse(lock.canonical_bytes)
-            except (TypeError, ValueError, RuntimeError) as error:
-                raise MaterializationError("trusted release lock is invalid") from error
+        # The lock is a security boundary: accepting a duck-typed object here
+        # would let an untrusted caller choose component descriptors while
+        # merely supplying a plausible digest.  Reparse the typed value's
+        # canonical bytes so the materializer consumes the same validated,
+        # immutable representation that the protocol verifier accepted.
+        if not isinstance(lock, PackageReleaseLock):
+            raise MaterializationError("trusted release lock is invalid")
+        try:
+            lock = PackageReleaseLock.parse(lock.canonical_bytes)
+        except (TypeError, ValueError, RuntimeError) as error:
+            raise MaterializationError("trusted release lock is invalid") from error
         release_digest = _raw_digest(getattr(lock, "digest", None), "release digest")
         if release_digest == "0" * 64:
             raise MaterializationError("trusted release lock is invalid")

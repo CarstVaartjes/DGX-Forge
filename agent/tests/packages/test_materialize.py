@@ -496,3 +496,23 @@ def test_rejects_duck_typed_lock_even_when_attacker_supplies_matching_objects(
             {value.digest: value},
             tmp_path / "generations",
         )
+
+
+def test_rejects_duck_typed_lock_with_nonzero_attacker_digest(
+    tmp_path: Path,
+) -> None:
+    store = ObjectStore(tmp_path / "store")
+    value = store.add(b"attacker-selected")
+    descriptor = _descriptor("payload", value, "configuration")
+    forged = SimpleNamespace(
+        digest="f" * 64,
+        components=(descriptor,),
+        adapter=None,
+    )
+
+    with pytest.raises(MaterializationError, match="trusted release lock"):
+        Materializer(store).materialize(
+            forged,
+            {value.digest: value},
+            tmp_path / "generations",
+        )
