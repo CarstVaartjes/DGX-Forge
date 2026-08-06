@@ -1331,3 +1331,10 @@ def _topological(nodes: Mapping[str, OperationNode]) -> tuple[OperationNode, ...
         for dependencies in unresolved.values():
             dependencies.difference_update(ready)
     return tuple(ordered)
+
+
+# Generic workload packages intentionally live in their own resolver module so
+# the legacy profile resolver can remain an explicit migration path.  Re-export
+# the type here for callers that historically imported all desired-state
+# resolvers from this module.
+from .package_rollouts import PackageDesiredStateResolver  # noqa: F401

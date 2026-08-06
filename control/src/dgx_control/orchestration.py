@@ -570,8 +570,12 @@ def _validate_package_plan(
             raise ValueError("package graph lifecycle is incomplete")
         if prepares.node_id != activates.node_id or activates.node_id != health.node_id:
             raise ValueError("package graph lifecycle target is inconsistent")
-        if activates.dependencies != (prepares.operation_id,):
-            raise ValueError("package activation must depend on preparation")
+        expected_activation_dependencies = [prepares.operation_id]
+        stop = operations.get(AgentOperation.PACKAGE_STOP.value)
+        if stop is not None:
+            expected_activation_dependencies.append(stop.operation_id)
+        if activates.dependencies != tuple(sorted(expected_activation_dependencies)):
+            raise ValueError("package activation must depend on preparation and stop")
         if health.dependencies != (activates.operation_id,):
             raise ValueError("package health must depend on activation")
         if activates.compensation_kind not in {

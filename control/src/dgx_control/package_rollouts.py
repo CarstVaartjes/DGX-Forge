@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from spark_profiles.workload_packages import WorkloadDeployment
 
 from .models import AgentOperation as StoredAgentOperation
-from .models import Job
+from .models import AgentOperationAttempt, Job
 from .orchestration import OperationGraph, OperationNode
 from .reconcile import ReconciliationPlan, resolved_reconciliation_plan
 
@@ -124,6 +124,27 @@ def package_operation_payload(
     }
     # Parse through the shared protocol constructor so control and agent have
     # one ABI, including exact field sets and digest validation.
+    PackageOperationRequest.parse(kind, payload)
+    return payload
+
+
+def _package_payload_for_identity(
+    deployment: WorkloadDeployment,
+    operation: str,
+    release_digest: str,
+    deployment_digest: str | None = None,
+) -> dict[str, object]:
+    """Build a request for a retained predecessor generation."""
+
+    kind = AgentOperation(operation)
+    payload = {
+        "schema_version": 1,
+        "deployment_id": deployment.deployment_id,
+        "release_digest": _raw_digest(release_digest),
+        "deployment_digest": _raw_digest(
+            deployment_digest if deployment_digest is not None else _package_digest(deployment)
+        ),
+    }
     PackageOperationRequest.parse(kind, payload)
     return payload
 
@@ -239,14 +260,18 @@ def _select_nodes(
             "online",
         }:
             continue
+        available_memory = _observation_value(
+            observation, "memory_available_bytes", minimum_memory
+        )
+        available_storage = _observation_value(
+            observation, "disk_available_bytes", minimum_storage
+        )
         if (
             isinstance(minimum_memory, int)
-            and _observation_value(observation, "memory_available_bytes", minimum_memory)
-            < minimum_memory
+            and (not isinstance(available_memory, int) or available_memory < minimum_memory)
         ) or (
             isinstance(minimum_storage, int)
-            and _observation_value(observation, "disk_available_bytes", minimum_storage)
-            < minimum_storage
+            and (not isinstance(available_storage, int) or available_storage < minimum_storage)
         ):
             continue
         observed_capabilities = set(
@@ -369,7 +394,7 @@ class PackageDesiredStateResolver:
                     )
             if not authorized:
                 raise PackageRolloutError("workload release is not TUF-authorized")
-            selected = _select_nodes(deployment, evidence)
+            selected = _select_nodes(deployment, evidence, lock)
             plans[deployment_id] = (deployment, lock, selected, lock_blob_digest)
             input_digests[path] = document.sha256
             input_digests[
@@ -437,6 +462,7 @@ def _package_graph(
             "release_digest": deployment.release_digest,
             "deployment_digest": _package_digest(deployment),
             "lock_digest": lock.digest,
+            "rollback_payloads": {},
         }
         releases[deployment_id] = release_payload
         groups[deployment_id] = {
@@ -461,22 +487,49 @@ def _package_graph(
                 deployment_id,
             )
             previous_release = previous[0] if previous else None
+            if previous_release is not None and previous_release != deployment.release_digest:
+                rollback_payload = _package_payload_for_identity(
+                    deployment,
+                    AgentOperation.PACKAGE_ROLLBACK.value,
+                    previous_release,
+                    previous[1],
+                )
+                cast(dict[str, object], release_payload["rollback_payloads"])[node_id] = rollback_payload
+                release_payload.setdefault("previous_release_digest", previous_release)
+                release_payload.setdefault("previous_deployment_digest", previous[1])
             kinds = list(_PACKAGE_KINDS)
             if previous_release == deployment.release_digest:
                 kinds = [AgentOperation.PACKAGE_HEALTH.value]
+            elif previous_release is not None:
+                kinds.insert(0, AgentOperation.PACKAGE_STOP.value)
             operation_ids: dict[str, str] = {}
             for kind in kinds:
                 operation_id = f"{deployment_id}:{node_id}:{kind}"
                 operation_ids[kind] = operation_id
-                payload = package_operation_payload(deployment, kind)
+                payload = (
+                    _package_payload_for_identity(
+                        deployment,
+                        kind,
+                        previous_release,
+                        previous[1],
+                    )
+                    if kind == AgentOperation.PACKAGE_STOP.value and previous_release is not None
+                    else package_operation_payload(deployment, kind)
+                )
                 payloads[operation_id] = MappingProxyType(payload)
-                if kind == AgentOperation.PACKAGE_PREPARE.value:
+                if kind == AgentOperation.PACKAGE_STOP.value:
                     dependencies: tuple[str, ...] = ()
+                    compensation = None
+                elif kind == AgentOperation.PACKAGE_PREPARE.value:
+                    dependencies = ()
                     compensation = None
                 elif kind == AgentOperation.PACKAGE_ACTIVATE.value:
                     dependencies = (
                         operation_ids[AgentOperation.PACKAGE_PREPARE.value],
                     )
+                    if AgentOperation.PACKAGE_STOP.value in operation_ids:
+                        dependencies += (operation_ids[AgentOperation.PACKAGE_STOP.value],)
+                        dependencies = tuple(sorted(dependencies))
                     compensation = AgentOperation.PACKAGE_ROLLBACK.value
                 else:
                     dependencies = (
@@ -563,7 +616,7 @@ class PackageRolloutOrchestrator:
     def create(
         self,
         plan: ReconciliationPlan,
-        deployment_id: str,
+        deployment_id: str | None = None,
         *,
         actor: str,
         request_id: str,
@@ -574,6 +627,8 @@ class PackageRolloutOrchestrator:
 
         if not isinstance(plan, ReconciliationPlan):
             raise PackageRolloutError("package rollout plan is invalid")
+        if deployment_id is None and len(plan.releases) == 1:
+            deployment_id = next(iter(plan.releases))
         if not isinstance(deployment_id, str) or not deployment_id:
             raise PackageRolloutError("package deployment ID is invalid")
         graph = plan.operation_graph
@@ -596,6 +651,7 @@ class PackageRolloutOrchestrator:
             "deployment_id": deployment_id,
             "operation_graph": _jsonable(graph.document),
             "operation_payloads": _jsonable(plan.operation_payloads),
+            "release": _jsonable(release),
             "targets": list(plan.targets),
         }
         plan_digest = _digest(plan_document)
@@ -630,7 +686,11 @@ class PackageRolloutOrchestrator:
             deployment_id=deployment_id,
             deployment_digest=deployment_digest,
             release_digest=release_digest,
-            previous_release_digest=None,
+            previous_release_digest=(
+                release.get("previous_release_digest")
+                if isinstance(release.get("previous_release_digest"), str)
+                else None
+            ),
             base_commit=plan.commit,
             policy_digest=policy_digest,
             tuf_target_digest=lock_digest,
@@ -729,18 +789,90 @@ class PackageRolloutOrchestrator:
                     if active.state in {"queued", "running"}:
                         continue
                     if active.state == "succeeded":
-                        self._accept_operation(node, history, active, now)
+                        active_kind = next(
+                            (
+                                item.get("kind")
+                                for item in history
+                                if item.get("operation_id") == active.id
+                            ),
+                            None,
+                        )
+                        self._accept_operation(session, node, history, active, now)
+                        if active_kind == AgentOperation.PACKAGE_ROLLBACK.value:
+                            node.state = "rolled-back"
+                            node.completed_at = now
+                            node.updated_at = now
+                            rollout.state = "rolled-back"
+                            rollout.rollback_evidence_digest = node.evidence_digest
+                            job.state = "failed"
+                            job.status_reason = "package rollout rolled back"
+                            job.updated_at = now
+                            continue
                     elif active.state in {"failed", "waiting-for-operator", "expired"}:
+                        active_kind = next(
+                            (
+                                item.get("kind")
+                                for item in history
+                                if item.get("operation_id") == active.id
+                            ),
+                            None,
+                        )
+                        release = (
+                            rollout.plan.get("release")
+                            if isinstance(rollout.plan, Mapping)
+                            else None
+                        )
+                        rollback_payloads = (
+                            release.get("rollback_payloads")
+                            if isinstance(release, Mapping)
+                            else None
+                        )
+                        rollback_payload = (
+                            rollback_payloads.get(node.node_id)
+                            if isinstance(rollback_payloads, Mapping)
+                            else None
+                        )
+                        if active_kind in {
+                            AgentOperation.PACKAGE_ACTIVATE.value,
+                            AgentOperation.PACKAGE_HEALTH.value,
+                        } and isinstance(rollback_payload, Mapping):
+                            rollback_id = str(uuid.uuid4())
+                            stored = self._agent_jobs.enqueue_in_session(
+                                session,
+                                job.id,
+                                node.node_id,
+                                AgentOperation.PACKAGE_ROLLBACK.value,
+                                rollout.base_commit,
+                                rollback_payload,
+                                operation_id=rollback_id,
+                            )
+                            node.operation_id = stored.id
+                            node.operation_kind = AgentOperation.PACKAGE_ROLLBACK.value
+                            node.rollback_operation_id = stored.id
+                            node.expected_payload_digest = _digest(rollback_payload)
+                            node.operation_history = history + [
+                                {
+                                    "kind": AgentOperation.PACKAGE_ROLLBACK.value,
+                                    "payload_digest": _digest(rollback_payload),
+                                    "operation_id": stored.id,
+                                    "state": "queued",
+                                }
+                            ]
+                            node.state = "rolling-back"
+                            rollout.state = "rolling-back"
+                            node.updated_at = now
+                            queued = True
+                            continue
                         node.state = "failed"
                         node.failure_reason = "package operation did not complete"
                         node.failure_evidence_digest = _digest(
                             {"operation_id": active.id, "state": active.state}
                         )
                         node.updated_at = now
-                        rollout.state = "failed"
+                        rollout.state = "waiting-for-operator"
                         rollout.failure_reason = node.failure_reason
                         rollout.failure_evidence_digest = node.failure_evidence_digest
-                        job.state = "failed"
+                        job.state = "waiting-for-operator"
                         job.status_reason = rollout.failure_reason
                         job.updated_at = now
                         continue
@@ -788,7 +920,8 @@ class PackageRolloutOrchestrator:
                 node.updated_at = now
                 queued = True
             if queued:
-                rollout.state = "running"
+                if rollout.state != "rolling-back":
+                    rollout.state = "running"
                 rollout.updated_at = now
                 self._agent_jobs.notify_available()
                 return rollout.state
@@ -848,6 +981,7 @@ class PackageRolloutOrchestrator:
 
     @staticmethod
     def _accept_operation(
+        session: Session,
         node: object,
         history: list[dict[str, object]],
         operation: StoredAgentOperation,
@@ -857,8 +991,17 @@ class PackageRolloutOrchestrator:
             if item.get("operation_id") == operation.id:
                 item["state"] = "accepted"
         node.operation_history = history
+        attempt = session.scalar(
+            select(AgentOperationAttempt).where(
+                AgentOperationAttempt.operation_id == operation.id,
+                AgentOperationAttempt.attempt == operation.current_attempt,
+            )
+        )
+        result = attempt.result if attempt is not None else None
         node.evidence_digest = _digest(
-            {"operation_id": operation.id, "state": operation.state}
+            result
+            if isinstance(result, Mapping)
+            else {"operation_id": operation.id, "state": operation.state}
         )
         node.observed_release_digest = operation.payload.get("release_digest")
         node.updated_at = now

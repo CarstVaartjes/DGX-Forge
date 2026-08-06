@@ -2,15 +2,29 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import pytest
-from dgx_agent_protocol import PackageReleaseLock
+from dgx_agent_protocol import AgentOperation, PackageReleaseLock
+from dgx_control.agent_jobs import AgentJobService
+from dgx_control.models import (
+    AgentNode,
+    Base,
+    PackageRolloutNode,
+)
+from dgx_control.models import (
+    AgentOperation as StoredAgentOperation,
+)
 from dgx_control.package_rollouts import (
     PackageDesiredStateResolver,
     PackageRolloutError,
+    PackageRolloutOrchestrator,
     package_operation_payload,
 )
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
 
 from spark_profiles.workload_packages import WorkloadDeployment
 
@@ -153,3 +167,122 @@ def test_unsigned_release_is_rejected_before_graph_creation() -> None:
             ("future-stack",),
             ({"node_id": NODE, "healthy": True, "labels": {"pool": "default"}},),
         )
+
+
+def test_replacement_stops_previous_digest_before_activation() -> None:
+    lock = _lock()
+    resolver = PackageDesiredStateResolver(
+        _Repository(_deployment(lock.digest), lock), trust=lambda *_: True
+    )
+    plan = resolver.resolve(
+        COMMIT,
+        ("future-stack",),
+        (
+            {
+                "node_id": NODE,
+                "healthy": True,
+                "labels": {"pool": "default"},
+                "current_packages": {
+                    "future-stack": {
+                        "release_digest": "c" * 64,
+                        "deployment_digest": "d" * 64,
+                    }
+                },
+            },
+        ),
+    )
+    operations = {node.kind: node for node in plan.operation_graph.nodes}  # type: ignore[union-attr]
+    assert "package.stop" in operations
+    assert operations["package.stop"].dependencies == ()
+    assert operations["package.activate"].dependencies == tuple(
+        sorted(
+            {
+                operations["package.prepare"].operation_id,
+                operations["package.stop"].operation_id,
+            }
+        )
+    )
+    release_projection = plan.releases["future-stack"]
+    rollback_payload = release_projection["rollback_payloads"][NODE]  # type: ignore[index]
+    assert rollback_payload["release_digest"] == "c" * 64
+    assert rollback_payload["deployment_digest"] == "d" * 64
+
+
+def test_failed_health_queues_fenced_predecessor_rollback(tmp_path) -> None:
+    lock = _lock()
+    resolver = PackageDesiredStateResolver(
+        _Repository(_deployment(lock.digest), lock), trust=lambda *_: True
+    )
+    plan = resolver.resolve(
+        COMMIT,
+        ("future-stack",),
+        (
+            {
+                "node_id": NODE,
+                "healthy": True,
+                "labels": {"pool": "default"},
+                "current_packages": {
+                    "future-stack": {
+                        "release_digest": "c" * 64,
+                        "deployment_digest": "d" * 64,
+                    }
+                },
+            },
+        ),
+    )
+    engine = create_engine(f"sqlite:///{tmp_path / 'package-rollout.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine, expire_on_commit=False)
+    clock = lambda: datetime(2026, 8, 6, 12, 0, tzinfo=UTC)
+    queue = AgentJobService(sessions, clock=clock)
+    orchestrator = PackageRolloutOrchestrator(sessions, queue, clock=clock)
+    with sessions.begin() as session:
+        session.add(
+            AgentNode(
+                node_id=NODE,
+                state="active",
+                capabilities=[
+                    item.value
+                    for item in AgentOperation
+                    if item.value.startswith("package.")
+                ],
+            )
+        )
+    rollout_id = orchestrator.create(
+        plan, "future-stack", actor="admin", request_id=str(uuid.uuid4())
+    )
+    for _ in range(3):
+        assert orchestrator.advance(rollout_id) == "running"
+        with sessions.begin() as session:
+            node = session.scalar(
+                select(PackageRolloutNode).where(
+                    PackageRolloutNode.rollout_id == rollout_id
+                )
+            )
+            assert node is not None and node.operation_id is not None
+            operation = session.get(StoredAgentOperation, node.operation_id)
+            assert operation is not None
+            operation.state = "succeeded"
+    assert orchestrator.advance(rollout_id) == "running"
+    with sessions.begin() as session:
+        node = session.scalar(
+            select(PackageRolloutNode).where(
+                PackageRolloutNode.rollout_id == rollout_id
+            )
+        )
+        assert node is not None and node.operation_id is not None
+        operation = session.get(StoredAgentOperation, node.operation_id)
+        assert operation is not None
+        operation.state = "failed"
+    assert orchestrator.advance(rollout_id) == "rolling-back"
+    with sessions() as session:
+        node = session.scalar(
+            select(PackageRolloutNode).where(
+                PackageRolloutNode.rollout_id == rollout_id
+            )
+        )
+        assert node is not None
+        assert node.operation_kind == AgentOperation.PACKAGE_ROLLBACK.value
+        assert node.state == "rolling-back"
+        assert node.rollback_operation_id == node.operation_id
+        assert node.operation_history[-1]["kind"] == AgentOperation.PACKAGE_ROLLBACK.value
