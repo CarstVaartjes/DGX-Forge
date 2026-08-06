@@ -10,13 +10,22 @@ on:
 permissions:
   contents: read
 
+# A new commit supersedes an older PR check. Release/manual evidence must not
+# be cancelled because it is an intentional publication or operator run.
+concurrency:
+  group: dgx-forge-ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     name: Ruff
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
       - name: Install uv and Python
         uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
@@ -24,11 +33,26 @@ jobs:
           python-version: "3.12"
           enable-cache: true
       - name: Run Ruff
-        run: uvx --from ruff==0.16.1 ruff check .
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_EVENT_NAME" == "pull_request" ]]; then
+            mapfile -t changed_python < <(
+              git diff --name-only --diff-filter=ACMR "$GITHUB_BASE_SHA" "$GITHUB_SHA" -- '*.py'
+            )
+            if ((${#changed_python[@]} == 0)); then
+              echo "No changed Python files; skipping Ruff"
+            else
+              uvx --from ruff==0.16.1 ruff check "${changed_python[@]}"
+            fi
+          else
+            uvx --from ruff==0.16.1 ruff check .
+          fi
 
   generated-clients:
     name: Generated control clients
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -48,6 +72,7 @@ jobs:
   test:
     name: PR contract smoke
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - name: Check out repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
