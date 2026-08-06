@@ -354,15 +354,15 @@ def _assert_execution_cycle(database: str) -> None:
     engine.dispose()
 
 
-def test_0009_is_the_sole_linear_head() -> None:
+def test_latest_migration_is_the_sole_linear_head() -> None:
     config = _config("sqlite://")
     scripts = ScriptDirectory.from_config(config)
     heads = scripts.get_heads()
 
-    assert heads == ["0014_package_action_plans"]
+    assert heads == ["0017_admission_and_run_state"]
     revision = ScriptDirectory.from_config(config).get_revision(heads[0])
     assert revision is not None
-    assert revision.down_revision == "0013_workload_packages"
+    assert revision.down_revision == "0016_recipe_deployment_authority"
     assert [item.revision for item in reversed(tuple(scripts.walk_revisions()))] == [
         "0001_operational_state",
         "0002_agent_operations",
@@ -378,6 +378,9 @@ def test_0009_is_the_sole_linear_head() -> None:
             "0012_control_process_heartbeats",
             "0013_workload_packages",
             "0014_package_action_plans",
+            "0015_recipe_catalog",
+            "0016_recipe_deployment_authority",
+            "0017_admission_and_run_state",
         ]
 
 
