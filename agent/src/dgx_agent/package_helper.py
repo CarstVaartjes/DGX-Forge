@@ -81,17 +81,58 @@ class SystemdCommandRunner:
             raise HelperProtocolError("package backend launch failed") from error
         return completed.returncode
 
+    def cleanup(self, unit_name: str) -> None:
+        if not unit_name.startswith("dgx-workload-") or not unit_name.endswith(
+            ".service"
+        ):
+            raise HelperProtocolError("package backend unit name is invalid")
+        fixed_environment = {
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "PATH": "/usr/bin:/bin",
+        }
+        for action in ("stop", "reset-failed"):
+            try:
+                subprocess.run(
+                    ("/usr/bin/systemctl", action, unit_name),
+                    executable="/usr/bin/systemctl",
+                    shell=False,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    cwd="/",
+                    env=fixed_environment,
+                    close_fds=True,
+                    timeout=10,
+                    check=False,
+                )
+            except (OSError, subprocess.TimeoutExpired) as error:
+                raise HelperProtocolError(
+                    "package backend cleanup did not complete"
+                ) from error
+
 
 class SystemdBackendLauncher:
     """Launch a digest-matched adapter in a fixed transient systemd sandbox."""
 
-    def __init__(self, generations_root: Path, *, runner=None) -> None:
+    def __init__(
+        self,
+        generations_root: Path,
+        *,
+        objects_root: Path | None = None,
+        runner=None,
+    ) -> None:
         root = Path(generations_root)
         if not root.is_absolute():
             raise HelperProtocolError("generation root is invalid")
         self._root = root
+        self._objects_root = Path(objects_root or root.parent / "objects" / "sha256")
+        if not self._objects_root.is_absolute():
+            raise HelperProtocolError("package object root is invalid")
         self._runner = runner or SystemdCommandRunner()
-        if not callable(getattr(self._runner, "run", None)):
+        if not callable(getattr(self._runner, "run", None)) or not callable(
+            getattr(self._runner, "cleanup", None)
+        ):
             raise HelperProtocolError("systemd command boundary is invalid")
 
     def launch(
@@ -99,7 +140,12 @@ class SystemdBackendLauncher:
     ) -> Mapping[str, object]:
         generation_fd = -1
         executable_fd = -1
+        mount_fds: list[int] = []
         try:
+            if request.invocation.network.mode != "none":
+                raise HelperProtocolError(
+                    "restricted network requires an installed network-policy boundary"
+                )
             generation_fd, executable_fd = _open_backend_content(self._root, request)
             plan = sandbox.plan(request.invocation, generation_fd, executable_fd)
             try:
@@ -113,6 +159,7 @@ class SystemdBackendLauncher:
             source_executable = f"/proc/{helper_pid}/fd/{executable_fd}"
             source_generation = f"/proc/{helper_pid}/fd/{generation_fd}"
             resources = request.invocation.resources
+            unit_name = f"dgx-workload-{request.request_id}.service"
             argv = [
                 "/usr/bin/systemd-run",
                 "--quiet",
@@ -120,7 +167,7 @@ class SystemdBackendLauncher:
                 "--pipe",
                 "--collect",
                 "--service-type=exec",
-                f"--unit=dgx-workload-{request.request_id}.service",
+                f"--unit={unit_name}",
                 f"--uid={plan.uid}",
                 f"--gid={plan.gid}",
                 "--property=NoNewPrivileges=yes",
@@ -141,6 +188,14 @@ class SystemdBackendLauncher:
                 "--working-directory=/run/dgx-forge/generation",
             ]
             argv.append("--property=PrivateNetwork=yes")
+            for mount in request.invocation.mounts:
+                mount_fd = _open_mount_object(
+                    self._objects_root, mount.object_digest, request
+                )
+                mount_fds.append(mount_fd)
+                source = f"/proc/{helper_pid}/fd/{mount_fd}"
+                target = f"/run/dgx-forge/generation/{mount.target}"
+                argv.append(f"--property=BindReadOnlyPaths={source}:{target}")
             argv.extend(
                 f"--property=DeviceAllow=/dev/{device} rw"
                 for device in request.invocation.devices
@@ -149,12 +204,17 @@ class SystemdBackendLauncher:
                 ("--", "/run/dgx-forge/entrypoint", *request.invocation.arguments)
             )
             fixed_argv = tuple(argv)
-            returncode = self._runner.run(
-                fixed_argv,
-                pass_fds=(generation_fd, executable_fd),
-                timeout_seconds=resources.timeout_seconds,
-            )
+            try:
+                returncode = self._runner.run(
+                    fixed_argv,
+                    pass_fds=(generation_fd, executable_fd, *mount_fds),
+                    timeout_seconds=resources.timeout_seconds,
+                )
+            except HelperProtocolError:
+                self._runner.cleanup(unit_name)
+                raise
             if returncode != 0:
+                self._runner.cleanup(unit_name)
                 raise HelperProtocolError("package backend launch failed")
             evidence = hashlib.sha256(
                 canonical_helper_document(
@@ -176,6 +236,76 @@ class SystemdBackendLauncher:
                 os.close(executable_fd)
             if generation_fd >= 0:
                 os.close(generation_fd)
+            for mount_fd in mount_fds:
+                os.close(mount_fd)
+
+
+def _open_mount_object(
+    objects_root: Path, object_digest: str, request: HelperRequest
+) -> int:
+    root_fd = -1
+    descriptor = -1
+    try:
+        receipt = next(
+            (
+                item
+                for item in request.receipts
+                if item.object_digest == object_digest
+            ),
+            None,
+        )
+        if receipt is None:
+            raise HelperProtocolError("mount has no signed receipt")
+        root_fd = os.open(
+            objects_root,
+            os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+        )
+        descriptor = os.open(
+            object_digest,
+            os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            dir_fd=root_fd,
+        )
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_mode & 0o022
+            or before.st_size != receipt.size
+        ):
+            raise HelperProtocolError("mount object is unsafe")
+        digest = hashlib.sha256()
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            digest.update(chunk)
+        after = os.fstat(descriptor)
+        if digest.hexdigest() != object_digest or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+            before.st_ctime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
+            raise HelperProtocolError("mount object digest is invalid")
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        result, descriptor = descriptor, -1
+        return result
+    except HelperProtocolError:
+        raise
+    except OSError as error:
+        raise HelperProtocolError("mount object is unavailable") from error
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        if root_fd >= 0:
+            os.close(root_fd)
 
 
 def _open_backend_content(
