@@ -102,4 +102,21 @@
 
 - [x] Run signer, agent-jobs, orchestrator, migration, production-worker, settings, Compose networking, and focused PostgreSQL race suites.
 - [x] Run Ruff on changed Python files, `python3 -m py_compile` on entry points, and `git diff --check`.
-- [ ] Report exact passing counts and any remaining design blocker without committing.
+- [x] Report exact passing counts and any remaining design blocker without committing.
+
+#### Verification checkpoint — 2026-08-06
+
+- The focused signer/authority, agent-job, update-orchestrator, rollout
+  migration, production-worker, settings, update-worker, generation-readiness,
+  and Compose networking selection passed **259 tests in 41.51s**.
+- The PostgreSQL agent-job and reconciliation race selection passed **64 tests
+  in 29.92s**.
+- The broader host-generation/release selection passed **102 tests in 7.97s**;
+  the control host boundary selection passed **275 tests in 29.91s**; the
+  agent update selection passed **21 tests in 0.20s**; and Compose networking
+  passed **12 tests in 1.37s**.
+- Ruff `0.16.1`, Python entry-point compilation, and `git diff --check` passed.
+- No code-level blocker remains for signer isolation. The first real release
+  still requires external physical control-host update/recovery, Spark
+  canary/rollback, replacement-host, authenticated-encryption, and signed
+  platform-manifest evidence; this checkpoint does not fabricate those gates.
