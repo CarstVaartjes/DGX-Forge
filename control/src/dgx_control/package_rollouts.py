@@ -252,6 +252,34 @@ def _select_nodes(
     resources = _mapping(deployment.resources, "deployment resources")
     minimum_memory = resources.get("memory_bytes", 0)
     minimum_storage = resources.get("storage_bytes", 0)
+    minimum_gpu_memory = 0
+    if lock is not None:
+        envelope = _mapping(lock.resource_envelope, "release resource envelope")
+        required_sparks = envelope.get("required_sparks")
+        if required_sparks != count:
+            raise PackageRolloutError(
+                "deployment Spark count does not match release resource envelope"
+            )
+        per_node = _mapping(envelope.get("per_node"), "release per-node resources")
+        envelope_memory = per_node.get("host_memory_bytes")
+        envelope_storage = per_node.get("installed_bytes")
+        envelope_transient = per_node.get("transient_bytes")
+        envelope_gpu_memory = per_node.get("gpu_memory_bytes")
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            for value in (
+                envelope_memory,
+                envelope_storage,
+                envelope_transient,
+                envelope_gpu_memory,
+            )
+        ):
+            raise PackageRolloutError("release resource envelope is incomplete")
+        minimum_memory = max(minimum_memory, envelope_memory)
+        minimum_storage = max(
+            minimum_storage, envelope_storage + envelope_transient
+        )
+        minimum_gpu_memory = envelope_gpu_memory
     compatibility = (
         _mapping(lock.compatibility, "release compatibility") if lock is not None else {}
     )
@@ -269,10 +297,15 @@ def _select_nodes(
         }:
             continue
         available_memory = _observation_value(
-            observation, "memory_available_bytes", minimum_memory
+            observation, "memory_available_bytes", None
         )
         available_storage = _observation_value(
-            observation, "disk_available_bytes", minimum_storage
+            observation, "disk_available_bytes", None
+        )
+        available_gpu_memory = _observation_value(
+            observation,
+            "gpu_memory_available_bytes",
+            _observation_value(observation, "gpu_memory_free_bytes", None),
         )
         if (
             isinstance(minimum_memory, int)
@@ -280,6 +313,13 @@ def _select_nodes(
         ) or (
             isinstance(minimum_storage, int)
             and (not isinstance(available_storage, int) or available_storage < minimum_storage)
+        ) or (
+            isinstance(minimum_gpu_memory, int)
+            and minimum_gpu_memory > 0
+            and (
+                not isinstance(available_gpu_memory, int)
+                or available_gpu_memory < minimum_gpu_memory
+            )
         ):
             continue
         observed_capabilities = set(

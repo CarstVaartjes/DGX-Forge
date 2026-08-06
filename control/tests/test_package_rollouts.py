@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 import pytest
@@ -182,7 +182,16 @@ def test_unknown_family_resolves_without_static_adapter_catalog() -> None:
     plan = resolver.resolve(
         COMMIT,
         ("future-stack",),
-        ({"node_id": NODE, "healthy": True, "labels": {"pool": "default"}},),
+        (
+            {
+                "node_id": NODE,
+                "healthy": True,
+                "labels": {"pool": "default"},
+                "memory_available_bytes": 4096,
+                "disk_available_bytes": 4096,
+                "gpu_memory_available_bytes": 4096,
+            },
+        ),
     )
     # Package operations require the v2 generic package ABI.  A v1 Spark must
     # not be selected for a package graph and would otherwise be unable to
@@ -211,7 +220,48 @@ def test_release_without_resource_envelope_is_rejected_before_graph_creation() -
         resolver.resolve(
             COMMIT,
             ("future-stack",),
-            ({"node_id": NODE, "healthy": True, "labels": {"pool": "default"}},),
+            (
+                {
+                    "node_id": NODE,
+                    "healthy": True,
+                    "labels": {"pool": "default"},
+                    "memory_available_bytes": 4096,
+                    "disk_available_bytes": 4096,
+                    "gpu_memory_available_bytes": 4096,
+                },
+            ),
+        )
+
+
+def test_resource_envelope_admission_rejects_insufficient_spark_headroom() -> None:
+    lock = _lock()
+    envelope = dict(lock.resource_envelope or {})
+    per_node = dict(envelope["per_node"])
+    aggregate = dict(envelope["aggregate"])
+    per_node["host_memory_bytes"] = 10_000
+    aggregate["host_memory_bytes"] = 10_000
+    rich_lock = replace(
+        lock,
+        resource_envelope={**envelope, "per_node": per_node, "aggregate": aggregate},
+    )
+    resolver = PackageDesiredStateResolver(
+        _Repository(_deployment(rich_lock.digest), rich_lock), trust=lambda *_: True
+    )
+
+    with pytest.raises(PackageRolloutError, match="compatible node placement"):
+        resolver.resolve(
+            COMMIT,
+            ("future-stack",),
+            (
+                {
+                    "node_id": NODE,
+                    "healthy": True,
+                    "labels": {"pool": "default"},
+                    "memory_available_bytes": 9_999,
+                    "disk_available_bytes": 4096,
+                    "gpu_memory_available_bytes": 4096,
+                },
+            ),
         )
 
 
@@ -241,6 +291,9 @@ def test_replacement_stops_previous_digest_before_activation() -> None:
                 "node_id": NODE,
                 "healthy": True,
                 "labels": {"pool": "default"},
+                "memory_available_bytes": 4096,
+                "disk_available_bytes": 4096,
+                "gpu_memory_available_bytes": 4096,
                 "current_packages": {
                     "future-stack": {
                         "release_digest": "c" * 64,
@@ -282,6 +335,9 @@ def test_failed_health_queues_fenced_predecessor_rollback(tmp_path) -> None:
                 "node_id": NODE,
                 "healthy": True,
                 "labels": {"pool": "default"},
+                "memory_available_bytes": 4096,
+                "disk_available_bytes": 4096,
+                "gpu_memory_available_bytes": 4096,
                 "current_packages": {
                     "future-stack": {
                         "release_digest": "c" * 64,
