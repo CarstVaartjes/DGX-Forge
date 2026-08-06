@@ -185,7 +185,12 @@ class AcquisitionEngine:
                 f"component acquisition cancelled: {descriptor.name}"
             )
         _deadline_check(deadline)
-        reservation = self._store.reserve(binding, descriptor.size)
+        reserve_component = getattr(self._store, "reserve_component", None)
+        reservation = (
+            reserve_component(binding, descriptor)
+            if callable(reserve_component)
+            else self._store.reserve(binding, descriptor.size)
+        )
         record = self._store.begin_component(reservation, descriptor)
         if (
             getattr(record, "component", None) != descriptor.name
@@ -196,6 +201,48 @@ class AcquisitionEngine:
         ):
             self._store.release(reservation)
             raise AcquisitionError("component download journal is invalid")
+        record_state = getattr(record, "state", "partial")
+        if record_state == "complete":
+            cached = self._store.lookup(expected_digest, descriptor.size)
+            if cached is None:
+                self._store.release(reservation)
+                raise AcquisitionError("completed component is unavailable")
+            _progress(
+                progress,
+                descriptor,
+                completed=descriptor.size,
+                cache_hits=1,
+                objects_completed=1,
+                reserved_bytes=reservation.bytes_reserved,
+            )
+            self._store.release(reservation)
+            return cached
+        if record_state == "shared":
+            waiter = getattr(self._store, "wait_for_component", None)
+            if not callable(waiter):
+                self._store.release(reservation)
+                raise AcquisitionError("component acquisition is already in progress")
+            cached = waiter(
+                binding,
+                expected_digest,
+                descriptor.size,
+                cancelled,
+                deadline=deadline,
+            )
+            self._store.release(reservation)
+            if cached is None:
+                raise AcquisitionError(
+                    f"component acquisition owner did not complete: {descriptor.name}"
+                )
+            _progress(
+                progress,
+                descriptor,
+                completed=descriptor.size,
+                cache_hits=1,
+                objects_completed=1,
+                reserved_bytes=reservation.bytes_reserved,
+            )
+            return cached
         _progress(
             progress,
             descriptor,
