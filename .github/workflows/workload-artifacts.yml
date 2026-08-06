@@ -70,13 +70,12 @@ jobs:
           source_commit=$(jq -er '.request.source_commit' "$validated_request")
           output_repository=$(jq -er '.request.output_repository' "$validated_request")
           repository_owner=${GITHUB_REPOSITORY_OWNER,,}
-          case "$output_repository" in
-            "ghcr.io/$repository_owner/"*) ;;
-            *)
-              echo "output repository must be owned by this GitHub organization" >&2
-              exit 2
-              ;;
-          esac
+          repository_name=${GITHUB_REPOSITORY#*/}
+          expected_output_repository="ghcr.io/$repository_owner/${repository_name,,}-workloads"
+          test "$output_repository" = "$expected_output_repository" || {
+            echo "output repository must be owned by this GitHub organization and match its workload package" >&2
+            exit 2
+          }
 
           git fetch --no-tags origin main
           git merge-base --is-ancestor "$source_commit" refs/remotes/origin/main
@@ -155,6 +154,7 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: Verify exact source context
+        id: source
         shell: bash
         env:
           EXPECTED_CONTEXT_DIGEST: ${{ needs.authorize-request.outputs.context_digest }}
@@ -164,19 +164,19 @@ jobs:
           SOURCE_COMMIT: ${{ needs.authorize-request.outputs.source_commit }}
         run: |
           set -euo pipefail
-          source_root=$(realpath workload-source)
-          context_path=$(realpath "workload-source/$CONTEXT")
-          dockerfile_path=$(realpath "workload-source/$DOCKERFILE")
-          case "$context_path" in
-            "$source_root"/adapters/*) ;;
+          checkout_root=$(realpath workload-source)
+          checkout_context=$(realpath "workload-source/$CONTEXT")
+          checkout_dockerfile=$(realpath "workload-source/$DOCKERFILE")
+          case "$checkout_context" in
+            "$checkout_root"/adapters/*) ;;
             *) echo "context resolved outside reviewed adapters" >&2; exit 2 ;;
           esac
-          case "$dockerfile_path" in
-            "$context_path"/*) ;;
+          case "$checkout_dockerfile" in
+            "$checkout_context"/*) ;;
             *) echo "Dockerfile resolved outside build context" >&2; exit 2 ;;
           esac
-          test -d "$context_path"
-          test -f "$dockerfile_path"
+          test -d "$checkout_context"
+          test -f "$checkout_dockerfile"
           context_archive=$RUNNER_TEMP/workload-context.tar
           git -C workload-source archive --format=tar --output="$context_archive" \
             "$SOURCE_COMMIT" "$CONTEXT"
@@ -185,6 +185,19 @@ jobs:
             echo "checked-out context does not match context_digest" >&2
             exit 2
           }
+          verified_root=$RUNNER_TEMP/verified-workload-source
+          install -d -m 0700 "$verified_root"
+          tar -xf "$context_archive" -C "$verified_root"
+          context_path=$(realpath "$verified_root/$CONTEXT")
+          dockerfile_path=$(realpath "$verified_root/$DOCKERFILE")
+          case "$context_path" in
+            "$verified_root"/adapters/*) ;;
+            *) echo "verified context escaped extraction root" >&2; exit 2 ;;
+          esac
+          case "$dockerfile_path" in
+            "$context_path"/*) ;;
+            *) echo "verified Dockerfile escaped build context" >&2; exit 2 ;;
+          esac
           python - "$dockerfile_path" <<'PY'
           import json
           import os
@@ -196,12 +209,23 @@ jobs:
           dockerfile = Path(sys.argv[1])
           if dockerfile.stat().st_size > 1024 * 1024:
               raise SystemExit("Dockerfile exceeds the bounded input size")
+          dockerfile_bytes = dockerfile.read_bytes()
+          if b"\xef\xbb\xbf" in dockerfile_bytes:
+              raise SystemExit("Dockerfile frontend directives are forbidden")
+          try:
+              dockerfile_text = dockerfile_bytes.decode("utf-8")
+          except UnicodeDecodeError as exc:
+              raise SystemExit("Dockerfile must be valid UTF-8") from exc
           declared = set(json.loads(os.environ["DECLARED_BASE_IMAGES"]))
           logical_lines: list[str] = []
           pending = ""
-          for raw_line in dockerfile.read_text().splitlines():
+          for raw_line in dockerfile_text.splitlines():
               line = raw_line.strip()
-              if re.match(r"(?i)^#\s*(?:syntax|escape)\s*=", line):
+              if re.match(
+                  r'(?i)^(?:(?:#|//)\s*(?:syntax|escape)\s*=|'
+                  r'\{\s*"(?:syntax|escape)"\s*:)',
+                  line,
+              ):
                   raise SystemExit("Dockerfile frontend directives are forbidden")
               if not line or (line.startswith("#") and not pending):
                   continue
@@ -228,6 +252,8 @@ jobs:
                   r"(?i)(?:https?|git|ssh)://|git@", line
               ):
                   raise SystemExit("remote ADD inputs are forbidden")
+              if command == "ADD" and any("$" in field for field in fields[1:]):
+                  raise SystemExit("variable ADD inputs are forbidden")
               if command == "COPY":
                   for field in fields[1:]:
                       if field.startswith("--from="):
@@ -280,6 +306,11 @@ jobs:
                   "declared base images must exactly match Dockerfile FROM inputs"
               )
           PY
+          chmod -R a-w "$verified_root"
+          {
+            printf 'verified_context=%s\n' "$context_path"
+            printf 'verified_dockerfile=%s\n' "$dockerfile_path"
+          } >> "$GITHUB_OUTPUT"
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
@@ -290,8 +321,8 @@ jobs:
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
-          context: workload-source/${{ needs.authorize-request.outputs.context }}
-          file: workload-source/${{ needs.authorize-request.outputs.dockerfile }}
+          context: ${{ steps.source.outputs.verified_context }}
+          file: ${{ steps.source.outputs.verified_dockerfile }}
           target: ${{ needs.authorize-request.outputs.target }}
           platforms: ${{ needs.authorize-request.outputs.architecture }}
           network: none
@@ -306,8 +337,14 @@ jobs:
       - name: Collect workload artifact evidence
         shell: bash
         env:
+          ARCHITECTURE: ${{ needs.authorize-request.outputs.architecture }}
+          BASE_IMAGES: ${{ needs.authorize-request.outputs.base_images }}
+          BUILD_REQUEST_DIGEST: ${{ needs.authorize-request.outputs.request_digest }}
+          CONTEXT_DIGEST: ${{ needs.authorize-request.outputs.context_digest }}
           OCI_MANIFEST_DIGEST: ${{ steps.build.outputs.digest }}
           OUTPUT_REPOSITORY: ${{ needs.authorize-request.outputs.output_repository }}
+          SOURCE_COMMIT: ${{ needs.authorize-request.outputs.source_commit }}
+          TARGET: ${{ needs.authorize-request.outputs.target }}
         run: |
           set -euo pipefail
           case "$OCI_MANIFEST_DIGEST" in
@@ -346,12 +383,34 @@ jobs:
             workload-artifact-output/sbom.json >/dev/null || { echo 'SBOM evidence is empty' >&2; exit 2; }
           jq -e 'if type == "object" or type == "array" then length > 0 else false end' \
             workload-artifact-output/provenance.json >/dev/null || { echo 'provenance evidence is empty' >&2; exit 2; }
+          buildkit_provenance_digest="sha256:$(sha256sum workload-artifact-output/provenance.json | cut -d ' ' -f 1)"
+          jq -n \
+            --arg architecture "$ARCHITECTURE" \
+            --argjson base_images "$BASE_IMAGES" \
+            --arg build_request_digest "$BUILD_REQUEST_DIGEST" \
+            --arg buildkit_provenance_digest "$buildkit_provenance_digest" \
+            --arg context_digest "$CONTEXT_DIGEST" \
+            --arg source_commit "$SOURCE_COMMIT" \
+            --arg target "$TARGET" \
+            '{
+              schema_version: 1,
+              kind: "workload-artifact-build-provenance",
+              build_request_digest: $build_request_digest,
+              source_commit: $source_commit,
+              context_digest: $context_digest,
+              target: $target,
+              architecture: $architecture,
+              base_images: $base_images,
+              buildkit_provenance_digest: $buildkit_provenance_digest
+            }' > workload-artifact-output/provenance-predicate.json
       - name: Sign workload provenance
         id: provenance-attestation
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4
         with:
           subject-name: ${{ needs.authorize-request.outputs.output_repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
+          predicate-type: https://dgx-forge.dev/attestations/workload-artifact-build/v1
+          predicate-path: workload-artifact-output/provenance-predicate.json
           push-to-registry: true
       - name: Sign workload SBOM
         id: sbom-attestation
@@ -424,6 +483,7 @@ jobs:
           path: |
             workload-artifact-output/oci-manifest.json
             workload-artifact-output/provenance.json
+            workload-artifact-output/provenance-predicate.json
             workload-artifact-output/sbom.json
             workload-artifact-output/signed-attestations.json
             workload-artifact-output/signed-provenance.bundle.json
