@@ -247,11 +247,7 @@ def _open_mount_object(
     descriptor = -1
     try:
         receipt = next(
-            (
-                item
-                for item in request.receipts
-                if item.object_digest == object_digest
-            ),
+            (item for item in request.receipts if item.object_digest == object_digest),
             None,
         )
         if receipt is None:
