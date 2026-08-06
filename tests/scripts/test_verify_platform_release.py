@@ -190,7 +190,8 @@ def test_release_verifier_lists_external_gates() -> None:
     report = json.loads(result.stdout)
     assert result.returncode == 2
     assert report["status"] == "blocked"
-    assert "protected-code-host" in report["missing_gates"]
+    assert "protected-code-host" not in report["missing_gates"]
+    assert "protected-code-host-pr-lifecycle" not in report["missing_gates"]
     assert "approved-physical-spark-lifecycle" in report["missing_gates"]
     assert UPDATE_GATES <= set(report["missing_gates"])
     assert report["physical_update_gates"] == {
@@ -204,6 +205,23 @@ def test_release_verifier_lists_external_gates() -> None:
         (ROOT / "schemas/platform-release-evidence.schema.json").read_text()
     )
     jsonschema.validate(report, schema)
+
+
+def test_code_host_pr_lifecycle_requires_success_for_every_required_check() -> None:
+    namespace = runpy.run_path(str(SCRIPT))
+    validate = namespace["_code_host_pr_lifecycle_valid"]
+    required = ["Ruff", "Generated control clients", "PR contract smoke"]
+    valid = {
+        "status": "passed",
+        "pull_request": 11,
+        "merge_commit": "a" * 40,
+        "checks": [
+            {"name": name, "conclusion": "SUCCESS"} for name in required
+        ],
+    }
+    assert validate(valid, required) is True
+    valid["checks"][0]["conclusion"] = "FAILURE"
+    assert validate(valid, required) is False
 
 
 def test_release_verifier_lists_missing_report(tmp_path: Path) -> None:

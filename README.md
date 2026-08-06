@@ -68,6 +68,11 @@ The simulated workload acceptance and failure matrix run on manual/tagged
 workflow executions so release evidence is still produced without charging
 every PR for the longest jobs.
 
+The protected `Main` ruleset requires the three PR checks (`Ruff`, `Generated
+control clients`, and `PR contract smoke`). A successful merged PR lifecycle is
+recorded in `inventory/reports/code-host-protection.json`; heavyweight
+acceptance remains outside the PR path by design.
+
 Configure the authenticated control origin and restrictive token file, then
 inspect current node state and preview the exact server reconciliation plan:
 
