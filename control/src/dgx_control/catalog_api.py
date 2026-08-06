@@ -76,6 +76,15 @@ class RecipeSummaryResponse(StrictModel):
     revision_number: int = Field(ge=1)
     lifecycle: Literal["draft", "blocked", "resolved", "deprecated"]
     content_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    runtime_family: str = Field(min_length=1, max_length=64)
+    runtime_image: str = Field(min_length=1, max_length=512)
+    artifact_count: int = Field(ge=1, le=16)
+    expected_download_bytes: int = Field(ge=1)
+    installed_bytes_per_node: int = Field(ge=1)
+    resident_memory_bytes_per_node: int = Field(ge=1)
+    activation_memory_bytes_per_node: int = Field(ge=1)
+    min_nodes: int = Field(ge=1, le=16)
+    max_nodes: int = Field(ge=1, le=16)
 
 
 class RecipeListResponse(StrictModel):
@@ -113,18 +122,41 @@ def _summary(value: RecipeSummary) -> dict[str, object]:
         "revision_number": value.revision_number,
         "lifecycle": value.lifecycle,
         "content_sha256": value.content_sha256,
+        "runtime_family": value.runtime_family,
+        "runtime_image": value.runtime_image,
+        "artifact_count": value.artifact_count,
+        "expected_download_bytes": value.expected_download_bytes,
+        "installed_bytes_per_node": value.installed_bytes_per_node,
+        "resident_memory_bytes_per_node": value.resident_memory_bytes_per_node,
+        "activation_memory_bytes_per_node": value.activation_memory_bytes_per_node,
+        "min_nodes": value.min_nodes,
+        "max_nodes": value.max_nodes,
     }
 
 
 def _revision(value: RecipeRevisionView) -> dict[str, object]:
+    document = value.document
+    runtime = document["runtime"]
+    resources = document["resources"]
+    topology = document["topology"]
+    artifacts = document["artifacts"]
+    assert isinstance(runtime, dict) and isinstance(resources, dict)
+    assert isinstance(resources["per_node"], dict) and isinstance(topology, dict)
+    assert isinstance(artifacts, list)
+    summary = {
+        "recipe_id": value.recipe_id, "slug": value.slug, "title": value.title,
+        "origin": value.source_kind, "revision_number": value.revision_number,
+        "lifecycle": value.lifecycle, "content_sha256": value.content_sha256,
+        "runtime_family": runtime["family"], "runtime_image": runtime["image"],
+        "artifact_count": len(artifacts),
+        "expected_download_bytes": sum(int(item["expected_bytes"]) for item in artifacts if isinstance(item, dict)),
+        "installed_bytes_per_node": resources["per_node"]["installed_bytes"],
+        "resident_memory_bytes_per_node": resources["per_node"]["resident_memory_bytes"],
+        "activation_memory_bytes_per_node": resources["per_node"]["activation_memory_bytes"],
+        "min_nodes": topology["min_nodes"], "max_nodes": topology["max_nodes"],
+    }
     return {
-        "recipe_id": value.recipe_id,
-        "slug": value.slug,
-        "title": value.title,
-        "origin": value.source_kind,
-        "revision_number": value.revision_number,
-        "lifecycle": value.lifecycle,
-        "content_sha256": value.content_sha256,
+        **summary,
         "id": value.id,
         "description": value.description,
         "schema_version": value.schema_version,

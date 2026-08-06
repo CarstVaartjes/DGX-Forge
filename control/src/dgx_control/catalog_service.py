@@ -75,6 +75,15 @@ class RecipeSummary:
     revision_number: int
     lifecycle: str
     content_sha256: str | None
+    runtime_family: str
+    runtime_image: str
+    artifact_count: int
+    expected_download_bytes: int
+    installed_bytes_per_node: int
+    resident_memory_bytes_per_node: int
+    activation_memory_bytes_per_node: int
+    min_nodes: int
+    max_nodes: int
 
 
 class CatalogService:
@@ -134,15 +143,7 @@ class CatalogService:
             rows = session.execute(statement.limit(limit + 1)).all()
         page = rows[:limit]
         summaries = [
-            RecipeSummary(
-                recipe_id=recipe.id,
-                slug=recipe.slug,
-                title=recipe.title,
-                source_kind=recipe.source_kind,
-                revision_number=revision.revision_number,
-                lifecycle=revision.lifecycle,
-                content_sha256=revision.content_sha256,
-            )
+            _summary(recipe, revision)
             for recipe, revision in page
         ]
         next_cursor = page[-1][0].id if len(rows) > limit else None
@@ -354,4 +355,32 @@ def _view(recipe: LocalRecipe, revision: LocalRecipeRevision) -> RecipeRevisionV
         content_sha256=revision.content_sha256,
         created_by=revision.created_by,
         created_at=revision.created_at,
+    )
+
+
+def _summary(recipe: LocalRecipe, revision: LocalRecipeRevision) -> RecipeSummary:
+    runtime = _mapping(revision.document["runtime"])
+    resources = _mapping(_mapping(revision.document["resources"])["per_node"])
+    topology = _mapping(revision.document["topology"])
+    artifacts = revision.document["artifacts"]
+    assert isinstance(artifacts, list)
+    return RecipeSummary(
+        recipe_id=recipe.id,
+        slug=recipe.slug,
+        title=recipe.title,
+        source_kind=recipe.source_kind,
+        revision_number=revision.revision_number,
+        lifecycle=revision.lifecycle,
+        content_sha256=revision.content_sha256,
+        runtime_family=str(runtime["family"]),
+        runtime_image=str(runtime["image"]),
+        artifact_count=len(artifacts),
+        expected_download_bytes=sum(
+            int(_mapping(artifact)["expected_bytes"]) for artifact in artifacts
+        ),
+        installed_bytes_per_node=int(resources["installed_bytes"]),
+        resident_memory_bytes_per_node=int(resources["resident_memory_bytes"]),
+        activation_memory_bytes_per_node=int(resources["activation_memory_bytes"]),
+        min_nodes=int(topology["min_nodes"]),
+        max_nodes=int(topology["max_nodes"]),
     )

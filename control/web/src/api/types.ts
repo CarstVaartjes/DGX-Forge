@@ -86,6 +86,18 @@ export type PackageRemovalPreview = components["schemas"]["PackageRemovalPreview
 export type PackageRemovalProgress = components["schemas"]["PackageProgressResponse"];
 export type PackagePlan = components["schemas"]["PackagePlanResponse"];
 export type PackageProgress = components["schemas"]["PackageProgressResponse"];
+export type CatalogRecipeSummary = components["schemas"]["RecipeSummaryResponse"];
+export type CatalogRecipeRevision = components["schemas"]["RecipeRevisionResponse"];
+export type CatalogRecipeList = components["schemas"]["RecipeListResponse"];
+export type CatalogRecipeDocument = Record<string, unknown>;
+export interface CatalogApi {
+  catalogRecipes(cursor?: string): Promise<CatalogRecipeList>;
+  catalogRecipe(recipeId: string): Promise<CatalogRecipeRevision>;
+  createCatalogRecipe(input: {slug: string; document: CatalogRecipeDocument}): Promise<CatalogRecipeRevision>;
+  updateCatalogRecipe(recipeId: string, expectedRevision: number, document: CatalogRecipeDocument): Promise<CatalogRecipeRevision>;
+  resolveCatalogRecipe(recipeId: string, expectedRevision: number): Promise<CatalogRecipeRevision>;
+  forkCatalogRecipe(recipeId: string, revision: number, slug: string): Promise<CatalogRecipeRevision>;
+}
 export interface ControlApi {
   fleet(): Promise<FleetResponse>; documents(kind: "models" | "profiles"): Promise<DocumentList>;
   jobs(cursor?: string): Promise<JobsResponse>;

@@ -1972,6 +1972,10 @@ export interface components {
         };
         /** RecipeRevisionResponse */
         RecipeRevisionResponse: {
+            /** Activation Memory Bytes Per Node */
+            activation_memory_bytes_per_node: number;
+            /** Artifact Count */
+            artifact_count: number;
             /** Content Sha256 */
             content_sha256?: string | null;
             /** Created At */
@@ -1984,13 +1988,21 @@ export interface components {
             document: {
                 [key: string]: unknown;
             };
+            /** Expected Download Bytes */
+            expected_download_bytes: number;
             /** Id */
             id: string;
+            /** Installed Bytes Per Node */
+            installed_bytes_per_node: number;
             /**
              * Lifecycle
              * @enum {string}
              */
             lifecycle: "draft" | "blocked" | "resolved" | "deprecated";
+            /** Max Nodes */
+            max_nodes: number;
+            /** Min Nodes */
+            min_nodes: number;
             /**
              * Origin
              * @enum {string}
@@ -1998,8 +2010,14 @@ export interface components {
             origin: "local" | "sparkrun" | "global";
             /** Recipe Id */
             recipe_id: string;
+            /** Resident Memory Bytes Per Node */
+            resident_memory_bytes_per_node: number;
             /** Revision Number */
             revision_number: number;
+            /** Runtime Family */
+            runtime_family: string;
+            /** Runtime Image */
+            runtime_image: string;
             /**
              * Schema Version
              * @constant
@@ -2012,13 +2030,25 @@ export interface components {
         };
         /** RecipeSummaryResponse */
         RecipeSummaryResponse: {
+            /** Activation Memory Bytes Per Node */
+            activation_memory_bytes_per_node: number;
+            /** Artifact Count */
+            artifact_count: number;
             /** Content Sha256 */
             content_sha256?: string | null;
+            /** Expected Download Bytes */
+            expected_download_bytes: number;
+            /** Installed Bytes Per Node */
+            installed_bytes_per_node: number;
             /**
              * Lifecycle
              * @enum {string}
              */
             lifecycle: "draft" | "blocked" | "resolved" | "deprecated";
+            /** Max Nodes */
+            max_nodes: number;
+            /** Min Nodes */
+            min_nodes: number;
             /**
              * Origin
              * @enum {string}
@@ -2026,8 +2056,14 @@ export interface components {
             origin: "local" | "sparkrun" | "global";
             /** Recipe Id */
             recipe_id: string;
+            /** Resident Memory Bytes Per Node */
+            resident_memory_bytes_per_node: number;
             /** Revision Number */
             revision_number: number;
+            /** Runtime Family */
+            runtime_family: string;
+            /** Runtime Image */
+            runtime_image: string;
             /** Slug */
             slug: string;
             /** Title */

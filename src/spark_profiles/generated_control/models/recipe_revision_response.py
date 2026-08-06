@@ -31,30 +31,48 @@ T = TypeVar("T", bound="RecipeRevisionResponse")
 class RecipeRevisionResponse:
     """
         Attributes:
+            activation_memory_bytes_per_node (int):
+            artifact_count (int):
             created_at (str):
             created_by (str):
             description (str):
             document (RecipeRevisionResponseDocument):
+            expected_download_bytes (int):
             id (str):
+            installed_bytes_per_node (int):
             lifecycle (RecipeRevisionResponseLifecycle):
+            max_nodes (int):
+            min_nodes (int):
             origin (RecipeRevisionResponseOrigin):
             recipe_id (str):
+            resident_memory_bytes_per_node (int):
             revision_number (int):
+            runtime_family (str):
+            runtime_image (str):
             schema_version (Literal[1]):
             slug (str):
             title (str):
             content_sha256 (Union[None, Unset, str]):
      """
 
+    activation_memory_bytes_per_node: int
+    artifact_count: int
     created_at: str
     created_by: str
     description: str
     document: 'RecipeRevisionResponseDocument'
+    expected_download_bytes: int
     id: str
+    installed_bytes_per_node: int
     lifecycle: RecipeRevisionResponseLifecycle
+    max_nodes: int
+    min_nodes: int
     origin: RecipeRevisionResponseOrigin
     recipe_id: str
+    resident_memory_bytes_per_node: int
     revision_number: int
+    runtime_family: str
+    runtime_image: str
     schema_version: Literal[1]
     slug: str
     title: str
@@ -66,6 +84,10 @@ class RecipeRevisionResponse:
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.recipe_revision_response_document import RecipeRevisionResponseDocument
+        activation_memory_bytes_per_node = self.activation_memory_bytes_per_node
+
+        artifact_count = self.artifact_count
+
         created_at = self.created_at
 
         created_by = self.created_by
@@ -74,15 +96,29 @@ class RecipeRevisionResponse:
 
         document = self.document.to_dict()
 
+        expected_download_bytes = self.expected_download_bytes
+
         id = self.id
 
+        installed_bytes_per_node = self.installed_bytes_per_node
+
         lifecycle: str = self.lifecycle
+
+        max_nodes = self.max_nodes
+
+        min_nodes = self.min_nodes
 
         origin: str = self.origin
 
         recipe_id = self.recipe_id
 
+        resident_memory_bytes_per_node = self.resident_memory_bytes_per_node
+
         revision_number = self.revision_number
+
+        runtime_family = self.runtime_family
+
+        runtime_image = self.runtime_image
 
         schema_version = self.schema_version
 
@@ -100,15 +136,24 @@ class RecipeRevisionResponse:
         field_dict: dict[str, Any] = {}
 
         field_dict.update({
+            "activation_memory_bytes_per_node": activation_memory_bytes_per_node,
+            "artifact_count": artifact_count,
             "created_at": created_at,
             "created_by": created_by,
             "description": description,
             "document": document,
+            "expected_download_bytes": expected_download_bytes,
             "id": id,
+            "installed_bytes_per_node": installed_bytes_per_node,
             "lifecycle": lifecycle,
+            "max_nodes": max_nodes,
+            "min_nodes": min_nodes,
             "origin": origin,
             "recipe_id": recipe_id,
+            "resident_memory_bytes_per_node": resident_memory_bytes_per_node,
             "revision_number": revision_number,
+            "runtime_family": runtime_family,
+            "runtime_image": runtime_image,
             "schema_version": schema_version,
             "slug": slug,
             "title": title,
@@ -124,6 +169,10 @@ class RecipeRevisionResponse:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.recipe_revision_response_document import RecipeRevisionResponseDocument
         d = dict(src_dict)
+        activation_memory_bytes_per_node = d.pop("activation_memory_bytes_per_node")
+
+        artifact_count = d.pop("artifact_count")
+
         created_at = d.pop("created_at")
 
         created_by = d.pop("created_by")
@@ -135,12 +184,20 @@ class RecipeRevisionResponse:
 
 
 
+        expected_download_bytes = d.pop("expected_download_bytes")
+
         id = d.pop("id")
+
+        installed_bytes_per_node = d.pop("installed_bytes_per_node")
 
         lifecycle = check_recipe_revision_response_lifecycle(d.pop("lifecycle"))
 
 
 
+
+        max_nodes = d.pop("max_nodes")
+
+        min_nodes = d.pop("min_nodes")
 
         origin = check_recipe_revision_response_origin(d.pop("origin"))
 
@@ -149,7 +206,13 @@ class RecipeRevisionResponse:
 
         recipe_id = d.pop("recipe_id")
 
+        resident_memory_bytes_per_node = d.pop("resident_memory_bytes_per_node")
+
         revision_number = d.pop("revision_number")
+
+        runtime_family = d.pop("runtime_family")
+
+        runtime_image = d.pop("runtime_image")
 
         schema_version = cast(Literal[1] , d.pop("schema_version"))
         if schema_version != 1:
@@ -170,15 +233,24 @@ class RecipeRevisionResponse:
 
 
         recipe_revision_response = cls(
+            activation_memory_bytes_per_node=activation_memory_bytes_per_node,
+            artifact_count=artifact_count,
             created_at=created_at,
             created_by=created_by,
             description=description,
             document=document,
+            expected_download_bytes=expected_download_bytes,
             id=id,
+            installed_bytes_per_node=installed_bytes_per_node,
             lifecycle=lifecycle,
+            max_nodes=max_nodes,
+            min_nodes=min_nodes,
             origin=origin,
             recipe_id=recipe_id,
+            resident_memory_bytes_per_node=resident_memory_bytes_per_node,
             revision_number=revision_number,
+            runtime_family=runtime_family,
+            runtime_image=runtime_image,
             schema_version=schema_version,
             slug=slug,
             title=title,

@@ -3377,6 +3377,17 @@
       "RecipeRevisionResponse": {
         "additionalProperties": false,
         "properties": {
+          "activation_memory_bytes_per_node": {
+            "minimum": 1.0,
+            "title": "Activation Memory Bytes Per Node",
+            "type": "integer"
+          },
+          "artifact_count": {
+            "maximum": 16.0,
+            "minimum": 1.0,
+            "title": "Artifact Count",
+            "type": "integer"
+          },
           "content_sha256": {
             "anyOf": [
               {
@@ -3410,10 +3421,20 @@
             "title": "Document",
             "type": "object"
           },
+          "expected_download_bytes": {
+            "minimum": 1.0,
+            "title": "Expected Download Bytes",
+            "type": "integer"
+          },
           "id": {
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
             "title": "Id",
             "type": "string"
+          },
+          "installed_bytes_per_node": {
+            "minimum": 1.0,
+            "title": "Installed Bytes Per Node",
+            "type": "integer"
           },
           "lifecycle": {
             "enum": [
@@ -3424,6 +3445,18 @@
             ],
             "title": "Lifecycle",
             "type": "string"
+          },
+          "max_nodes": {
+            "maximum": 16.0,
+            "minimum": 1.0,
+            "title": "Max Nodes",
+            "type": "integer"
+          },
+          "min_nodes": {
+            "maximum": 16.0,
+            "minimum": 1.0,
+            "title": "Min Nodes",
+            "type": "integer"
           },
           "origin": {
             "enum": [
@@ -3439,10 +3472,27 @@
             "title": "Recipe Id",
             "type": "string"
           },
+          "resident_memory_bytes_per_node": {
+            "minimum": 1.0,
+            "title": "Resident Memory Bytes Per Node",
+            "type": "integer"
+          },
           "revision_number": {
             "minimum": 1.0,
             "title": "Revision Number",
             "type": "integer"
+          },
+          "runtime_family": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Runtime Family",
+            "type": "string"
+          },
+          "runtime_image": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Runtime Image",
+            "type": "string"
           },
           "schema_version": {
             "const": 1,
@@ -3468,6 +3518,15 @@
           "origin",
           "revision_number",
           "lifecycle",
+          "runtime_family",
+          "runtime_image",
+          "artifact_count",
+          "expected_download_bytes",
+          "installed_bytes_per_node",
+          "resident_memory_bytes_per_node",
+          "activation_memory_bytes_per_node",
+          "min_nodes",
+          "max_nodes",
           "id",
           "description",
           "schema_version",
@@ -3481,6 +3540,17 @@
       "RecipeSummaryResponse": {
         "additionalProperties": false,
         "properties": {
+          "activation_memory_bytes_per_node": {
+            "minimum": 1.0,
+            "title": "Activation Memory Bytes Per Node",
+            "type": "integer"
+          },
+          "artifact_count": {
+            "maximum": 16.0,
+            "minimum": 1.0,
+            "title": "Artifact Count",
+            "type": "integer"
+          },
           "content_sha256": {
             "anyOf": [
               {
@@ -3493,6 +3563,16 @@
             ],
             "title": "Content Sha256"
           },
+          "expected_download_bytes": {
+            "minimum": 1.0,
+            "title": "Expected Download Bytes",
+            "type": "integer"
+          },
+          "installed_bytes_per_node": {
+            "minimum": 1.0,
+            "title": "Installed Bytes Per Node",
+            "type": "integer"
+          },
           "lifecycle": {
             "enum": [
               "draft",
@@ -3502,6 +3582,18 @@
             ],
             "title": "Lifecycle",
             "type": "string"
+          },
+          "max_nodes": {
+            "maximum": 16.0,
+            "minimum": 1.0,
+            "title": "Max Nodes",
+            "type": "integer"
+          },
+          "min_nodes": {
+            "maximum": 16.0,
+            "minimum": 1.0,
+            "title": "Min Nodes",
+            "type": "integer"
           },
           "origin": {
             "enum": [
@@ -3517,10 +3609,27 @@
             "title": "Recipe Id",
             "type": "string"
           },
+          "resident_memory_bytes_per_node": {
+            "minimum": 1.0,
+            "title": "Resident Memory Bytes Per Node",
+            "type": "integer"
+          },
           "revision_number": {
             "minimum": 1.0,
             "title": "Revision Number",
             "type": "integer"
+          },
+          "runtime_family": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Runtime Family",
+            "type": "string"
+          },
+          "runtime_image": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Runtime Image",
+            "type": "string"
           },
           "slug": {
             "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
@@ -3540,7 +3649,16 @@
           "title",
           "origin",
           "revision_number",
-          "lifecycle"
+          "lifecycle",
+          "runtime_family",
+          "runtime_image",
+          "artifact_count",
+          "expected_download_bytes",
+          "installed_bytes_per_node",
+          "resident_memory_bytes_per_node",
+          "activation_memory_bytes_per_node",
+          "min_nodes",
+          "max_nodes"
         ],
         "title": "RecipeSummaryResponse",
         "type": "object"

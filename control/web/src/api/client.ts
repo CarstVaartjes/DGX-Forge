@@ -24,6 +24,9 @@ import type {
   UpdatePlan,
   UpdateRollout,
   UpdateSkew,
+  CatalogRecipeDocument,
+  CatalogRecipeList,
+  CatalogRecipeRevision,
 } from "./types";
 import type {
   PackageCandidate,
@@ -164,6 +167,30 @@ export class ApiClient implements ControlApi {
     const response = await fetch(path, {...init, headers, credentials: "same-origin"});
     if (!response.ok) throw new Error(`Control API returned ${response.status}`);
     return response.json() as Promise<T>;
+  }
+
+  async catalogRecipes(cursor?: string): Promise<CatalogRecipeList> {
+    return resultData(await this.generated.GET("/api/v1/catalog/recipes", {params: {query: {cursor, limit: 20}}}));
+  }
+
+  async catalogRecipe(recipeId: string): Promise<CatalogRecipeRevision> {
+    return resultData(await this.generated.GET("/api/v1/catalog/recipes/{recipe_id}", {params: {path: {recipe_id: recipeId}}}));
+  }
+
+  async createCatalogRecipe(input: {slug: string; document: CatalogRecipeDocument}): Promise<CatalogRecipeRevision> {
+    return resultData(await this.generated.POST("/api/v1/catalog/recipes", {body: input}));
+  }
+
+  async updateCatalogRecipe(recipeId: string, expectedRevision: number, document: CatalogRecipeDocument): Promise<CatalogRecipeRevision> {
+    return resultData(await this.generated.PUT("/api/v1/catalog/recipes/{recipe_id}/draft", {params: {path: {recipe_id: recipeId}}, body: {expected_revision: expectedRevision, document}}));
+  }
+
+  async resolveCatalogRecipe(recipeId: string, expectedRevision: number): Promise<CatalogRecipeRevision> {
+    return resultData(await this.generated.POST("/api/v1/catalog/recipes/{recipe_id}/resolve", {params: {path: {recipe_id: recipeId}}, body: {expected_revision: expectedRevision}}));
+  }
+
+  async forkCatalogRecipe(recipeId: string, revision: number, slug: string): Promise<CatalogRecipeRevision> {
+    return resultData(await this.generated.POST("/api/v1/catalog/recipes/{recipe_id}/fork", {params: {path: {recipe_id: recipeId}}, body: {revision, slug}}));
   }
 
   async fleet(): Promise<FleetResponse> {
