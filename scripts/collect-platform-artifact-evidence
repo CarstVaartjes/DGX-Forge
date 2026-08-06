@@ -21,6 +21,7 @@ _LOCATOR = re.compile(
 _NAME = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
 _MAX_MANIFEST = 16 * 1024 * 1024
 _MAX_EVIDENCE = 16 * 1024 * 1024
+_MAX_PAYLOAD = 256 * 1024 * 1024
 
 
 class EvidenceError(RuntimeError):
@@ -88,6 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--sbom", required=True, type=Path)
     parser.add_argument("--provenance", required=True, type=Path)
+    parser.add_argument("--payload", type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args(argv)
     try:
@@ -103,6 +105,12 @@ def main(argv: list[str] | None = None) -> int:
             raise EvidenceError("OCI manifest digest does not match reference")
         sbom = _read(args.sbom, maximum=_MAX_EVIDENCE, canonical=True)
         provenance = _read(args.provenance, maximum=_MAX_EVIDENCE, canonical=True)
+        architecture_locator = re.fullmatch(
+            r"(?:agents|supervisors|tooling)\.linux-(?:arm64|x86_64)",
+            args.locator,
+        ) is not None
+        if architecture_locator != (args.payload is not None):
+            raise EvidenceError("platform payload evidence is required only for architecture artifacts")
         document = {
             "artifact": {
                 "name": args.name,
@@ -115,6 +123,15 @@ def main(argv: list[str] | None = None) -> int:
             "locator": args.locator,
             "schema_version": 1,
         }
+        if args.payload is not None:
+            payload = _read(args.payload, maximum=_MAX_PAYLOAD, canonical=False)
+            if _NAME.fullmatch(args.payload.name) is None:
+                raise EvidenceError("platform payload identity is invalid")
+            document["payload"] = {
+                "name": args.payload.name,
+                "sha256": hashlib.sha256(payload).hexdigest(),
+                "size": len(payload),
+            }
         _write_new(args.output, _canonical(document))
     except (EvidenceError, OSError) as error:
         print(f"collect-platform-artifact-evidence: {error}", file=sys.stderr)

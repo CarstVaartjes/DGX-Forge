@@ -18,6 +18,7 @@ def _copy(tmp_path: Path) -> Path:
         ".github/workflows/workload-artifacts.yml",
         ".github/dependabot.yml",
         "pyproject.toml",
+        "release/platform/0.1.0.input.json",
         "schemas/control-deployment-bundle.schema.json",
         "schemas/platform-update-manifest.schema.json",
         "schemas/workload-artifact-build.schema.json",
@@ -164,6 +165,24 @@ def test_supply_chain_manifest_binds_spark_platform_artifact_tools(
     repository = _copy(tmp_path)
     candidate = repository / path
     candidate.write_bytes(candidate.read_bytes() + b"\n# drift\n")
+
+    result = subprocess.run(
+        [SCRIPT, "--root", repository, "--json"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "manifest" in " ".join(json.loads(result.stdout)["errors"]).lower()
+
+
+def test_supply_chain_manifest_binds_reviewed_platform_release_input(
+    tmp_path: Path,
+) -> None:
+    repository = _copy(tmp_path)
+    release_input = repository / "release/platform/0.1.0.input.json"
+    release_input.write_bytes(release_input.read_bytes() + b"\n")
 
     result = subprocess.run(
         [SCRIPT, "--root", repository, "--json"],

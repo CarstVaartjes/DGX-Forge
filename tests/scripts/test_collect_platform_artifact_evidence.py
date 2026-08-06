@@ -122,9 +122,11 @@ def test_collector_accepts_typed_arm64_platform_artifact_locators(
     sbom_path = tmp_path / "sbom.json"
     provenance_path = tmp_path / "provenance.json"
     output = tmp_path / "evidence.json"
+    payload_path = tmp_path / "platform-artifact"
     manifest_path.write_bytes(manifest)
     sbom_path.write_bytes(_canonical({"kind": "sbom"}))
     provenance_path.write_bytes(_canonical({"kind": "provenance"}))
+    payload_path.write_bytes(b"platform payload" * 8)
 
     result = subprocess.run(
         [
@@ -141,6 +143,8 @@ def test_collector_accepts_typed_arm64_platform_artifact_locators(
             sbom_path,
             "--provenance",
             provenance_path,
+            "--payload",
+            payload_path,
             "--output",
             output,
         ],
@@ -150,7 +154,13 @@ def test_collector_accepts_typed_arm64_platform_artifact_locators(
     )
 
     assert result.returncode == 0, result.stderr
-    assert json.loads(output.read_bytes())["locator"] == locator
+    evidence = json.loads(output.read_bytes())
+    assert evidence["locator"] == locator
+    assert evidence["payload"] == {
+        "name": "platform-artifact",
+        "sha256": hashlib.sha256(payload_path.read_bytes()).hexdigest(),
+        "size": payload_path.stat().st_size,
+    }
 
 
 def test_collector_rejects_unknown_platform_artifact_architecture(

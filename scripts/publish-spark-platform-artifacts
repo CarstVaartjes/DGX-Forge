@@ -376,6 +376,8 @@ def publish(args: argparse.Namespace) -> dict[str, object]:
                 str(sbom),
                 "--provenance",
                 str(provenance),
+                "--payload",
+                str(payload.path),
                 "--output",
                 str(args.output_root / f"{payload.key}-evidence.json"),
             ]

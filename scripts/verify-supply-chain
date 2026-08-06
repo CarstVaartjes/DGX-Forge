@@ -339,6 +339,13 @@ def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
         "src/spark_profiles/update_trust.py",
     )
     input_paths += workload_package_inputs(root)
+    release_root = root / "release/platform"
+    if release_root.is_dir():
+        input_paths += tuple(
+            path.relative_to(root).as_posix()
+            for path in sorted(release_root.glob("*.input.json"))
+            if path.is_file()
+        )
     deployment_bundle = control_deployment_bundle(root)
     manifest = {
         "schema_version": 2,

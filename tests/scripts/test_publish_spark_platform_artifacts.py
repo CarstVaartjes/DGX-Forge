@@ -145,6 +145,11 @@ def test_publisher_pushes_attaches_and_binds_all_exact_payloads(tmp_path: Path) 
         assert evidence["artifact"]["reference"] == (
             f"{repository}@sha256:{manifest_digest}"
         )
+        assert evidence["payload"] == {
+            "name": filename,
+            "sha256": hashlib.sha256((payloads / filename).read_bytes()).hexdigest(),
+            "size": (payloads / filename).stat().st_size,
+        }
         assert receipt["artifacts"][key] == evidence["artifact"]["reference"]
         sbom = json.loads((output / f"{key}-sbom.json").read_bytes())
         provenance = json.loads((output / f"{key}-provenance.json").read_bytes())
