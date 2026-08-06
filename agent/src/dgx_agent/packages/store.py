@@ -235,6 +235,189 @@ class ContentStore:
             bytes_reserved=bytes_required,
         )
 
+    def reserve_component(
+        self,
+        operation: OperationBinding,
+        descriptor: object,
+    ) -> Reservation:
+        """Reserve a component while coalescing concurrent same-digest fetches.
+
+        A normal reservation accounts for the complete component size.  When
+        another operation already owns the same digest, no second capacity
+        reservation is needed: the caller receives a zero-byte shared
+        reservation and waits for the owner's verified promotion.  A stale
+        partial with no owner reservation is adopted by the new fence and its
+        remaining bytes are reserved normally.
+        """
+
+        if not isinstance(operation, OperationBinding):
+            raise TypeError("package reservation operation is invalid")
+        descriptor, component_name = _component_descriptor(descriptor)
+        self._state.begin_operation(operation, phase="reserve")
+        with self._state.transaction() as connection:
+            self._state.assert_binding(connection, operation)
+            existing_reservation = connection.execute(
+                "SELECT attempt, fence, bytes_reserved FROM reservations "
+                "WHERE operation_id = ?",
+                (operation.operation_id,),
+            ).fetchone()
+            if existing_reservation is not None:
+                if (
+                    existing_reservation["attempt"] != operation.attempt
+                    or existing_reservation["fence"] != operation.fence
+                ):
+                    raise PackageStateConflict(
+                        "capacity reservation disagrees with operation fence"
+                    )
+                return Reservation(
+                    operation.job_id,
+                    operation.operation_id,
+                    operation.attempt,
+                    operation.fence,
+                    operation.node_id,
+                    existing_reservation["bytes_reserved"],
+                )
+            component = connection.execute(
+                "SELECT name, size, kind, state, operation_id, attempt, fence "
+                "FROM components WHERE digest = ?",
+                (descriptor.digest,),
+            ).fetchone()
+            if component is not None:
+                if (
+                    component["name"] != component_name
+                    or component["size"] != descriptor.size
+                    or component["kind"] != descriptor.kind
+                ):
+                    raise PackageStoreError(
+                        "component digest metadata is inconsistent"
+                    )
+                if component["state"] == "complete":
+                    bytes_reserved = 0
+                else:
+                    owner = connection.execute(
+                        "SELECT operation_id, attempt, fence, bytes_reserved "
+                        "FROM reservations WHERE operation_id = ?",
+                        (component["operation_id"],),
+                    ).fetchone()
+                    if owner is not None:
+                        # The owner already accounts for the bytes on disk;
+                        # coalesce this request rather than overcommitting.
+                        bytes_reserved = 0
+                    else:
+                        # A crashed owner released its reservation.  Adopt its
+                        # partial under this fence and account for its size.
+                        bytes_reserved = descriptor.size
+                        connection.execute(
+                            "UPDATE components SET operation_id=?, attempt=?, fence=? "
+                            "WHERE digest=?",
+                            (
+                                operation.operation_id,
+                                operation.attempt,
+                                operation.fence,
+                                descriptor.digest,
+                            ),
+                        )
+                        connection.execute(
+                            "UPDATE partials SET operation_id=?, attempt=?, fence=? "
+                            "WHERE digest=?",
+                            (
+                                operation.operation_id,
+                                operation.attempt,
+                                operation.fence,
+                                descriptor.digest,
+                            ),
+                        )
+                connection.execute(
+                    "INSERT INTO reservations "
+                    "(operation_id, attempt, fence, bytes_reserved) VALUES (?, ?, ?, ?)",
+                    (
+                        operation.operation_id,
+                        operation.attempt,
+                        operation.fence,
+                        bytes_reserved,
+                    ),
+                )
+                return Reservation(
+                    operation.job_id,
+                    operation.operation_id,
+                    operation.attempt,
+                    operation.fence,
+                    operation.node_id,
+                    bytes_reserved,
+                )
+            committed = connection.execute(
+                "SELECT COALESCE(SUM(size), 0) FROM components "
+                "WHERE state = 'complete'"
+            ).fetchone()[0]
+            reserved = connection.execute(
+                "SELECT COALESCE(SUM(bytes_reserved), 0) FROM reservations"
+            ).fetchone()[0]
+            capacity = self._logical_capacity()
+            if committed + reserved + descriptor.size > capacity:
+                raise PackageCapacityError("package store capacity is insufficient")
+            available = _available_bytes(self._root)
+            if descriptor.size > available:
+                raise PackageCapacityError("package store filesystem is full")
+            connection.execute(
+                "INSERT INTO reservations "
+                "(operation_id, attempt, fence, bytes_reserved) VALUES (?, ?, ?, ?)",
+                (
+                    operation.operation_id,
+                    operation.attempt,
+                    operation.fence,
+                    descriptor.size,
+                ),
+            )
+            return Reservation(
+                operation.job_id,
+                operation.operation_id,
+                operation.attempt,
+                operation.fence,
+                operation.node_id,
+                descriptor.size,
+            )
+
+    def wait_for_component(
+        self,
+        operation: OperationBinding,
+        digest: str,
+        size: int,
+        cancelled: Callable[[], bool],
+        *,
+        deadline: object | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> StoreObject | None:
+        """Wait for another operation to promote a shared component.
+
+        The method never reads or returns partial bytes.  A bounded timeout
+        lets the caller classify an owner outage as retryable and recover on a
+        subsequent fenced attempt.
+        """
+
+        if not isinstance(operation, OperationBinding):
+            raise TypeError("package wait operation is invalid")
+        digest = _raw_digest(digest)
+        if type(size) is not int or size < 0:
+            raise ValueError("package wait size is invalid")
+        if not callable(cancelled):
+            raise TypeError("package wait cancellation callback is invalid")
+        if not isinstance(timeout_seconds, (int, float)) or timeout_seconds <= 0:
+            raise ValueError("package wait timeout is invalid")
+        started = time.monotonic()
+        while time.monotonic() - started < timeout_seconds:
+            if cancelled():
+                return None
+            if deadline is not None and hasattr(deadline, "check"):
+                try:
+                    deadline.check()
+                except Exception:
+                    return None
+            cached = self.lookup(digest, size)
+            if cached is not None:
+                return cached
+            time.sleep(0.02)
+        return self.lookup(digest, size)
+
     def release_reservation(self, reservation: Reservation) -> None:
         if not isinstance(reservation, Reservation):
             raise TypeError("package reservation is invalid")
@@ -284,10 +467,6 @@ class ContentStore:
                 ):
                     raise PackageStateConflict(
                         "package reservation ownership is invalid"
-                    )
-                if descriptor.size > reservation.bytes_reserved:
-                    raise PackageCapacityError(
-                        "component exceeds its capacity reservation"
                     )
                 component = connection.execute(
                     "SELECT name, size, kind, state, relative_name, operation_id, "
@@ -356,6 +535,10 @@ class ContentStore:
                         bytes_completed=partial["bytes_written"],
                         validators=_validators(partial),
                         state="shared",
+                    )
+                if descriptor.size > reservation.bytes_reserved:
+                    raise PackageCapacityError(
+                        "component exceeds its capacity reservation"
                     )
                 partial_name, device, inode, ctime_ns = self._create_partial(
                     reservation,

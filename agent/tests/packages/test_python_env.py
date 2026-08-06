@@ -310,6 +310,66 @@ def test_runtime_identity_is_exported_from_package_namespace() -> None:
     assert ExportedIdentity is PythonRuntimeIdentity
 
 
+def test_wheel_expanded_size_is_checked_before_member_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dgx_agent.packages import python_env
+
+    wheel_bytes = _wheel()
+    wheel = zipfile.ZipFile(io.BytesIO(wheel_bytes))
+    package_info = next(
+        info for info in wheel.infolist() if info.filename.endswith("__init__.py")
+    )
+    wheel.close()
+    monkeypatch.setattr(python_env, "_MAX_ENVIRONMENT_BYTES", 1)
+
+    store = ObjectStore(tmp_path / "store")
+    wheel_object = store.add(wheel_bytes, kind="wheel")
+    lock = store.add(_pylock("demo", wheel_object.digest), kind="pylock")
+    original_read = zipfile.ZipFile.read
+
+    def read(archive: zipfile.ZipFile, member, *args, **kwargs):
+        if getattr(member, "filename", member) == package_info.filename:
+            raise AssertionError("oversized wheel member was read")
+        return original_read(archive, member, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", read)
+    with pytest.raises(PythonEnvironmentError, match="exceeds"):
+        _builder(store).build(
+            _spec(lock, (wheel_object,)),
+            {lock.digest: lock, wheel_object.digest: wheel_object},
+            _binding(),
+        )
+
+
+def test_failed_environment_publication_releases_capacity_reservation(
+    tmp_path: Path,
+) -> None:
+    store = ContentStore(tmp_path / "store", capacity_bytes=8 * 1024**2)
+    wheel = _add_real(store, _real_binding(1), _wheel(), "wheel")
+    lock = _add_real(
+        store,
+        _real_binding(2),
+        _pylock("demo", wheel.digest),
+        "pylock",
+    )
+
+    def fail_promote(*args, **kwargs):
+        raise RuntimeError("simulated publication failure")
+
+    store.promote_component = fail_promote  # type: ignore[method-assign]
+    with pytest.raises(PythonEnvironmentError, match="publication"):
+        _builder(store).build(
+            _spec(lock, (wheel,)),
+            {lock.digest: lock, wheel.digest: wheel},
+            _real_binding(3),
+        )
+
+    with store.state.transaction() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM reservations").fetchone()[0] == 0
+
+
 def test_complete_lock_build_is_reproducible_immutable_and_reused(
     tmp_path: Path,
 ) -> None:

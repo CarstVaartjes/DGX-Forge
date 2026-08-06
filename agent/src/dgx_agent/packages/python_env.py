@@ -466,6 +466,18 @@ def _environment_entries(
                     path = _wheel_path(info)
                     if info.is_dir():
                         continue
+                    # Check the declared expanded size before asking zipfile to
+                    # allocate/decompress the member.  This keeps a malicious
+                    # wheel bomb bounded even when the archive is highly
+                    # compressed.
+                    if (
+                        not isinstance(info.file_size, int)
+                        or info.file_size < 0
+                        or total > _MAX_ENVIRONMENT_BYTES - info.file_size
+                    ):
+                        raise PythonEnvironmentError(
+                            "Python environment exceeds materialization limit"
+                        )
                     destination = f"lib/python/site-packages/{path.as_posix()}"
                     if destination in entries:
                         raise PythonEnvironmentError(
@@ -741,14 +753,18 @@ def _publish(
 
         digest = hashlib.sha256(content).hexdigest()
         reservation = store.reserve(binding, bytes_required=len(content))
-        record = store.begin_component(
-            reservation,
-            ComponentDescriptor(digest, len(content), "python-environment"),
-        )
-        if record.state == "partial":
-            record = store.write_partial(record, content)
-        result = store.promote_component(record, digest)
-        store.release_reservation(reservation)
+        try:
+            record = store.begin_component(
+                reservation,
+                ComponentDescriptor(digest, len(content), "python-environment"),
+            )
+            if record.state == "partial":
+                record = store.write_partial(record, content)
+            result = store.promote_component(record, digest)
+        finally:
+            # A failed build must not strand a durable capacity reservation;
+            # otherwise every later retry can be rejected as over capacity.
+            store.release_reservation(reservation)
         _record_derived(store, binding, derivation_digest, result)
         return result
     except PythonEnvironmentError:
