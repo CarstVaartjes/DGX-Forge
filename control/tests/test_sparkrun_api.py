@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import hashlib
+import json
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -12,6 +14,8 @@ from dgx_control.audit import MemoryAuditStore
 from dgx_control.auth import Actor, TokenCodec
 from dgx_control.models import Base, LocalRecipe, RecipeImport
 from dgx_control.sparkrun_workflow import SparkRunWorkflow
+from dgx_control.registry_resolution import ManifestEnvelope
+from dgx_control.model_resolution import ModelFile, SnapshotEnvelope
 
 
 class Jobs:
@@ -65,3 +69,29 @@ def test_apply_rejects_stale_preview_and_operator(tmp_path: Path) -> None:
     stale = client.post("/api/v1/catalog/imports/sparkrun", headers=headers, json={"source_yaml": source, "source_sha256": "a"*64, "report_digest": "b"*64})
     assert stale.status_code == 409
     assert stale.json()["code"] == "sparkrun.stale_preview"
+
+
+def test_workflow_resolves_with_verified_metadata_and_overlays(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite:///{tmp_path/'resolve.sqlite'}")
+    Base.metadata.create_all(engine); sessions = sessionmaker(engine, expire_on_commit=False)
+    workflow = SparkRunWorkflow(sessions, clock=lambda: datetime(2026, 8, 7, tzinfo=UTC), registry=_Registry(), models=_Models())
+    raw = (Path(__file__).parent / "fixtures/sparkrun/minimal-vllm.yaml").read_bytes()
+    preview = workflow.preview(raw)
+    applied = workflow.apply(raw, source_sha256=preview.source_sha256, report_digest=preview.report_digest, actor="admin")
+
+    resolved = workflow.resolve(applied.recipe_id, expected_revision=1, overlays={"resources": {"download_bytes": 100, "installed_bytes": 150, "staging_bytes": 50, "resident_memory_bytes": 200, "activation_memory_bytes": 25}, "security_acknowledged": True}, actor="admin")
+    assert resolved.revision_number == 2
+    assert len(resolved.content_sha256) == 64
+
+
+class _Registry:
+    def resolve(self, host): return ("93.184.216.34",)
+    def manifest(self, host, repository, reference, *, maximum_bytes):
+        document = {"mediaType": "application/vnd.oci.image.manifest.v1+json", "layers": [{"digest": "sha256:" + "b"*64, "size": 50}]}
+        body = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+        return ManifestEnvelope(body, "sha256:" + hashlib.sha256(body).hexdigest(), document["mediaType"], "linux/arm64", ())
+
+
+class _Models:
+    def snapshot(self, repository, revision, *, maximum_files):
+        return SnapshotEnvelope(repository, revision, (ModelFile("model.safetensors", 100),))

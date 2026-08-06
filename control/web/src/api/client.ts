@@ -27,6 +27,8 @@ import type {
   CatalogRecipeDocument,
   CatalogRecipeList,
   CatalogRecipeRevision,
+  SparkRunApplied,
+  SparkRunPreview,
 } from "./types";
 import type {
   PackageCandidate,
@@ -191,6 +193,14 @@ export class ApiClient implements ControlApi {
 
   async forkCatalogRecipe(recipeId: string, revision: number, slug: string): Promise<CatalogRecipeRevision> {
     return resultData(await this.generated.POST("/api/v1/catalog/recipes/{recipe_id}/fork", {params: {path: {recipe_id: recipeId}}, body: {revision, slug}}));
+  }
+
+  previewSparkRun(sourceYaml: string): Promise<SparkRunPreview> {
+    return this.request("/api/v1/catalog/imports/sparkrun/preview", {method: "POST", body: JSON.stringify({source_yaml: sourceYaml})});
+  }
+
+  applySparkRun(sourceYaml: string, sourceSha256: string, reportDigest: string): Promise<SparkRunApplied> {
+    return this.request("/api/v1/catalog/imports/sparkrun", {method: "POST", body: JSON.stringify({source_yaml: sourceYaml, source_sha256: sourceSha256, report_digest: reportDigest})});
   }
 
   async fleet(): Promise<FleetResponse> {
