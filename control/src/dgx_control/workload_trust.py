@@ -918,6 +918,7 @@ class WorkloadTrustDelivery:
         target_root: Path,
         max_metadata_bytes: int = _MAX_METADATA_BYTES,
         max_target_bytes: int = _MAX_LOCK_BYTES,
+        clock: Callable[[], datetime] | None = None,
     ) -> None:
         if (
             type(max_metadata_bytes) is not int
@@ -933,6 +934,7 @@ class WorkloadTrustDelivery:
         self._target_root = Path(target_root)
         self._max_metadata_bytes = max_metadata_bytes
         self._max_target_bytes = max_target_bytes
+        self._clock = clock or (lambda: datetime.now().astimezone())
 
     def metadata(self, role: str) -> bytes:
         match = _METADATA_ROLE.fullmatch(role) if isinstance(role, str) else None
@@ -989,3 +991,37 @@ class WorkloadTrustDelivery:
         if hashlib.sha256(raw).hexdigest() != digest:
             raise WorkloadTrustError("workload target digest mismatch")
         return raw
+
+    def authorize_release(
+        self, release_digest: str, lock_bytes: bytes, git_commit: str
+    ) -> bool:
+        """Verify one exact release target and its NAS Git provenance binding.
+
+        This is the read-only trust boundary consumed by desired-state
+        resolution.  It never signs or mutates metadata: publication remains
+        owned by :class:`WorkloadTrustPublisher`.
+        """
+        if (
+            not isinstance(release_digest, str)
+            or _SHA256.fullmatch(release_digest) is None
+            or not isinstance(lock_bytes, bytes)
+            or not isinstance(git_commit, str)
+            or _GIT_COMMIT.fullmatch(git_commit) is None
+        ):
+            return False
+        try:
+            now = self._clock()
+            if now.tzinfo is None or now.utcoffset() is None:
+                return False
+            repository = _load_repository(self._metadata_root, now.astimezone())
+            target_name = f"releases/{release_digest}.json"
+            target = repository.releases.signed.targets.get(target_name)
+            if target is None:
+                return False
+            target.verify_length_and_hashes(lock_bytes)
+            custom = target.unrecognized_fields.get("custom")
+            return isinstance(custom, Mapping) and custom.get("git_commit") == git_commit
+        except (OSError, ValueError, TypeError, KeyError, WorkloadTrustError):
+            return False
+        except Exception:  # noqa: BLE001 - TUF verification must fail closed
+            return False

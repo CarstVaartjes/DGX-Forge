@@ -243,6 +243,23 @@ def test_shared_package_lock_bytes_are_the_exact_workload_tuf_target(
     assert hashlib.sha256(delivered).hexdigest() == lock.digest
 
 
+def test_delivery_authorizes_release_only_for_exact_git_commit(
+    tmp_path: Path,
+) -> None:
+    publisher, _signers_value, metadata_root, target_root = _publisher(tmp_path)
+    lock_bytes = _lock_bytes()
+    trusted = publisher.publish(lock_bytes, COMMIT, _evidence(lock_bytes))
+    delivery = WorkloadTrustDelivery(
+        metadata_root=metadata_root,
+        target_root=target_root,
+    )
+
+    assert delivery.authorize_release(trusted.digest, lock_bytes, COMMIT) is True
+    assert delivery.authorize_release(trusted.digest, lock_bytes, "d" * 40) is False
+    assert delivery.authorize_release("0" * 64, lock_bytes, COMMIT) is False
+    assert delivery.authorize_release(trusted.digest, lock_bytes + b"x", COMMIT) is False
+
+
 @pytest.mark.parametrize(
     "target_name",
     (

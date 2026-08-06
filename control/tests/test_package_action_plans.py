@@ -170,3 +170,86 @@ def test_removal_uses_real_agent_job_boundary(tmp_path) -> None:
         assert operation is not None
         assert operation.kind == "package.remove"
         assert operation.node_id == node_id
+
+
+def test_rollout_preview_and_apply_use_digest_plan_and_existing_orchestrator(tmp_path) -> None:
+    engine = build_engine(f"sqlite:///{tmp_path / 'plans.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = session_factory(engine)
+    node_id = "spk_" + "4" * 32
+    queued: list[tuple[str, str, dict[str, object]]] = []
+
+    class Jobs:
+        def enqueue_in_session(self, session, job_id, node_id, operation, base_commit, payload, *, operation_id):
+            del session, job_id, base_commit, operation_id
+            queued.append((node_id, operation, dict(payload)))
+            return type("Stored", (), {"id": "operation-id"})()
+
+        def notify_available(self):
+            return None
+
+    root = RepositoryService(Path(__file__).resolve().parents[2])
+    service = ProductionPackageProjectionService(
+        root,
+        sessions,
+        fleet=lambda: {
+            "nodes": [
+                {
+                    "id": node_id,
+                    "healthy": True,
+                    "agent_state": "active",
+                    "agent_online": True,
+                    "memory_available_bytes": 2_000_000_000_000,
+                    "disk_available_bytes": 2_000_000_000_000,
+                    "labels": {},
+                    "capabilities": ["package-abi-v1"],
+                    "architecture": "arm64",
+                    "operating_system": "linux",
+                }
+            ]
+        },
+        agent_jobs=Jobs(),
+        package_trust=lambda _release, _lock, _commit: True,
+    )
+    preview = service.rollout_preview("ds4-deepseek-single")
+    assert preview["state"] == "ready"
+    result = service.rollout(
+        "ds4-deepseek-single", preview["digest"], "admin", "request-rollout"
+    )
+    assert result["state"] in {"planned", "running"}
+    assert any(item[1] == "package.prepare" for item in queued)
+
+
+def test_repair_preview_and_apply_queues_package_repair(tmp_path) -> None:
+    engine = build_engine(f"sqlite:///{tmp_path / 'plans.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = session_factory(engine)
+    node_id = "spk_" + "5" * 32
+    now = datetime.now(UTC)
+    with sessions.begin() as session:
+        session.add(AgentNode(node_id=node_id, state="active", capabilities=[]))
+        session.add(
+            Observation(
+                node_id=node_id,
+                kind="health",
+                payload={"status": "healthy", "storage": {"total_bytes": 1000, "free_bytes": 900}},
+                observed_at=now,
+            )
+        )
+    queued: list[tuple[str, str, dict[str, object]]] = []
+
+    class Jobs:
+        def enqueue_in_session(self, session, job_id, node_id, operation, base_commit, payload, *, operation_id):
+            del session, job_id, base_commit, operation_id
+            queued.append((node_id, operation, dict(payload)))
+
+        def notify_available(self):
+            return None
+
+    service = ProductionPackageProjectionService(
+        RepositoryService(Path(__file__).resolve().parents[2]), sessions, agent_jobs=Jobs()
+    )
+    preview = service.repair_preview("ds4-deepseek-single")
+    result = service.repair("ds4-deepseek-single", preview["digest"], "admin", "request-repair")
+    assert result["state"] == "planned"
+    assert queued[0][1] == "package.repair"

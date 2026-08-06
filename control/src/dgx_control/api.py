@@ -1616,6 +1616,7 @@ def production_app() -> FastAPI:
     from .update_grants import AdminActionGrantIssuer
     from .updates import UpdateOrchestrator
     from .worker_authority import RepositoryAuthorityService
+    from .workload_trust import WorkloadTrustDelivery
 
     generation = GenerationStartupSettings.from_env_and_secrets()
     sessions = session_factory(build_engine(generation.database_url))
@@ -1699,6 +1700,11 @@ def production_app() -> FastAPI:
         fleet=dashboard.fleet,
         clock=clock,
         agent_jobs=agent_services.operations,
+        package_trust=WorkloadTrustDelivery(
+            metadata_root=settings.workload_tuf_metadata_root,
+            target_root=settings.workload_tuf_target_root,
+            clock=clock,
+        ),
     )
     if settings.admin_grant_private_key_path is None:
         raise RuntimeError("production admin grant private key is unavailable")

@@ -3,10 +3,10 @@
 The package routes are intentionally thin.  This module is the production
 adapter that binds them to the existing Git repository and operational
 database; it does not add a second queue, reconciler, or trust root.  Read
-projections are available in the API process.  Removal and garbage collection
-are dispatched through the existing worker-owned agent-job boundary; release
-publication and validation remain trust-gated until their signer/runner is
-installed.
+projections are available in the API process.  Removal, garbage collection,
+and rollout are dispatched through the existing worker-owned agent-job
+boundary; release publication and validation remain trust-gated until their
+signer/runner is installed.
 """
 
 from __future__ import annotations
@@ -37,7 +37,11 @@ from .models import (
     PackageRolloutNode,
     PackageValidationRun,
 )
-from .package_rollouts import package_operation_payload
+from .package_rollouts import (
+    PackageDesiredStateResolver,
+    PackageRolloutOrchestrator,
+    package_operation_payload,
+)
 
 
 def _digest(value: object) -> str:
@@ -94,6 +98,7 @@ class ProductionPackageProjectionService:
         fleet: Callable[[], Mapping[str, object]] | None = None,
         clock: Callable[[], datetime] | None = None,
         agent_jobs: Any | None = None,
+        package_trust: Any | Callable[[str, bytes, str], bool] | None = None,
     ) -> None:
         if not callable(getattr(repository, "head", None)):
             raise TypeError("package repository is required")
@@ -102,6 +107,12 @@ class ProductionPackageProjectionService:
         self._fleet = fleet or (lambda: {"nodes": []})
         self._clock = clock or (lambda: datetime.now(UTC))
         self._agent_jobs = agent_jobs
+        self._package_trust = package_trust
+        self._rollouts = (
+            PackageRolloutOrchestrator(sessions, agent_jobs, clock=self._clock)
+            if agent_jobs is not None
+            else None
+        )
         self._idempotency_lock = threading.RLock()
         self._idempotent: dict[tuple[object, ...], Mapping[str, object]] = {}
 
@@ -240,7 +251,7 @@ class ProductionPackageProjectionService:
             "request": dict(request),
         }
         deployment = None
-        if action == "package.remove":
+        if action in {"package.remove", "package.repair"}:
             deployment_id = request.get("deployment_id")
             release_digest = request.get("release_digest")
             if not isinstance(deployment_id, str) or not isinstance(release_digest, str):
@@ -263,12 +274,16 @@ class ProductionPackageProjectionService:
                 )
             )
             for node_id in targets:
-                if action == "package.remove":
+                if action in {"package.remove", "package.repair"}:
                     assert deployment is not None
-                    operation_payload = package_operation_payload(
-                        deployment, AgentOperation.PACKAGE_REMOVE.value
+                    operation = (
+                        AgentOperation.PACKAGE_REMOVE.value
+                        if action == "package.remove"
+                        else AgentOperation.PACKAGE_REPAIR.value
                     )
-                    operation = AgentOperation.PACKAGE_REMOVE.value
+                    operation_payload = package_operation_payload(
+                        deployment, operation
+                    )
                 elif action == "package.gc":
                     targets_by_node = request.get("target_bytes_by_node")
                     target_bytes = (
@@ -605,6 +620,209 @@ class ProductionPackageProjectionService:
             if isinstance(value, Mapping) and value.get("id") == deployment_id:
                 return value
         raise KeyError(deployment_id)
+
+    def _package_observations(self) -> tuple[Mapping[str, object], ...]:
+        """Project authenticated fleet/health/package state for placement."""
+        fleet = self._fleet()
+        raw_nodes = fleet.get("nodes", ()) if isinstance(fleet, Mapping) else ()
+        with self._sessions() as session:
+            agent_nodes = {
+                node.node_id: node
+                for node in session.scalars(select(AgentNode))
+            }
+            package_rows = list(
+                session.scalars(
+                    select(PackageObservation).order_by(
+                        PackageObservation.observed_at.desc()
+                    )
+                )
+            )
+        current_packages: dict[str, dict[str, Mapping[str, object]]] = {}
+        seen: set[tuple[str, str]] = set()
+        for row in package_rows:
+            key = (row.node_id, row.deployment_id)
+            if key in seen:
+                continue
+            seen.add(key)
+            current_packages.setdefault(row.node_id, {})[row.deployment_id] = {
+                "release_digest": row.release_digest,
+                "deployment_digest": "0" * 64,
+            }
+        result: list[Mapping[str, object]] = []
+        if not isinstance(raw_nodes, (list, tuple)):
+            return ()
+        for raw in raw_nodes:
+            if not isinstance(raw, Mapping):
+                continue
+            node_id = raw.get("node_id", raw.get("id"))
+            if not isinstance(node_id, str):
+                continue
+            stored = agent_nodes.get(node_id)
+            observation = dict(raw)
+            observation["node_id"] = node_id
+            observation["agent_state"] = raw.get(
+                "agent_state", stored.state if stored is not None else "unknown"
+            )
+            observation["healthy"] = bool(raw.get("healthy", False)) and bool(
+                raw.get("agent_online", True)
+            )
+            observation["capabilities"] = raw.get(
+                "capabilities", stored.capabilities if stored is not None else ()
+            )
+            observation["architecture"] = raw.get(
+                "architecture", stored.architecture if stored is not None else None
+            )
+            observation["operating_system"] = raw.get("operating_system", "linux")
+            observation["current_packages"] = current_packages.get(node_id, {})
+            result.append(observation)
+        return tuple(result)
+
+    @staticmethod
+    def _rollout_identity(plan: object, deployment_id: str) -> tuple[str, Mapping[str, object]]:
+        graph = getattr(plan, "operation_graph", None)
+        releases = getattr(plan, "releases", None)
+        payloads = getattr(plan, "operation_payloads", None)
+        targets = getattr(plan, "targets", None)
+        release = releases.get(deployment_id) if isinstance(releases, Mapping) else None
+        if graph is None or not isinstance(release, Mapping) or not isinstance(payloads, Mapping):
+            raise RuntimeError("package rollout plan is incomplete")
+        document = {
+            "schema_version": 1,
+            "deployment_id": deployment_id,
+            "operation_graph": graph.document,
+            "operation_payloads": payloads,
+            "release": release,
+            "targets": list(targets or ()),
+        }
+        return hashlib.sha256(canonical_message(document)).hexdigest(), document
+
+    def _resolve_rollout(self, deployment_id: str):
+        if self._package_trust is None:
+            raise RuntimeError("workload TUF authorization service is not installed")
+        resolver = PackageDesiredStateResolver(
+            self._repository,
+            trust=self._package_trust,
+            clock=self._clock,
+        )
+        return resolver.resolve(
+            self._repository.head(),
+            (deployment_id,),
+            self._package_observations(),
+        )
+
+    def rollout_preview(self, deployment_id: str) -> Mapping[str, object]:
+        if self._rollouts is None:
+            raise RuntimeError("package rollout service is not installed")
+        plan = self._resolve_rollout(deployment_id)
+        identity, _document = self._rollout_identity(plan, deployment_id)
+        release = plan.releases[deployment_id]
+        release_digest = release.get("release_digest")
+        node_ids = list(plan.placements.get(deployment_id, ()))
+        request = {
+            "deployment_id": deployment_id,
+            "base_commit": plan.commit,
+            "plan_identity": identity,
+            "release_digest": release_digest,
+            "node_ids": sorted(node_ids),
+        }
+        digest = self.create_action_plan("package.rollout", deployment_id, request)
+        return {
+            "digest": digest,
+            "state": "ready",
+            "deployment_id": deployment_id,
+            "release_digest": "sha256:" + str(release_digest),
+            "batches": [sorted(node_ids[:1]), sorted(node_ids[1:])] if node_ids else [],
+            "canary_node": node_ids[0] if node_ids else None,
+            "offline_pending": [],
+            "storage_bytes": 0,
+            "download_bytes": 0,
+        }
+
+    def rollout(
+        self, deployment_id: str, plan_digest: str, actor: str, request_id: str
+    ) -> Mapping[str, object]:
+        if self._rollouts is None:
+            raise RuntimeError("package rollout service is not installed")
+        replay = self._progress_replay(plan_digest, "package.rollout")
+        if replay is not None:
+            return replay
+        request = self.consume_action_plan(plan_digest, "package.rollout", deployment_id)
+        if request.get("deployment_id") != deployment_id:
+            raise ValueError("package rollout deployment changed")
+        plan = self._resolve_rollout(deployment_id)
+        identity, _document = self._rollout_identity(plan, deployment_id)
+        if request.get("plan_identity") != identity or request.get("base_commit") != plan.commit:
+            raise ValueError("package rollout preview is stale")
+        rollout_id = self._rollouts.create(
+            plan, deployment_id, actor=actor, request_id=request_id
+        )
+        self._rollouts.advance(rollout_id)
+        result = self.rollout_status(deployment_id, rollout_id, None, 512)
+        self.finish_action_plan(plan_digest, result=result)
+        return result
+
+    def repair_preview(self, deployment_id: str) -> Mapping[str, object]:
+        deployment = self._deployments().get(deployment_id)
+        if deployment is None:
+            raise KeyError(deployment_id)
+        inventory = self.inventory(None, deployment_id, None, 512)
+        node_ids = [
+            node.get("node_id")
+            for node in inventory.get("nodes", [])
+            if isinstance(node, Mapping)
+            and node.get("online") is True
+            and isinstance(node.get("node_id"), str)
+        ]
+        if not node_ids:
+            raise ValueError("package repair has no online target nodes")
+        request = {
+            "deployment_id": deployment_id,
+            "release_digest": deployment.release_digest,
+            "node_ids": sorted(node_ids),
+            "inventory_digest": _digest(inventory),
+        }
+        digest = self.create_action_plan("package.repair", deployment_id, request)
+        return {
+            "digest": digest,
+            "state": "ready",
+            "deployment_id": deployment_id,
+            "release_digest": "sha256:" + deployment.release_digest,
+            "batches": [sorted(node_ids)],
+            "canary_node": None,
+            "offline_pending": [],
+            "storage_bytes": 0,
+            "download_bytes": 0,
+        }
+
+    def repair(
+        self, deployment_id: str, plan_digest: str, actor: str, request_id: str
+    ) -> Mapping[str, object]:
+        replay = self._progress_replay(plan_digest, "package.repair")
+        if replay is not None:
+            return replay
+        request = self.consume_action_plan(plan_digest, "package.repair", deployment_id)
+        if request.get("deployment_id") != deployment_id:
+            raise ValueError("package repair deployment changed")
+        release_digest = request.get("release_digest")
+        node_ids = request.get("node_ids")
+        if (
+            not isinstance(release_digest, str)
+            or not isinstance(node_ids, list)
+            or any(not isinstance(node_id, str) for node_id in node_ids)
+        ):
+            raise ValueError("package repair plan is invalid")
+        preview = self.repair_preview(deployment_id)
+        if preview.get("digest") != plan_digest:
+            raise ValueError("package repair preview is stale")
+        result = self._queue_package_operations(
+            action="package.repair",
+            plan_digest=plan_digest,
+            request=request,
+            actor=actor,
+            request_id=request_id,
+        )
+        self.finish_action_plan(plan_digest, result=result)
+        return result
 
     def rollout_status(
         self, deployment_id: str, rollout_id: str, cursor: str | None, limit: int
@@ -961,12 +1179,8 @@ class ProductionPackageProjectionService:
     validate = _mutation_unavailable
     promotion_preview = _mutation_unavailable
     promote = _mutation_unavailable
-    rollout_preview = _mutation_unavailable
-    rollout = _mutation_unavailable
     rollback_preview = _mutation_unavailable
     rollback = _mutation_unavailable
-    repair_preview = _mutation_unavailable
-    repair = _mutation_unavailable
 
     def idempotency(
         self,

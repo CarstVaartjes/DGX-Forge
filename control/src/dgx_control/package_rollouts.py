@@ -331,11 +331,12 @@ def _load_lock(
         or lock.digest != deployment.release_digest
     ):
         raise PackageRolloutError("deployment release identity does not match lock")
-    # The lock is immutable and canonical.  A Git blob with formatting changes
-    # must produce a different identity, even if its JSON parses successfully.
-    if raw != lock.canonical_bytes:
+    # Repository JSON documents carry the normal terminal newline; the signed
+    # lock identity itself is the canonical JSON bytes without that transport
+    # newline.  Any other formatting variation remains fail-closed.
+    if raw not in {lock.canonical_bytes, lock.canonical_bytes + b"\n"}:
         raise PackageRolloutError("workload release lock is not canonical")
-    return lock, raw, document.sha256
+    return lock, lock.canonical_bytes, document.sha256
 
 
 class PackageDesiredStateResolver:
