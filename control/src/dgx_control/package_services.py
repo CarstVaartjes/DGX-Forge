@@ -846,7 +846,6 @@ class ProductionPackageProjectionService:
             "release_digest": release_digest,
             "node_ids": sorted(node_ids),
         }
-        digest = self.create_action_plan("package.rollout", deployment_id, request)
         envelope = release.get("resource_envelope")
         if not isinstance(envelope, Mapping):
             raise TypeError("promoted workload release resource envelope is missing")
@@ -861,7 +860,8 @@ class ProductionPackageProjectionService:
             isinstance(value, int) and not isinstance(value, bool) and value >= 0
             for value in (download_bytes, installed_bytes, transient_bytes)
         ):
-            raise RuntimeError("promoted workload resource envelope is incomplete")
+            raise TypeError("promoted workload resource envelope is incomplete")
+        digest = self.create_action_plan("package.rollout", deployment_id, request)
         return {
             "digest": digest,
             "state": "ready",
