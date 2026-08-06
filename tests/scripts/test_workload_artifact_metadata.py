@@ -131,6 +131,11 @@ def test_request_rejects_missing_exact_or_unbounded_values(
         ("adapters/ds4", "adapters/other/Dockerfile"),
         ("control", "control/Dockerfile"),
         ("adapters\\ds4", "adapters\\ds4\\Dockerfile"),
+        (
+            f"adapters/ds4\nsource_commit={COMMIT}",
+            f"adapters/ds4\nsource_commit={COMMIT}/Dockerfile",
+        ),
+        ("adapters/ds4\rrequest_digest=sha256:" + "a" * 64, "adapters/ds4/Dockerfile"),
     ],
 )
 def test_request_rejects_path_escape_or_unreviewed_source_roots(
