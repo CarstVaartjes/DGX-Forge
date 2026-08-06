@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -87,6 +88,73 @@ class CatalogService:
         self._sessions = sessions
         self._clock = clock
         self._repository = repository or CatalogRepository()
+
+    def list_recipes(
+        self, *, limit: int = 20, cursor: str | None = None
+    ) -> tuple[list[RecipeSummary], str | None]:
+        if not 1 <= limit <= 100:
+            raise CatalogValidationError("catalog.limit", "catalog limit is invalid")
+        latest_numbers = (
+            select(
+                LocalRecipeRevision.recipe_id,
+                func.max(LocalRecipeRevision.revision_number).label("revision_number"),
+            )
+            .group_by(LocalRecipeRevision.recipe_id)
+            .subquery()
+        )
+        with self._sessions() as session:
+            statement = (
+                select(LocalRecipe, LocalRecipeRevision)
+                .join(latest_numbers, latest_numbers.c.recipe_id == LocalRecipe.id)
+                .join(
+                    LocalRecipeRevision,
+                    and_(
+                        LocalRecipeRevision.recipe_id == LocalRecipe.id,
+                        LocalRecipeRevision.revision_number
+                        == latest_numbers.c.revision_number,
+                    ),
+                )
+                .order_by(LocalRecipe.updated_at.desc(), LocalRecipe.id.desc())
+            )
+            if cursor is not None:
+                boundary = self._repository.recipe(session, cursor)
+                if boundary is None:
+                    raise CatalogValidationError(
+                        "catalog.cursor", "catalog cursor is invalid"
+                    )
+                statement = statement.where(
+                    or_(
+                        LocalRecipe.updated_at < boundary.updated_at,
+                        and_(
+                            LocalRecipe.updated_at == boundary.updated_at,
+                            LocalRecipe.id < boundary.id,
+                        ),
+                    )
+                )
+            rows = session.execute(statement.limit(limit + 1)).all()
+        page = rows[:limit]
+        summaries = [
+            RecipeSummary(
+                recipe_id=recipe.id,
+                slug=recipe.slug,
+                title=recipe.title,
+                source_kind=recipe.source_kind,
+                revision_number=revision.revision_number,
+                lifecycle=revision.lifecycle,
+                content_sha256=revision.content_sha256,
+            )
+            for recipe, revision in page
+        ]
+        next_cursor = page[-1][0].id if len(rows) > limit else None
+        return summaries, next_cursor
+
+    def get_recipe(self, recipe_id: str) -> RecipeRevisionView:
+        with self._sessions() as session:
+            recipe = self._require_recipe(session, recipe_id)
+            revision = self._repository.latest_revision(session, recipe_id)
+            if revision is None:
+                raise KeyError(recipe_id)
+            return _view(recipe, revision)
 
     def create_recipe(
         self, actor: str, draft: RecipeDraftInput

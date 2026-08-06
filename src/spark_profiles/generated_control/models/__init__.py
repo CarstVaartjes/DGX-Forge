@@ -6,7 +6,10 @@ from .apply_platform_update_response_apply_update_api_v1_updates_post import App
 from .approve_platform_update_recovery_response_approve_update_resume_api_v1_updates_rollout_id_approve_resume_post import ApprovePlatformUpdateRecoveryResponseApproveUpdateResumeApiV1UpdatesRolloutIdApproveResumePost
 from .bounded_error_response import BoundedErrorResponse
 from .cancel_reconciliation_response_cancel_reconciliation_api_v1_reconciliations_reconciliation_id_cancel_post import CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost
+from .catalog_problem import CatalogProblem
 from .change_request import ChangeRequest
+from .create_recipe_request import CreateRecipeRequest
+from .create_recipe_request_document import CreateRecipeRequestDocument
 from .deployment_response import DeploymentResponse
 from .deployments_response import DeploymentsResponse
 from .endpoint_response import EndpointResponse
@@ -16,6 +19,7 @@ from .enrollment_grant_response import EnrollmentGrantResponse
 from .enrollment_list_response import EnrollmentListResponse
 from .enrollment_summary import EnrollmentSummary
 from .fleet_status_response import FleetStatusResponse
+from .fork_recipe_request import ForkRecipeRequest
 from .get_platform_update_response_update_status_api_v1_updates_rollout_id_get import GetPlatformUpdateResponseUpdateStatusApiV1UpdatesRolloutIdGet
 from .get_platform_update_skew_response_update_skew_api_v1_updates_skew_get import GetPlatformUpdateSkewResponseUpdateSkewApiV1UpdatesSkewGet
 from .get_repository_response_repository_view_api_v1_repository_get import GetRepositoryResponseRepositoryViewApiV1RepositoryGet
@@ -87,16 +91,27 @@ from .preview_proposal_response_proposal_preview_api_v1_proposals_post import Pr
 from .proposal_change_request import ProposalChangeRequest
 from .proposal_change_request_document import ProposalChangeRequestDocument
 from .proposal_request import ProposalRequest
+from .recipe_list_response import RecipeListResponse
+from .recipe_revision_response import RecipeRevisionResponse
+from .recipe_revision_response_document import RecipeRevisionResponseDocument
+from .recipe_revision_response_lifecycle import RecipeRevisionResponseLifecycle
+from .recipe_revision_response_origin import RecipeRevisionResponseOrigin
+from .recipe_summary_response import RecipeSummaryResponse
+from .recipe_summary_response_lifecycle import RecipeSummaryResponseLifecycle
+from .recipe_summary_response_origin import RecipeSummaryResponseOrigin
 from .reconciliation_accepted_response import ReconciliationAcceptedResponse
 from .reconciliation_cancel_request import ReconciliationCancelRequest
 from .reconciliation_plan_request import ReconciliationPlanRequest
 from .reconciliation_plan_response import ReconciliationPlanResponse
 from .reconciliation_request import ReconciliationRequest
 from .reject_request import RejectRequest
+from .resolve_recipe_request import ResolveRecipeRequest
 from .submit_change_response_submit_change_api_v1_changes_post import SubmitChangeResponseSubmitChangeApiV1ChangesPost
 from .update_apply_request import UpdateApplyRequest
 from .update_approve_resume_request import UpdateApproveResumeRequest
 from .update_plan_request import UpdatePlanRequest
+from .update_recipe_draft_request import UpdateRecipeDraftRequest
+from .update_recipe_draft_request_document import UpdateRecipeDraftRequestDocument
 from .validation_error import ValidationError
 
 __all__ = (
@@ -106,7 +121,10 @@ __all__ = (
     "ApprovePlatformUpdateRecoveryResponseApproveUpdateResumeApiV1UpdatesRolloutIdApproveResumePost",
     "BoundedErrorResponse",
     "CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost",
+    "CatalogProblem",
     "ChangeRequest",
+    "CreateRecipeRequest",
+    "CreateRecipeRequestDocument",
     "DeploymentResponse",
     "DeploymentsResponse",
     "EndpointResponse",
@@ -116,6 +134,7 @@ __all__ = (
     "EnrollmentListResponse",
     "EnrollmentSummary",
     "FleetStatusResponse",
+    "ForkRecipeRequest",
     "GetPlatformUpdateResponseUpdateStatusApiV1UpdatesRolloutIdGet",
     "GetPlatformUpdateSkewResponseUpdateSkewApiV1UpdatesSkewGet",
     "GetRepositoryResponseRepositoryViewApiV1RepositoryGet",
@@ -187,15 +206,26 @@ __all__ = (
     "ProposalChangeRequest",
     "ProposalChangeRequestDocument",
     "ProposalRequest",
+    "RecipeListResponse",
+    "RecipeRevisionResponse",
+    "RecipeRevisionResponseDocument",
+    "RecipeRevisionResponseLifecycle",
+    "RecipeRevisionResponseOrigin",
+    "RecipeSummaryResponse",
+    "RecipeSummaryResponseLifecycle",
+    "RecipeSummaryResponseOrigin",
     "ReconciliationAcceptedResponse",
     "ReconciliationCancelRequest",
     "ReconciliationPlanRequest",
     "ReconciliationPlanResponse",
     "ReconciliationRequest",
     "RejectRequest",
+    "ResolveRecipeRequest",
     "SubmitChangeResponseSubmitChangeApiV1ChangesPost",
     "UpdateApplyRequest",
     "UpdateApproveResumeRequest",
     "UpdatePlanRequest",
+    "UpdateRecipeDraftRequest",
+    "UpdateRecipeDraftRequestDocument",
     "ValidationError",
 )

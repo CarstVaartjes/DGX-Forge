@@ -87,6 +87,12 @@ _ADMIN_OPERATION_IDS = {
     ("post", "/api/v1/deployments/{deployment_id}/repair"): "repairPackage",
     ("post", "/api/v1/packages/gc-preview"): "previewPackageGc",
     ("post", "/api/v1/packages/gc"): "applyPackageGc",
+    ("get", "/api/v1/catalog/recipes"): "listLocalRecipes",
+    ("post", "/api/v1/catalog/recipes"): "createLocalRecipe",
+    ("get", "/api/v1/catalog/recipes/{recipe_id}"): "getLocalRecipe",
+    ("put", "/api/v1/catalog/recipes/{recipe_id}/draft"): "updateLocalRecipeDraft",
+    ("post", "/api/v1/catalog/recipes/{recipe_id}/resolve"): "resolveLocalRecipe",
+    ("post", "/api/v1/catalog/recipes/{recipe_id}/fork"): "forkLocalRecipe",
 }
 _HTTP_METHODS = frozenset({"delete", "get", "patch", "post", "put"})
 BoundedIdentifier = Annotated[str, Field(min_length=1, max_length=128)]

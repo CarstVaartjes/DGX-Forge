@@ -1,0 +1,10 @@
+from typing import Literal, cast
+
+RecipeSummaryResponseOrigin = Literal['global', 'local', 'sparkrun']
+
+RECIPE_SUMMARY_RESPONSE_ORIGIN_VALUES: set[RecipeSummaryResponseOrigin] = { 'global', 'local', 'sparkrun',  }
+
+def check_recipe_summary_response_origin(value: str) -> RecipeSummaryResponseOrigin:
+    if value in RECIPE_SUMMARY_RESPONSE_ORIGIN_VALUES:
+        return cast(RecipeSummaryResponseOrigin, value)
+    raise TypeError(f"Unexpected value {value!r}. Expected one of {RECIPE_SUMMARY_RESPONSE_ORIGIN_VALUES!r}")

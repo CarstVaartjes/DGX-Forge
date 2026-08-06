@@ -123,6 +123,92 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/catalog/recipes": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Recipes */
+        get: operations["listLocalRecipes"];
+        put?: never;
+        /** Create Recipe */
+        post: operations["createLocalRecipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/recipes/{recipe_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Recipe */
+        get: operations["getLocalRecipe"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/recipes/{recipe_id}/draft": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Update Draft */
+        put: operations["updateLocalRecipeDraft"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/recipes/{recipe_id}/fork": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Fork Recipe */
+        post: operations["forkLocalRecipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/recipes/{recipe_id}/resolve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resolve Recipe */
+        post: operations["resolveLocalRecipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/changes": {
         parameters: {
             query?: never;
@@ -921,10 +1007,28 @@ export interface components {
             /** Detail */
             detail: string;
         };
+        /** CatalogProblem */
+        CatalogProblem: {
+            /** Code */
+            code: string;
+            /** Detail */
+            detail: string;
+            /** Request Id */
+            request_id: string;
+        };
         /** ChangeRequest */
         ChangeRequest: {
             /** Proposal Digest */
             proposal_digest: string;
+        };
+        /** CreateRecipeRequest */
+        CreateRecipeRequest: {
+            /** Document */
+            document: {
+                [key: string]: unknown;
+            };
+            /** Slug */
+            slug: string;
         };
         /** DeploymentResponse */
         DeploymentResponse: {
@@ -1038,6 +1142,13 @@ export interface components {
             evidence_digest: string;
             /** Nodes */
             nodes: components["schemas"]["NodeStatus"][];
+        };
+        /** ForkRecipeRequest */
+        ForkRecipeRequest: {
+            /** Revision */
+            revision: number;
+            /** Slug */
+            slug: string;
         };
         /** GrantRequest */
         GrantRequest: {
@@ -1852,6 +1963,76 @@ export interface components {
             /** Changes */
             changes: components["schemas"]["ProposalChangeRequest"][];
         };
+        /** RecipeListResponse */
+        RecipeListResponse: {
+            /** Next Cursor */
+            next_cursor?: string | null;
+            /** Recipes */
+            recipes: components["schemas"]["RecipeSummaryResponse"][];
+        };
+        /** RecipeRevisionResponse */
+        RecipeRevisionResponse: {
+            /** Content Sha256 */
+            content_sha256?: string | null;
+            /** Created At */
+            created_at: string;
+            /** Created By */
+            created_by: string;
+            /** Description */
+            description: string;
+            /** Document */
+            document: {
+                [key: string]: unknown;
+            };
+            /** Id */
+            id: string;
+            /**
+             * Lifecycle
+             * @enum {string}
+             */
+            lifecycle: "draft" | "blocked" | "resolved" | "deprecated";
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "local" | "sparkrun" | "global";
+            /** Recipe Id */
+            recipe_id: string;
+            /** Revision Number */
+            revision_number: number;
+            /**
+             * Schema Version
+             * @constant
+             */
+            schema_version: 1;
+            /** Slug */
+            slug: string;
+            /** Title */
+            title: string;
+        };
+        /** RecipeSummaryResponse */
+        RecipeSummaryResponse: {
+            /** Content Sha256 */
+            content_sha256?: string | null;
+            /**
+             * Lifecycle
+             * @enum {string}
+             */
+            lifecycle: "draft" | "blocked" | "resolved" | "deprecated";
+            /**
+             * Origin
+             * @enum {string}
+             */
+            origin: "local" | "sparkrun" | "global";
+            /** Recipe Id */
+            recipe_id: string;
+            /** Revision Number */
+            revision_number: number;
+            /** Slug */
+            slug: string;
+            /** Title */
+            title: string;
+        };
         /** ReconciliationAcceptedResponse */
         ReconciliationAcceptedResponse: {
             /** Base Commit */
@@ -1907,6 +2088,11 @@ export interface components {
             /** Reason */
             reason: string;
         };
+        /** ResolveRecipeRequest */
+        ResolveRecipeRequest: {
+            /** Expected Revision */
+            expected_revision: number;
+        };
         /** UpdateApplyRequest */
         UpdateApplyRequest: {
             /** Plan Digest */
@@ -1924,6 +2110,15 @@ export interface components {
         UpdatePlanRequest: {
             /** Release */
             release: string;
+        };
+        /** UpdateRecipeDraftRequest */
+        UpdateRecipeDraftRequest: {
+            /** Document */
+            document: {
+                [key: string]: unknown;
+            };
+            /** Expected Revision */
+            expected_revision: number;
         };
         /** ValidationError */
         ValidationError: {
@@ -2322,6 +2517,369 @@ export interface operations {
                     "application/json": {
                         [key: string]: unknown;
                     };
+                };
+            };
+        };
+    };
+    listLocalRecipes: {
+        parameters: {
+            query?: {
+                cursor?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeListResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+        };
+    };
+    createLocalRecipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CreateRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRevisionResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+        };
+    };
+    getLocalRecipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recipe_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRevisionResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    updateLocalRecipeDraft: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recipe_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["UpdateRecipeDraftRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRevisionResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+        };
+    };
+    forkLocalRecipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recipe_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ForkRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRevisionResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+        };
+    };
+    resolveLocalRecipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recipe_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ResolveRecipeRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRevisionResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
                 };
             };
         };
