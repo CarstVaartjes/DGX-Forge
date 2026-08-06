@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from dgx_agent_protocol import AgentOperation, PackageOperationRequest
+from dgx_agent_protocol import AgentOperation, PackageOperationRequest, PackageReleaseLock
 
 from ..package_operations import (
     OperationBinding,
@@ -19,6 +19,7 @@ from ..package_operations import (
 )
 from .adapter import AdapterInvocation, AdapterOperation
 from .state import GenerationRecord, PackageState, PackageStateConflict
+from .gc import PackageGarbageCollector
 
 
 class PackageEngineError(RuntimeError):
@@ -98,6 +99,7 @@ class PackageEngine:
         preflight: Callable[[object, PackageOperationRequest, OperationBinding], None],
         progress: Callable[[OperationBinding, Mapping[str, object]], None],
         cancelled: Callable[[OperationBinding], bool],
+        garbage_collector: PackageGarbageCollector | None = None,
         crash_hook: Callable[[str], None] | None = None,
     ) -> None:
         self._state = state
@@ -106,10 +108,16 @@ class PackageEngine:
         self._materializer = materializer
         self._generation_root = _private_directory(Path(generation_root))
         self._pointer_root = _private_directory(Path(pointer_root))
+        self._lock_root = _private_directory(self._generation_root.parent / "locks")
         self._adapter_factory = adapter_factory
         self._preflight = preflight
         self._progress = progress
         self._cancelled = cancelled
+        if garbage_collector is not None and not isinstance(
+            garbage_collector, PackageGarbageCollector
+        ):
+            raise TypeError("package garbage collector is invalid")
+        self._garbage_collector = garbage_collector
         self._crash_hook = crash_hook or (lambda _phase: None)
         # A prepared release is sufficient for activation/rollback without a
         # network trust refresh. Durable materialization receipts remain the
@@ -140,6 +148,8 @@ class PackageEngine:
             return self._remove(request, binding)
         if operation is AgentOperation.PACKAGE_REPAIR:
             return self._repair(request, binding, deadline)
+        if operation is AgentOperation.PACKAGE_GC:
+            return self._gc(request, binding)
         raise PackageEngineError("package operation belongs to another engine")
 
     def inspect(self, request, binding, deadline) -> PackageInspection:
@@ -173,6 +183,7 @@ class PackageEngine:
         if getattr(lock, "digest", None) != release_digest:
             raise PackageEngineError("trusted release identity is inconsistent")
         self._locks[release_digest] = lock
+        self._persist_lock(lock)
         self._preflight(lock, request, binding)
         self._state.set_phase(binding, "fetch")
         objects: dict[str, object] = {}
@@ -413,6 +424,17 @@ class PackageEngine:
             )
         return self._prepare(request, binding, deadline)
 
+    def _gc(self, request, binding):
+        collector = self._garbage_collector
+        if collector is None:
+            raise PackageEngineError("package garbage collection is unavailable")
+        target_bytes = request.target_bytes or 2**63 - 1
+        return collector.collect(
+            binding,
+            dry_run=bool(request.dry_run),
+            target_bytes=target_bytes,
+        )
+
     def _adapter(self, lock, generation_id, objects):
         return self._adapter_factory(
             lock,
@@ -424,8 +446,71 @@ class PackageEngine:
     def _local_lock(self, release_digest: str):
         try:
             return self._locks[release_digest]
-        except KeyError as error:
-            raise PackageEngineError("local release metadata is unavailable") from error
+        except KeyError:
+            path = self._lock_root / f"{release_digest}.json"
+            try:
+                metadata = path.stat(follow_symlinks=False)
+                if (
+                    not path.is_file()
+                    or metadata.st_nlink != 1
+                    or metadata.st_size > 1024 * 1024
+                    or metadata.st_mode & 0o177
+                ):
+                    raise OSError("lock metadata is unsafe")
+                raw = path.read_bytes()
+                lock = PackageReleaseLock.parse(raw)
+            except (OSError, TypeError, ValueError) as error:
+                raise PackageEngineError("local release metadata is unavailable") from error
+            if lock.digest != release_digest or lock.canonical_bytes != raw:
+                raise PackageEngineError("local release metadata is inconsistent")
+            self._locks[release_digest] = lock
+            return lock
+
+    def _persist_lock(self, lock: PackageReleaseLock) -> None:
+        if type(lock) is not PackageReleaseLock:
+            # Existing unit fixtures use a narrow in-memory lock double.  A
+            # production trust source always returns the protocol type; never
+            # serialize an untyped value into the durable lock boundary.
+            return
+        raw = lock.canonical_bytes
+        path = self._lock_root / f"{lock.digest}.json"
+        if path.exists():
+            try:
+                if path.read_bytes() != raw:
+                    raise PackageEngineError("local release metadata conflicts")
+            except OSError as error:
+                raise PackageEngineError("local release metadata is unavailable") from error
+            return
+        temporary = self._lock_root / f".{lock.digest}.tmp"
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o444,
+        )
+        try:
+            os.write(descriptor, raw)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        try:
+            os.replace(temporary, path)
+            directory = os.open(
+                self._lock_root,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | os.O_NOFOLLOW,
+            )
+            try:
+                os.fsync(directory)
+            finally:
+                os.close(directory)
+        except FileExistsError:
+            try:
+                if path.read_bytes() != raw:
+                    raise PackageEngineError("local release metadata conflicts")
+            finally:
+                try:
+                    temporary.unlink()
+                except FileNotFoundError:
+                    pass
 
     @staticmethod
     def _invoke(adapter, operation, binding, release_digest, generation_id, deadline):

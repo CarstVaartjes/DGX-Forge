@@ -12,6 +12,7 @@ import shutil
 import signal
 import stat
 import threading
+import time
 from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
@@ -51,6 +52,27 @@ from .update import (
 )
 from .update_trust import BoundedHTTPSFetcher, TUFReleaseTrust
 from .workloads import WorkloadOperations
+from .package_trust import WorkloadTrust
+from .packages.engine import PackageEngine
+from .packages.fetch import AcquisitionEngine
+from .packages.gc import PackageGarbageCollector
+from .packages.materialize import Materializer
+from .packages.providers import (
+    GitSnapshotProvider,
+    HuggingFaceProvider,
+    OCIFetchProvider,
+    ProviderRegistry,
+    PythonArtifactProvider,
+    SignedIndexProvider,
+    SourcePolicy,
+    VerifiedHTTPSProvider,
+)
+from .packages.store import ContentStore
+from .workload_runtime import (
+    HTTPSProviderTransport,
+    ProtocolAcquisition,
+    WorkloadTUFSource,
+)
 
 
 class AgentControl(Protocol):
@@ -447,6 +469,97 @@ def build_agent(
             _AGENT_UPDATE_STAGING_ROOT.parent
         ).free,
     )
+
+    # Workload packages use a completely separate TUF cache and source route.
+    # The protocol lock remains the only catalog: every descriptor is converted
+    # at operation time and fetched directly from its immutable upstream.
+    package_root = config.state_root / "packages"
+    config.state_root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(config.state_root, 0o700)
+    package_store = ContentStore(package_root)
+    workload_metadata_root = runtime.tuf.metadata_root / "workload"
+    workload_target_root = runtime.tuf.target_root / "workload"
+    workload_fetcher = BoundedHTTPSFetcher(
+        config.control_origin,
+        credential_provider=credentials,
+    )
+    workload_source = WorkloadTUFSource(
+        workload_metadata_root,
+        workload_target_root,
+        f"{config.control_origin}/agent/v1/workload-tuf/metadata/",
+        f"{config.control_origin}/agent/v1/workload-tuf/targets/",
+        runtime.read_bootstrap_root(),
+        workload_fetcher,
+    )
+    workload_transport = HTTPSProviderTransport(policy=SourcePolicy())
+    verified_https = VerifiedHTTPSProvider(
+        workload_transport,
+        policy=SourcePolicy(),
+    )
+    provider_registry = ProviderRegistry(
+        (
+            verified_https,
+            GitSnapshotProvider(verified_https),
+            OCIFetchProvider(verified_https),
+            HuggingFaceProvider(verified_https),
+            PythonArtifactProvider(verified_https),
+            SignedIndexProvider(verified_https),
+        )
+    )
+    acquisition = ProtocolAcquisition(
+        AcquisitionEngine(package_store, provider_registry),
+        platform=protocol_architecture,
+    )
+    materializer = Materializer(package_store)
+
+    def package_preflight(lock, _request, _binding) -> None:
+        compatibility = getattr(lock, "compatibility", {})
+        if not isinstance(compatibility, Mapping):
+            raise RuntimeError("workload compatibility policy is invalid")
+        architectures = compatibility.get("architectures", ())
+        operating_systems = compatibility.get("operating_systems", ())
+        local_architecture = {
+            "linux-arm64": "arm64",
+            "linux-x86_64": "x86_64",
+        }[protocol_architecture]
+        if local_architecture not in architectures or "linux" not in operating_systems:
+            raise RuntimeError("workload release is incompatible with this node")
+        required_storage = compatibility.get("minimum_storage_bytes", 0)
+        if type(required_storage) is not int or required_storage < 0:
+            raise RuntimeError("workload storage policy is invalid")
+        if shutil.disk_usage(package_root).free < required_storage:
+            raise RuntimeError("workload storage capacity is insufficient")
+
+    def package_cancelled(binding) -> bool:
+        try:
+            return state.operation(binding).cancel_requested
+        except Exception:
+            return False
+
+    def package_adapter_factory(_lock, _generation, _generation_path, _objects):
+        # Adapter execution is a privileged boundary.  The helper-client
+        # implementation is installed with the package-helper socket; until
+        # its signed grant/receipt key material is available, fail closed.
+        raise RuntimeError("workload package helper authority is unavailable")
+
+    packages = PackageEngine(
+        state=package_store.state,
+        trust=WorkloadTrust(workload_source),
+        acquisition=acquisition,
+        materializer=materializer,
+        generation_root=package_root / "generations",
+        pointer_root=package_root / "pointers",
+        adapter_factory=package_adapter_factory,
+        preflight=package_preflight,
+        progress=lambda _binding, _value: None,
+        cancelled=package_cancelled,
+        garbage_collector=PackageGarbageCollector(
+            package_store.state,
+            package_store,
+            clock_ns=time.time_ns,
+            cancelled=package_cancelled,
+        ),
+    )
     context = OperationContext(
         node_id=config.node_id,
         state=state,
@@ -454,6 +567,7 @@ def build_agent(
         releases=releases,
         workloads=workloads,
         updates=updates,
+        packages=packages,
     )
     return Agent(
         client,

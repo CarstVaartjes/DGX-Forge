@@ -255,93 +255,128 @@ class ContentStore:
             raise TypeError("package reservation operation is invalid")
         descriptor, component_name = _component_descriptor(descriptor)
         self._state.begin_operation(operation, phase="reserve")
-        with self._state.transaction() as connection:
-            self._state.assert_binding(connection, operation)
-            existing_reservation = connection.execute(
-                "SELECT attempt, fence, bytes_reserved FROM reservations "
-                "WHERE operation_id = ?",
-                (operation.operation_id,),
-            ).fetchone()
-            if existing_reservation is not None:
-                if (
-                    existing_reservation["attempt"] != operation.attempt
-                    or existing_reservation["fence"] != operation.fence
-                ):
-                    raise PackageStateConflict(
-                        "capacity reservation disagrees with operation fence"
+        partial_created: str | None = None
+        try:
+            with self._state.transaction() as connection:
+                self._state.assert_binding(connection, operation)
+                existing_reservation = connection.execute(
+                    "SELECT attempt, fence, bytes_reserved FROM reservations "
+                    "WHERE operation_id = ?",
+                    (operation.operation_id,),
+                ).fetchone()
+                if existing_reservation is not None:
+                    if (
+                        existing_reservation["attempt"] != operation.attempt
+                        or existing_reservation["fence"] != operation.fence
+                    ):
+                        raise PackageStateConflict(
+                            "capacity reservation disagrees with operation fence"
+                        )
+                    return Reservation(
+                        operation.job_id,
+                        operation.operation_id,
+                        operation.attempt,
+                        operation.fence,
+                        operation.node_id,
+                        existing_reservation["bytes_reserved"],
                     )
-                return Reservation(
+                component = connection.execute(
+                    "SELECT name, size, kind, state, operation_id, attempt, fence "
+                    "FROM components WHERE digest = ?",
+                    (descriptor.digest,),
+                ).fetchone()
+                if component is not None:
+                    if (
+                        component["name"] != component_name
+                        or component["size"] != descriptor.size
+                        or component["kind"] != descriptor.kind
+                    ):
+                        raise PackageStoreError(
+                            "component digest metadata is inconsistent"
+                        )
+                    if component["state"] == "complete":
+                        bytes_reserved = 0
+                    else:
+                        owner = connection.execute(
+                            "SELECT operation_id, attempt, fence, bytes_reserved "
+                            "FROM reservations WHERE operation_id = ?",
+                            (component["operation_id"],),
+                        ).fetchone()
+                        if owner is not None:
+                            bytes_reserved = 0
+                        else:
+                            committed = connection.execute(
+                                "SELECT COALESCE(SUM(size), 0) FROM components "
+                                "WHERE state = 'complete'"
+                            ).fetchone()[0]
+                            reserved = connection.execute(
+                                "SELECT COALESCE(SUM(bytes_reserved), 0) "
+                                "FROM reservations"
+                            ).fetchone()[0]
+                            if committed + reserved + descriptor.size > self._logical_capacity():
+                                raise PackageCapacityError(
+                                    "package store capacity is insufficient"
+                                )
+                            if descriptor.size > _available_bytes(self._root):
+                                raise PackageCapacityError("package store filesystem is full")
+                            bytes_reserved = descriptor.size
+                            connection.execute(
+                                "UPDATE components SET operation_id=?, attempt=?, fence=? "
+                                "WHERE digest=?",
+                                (
+                                    operation.operation_id,
+                                    operation.attempt,
+                                    operation.fence,
+                                    descriptor.digest,
+                                ),
+                            )
+                            connection.execute(
+                                "UPDATE partials SET operation_id=?, attempt=?, fence=? "
+                                "WHERE digest=?",
+                                (
+                                    operation.operation_id,
+                                    operation.attempt,
+                                    operation.fence,
+                                    descriptor.digest,
+                                ),
+                            )
+                    connection.execute(
+                        "INSERT INTO reservations "
+                        "(operation_id, attempt, fence, bytes_reserved) VALUES (?, ?, ?, ?)",
+                        (
+                            operation.operation_id,
+                            operation.attempt,
+                            operation.fence,
+                            bytes_reserved,
+                        ),
+                    )
+                    return Reservation(
+                        operation.job_id,
+                        operation.operation_id,
+                        operation.attempt,
+                        operation.fence,
+                        operation.node_id,
+                        bytes_reserved,
+                    )
+                committed = connection.execute(
+                    "SELECT COALESCE(SUM(size), 0) FROM components "
+                    "WHERE state = 'complete'"
+                ).fetchone()[0]
+                reserved = connection.execute(
+                    "SELECT COALESCE(SUM(bytes_reserved), 0) FROM reservations"
+                ).fetchone()[0]
+                if committed + reserved + descriptor.size > self._logical_capacity():
+                    raise PackageCapacityError("package store capacity is insufficient")
+                if descriptor.size > _available_bytes(self._root):
+                    raise PackageCapacityError("package store filesystem is full")
+                reservation = Reservation(
                     operation.job_id,
                     operation.operation_id,
                     operation.attempt,
                     operation.fence,
                     operation.node_id,
-                    existing_reservation["bytes_reserved"],
+                    descriptor.size,
                 )
-            component = connection.execute(
-                "SELECT name, size, kind, state, operation_id, attempt, fence "
-                "FROM components WHERE digest = ?",
-                (descriptor.digest,),
-            ).fetchone()
-            if component is not None:
-                if (
-                    component["name"] != component_name
-                    or component["size"] != descriptor.size
-                    or component["kind"] != descriptor.kind
-                ):
-                    raise PackageStoreError(
-                        "component digest metadata is inconsistent"
-                    )
-                if component["state"] == "complete":
-                    bytes_reserved = 0
-                else:
-                    owner = connection.execute(
-                        "SELECT operation_id, attempt, fence, bytes_reserved "
-                        "FROM reservations WHERE operation_id = ?",
-                        (component["operation_id"],),
-                    ).fetchone()
-                    if owner is not None:
-                        # The owner already accounts for the bytes on disk;
-                        # coalesce this request rather than overcommitting.
-                        bytes_reserved = 0
-                    else:
-                        # A crashed owner released its reservation.  Adopt its
-                        # partial under this fence and account for its size.
-                        committed = connection.execute(
-                            "SELECT COALESCE(SUM(size), 0) FROM components "
-                            "WHERE state = 'complete'"
-                        ).fetchone()[0]
-                        reserved = connection.execute(
-                            "SELECT COALESCE(SUM(bytes_reserved), 0) "
-                            "FROM reservations"
-                        ).fetchone()[0]
-                        if committed + reserved + descriptor.size > self._logical_capacity():
-                            raise PackageCapacityError(
-                                "package store capacity is insufficient"
-                            )
-                        if descriptor.size > _available_bytes(self._root):
-                            raise PackageCapacityError("package store filesystem is full")
-                        bytes_reserved = descriptor.size
-                        connection.execute(
-                            "UPDATE components SET operation_id=?, attempt=?, fence=? "
-                            "WHERE digest=?",
-                            (
-                                operation.operation_id,
-                                operation.attempt,
-                                operation.fence,
-                                descriptor.digest,
-                            ),
-                        )
-                        connection.execute(
-                            "UPDATE partials SET operation_id=?, attempt=?, fence=? "
-                            "WHERE digest=?",
-                            (
-                                operation.operation_id,
-                                operation.attempt,
-                                operation.fence,
-                                descriptor.digest,
-                            ),
-                        )
                 connection.execute(
                     "INSERT INTO reservations "
                     "(operation_id, attempt, fence, bytes_reserved) VALUES (?, ?, ?, ?)",
@@ -349,48 +384,47 @@ class ContentStore:
                         operation.operation_id,
                         operation.attempt,
                         operation.fence,
-                        bytes_reserved,
+                        descriptor.size,
                     ),
                 )
-                return Reservation(
-                    operation.job_id,
-                    operation.operation_id,
-                    operation.attempt,
-                    operation.fence,
-                    operation.node_id,
-                    bytes_reserved,
+                partial_created, device, inode, ctime_ns = self._create_partial(
+                    reservation, descriptor
                 )
-            committed = connection.execute(
-                "SELECT COALESCE(SUM(size), 0) FROM components "
-                "WHERE state = 'complete'"
-            ).fetchone()[0]
-            reserved = connection.execute(
-                "SELECT COALESCE(SUM(bytes_reserved), 0) FROM reservations"
-            ).fetchone()[0]
-            capacity = self._logical_capacity()
-            if committed + reserved + descriptor.size > capacity:
-                raise PackageCapacityError("package store capacity is insufficient")
-            available = _available_bytes(self._root)
-            if descriptor.size > available:
-                raise PackageCapacityError("package store filesystem is full")
-            connection.execute(
-                "INSERT INTO reservations "
-                "(operation_id, attempt, fence, bytes_reserved) VALUES (?, ?, ?, ?)",
-                (
-                    operation.operation_id,
-                    operation.attempt,
-                    operation.fence,
-                    descriptor.size,
-                ),
-            )
-            return Reservation(
-                operation.job_id,
-                operation.operation_id,
-                operation.attempt,
-                operation.fence,
-                operation.node_id,
-                descriptor.size,
-            )
+                connection.execute(
+                    "INSERT INTO components "
+                    "(digest, name, size, kind, state, relative_name, operation_id, "
+                    "attempt, fence) VALUES (?, ?, ?, ?, 'partial', NULL, ?, ?, ?)",
+                    (
+                        descriptor.digest,
+                        component_name,
+                        descriptor.size,
+                        descriptor.kind,
+                        operation.operation_id,
+                        operation.attempt,
+                        operation.fence,
+                    ),
+                )
+                connection.execute(
+                    "INSERT INTO partials "
+                    "(digest, operation_id, attempt, fence, partial_name, device, inode, "
+                    "ctime_ns, bytes_written, validator_etag, validator_last_modified) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULL, NULL)",
+                    (
+                        descriptor.digest,
+                        operation.operation_id,
+                        operation.attempt,
+                        operation.fence,
+                        partial_created,
+                        device,
+                        inode,
+                        ctime_ns,
+                    ),
+                )
+                return reservation
+        except Exception:
+            if partial_created is not None:
+                _unlink_optional(self._root / "partials", partial_created)
+            raise
 
     def wait_for_component(
         self,
@@ -892,6 +926,78 @@ class ContentStore:
             finally:
                 os.close(objects_fd)
             return StoreObject(digest, row["size"], row["kind"], expected_name)
+
+    def list_objects(self) -> tuple[StoreObject, ...]:
+        """Return every verified object in digest order for GC planning."""
+
+        with self._state.transaction() as connection:
+            rows = connection.execute(
+                "SELECT digest, size, kind, relative_name FROM components "
+                "WHERE state = 'complete' ORDER BY digest"
+            ).fetchall()
+        objects: list[StoreObject] = []
+        objects_root = _open_directory(self._root / "objects" / "sha256")
+        try:
+            for row in rows:
+                digest = _raw_digest(row["digest"])
+                expected_name = f"objects/sha256/{digest}"
+                if row["relative_name"] != expected_name:
+                    raise PackageStoreError("verified component path is invalid")
+                _validate_object_at(
+                    objects_root,
+                    digest,
+                    size=row["size"],
+                    digest=digest,
+                )
+                objects.append(StoreObject(digest, row["size"], row["kind"], expected_name))
+        finally:
+            os.close(objects_root)
+        return tuple(objects)
+
+    def delete_unreachable(
+        self,
+        binding: OperationBinding,
+        digest: str,
+        *,
+        now_ns: int,
+    ) -> int:
+        """Delete one verified object only when no durable root reaches it."""
+
+        if not isinstance(binding, OperationBinding):
+            raise TypeError("GC operation binding is invalid")
+        digest = _raw_digest(digest)
+        if type(now_ns) is not int or now_ns < 0:
+            raise ValueError("GC timestamp is invalid")
+        self._state.operation(binding)
+        lock = self._digest_lock(digest)
+        try:
+            if digest in self._state.reachable_objects(now_ns=now_ns):
+                raise PackageStoreError("reachable store object cannot be deleted")
+            objects_fd = _open_directory(self._root / "objects" / "sha256")
+            try:
+                try:
+                    metadata = os.stat(digest, dir_fd=objects_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    self._state.forget_object(binding, digest)
+                    return 0
+                if (
+                    not stat.S_ISREG(metadata.st_mode)
+                    or metadata.st_nlink != 1
+                    or not _trusted_owner(metadata)
+                    or stat.S_IMODE(metadata.st_mode) != 0o444
+                ):
+                    raise PackageStoreError("GC object path is unsafe")
+                _validate_object_at(objects_fd, digest, size=metadata.st_size, digest=digest)
+                os.unlink(digest, dir_fd=objects_fd)
+                os.fsync(objects_fd)
+            finally:
+                os.close(objects_fd)
+            self._state.forget_object(binding, digest)
+            return metadata.st_size
+        except OSError as error:
+            raise PackageStoreError("GC object deletion failed safely") from error
+        finally:
+            os.close(lock)
 
     def record_derived(
         self,

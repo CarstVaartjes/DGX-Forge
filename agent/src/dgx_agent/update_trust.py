@@ -979,10 +979,27 @@ def _persist_accepted_cache(
 def _allowed_tuf_path(path: str) -> bool:
     metadata_prefix = "/agent/v1/tuf/metadata/"
     targets_prefix = "/agent/v1/tuf/targets/"
+    workload_metadata_prefix = "/agent/v1/workload-tuf/metadata/"
+    workload_targets_prefix = "/agent/v1/workload-tuf/targets/"
     if path.startswith(metadata_prefix):
         return bool(_TUF_FILE.fullmatch(path[len(metadata_prefix) :]))
     if path.startswith(targets_prefix):
         return bool(_TARGET_FILE.fullmatch(path[len(targets_prefix) :]))
+    if path.startswith(workload_metadata_prefix):
+        return bool(
+            re.fullmatch(
+                r"(?:[1-9][0-9]*\.root|timestamp|snapshot|targets|families|releases|"
+                r"[1-9][0-9]*\.(?:targets|families|releases))\.json\Z",
+                path[len(workload_metadata_prefix) :],
+            )
+        )
+    if path.startswith(workload_targets_prefix):
+        return bool(
+            re.fullmatch(
+                r"releases/[0-9a-f]{64}\.json\Z",
+                path[len(workload_targets_prefix) :],
+            )
+        )
     return False
 
 
