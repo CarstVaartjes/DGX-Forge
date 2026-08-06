@@ -137,7 +137,7 @@ def test_bundle_ignores_interpreter_cache_artifacts(tmp_path: Path) -> None:
     source = tmp_path / "compose"
     shutil.copytree(ROOT / "deploy/compose", source)
     cache = source / "litellm/__pycache__"
-    cache.mkdir()
+    cache.mkdir(exist_ok=True)
     (cache / "config_supervisor.cpython-312.pyc").write_bytes(b"generated")
 
     assert module.build_deployment_bundle(source) == module.build_deployment_bundle(

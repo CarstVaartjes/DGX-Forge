@@ -31,8 +31,8 @@ from dgx_control.desired_state import (
 from dgx_control.git_policy import Eligibility
 from dgx_control.jobs import JobService
 from dgx_control.models import AgentCertificate, AgentNode, Base
-from dgx_control.orchestration import ReconciliationOrchestrator
 from dgx_control.operation_api import fleet_response
+from dgx_control.orchestration import ReconciliationOrchestrator
 from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
 from dgx_control.reconcile import Reconciler
 from dgx_control.repository import RepositoryService
@@ -136,7 +136,11 @@ def _drive_reconciliation(
             from dgx_control.models import Reconciliation
 
             reconciliation = session.get(Reconciliation, reconciliation_id)
-            if reconciliation is not None and reconciliation.current_phase == "completed":
+            if (
+                reconciliation is not None
+                and reconciliation.current_phase == "completed"
+                and reconciliation.status == "succeeded"
+            ):
                 return claimed
         if not advanced:
             raise RuntimeError("production reconciliation service made no progress")
@@ -419,12 +423,6 @@ def run(host: str, display_name: str) -> dict[str, object]:
             plan.operation_graph.reconciliation_id,
             node_id.value,
         )
-        # Completion marks the node lease for release.  Perform the durable
-        # release tick before creating the successor plan so the successor can
-        # acquire the same Spark without relying on UUID ordering or a stale
-        # lease window.
-        assert execution.tick(plan.operation_graph.reconciliation_id)
-
         # A periodic post-start probe observes the now-running managed workload.
         # Keep it later than the pre-mutation zero-compute gate so durable replay
         # cannot mistake the gate evidence for the current runtime state.
@@ -467,7 +465,7 @@ def run(host: str, display_name: str) -> dict[str, object]:
         claimed += 1
         if os.environ.get("DGX_DEBUG_LIFECYCLE"):
             with sessions() as debug_session:
-                from dgx_control.models import Job, AgentOperation, Reconciliation
+                from dgx_control.models import AgentOperation, Job, Reconciliation
                 print("DEBUG jobs", [(j.id, j.reconciliation_id, j.state, j.kind) for j in debug_session.query(Job).all()], file=sys.stderr)
                 print("DEBUG recs", [(r.id, r.current_phase, r.completion_generation) for r in debug_session.query(Reconciliation).all()], file=sys.stderr)
                 print("DEBUG ops", [(o.id, o.parent_job_id, o.kind, o.state) for o in debug_session.query(AgentOperation).all()], file=sys.stderr)
