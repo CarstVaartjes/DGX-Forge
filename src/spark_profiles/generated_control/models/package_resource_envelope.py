@@ -27,6 +27,7 @@ class PackageResourceEnvelope:
             installed_bytes (int):
             kv_cache_base_bytes (int):
             kv_cache_per_token_bytes (int):
+            output_bytes (int):
             required_sparks (int):
             topology (str):
             transient_bytes (int):
@@ -38,6 +39,7 @@ class PackageResourceEnvelope:
     installed_bytes: int
     kv_cache_base_bytes: int
     kv_cache_per_token_bytes: int
+    output_bytes: int
     required_sparks: int
     topology: str
     transient_bytes: int
@@ -59,6 +61,8 @@ class PackageResourceEnvelope:
 
         kv_cache_per_token_bytes = self.kv_cache_per_token_bytes
 
+        output_bytes = self.output_bytes
+
         required_sparks = self.required_sparks
 
         topology = self.topology
@@ -75,6 +79,7 @@ class PackageResourceEnvelope:
             "installed_bytes": installed_bytes,
             "kv_cache_base_bytes": kv_cache_base_bytes,
             "kv_cache_per_token_bytes": kv_cache_per_token_bytes,
+            "output_bytes": output_bytes,
             "required_sparks": required_sparks,
             "topology": topology,
             "transient_bytes": transient_bytes,
@@ -99,6 +104,8 @@ class PackageResourceEnvelope:
 
         kv_cache_per_token_bytes = d.pop("kv_cache_per_token_bytes")
 
+        output_bytes = d.pop("output_bytes")
+
         required_sparks = d.pop("required_sparks")
 
         topology = d.pop("topology")
@@ -112,6 +119,7 @@ class PackageResourceEnvelope:
             installed_bytes=installed_bytes,
             kv_cache_base_bytes=kv_cache_base_bytes,
             kv_cache_per_token_bytes=kv_cache_per_token_bytes,
+            output_bytes=output_bytes,
             required_sparks=required_sparks,
             topology=topology,
             transient_bytes=transient_bytes,

@@ -282,9 +282,9 @@ class PackagePublicationService:
             raise PublicationError("publication preview expired")
         candidate = self._candidate(preview.candidate_id)
         lock = _lock_bytes(candidate)
-        _validate_resource_envelope(lock)
         if hashlib.sha256(lock).hexdigest() != preview.release_digest or lock != preview.lock_bytes:
             raise PublicationError("candidate lock bytes changed")
+        _validate_resource_envelope(lock)
         if self._head() != preview.base_commit:
             raise PublicationError("publication preview is stale")
         if not self._commit_eligible(preview.base_commit):

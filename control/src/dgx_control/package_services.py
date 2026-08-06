@@ -849,11 +849,11 @@ class ProductionPackageProjectionService:
         digest = self.create_action_plan("package.rollout", deployment_id, request)
         envelope = release.get("resource_envelope")
         if not isinstance(envelope, Mapping):
-            raise RuntimeError("promoted workload release resource envelope is missing")
+            raise TypeError("promoted workload release resource envelope is missing")
         per_node = envelope.get("per_node")
         aggregate = envelope.get("aggregate")
         if not isinstance(per_node, Mapping) or not isinstance(aggregate, Mapping):
-            raise RuntimeError("promoted workload resource envelope is invalid")
+            raise TypeError("promoted workload resource envelope is invalid")
         download_bytes = aggregate.get("download_bytes")
         installed_bytes = aggregate.get("installed_bytes")
         transient_bytes = aggregate.get("transient_bytes")
@@ -1129,7 +1129,7 @@ class ProductionPackageProjectionService:
         """
         raw = summary.get("resources")
         if not isinstance(raw, Mapping):
-            raise RuntimeError("package observation has no resource envelope")
+            raise TypeError("package observation has no resource envelope")
         fields = (
             "download_bytes",
             "installed_bytes",

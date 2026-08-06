@@ -73,6 +73,9 @@ control clients`, and `PR contract smoke`). A successful merged PR lifecycle is
 recorded in `inventory/reports/code-host-protection.json`; heavyweight
 acceptance remains outside the PR path by design.
 
+See [Testing and CI policy](docs/testing-and-ci.md) for the exact local tiers,
+the hosted smoke subset, and the release-only acceptance gates.
+
 Configure the authenticated control origin and restrictive token file, then
 inspect current node state and preview the exact server reconciliation plan:
 

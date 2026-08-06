@@ -92,6 +92,33 @@ def _release_lock(name: str):
             "validation": [],
             "provenance": [],
             "resolver": {"name": "synthetic-e2e", "version": 1},
+            "resource_envelope": {
+                "schema_version": 1,
+                "per_node": {
+                    "download_bytes": len(content) + len(adapter_content),
+                    "installed_bytes": len(content) + len(adapter_content),
+                    "transient_bytes": 1,
+                    "output_bytes": 0,
+                    "host_memory_bytes": 1,
+                    "gpu_memory_bytes": 1,
+                    "kv_cache_base_bytes": 0,
+                    "kv_cache_per_token_bytes": 0,
+                },
+                "aggregate": {
+                    "download_bytes": len(content) + len(adapter_content),
+                    "installed_bytes": len(content) + len(adapter_content),
+                    "transient_bytes": 1,
+                    "output_bytes": 0,
+                    "host_memory_bytes": 1,
+                    "gpu_memory_bytes": 1,
+                    "kv_cache_base_bytes": 0,
+                    "kv_cache_per_token_bytes": 0,
+                },
+                "required_sparks": 1,
+                "topology": "single",
+                "measurement": "declared",
+                "evidence": [{"kind": "capacity", "digest": "sha256:" + "a" * 64}],
+            },
         }
     )
     return lock, {component["digest"]: content, adapter["digest"]: adapter_content}

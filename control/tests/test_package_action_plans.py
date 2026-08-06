@@ -222,6 +222,9 @@ def test_rollout_preview_and_apply_use_digest_plan_and_existing_orchestrator(tmp
     )
     preview = service.rollout_preview("ds4-deepseek-single")
     assert preview["state"] == "ready"
+    assert preview["download_bytes"] == 93_691_352_994
+    assert preview["storage_bytes"] == 213_691_352_994
+    assert preview["resource_envelope"]["required_sparks"] == 1
     result = service.rollout(
         "ds4-deepseek-single", preview["digest"], "admin", "request-rollout"
     )

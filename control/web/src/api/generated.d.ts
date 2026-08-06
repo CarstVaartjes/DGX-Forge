@@ -1511,6 +1511,8 @@ export interface components {
             kv_cache_base_bytes: number;
             /** Kv Cache Per Token Bytes */
             kv_cache_per_token_bytes: number;
+            /** Output Bytes */
+            output_bytes: number;
             /** Required Sparks */
             required_sparks: number;
             /** Topology */

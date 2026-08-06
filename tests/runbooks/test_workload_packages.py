@@ -64,7 +64,8 @@ def test_hosted_ci_uploads_independent_workload_evidence() -> None:
     evidence_job = workflow.split("  workload-package-evidence:", 1)[1].split(
         "  release-metadata:", 1
     )[0]
-    assert "github.event_name != 'pull_request'" in evidence_job
+    assert "github.event_name == 'workflow_dispatch'" in evidence_job
+    assert "github.ref_type == 'tag'" in evidence_job
 
 
 def test_ci_only_runs_for_main_pull_requests_manual_dispatch_or_release_tags() -> None:

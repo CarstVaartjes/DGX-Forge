@@ -224,6 +224,7 @@ class Packages:
                                 "download_bytes": 200,
                                 "installed_bytes": 200,
                                 "transient_bytes": 20,
+                                "output_bytes": 0,
                                 "host_memory_bytes": 100,
                                 "gpu_memory_bytes": 300,
                                 "kv_cache_base_bytes": 40,
