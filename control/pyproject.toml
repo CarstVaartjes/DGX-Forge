@@ -11,6 +11,7 @@ dependencies = [
   "jsonschema==4.25.1",
   "psycopg[binary]==3.2.9",
   "PyJWT==2.13.0",
+  "PyYAML==6.0.3",
   "sqlalchemy==2.0.42",
   "spark-profiles==0.1.0",
   "tomli-w==1.2.0",
