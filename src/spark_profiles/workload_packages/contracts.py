@@ -106,6 +106,7 @@ class PromotionPolicy:
 class PackageFamily:
     schema_version: int
     family_id: str
+    validation_deployment_id: str | None
     source: Mapping[str, object]
     versions: Mapping[str, object]
     discovery: Mapping[str, object]
@@ -135,6 +136,7 @@ class PackageFamily:
         return cls(
             schema_version=value["schema_version"],
             family_id=value["family_id"],
+            validation_deployment_id=value.get("validation_deployment"),
             source=_freeze(value["source"]),
             versions=_freeze(value["versions"]),
             discovery=_freeze(value["discovery"]),

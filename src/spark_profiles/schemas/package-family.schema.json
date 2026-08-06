@@ -20,6 +20,7 @@
   "properties": {
     "schema_version": {"const": 1},
     "family_id": {"$ref": "#/$defs/identifier"},
+    "validation_deployment": {"$ref": "#/$defs/identifier"},
     "source": {
       "type": "object",
       "additionalProperties": false,

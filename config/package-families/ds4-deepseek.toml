@@ -1,5 +1,6 @@
 schema_version = 1
 family_id = "ds4-deepseek"
+validation_deployment = "ds4-deepseek-single"
 
 [source]
 provider = "git"

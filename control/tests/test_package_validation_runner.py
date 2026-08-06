@@ -1,0 +1,103 @@
+from __future__ import annotations
+
+import hashlib
+from datetime import UTC, datetime
+
+from dgx_agent_protocol import AgentOperation, canonical_message
+from dgx_control.db import build_engine, session_factory
+from dgx_control.models import AgentNode, Base, Job, PackageValidationRun
+from dgx_control.package_validation_runner import PackageValidationRunner
+
+
+def _request() -> dict[str, object]:
+    deployment = {
+        "schema_version": 1,
+        "deployment_id": "future-stack-canary",
+        "family_id": "future-stack",
+        "release_digest": "a" * 64,
+        "selector": {"node_count": 1, "required_labels": {}, "preferred_node_ids": []},
+        "secrets": {},
+        "ports": {"inference": 8000},
+        "arguments": [],
+        "routing": {"alias": "future-stack", "port": "inference"},
+        "resources": {"memory_bytes": 1, "storage_bytes": 1, "gpu_count": 1},
+    }
+    deployment_config_digest = hashlib.sha256(
+        canonical_message(deployment) + b"\n"
+    ).hexdigest()
+    payload = {
+        "schema_version": 1,
+        "candidate_id": "candidate-1",
+        "release_digest": "a" * 64,
+        "compatibility_digest": "b" * 64,
+        "deployment_id": "future-stack-canary",
+        "deployment_digest": deployment_config_digest,
+        "deployment": deployment,
+        "deployment_config_digest": deployment_config_digest,
+    }
+    return {
+        "candidate_id": "candidate-1",
+        "validation_id": "00000000-0000-4000-8000-000000000001",
+        "release_digest": "a" * 64,
+        "base_commit": "d" * 40,
+        "node_ids": ["spk_" + "1" * 32],
+        "operations": [
+            {"kind": AgentOperation.PACKAGE_PREPARE.value, "payload": payload},
+            {"kind": AgentOperation.PACKAGE_HEALTH.value, "payload": payload},
+        ],
+    }
+
+
+class RecordingAgentJobs:
+    def __init__(self) -> None:
+        self.enqueued: list[tuple[str, str, dict[str, object]]] = []
+
+    def enqueue_in_session(self, session, job_id, node_id, operation, base_commit, payload, *, operation_id):
+        del session, job_id, base_commit
+        self.enqueued.append((node_id, operation, dict(payload)))
+        return type("Stored", (), {"id": operation_id})()
+
+    def notify_available(self) -> None:
+        return None
+
+
+def test_runner_stages_agent_operations_and_returns_running(tmp_path) -> None:
+    engine = build_engine(f"sqlite:///{tmp_path / 'validation-runner.sqlite'}")
+    Base.metadata.create_all(engine)
+    sessions = session_factory(engine)
+    now = datetime(2026, 8, 6, tzinfo=UTC)
+    node_id = "spk_" + "1" * 32
+    with sessions.begin() as session:
+        session.add(AgentNode(node_id=node_id, state="active", capabilities=["package-abi-v1"]))
+        session.add(
+            PackageValidationRun(
+                id="00000000-0000-4000-8000-000000000001",
+                candidate_id="candidate-1",
+                resolution_id="00000000-0000-4000-8000-000000000002",
+                validation_kind="artifact",
+                release_digest="a" * 64,
+                policy_digest="b" * 64,
+                fleet_digest="b" * 64,
+                state="running",
+                attempt=1,
+                actor="admin",
+                progress={"completed": 0, "failed": 0, "running": 2, "total": 2},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+    jobs = RecordingAgentJobs()
+    runner = PackageValidationRunner(sessions, jobs, clock=lambda: now)
+
+    result = runner(_request())
+
+    assert result["status"] == "running"
+    assert [item[1] for item in jobs.enqueued] == [
+        AgentOperation.PACKAGE_PREPARE.value,
+        AgentOperation.PACKAGE_HEALTH.value,
+    ]
+    with sessions() as session:
+        job = session.query(Job).filter_by(kind="package.validation").one()
+        run = session.get(PackageValidationRun, "00000000-0000-4000-8000-000000000001")
+        assert run is not None
+        assert run.progress["job_id"] == job.id

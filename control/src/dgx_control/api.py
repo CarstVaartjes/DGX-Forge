@@ -1600,6 +1600,7 @@ def production_app() -> FastAPI:
     from .orchestration import ReconciliationOrchestrator
     from .package_publication import PackagePublicationService
     from .package_services import ProductionPackageProjectionService
+    from .package_validation_runner import PackageValidationRunner
     from .proposals import ProposalService
     from .reconcile import ChangeService, Reconciler
     from .repository import RepositoryService
@@ -1696,6 +1697,11 @@ def production_app() -> FastAPI:
         commit_eligible=commit_eligible,
         current_commit=current_commit,
     )
+    validation_runner = PackageValidationRunner(
+        sessions,
+        agent_services.operations,
+        clock=clock,
+    )
     package_services = ProductionPackageProjectionService(
         repository,
         sessions,
@@ -1707,6 +1713,7 @@ def production_app() -> FastAPI:
             target_root=settings.workload_tuf_target_root,
             clock=clock,
         ),
+        validation_runner=validation_runner,
     )
     package_services.install_publication(
         PackagePublicationService(

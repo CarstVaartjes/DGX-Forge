@@ -6,6 +6,7 @@ import pytest
 from dgx_control.jobs import JobService
 from dgx_control.models import Base
 from dgx_control.package_rollout_worker import PackageRolloutWorker
+from dgx_control.package_validation_runner import PackageValidationRunner
 from dgx_control.presence import ManagementAddressPolicy
 from dgx_control.route_runtime import AtomicRouteBundlePublisher
 from dgx_control.settings import Settings, SettingsError, WorkerSettings
@@ -60,7 +61,11 @@ def test_production_builder_wires_signer_queue_route_boundary_and_update_worker(
     )
 
     class SignerBackedAgentJobs:
-        pass
+        def enqueue_in_session(self, *_args, **_kwargs):
+            raise AssertionError("validation enqueue is not exercised here")
+
+        def notify_available(self):
+            return None
 
     class Authority:
         def refresh_update_grant(self, *_args):
@@ -91,6 +96,8 @@ def test_production_builder_wires_signer_queue_route_boundary_and_update_worker(
 
     assert isinstance(worker._updates, UpdateRolloutWorker)
     assert isinstance(worker._packages, PackageRolloutWorker)
+    assert isinstance(worker._validation, PackageValidationRunner)
+    assert worker._validation._agent_jobs is agent_jobs
     assert worker._packages._orchestrator._agent_jobs is agent_jobs
     assert worker._updates._orchestrator._agent_jobs is agent_jobs
     assert isinstance(worker._updates._routes, ProductionUpdateRouteBoundary)

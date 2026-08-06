@@ -251,6 +251,31 @@ class ValidationController:
             }
             for kind in ("package.prepare", self._verify_operation)
         )
+        deployment = _get(candidate, "deployment")
+        if isinstance(deployment, Mapping):
+            deployment_id = deployment.get("deployment_id")
+            deployment_digest = _get(candidate, "deployment_digest")
+            deployment_config_digest = _get(
+                candidate, "deployment_config_digest", default=deployment_digest
+            )
+            if not all(
+                isinstance(value, str) and len(value) == 64
+                for value in (deployment_digest, deployment_config_digest)
+            ) or not isinstance(deployment_id, str):
+                raise ValidationError("validation deployment identity is invalid")
+            operations = tuple(
+                {
+                    **operation,
+                    "payload": {
+                        **dict(operation["payload"]),
+                        "deployment_id": deployment_id,
+                        "deployment_digest": deployment_digest,
+                        "deployment": dict(deployment),
+                        "deployment_config_digest": deployment_config_digest,
+                    },
+                }
+                for operation in operations
+            )
         value = {
             "candidate_id": candidate_id,
             "compatibility_digest": report.digest,

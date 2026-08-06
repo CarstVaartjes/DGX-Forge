@@ -11,6 +11,7 @@ from spark_profiles.contracts import (
     load_generic_cluster_profile,
     load_workload,
 )
+from spark_profiles.workload_packages import PackageFamily
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 CANONICAL_SCHEMA_ROOT = REPOSITORY_ROOT / "src/spark_profiles/schemas"
@@ -60,6 +61,35 @@ stop_order = "independent"
     assert profile.quotas == {
         "chat": {"requests_per_minute": 30, "tokens_per_minute": 10000}
     }
+
+
+def test_package_family_binds_an_explicit_validation_deployment() -> None:
+    family = PackageFamily.load(
+        {
+            "schema_version": 1,
+            "family_id": "future-stack",
+            "validation_deployment": "future-stack-canary",
+            "source": {
+                "provider": "git",
+                "locator": "https://example.invalid/future-stack",
+                "policy_refs": ["policy://origins/example"],
+            },
+            "versions": {
+                "scheme": "opaque",
+                "channels": ["stable"],
+                "include_prereleases": False,
+            },
+            "discovery": {"poll_interval_seconds": 60, "bindings": [{"target": "release.version", "source": "release.version", "value_type": "string", "required": True}]},
+            "resolution": {"recipe_version": 1, "components": [{"name": "model", "kind": "model", "media_type": "application/octet-stream", "materialization": "file", "platforms": ["linux/arm64"]}], "dependencies": []},
+            "policy": {"required_evidence": ["checksum"], "license_policy_refs": []},
+            "compatibility": {"architectures": ["linux-arm64"], "operating_systems": ["linux"], "min_memory_bytes": 1, "min_storage_bytes": 1},
+            "execution": {"backend": "native", "adapter_abi": 1},
+            "validation": [{"kind": "artifact", "timeout_seconds": 60}],
+            "retention": {"release_count": 2, "rollback_count": 1},
+        }
+    )
+
+    assert family.validation_deployment_id == "future-stack-canary"
 
 
 def test_generic_profile_rejects_quota_without_matching_endpoint(

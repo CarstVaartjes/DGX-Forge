@@ -64,6 +64,39 @@ def test_plan_schedules_prepare_and_verify_only() -> None:
     assert plan.digest == hashlib.sha256(plan.canonical_bytes).hexdigest()
 
 
+def test_plan_carries_the_exact_validation_deployment_into_agent_payloads() -> None:
+    candidate = _candidate()
+    candidate["deployment"] = {
+        "schema_version": 1,
+        "deployment_id": "future-stack-canary",
+        "family_id": "future-stack",
+        "release_digest": "a" * 64,
+        "selector": {"node_count": 1, "required_labels": {}, "preferred_node_ids": []},
+        "secrets": {},
+        "ports": {"inference": 8000},
+        "arguments": [],
+        "routing": {"alias": "future-stack", "port": "inference"},
+        "resources": {"memory_bytes": 1, "storage_bytes": 1, "gpu_count": 1},
+    }
+    candidate["deployment_digest"] = "c" * 64
+    candidate["deployment_config_digest"] = "c" * 64
+    queued: list[dict[str, object]] = []
+    controller = ValidationController(
+        candidate_loader=lambda _candidate_id: candidate,
+        fleet_loader=lambda: FLEET,
+        enqueue=lambda operation: queued.append(operation) or "op-1",
+        clock=lambda: datetime(2026, 8, 6, tzinfo=UTC),
+    )
+
+    controller.plan("candidate-1")
+
+    assert all(
+        operation["payload"]["deployment_id"] == "future-stack-canary"
+        for operation in queued
+    )
+    assert all(operation["payload"]["deployment_digest"] == "c" * 64 for operation in queued)
+
+
 def test_validation_advances_to_passed_only_with_required_evidence() -> None:
     statuses = iter(("running", "passed"))
     controller = ValidationController(

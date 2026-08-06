@@ -1,5 +1,6 @@
 schema_version = 1
 family_id = "mia-deepseek"
+validation_deployment = "mia-deepseek-dual"
 
 [source]
 provider = "git"

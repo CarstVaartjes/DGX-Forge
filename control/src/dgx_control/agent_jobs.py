@@ -1601,7 +1601,15 @@ class AgentJobService:
             attempt.state = state
             operation.state = state
             operation.updated_at = now
-            if self._result_consumer is not None:
+            # Package-validation attempts are projected by the worker-owned
+            # validation runner after the durable attempt is committed.  They
+            # are deliberately not reconciliation operations, so sending them
+            # through the reconciliation consumer would produce a false
+            # parent-job lookup/authority failure.
+            parent = session.get(Job, operation.parent_job_id)
+            if self._result_consumer is not None and (
+                parent is None or parent.kind != "package.validation"
+            ):
                 self._result_consumer(session, operation, attempt, message)
             self._aggregate_parent(session, operation.parent_job_id)
 

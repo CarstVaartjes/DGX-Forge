@@ -185,6 +185,7 @@ class Worker:
         reconciliations=None,
         updates=None,
         packages=None,
+        validation=None,
         quarantine_unlinked: bool = False,
         loop_heartbeat: Callable[[], object] | None = None,
     ) -> None:
@@ -196,6 +197,7 @@ class Worker:
         self._reconciliations = reconciliations
         self._updates = updates
         self._packages = packages
+        self._validation = validation
         self._quarantine_unlinked = quarantine_unlinked
         self._loop_heartbeat = loop_heartbeat
         self._source_cursor = 0
@@ -210,6 +212,8 @@ class Worker:
             sources.append(self._updates.tick)
         if self._packages is not None:
             sources.append(self._packages.tick)
+        if self._validation is not None:
+            sources.append(self._validation.tick)
         sources.append(self._run_generic)
         if self._source_cursor >= len(sources):
             self._source_cursor = 0
@@ -274,6 +278,7 @@ def assemble_production_worker(
     from .agent_reconciliation import AgentReconciliationService
     from .package_rollout_worker import PackageRolloutWorker
     from .package_rollouts import PackageRolloutOrchestrator
+    from .package_validation_runner import PackageValidationRunner
     from .update_routes import (
         ProductionUpdateRouteBoundary,
         load_authoritative_route_request,
@@ -311,6 +316,11 @@ def assemble_production_worker(
         sessions,
         PackageRolloutOrchestrator(sessions, agent_jobs, clock=clock),
     )
+    package_validation = PackageValidationRunner(
+        sessions,
+        agent_jobs,
+        clock=clock,
+    )
     reconciliations = AgentReconciliationService(
         sessions,
         agent_jobs=agent_jobs,
@@ -328,6 +338,7 @@ def assemble_production_worker(
         reconciliations=reconciliations,
         updates=updates,
         packages=package_rollouts,
+        validation=package_validation,
         quarantine_unlinked=True,
         loop_heartbeat=loop_heartbeat,
     )

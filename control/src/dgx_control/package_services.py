@@ -1385,7 +1385,9 @@ class ProductionPackageProjectionService:
 
     # ---- Durable validation boundary -------------------------------------------
 
-    def _validation_inputs(self, candidate_id: str) -> tuple[dict[str, object], str, str, object]:
+    def _validation_inputs(
+        self, candidate_id: str
+    ) -> tuple[dict[str, object], str, str, object, WorkloadDeployment]:
         """Load one candidate, exact lock, policy, and resolution binding.
 
         The lock is parsed from the eligible Git document on every preview and
@@ -1414,6 +1416,24 @@ class ProductionPackageProjectionService:
         family = self._families().get(candidate.family_id)
         if family is None:
             raise ValidationError("candidate package family is unavailable")
+        validation_deployment_id = family.validation_deployment_id
+        if validation_deployment_id is None:
+            raise ValidationError("validation-deployment-missing")
+        deployment_path = (
+            f"config/workload-deployments/{validation_deployment_id}.toml"
+        )
+        deployment_document = self._repository.read_document(commit, deployment_path)
+        try:
+            deployment = WorkloadDeployment.load(deployment_document.parsed)
+        except Exception as error:
+            raise ValidationError("validation deployment is invalid") from error
+        if (
+            deployment.deployment_id != validation_deployment_id
+            or deployment.family_id != candidate.family_id
+            or deployment.release_digest != release_digest
+        ):
+            raise ValidationError("validation deployment release binding changed")
+        deployment_digest = hashlib.sha256(deployment.canonical_bytes).hexdigest()
         policy = dict(family.policy)
         # Keep the family policy authoritative, while carrying the family
         # validation suite as a bounded requirement for the runner.
@@ -1429,8 +1449,11 @@ class ProductionPackageProjectionService:
             "provenance_verified": True,
             "license_accepted": summary.get("license_accepted", True),
             "evidence": dict(evidence) if isinstance(evidence, Mapping) else {},
+            "deployment": json.loads(deployment.canonical_bytes),
+            "deployment_digest": deployment_digest,
+            "deployment_config_digest": deployment_digest,
         }
-        return candidate_value, commit, resolution_id, lock
+        return candidate_value, commit, resolution_id, lock, deployment
 
     def _validation_fleet(self) -> object:
         """Return an authenticated, bounded fleet projection for compatibility."""
@@ -1492,7 +1515,7 @@ class ProductionPackageProjectionService:
         }
 
     def validation_preview(self, candidate_id: str) -> Mapping[str, object]:
-        candidate, commit, resolution_id, lock = self._validation_inputs(candidate_id)
+        candidate, commit, resolution_id, lock, _deployment = self._validation_inputs(candidate_id)
         controller = self._validation_controller(candidate)
         plan = controller.plan(candidate_id)
         now = self._clock()
@@ -1567,7 +1590,7 @@ class ProductionPackageProjectionService:
         request = self.consume_action_plan(plan_digest, "package.validate", candidate_id)
         if request.get("candidate_id") != candidate_id:
             raise ValueError("package validation candidate changed")
-        candidate, commit, _resolution_id, lock = self._validation_inputs(candidate_id)
+        candidate, commit, _resolution_id, lock, _deployment = self._validation_inputs(candidate_id)
         controller = self._validation_controller(candidate)
         plan = controller.plan(candidate_id)
         if (
