@@ -22,7 +22,7 @@ def config(database_url: str) -> Config:
 
 def test_recipe_catalog_is_the_linear_head() -> None:
     script = ScriptDirectory.from_config(config("sqlite://"))
-    assert script.get_heads() == ["0015_recipe_catalog"]
+    assert script.get_heads() == ["0016_recipe_deployment_authority"]
     assert script.get_revision("0015_recipe_catalog").down_revision == (
         "0014_package_action_plans"
     )

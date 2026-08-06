@@ -61,9 +61,9 @@ def _insert_candidate(connection, *, candidate_id: str = "candidate-1") -> None:
 def test_w11_is_the_sole_linear_alembic_head() -> None:
     root = Path(__file__).resolve().parents[1]
     script = ScriptDirectory.from_config(_config("sqlite://"))
-    assert script.get_heads() == ["0014_package_action_plans"]
-    revision = script.get_revision("0014_package_action_plans")
-    assert revision.down_revision == "0013_workload_packages"
+    assert script.get_heads() == ["0016_recipe_deployment_authority"]
+    revision = script.get_revision("0016_recipe_deployment_authority")
+    assert revision.down_revision == "0015_recipe_catalog"
     assert root.joinpath("migrations/versions/0013_workload_packages.py").exists()
     assert root.joinpath("migrations/versions/0014_package_action_plans.py").exists()
 
@@ -146,16 +146,17 @@ def test_resolution_and_rollout_require_immutable_digests(tmp_path: Path) -> Non
             "fleet_digest": HEX,
             "topology_digest": HEX,
             "plan_digest": "d" * 64,
+            "authority_digest": "e" * 64,
         }
         connection.execute(
             text(
                 "INSERT INTO package_rollouts "
                 "(id,deployment_id,deployment_digest,release_digest,base_commit,"
                 "policy_digest,tuf_target_digest,fleet_digest,topology_digest,"
-                "plan_digest,state,actor,created_at,updated_at) VALUES "
+                "plan_digest,authority_digest,state,actor,created_at,updated_at) VALUES "
                 "(:id,'synthetic-deployment',:deployment_digest,:release_digest,"
                 ":base_commit,:policy_digest,:tuf_target_digest,:fleet_digest,"
-                ":topology_digest,:plan_digest,'planned','admin',"
+                ":topology_digest,:plan_digest,:authority_digest,'planned','admin',"
                 "'2026-08-06 00:00:00','2026-08-06 00:00:00')"
             ),
             {**values, "base_commit": COMMIT},
@@ -166,11 +167,12 @@ def test_resolution_and_rollout_require_immutable_digests(tmp_path: Path) -> Non
                     "INSERT INTO package_rollouts "
                     "(id,deployment_id,deployment_digest,release_digest,base_commit,"
                     "policy_digest,tuf_target_digest,fleet_digest,topology_digest,"
-                    "plan_digest,state,actor,created_at,updated_at) VALUES "
+                    "plan_digest,authority_digest,state,actor,created_at,updated_at) VALUES "
                     "('rollout-2','synthetic-deployment',:deployment_digest,"
                     ":release_digest,'short',:policy_digest,:tuf_target_digest,"
                     ":fleet_digest,:topology_digest,'e' || :plan_digest,"
-                    "'planned','admin','2026-08-06 00:00:00','2026-08-06 00:00:00')"
+                    ":authority_digest,'planned','admin','2026-08-06 00:00:00',"
+                    "'2026-08-06 00:00:00')"
                 ),
                 values,
             )

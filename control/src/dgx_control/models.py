@@ -7,6 +7,8 @@ signed release evidence while those adapters are migrated.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from datetime import datetime
 
@@ -1230,8 +1232,17 @@ class PackageRollout(Base):
             name="ck_package_rollouts_plan_digest",
         ),
         CheckConstraint(
-            "length(base_commit) BETWEEN 40 AND 128",
+            "base_commit IS NULL OR length(base_commit) BETWEEN 40 AND 128",
             name="ck_package_rollouts_base_commit_length",
+        ),
+        CheckConstraint(
+            _lower_hex("authority_digest", 64),
+            name="ck_package_rollouts_authority_digest",
+        ),
+        CheckConstraint(
+            "(base_commit IS NOT NULL AND recipe_revision_id IS NULL) OR "
+            "(base_commit IS NULL AND recipe_revision_id IS NOT NULL)",
+            name="ck_package_rollouts_authority_kind",
         ),
         CheckConstraint(
             "current_batch >= 0",
@@ -1261,10 +1272,9 @@ class PackageRollout(Base):
         ),
         UniqueConstraint(
             "deployment_id",
-            "release_digest",
-            "base_commit",
+            "authority_digest",
             "plan_digest",
-            name="uq_package_rollouts_deployment_release_commit_plan",
+            name="uq_package_rollouts_deployment_authority_plan",
         ),
     )
     id: Mapped[str] = mapped_column(
@@ -1277,7 +1287,11 @@ class PackageRollout(Base):
     deployment_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     release_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     previous_release_digest: Mapped[str | None] = mapped_column(String(64))
-    base_commit: Mapped[str] = mapped_column(String(128), nullable=False)
+    base_commit: Mapped[str | None] = mapped_column(String(128))
+    recipe_revision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("local_recipe_revisions.id", ondelete="RESTRICT"), index=True
+    )
+    authority_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     policy_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     tuf_target_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     fleet_digest: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -1296,6 +1310,28 @@ class PackageRollout(Base):
     )
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+@event.listens_for(PackageRollout, "before_insert")
+def _populate_rollout_authority_digest(_mapper, _connection, target: PackageRollout) -> None:
+    if target.authority_digest:
+        return
+    if target.recipe_revision_id is None:
+        authority = {
+            "base_commit": target.base_commit,
+            "deployment_digest": target.deployment_digest,
+            "release_digest": target.release_digest,
+        }
+    else:
+        authority = {
+            "recipe_revision_id": target.recipe_revision_id,
+            "deployment_digest": target.deployment_digest,
+            "release_digest": target.release_digest,
+            "plan_digest": target.plan_digest,
+        }
+    target.authority_digest = hashlib.sha256(
+        json.dumps(authority, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 class PackageRolloutNode(Base):
