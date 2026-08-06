@@ -31,7 +31,10 @@ jobs:
         with:
           version: "0.12.1"
           python-version: "3.12"
-          enable-cache: true
+          # Ruff is executed through uvx and has no project dependency cache.
+          # Enabling setup-uv's cache here can fail post-job when no cache path
+          # is created; dependency-using jobs below keep caching enabled.
+          enable-cache: false
       - name: Run Ruff
         shell: bash
         run: |
