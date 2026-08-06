@@ -246,7 +246,7 @@ jobs:
             "$HERMES_AGENT_IMAGE"
       - name: Build and push API image
         id: api
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: control/Dockerfile
@@ -266,7 +266,7 @@ jobs:
             org.opencontainers.image.version=${{ needs.release-metadata.outputs.version }}
       - name: Build and push worker image
         id: worker
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: .
           file: control/Dockerfile
@@ -286,7 +286,7 @@ jobs:
             org.opencontainers.image.version=${{ needs.release-metadata.outputs.version }}
       - name: Build and push Hermes image
         id: hermes
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
         with:
           context: deploy/compose/hermes-agent
           file: deploy/compose/hermes-agent/Dockerfile
