@@ -79,7 +79,7 @@ rejected result is not success evidence; the parent job remains recoverable
 through an explicit retry or operator decision.
 
 Smallstep revocation is passive in v0.30.2: it prevents CA renewal but does not
-make an already-issued leaf disappear from every TLS verifier. DGX-Forge's
+make an already-issued leaf disappear from every TLS verifier. `vonk-forge`'s
 database and Caddy-to-control identity validator are therefore the immediate
 revocation boundary. A control database outage fails agent authorization
 closed. The remaining exposure is bounded by the 24-hour leaf lifetime.
