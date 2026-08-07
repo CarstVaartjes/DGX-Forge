@@ -6,8 +6,9 @@ use std::{
 };
 
 use chrono::{DateTime, TimeZone, Utc};
+use rcgen::string::Ia5String;
 use rcgen::{
-    CertificateParams, DistinguishedName, DnType, Ia5String, KeyPair, PKCS_ED25519, SanType,
+    CertificateParams, DistinguishedName, DnType, KeyPair, PKCS_ED25519, PublicKeyData, SanType,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -79,7 +80,7 @@ pub fn generate_pending(node_id: &str) -> Result<PendingIdentity, IdentityError>
             .map_err(|_| IdentityError::Node)?,
     )];
     let csr = parameters.serialize_request(&key)?.pem()?;
-    let public_key_fingerprint = hex::encode(Sha256::digest(key.public_key_der()));
+    let public_key_fingerprint = hex::encode(Sha256::digest(key.subject_public_key_info()));
     Ok(PendingIdentity {
         private_key_pem: key.serialize_pem().into_bytes(),
         csr_pem: csr.into_bytes(),
@@ -136,7 +137,7 @@ pub fn load_pending(root: &Path) -> Result<Option<PendingIdentity>, IdentityErro
             .map_err(|_| std::io::Error::other("pending key is not UTF-8 PEM"))?,
     )?;
     Ok(Some(PendingIdentity {
-        public_key_fingerprint: hex::encode(Sha256::digest(key.public_key_der())),
+        public_key_fingerprint: hex::encode(Sha256::digest(key.subject_public_key_info())),
         private_key_pem,
         csr_pem,
     }))
