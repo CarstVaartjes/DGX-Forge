@@ -1,21 +1,21 @@
 # DeepSeek V4 Flash 0731 Runtime Implementation Plan
 
-> **Superseded by the Mia dual-Spark implementation plan:** This initial
+> **Superseded by the Mia dual-GPU node implementation plan:** This initial
 > staged-lane plan is retained as historical DeepSeek bring-up research. The
 > approved implementation pins Mia commit
 > `b131b2a22164675890dd1465fd8862b5cfb6ff13` and treats the 1M-capable
-> dual-Spark runtime as the planned candidate. Execute
+> dual-GPU node runtime as the planned candidate. Execute
 > [the superseding plan](2026-08-02-mia-deepseek-dual-runtime.md), not the
 > tasks below. The historical rationale remains useful for later acceptance
 > gates and the DS4 comparison path.
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Run and validate the pinned DeepSeek-V4-Flash-0731 checkpoint across both Sparks through a loopback-only API before adding the external gateway.
+**Goal:** Run and validate the pinned DeepSeek-V4-Flash-0731 checkpoint across both GPU nodes through a loopback-only API before adding the external gateway.
 
-**Architecture:** The MiaAI-Lab dual-Spark recipe is audited and pinned rather than run blindly. Both nodes keep complete manifest-verified offline caches. Bring-up advances from plain TP=2 through DSpark and padded NVFP4 before enabling concurrent 200K and derived-concurrency 1M lanes; vLLM binds to Spark 1 loopback and the Mac reaches it through an SSH tunnel.
+**Architecture:** The MiaAI-Lab dual-GPU node recipe is audited and pinned rather than run blindly. Both nodes keep complete manifest-verified offline caches. Bring-up advances from plain TP=2 through draft-model and padded NVFP4 before enabling concurrent 200K and derived-concurrency 1M lanes; vLLM binds to GPU node 1 loopback and the Mac reaches it through an SSH tunnel.
 
-**Tech Stack:** Docker Compose, vLLM/Anemll GX10 image, Python 3.12, Hugging Face Hub, SHA-256 manifests, DeepSeek V4 encoder, DSpark MTP=5, NVFP4 DS-MLA, pytest, OpenAI-compatible HTTP, upstream benchmark tooling.
+**Tech Stack:** Docker Compose, vLLM/Anemll GX10 image, Python 3.12, Hugging Face Hub, SHA-256 manifests, DeepSeek V4 encoder, draft-model MTP=5, NVFP4 DS-MLA, pytest, OpenAI-compatible HTTP, upstream benchmark tooling.
 
 ## Global Constraints
 
@@ -23,7 +23,7 @@
   `914c35bd7d5607560048e4467c3fdd42e892e297`; the superseding plan pins
   `b131b2a22164675890dd1465fd8862b5cfb6ff13`.
 - Pin model revision `9e165c30e2704aec5d9d593cce3eebd58bbef1cb`.
-- Resolve `ghcr.io/anemll/dspark-vllm-gx10:0.1.1` to and run by immutable digest.
+- Resolve `ghcr.io/anemll/draft-vllm-gx10:0.1.1` to and run by immutable digest.
 - Require the complete 166,898,660,330-byte snapshot and 166,886,535,336 SafeTensor bytes on both nodes.
 - Serving requires `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, and `HF_HUB_DISABLE_XET=1`.
 - Use tensor parallel 2, pipeline parallel 1, distributed executor `mp`, worker-first start, and head-first stop.
@@ -52,7 +52,7 @@
 
 ```python
 def test_rejects_mutable_image_tag(run_verify, lock_tree):
-    lock_tree.images.write_text('image = "ghcr.io/anemll/dspark-vllm-gx10:0.1.1"')
+    lock_tree.images.write_text('image = "ghcr.io/anemll/draft-vllm-gx10:0.1.1"')
     result = run_verify(lock_tree)
     assert result.returncode != 0
     assert "digest" in result.stderr
@@ -70,7 +70,7 @@ Expected: FAIL because `scripts/verify-locks` is absent.
 
 - [ ] **Step 3: Inspect and document the pinned source**
 
-Clone the Mia repository into a temporary directory at the exact commit. Review the launcher, Compose file, encoder-copy logic, DSpark patch, padded NVFP4 caveat, environment matrix, network bindings, image provenance, license, and destructive commands. Record each reviewed path and conclusion in the audit.
+Clone the Mia repository into a temporary directory at the exact commit. Review the launcher, Compose file, encoder-copy logic, draft-model patch, padded NVFP4 caveat, environment matrix, network bindings, image provenance, license, and destructive commands. Record each reviewed path and conclusion in the audit.
 
 - [ ] **Step 4: Resolve immutable digests and checksums**
 
@@ -149,7 +149,7 @@ git commit -m "feat: verify DeepSeek model snapshots"
 - Create: `profiles/deepseek/compose.yaml`
 - Create: `profiles/deepseek/env/common.env`
 - Create: `profiles/deepseek/env/baseline.env`
-- Create: `profiles/deepseek/env/dspark.env`
+- Create: `profiles/deepseek/env/draft.env`
 - Create: `profiles/deepseek/env/nvfp4.env`
 - Create: `profiles/deepseek/env/agent.env`
 - Create: `profiles/deepseek/env/long.env`
@@ -157,16 +157,16 @@ git commit -m "feat: verify DeepSeek model snapshots"
 - Create: `profiles/deepseek/bin/profile-stop`
 - Create: `profiles/deepseek/bin/profile-status`
 - Create: `config/profiles/deepseek-baseline.toml`
-- Create: `config/profiles/deepseek-dspark.toml`
+- Create: `config/profiles/deepseek-draft.toml`
 - Create: `config/profiles/deepseek-nvfp4.toml`
 - Create: `config/profiles/deepseek-agent.toml`
 - Create: `config/profiles/deepseek-long.toml`
 - Create: `tests/profiles/test_deepseek_profiles.py`
 
 **Interfaces:**
-- Produces: node-local Compose project `dgx-deepseek`.
+- Produces: node-local Compose project `vonk-deepseek`.
 - Produces: scripts with interface `profile-start NAME RANK`, `profile-stop NAME`, and `profile-status` for manual SSH now and restricted controller use later.
-- Profile constants: baseline `16384/1/FP8/off`; DSpark `16384/1/FP8/MTP5`; NVFP4 `16384/1/nvfp4_ds_mla/MTP5`; agent `200000/6/nvfp4_ds_mla/MTP5`; long `1048576/Cfull/nvfp4_ds_mla/MTP5`.
+- Profile constants: baseline `16384/1/FP8/off`; draft-model `16384/1/FP8/MTP5`; NVFP4 `16384/1/nvfp4_ds_mla/MTP5`; agent `200000/6/nvfp4_ds_mla/MTP5`; long `1048576/Cfull/nvfp4_ds_mla/MTP5`.
 
 - [ ] **Step 1: Write failing profile-policy tests**
 
@@ -177,7 +177,7 @@ def test_profile_ladder(profile_matrix):
     assert profile_matrix["deepseek-long"].max_model_len == 1_048_576
 
 def test_distributed_policy(compose):
-    service = compose["services"]["vllm-dspark"]
+    service = compose["services"]["vllm-draft"]
     assert service["restart"] == "no"
     assert "--distributed-executor-backend mp" in rendered_command(service)
 ```
@@ -194,9 +194,9 @@ Set TP=2, PP=1, `mp`, `max_num_batched_tokens=8192`, `gpu_memory_utilization=0.8
 
 - [ ] **Step 4: Implement lane-specific overlays**
 
-Do not include `--speculative-config` in baseline. Add it only from DSpark onward. Use FP8 KV before NVFP4. For long, require `CFULL` equal to `min(2, floor(P / 1048576))` and reject zero.
+Do not include `--speculative-config` in baseline. Add it only from draft-model onward. Use FP8 KV before NVFP4. For long, require `CFULL` equal to `min(2, floor(P / 1048576))` and reject zero.
 
-Set the head API bind to `127.0.0.1:8888`. Implement the three profile scripts with exact profile-name allowlisting, worker/head rank inputs, `restart: "no"`, and no LAN publishing. The later `spark-nodectl` command calls these same scripts rather than duplicating Compose logic.
+Set the head API bind to `127.0.0.1:8888`. Implement the three profile scripts with exact profile-name allowlisting, worker/head rank inputs, `restart: "no"`, and no LAN publishing. The later `node-nodectl` command calls these same scripts rather than duplicating Compose logic.
 
 - [ ] **Step 5: Run render and policy tests**
 
@@ -312,8 +312,8 @@ git commit -m "test: add DeepSeek capacity and performance gates"
 ### Task 6: Prepare and verify both local model caches
 
 **Files:**
-- Create: `inventory/reports/deepseek-cache-spark1.json`
-- Create: `inventory/reports/deepseek-cache-spark2.json`
+- Create: `inventory/reports/deepseek-cache-node1.json`
+- Create: `inventory/reports/deepseek-cache-node2.json`
 - Modify: `docs/runbooks/model-cache.md`
 
 **Interfaces:**
@@ -324,17 +324,17 @@ git commit -m "test: add DeepSeek capacity and performance gates"
 
 Require at least 350 GiB free per node before download. Confirm no AI profile is active and record current free bytes.
 
-- [ ] **Step 2: Download on Spark 2 in explicit online mode**
+- [ ] **Step 2: Download on GPU node 2 in explicit online mode**
 
 Use `snapshot_download` with the exact revision and local HF cache. Do not use `latest`, branch names, or Xet. Keep model serving stopped.
 
-- [ ] **Step 3: Verify Spark 2 and enable offline serving config**
+- [ ] **Step 3: Verify GPU node 2 and enable offline serving config**
 
-Run the manifest verifier over the resolved snapshot. Require all 74 files, exact aggregate size, and encoder hash. Write the Spark 2 report.
+Run the manifest verifier over the resolved snapshot. Require all 74 files, exact aggregate size, and encoder hash. Write the GPU node 2 report.
 
-- [ ] **Step 4: Repeat download and verification on Spark 1**
+- [ ] **Step 4: Repeat download and verification on GPU node 1**
 
-Write the Spark 1 report and compare revision, file count, total bytes, and every SHA-256 result.
+Write the GPU node 1 report and compare revision, file count, total bytes, and every SHA-256 result.
 
 - [ ] **Step 5: Verify post-cache disk floor**
 
@@ -344,7 +344,7 @@ Require at least 150 GiB free on each node after image, model, encoder, and JIT 
 
 ```bash
 git add inventory/reports/deepseek-cache-*.json docs/runbooks/model-cache.md
-git commit -m "ops: verify DeepSeek caches on both Sparks"
+git commit -m "ops: verify DeepSeek caches on both GPU nodes"
 ```
 
 ### Task 7: Execute the staged live bring-up
@@ -359,9 +359,9 @@ git commit -m "ops: verify DeepSeek caches on both Sparks"
 
 - [ ] **Step 1: Start and accept `deepseek-baseline`**
 
-Start the worker with `ssh dgx-spark-2 'profile-start deepseek-baseline worker'`, then the head with `ssh dgx-spark-1 'profile-start deepseek-baseline head'`. Require TP=2, correct model/revision, deterministic sentinel, encoding, reasoning, tool-call, and streaming tests through an SSH tunnel. On failure, stop head then worker and diagnose without enabling DSpark.
+Start the worker with `ssh vonk-node-2 'profile-start deepseek-baseline worker'`, then the head with `ssh vonk-node-1 'profile-start deepseek-baseline head'`. Require TP=2, correct model/revision, deterministic sentinel, encoding, reasoning, tool-call, and streaming tests through an SSH tunnel. On failure, stop head then worker and diagnose without enabling draft-model.
 
-- [ ] **Step 2: Start and accept `deepseek-dspark`**
+- [ ] **Step 2: Start and accept `deepseek-draft`**
 
 Require MTP=5 active, nonzero speculative acceptance, and every baseline quality fixture still clean.
 
@@ -408,11 +408,11 @@ Perform at least three `deepseek-agent → stopped → deepseek-long → stopped
 
 - [ ] **Step 4: Test direct failure and reboot semantics**
 
-Force a head health-check failure and stop head then worker. Reboot both Sparks and require no automatic AI container start. Recreate the SSH tunnel and verify port 8888 remains closed until an explicit worker-first/head-second start.
+Force a head health-check failure and stop head then worker. Reboot both GPU nodes and require no automatic AI container start. Recreate the SSH tunnel and verify port 8888 remains closed until an explicit worker-first/head-second start.
 
 - [ ] **Step 5: Commit final DeepSeek acceptance**
 
 ```bash
 git add inventory/reports/deepseek-performance.json inventory/reports/deepseek-direct-resilience.json docs/runbooks/deepseek-bringup.md
-git commit -m "test: accept direct dual-Spark DeepSeek 0731"
+git commit -m "test: accept direct dual-GPU node DeepSeek 0731"
 ```

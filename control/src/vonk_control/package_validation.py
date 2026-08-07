@@ -183,7 +183,7 @@ class ValidationController:
         return tuple(str(item) for item in values) if isinstance(values, Sequence) else ()
 
     def _policy_gates(self, candidate_id: str, candidate: object, lock: object) -> None:
-        """Reject missing trust and license inputs before scheduling any Spark work."""
+        """Reject missing trust and license inputs before scheduling any GPU node work."""
 
         for name in ("signature_verified", "provenance_verified"):
             if _get(candidate, name, default=True) is False or _get(lock, name, default=True) is False:

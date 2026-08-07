@@ -25,12 +25,12 @@ def profile(catalog: Catalog):
 @pytest.fixture
 def healthy_inventory() -> dict[str, dict[str, int | bool]]:
     return {
-        "spark1": {
+        "node1": {
             "free_memory_bytes": 240_000_000_000,
             "free_disk_bytes": 800_000_000_000,
             "healthy": True,
         },
-        "spark2": {
+        "node2": {
             "free_memory_bytes": 240_000_000_000,
             "free_disk_bytes": 800_000_000_000,
             "healthy": True,
@@ -79,9 +79,9 @@ def single_definition(
         id=identifier,
         topology="single",
         placement_class=placement_class,
-        nodes=("spark1",),
-        start_order=("spark1",),
-        stop_order=("spark1",),
+        nodes=("node1",),
+        start_order=("node1",),
+        stop_order=("node1",),
         co_location=co_location,
         paths=replace(
             base.paths,
@@ -117,7 +117,7 @@ def exact_evidence(profile, catalog: Catalog) -> dict[str, tuple[str, ...]]:
 def test_unknown_workload_is_rejected(
     catalog: Catalog, profile, healthy_inventory: dict[str, dict[str, int | bool]]
 ) -> None:
-    unknown = replace(profile, placements={"spark1": ("missing",), "spark2": ()})
+    unknown = replace(profile, placements={"node1": ("missing",), "node2": ()})
 
     assert check_admission(unknown, catalog, healthy_inventory).ok is False
 
@@ -170,8 +170,8 @@ def test_colocation_requires_exact_acceptance(
     colocated = replace(
         profile,
         placements={
-            "spark1": tuple(item.id for item in definitions),
-            "spark2": (),
+            "node1": tuple(item.id for item in definitions),
+            "node2": (),
         },
         endpoints={},
     )
@@ -204,7 +204,7 @@ def test_exact_evidence_does_not_allow_exclusive_workloads_to_co_reside(
     )
     colocated = replace(
         profile,
-        placements={"spark1": tuple(item.id for item in definitions), "spark2": ()},
+        placements={"node1": tuple(item.id for item in definitions), "node2": ()},
         endpoints={},
     )
 
@@ -216,7 +216,7 @@ def test_exact_evidence_does_not_allow_exclusive_workloads_to_co_reside(
     )
 
     assert report.errors == (
-        "incompatible co-location on spark1: exclusive-one, exclusive-two",
+        "incompatible co-location on node1: exclusive-one, exclusive-two",
     )
 
 
@@ -242,7 +242,7 @@ def test_exact_evidence_allows_compatible_shareable_workloads_to_co_reside(
     )
     colocated = replace(
         profile,
-        placements={"spark1": tuple(item.id for item in definitions), "spark2": ()},
+        placements={"node1": tuple(item.id for item in definitions), "node2": ()},
         endpoints={},
     )
 
@@ -277,7 +277,7 @@ def test_inconsistent_topology_placement_declaration_is_rejected(
     co_location: str,
 ) -> None:
     base = catalog.definitions["deepseek-agent-dual"]
-    nodes = ("spark1", "spark2") if topology == "distributed" else ("spark1",)
+    nodes = ("node1", "node2") if topology == "distributed" else ("node1",)
     definition = replace(
         base,
         topology=topology,
@@ -291,8 +291,8 @@ def test_inconsistent_topology_placement_declaration_is_rejected(
     inconsistent = replace(
         profile,
         placements={
-            "spark1": (definition.id,),
-            "spark2": (definition.id,) if topology == "distributed" else (),
+            "node1": (definition.id,),
+            "node2": (definition.id,) if topology == "distributed" else (),
         },
         endpoints={},
     )
@@ -335,7 +335,7 @@ def test_distributed_workload_reserves_both_nodes(
     mark_definition_accepted(catalog, "deepseek-agent-dual")
     partial = replace(
         profile,
-        placements={"spark1": ("deepseek-agent-dual",), "spark2": ()},
+        placements={"node1": ("deepseek-agent-dual",), "node2": ()},
     )
 
     assert (
@@ -419,7 +419,7 @@ def test_endpoint_target_must_be_assigned_to_the_profile(
     catalog: Catalog, profile, healthy_inventory: dict[str, dict[str, int | bool]]
 ) -> None:
     mark_definition_accepted(catalog, "deepseek-agent-dual")
-    stopped = replace(profile, placements={"spark1": (), "spark2": ()})
+    stopped = replace(profile, placements={"node1": (), "node2": ()})
 
     report = check_admission(stopped, catalog, healthy_inventory)
 
@@ -431,7 +431,7 @@ def test_endpoint_target_must_be_assigned_to_the_profile(
 def test_unhealthy_endpoint_is_not_published(
     catalog: Catalog, profile, healthy_inventory: dict[str, dict[str, int | bool]]
 ) -> None:
-    healthy_inventory["spark1"]["healthy"] = False
+    healthy_inventory["node1"]["healthy"] = False
 
     report = check_admission(profile, catalog, healthy_inventory)
 

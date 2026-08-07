@@ -256,11 +256,11 @@ def test_release_and_workload_operations_dispatch_only_to_typed_interfaces(tmp_p
     workloads = RecordingWorkloads()
     release_payload = {
         "schema_version": 1,
-        "target_name": "spark-runtime-2026-08",
+        "target_name": "node-runtime-2026-08",
         "oci_manifest_digest": "sha256:" + "1" * 64,
         "target_digest": "2" * 64,
         "provenance_digest": "3" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
     }
     release_context = OperationContext(
         NODE_ID, AgentStateStore(tmp_path / "release-state"), NeverProbe(),
@@ -288,7 +288,7 @@ def test_release_and_workload_operations_dispatch_only_to_typed_interfaces(tmp_p
             "schema_version": 1,
             "workload_id": "deepseek-v4-flash-a",
             "release_digest": "4" * 64,
-            "adapter_id": "spark-runtime-v1",
+            "adapter_id": "node-runtime-v1",
         } | extra
         operation_context = OperationContext(
             NODE_ID,
@@ -391,7 +391,7 @@ def test_interrupted_mutation_persists_operator_disposition_and_replays_exactly(
         "schema_version": 1,
         "workload_id": "deepseek-v4-flash-a",
         "release_digest": "4" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
         "preparation_digest": "6" * 64,
     }
     active = claim(operation=AgentOperation.WORKLOAD_START, payload=payload)
@@ -482,7 +482,7 @@ def test_zero_compute_gate_succeeds_only_for_exact_zero_count(
 ) -> None:
     probe = RecordingProbe(
         {
-            "dgx_forge": {
+            "vonk_forge": {
                 "accelerator": {
                     "active_nvidia_compute_processes": count,
                 }
@@ -684,11 +684,11 @@ def test_unrecognized_exception_error_code_cannot_enter_persisted_result(tmp_pat
             AgentOperation.RELEASE_INSTALL,
             {
                 "schema_version": 1,
-                "target_name": "spark-runtime-2026-08",
+                "target_name": "node-runtime-2026-08",
                 "oci_manifest_digest": "sha256:" + "1" * 64,
                 "target_digest": "2" * 64,
                 "provenance_digest": "3" * 64,
-                "adapter_id": "spark-runtime-v1",
+                "adapter_id": "node-runtime-v1",
             },
             "release_install_failed",
         ),
@@ -698,7 +698,7 @@ def test_unrecognized_exception_error_code_cannot_enter_persisted_result(tmp_pat
                 "schema_version": 1,
                 "workload_id": "deepseek-v4-flash-a",
                 "release_digest": "4" * 64,
-                "adapter_id": "spark-runtime-v1",
+                "adapter_id": "node-runtime-v1",
             },
             "workload_failed",
         ),
@@ -739,7 +739,7 @@ def test_expired_active_mutation_can_inspect_complete_or_persist_deadline_failur
         "schema_version": 1,
         "workload_id": "deepseek-v4-flash-a",
         "release_digest": "4" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
         "preparation_digest": "6" * 64,
     }
     active = claim(

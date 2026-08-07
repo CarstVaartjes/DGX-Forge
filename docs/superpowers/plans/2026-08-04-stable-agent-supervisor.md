@@ -1,8 +1,8 @@
-# Stable Spark Agent Supervisor Implementation Plan
+# Stable GPU node Agent Supervisor Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Install and run the outbound Spark agent through a crash-consistent stable A/B supervisor, strict installed runtime policy, and networkless per-node installer.
+**Goal:** Install and run the outbound GPU node agent through a crash-consistent stable A/B supervisor, strict installed runtime policy, and networkless per-node installer.
 
 **Architecture:** A stable Python supervisor outside both slots validates and descriptor-executes the selected agent under a dedicated systemd service account, while a separate root unit owns only activation and rollback. A networkless Python installer publishes immutable digest roots and root-owned policies before mutable configuration, and production `build_agent` constructs the accepted TUF, ORAS, release, and workload handlers from those policies.
 
@@ -12,11 +12,11 @@
 
 - Work directly on `main`; do not push or open a pull request.
 - The exact NVIDIA archive is `enterprise-lifecycle-integration-scripts-20260520-1602.zip`, version `0.1.0`, SHA-256 `0eb1c93dd839b6bd4136cc8b79ea04a1e44fd637ff6afa6ee9568951a4c179f3`.
-- The slot ELF binds the complete Python/application/native-module closure and resolves no Python package outside itself; the supported DGX OS kernel/dynamic-loader/glibc ABI is a separate validated platform contract.
+- The slot ELF binds the complete Python/application/native-module closure and resolves no Python package outside itself; the supported Vonk Forge OS kernel/dynamic-loader/glibc ABI is a separate validated platform contract.
 - The installer performs no network fetch and accepts one explicit canonical `spk_[0-9a-f]{32}` node ID plus absolute local inputs.
-- Routine operation remains outbound mutual TLS as non-root `dgx-agent`; SSH is neither used nor disabled.
+- Routine operation remains outbound mutual TLS as non-root `vonk-agent`; SSH is neither used nor disabled.
 - No claim selects an origin, repository, path, executable, arguments, adapter, environment, trust root, or shell command.
-- Supervisor/slot/policy/artifact roots are fixed and non-writable by `dgx-agent`; readiness is the only agent-writable supervisor input.
+- Supervisor/slot/policy/artifact roots are fixed and non-writable by `vonk-agent`; readiness is the only agent-writable supervisor input.
 - State and policies are bounded canonical duplicate-free JSON and fail closed on missing, extra, corrupt, unsafe, or noncanonical content.
 - Every production behavior begins with a test that is observed failing for the intended missing or wrong behavior.
 - Preserve the later SSH/Ansible/cloud-init migration, recovery CLI, signed rollout, and network `agent.update` boundaries.
@@ -26,18 +26,18 @@
 ### Task 1: Stable supervisor state, launch, readiness, and rollback
 
 **Files:**
-- Create: `agent/supervisor/dgx-agent-supervisor`
+- Create: `agent/supervisor/vonk-agent-supervisor`
 - Create: `agent/tests/test_supervisor.py`
 
 **Interfaces:**
-- Consumes: fixed slot root `/opt/dgx-forge/agent-slots`, state root `/var/lib/dgx-forge-agent-supervisor`, runtime root `/run/dgx-forge-agent`, and fixed units `dgx-forge-agent.service` / `dgx-forge-agent-supervisor.service`.
+- Consumes: fixed slot root `/opt/vonk-forge/agent-slots`, state root `/var/lib/vonk-forge-agent-supervisor`, runtime root `/run/vonk-forge-agent`, and fixed units `vonk-forge-agent.service` / `vonk-forge-agent-supervisor.service`.
 - Produces: `initialize --slot A|B --sha256 HEX`, `activate --slot A|B --sha256 HEX`, `supervise`, and `run-agent`; all interfaces reject unknown options and arbitrary paths.
 - State fields: `schema_version`, `generation`, `active_slot`, `previous_slot`, `slot_sha256`, `expected_sha256`, `activation_deadline`, `boot_attempts`, `status`, `rollback_performed`.
 
 - [ ] **Step 1: Write the initial failing supervisor tests**
 
-Add subprocess tests that use the unprivileged-only `DGX_SUPERVISOR_TEST_ROOT`
-and `DGX_SUPERVISOR_SYSTEMCTL` hooks. The initial slice asserts:
+Add subprocess tests that use the unprivileged-only `VONK_SUPERVISOR_TEST_ROOT`
+and `VONK_SUPERVISOR_SYSTEMCTL` hooks. The initial slice asserts:
 
 ```python
 def test_initialize_and_run_agent_executes_only_verified_slot(tmp_path: Path) -> None:
@@ -75,7 +75,7 @@ uv run --project agent pytest agent/tests/test_supervisor.py -v
 ```
 
 Expected: collection or subprocess assertions fail because
-`agent/supervisor/dgx-agent-supervisor` does not exist.
+`agent/supervisor/vonk-agent-supervisor` does not exist.
 
 - [ ] **Step 3: Implement strict state parsing and atomic publication**
 
@@ -106,18 +106,18 @@ and inode and removes.
 
 - [ ] **Step 5: Implement verified FD launch and activation coordination**
 
-Open the selected `dgx-forge-agent` relative to its fixed slot descriptor with
+Open the selected `vonk-forge-agent` relative to its fixed slot descriptor with
 `O_NOFOLLOW|O_NONBLOCK|O_CLOEXEC`; require root/current-test owner, mode `0555`,
 regular type, one link, maximum 256 MiB, stable metadata before/after hash,
 exact digest, ELF magic/class/endianness/type/machine, and the detected supported
 architecture. Reject every script/shebang, including a console stub importing
-`dgx_agent` from mutable global or site packages. Execute through
+`vonk_agent` from mutable global or site packages. Execute through
 `/proc/self/fd/<fd>` with a deliberately built environment containing
 only fixed locale/Python values and verified readiness generation/slot/digest.
 
 Activation requires root in production, verifies inactive and previous slots,
 publishes generation+1 pending state with the compiled 120-second deadline,
-and invokes only `/usr/bin/systemctl restart dgx-forge-agent-supervisor.service`.
+and invokes only `/usr/bin/systemctl restart vonk-forge-agent-supervisor.service`.
 `supervise` increments attempts, restarts only the fixed agent unit, accepts
 only the exact readiness marker, commits stable state on success, or durably
 commits one rollback before restarting the verified previous slot. It exits
@@ -137,8 +137,8 @@ Expected: every state, process, race, readiness, and rollback case passes.
 
 **Files:**
 - Create: `nodes/vendor/nvidia-manageability.lock.json`
-- Create: `nodes/bin/install-dgx-agent`
-- Create: `tests/nodes/test_install_dgx_agent.py`
+- Create: `nodes/bin/install-vonk-agent`
+- Create: `tests/nodes/test_install_vonk_agent.py`
 
 **Interfaces:**
 - Consumes: `--node-id`, `--agent-artifact`, `--agent-sha256`, `--oras`, `--oras-sha256`, `--nvidia-bundle`, `--health-collector`, `--health-collector-sha256`, `--site-config`, `--ca`, `--tuf-root`, `--tuf-root-sha256`, `--workload-tuf-root`, `--workload-tuf-root-sha256`, `--registry-auth`, `--update-authority`, `--package-grant-public`, `--package-receipt-public`, and `--enrollment-token`; every path is absolute. Platform and workload TUF roots, metadata caches, and target caches are separate installed paths. The installer publishes the grant key under both the agent and root-helper trust paths (`package-grant-public.pem` and `package-fence-public.pem`) and publishes the independent object-receipt key as `package-receipt-public.pem` before enabling the helper socket.
@@ -147,7 +147,7 @@ Expected: every state, process, race, readiness, and rollback case passes.
 - [ ] **Step 1: Write failing installer input and NVIDIA lifecycle tests**
 
 Create real temporary inputs and invoke the script as a subprocess with the
-unprivileged-only `DGX_INSTALL_TEST_ROOT`. Use a purpose-built locked NVIDIA ZIP
+unprivileged-only `VONK_INSTALL_TEST_ROOT`. Use a purpose-built locked NVIDIA ZIP
 fixture whose member bytes have the literal reviewed sizes/digests and whose
 archive bytes are supplied through a test-only lock path; production refuses
 that override. Tests assert two distinct node IDs, second-install no-op,
@@ -178,7 +178,7 @@ assert {tool["name"] for tool in installed_policy["tools"]} == set(NVIDIA_TOOL_N
 Run:
 
 ```bash
-uv run pytest tests/nodes/test_install_dgx_agent.py -v
+uv run pytest tests/nodes/test_install_vonk_agent.py -v
 ```
 
 Expected: tests fail because the installer and lock do not exist.
@@ -222,7 +222,7 @@ fixed units, and start the supervisor. Configuration is last. Reinstall emits
 Run:
 
 ```bash
-uv run pytest tests/nodes/test_install_dgx_agent.py -v
+uv run pytest tests/nodes/test_install_vonk_agent.py -v
 ```
 
 Expected: all input, archive, crash, concurrency, idempotency, node identity,
@@ -232,16 +232,16 @@ pass.
 ### Task 3: Strict installed runtime policy and production handler wiring
 
 **Files:**
-- Create: `agent/src/dgx_agent/runtime_policy.py`
-- Modify: `agent/src/dgx_agent/config.py`
-- Modify: `agent/src/dgx_agent/update_trust.py`
-- Modify: `agent/src/dgx_agent/main.py`
+- Create: `agent/src/vonk_agent/runtime_policy.py`
+- Modify: `agent/src/vonk_agent/config.py`
+- Modify: `agent/src/vonk_agent/update_trust.py`
+- Modify: `agent/src/vonk_agent/main.py`
 - Create: `agent/tests/test_runtime_policy.py`
 - Modify: `agent/tests/test_lifecycle.py`
 
 **Interfaces:**
 - Produces: `RuntimePolicy.load(path) -> RuntimePolicy`, `RuntimePolicy._load_for_test(path)`, and `build_agent(config)` with non-null `ReleaseInstaller` and `WorkloadOperations` boundaries.
-- Runtime policy fields: schema/architecture, registry origin/repository, ORAS version/path/digest/auth path, independent platform and workload TUF root paths/digests/metadata/target roots, release/staging roots, and exact `spark-runtime-v1` adapter fields.
+- Runtime policy fields: schema/architecture, registry origin/repository, ORAS version/path/digest/auth path, independent platform and workload TUF root paths/digests/metadata/target roots, release/staging roots, and exact `node-runtime-v1` adapter fields.
 - `BoundedHTTPSFetcher` gains an optional `credential_provider: CredentialProvider`; when present, each fetch snapshots the current CA/certificate/key and closes the per-fetch pool.
 
 - [ ] **Step 1: Write runtime-policy and production-wiring RED tests**
@@ -275,7 +275,7 @@ Run:
 uv run --project agent pytest agent/tests/test_runtime_policy.py agent/tests/test_lifecycle.py -v
 ```
 
-Expected: collection fails for missing `dgx_agent.runtime_policy`, then wiring
+Expected: collection fails for missing `vonk_agent.runtime_policy`, then wiring
 tests fail because release/workload handlers are `None`.
 
 - [ ] **Step 3: Implement and verify `RuntimePolicy`**
@@ -319,8 +319,8 @@ Expected: all policy, accepted Task 3, and lifecycle tests pass.
 - Modify: `agent/pyproject.toml`
 
 **Interfaces:**
-- Consumes: the freshly built `dgx_agent` wheel, committed protocol wheel, an explicit output path, and explicit target architecture equal to the native builder architecture.
-- Produces: one self-contained `ET_DYN` or `ET_EXEC` ELF named `dgx-forge-agent` whose one SHA-256 binds the Python runtime, agent/protocol packages, native modules, and every runtime dependency.
+- Consumes: the freshly built `vonk_agent` wheel, committed protocol wheel, an explicit output path, and explicit target architecture equal to the native builder architecture.
+- Produces: one self-contained `ET_DYN` or `ET_EXEC` ELF named `vonk-forge-agent` whose one SHA-256 binds the Python runtime, agent/protocol packages, native modules, and every runtime dependency.
 
 - [ ] **Step 1: Write slot-closure RED tests**
 
@@ -362,7 +362,7 @@ descriptor, creates a private temporary packaging environment, installs only
 the explicit freshly built agent wheel and committed protocol wheel plus their
 locked dependencies, and invokes the pinned one-file packager on
 `agent/packaging/slot_entry.py`. The entry delegates ordinary arguments to
-`dgx_agent.main.main`; `--packaged-module-smoke` imports `client`, `config`,
+`vonk_agent.main.main`; `--packaged-module-smoke` imports `client`, `config`,
 `deadlines`, `main`, `nvidia_tools`, `oci`, `operations`, `probe`, `readiness`,
 `releases`, `runtime_policy`, `state`, `update_trust`, and `workloads`, then
 prints the literal success line. The builder verifies the final ELF machine,
@@ -387,9 +387,9 @@ verified FD launch pass.
 ### Task 5: Enrollment bootstrap and generation-bound readiness emission
 
 **Files:**
-- Create: `agent/src/dgx_agent/readiness.py`
-- Modify: `agent/src/dgx_agent/client.py`
-- Modify: `agent/src/dgx_agent/main.py`
+- Create: `agent/src/vonk_agent/readiness.py`
+- Modify: `agent/src/vonk_agent/client.py`
+- Modify: `agent/src/vonk_agent/main.py`
 - Modify: `agent/tests/test_client.py`
 - Modify: `agent/tests/test_lifecycle.py`
 
@@ -459,15 +459,15 @@ tests all pass.
 ### Task 6: Hardened systemd packaging and effective-property tests
 
 **Files:**
-- Create: `agent/systemd/dgx-forge-agent.service`
-- Create: `agent/systemd/dgx-forge-agent-supervisor.service`
+- Create: `agent/systemd/vonk-forge-agent.service`
+- Create: `agent/systemd/vonk-forge-agent-supervisor.service`
 - Modify: `agent/tests/test_supervisor.py`
-- Modify: `tests/nodes/test_install_dgx_agent.py`
+- Modify: `tests/nodes/test_install_vonk_agent.py`
 
 **Interfaces:**
-- Agent unit fixed command: `/usr/libexec/dgx-agent-supervisor run-agent`.
-- Root unit fixed command: `/usr/libexec/dgx-agent-supervisor supervise`.
-- Writable agent paths are only `/var/lib/dgx-forge-agent`, `/var/lib/dgx-forge/releases`, `/var/lib/dgx-forge/release-staging`, and `/run/dgx-forge-agent`; root supervisor writes only its state and runtime coordination paths.
+- Agent unit fixed command: `/usr/libexec/vonk-agent-supervisor run-agent`.
+- Root unit fixed command: `/usr/libexec/vonk-agent-supervisor supervise`.
+- Writable agent paths are only `/var/lib/vonk-forge-agent`, `/var/lib/vonk-forge/releases`, `/var/lib/vonk-forge/release-staging`, and `/run/vonk-forge-agent`; root supervisor writes only its state and runtime coordination paths.
 
 - [ ] **Step 1: Write effective unit-property RED tests**
 
@@ -487,7 +487,7 @@ Run:
 
 ```bash
 uv run --project agent pytest agent/tests/test_supervisor.py -k systemd -v
-systemd-analyze verify agent/systemd/dgx-forge-agent.service agent/systemd/dgx-forge-agent-supervisor.service
+systemd-analyze verify agent/systemd/vonk-forge-agent.service agent/systemd/vonk-forge-agent-supervisor.service
 ```
 
 Expected: missing unit failures.
@@ -496,7 +496,7 @@ Expected: missing unit failures.
 
 Set explicit dependencies so the root supervisor initializes/coordinates before
 the agent starts, without a dependency cycle. Use systemd 249-compatible
-directives for the supported DGX OS baseline; retain stronger directives
+directives for the supported Vonk Forge OS baseline; retain stronger directives
 accepted by that version. Give the root unit only `CAP_CHOWN` for clean-boot
 runtime ownership plus `CAP_DAC_READ_SEARCH` and `CAP_DAC_OVERRIDE` to consume
 the exact `0600` agent-owned marker, and no ambient capability.
@@ -512,7 +512,7 @@ uv run --project agent pytest agent/tests/test_supervisor.py -k systemd -v
 scripts/verify-agent-systemd --json
 ```
 
-Expected: verify exits zero; record both exposure summaries and any target-DGX
+Expected: verify exits zero; record both exposure summaries and any target-Vonk Forge
 compatibility ruling in the task report.
 
 ### Task 7: Final integration gates, report, and implementation commit
@@ -520,10 +520,10 @@ compatibility ruling in the task report.
 **Files:**
 - Modify: `inventory/sbom/agent-python.spdx.json` only if the supply-chain generator proves it stale
 - Modify: `inventory/sbom/manifest.json` only if the supply-chain generator proves it stale
-- Create: `.superpowers/sdd/2026-08-03-spark-agent-runtime/task-5-report.md`
+- Create: `.superpowers/sdd/2026-08-03-node-agent-runtime/task-5-report.md`
 
 **Interfaces:**
-- Produces: one final implementation commit with subject `feat: supervise Spark agents with A/B rollback`.
+- Produces: one final implementation commit with subject `feat: supervise GPU node agents with A/B rollback`.
 
 - [ ] **Step 1: Run focused tests and static checks**
 
@@ -531,7 +531,7 @@ Run and record exact counts/output:
 
 ```bash
 uv run --project agent pytest agent/tests/test_supervisor.py agent/tests/test_runtime_policy.py agent/tests/test_client.py agent/tests/test_lifecycle.py -v
-uv run pytest tests/nodes/test_install_dgx_agent.py -v
+uv run pytest tests/nodes/test_install_vonk_agent.py -v
 uvx --from ruff==0.16.1 ruff check .
 shellcheck nodes/bin/* agent/supervisor/* 2>/dev/null || test $? -eq 127
 git diff --check
@@ -550,7 +550,7 @@ uv run pytest deploy/compose/tests -q
 docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml -f deploy/compose/compose.step-ca.yaml config --quiet
 docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml -f deploy/compose/compose.builtin-ca.yaml config --quiet
 scripts/verify-agent-systemd --json
-uv run --project agent python -m compileall -q agent/src agent/supervisor nodes/bin/install-dgx-agent
+uv run --project agent python -m compileall -q agent/src agent/supervisor nodes/bin/install-vonk-agent
 uv build --project agent
 uv run --project agent pytest agent/tests/test_slot_artifact.py -v
 scripts/verify-supply-chain --json
@@ -559,15 +559,15 @@ git diff --check
 
 Also create a fresh Python 3.12 virtual environment, install the committed
 protocol wheel and newly built agent wheel, import every production module,
-run `dgx-forge-agent --help`, build the native self-contained slot ELF, run its
+run `vonk-forge-agent --help`, build the native self-contained slot ELF, run its
 isolated `--help` and `--packaged-module-smoke` with checkout/venv/global and
 user site packages unavailable, run supervisor `--help` and an unprivileged
 relocated FD-execution smoke, and validate an ARM64 ELF/site-policy fixture
 without executing it.
 
 The physical GPU-device acceptance remains the existing
-`approved-physical-spark-lifecycle` release gate. It runs the installed-unit
-inventory and health adapters on each supported DGX Spark device inventory;
+`approved-physical-node-lifecycle` release gate. It runs the installed-unit
+inventory and health adapters on each supported Vonk Forge GPU node device inventory;
 local effective-property tests do not substitute for that physical evidence.
 
 - [ ] **Step 3: Self-review the final diff**
@@ -581,7 +581,7 @@ every discovered defect into a new observed RED test before fixing it.
 
 - [ ] **Step 4: Write the complete evidence report**
 
-Write `.superpowers/sdd/2026-08-03-spark-agent-runtime/task-5-report.md` with
+Write `.superpowers/sdd/2026-08-03-node-agent-runtime/task-5-report.md` with
 approved design decisions, implementation/files, every RED and GREEN command
 and output, all verification commands/results, systemd exposure and
 compatibility ruling, final self-review, scope boundary, and remaining physical
@@ -592,8 +592,8 @@ or environmental concerns. Do not claim a gate that was not run successfully.
 Run final fresh verification relevant to any report-only edits, then:
 
 ```bash
-git add agent/supervisor agent/systemd agent/src agent/tests agent/packaging agent/tools agent/pyproject.toml agent/uv.lock nodes/bin/install-dgx-agent nodes/vendor/nvidia-manageability.lock.json tests/nodes/test_install_dgx_agent.py inventory/sbom .superpowers/sdd/2026-08-03-spark-agent-runtime/task-5-report.md
-git commit -m "feat: supervise Spark agents with A/B rollback"
+git add agent/supervisor agent/systemd agent/src agent/tests agent/packaging agent/tools agent/pyproject.toml agent/uv.lock nodes/bin/install-vonk-agent nodes/vendor/nvidia-manageability.lock.json tests/nodes/test_install_vonk_agent.py inventory/sbom .superpowers/sdd/2026-08-03-node-agent-runtime/task-5-report.md
+git commit -m "feat: supervise GPU node agents with A/B rollback"
 ```
 
 Do not stage the controller-owned progress file or unrelated user changes. Do

@@ -1,4 +1,4 @@
-"""Persisted python-tuf trust boundary for DGX-Forge platform releases."""
+"""Persisted python-tuf trust boundary for Vonk Forge platform releases."""
 
 from __future__ import annotations
 
@@ -105,7 +105,7 @@ class UpdateTrust:
                     snapshot_max_length=1024 * 1024,
                     targets_max_length=2 * 1024 * 1024,
                     prefix_targets_with_hash=True,
-                    app_user_agent="dgx-forge-platform-updater/0.1.0",
+                    app_user_agent="vonk-forge-platform-updater/0.1.0",
                 ),
                 bootstrap=bootstrap,
             )

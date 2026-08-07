@@ -1,4 +1,4 @@
-"""Explicit legacy developer-machine controller for Spark profiles."""
+"""Explicit legacy developer-machine controller for workload profiles."""
 
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def build_dependencies(
     state_directory: Path | None = None,
     include_health: bool = False,
 ) -> CliDependencies:
-    """Build the production controller without contacting either Spark node."""
+    """Build the production controller without contacting either GPU node."""
     repository_root = (
         Path(root).resolve()
         if root is not None
@@ -98,7 +98,7 @@ def build_dependencies(
         active = [record for _, record in sorted(fleet.nodes.items()) if record.lifecycle != "retired"]
         legacy_aliases = {
             alias: active[index].management
-            for index, alias in enumerate(("spark1", "spark2"))
+            for index, alias in enumerate(("node1", "node2"))
             if index < len(active)
         }
         backend = SshBackend.from_fleet(
@@ -137,7 +137,7 @@ def build_dependencies(
         return (
             {node_id.value: {} for node_id in fleet.nodes}
             if fleet is not None
-            else {"spark1": {}, "spark2": {}}
+            else {"node1": {}, "node2": {}}
         )
 
     def live_inventory() -> Mapping[str, object]:
@@ -184,20 +184,20 @@ def _live_publication_error(
 ) -> str | None:
     live_boot_ids: dict[str, str] = {}
     if not state.boot_ids:
-        return "active state has no Spark boot IDs"
+        return "active state has no GPU node boot IDs"
     for node_name in sorted(state.boot_ids):
         measurement = inventory.get(node_name)
         if (
             not isinstance(measurement, Mapping)
             or measurement.get("healthy") is not True
         ):
-            return "live Spark health gate failed"
+            return "live GPU node health gate failed"
         boot_id = measurement.get("boot_id")
         if not isinstance(boot_id, str) or not boot_id:
-            return "live Spark health gate failed"
+            return "live GPU node health gate failed"
         live_boot_ids[node_name] = boot_id
     if dict(state.boot_ids) != live_boot_ids:
-        return "Spark boot IDs changed since activation"
+        return "GPU node boot IDs changed since activation"
     return None
 
 
@@ -224,9 +224,9 @@ def _resolve_endpoint(
     try:
         inventory = dependencies.inventory_provider()
     except (OSError, RuntimeError, TypeError, ValueError):
-        return unavailable("live Spark health gate failed")
+        return unavailable("live GPU node health gate failed")
     if not isinstance(inventory, Mapping):
-        return unavailable("live Spark health gate failed")
+        return unavailable("live GPU node health gate failed")
     publication_error = _live_publication_error(state, inventory)
     if publication_error is not None:
         return unavailable(publication_error)

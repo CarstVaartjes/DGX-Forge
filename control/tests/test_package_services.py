@@ -29,7 +29,7 @@ def test_production_package_projection_reads_git_authority_and_sql_state(tmp_pat
     assert service.inventory(None, None, None, 100)["nodes"] == []
 
 
-def test_validation_status_projects_queue_identity_and_per_spark_progress(tmp_path) -> None:
+def test_validation_status_projects_queue_identity_and_per_node_progress(tmp_path) -> None:
     engine = build_engine(f"sqlite:///{tmp_path / 'package-validation-status.sqlite'}")
     sessions = session_factory(engine)
     Base.metadata.create_all(engine)

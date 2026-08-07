@@ -9,8 +9,8 @@ connect_timeout_seconds = 10
 output_limit_bytes = 65536
 
 [ssh.node_aliases]
-spark1 = "dgx-spark-1"
-spark2 = "dgx-spark-2"
+node1 = "vonk-node-1"
+node2 = "vonk-node-2"
 
 [health]
 timeout_seconds = 10

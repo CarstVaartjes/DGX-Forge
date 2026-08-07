@@ -1,4 +1,4 @@
-# Vonk Forge catalog, installation, and SparkRun interoperability design
+# Vonk Forge catalog, installation, and WorkloadRun interoperability design
 
 Date: 2026-08-06
 
@@ -8,7 +8,7 @@ local product and global service
 > **Recipe-model update (2026-08-07):** The source-first recipe specification
 > in [2026-08-07-source-first-recipe-design.md](2026-08-07-source-first-recipe-design.md)
 > supersedes this document's unreleased image-first recipe, payload,
-> container-publication, SparkRun execution, sizing, topology-profile, global
+> container-publication, WorkloadRun execution, sizing, topology-profile, global
 > publication, and related verification assumptions. Nothing has been released,
 > so the source-first contract is the sole initial `schema_version: 1`; no
 > internal recipe migration or compatibility path is required. The remaining
@@ -17,13 +17,13 @@ local product and global service
 
 ## Purpose
 
-Turn DGX-Forge into Vonk Forge: a local-first application for installing,
-placing, running, and operating containerized AI workloads on one or more DGX
-Spark nodes, with a separate global catalog at `vonkforge.ai`.
+Turn Vonk Forge into Vonk Forge: a local-first application for installing,
+placing, running, and operating containerized AI workloads on one or more Vonk Forge
+GPU nodes, with a separate global catalog at `vonkforge.ai`.
 
 The design has four related goals:
 
-1. import SparkRun recipes without executing untrusted recipe instructions;
+1. import WorkloadRun recipes without executing untrusted recipe instructions;
 2. materialize supported recipes as verified, resource-aware deployments;
 3. let users author and test their own recipes locally, then optionally publish
    immutable revisions to the global catalog; and
@@ -32,19 +32,19 @@ The design has four related goals:
 
 This document records product and architecture decisions. It does not authorize
 implementation, production publication, DNS mutation, Railway deployment, or
-changes to physical Sparks.
+changes to physical GPU nodes.
 
 ## Product position
 
-SparkRun is a capable CLI launcher and Spark Arena is a benchmark and recipe
-website. SparkRun already provides container orchestration, model distribution,
+WorkloadRun is a capable CLI launcher and GPU node Arena is a benchmark and recipe
+website. WorkloadRun already provides container orchestration, model distribution,
 multi-node launch, runtime plugins, VRAM estimation, live monitoring, Git recipe
 registries, and benchmark submission. Vonk Forge must not market those
 capabilities as inventions.
 
 The distinction is lifecycle and authority:
 
-- SparkRun primarily answers: "How do I launch this recipe?"
+- WorkloadRun primarily answers: "How do I launch this recipe?"
 - Vonk Forge answers: "What is installed, what fits now, where can it run, what
   exact revision is active, why is a transition blocked, and how can I publish
   the locally verified result?"
@@ -53,7 +53,7 @@ Vonk Forge is deliberately heavier than a CLI. It provides a persistent local
 database, browser control plane, authenticated node agents, installation state,
 capacity admission, immutable deployment revisions, and a public catalog. A
 single-machine user who only wants a quick command may reasonably prefer
-SparkRun. Importing SparkRun recipes complements that ecosystem instead of
+WorkloadRun. Importing WorkloadRun recipes complements that ecosystem instead of
 forking it.
 
 ## Product and repository shape
@@ -68,14 +68,14 @@ The installable local product contains:
 - the local React administration interface;
 - Caddy, LiteLLM, PostgreSQL, monitoring, backup, and Tailscale Compose
   services;
-- the SparkRun importer and native recipe compiler;
+- the WorkloadRun importer and native recipe compiler;
 - installation, placement, admission, reconciliation, and audit logic;
-- the DGX Spark agent, restricted privileged helper, and agent packaging; and
+- the Vonk Forge GPU node agent, restricted privileged helper, and agent packaging; and
 - versioned compatibility clients for the global catalog API.
 
 The normal service-host deployment is one Docker Compose project on a NAS,
 computer, server, or VM. Model-serving containers and model weights remain on
-the Sparks.
+the GPU nodes.
 
 ### `vonk-forge-web`
 
@@ -109,12 +109,12 @@ other's PostgreSQL database. Compatibility is enforced with published schemas,
 generated or validated clients, golden fixtures, and consumer contract tests.
 
 The global service never receives direct access to a local controller, agent,
-Spark, model endpoint, local database, or tailnet.
+GPU node, model endpoint, local database, or tailnet.
 
 ## Naming and public endpoints
 
 The product name is **Vonk Forge**, with **Vonk** as its short name and `vonk`
-as the intended CLI name. The working tagline is "Many sparks. One forge."
+as the intended CLI name. The working tagline is "Many nodes. One forge."
 
 The initial endpoint plan is:
 
@@ -136,7 +136,7 @@ trust signals.
 Local PostgreSQL is authoritative for:
 
 - locally authored recipe records and drafts;
-- imported SparkRun recipes and their complete import reports;
+- imported WorkloadRun recipes and their complete import reports;
 - global recipe revisions accepted into the local catalog;
 - seeded and user-created package families;
 - node enrollment and current authenticated inventory;
@@ -178,7 +178,7 @@ Neither database stores model weights or container layers. Recipes refer to:
   content metadata; and
 - approved OCI or object-storage locations for other artifacts.
 
-Sparks fetch large payloads directly from their declared source or an approved
+GPU nodes fetch large payloads directly from their declared source or an approved
 mirror into their local content-addressed stores. The NAS and Railway service
 are not payload proxies or inference hot paths.
 
@@ -242,7 +242,7 @@ creates a new revision and content hash.
 ## Container execution model
 
 OCI containers are the default runtime boundary. Model weights remain outside
-the image in verified Spark-local stores and are mounted read-only. Writable
+the image in verified GPU node-local stores and are mounted read-only. Writable
 caches, generated output, logs, and runtime state receive explicit bounded
 paths.
 
@@ -254,7 +254,7 @@ it does not:
 - run publisher scripts;
 - host community images;
 - repair incompatible images; or
-- manufacture an image for an imported SparkRun recipe.
+- manufacture an image for an imported WorkloadRun recipe.
 
 The initial global catalog accepts only publicly retrievable OCI images.
 Private registries and per-site credentials are deferred.
@@ -271,10 +271,10 @@ The native compiler initially targets vLLM, SGLang, and llama.cpp. Specialized
 native runtimes such as DS4 remain distinct declared capabilities rather than
 being forced into a generic vLLM profile.
 
-## SparkRun import
+## WorkloadRun import
 
 Import is translation into the Vonk schema, never execution of the source
-recipe. It accepts a local file or supported SparkRun registry/export reference
+recipe. It accepts a local file or supported WorkloadRun registry/export reference
 and preserves the original source document and source identity for audit.
 
 The importer parses model, revision, runtime, container, defaults, environment,
@@ -301,12 +301,12 @@ are retained only as non-executable import evidence. If their semantics cannot
 be represented, the imported record remains an editable draft and cannot be
 installed.
 
-An image tag must resolve to an immutable digest and support DGX Spark ARM64.
+An image tag must resolve to an immutable digest and support Vonk Forge GPU node ARM64.
 When no compatible publisher-built image exists, import may still succeed as a
 draft but publication and execution remain blocked. Vonk never promises that
-every syntactically valid SparkRun profile is automatically runnable.
+every syntactically valid WorkloadRun profile is automatically runnable.
 
-Broad SparkRun fixtures must cover official, experimental, community, and
+Broad WorkloadRun fixtures must cover official, experimental, community, and
 external registry forms rather than optimizing for only two demonstration
 recipes. Mia dual-node and DS4 single-node examples remain important authored
 acceptance profiles because they exercise topology, native capability,
@@ -317,7 +317,7 @@ artifacts, and resource behavior that basic vLLM recipes do not.
 The principal state flow is:
 
 ```text
-local draft | SparkRun import | global download
+local draft | WorkloadRun import | global download
   -> resolved
   -> install planned
   -> installed on exact nodes
@@ -379,7 +379,7 @@ The local browser application is the operating console. It provides:
   topology, trust, and validation;
 - structured authoring and import-resolution workflows;
 - exact install and run previews with explainable blockers;
-- cluster cards for every Spark showing memory, disk, thermal, power, fabric,
+- cluster cards for every GPU node showing memory, disk, thermal, power, fabric,
   agent, and platform status;
 - installed artifacts and images per node with logical, physical, shared, and
   reclaimable sizes;
@@ -392,7 +392,7 @@ The local browser application is the operating console. It provides:
 The UI, CLI, and automation clients call the same API. The UI contains no
 independent placement, privilege, or reconciliation logic.
 
-Useful SparkDash ideas include compact node cards and live resource visibility,
+Useful GPU dashboard ideas include compact node cards and live resource visibility,
 but Vonk retains authenticated outbound agents, typed operations, durable state,
 resource admission, and multi-node workload identity rather than copying an
 SSH-oriented or privileged monitoring architecture.
@@ -448,7 +448,7 @@ updated draft or publishing.
 
 "Self-tested" records publisher-supplied local evidence. A stronger
 "Vonk-qualified" status requires the official validation suite on real
-supported DGX Spark topology. These labels are transparent evidence levels,
+supported Vonk Forge GPU node topology. These labels are transparent evidence levels,
 not claims that community containers are harmless.
 
 ## Global API and synchronization
@@ -477,19 +477,19 @@ Validation failures identify exact fields. External registry or model-hub
 outages leave a retryable validation pending rather than corrupting or silently
 rejecting the draft.
 
-## Spark agent installation and node preparation
+## GPU node agent installation and node preparation
 
 Host preparation and service installation are different products.
 
 ### Readiness and hardening guidance
 
-`vonkforge.ai` publishes a versioned DGX Spark readiness and hardening runbook
+`vonkforge.ai` publishes a versioned Vonk Forge GPU node readiness and hardening runbook
 with a human checklist, explained commands, rollback steps, and an optional
 prompt for use with an LLM assistant. LLM output is guidance, not acceptance
 evidence.
 
 A read-only `vonk diagnose` or equivalent tool produces structured pass,
-warning, and fail results for DGX OS, architecture, NVIDIA container support,
+warning, and fail results for Vonk Forge OS, architecture, NVIDIA container support,
 Docker configuration, storage, memory, networking, time, certificates, and
 optional RDMA prerequisites. Remediation is explicit and never smuggled into a
 recipe or silently applied by diagnostics.
@@ -511,7 +511,7 @@ sudo vonk-agent pair https://controller-name
 
 The eventual signed repository at a dedicated package endpoint supports normal
 `apt update`, `apt install vonk-agent`, and operator-controlled upgrades.
-Package provenance, signature, digest, SBOM, and supported DGX OS range are
+Package provenance, signature, digest, SBOM, and supported Vonk Forge OS range are
 published with every release.
 
 The production agent, stable supervisor, and restricted privileged helper are
@@ -536,16 +536,16 @@ dependencies at service start. It also installs:
 but not as the permanent service lifecycle. The existing Python agent remains a
 behavioral oracle during the contract-driven Rust transition and is removed
 from the production package only after protocol, failure, update, and physical
-Spark parity pass.
+GPU node parity pass.
 
 ### Pairing and agent trust
 
-Pairing generates the private key on the Spark and presents a short code and
+Pairing generates the private key on the GPU node and presents a short code and
 fingerprint for approval in the local UI. Approval binds a short-lived mTLS
 certificate to an immutable node ID. Enrollment secrets do not appear in shell
 history, and private keys never leave the node.
 
-The existing outbound-agent transport remains authoritative: the Spark initiates
+The existing outbound-agent transport remains authoritative: the GPU node initiates
 bounded HTTPS long polling to the controller and exposes no routine inbound
 management service. Every mutation is a typed, fenced operation. The protocol
 has no arbitrary shell, command, script, environment, filesystem path, or
@@ -589,10 +589,10 @@ tailnet client
   -> local UI | control API | LiteLLM | approved dashboards
 ```
 
-The Sparks do not join Tailscale. They use restricted LAN egress to the
+The GPU nodes do not join Tailscale. They use restricted LAN egress to the
 controller for enrollment and outbound mTLS agent traffic, while LiteLLM uses
-validated Spark model endpoints on the management network. Tensor and fabric
-traffic remains Spark-to-Spark.
+validated GPU node model endpoints on the management network. Tensor and fabric
+traffic remains GPU node-to-GPU node.
 
 No user, administrator, inference, dashboard, SSH, or database service is
 published directly on the public internet or ordinary LAN. There is no
@@ -607,7 +607,7 @@ controller-agent traffic still uses mTLS.
 The service-host gives clients one stable OpenAI-compatible URL and stable
 model aliases. Switching a healthy deployment changes an audited LiteLLM route
 rather than client configuration. A service-host outage removes shared UI and
-inference ingress but does not delete Spark-local artifacts or pretend running
+inference ingress but does not delete GPU node-local artifacts or pretend running
 workloads stopped.
 
 ### Inference route publication
@@ -625,22 +625,22 @@ aliases to approved upstream URLs.
 
 LiteLLM reads only this controller-published route generation. It authenticates
 inference clients, applies quotas and replica routing, and connects directly
-over the restricted management LAN to the approved Spark entrypoint. It does
+over the restricted management LAN to the approved GPU node entrypoint. It does
 not discover containers, select placement, start workloads, or accept dynamic
 model authority from its administration UI. A multi-node gang publishes only
-its entrypoint endpoint; worker ranks communicate over the Spark fabric and are
+its entrypoint endpoint; worker ranks communicate over the GPU node fabric and are
 not LiteLLM upstreams.
 
 The resulting request path is:
 
 ```text
-tailnet client -> Tailscale -> Caddy -> LiteLLM -> Spark entrypoint model API
+tailnet client -> Tailscale -> Caddy -> LiteLLM -> GPU node entrypoint model API
 ```
 
 The independent control paths are:
 
 ```text
-Spark agent -> outbound mTLS Caddy backend -> controller
+GPU node agent -> outbound mTLS Caddy backend -> controller
 controller -> atomic validated route generation -> LiteLLM
 ```
 
@@ -661,7 +661,7 @@ LiteLLM route before workload cleanup. Caddy never invents a fallback endpoint.
   recipe values, URLs, arguments, audit payloads, or logs.
 - Multi-node routes remain withdrawn until all ranks pass readiness.
 - Remote users enter only through Tailscale and Caddy.
-- Large payloads move directly between approved upstreams and Spark-local
+- Large payloads move directly between approved upstreams and GPU node-local
   stores.
 
 ## Failure behavior
@@ -697,7 +697,7 @@ into contract-led programs.
 - Preserve exact export and backup formats without retaining a Git execution
   gate.
 
-### Program B: Spark agent distribution and pairing
+### Program B: GPU node agent distribution and pairing
 
 - Port the production agent, stable supervisor, and privileged helper to
   first-party Rust crates against the existing Python protocol oracle.
@@ -711,7 +711,7 @@ into contract-led programs.
 
 ### Program C: import, resolution, and native execution
 
-- Implement SparkRun parsing and exhaustive import reports.
+- Implement WorkloadRun parsing and exhaustive import reports.
 - Add vLLM, SGLang, and llama.cpp compilers plus distinct native capability
   support.
 - Resolve image and model identities, artifacts, resources, privileges, and
@@ -756,7 +756,7 @@ Acceptance requires more than schema unit tests.
   repositories.
 - Old supported schema revisions remain readable or receive explicit migration
   errors.
-- Golden SparkRun fixtures cover every import outcome and supported registry
+- Golden WorkloadRun fixtures cover every import outcome and supported registry
   class.
 - Arbitrary commands, mods, unknown arguments, and missing digests cannot become
   executable by omission.
@@ -786,7 +786,7 @@ Acceptance requires more than schema unit tests.
 ### Agent and packaging
 
 - `.deb` install, upgrade, rollback, removal, reinstall, and unsupported-platform
-  behavior are tested on DGX-compatible ARM64 Ubuntu environments.
+  behavior are tested on Vonk Forge-compatible ARM64 Ubuntu environments.
 - The production agent package contains no Python runtime, virtual environment,
   `pip`, or `uv` dependency.
 - First-party Rust crates enforce the reviewed unsafe-code policy, locked
@@ -803,12 +803,12 @@ Acceptance requires more than schema unit tests.
 - Authorized tailnet users can reach only granted services.
 - Ordinary LAN and public clients cannot reach UI, inference, administration,
   dashboards, development SSH, or databases.
-- The Sparks remain free of Caddy, LiteLLM, PostgreSQL, Tailscale, and general
+- The GPU nodes remain free of Caddy, LiteLLM, PostgreSQL, Tailscale, and general
   monitoring services.
 
 ### Physical acceptance
 
-At least one real single-Spark recipe and one real multi-Spark gang recipe must
+At least one real single-GPU node recipe and one real multi-GPU node gang recipe must
 complete import or authoring, resolution, installation, start, health,
 inference, stop, memory recovery, and retained-evidence workflows. A local
 recipe must also complete draft upload and publication against staging before
@@ -820,13 +820,13 @@ production publication is enabled.
 - Copying model weights into Railway or the service-host database.
 - Executing recipe-provided shell or privileged installation hooks.
 - Requiring Git to author, install, run, or publish a recipe.
-- Installing Tailscale on every Spark.
+- Installing Tailscale on every GPU node.
 - Public internet or unauthenticated LAN access to the private control plane.
 - Kubernetes, Slurm, Docker Swarm, a message broker, or a service mesh for the
   initial product.
 - Automatic execution of newly discovered or newly published revisions.
 - Automatic cache deletion to satisfy disk admission.
-- Claiming every SparkRun recipe is safely or automatically portable.
+- Claiming every WorkloadRun recipe is safely or automatically portable.
 - Treating community, self-tested, or official labels as a substitute for local
   policy and admission.
 
@@ -835,11 +835,11 @@ production publication is enabled.
 The design succeeds when a user can:
 
 1. start the Vonk Compose application on a suitable NAS or computer;
-2. prepare each Spark using documented guidance and install one signed agent
+2. prepare each GPU node using documented guidance and install one signed agent
    package;
 3. approve node pairing and observe authenticated inventory without a subnet
    scan or routine SSH;
-4. create a local recipe, import a SparkRun recipe, or download an immutable
+4. create a local recipe, import a WorkloadRun recipe, or download an immutable
    global revision;
 5. understand every unsupported or transformed import element;
 6. see exact per-node installation and runtime capacity before acting;
@@ -856,14 +856,14 @@ The design succeeds when a user can:
 
 This design preserves and amends the following local specifications:
 
-- `2026-08-03-outbound-spark-agent-design.md` for outbound long polling, mTLS,
+- `2026-08-03-outbound-node-agent-design.md` for outbound long polling, mTLS,
   fencing, typed operations, and A/B updates;
 - `2026-08-05-containerized-nas-access-and-devbox-design.md` for the Tailscale
   Compose gateway and LAN/tailnet split;
 - `2026-08-05-generalized-workload-package-system-design.md` for immutable
-  package content, resource envelopes, Spark-local stores, topology, and
+  package content, resource envelopes, GPU node-local stores, topology, and
   lifecycle, while replacing Git recipe authority;
-- `2026-08-03-scalable-spark-platform-control-plane-design.md` for the control
+- `2026-08-03-scalable-node-platform-control-plane-design.md` for the control
   API, worker, Compose, LiteLLM, observations, and N-node planning, while
   removing the Git gate from recipe operations; and
 - `2026-08-06-workload-validation-runner-design.md` for validation binding and
@@ -871,10 +871,10 @@ This design preserves and amends the following local specifications:
 
 External design inputs include:
 
-- SparkRun documentation: <https://sparkrun.dev/>;
-- SparkRun recipe format: <https://sparkrun.dev/recipes/format/>;
-- SparkRun registries: <https://sparkrun.dev/recipes/registries/>;
-- Spark Arena: <https://spark-arena.com/>;
+- WorkloadRun documentation: <https://workload_run.dev/>;
+- WorkloadRun recipe format: <https://workload_run.dev/recipes/format/>;
+- WorkloadRun registries: <https://workload_run.dev/recipes/registries/>;
+- GPU node Arena: <https://node-arena.com/>;
 - Ubuntu package management:
   <https://documentation.ubuntu.com/server/how-to/software/package-management/>;
 - Debian service policy:

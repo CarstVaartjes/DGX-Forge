@@ -26,7 +26,7 @@ ROOT_PYTHON_IMAGE = (
 )
 LINUX_INSTALLER_RUNTIME = pytest.mark.skipif(
     sys.platform != "linux",
-    reason="agent installation runtime is supported only on DGX OS/Linux nodes",
+    reason="agent installation runtime is supported only on Vonk Forge OS/Linux nodes",
 )
 
 
@@ -171,7 +171,7 @@ def test_installer_exists_as_networkless_node_local_primitive(tmp_path: Path) ->
 
 def test_installer_rejects_noncanonical_node_before_mutation(tmp_path: Path) -> None:
     result = subprocess.run(
-        [str(INSTALLER), "--node-id", "spark1"],
+        [str(INSTALLER), "--node-id", "node1"],
         env={**os.environ, "VONK_INSTALL_TEST_ROOT": str(tmp_path / "host")},
         check=False,
         capture_output=True,

@@ -121,14 +121,14 @@ def test_production_handlers_execute_every_gate_for_only_requested_endpoint(
     assert all(result.stdout or result.stderr == b"" for result in results)
     assert all(call[0] == request.endpoint for call in transport.runs)
     assert all(copy[0] == request.endpoint for copy in transport.copies)
-    assert all("spark1" not in " ".join(call[1]) for call in transport.runs)
+    assert all("node1" not in " ".join(call[1]) for call in transport.runs)
     assert all("192.168." not in " ".join(call[1]) for call in transport.runs)
     assert {copy[2] for copy in transport.copies} >= {
-        "/tmp/dgx-install-ssh-hardening",
-        "/tmp/dgx-install-ssh-drop-in.conf",
-        "/tmp/dgx-apply-node-policy",
-        "/tmp/dgx-disable-earlyoom",
-        "/tmp/dgx-node-policy.json",
+        "/tmp/vonk-install-ssh-hardening",
+        "/tmp/vonk-install-ssh-drop-in.conf",
+        "/tmp/vonk-apply-node-policy",
+        "/tmp/vonk-disable-earlyoom",
+        "/tmp/vonk-node-policy.json",
     }
 
 
@@ -184,7 +184,7 @@ def test_tampered_repository_script_is_not_silently_accepted(
     }
     for name, content in required.items():
         (repository / "nodes" / "bin" / name).write_text(content)
-    (repository / "nodes" / "etc" / "ssh" / "sshd_config.d" / "90-dgx-admin.conf").write_text("drop-in")
+    (repository / "nodes" / "etc" / "ssh" / "sshd_config.d" / "90-vonk-admin.conf").write_text("drop-in")
     (repository / "nodes" / "policy" / "default.json").write_text("{}")
     options = ProductionStepOptions(
         repository_root=repository,

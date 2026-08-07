@@ -24,8 +24,8 @@
 
 **Files:**
 - Create: `control/pyproject.toml`
-- Create: `control/src/dgx_control/__init__.py`
-- Create: `control/src/dgx_control/settings.py`
+- Create: `control/src/vonk_control/__init__.py`
+- Create: `control/src/vonk_control/settings.py`
 - Create: `control/Dockerfile`
 - Create: `control/tests/test_settings.py`
 - Create: `deploy/compose/compose.yaml`
@@ -33,7 +33,7 @@
 
 **Interfaces:**
 - Produces: `Settings.from_env_and_secrets()` with database URL file, repository path, state path, and deployment mode.
-- Image entrypoints: `python -m dgx_control.api` and `python -m dgx_control.worker`.
+- Image entrypoints: `python -m vonk_control.api` and `python -m vonk_control.worker`.
 
 - [ ] **Step 1: Write failing secret-file and platform-neutral tests**
 
@@ -41,11 +41,11 @@
 def test_database_secret_is_read_from_file(tmp_path, monkeypatch):
     secret = tmp_path / "database-url"
     secret.write_text("postgresql+psycopg://control:pw@postgres/control")
-    monkeypatch.setenv("DGX_DATABASE_URL_FILE", str(secret))
+    monkeypatch.setenv("VONK_DATABASE_URL_FILE", str(secret))
     assert Settings.from_env_and_secrets().database_url.host == "postgres"
 
 
-def test_compose_has_no_ugreen_or_spark_host_bindings(compose_text):
+def test_compose_has_no_host_or_node_host_bindings(compose_text):
     assert "ugreen" not in compose_text.lower()
     assert "192.168." not in compose_text
 ```
@@ -74,8 +74,8 @@ git commit -m "feat: scaffold portable control plane"
 ### Task 2: Add PostgreSQL schema and migrations
 
 **Files:**
-- Create: `control/src/dgx_control/db.py`
-- Create: `control/src/dgx_control/models.py`
+- Create: `control/src/vonk_control/db.py`
+- Create: `control/src/vonk_control/models.py`
 - Create: `control/alembic.ini`
 - Create: `control/migrations/env.py`
 - Create: `control/migrations/versions/0001_operational_state.py`
@@ -117,15 +117,15 @@ Expected: PASS.
 - [ ] **Step 5: Commit database**
 
 ```bash
-git add control/src/dgx_control/db.py control/src/dgx_control/models.py control/alembic.ini control/migrations control/tests/test_migrations.py
+git add control/src/vonk_control/db.py control/src/vonk_control/models.py control/alembic.ini control/migrations control/tests/test_migrations.py
 git commit -m "feat: add control plane operational database"
 ```
 
 ### Task 3: Implement durable fenced jobs and worker
 
 **Files:**
-- Create: `control/src/dgx_control/jobs.py`
-- Create: `control/src/dgx_control/worker.py`
+- Create: `control/src/vonk_control/jobs.py`
+- Create: `control/src/vonk_control/worker.py`
 - Create: `control/tests/test_jobs.py`
 - Create: `control/tests/test_worker.py`
 
@@ -167,16 +167,16 @@ Expected: PASS.
 - [ ] **Step 5: Commit worker**
 
 ```bash
-git add control/src/dgx_control/jobs.py control/src/dgx_control/worker.py control/tests/test_jobs.py control/tests/test_worker.py
+git add control/src/vonk_control/jobs.py control/src/vonk_control/worker.py control/tests/test_jobs.py control/tests/test_worker.py
 git commit -m "feat: run durable fenced control jobs"
 ```
 
 ### Task 4: Add authenticated, role-authorized control API
 
 **Files:**
-- Create: `control/src/dgx_control/api.py`
-- Create: `control/src/dgx_control/auth.py`
-- Create: `control/src/dgx_control/audit.py`
+- Create: `control/src/vonk_control/api.py`
+- Create: `control/src/vonk_control/auth.py`
+- Create: `control/src/vonk_control/audit.py`
 - Create: `control/tests/test_api.py`
 - Create: `control/tests/test_auth.py`
 
@@ -215,7 +215,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit API**
 
 ```bash
-git add control/src/dgx_control/api.py control/src/dgx_control/auth.py control/src/dgx_control/audit.py control/tests/test_api.py control/tests/test_auth.py
+git add control/src/vonk_control/api.py control/src/vonk_control/auth.py control/src/vonk_control/audit.py control/tests/test_api.py control/tests/test_auth.py
 git commit -m "feat: expose authorized control API"
 ```
 
@@ -266,8 +266,8 @@ git commit -m "feat: add isolated Caddy control ingress"
 ### Task 6: Add offline bootstrap, backup, and restore
 
 **Files:**
-- Create: `control/src/dgx_control/offline.py`
-- Create: `bin/dgx-control-offline`
+- Create: `control/src/vonk_control/offline.py`
+- Create: `bin/vonk-control-offline`
 - Create: `deploy/compose/bin/backup-control-plane`
 - Create: `deploy/compose/bin/restore-control-plane`
 - Create: `control/tests/test_offline.py`
@@ -312,6 +312,6 @@ Expected: PASS.
 - [ ] **Step 5: Commit recovery foundation**
 
 ```bash
-git add control bin/dgx-control-offline deploy/compose docs/runbooks/control-plane-bootstrap.md docs/runbooks/control-plane-recovery.md
+git add control bin/vonk-control-offline deploy/compose docs/runbooks/control-plane-bootstrap.md docs/runbooks/control-plane-recovery.md
 git commit -m "feat: bootstrap and recover the control plane"
 ```

@@ -1,4 +1,4 @@
-"""Authenticated preview/apply API for SparkRun imports."""
+"""Authenticated preview/apply API for WorkloadRun imports."""
 
 from __future__ import annotations
 
@@ -11,8 +11,8 @@ from starlette.responses import JSONResponse
 
 from .audit import AuditRecord
 from .auth import Actor
-from .sparkrun_source import SparkRunParseError
-from .sparkrun_workflow import SparkRunWorkflow, SparkRunWorkflowError
+from .workload_run_source import WorkloadRunParseError
+from .workload_run_workflow import WorkloadRunWorkflow, WorkloadRunWorkflowError
 
 
 class AuditSink(Protocol):
@@ -37,12 +37,12 @@ class ResolveImportRequest(StrictModel):
     overlays: dict[str, object]
 
 
-def install_sparkrun_routes(
+def install_workload_run_routes(
     app: FastAPI,
     *,
     actor_dependency: Any,
     audits: AuditSink,
-    workflow: SparkRunWorkflow | None,
+    workflow: WorkloadRunWorkflow | None,
 ) -> None:
     authenticated = actor_dependency
     from .operation_api import _ADMIN_OPERATION_IDS
@@ -51,19 +51,19 @@ def install_sparkrun_routes(
         {
             (
                 "post",
-                "/api/v1/catalog/imports/sparkrun/preview",
-            ): "previewSparkRunImport",
-            ("post", "/api/v1/catalog/imports/sparkrun"): "applySparkRunImport",
+                "/api/v1/catalog/imports/workload_run/preview",
+            ): "previewWorkloadRunImport",
+            ("post", "/api/v1/catalog/imports/workload_run"): "applyWorkloadRunImport",
             (
                 "post",
                 "/api/v1/catalog/recipes/{recipe_id}/resolve-import",
-            ): "resolveSparkRunImport",
+            ): "resolveWorkloadRunImport",
         }
     )
 
-    def service() -> SparkRunWorkflow:
+    def service() -> WorkloadRunWorkflow:
         if workflow is None:
-            raise HTTPException(status_code=503, detail="SparkRun import unavailable")
+            raise HTTPException(status_code=503, detail="WorkloadRun import unavailable")
         return workflow
 
     def admin(actor: Actor) -> None:
@@ -101,19 +101,19 @@ def install_sparkrun_routes(
         }
 
     @app.post(
-        "/api/v1/catalog/imports/sparkrun/preview", operation_id="previewSparkRunImport"
+        "/api/v1/catalog/imports/workload_run/preview", operation_id="previewWorkloadRunImport"
     )
     def preview(body: PreviewRequest, request: Request, actor: Actor = authenticated):
         admin(actor)
         try:
             return preview_document(service().preview(body.source_yaml.encode()))
-        except SparkRunParseError as error:
-            return problem(request, "sparkrun.invalid_source", str(error), 422)
+        except WorkloadRunParseError as error:
+            return problem(request, "workload_run.invalid_source", str(error), 422)
 
     @app.post(
-        "/api/v1/catalog/imports/sparkrun",
+        "/api/v1/catalog/imports/workload_run",
         status_code=status.HTTP_201_CREATED,
-        operation_id="applySparkRunImport",
+        operation_id="applyWorkloadRunImport",
     )
     def apply(body: ApplyRequest, request: Request, actor: Actor = authenticated):
         admin(actor)
@@ -124,15 +124,15 @@ def install_sparkrun_routes(
                 report_digest=body.report_digest,
                 actor=actor.subject,
             )
-        except SparkRunWorkflowError as error:
+        except WorkloadRunWorkflowError as error:
             return problem(request, error.code, str(error), 409)
-        except SparkRunParseError as error:
-            return problem(request, "sparkrun.invalid_source", str(error), 422)
+        except WorkloadRunParseError as error:
+            return problem(request, "workload_run.invalid_source", str(error), 422)
         audits.append(
             AuditRecord(
                 request.state.request_id,
                 actor.subject,
-                "catalog.sparkrun.import",
+                "catalog.workload_run.import",
                 None,
                 (result.import_id, result.recipe_id, result.source_sha256),
             )
@@ -141,7 +141,7 @@ def install_sparkrun_routes(
 
     @app.post(
         "/api/v1/catalog/recipes/{recipe_id}/resolve-import",
-        operation_id="resolveSparkRunImport",
+        operation_id="resolveWorkloadRunImport",
     )
     def resolve_imported(
         body: ResolveImportRequest,
@@ -159,20 +159,20 @@ def install_sparkrun_routes(
             )
         except KeyError:
             raise HTTPException(status_code=404, detail="recipe not found") from None
-        except SparkRunWorkflowError as error:
+        except WorkloadRunWorkflowError as error:
             return problem(
                 request,
                 error.code,
                 str(error),
                 409
-                if error.code in {"catalog.stale_revision", "sparkrun.import_blocked"}
+                if error.code in {"catalog.stale_revision", "workload_run.import_blocked"}
                 else 503,
             )
         audits.append(
             AuditRecord(
                 request.state.request_id,
                 actor.subject,
-                "catalog.sparkrun.resolve",
+                "catalog.workload_run.resolve",
                 None,
                 (result.recipe_id, result.revision_id, result.content_sha256),
             )

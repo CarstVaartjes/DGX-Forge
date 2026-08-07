@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://dgx-forge.invalid/schemas/platform-release-evidence.schema.json",
+  "$id": "https://vonk-forge.invalid/schemas/platform-release-evidence.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "candidate", "status", "evidence_sha256", "evidence_kinds", "physical_evidence_key_id", "physical_update_gates", "workload_packages", "missing_gates", "digest"],
@@ -22,11 +22,11 @@
     "physical_update_gates": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["control_host_update_recovery", "signed_platform_update_manifest", "spark_canary_and_rollback"],
+      "required": ["control_host_update_recovery", "signed_platform_update_manifest", "node_canary_and_rollback"],
       "properties": {
         "control_host_update_recovery": {"type": "boolean"},
         "signed_platform_update_manifest": {"type": "boolean"},
-        "spark_canary_and_rollback": {"type": "boolean"}
+        "node_canary_and_rollback": {"type": "boolean"}
       }
     },
     "workload_packages": {

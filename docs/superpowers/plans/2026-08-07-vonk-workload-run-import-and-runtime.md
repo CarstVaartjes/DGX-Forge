@@ -1,8 +1,8 @@
-# Vonk SparkRun Import and Runtime Implementation Plan
+# Vonk WorkloadRun Import and Runtime Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Import broad SparkRun recipe profiles into safe local Vonk drafts with exhaustive field-level reports, then resolve supported vLLM, SGLang, and llama.cpp profiles into typed immutable recipe revisions.
+**Goal:** Import broad WorkloadRun recipe profiles into safe local Vonk drafts with exhaustive field-level reports, then resolve supported vLLM, SGLang, and llama.cpp profiles into typed immutable recipe revisions.
 
 **Architecture:** A strict YAML parser produces a bounded neutral source model without executing templates. Runtime-specific compilers recognize allowlisted command grammar and translate it into typed recipe fields. Every source field receives one import disposition; unresolved image, artifact, resource, privilege, or topology requirements keep the local draft non-runnable.
 
@@ -20,26 +20,26 @@
 
 ---
 
-### Task 1: Bounded SparkRun YAML parser
+### Task 1: Bounded WorkloadRun YAML parser
 
 **Files:**
 - Add dependency: `PyYAML==6.0.3` in `control/pyproject.toml`
-- Create: `control/src/dgx_control/sparkrun_source.py`
-- Create: `control/tests/test_sparkrun_source.py`
-- Create: `control/tests/fixtures/sparkrun/minimal-vllm.yaml`
-- Create: `control/tests/fixtures/sparkrun/full-sglang.yaml`
-- Create: `control/tests/fixtures/sparkrun/llama-cpp.yaml`
-- Create: `control/tests/fixtures/sparkrun/malicious.yaml`
+- Create: `control/src/vonk_control/workload_run_source.py`
+- Create: `control/tests/test_workload_run_source.py`
+- Create: `control/tests/fixtures/workload_run/minimal-vllm.yaml`
+- Create: `control/tests/fixtures/workload_run/full-sglang.yaml`
+- Create: `control/tests/fixtures/workload_run/llama-cpp.yaml`
+- Create: `control/tests/fixtures/workload_run/malicious.yaml`
 
 **Interfaces:**
-- Produces: `parse_sparkrun_yaml(raw: bytes) -> SparkRunSource`
-- Produces frozen types: `SparkRunSource`, `SparkRunDefaults`, `SparkRunMetadata`
+- Produces: `parse_workload_run_yaml(raw: bytes) -> WorkloadRunSource`
+- Produces frozen types: `WorkloadRunSource`, `WorkloadRunDefaults`, `WorkloadRunMetadata`
 
 - [ ] **Step 1: Write failing parser tests**
 
 ```python
 def test_minimal_recipe_parses_without_executing_command(fixture_bytes) -> None:
-    source = parse_sparkrun_yaml(fixture_bytes("minimal-vllm.yaml"))
+    source = parse_workload_run_yaml(fixture_bytes("minimal-vllm.yaml"))
     assert source.model == "Qwen/Qwen3-1.7B"
     assert source.runtime == "vllm"
     assert source.command.raw.startswith("vllm serve")
@@ -47,15 +47,15 @@ def test_minimal_recipe_parses_without_executing_command(fixture_bytes) -> None:
 
 @pytest.mark.parametrize("body", [b"!!python/object:os.system ['id']", b"a: &a [*a]"])
 def test_unsafe_yaml_is_rejected(body: bytes) -> None:
-    with pytest.raises(SparkRunParseError):
-        parse_sparkrun_yaml(body)
+    with pytest.raises(WorkloadRunParseError):
+        parse_workload_run_yaml(body)
 ```
 
 - [ ] **Step 2: Verify RED**
 
-Run: `uv run --project control pytest control/tests/test_sparkrun_source.py -v`
+Run: `uv run --project control pytest control/tests/test_workload_run_source.py -v`
 
-Expected: FAIL because `sparkrun_source` is absent.
+Expected: FAIL because `workload_run_source` is absent.
 
 - [ ] **Step 3: Implement duplicate-key and node-count-limited safe loading**
 
@@ -63,47 +63,47 @@ Subclass `yaml.SafeLoader` to reject duplicate mapping keys and all unknown tags
 
 - [ ] **Step 4: Validate the neutral source shape**
 
-Accept documented SparkRun fields `recipe_version`, `model`, `model_revision`, `runtime`, `container`, `min_nodes`, `max_nodes`, `metadata`, `defaults`, `env`, `command`, `mods`, `tuning`, and `benchmark`. Preserve unknown fields as bounded `UnknownField(path, value_type)` records rather than dropping them.
+Accept documented WorkloadRun fields `recipe_version`, `model`, `model_revision`, `runtime`, `container`, `min_nodes`, `max_nodes`, `metadata`, `defaults`, `env`, `command`, `mods`, `tuning`, and `benchmark`. Preserve unknown fields as bounded `UnknownField(path, value_type)` records rather than dropping them.
 
 - [ ] **Step 5: Verify parser and rejection corpus**
 
-Run: `uv run --project control pytest control/tests/test_sparkrun_source.py -v`
+Run: `uv run --project control pytest control/tests/test_workload_run_source.py -v`
 
 Expected: PASS for valid runtime fixtures and rejection of tag execution, duplicate keys, recursive aliases, multiple documents, oversize input, excessive depth, and secret-shaped environment values.
 
 - [ ] **Step 6: Commit parser**
 
 ```bash
-git add control/pyproject.toml control/uv.lock control/src/dgx_control/sparkrun_source.py control/tests
-git commit -m "feat: parse SparkRun recipes safely"
+git add control/pyproject.toml control/uv.lock control/src/vonk_control/workload_run_source.py control/tests
+git commit -m "feat: parse WorkloadRun recipes safely"
 ```
 
 ### Task 2: Exhaustive import-report engine
 
 **Files:**
-- Create: `control/src/dgx_control/import_report.py`
-- Create: `control/src/dgx_control/sparkrun_importer.py`
+- Create: `control/src/vonk_control/import_report.py`
+- Create: `control/src/vonk_control/workload_run_importer.py`
 - Create: `control/tests/test_import_report.py`
-- Create: `control/tests/test_sparkrun_importer.py`
+- Create: `control/tests/test_workload_run_importer.py`
 
 **Interfaces:**
 - Produces enum: `ImportDisposition`
 - Produces: `ImportReportItem(source_path, disposition, destination_path, reason_code, detail, blocking)`
-- Produces: `SparkRunImportResult(draft_document, report, source_sha256, redacted_source)`
-- Produces: `import_sparkrun(source: SparkRunSource) -> SparkRunImportResult`
+- Produces: `WorkloadRunImportResult(draft_document, report, source_sha256, redacted_source)`
+- Produces: `import_workload_run(source: WorkloadRunSource) -> WorkloadRunImportResult`
 
 - [ ] **Step 1: Write failing coverage-accounting test**
 
 ```python
 def test_every_source_leaf_has_exactly_one_report_item(full_source) -> None:
-    result = import_sparkrun(full_source)
+    result = import_workload_run(full_source)
     assert sorted(item.source_path for item in result.report) == sorted(full_source.leaf_paths())
     assert len({item.source_path for item in result.report}) == len(result.report)
 ```
 
 - [ ] **Step 2: Verify RED**
 
-Run: `uv run --project control pytest control/tests/test_import_report.py control/tests/test_sparkrun_importer.py -v`
+Run: `uv run --project control pytest control/tests/test_import_report.py control/tests/test_workload_run_importer.py -v`
 
 Expected: FAIL because importer/report modules do not exist.
 
@@ -113,7 +113,7 @@ The report builder registers every source leaf before translation, requires exac
 
 - [ ] **Step 4: Implement base mappings**
 
-Map model, exact model revision, runtime, immutable container reference, metadata, node bounds, environment names, and recognized defaults. Mark mutable image tags and absent artifact revision `resolution_required`; resource/topology fields absent from SparkRun become explicit `overlay_required`; raw command is delegated to runtime compiler; mods/installers become `unsupported_blocking` unless a compiler proves an exactly redundant behavior.
+Map model, exact model revision, runtime, immutable container reference, metadata, node bounds, environment names, and recognized defaults. Mark mutable image tags and absent artifact revision `resolution_required`; resource/topology fields absent from WorkloadRun become explicit `overlay_required`; raw command is delegated to runtime compiler; mods/installers become `unsupported_blocking` unless a compiler proves an exactly redundant behavior.
 
 - [ ] **Step 5: Implement redaction**
 
@@ -121,28 +121,28 @@ Keep source field names and types, but replace secret-like values with `"<redact
 
 - [ ] **Step 6: Verify all dispositions**
 
-Run: `uv run --project control pytest control/tests/test_import_report.py control/tests/test_sparkrun_importer.py -v`
+Run: `uv run --project control pytest control/tests/test_import_report.py control/tests/test_workload_run_importer.py -v`
 
 Expected: PASS with at least one fixture for each disposition, no unreported field, no secret value, and deterministic report ordering/hash.
 
 - [ ] **Step 7: Commit report engine**
 
 ```bash
-git add control/src/dgx_control/import_report.py control/src/dgx_control/sparkrun_importer.py control/tests
-git commit -m "feat: report SparkRun import transformations"
+git add control/src/vonk_control/import_report.py control/src/vonk_control/workload_run_importer.py control/tests
+git commit -m "feat: report WorkloadRun import transformations"
 ```
 
 ### Task 3: Typed vLLM compiler
 
 **Files:**
-- Create: `control/src/dgx_control/runtime_compilers/__init__.py`
-- Create: `control/src/dgx_control/runtime_compilers/common.py`
-- Create: `control/src/dgx_control/runtime_compilers/vllm.py`
+- Create: `control/src/vonk_control/runtime_compilers/__init__.py`
+- Create: `control/src/vonk_control/runtime_compilers/common.py`
+- Create: `control/src/vonk_control/runtime_compilers/vllm.py`
 - Create: `control/tests/test_vllm_compiler.py`
-- Add fixtures: `control/tests/fixtures/sparkrun/vllm-*.yaml`
+- Add fixtures: `control/tests/fixtures/workload_run/vllm-*.yaml`
 
 **Interfaces:**
-- Produces: `compile_vllm(source: SparkRunSource, report: ImportReportBuilder) -> RuntimeProjection`
+- Produces: `compile_vllm(source: WorkloadRunSource, report: ImportReportBuilder) -> RuntimeProjection`
 - Produces: `RuntimeProjection(family, arguments, environment, endpoint, transformed_paths)`
 
 - [ ] **Step 1: Write failing command-translation test**
@@ -178,19 +178,19 @@ Expected: PASS for single/two-node, quantization, tool-calling, context, KV, and
 - [ ] **Step 6: Commit vLLM compiler**
 
 ```bash
-git add control/src/dgx_control/runtime_compilers control/tests
-git commit -m "feat: compile SparkRun vLLM profiles"
+git add control/src/vonk_control/runtime_compilers control/tests
+git commit -m "feat: compile WorkloadRun vLLM profiles"
 ```
 
 ### Task 4: Typed SGLang and llama.cpp compilers
 
 **Files:**
-- Create: `control/src/dgx_control/runtime_compilers/sglang.py`
-- Create: `control/src/dgx_control/runtime_compilers/llama_cpp.py`
+- Create: `control/src/vonk_control/runtime_compilers/sglang.py`
+- Create: `control/src/vonk_control/runtime_compilers/llama_cpp.py`
 - Create: `control/tests/test_sglang_compiler.py`
 - Create: `control/tests/test_llama_cpp_compiler.py`
-- Add fixtures: `control/tests/fixtures/sparkrun/sglang-*.yaml`
-- Add fixtures: `control/tests/fixtures/sparkrun/llama-cpp-*.yaml`
+- Add fixtures: `control/tests/fixtures/workload_run/sglang-*.yaml`
+- Add fixtures: `control/tests/fixtures/workload_run/llama-cpp-*.yaml`
 
 **Interfaces:**
 - Produces: `compile_sglang(...) -> RuntimeProjection`
@@ -223,16 +223,16 @@ Expected: PASS for valid profiles and the same adversarial shell/placeholder cor
 - [ ] **Step 6: Commit runtime compilers**
 
 ```bash
-git add control/src/dgx_control/runtime_compilers control/tests
+git add control/src/vonk_control/runtime_compilers control/tests
 git commit -m "feat: compile SGLang and llama.cpp profiles"
 ```
 
 ### Task 5: OCI and model identity resolution
 
 **Files:**
-- Create: `control/src/dgx_control/registry_resolution.py`
-- Create: `control/src/dgx_control/model_resolution.py`
-- Create: `control/src/dgx_control/import_resolution.py`
+- Create: `control/src/vonk_control/registry_resolution.py`
+- Create: `control/src/vonk_control/model_resolution.py`
+- Create: `control/src/vonk_control/import_resolution.py`
 - Create: `control/tests/test_registry_resolution.py`
 - Create: `control/tests/test_model_resolution.py`
 - Create: `control/tests/test_import_resolution.py`
@@ -278,35 +278,35 @@ Expected: PASS for manifest list, missing ARM64, moved tag detection, redirect r
 - [ ] **Step 7: Commit resolvers**
 
 ```bash
-git add control/src/dgx_control/registry_resolution.py control/src/dgx_control/model_resolution.py control/src/dgx_control/import_resolution.py control/tests
+git add control/src/vonk_control/registry_resolution.py control/src/vonk_control/model_resolution.py control/src/vonk_control/import_resolution.py control/tests
 git commit -m "feat: resolve imported runtime artifacts"
 ```
 
 ### Task 6: Persist import preview/apply and expose API
 
 **Files:**
-- Create: `control/src/dgx_control/sparkrun_api.py`
-- Create: `control/tests/test_sparkrun_api.py`
-- Modify: `control/src/dgx_control/api.py`
-- Modify: `control/src/dgx_control/catalog_service.py`
+- Create: `control/src/vonk_control/workload_run_api.py`
+- Create: `control/tests/test_workload_run_api.py`
+- Modify: `control/src/vonk_control/api.py`
+- Modify: `control/src/vonk_control/catalog_service.py`
 
 **Interfaces:**
-- Produces: `POST /api/v1/catalog/imports/sparkrun/preview`
-- Produces: `POST /api/v1/catalog/imports/sparkrun`
+- Produces: `POST /api/v1/catalog/imports/workload_run/preview`
+- Produces: `POST /api/v1/catalog/imports/workload_run`
 - Produces: `POST /api/v1/catalog/recipes/{recipe_id}/resolve-import`
 
 - [ ] **Step 1: Write failing preview/apply separation test**
 
 ```python
-def test_preview_does_not_persist_recipe(client, admin_headers, sparkrun_yaml, session) -> None:
-    response = client.post("/api/v1/catalog/imports/sparkrun/preview", headers=admin_headers, content=sparkrun_yaml)
+def test_preview_does_not_persist_recipe(client, admin_headers, workload_run_yaml, session) -> None:
+    response = client.post("/api/v1/catalog/imports/workload_run/preview", headers=admin_headers, content=workload_run_yaml)
     assert response.status_code == 200
     assert session.query(LocalRecipe).count() == 0
 ```
 
 - [ ] **Step 2: Verify RED**
 
-Run: `uv run --project control pytest control/tests/test_sparkrun_api.py -v`
+Run: `uv run --project control pytest control/tests/test_workload_run_api.py -v`
 
 Expected: FAIL with `404`.
 
@@ -320,29 +320,29 @@ Resolution request contains expected draft revision and typed overlays. It runs 
 
 - [ ] **Step 5: Verify API security and idempotency**
 
-Run: `uv run --project control pytest control/tests/test_sparkrun_api.py -v`
+Run: `uv run --project control pytest control/tests/test_workload_run_api.py -v`
 
 Expected: PASS for preview non-persistence, apply idempotency, stale preview, secret redaction, admin authorization, payload limit, retryable external errors, blocked import, and successful resolution.
 
 - [ ] **Step 6: Commit import API**
 
 ```bash
-git add control/src/dgx_control/sparkrun_api.py control/src/dgx_control/api.py control/src/dgx_control/catalog_service.py control/tests
-git commit -m "feat: expose SparkRun import workflow"
+git add control/src/vonk_control/workload_run_api.py control/src/vonk_control/api.py control/src/vonk_control/catalog_service.py control/tests
+git commit -m "feat: expose WorkloadRun import workflow"
 ```
 
 ### Task 7: Import and resolution interface
 
 **Files:**
-- Create: `control/web/src/pages/sparkrun-import.tsx`
-- Create: `control/web/src/pages/sparkrun-import.test.tsx`
+- Create: `control/web/src/pages/workload_run-import.tsx`
+- Create: `control/web/src/pages/workload_run-import.test.tsx`
 - Create: `control/web/src/components/import-report.tsx`
 - Create: `control/web/src/components/import-report.test.tsx`
 - Modify: `control/web/src/app.tsx`
 - Modify: `control/web/src/styles.css`
 
 **Interfaces:**
-- Produces UI route: `/catalog/import/sparkrun`
+- Produces UI route: `/catalog/import/workload_run`
 - Consumes Task 6 API operations
 
 - [ ] **Step 1: Write failing report-language test**
@@ -372,7 +372,7 @@ Typed controls collect image resolution choice, resource envelope, topology, fab
 
 - [ ] **Step 5: Verify accessibility and build**
 
-Run: `npm --prefix control/web test -- --run src/pages/sparkrun-import.test.tsx src/components/import-report.test.tsx && npm --prefix control/web run build`
+Run: `npm --prefix control/web test -- --run src/pages/workload_run-import.test.tsx src/components/import-report.test.tsx && npm --prefix control/web run build`
 
 Expected: PASS for keyboard workflow, status labels not color-only, blocking summary, stale preview, provider outage, and successful resolved revision.
 
@@ -380,7 +380,7 @@ Expected: PASS for keyboard workflow, status labels not color-only, blocking sum
 
 ```bash
 git add control/web
-git commit -m "feat: add SparkRun import UI"
+git commit -m "feat: add WorkloadRun import UI"
 ```
 
 ## Plan acceptance
@@ -389,18 +389,18 @@ Run:
 
 ```bash
 uv run --project control pytest \
-  control/tests/test_sparkrun_source.py \
+  control/tests/test_workload_run_source.py \
   control/tests/test_import_report.py \
-  control/tests/test_sparkrun_importer.py \
+  control/tests/test_workload_run_importer.py \
   control/tests/test_vllm_compiler.py \
   control/tests/test_sglang_compiler.py \
   control/tests/test_llama_cpp_compiler.py \
   control/tests/test_registry_resolution.py \
   control/tests/test_model_resolution.py \
   control/tests/test_import_resolution.py \
-  control/tests/test_sparkrun_api.py -q
-npm --prefix control/web test -- --run src/pages/sparkrun-import.test.tsx src/components/import-report.test.tsx
+  control/tests/test_workload_run_api.py -q
+npm --prefix control/web test -- --run src/pages/workload_run-import.test.tsx src/components/import-report.test.tsx
 npm --prefix control/web run build
 ```
 
-Acceptance additionally imports a representative census from every configured SparkRun registry class and emits a machine-readable coverage report by runtime and disposition. No imported source may become runnable while any leaf is unreported or any blocking/resolution/overlay item remains.
+Acceptance additionally imports a representative census from every configured WorkloadRun registry class and emits a machine-readable coverage report by runtime and disposition. No imported source may become runnable while any leaf is unreported or any blocking/resolution/overlay item remains.

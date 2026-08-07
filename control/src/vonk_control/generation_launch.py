@@ -73,11 +73,11 @@ def selected_compose_environment(
     return {
         "CONTROL_API_IMAGE": identity.api_image,
         "CONTROL_WORKER_IMAGE": identity.worker_image,
-        "DGX_CONTROL_GENERATION_ID": identity.generation_id,
-        "DGX_CONTROL_START_NONCE": runtime.start_nonce,
-        "DGX_CONTROL_STARTUP_MODE": "selected",
-        "DGX_DATABASE_REVISION": identity.database_revision,
-        "DGX_PLATFORM_BUILD_DIGEST": identity.build_digest,
-        "DGX_PLATFORM_RELEASE_DIGEST": identity.release_digest,
-        "DGX_PLATFORM_VERSION": identity.platform_version,
+        "VONK_CONTROL_GENERATION_ID": identity.generation_id,
+        "VONK_CONTROL_START_NONCE": runtime.start_nonce,
+        "VONK_CONTROL_STARTUP_MODE": "selected",
+        "VONK_DATABASE_REVISION": identity.database_revision,
+        "VONK_PLATFORM_BUILD_DIGEST": identity.build_digest,
+        "VONK_PLATFORM_RELEASE_DIGEST": identity.release_digest,
+        "VONK_PLATFORM_VERSION": identity.platform_version,
     }

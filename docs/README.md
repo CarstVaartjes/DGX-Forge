@@ -1,14 +1,14 @@
 # Vonk Forge operator documentation
 
 Vonk Forge runs a Docker-capable control host (normally a NAS) and one or more
-DGX Spark agents. Caddy is the only published ingress; Tailscale is the
-default remote-access boundary; Spark agents make outbound mTLS connections;
+Vonk Forge GPU node agents. Caddy is the only published ingress; Tailscale is the
+default remote-access boundary; GPU node agents make outbound mTLS connections;
 LiteLLM publishes only routes acknowledged by the control plane.
 
 ## Authority boundary
 
 - Local PostgreSQL owns recipe families, authored and imported revisions,
-  SparkRun import reports, installations, placements, and runs. It remains
+  WorkloadRun import reports, installations, placements, and runs. It remains
   usable without the global catalog or a Git remote.
 - The optional global Vonk Forge Web service publishes immutable recipe
   revisions and metadata. It never stores image layers, model weights, or
@@ -20,7 +20,8 @@ LiteLLM publishes only routes acknowledged by the control plane.
 ## Deployment boundary
 
 - The NAS/Docker service host runs the local control API, repository-less worker,
-  PostgreSQL, Caddy, LiteLLM, Hermes, and observability services. Caddy is the
+  PostgreSQL, Caddy, LiteLLM, and observability services. Optional Hermes is a
+  default-disabled Compose profile. Caddy is the
   local ingress boundary; it is not the global website host.
 - GitHub Actions in this repository builds, tests, signs, and publishes the
   `vonk-forge-agent` ARM64 Debian package to the public Cloudflare R2 APT
@@ -28,12 +29,13 @@ LiteLLM publishes only routes acknowledged by the control plane.
 - The initial local product does not require Railway or a global catalog. The
   future `vonk-forge-web` frontend belongs on Cloudflare Pages; its global
   API/validation worker/PostgreSQL backend may later run on Railway.
-- Recipe containers and model weights are installed and run on the NAS/Sparks,
+- Recipe containers and model weights are installed and run on the NAS/GPU nodes,
   never on Railway or Cloudflare Pages.
 
 ## Start here
 
 - [Architecture overview](architecture-overview.md)
+- [Source-first local Compose deployment](../deploy/compose/README.md)
 - [Testing and CI](testing-and-ci.md)
 - [Identity verification policy](identity-verifier.md)
 - [Control-plane bootstrap](runbooks/control-plane-bootstrap.md)

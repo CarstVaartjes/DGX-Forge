@@ -99,16 +99,16 @@ class GenerationStartupSettings:
 
     @classmethod
     def from_env_and_secrets(cls) -> GenerationStartupSettings:
-        deployment_mode = os.environ.get("DGX_DEPLOYMENT_MODE", "development")
+        deployment_mode = os.environ.get("VONK_DEPLOYMENT_MODE", "development")
         if deployment_mode not in {"development", "test", "production"}:
-            raise SettingsError("DGX_DEPLOYMENT_MODE is invalid")
-        raw_mode = os.environ.get("DGX_CONTROL_STARTUP_MODE", "selected")
+            raise SettingsError("VONK_DEPLOYMENT_MODE is invalid")
+        raw_mode = os.environ.get("VONK_CONTROL_STARTUP_MODE", "selected")
         try:
             startup_mode = StartupMode(raw_mode)
         except ValueError as error:
-            raise SettingsError("DGX_CONTROL_STARTUP_MODE is invalid") from error
+            raise SettingsError("VONK_CONTROL_STARTUP_MODE is invalid") from error
         database_url = _secret(
-            "DGX_DATABASE_URL_FILE",
+            "VONK_DATABASE_URL_FILE",
             production=deployment_mode == "production",
         )
         if urlsplit(database_url).scheme not in {
@@ -116,53 +116,53 @@ class GenerationStartupSettings:
             "postgresql+psycopg",
         }:
             raise SettingsError("database URL must use PostgreSQL")
-        operation_id = os.environ.get("DGX_CONTROL_OPERATION_ID")
+        operation_id = os.environ.get("VONK_CONTROL_OPERATION_ID")
         if startup_mode is StartupMode.PRESELECTION:
             if operation_id is None or re.fullmatch(
                 r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?",
                 operation_id,
             ) is None:
                 raise SettingsError(
-                    "DGX_CONTROL_OPERATION_ID is required for preselection"
+                    "VONK_CONTROL_OPERATION_ID is required for preselection"
                 )
         elif operation_id is not None:
             raise SettingsError(
-                "DGX_CONTROL_OPERATION_ID is forbidden in selected mode"
+                "VONK_CONTROL_OPERATION_ID is forbidden in selected mode"
             )
-        generation_id = os.environ.get("DGX_CONTROL_GENERATION_ID", "")
-        database_revision = os.environ.get("DGX_DATABASE_REVISION", "")
-        version = os.environ.get("DGX_PLATFORM_VERSION", "")
-        release = os.environ.get("DGX_PLATFORM_RELEASE_DIGEST", "")
-        build = os.environ.get("DGX_PLATFORM_BUILD_DIGEST", "")
-        image = os.environ.get("DGX_CONTROL_PROCESS_IMAGE", "")
-        nonce = os.environ.get("DGX_CONTROL_START_NONCE", "")
+        generation_id = os.environ.get("VONK_CONTROL_GENERATION_ID", "")
+        database_revision = os.environ.get("VONK_DATABASE_REVISION", "")
+        version = os.environ.get("VONK_PLATFORM_VERSION", "")
+        release = os.environ.get("VONK_PLATFORM_RELEASE_DIGEST", "")
+        build = os.environ.get("VONK_PLATFORM_BUILD_DIGEST", "")
+        image = os.environ.get("VONK_CONTROL_PROCESS_IMAGE", "")
+        nonce = os.environ.get("VONK_CONTROL_START_NONCE", "")
         if re.fullmatch(
             r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?", generation_id
         ) is None:
-            raise SettingsError("DGX_CONTROL_GENERATION_ID is invalid")
+            raise SettingsError("VONK_CONTROL_GENERATION_ID is invalid")
         if re.fullmatch(
             r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?", database_revision
         ) is None:
-            raise SettingsError("DGX_DATABASE_REVISION is invalid")
+            raise SettingsError("VONK_DATABASE_REVISION is invalid")
         if re.fullmatch(
             r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version
         ) is None:
-            raise SettingsError("DGX_PLATFORM_VERSION is invalid")
+            raise SettingsError("VONK_PLATFORM_VERSION is invalid")
         for name, value in (
-            ("DGX_PLATFORM_RELEASE_DIGEST", release),
-            ("DGX_PLATFORM_BUILD_DIGEST", build),
+            ("VONK_PLATFORM_RELEASE_DIGEST", release),
+            ("VONK_PLATFORM_BUILD_DIGEST", build),
         ):
             if re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
                 raise SettingsError(f"{name} is invalid")
         if re.fullmatch(r"[^\s]{1,1900}@sha256:[0-9a-f]{64}", image) is None:
-            raise SettingsError("DGX_CONTROL_PROCESS_IMAGE is invalid")
+            raise SettingsError("VONK_CONTROL_PROCESS_IMAGE is invalid")
         if re.fullmatch(r"[0-9a-f]{64}", nonce) is None:
-            raise SettingsError("DGX_CONTROL_START_NONCE is invalid")
+            raise SettingsError("VONK_CONTROL_START_NONCE is invalid")
         return cls(
             database_url=database_url,
             startup_mode=startup_mode,
             identity_root=_absolute_root(
-                "DGX_CONTROL_IDENTITY_ROOT", "/control-identity"
+                "VONK_CONTROL_IDENTITY_ROOT", "/control-identity"
             ),
             operation_id=operation_id,
             generation_id=generation_id,
@@ -213,7 +213,7 @@ class Settings:
     direct_fabric_cidrs: str
     package_helper_grant_private_key_path: Path | None = None
     package_helper_receipt_private_key_path: Path | None = None
-    workload_signer_socket_path: Path = Path("/run/dgx-workload-signer/signer.sock")
+    workload_signer_socket_path: Path = Path("/run/vonk-workload-signer/signer.sock")
     global_catalog_url: str = "https://vonkforge.ai"
 
     @property
@@ -222,38 +222,38 @@ class Settings:
 
     @classmethod
     def from_env_and_secrets(cls) -> Settings:
-        mode = os.environ.get("DGX_DEPLOYMENT_MODE", "development")
+        mode = os.environ.get("VONK_DEPLOYMENT_MODE", "development")
         if mode not in {"development", "test", "production"}:
-            raise SettingsError("DGX_DEPLOYMENT_MODE is invalid")
+            raise SettingsError("VONK_DEPLOYMENT_MODE is invalid")
         legacy_direct_transport = os.environ.get(
-            "DGX_LEGACY_DIRECT_TRANSPORT",
+            "VONK_LEGACY_DIRECT_TRANSPORT",
             "",
         )
         if legacy_direct_transport not in {"", "explicit-test-only"}:
             raise SettingsError("legacy direct transport selector is invalid")
         if mode == "production" and legacy_direct_transport:
             raise SettingsError("legacy direct transport is forbidden in production")
-        agent_ca_provider = os.environ.get("DGX_AGENT_CA_PROVIDER", "")
-        agent_runtime = os.environ.get("DGX_AGENT_RUNTIME", "enabled")
+        agent_ca_provider = os.environ.get("VONK_AGENT_CA_PROVIDER", "")
+        agent_runtime = os.environ.get("VONK_AGENT_RUNTIME", "enabled")
         if agent_runtime not in {"enabled", "disabled"}:
-            raise SettingsError("DGX_AGENT_RUNTIME is invalid")
+            raise SettingsError("VONK_AGENT_RUNTIME is invalid")
         agent_enabled = mode == "production" and agent_runtime == "enabled"
-        builtin_bootstrap = os.environ.get("DGX_AGENT_BUILTIN_CA_BOOTSTRAP", "")
+        builtin_bootstrap = os.environ.get("VONK_AGENT_BUILTIN_CA_BOOTSTRAP", "")
         if builtin_bootstrap not in {"", "1"}:
-            raise SettingsError("DGX_AGENT_BUILTIN_CA_BOOTSTRAP is invalid")
+            raise SettingsError("VONK_AGENT_BUILTIN_CA_BOOTSTRAP is invalid")
         if mode == "production" and not agent_ca_provider:
-            raise SettingsError("DGX_AGENT_CA_PROVIDER is required in production")
+            raise SettingsError("VONK_AGENT_CA_PROVIDER is required in production")
         if agent_ca_provider and agent_ca_provider not in {"step-ca", "builtin"}:
-            raise SettingsError("DGX_AGENT_CA_PROVIDER is invalid")
+            raise SettingsError("VONK_AGENT_CA_PROVIDER is invalid")
         step_ca_settings_present = any(
             os.environ.get(name)
             for name in (
-                "DGX_AGENT_CA_CREDENTIAL", "DGX_AGENT_CA_CREDENTIAL_FILE",
-                "DGX_AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE", "DGX_AGENT_CA_ROOT_FILE",
+                "VONK_AGENT_CA_CREDENTIAL", "VONK_AGENT_CA_CREDENTIAL_FILE",
+                "VONK_AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE", "VONK_AGENT_CA_ROOT_FILE",
             )
         )
         builtin_settings_present = bool(
-            builtin_bootstrap or os.environ.get("DGX_AGENT_INTERMEDIATE_KEY_FILE")
+            builtin_bootstrap or os.environ.get("VONK_AGENT_INTERMEDIATE_KEY_FILE")
         )
         if (
             agent_ca_provider == "builtin" and step_ca_settings_present
@@ -265,18 +265,18 @@ class Settings:
             raise SettingsError("built-in CA requires explicit bootstrap selection")
         if agent_ca_provider != "builtin" and builtin_bootstrap:
             raise SettingsError("built-in CA bootstrap requires the builtin provider")
-        database_url = _secret("DGX_DATABASE_URL_FILE", production=mode == "production")
+        database_url = _secret("VONK_DATABASE_URL_FILE", production=mode == "production")
         if urlsplit(database_url).scheme not in {"postgresql", "postgresql+psycopg"}:
             raise SettingsError("database URL must use PostgreSQL")
-        management_cidrs = os.environ.get("DGX_MANAGEMENT_CIDRS", "").strip()
+        management_cidrs = os.environ.get("VONK_MANAGEMENT_CIDRS", "").strip()
         direct_fabric_cidrs = os.environ.get(
-            "DGX_DIRECT_FABRIC_CIDRS", ""
+            "VONK_DIRECT_FABRIC_CIDRS", ""
         ).strip()
         if mode == "production" and not management_cidrs:
-            raise SettingsError("DGX_MANAGEMENT_CIDRS is required in production")
+            raise SettingsError("VONK_MANAGEMENT_CIDRS is required in production")
         if not management_cidrs and direct_fabric_cidrs:
             raise SettingsError(
-                "DGX_MANAGEMENT_CIDRS is required when direct fabric CIDRs are set"
+                "VONK_MANAGEMENT_CIDRS is required when direct fabric CIDRs are set"
             )
         if management_cidrs:
             try:
@@ -286,79 +286,79 @@ class Settings:
                 )
             except PresenceError as error:
                 raise SettingsError(str(error)) from error
-        signing_file = os.environ.get("DGX_TOKEN_SIGNING_KEY_FILE")
+        signing_file = os.environ.get("VONK_TOKEN_SIGNING_KEY_FILE")
         if signing_file:
             signing_path = Path(signing_file)
             if signing_path.is_symlink() or not signing_path.is_file():
                 raise SettingsError("token signing key must be a regular non-symlink file")
             signing_key = signing_path.read_bytes().strip()
         elif mode == "production":
-            raise SettingsError("DGX_TOKEN_SIGNING_KEY_FILE is required in production")
+            raise SettingsError("VONK_TOKEN_SIGNING_KEY_FILE is required in production")
         else:
             signing_key = b"development-only-signing-key-32b"
         if len(signing_key) < 32:
             raise SettingsError("token signing key must contain at least 32 bytes")
-        metrics_file = os.environ.get("DGX_METRICS_TOKEN_FILE")
+        metrics_file = os.environ.get("VONK_METRICS_TOKEN_FILE")
         if metrics_file:
             metrics_path = Path(metrics_file)
             if metrics_path.is_symlink() or not metrics_path.is_file():
                 raise SettingsError("metrics token must be a regular non-symlink file")
             metrics_token = metrics_path.read_text().strip()
         elif mode == "production":
-            raise SettingsError("DGX_METRICS_TOKEN_FILE is required in production")
+            raise SettingsError("VONK_METRICS_TOKEN_FILE is required in production")
         else:
             metrics_token = "development-metrics-token"
         if len(metrics_token) < 16 or any(character.isspace() for character in metrics_token):
             raise SettingsError("metrics token is invalid")
-        git_signing_raw = os.environ.get("DGX_GIT_SIGNING_KEY_FILE")
+        git_signing_raw = os.environ.get("VONK_GIT_SIGNING_KEY_FILE")
         git_signing_key_path = Path(git_signing_raw) if git_signing_raw else None
         if git_signing_key_path is not None and (
             git_signing_key_path.is_symlink() or not git_signing_key_path.is_file()
         ):
             raise SettingsError("Git signing key must be a regular non-symlink file")
         if mode == "production" and git_signing_key_path is None:
-            raise SettingsError("DGX_GIT_SIGNING_KEY_FILE is required in production")
-        deployment_branch = os.environ.get("DGX_DEPLOYMENT_BRANCH", "deploy")
+            raise SettingsError("VONK_GIT_SIGNING_KEY_FILE is required in production")
+        deployment_branch = os.environ.get("VONK_DEPLOYMENT_BRANCH", "deploy")
         if not deployment_branch or any(value in deployment_branch for value in ("..", "//", "\n", "\x00")):
             raise SettingsError("deployment branch is invalid")
         required_checks = tuple(
-            value.strip() for value in os.environ.get("DGX_REQUIRED_CHECKS", "").split(",")
+            value.strip() for value in os.environ.get("VONK_REQUIRED_CHECKS", "").split(",")
             if value.strip()
         )
         if len(required_checks) != len(set(required_checks)):
             raise SettingsError("required checks must be unique")
-        agent_client_ca = _secret("DGX_AGENT_CLIENT_CA_FILE", production=True).encode() if agent_enabled else b""
+        agent_client_ca = _secret("VONK_AGENT_CLIENT_CA_FILE", production=True).encode() if agent_enabled else b""
         agent_intermediate_certificate_path = (
-            _secret_path("DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE") if agent_enabled else None
+            _secret_path("VONK_AGENT_INTERMEDIATE_CERTIFICATE_FILE") if agent_enabled else None
         )
         agent_intermediate_certificate = (
             agent_intermediate_certificate_path.read_bytes() if agent_intermediate_certificate_path else b""
         )
         agent_intermediate_key_path = (
-            _secret_path("DGX_AGENT_INTERMEDIATE_KEY_FILE")
+            _secret_path("VONK_AGENT_INTERMEDIATE_KEY_FILE")
             if mode == "production" and agent_ca_provider == "builtin" else None
         )
         step_ca_enabled = agent_enabled and agent_ca_provider == "step-ca"
-        agent_ca_credential_path = _secret_path("DGX_AGENT_CA_CREDENTIAL_FILE") if step_ca_enabled else None
+        agent_ca_credential_path = _secret_path("VONK_AGENT_CA_CREDENTIAL_FILE") if step_ca_enabled else None
         agent_ca_provisioner_public_jwk_path = (
-            _secret_path("DGX_AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE") if step_ca_enabled else None
+            _secret_path("VONK_AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE") if step_ca_enabled else None
         )
-        agent_ca_root_path = _secret_path("DGX_AGENT_CA_ROOT_FILE") if step_ca_enabled else None
-        agent_ca_url = os.environ.get("DGX_AGENT_CA_URL", "") if step_ca_enabled else ""
+        agent_ca_root_path = _secret_path("VONK_AGENT_CA_ROOT_FILE") if step_ca_enabled else None
+        agent_ca_url = os.environ.get("VONK_AGENT_CA_URL", "") if step_ca_enabled else ""
         parsed_ca_url = urlsplit(agent_ca_url)
         if step_ca_enabled and (
             parsed_ca_url.scheme != "https" or not parsed_ca_url.hostname
             or parsed_ca_url.path not in {"", "/"} or parsed_ca_url.query or parsed_ca_url.fragment
             or parsed_ca_url.username is not None or parsed_ca_url.password is not None
         ):
-            raise SettingsError("DGX_AGENT_CA_URL must be a fixed HTTPS origin")
-        agent_ca_provisioner_name = os.environ.get("DGX_AGENT_CA_PROVISIONER_NAME", "") if step_ca_enabled else ""
-        agent_ca_provisioner_kid = os.environ.get("DGX_AGENT_CA_PROVISIONER_KID", "") if step_ca_enabled else ""
+            raise SettingsError("VONK_AGENT_CA_URL must be a fixed HTTPS origin")
+        agent_ca_provisioner_name = os.environ.get("VONK_AGENT_CA_PROVISIONER_NAME", "") if step_ca_enabled else ""
+        agent_ca_provisioner_kid = os.environ.get("VONK_AGENT_CA_PROVISIONER_KID", "") if step_ca_enabled else ""
         if step_ca_enabled and (not agent_ca_provisioner_name or not agent_ca_provisioner_kid):
             raise SettingsError("Smallstep provisioner name and key ID are required")
         try:
-            agent_ca_timeout_seconds = float(os.environ.get("DGX_AGENT_CA_TIMEOUT_SECONDS", "3"))
-            agent_ca_max_response_bytes = int(os.environ.get("DGX_AGENT_CA_MAX_RESPONSE_BYTES", str(64 * 1024)))
+            agent_ca_timeout_seconds = float(os.environ.get("VONK_AGENT_CA_TIMEOUT_SECONDS", "3"))
+            agent_ca_max_response_bytes = int(os.environ.get("VONK_AGENT_CA_MAX_RESPONSE_BYTES", str(64 * 1024)))
         except ValueError as error:
             raise SettingsError("Smallstep timeout and response limit must be numeric") from error
         if not 0 < agent_ca_timeout_seconds <= 30:
@@ -366,27 +366,27 @@ class Settings:
         if not 1024 <= agent_ca_max_response_bytes <= 1024 * 1024:
             raise SettingsError("Smallstep response limit must be between 1024 bytes and one MiB")
         agent_proxy_auth = (
-            _agent_proxy_auth_secret("DGX_AGENT_PROXY_AUTH_FILE", production=True)
+            _agent_proxy_auth_secret("VONK_AGENT_PROXY_AUTH_FILE", production=True)
             if agent_enabled else b""
         )
         worker_api_token = (
-            _agent_proxy_auth_secret("DGX_WORKER_API_TOKEN_FILE", production=True)
+            _agent_proxy_auth_secret("VONK_WORKER_API_TOKEN_FILE", production=True)
             if mode == "production" else b""
         )
         agent_artifact_root = _absolute_root(
-            "DGX_AGENT_ARTIFACT_ROOT", "/state/agent-artifacts"
+            "VONK_AGENT_ARTIFACT_ROOT", "/state/agent-artifacts"
         )
         agent_tuf_metadata_root = _absolute_root(
-            "DGX_AGENT_TUF_METADATA_ROOT", "/state/agent-tuf/metadata"
+            "VONK_AGENT_TUF_METADATA_ROOT", "/state/agent-tuf/metadata"
         )
         agent_tuf_target_root = _absolute_root(
-            "DGX_AGENT_TUF_TARGET_ROOT", "/state/agent-tuf/targets"
+            "VONK_AGENT_TUF_TARGET_ROOT", "/state/agent-tuf/targets"
         )
         workload_tuf_metadata_root = _absolute_root(
-            "DGX_WORKLOAD_TUF_METADATA_ROOT", "/state/workload-tuf/metadata"
+            "VONK_WORKLOAD_TUF_METADATA_ROOT", "/state/workload-tuf/metadata"
         )
         workload_tuf_target_root = _absolute_root(
-            "DGX_WORKLOAD_TUF_TARGET_ROOT", "/state/workload-tuf/targets"
+            "VONK_WORKLOAD_TUF_TARGET_ROOT", "/state/workload-tuf/targets"
         )
         agent_roots = (
             agent_artifact_root,
@@ -406,23 +406,23 @@ class Settings:
                 "agent artifact and TUF roots must be distinct and nonoverlapping"
             )
         admin_grant_private_key_path = (
-            _secret_path("DGX_ADMIN_GRANT_PRIVATE_KEY_FILE")
+            _secret_path("VONK_ADMIN_GRANT_PRIVATE_KEY_FILE")
             if mode == "production"
-            or os.environ.get("DGX_ADMIN_GRANT_PRIVATE_KEY_FILE")
+            or os.environ.get("VONK_ADMIN_GRANT_PRIVATE_KEY_FILE")
             else None
         )
         package_helper_grant_private_key_path = (
-            _secret_path("DGX_PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE")
-            if os.environ.get("DGX_PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE")
+            _secret_path("VONK_PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE")
+            if os.environ.get("VONK_PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE")
             else None
         )
         package_helper_receipt_private_key_path = (
-            _secret_path("DGX_PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE")
-            if os.environ.get("DGX_PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE")
+            _secret_path("VONK_PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE")
+            if os.environ.get("VONK_PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE")
             else None
         )
         global_catalog_url = os.environ.get(
-            "DGX_GLOBAL_CATALOG_URL", "https://vonkforge.ai"
+            "VONK_GLOBAL_CATALOG_URL", "https://vonkforge.ai"
         ).rstrip("/")
         parsed_catalog = urlsplit(global_catalog_url)
         catalog_loopback = parsed_catalog.hostname in {
@@ -442,8 +442,8 @@ class Settings:
             raise SettingsError("global catalog URL must be a fixed HTTPS origin")
         return cls(
             database_url=database_url,
-            repository_path=Path(os.environ.get("DGX_REPOSITORY_PATH", "/srv/dgx-forge/repository")),
-            state_path=Path(os.environ.get("DGX_STATE_PATH", "/srv/dgx-forge/state")),
+            repository_path=Path(os.environ.get("VONK_REPOSITORY_PATH", "/srv/vonk-forge/repository")),
+            state_path=Path(os.environ.get("VONK_STATE_PATH", "/srv/vonk-forge/state")),
             deployment_mode=mode,
             legacy_direct_transport=legacy_direct_transport,
             token_signing_key=signing_key,
@@ -478,8 +478,8 @@ class Settings:
             package_helper_grant_private_key_path=package_helper_grant_private_key_path,
             package_helper_receipt_private_key_path=package_helper_receipt_private_key_path,
             workload_signer_socket_path=_absolute_root(
-                "DGX_WORKLOAD_SIGNER_SOCKET",
-                "/run/dgx-workload-signer/signer.sock",
+                "VONK_WORKLOAD_SIGNER_SOCKET",
+                "/run/vonk-workload-signer/signer.sock",
             ),
             global_catalog_url=global_catalog_url,
         )
@@ -500,16 +500,16 @@ class WorkerSettings:
 
     @classmethod
     def from_env_and_secrets(cls) -> WorkerSettings:
-        mode = os.environ.get("DGX_DEPLOYMENT_MODE", "development")
+        mode = os.environ.get("VONK_DEPLOYMENT_MODE", "development")
         if mode not in {"development", "test", "production"}:
-            raise SettingsError("DGX_DEPLOYMENT_MODE is invalid")
-        legacy = os.environ.get("DGX_LEGACY_DIRECT_TRANSPORT", "")
+            raise SettingsError("VONK_DEPLOYMENT_MODE is invalid")
+        legacy = os.environ.get("VONK_LEGACY_DIRECT_TRANSPORT", "")
         if legacy not in {"", "explicit-test-only"}:
             raise SettingsError("legacy direct transport selector is invalid")
         if mode == "production" and legacy:
             raise SettingsError("legacy direct transport is forbidden in production")
         database_url = _secret(
-            "DGX_DATABASE_URL_FILE",
+            "VONK_DATABASE_URL_FILE",
             production=mode == "production",
         )
         if urlsplit(database_url).scheme not in {
@@ -518,11 +518,11 @@ class WorkerSettings:
         }:
             raise SettingsError("database URL must use PostgreSQL")
         token = _agent_proxy_auth_secret(
-            "DGX_WORKER_API_TOKEN_FILE",
+            "VONK_WORKER_API_TOKEN_FILE",
             production=mode == "production",
         )
         origin = os.environ.get(
-            "DGX_INTERNAL_API_URL",
+            "VONK_INTERNAL_API_URL",
             "http://control-api:8000",
         )
         parsed = urlsplit(origin)
@@ -535,24 +535,24 @@ class WorkerSettings:
             or parsed.username is not None
             or parsed.password is not None
         ):
-            raise SettingsError("DGX_INTERNAL_API_URL must be a fixed HTTP origin")
+            raise SettingsError("VONK_INTERNAL_API_URL must be a fixed HTTP origin")
         origin = origin.rstrip("/")
         try:
-            timeout = float(os.environ.get("DGX_INTERNAL_API_TIMEOUT_SECONDS", "3"))
+            timeout = float(os.environ.get("VONK_INTERNAL_API_TIMEOUT_SECONDS", "3"))
         except ValueError as error:
             raise SettingsError("internal API timeout must be numeric") from error
         if not 0 < timeout <= 30:
             raise SettingsError("internal API timeout must be between zero and 30 seconds")
-        management_cidrs = os.environ.get("DGX_MANAGEMENT_CIDRS", "").strip()
+        management_cidrs = os.environ.get("VONK_MANAGEMENT_CIDRS", "").strip()
         direct_fabric_cidrs = os.environ.get(
-            "DGX_DIRECT_FABRIC_CIDRS",
+            "VONK_DIRECT_FABRIC_CIDRS",
             "",
         ).strip()
         if mode == "production" and not management_cidrs:
-            raise SettingsError("DGX_MANAGEMENT_CIDRS is required in production")
+            raise SettingsError("VONK_MANAGEMENT_CIDRS is required in production")
         if not management_cidrs and direct_fabric_cidrs:
             raise SettingsError(
-                "DGX_MANAGEMENT_CIDRS is required when direct fabric CIDRs are set"
+                "VONK_MANAGEMENT_CIDRS is required when direct fabric CIDRs are set"
             )
         if management_cidrs:
             try:
@@ -571,7 +571,7 @@ class WorkerSettings:
             management_cidrs=management_cidrs,
             direct_fabric_cidrs=direct_fabric_cidrs,
             update_signer_socket_path=_absolute_root(
-                "DGX_UPDATE_SIGNER_SOCKET", "/run/dgx-signer/signer.sock"
+                "VONK_UPDATE_SIGNER_SOCKET", "/run/vonk-signer/signer.sock"
             ),
         )
 
@@ -596,49 +596,49 @@ class SignerSettings:
 
     @classmethod
     def from_env_and_secrets(cls) -> SignerSettings:
-        version = os.environ.get("DGX_PLATFORM_VERSION", "")
-        release = os.environ.get("DGX_PLATFORM_RELEASE_DIGEST", "")
-        build = os.environ.get("DGX_PLATFORM_BUILD_DIGEST", "")
-        image = os.environ.get("DGX_CONTROL_PROCESS_IMAGE", "")
+        version = os.environ.get("VONK_PLATFORM_VERSION", "")
+        release = os.environ.get("VONK_PLATFORM_RELEASE_DIGEST", "")
+        build = os.environ.get("VONK_PLATFORM_BUILD_DIGEST", "")
+        image = os.environ.get("VONK_CONTROL_PROCESS_IMAGE", "")
         if re.fullmatch(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)", version) is None:
-            raise SettingsError("DGX_PLATFORM_VERSION is invalid")
+            raise SettingsError("VONK_PLATFORM_VERSION is invalid")
         for name, value in (
-            ("DGX_PLATFORM_RELEASE_DIGEST", release),
-            ("DGX_PLATFORM_BUILD_DIGEST", build),
+            ("VONK_PLATFORM_RELEASE_DIGEST", release),
+            ("VONK_PLATFORM_BUILD_DIGEST", build),
         ):
             if re.fullmatch(r"sha256:[0-9a-f]{64}", value) is None:
                 raise SettingsError(f"{name} is invalid")
         if re.fullmatch(r"[^\s]{1,1900}@sha256:[0-9a-f]{64}", image) is None:
-            raise SettingsError("DGX_CONTROL_PROCESS_IMAGE is invalid")
+            raise SettingsError("VONK_CONTROL_PROCESS_IMAGE is invalid")
         return cls(
             socket_path=_absolute_root(
-                "DGX_UPDATE_SIGNER_SOCKET", "/run/dgx-signer/signer.sock"
+                "VONK_UPDATE_SIGNER_SOCKET", "/run/vonk-signer/signer.sock"
             ),
             update_authority_key_path=_secret_path(
-                "DGX_AGENT_UPDATE_AUTHORITY_KEY_FILE"
+                "VONK_AGENT_UPDATE_AUTHORITY_KEY_FILE"
             ),
             admin_grant_public_key_path=_secret_path(
-                "DGX_ADMIN_GRANT_PUBLIC_KEY_FILE"
+                "VONK_ADMIN_GRANT_PUBLIC_KEY_FILE"
             ),
             tuf_bootstrap_root_path=_secret_path(
-                "DGX_AGENT_TUF_BOOTSTRAP_ROOT_FILE"
+                "VONK_AGENT_TUF_BOOTSTRAP_ROOT_FILE"
             ),
             tuf_metadata_root=_absolute_root(
-                "DGX_AGENT_TUF_METADATA_ROOT", "/state/agent-tuf/metadata"
+                "VONK_AGENT_TUF_METADATA_ROOT", "/state/agent-tuf/metadata"
             ),
             tuf_target_root=_absolute_root(
-                "DGX_AGENT_TUF_TARGET_ROOT", "/state/agent-tuf/targets"
+                "VONK_AGENT_TUF_TARGET_ROOT", "/state/agent-tuf/targets"
             ),
             tuf_verified_metadata_root=_absolute_root(
-                "DGX_AGENT_TUF_VERIFIED_METADATA_ROOT",
+                "VONK_AGENT_TUF_VERIFIED_METADATA_ROOT",
                 "/state/agent-tuf-verifier/metadata",
             ),
             tuf_verified_target_root=_absolute_root(
-                "DGX_AGENT_TUF_VERIFIED_TARGET_ROOT",
+                "VONK_AGENT_TUF_VERIFIED_TARGET_ROOT",
                 "/state/agent-tuf-verifier/targets",
             ),
             control_identity_root=_absolute_root(
-                "DGX_CONTROL_IDENTITY_ROOT", "/control-identity"
+                "VONK_CONTROL_IDENTITY_ROOT", "/control-identity"
             ),
             platform_version=version,
             platform_release_digest=release,

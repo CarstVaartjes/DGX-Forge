@@ -5,9 +5,9 @@ Standard service images are fixed by version and OCI index digest in
 defaults. The custom control image is a release artifact and must be supplied
 through `CONTROL_API_IMAGE`, `CONTROL_WORKER_IMAGE`, and `HERMES_AGENT_IMAGE`
 with one complete set of registry digests. The three `vonk-forge` packages are
-`ghcr.io/carstvaartjes/dgx-forge-api`,
-`ghcr.io/carstvaartjes/dgx-forge-worker`, and
-`ghcr.io/carstvaartjes/dgx-forge-hermes`. Build the `api` and `worker`
+`ghcr.io/carstvaartjes/vonk-forge-api`,
+`ghcr.io/carstvaartjes/vonk-forge-worker`, and
+`ghcr.io/carstvaartjes/vonk-forge-hermes`. Build the `api` and `worker`
 Dockerfile targets from the same release commit; the worker target deliberately
 contains neither Git nor OpenSSH. The Node and Python build bases are separately
 digest-pinned in the lock.
@@ -15,7 +15,7 @@ digest-pinned in the lock.
 ## Future image releases
 
 No images are currently being published. The repository variable
-`DGX_CONTAINER_RELEASES_ENABLED` remains unset/default-off until the whole
+`VONK_CONTAINER_RELEASES_ENABLED` remains unset/default-off until the whole
 repository is release-ready. Setting it to `true` is a deliberate maintainer
 enablement action. Once enabled, only an exact stable SemVer version-tag push
 (`vX.Y.Z`) can publish the three packages; branches, pull requests, malformed
@@ -25,8 +25,8 @@ For each package's initial publication, a maintainer must open its GitHub
 package page and choose **Package settings** → **Danger Zone** → **Change
 visibility** → **Set package visibility to Public**. Public NAS pulls then need
 no GitHub token. A successful three-image publication creates the public
-release assets `dgx-forge-images.env` and
-`dgx-forge-images.env.sha256`; NAS operators verify the checksum and use all
+release assets `vonk-forge-images.env` and
+`vonk-forge-images.env.sha256`; NAS operators verify the checksum and use all
 three version-and-digest assignments as one release set. See the authoritative
 [NAS pull-only Compose deployment guide](../../deploy/compose/README.md).
 
@@ -47,7 +47,7 @@ scripts/verify-supply-chain --json
 ```
 
 The verifier checks image defaults, both dependency lockfiles, deterministic
-SPDX 2.3 documents, the rebuilt `dgx-agent-protocol` wheel hash,
+SPDX 2.3 documents, the rebuilt `vonk-agent-protocol` wheel hash,
 Dockerfile/Compose inputs, the LiteLLM cosign public key, and the
 content-addressed evidence manifest. Normal verification performs no network
 access. Regeneration is an explicit reviewed operation:
@@ -64,12 +64,12 @@ Exercise all three release targets together from the tagged source candidate:
 
 ```bash
 docker buildx build --platform linux/amd64 --load \
-  --file control/Dockerfile --target api --tag dgx-forge-api:release-dry-run .
+  --file control/Dockerfile --target api --tag vonk-forge-api:release-dry-run .
 docker buildx build --platform linux/amd64 --load \
-  --file control/Dockerfile --target worker --tag dgx-forge-worker:release-dry-run .
+  --file control/Dockerfile --target worker --tag vonk-forge-worker:release-dry-run .
 docker buildx build --platform linux/amd64 --load \
   --file deploy/compose/hermes-agent/Dockerfile --target managed \
-  --tag dgx-forge-hermes:release-dry-run deploy/compose/hermes-agent
+  --tag vonk-forge-hermes:release-dry-run deploy/compose/hermes-agent
 ```
 
 After future deliberate enablement, the tag-triggered GitHub Actions workflow
@@ -104,7 +104,7 @@ The authorities are deliberately separate:
    promotion. Its roots, roles, target prefixes, and signing credentials are
    separate from platform TUF, so a workload key cannot update `vonk-forge`, its
    agents, supervisors, protocol, or node policy.
-5. Sparks obtain authorized lock metadata from the NAS and fetch large
+5. GPU nodes obtain authorized lock metadata from the NAS and fetch large
    content-addressed payloads from their declared upstream or approved mirror.
    SSH is not part of this standard path.
 

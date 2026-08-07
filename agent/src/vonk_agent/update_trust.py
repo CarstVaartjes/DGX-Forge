@@ -1,4 +1,4 @@
-"""Single-writer python-tuf trust boundary for signed Spark releases."""
+"""Single-writer python-tuf trust boundary for signed GPU node releases."""
 
 from __future__ import annotations
 
@@ -392,7 +392,7 @@ class TUFReleaseTrust:
             )
             check_deadline()
             target_fd = os.memfd_create(
-                "dgx-tuf-target", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
+                "vonk-tuf-target", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
             )
             try:
                 check_deadline()

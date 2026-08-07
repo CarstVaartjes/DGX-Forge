@@ -2,8 +2,8 @@ id = "geometry-triposg"
 accepted_evidence = "inventory/reports/accepted-cluster-profiles.json"
 
 [placements]
-spark1 = ["deepseek-agent-single"]
-spark2 = ["triposg-single"]
+node1 = ["deepseek-agent-single"]
+node2 = ["triposg-single"]
 
 [endpoints]
 deepseek = "deepseek-agent-single"

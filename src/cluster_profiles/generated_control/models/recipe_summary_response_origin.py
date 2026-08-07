@@ -1,8 +1,8 @@
 from typing import Literal, cast
 
-RecipeSummaryResponseOrigin = Literal['global', 'local', 'sparkrun']
+RecipeSummaryResponseOrigin = Literal['global', 'local', 'workload_run']
 
-RECIPE_SUMMARY_RESPONSE_ORIGIN_VALUES: set[RecipeSummaryResponseOrigin] = { 'global', 'local', 'sparkrun',  }
+RECIPE_SUMMARY_RESPONSE_ORIGIN_VALUES: set[RecipeSummaryResponseOrigin] = { 'global', 'local', 'workload_run',  }
 
 def check_recipe_summary_response_origin(value: str) -> RecipeSummaryResponseOrigin:
     if value in RECIPE_SUMMARY_RESPONSE_ORIGIN_VALUES:

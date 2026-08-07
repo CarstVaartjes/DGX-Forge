@@ -149,7 +149,7 @@ def _validate_workload_compatibility(
     cuda_version: str | None = None,
     request: object | None = None,
 ) -> None:
-    """Fail closed when a signed workload lock cannot run on this Spark."""
+    """Fail closed when a signed workload lock cannot run on this GPU node."""
 
     compatibility = getattr(lock, "compatibility", {})
     if not isinstance(compatibility, Mapping):

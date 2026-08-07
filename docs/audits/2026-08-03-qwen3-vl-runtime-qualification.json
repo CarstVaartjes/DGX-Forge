@@ -2,7 +2,7 @@
   "model_definition": "qwen3-vl-8b-single",
   "definition_sha256": "aea18c822589c2acbce8a5b5f12d8b58b504a7eec2f554c1a45a1641d6bcfe94",
   "runtime_release_sha256": "8022bd60dd108dce87adf1aae411b727af2cb037bc053fcfdaeaf151155d528b",
-  "node": "spark2",
+  "node": "node2",
   "boot_id": "abeace49-049a-4c8c-b079-b4ce66793b67",
   "source": {
     "repository": "https://github.com/QwenLM/Qwen3-VL",
@@ -64,7 +64,7 @@
   },
   "reboot": {
     "performed": false,
-    "reason": "sudo reboot requires interactive authorization on the new Spark image"
+    "reason": "sudo reboot requires interactive authorization on the new GPU node image"
   },
   "acceptance": "verified; accepted pending reboot, extended thermal/capacity, and exact-profile co-residency gates"
 }

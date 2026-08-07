@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Work directly on `main`; do not push or open a pull request.
-- Preserve and do not stage `.superpowers/sdd/2026-08-03-spark-agent-runtime/progress.md`.
+- Preserve and do not stage `.superpowers/sdd/2026-08-03-node-agent-runtime/progress.md`.
 - Write each behavioral regression before production code and observe its expected failure.
 - The persisted control-plane issuance state is authoritative; agent retry behavior cannot be the only issuance bound.
 - Ambiguous provider outcomes never authorize an automatic second CA call.
@@ -25,11 +25,11 @@
 - Modify: `control/tests/test_enrollment.py`
 - Modify: `control/tests/test_agent_api.py`
 - Modify: `control/tests/test_step_ca.py`
-- Modify: `control/src/dgx_control/models.py`
-- Modify: `control/src/dgx_control/enrollment.py`
-- Modify: `control/src/dgx_control/agent_api.py`
-- Modify: `control/src/dgx_control/pki.py`
-- Modify: `control/src/dgx_control/step_ca.py`
+- Modify: `control/src/vonk_control/models.py`
+- Modify: `control/src/vonk_control/enrollment.py`
+- Modify: `control/src/vonk_control/agent_api.py`
+- Modify: `control/src/vonk_control/pki.py`
+- Modify: `control/src/vonk_control/step_ca.py`
 - Modify: `control/migrations/versions/0005_certificate_rotation.py`
 
 **Interfaces:**
@@ -156,7 +156,7 @@ Expected: all migration tests pass, staged denial survives downgrade, re-upgrade
 
 **Files:**
 - Modify: `agent/tests/test_lifecycle.py`
-- Modify: `agent/src/dgx_agent/operations.py`
+- Modify: `agent/src/vonk_agent/operations.py`
 
 **Interfaces:**
 - Consumes: `AgentStateStore.begin/finish/recover_pending/acknowledge` and `Agent.run_once` pending-first ordering.
@@ -201,7 +201,7 @@ only then may the queued fresh claim execute.
 ### Task 4: Report, full verification, and commit
 
 **Files:**
-- Modify: `.superpowers/sdd/2026-08-03-spark-agent-runtime/task-4-report.md`
+- Modify: `.superpowers/sdd/2026-08-03-node-agent-runtime/task-4-report.md`
 - Modify: `docs/superpowers/plans/2026-08-04-task4-fix-round1.md`
 
 **Interfaces:**

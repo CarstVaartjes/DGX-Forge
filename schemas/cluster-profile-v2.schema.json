@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://dgx-forge.local/schemas/cluster-profile-v2.schema.json",
+  "$id": "https://vonk-forge.local/schemas/cluster-profile-v2.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "id", "accepted_evidence", "workloads", "requirements", "endpoints", "quotas", "lifecycle"],

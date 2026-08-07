@@ -115,11 +115,11 @@ def test_production_worker_settings_load_only_worker_authority_secrets(
     token = tmp_path / "worker-api-token"
     database.write_text("postgresql://control:test@postgres/control")
     token.write_text("w" * 32)
-    monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
-    monkeypatch.setenv("DGX_DATABASE_URL_FILE", str(database))
-    monkeypatch.setenv("DGX_WORKER_API_TOKEN_FILE", str(token))
-    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
-    monkeypatch.setenv("DGX_INTERNAL_API_URL", "http://control-api:8000")
+    monkeypatch.setenv("VONK_DEPLOYMENT_MODE", "production")
+    monkeypatch.setenv("VONK_DATABASE_URL_FILE", str(database))
+    monkeypatch.setenv("VONK_WORKER_API_TOKEN_FILE", str(token))
+    monkeypatch.setenv("VONK_MANAGEMENT_CIDRS", "10.0.0.0/24")
+    monkeypatch.setenv("VONK_INTERNAL_API_URL", "http://control-api:8000")
 
     settings = WorkerSettings.from_env_and_secrets()
 
@@ -142,42 +142,42 @@ def test_production_worker_settings_reject_raw_or_cross_origin_authority(
 ) -> None:
     database = tmp_path / "database-url"
     database.write_text("postgresql://control:test@postgres/control")
-    monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
-    monkeypatch.setenv("DGX_DATABASE_URL_FILE", str(database))
-    monkeypatch.setenv("DGX_WORKER_API_TOKEN", "w" * 32)
-    monkeypatch.setenv("DGX_MANAGEMENT_CIDRS", "10.0.0.0/24")
-    monkeypatch.setenv("DGX_INTERNAL_API_URL", "http://127.0.0.1:8000/path")
+    monkeypatch.setenv("VONK_DEPLOYMENT_MODE", "production")
+    monkeypatch.setenv("VONK_DATABASE_URL_FILE", str(database))
+    monkeypatch.setenv("VONK_WORKER_API_TOKEN", "w" * 32)
+    monkeypatch.setenv("VONK_MANAGEMENT_CIDRS", "10.0.0.0/24")
+    monkeypatch.setenv("VONK_INTERNAL_API_URL", "http://127.0.0.1:8000/path")
 
     with pytest.raises(SettingsError):
         WorkerSettings.from_env_and_secrets()
 
     token = tmp_path / "worker-api-token"
     token.write_text("w" * 32)
-    monkeypatch.delenv("DGX_WORKER_API_TOKEN")
-    monkeypatch.setenv("DGX_WORKER_API_TOKEN_FILE", str(token))
+    monkeypatch.delenv("VONK_WORKER_API_TOKEN")
+    monkeypatch.setenv("VONK_WORKER_API_TOKEN_FILE", str(token))
     with pytest.raises(SettingsError, match="fixed HTTP origin"):
         WorkerSettings.from_env_and_secrets()
 
 
 def test_legacy_direct_transport_defaults_disabled(monkeypatch) -> None:
-    monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "test")
+    monkeypatch.setenv("VONK_DEPLOYMENT_MODE", "test")
     monkeypatch.setenv(
-        "DGX_DATABASE_URL",
+        "VONK_DATABASE_URL",
         "postgresql://control:test@postgres/control",
     )
-    monkeypatch.delenv("DGX_LEGACY_DIRECT_TRANSPORT", raising=False)
+    monkeypatch.delenv("VONK_LEGACY_DIRECT_TRANSPORT", raising=False)
 
     assert Settings.from_env_and_secrets().legacy_direct_transport == ""
 
 
 def test_only_exact_test_selector_can_authorize_legacy_transport(monkeypatch) -> None:
-    monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "test")
+    monkeypatch.setenv("VONK_DEPLOYMENT_MODE", "test")
     monkeypatch.setenv(
-        "DGX_DATABASE_URL",
+        "VONK_DATABASE_URL",
         "postgresql://control:test@postgres/control",
     )
     monkeypatch.setenv(
-        "DGX_LEGACY_DIRECT_TRANSPORT",
+        "VONK_LEGACY_DIRECT_TRANSPORT",
         "explicit-test-only",
     )
 
@@ -186,7 +186,7 @@ def test_only_exact_test_selector_can_authorize_legacy_transport(monkeypatch) ->
         == "explicit-test-only"
     )
 
-    monkeypatch.setenv("DGX_LEGACY_DIRECT_TRANSPORT", "enabled")
+    monkeypatch.setenv("VONK_LEGACY_DIRECT_TRANSPORT", "enabled")
     with pytest.raises(SettingsError, match="legacy direct transport"):
         Settings.from_env_and_secrets()
 
@@ -194,9 +194,9 @@ def test_only_exact_test_selector_can_authorize_legacy_transport(monkeypatch) ->
 def test_production_rejects_legacy_selector_before_loading_other_secrets(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "production")
+    monkeypatch.setenv("VONK_DEPLOYMENT_MODE", "production")
     monkeypatch.setenv(
-        "DGX_LEGACY_DIRECT_TRANSPORT",
+        "VONK_LEGACY_DIRECT_TRANSPORT",
         "explicit-test-only",
     )
 

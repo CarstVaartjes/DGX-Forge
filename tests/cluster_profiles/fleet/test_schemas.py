@@ -29,9 +29,9 @@ def _fleet_document(count: int) -> dict[str, object]:
         node_id = f"spk_{index:032x}"
         nodes[node_id] = {
             "display_name": f"node-{index}",
-            "hostname": f"spark-{index}",
+            "hostname": f"node-{index}",
             "management": {
-                "host": f"spark-{index}.local",
+                "host": f"node-{index}.local",
                 "user": "operator",
                 "port": 22,
             },
@@ -52,7 +52,7 @@ def test_fleet_schema_accepts_variable_node_counts(
 def test_fleet_schema_rejects_fixed_name_identity(repository_root: Path) -> None:
     document = _fleet_document(1)
     node = document["nodes"].pop("spk_00000000000000000000000000000000")
-    document["nodes"]["spark1"] = node
+    document["nodes"]["node1"] = node
 
     with pytest.raises(jsonschema.ValidationError):
         _validator(repository_root, "fleet.schema.json").validate(document)

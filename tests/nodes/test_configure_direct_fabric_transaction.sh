@@ -58,7 +58,7 @@ case "$1" in
     printf 'configured\n' > "$DIRECT_FABRIC_TEST_STATE"
     ;;
   apply)
-    if [[ -e "$DIRECT_FABRIC_NETPLAN_DIRECTORY/99-dgx-spark-direct-fabric.yaml" ]]; then
+    if [[ -e "$DIRECT_FABRIC_NETPLAN_DIRECTORY/99-vonk-node-direct-fabric.yaml" ]]; then
       printf 'configured\n' > "$DIRECT_FABRIC_TEST_STATE"
     else
       printf 'baseline\n' > "$DIRECT_FABRIC_TEST_STATE"
@@ -77,10 +77,10 @@ run_script() {
     DIRECT_FABRIC_SYS_CLASS_INFINIBAND="$sys_ib" \
     DIRECT_FABRIC_ROLLBACK_DIRECTORY="$rollback_dir" \
     DIRECT_FABRIC_TEST_STATE="$state_file" \
-    "$script" --node spark2 "$@"
+    "$script" --node node2 "$@"
 }
 
-managed_plan="$netplan_dir/99-dgx-spark-direct-fabric.yaml"
+managed_plan="$netplan_dir/99-vonk-node-direct-fabric.yaml"
 if NETPLAN_GENERATE_RC=7 run_script --apply > "$fixture_dir/generate-fail.out" 2>&1; then
   printf 'apply accepted a netplan generate failure\n' >&2
   exit 1
@@ -101,7 +101,7 @@ run_script --apply > "$fixture_dir/apply.out"
 test -f "$managed_plan"
 grep -Fq 'PASS: Netplan accepted without a fabric default route' "$fixture_dir/apply.out"
 run_script --local-postcheck > "$fixture_dir/local.out"
-grep -Fq 'PASS: local fabric validation passed for spark2' "$fixture_dir/local.out"
+grep -Fq 'PASS: local fabric validation passed for node2' "$fixture_dir/local.out"
 
 if NETPLAN_TRY_RC=8 run_script --rollback > "$fixture_dir/rollback-try-fail.out" 2>&1; then
   printf 'rollback accepted a rejected netplan try\n' >&2

@@ -2,11 +2,11 @@ schema_version = 2
 
 [nodes.spk_00000000000000000000000000000001]
 display_name = "alpha"
-hostname = "spark-alpha"
+hostname = "node-alpha"
 lifecycle = "ready"
 
 [nodes.spk_00000000000000000000000000000001.management]
-host = "spark-alpha.local"
+host = "node-alpha.local"
 user = "operator"
 port = 22
 credential_ref = "secret://ssh/lab-admin"
@@ -16,11 +16,11 @@ rack = "lab"
 
 [nodes.spk_00000000000000000000000000000002]
 display_name = "beta"
-hostname = "spark-beta"
+hostname = "node-beta"
 lifecycle = "ready"
 
 [nodes.spk_00000000000000000000000000000002.management]
-host = "spark-beta.local"
+host = "node-beta.local"
 user = "operator"
 port = 2222
 

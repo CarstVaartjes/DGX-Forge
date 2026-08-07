@@ -6,7 +6,7 @@ rule_files:
   - /etc/prometheus/alerts.yaml
 
 scrape_configs:
-  - job_name: dgx-control
+  - job_name: vonk-control
     scheme: http
     metrics_path: /metrics
     bearer_token_file: /run/secrets/metrics-token

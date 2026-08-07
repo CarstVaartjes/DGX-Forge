@@ -30,15 +30,15 @@ The compiled agent continues to own safe operation vocabulary and privileged
 backend policy. Model IDs, family IDs, adapter IDs, adapter releases, images,
 environments, and checkpoints come dynamically from NAS-admin-controlled,
 Git-backed, workload-TUF-authorized release locks. Neither `agent.update` nor a
-new DGX-Forge release is used for an ordinary workload package update.
+new Vonk Forge release is used for an ordinary workload package update.
 
 ---
 
 ### Task 1: Persisted reconciliation operation graph
 
 **Files:**
-- Create: `control/src/dgx_control/orchestration.py`
-- Modify: `control/src/dgx_control/models.py`
+- Create: `control/src/vonk_control/orchestration.py`
+- Modify: `control/src/vonk_control/models.py`
 - Create: `control/migrations/versions/0005_reconciliation_graph.py`
 - Test: `control/tests/test_orchestration.py`
 
@@ -77,15 +77,15 @@ Expected: PASS.
 - [ ] **Step 5: Commit graph**
 
 ```bash
-git add control/src/dgx_control/orchestration.py control/src/dgx_control/models.py control/migrations/versions/0005_reconciliation_graph.py control/tests/test_orchestration.py
+git add control/src/vonk_control/orchestration.py control/src/vonk_control/models.py control/migrations/versions/0005_reconciliation_graph.py control/tests/test_orchestration.py
 git commit -m "feat: persist agent reconciliation graphs"
 ```
 
 ### Task 2: Repository-to-agent plan resolver
 
 **Files:**
-- Create: `control/src/dgx_control/desired_state.py`
-- Modify: `control/src/dgx_control/reconcile.py`
+- Create: `control/src/vonk_control/desired_state.py`
+- Modify: `control/src/vonk_control/reconcile.py`
 - Test: `control/tests/test_desired_state.py`
 - Test: `control/tests/test_reconcile.py`
 
@@ -114,22 +114,22 @@ reconciliation documents only as a test fixture/explicit compatibility format.
 
 - [ ] **Step 4: Run resolver, placement, and repository tests**
 
-Run: `uv run --project control pytest control/tests/test_desired_state.py control/tests/test_reconcile.py control/tests/test_repository.py -v && uv run pytest tests/spark_profiles/test_placement.py -v`
+Run: `uv run --project control pytest control/tests/test_desired_state.py control/tests/test_reconcile.py control/tests/test_repository.py -v && uv run pytest tests/cluster_profiles/test_placement.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit resolver**
 
 ```bash
-git add control/src/dgx_control/desired_state.py control/src/dgx_control/reconcile.py control/tests/test_desired_state.py control/tests/test_reconcile.py
+git add control/src/vonk_control/desired_state.py control/src/vonk_control/reconcile.py control/tests/test_desired_state.py control/tests/test_reconcile.py
 git commit -m "feat: derive agent plans from repository state"
 ```
 
 ### Task 3: Fail-closed route and operation orchestration
 
 **Files:**
-- Modify: `control/src/dgx_control/orchestration.py`
-- Modify: `control/src/dgx_control/routes.py`
-- Modify: `control/src/dgx_control/litellm.py`
+- Modify: `control/src/vonk_control/orchestration.py`
+- Modify: `control/src/vonk_control/routes.py`
+- Modify: `control/src/vonk_control/litellm.py`
 - Test: `control/tests/test_agent_reconciliation.py`
 
 **Interfaces:**
@@ -146,7 +146,7 @@ restart does not duplicate completed mutation.
 - [ ] **Step 2: Run and observe missing agent-driven lifecycle**
 
 Run: `uv run --project control pytest control/tests/test_agent_reconciliation.py -v`
-Expected: FAIL because current runtime handler shells to `sparkctl`.
+Expected: FAIL because current runtime handler shells to `vonkctl`.
 
 - [ ] **Step 3: Implement persisted advancement and compensation**
 
@@ -165,23 +165,23 @@ Expected: PASS.
 - [ ] **Step 5: Commit orchestration**
 
 ```bash
-git add control/src/dgx_control/orchestration.py control/src/dgx_control/routes.py control/src/dgx_control/litellm.py control/tests/test_agent_reconciliation.py
+git add control/src/vonk_control/orchestration.py control/src/vonk_control/routes.py control/src/vonk_control/litellm.py control/tests/test_agent_reconciliation.py
 git commit -m "feat: reconcile cluster through outbound agents"
 ```
 
 ### Task 4: Remove SSH from production worker wiring
 
 **Files:**
-- Modify: `control/src/dgx_control/worker.py`
-- Delete: routine subprocess behavior from `control/src/dgx_control/runtime.py`
-- Create: `control/src/dgx_control/legacy_runtime.py`
-- Modify: `control/src/dgx_control/settings.py`
+- Modify: `control/src/vonk_control/worker.py`
+- Delete: routine subprocess behavior from `control/src/vonk_control/runtime.py`
+- Create: `control/src/vonk_control/legacy_runtime.py`
+- Modify: `control/src/vonk_control/settings.py`
 - Test: `control/tests/test_production_worker.py`
 - Test: `control/tests/security/test_no_routine_ssh.py`
 
 **Interfaces:**
 - Production worker registry contains orchestration/maintenance tasks only and emits agent operations.
-- Legacy runtime requires `DGX_LEGACY_DIRECT_TRANSPORT=explicit-test-only` and is rejected in production mode.
+- Legacy runtime requires `VONK_LEGACY_DIRECT_TRANSPORT=explicit-test-only` and is rejected in production mode.
 
 - [x] **Step 1: Write failing production-boundary tests**
 
@@ -210,15 +210,15 @@ Expected: PASS.
 - [x] **Step 5: Commit transport cutover**
 
 ```bash
-git add control/src/dgx_control/worker.py control/src/dgx_control/runtime.py control/src/dgx_control/legacy_runtime.py control/src/dgx_control/settings.py control/tests/test_production_worker.py control/tests/security/test_no_routine_ssh.py
+git add control/src/vonk_control/worker.py control/src/vonk_control/runtime.py control/src/vonk_control/legacy_runtime.py control/src/vonk_control/settings.py control/tests/test_production_worker.py control/tests/security/test_no_routine_ssh.py
 git commit -m "refactor: remove routine SSH from control worker"
 ```
 
 ### Task 5: Metrics and operational visibility
 
 **Files:**
-- Modify: `control/src/dgx_control/metrics.py`
-- Modify: `control/src/dgx_control/dashboard.py`
+- Modify: `control/src/vonk_control/metrics.py`
+- Modify: `control/src/vonk_control/dashboard.py`
 - Modify: `deploy/compose/prometheus/alerts.yaml`
 - Modify: `deploy/compose/grafana/dashboards/fleet.json`
 - Test: `control/tests/test_agent_metrics.py`
@@ -256,8 +256,8 @@ Expected: all pass.
 - [ ] **Step 5: Commit visibility**
 
 ```bash
-git add control/src/dgx_control/metrics.py control/src/dgx_control/dashboard.py deploy/compose/prometheus/alerts.yaml deploy/compose/grafana/dashboards/fleet.json control/tests/test_agent_metrics.py deploy/compose/tests/test_observability.py
-git commit -m "feat: observe outbound Spark agents"
+git add control/src/vonk_control/metrics.py control/src/vonk_control/dashboard.py deploy/compose/prometheus/alerts.yaml deploy/compose/grafana/dashboards/fleet.json control/tests/test_agent_metrics.py deploy/compose/tests/test_observability.py
+git commit -m "feat: observe outbound GPU node agents"
 ```
 
 ---
@@ -282,8 +282,8 @@ cluster egress in this task.
 
 ### Repair 1: Canonical plan bytes and authoritative replay linkage
 
-**Files:** `control/src/dgx_control/route_runtime.py`,
-`control/src/dgx_control/desired_state.py`, and their focused tests.
+**Files:** `control/src/vonk_control/route_runtime.py`,
+`control/src/vonk_control/desired_state.py`, and their focused tests.
 
 - [ ] Add a planner-to-`AtomicRouteBundlePublisher` regression whose quota digest
   comes only from `DesiredStateResolver`; run it and record the exact digest RED.
@@ -295,8 +295,8 @@ cluster egress in this task.
 
 ### Repair 2: Transactional queue authority, quiescence, expiry, and fairness
 
-**Files:** `control/src/dgx_control/agent_jobs.py`,
-`control/src/dgx_control/agent_reconciliation.py`, `control/src/dgx_control/worker.py`,
+**Files:** `control/src/vonk_control/agent_jobs.py`,
+`control/src/vonk_control/agent_reconciliation.py`, `control/src/vonk_control/worker.py`,
 and queue/reconciliation PostgreSQL tests.
 
 - [ ] Add deterministic PostgreSQL multi-operation RED cases for agent-declared

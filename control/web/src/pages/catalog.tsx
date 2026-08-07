@@ -53,7 +53,7 @@ export function CatalogPage({api}: {api: CatalogListApi}) {
   const installed = maximumInstalled(preview?.document ?? {});
   const memory = maximumMemory(preview?.document ?? {});
   return <>
-    <div className="page-heading"><div><h2>Recipe catalog</h2><p>Local PostgreSQL is authoritative. Recipes remain available when vonkforge.ai or Git is unavailable.</p></div><div className="actions"><a className="button" href="/catalog/import/sparkrun">Import SparkRun</a><a className="button" href="/catalog/new">Create local recipe</a></div></div>
+    <div className="page-heading"><div><h2>Recipe catalog</h2><p>Local PostgreSQL is authoritative. Recipes remain available when vonkforge.ai or Git is unavailable.</p></div><div className="actions"><a className="button" href="/catalog/import/workload_run">Import WorkloadRun</a><a className="button" href="/catalog/new">Create local recipe</a></div></div>
     {error && <p role="alert">{error}</p>}{!error && recipes.length === 0 && <p role="status">No recipes yet.</p>}
     {message && <p role="status">{message}</p>}
     {api.previewGlobalRecipe && <section className="confirmation" aria-labelledby="global-import-heading"><h3 id="global-import-heading">Import from vonkforge.ai</h3><p>Paste the immutable URI from a public recipe. Review its exact build source, weights, sizing, and deployment profiles before creating a durable local copy.</p><label>Immutable vonkforge.ai URI<input value={uri} onChange={event => setUri(event.target.value)} placeholder={`vonk://catalog/vonk/model@sha256:${"0".repeat(64)}`}/></label><button type="button" onClick={() => void review()}>Review global recipe</button></section>}

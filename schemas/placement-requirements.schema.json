@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://dgx-forge.local/schemas/placement-requirements.schema.json",
-  "title": "DGX-Forge placement requirement v1",
+  "$id": "https://vonk-forge.local/schemas/placement-requirements.schema.json",
+  "title": "Vonk Forge placement requirement v1",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "name", "definition_hash", "node_count", "required_labels", "min_memory_bytes", "min_disk_bytes", "exclusive", "distributed", "model_supports_distributed", "preferred_node_ids"],

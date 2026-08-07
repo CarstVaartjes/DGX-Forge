@@ -39,7 +39,7 @@ SHA_E = "e" * 64
 def _artifact(name: str, digest: str) -> dict[str, object]:
     return {
         "name": name,
-        "reference": f"ghcr.io/example/dgx-forge/{name}@sha256:{digest}",
+        "reference": f"ghcr.io/example/vonk-forge/{name}@sha256:{digest}",
         "sha256": digest,
         "size": 1024,
         "sbom_sha256": SHA_D,
@@ -59,14 +59,14 @@ def _manifest() -> dict[str, object]:
         "host_updater_abi": {"minimum": 2, "maximum": 3},
         "deployment_bundle": {
             "reference": (
-                f"ghcr.io/example/dgx-forge/control-deployment@sha256:{SHA_A}"
+                f"ghcr.io/example/vonk-forge/control-deployment@sha256:{SHA_A}"
             ),
             "manifest_digest": f"sha256:{SHA_A}",
             "manifest_size": 4096,
             "manifest_media_type": "application/vnd.oci.image.manifest.v1+json",
             "layer_digest": f"sha256:{SHA_B}",
             "layer_size": 1048576,
-            "layer_media_type": "application/vnd.dgx-forge.control-deployment.v1.tar",
+            "layer_media_type": "application/vnd.vonk-forge.control-deployment.v1.tar",
         },
         "control": {
             "config_version": 3,
@@ -87,7 +87,7 @@ def _manifest() -> dict[str, object]:
                 "architecture": "linux-arm64",
                 "protocol": {"minimum": 1, "maximum": 2},
                 "artifact": _artifact("agent-linux-arm64", SHA_A),
-                "payload": _payload("dgx-agent", SHA_B),
+                "payload": _payload("vonk-agent", SHA_B),
             }
         ],
         "supervisors": [
@@ -101,7 +101,7 @@ def _manifest() -> dict[str, object]:
             {
                 "architecture": "linux-arm64",
                 "artifact": _artifact("tooling-linux-arm64", SHA_C),
-                "payload": _payload("dgx-forge-tooling", SHA_D, 16384),
+                "payload": _payload("vonk-forge-tooling", SHA_D, 16384),
             }
         ],
         "rollback": {
@@ -145,13 +145,13 @@ def test_platform_release_loads_exact_oci_bundle_and_predecessor_contract() -> N
     )
 
     assert release.deployment_bundle == platform_release_module.OciDeploymentBundle(
-        reference=f"ghcr.io/example/dgx-forge/control-deployment@sha256:{SHA_A}",
+        reference=f"ghcr.io/example/vonk-forge/control-deployment@sha256:{SHA_A}",
         manifest_digest=f"sha256:{SHA_A}",
         manifest_size=4096,
         manifest_media_type="application/vnd.oci.image.manifest.v1+json",
         layer_digest=f"sha256:{SHA_B}",
         layer_size=1048576,
-        layer_media_type="application/vnd.dgx-forge.control-deployment.v1.tar",
+        layer_media_type="application/vnd.vonk-forge.control-deployment.v1.tar",
     )
     assert release.predecessors == (
         platform_release_module.AuthorizedPredecessor(
@@ -211,7 +211,7 @@ def test_architecture_artifact_keeps_oci_and_installed_payload_metadata_distinct
     assert agent.artifact.name == "agent-linux-arm64"
     assert agent.artifact.sha256 == SHA_A
     assert agent.artifact.size == 1024
-    assert agent.payload_name == "dgx-agent"
+    assert agent.payload_name == "vonk-agent"
     assert agent.payload_sha256 == SHA_B
     assert agent.payload_size == 4096
 
@@ -288,7 +288,7 @@ def test_platform_release_digest_binds_installed_payload_metadata(
         ),
         lambda d: d["deployment_bundle"].update(manifest_size=0),  # type: ignore[index,union-attr]
         lambda d: d["control"]["images"]["api"].update(  # type: ignore[index,union-attr]
-            reference="ghcr.io/example/dgx-forge/api:latest"
+            reference="ghcr.io/example/vonk-forge/api:latest"
         ),
         lambda d: d["control"]["images"]["api"].update(  # type: ignore[index,union-attr]
             sbom_sha256=None
@@ -302,7 +302,7 @@ def test_platform_release_digest_binds_installed_payload_metadata(
         lambda d: d["agents"][0]["payload"].pop("sha256"),  # type: ignore[index,union-attr]
         lambda d: d["agents"][0]["payload"].pop("size"),  # type: ignore[index,union-attr]
         lambda d: d["agents"][0]["payload"].update(extra=True),  # type: ignore[index,union-attr]
-        lambda d: d["agents"][0]["payload"].update(name="DGX Agent"),  # type: ignore[index,union-attr]
+        lambda d: d["agents"][0]["payload"].update(name="Vonk Forge Agent"),  # type: ignore[index,union-attr]
         lambda d: d["agents"][0]["payload"].update(sha256=f"sha256:{SHA_B}"),  # type: ignore[index,union-attr]
         lambda d: d["agents"][0]["payload"].update(size=63),  # type: ignore[index,union-attr]
         lambda d: d["agents"][0]["payload"].update(size=268435457),  # type: ignore[index,union-attr]

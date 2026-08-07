@@ -29,7 +29,7 @@ function api() {
       upstream_version: "1.2.3",
       updated_at: "2026-08-05T12:00:00Z",
       lock: {digest, components: ["runtime", "weights"], dependencies: ["cuda-12"], provenance: "verified"},
-      compatibility: {compatible: ["Alpha Spark"], incompatible_count: 1},
+      compatibility: {compatible: ["Alpha GPU node"], incompatible_count: 1},
       validations: [{backend: "artifact", state: "passed", reason_code: null}],
       audit: [{action: "package.candidate.discovered", request_id: "request-1"}],
     }),
@@ -80,7 +80,7 @@ it("starts validation through an exact plan and keeps the run inspectable", asyn
     ...api(),
     previewPackageValidation: async () => ({digest: `sha256:${"v".repeat(64)}`, candidate_id: "candidate-1", validation_id: "validation-1"}),
     validatePackage: async (_id: string, supplied: string) => { calls.push(supplied); return {id: "validation-1", state: "running", progress: {completed: 0, failed: 0, running: 2, total: 2}}; },
-    packageValidation: async () => ({id: "validation-1", state: "passed", job_id: "job-validation-1", progress: {completed: 2, failed: 0, running: 0, total: 2}, nodes: [{node_id: "spark-a", state: "succeeded", batch_index: 0, completed: 2, total: 2}]}),
+    packageValidation: async () => ({id: "validation-1", state: "passed", job_id: "job-validation-1", progress: {completed: 2, failed: 0, running: 0, total: 2}, nodes: [{node_id: "node-a", state: "succeeded", batch_index: 0, completed: 2, total: 2}]}),
   };
   render(<PackageCandidatePage api={control} candidateId="candidate-1"/>);
   const user = userEvent.setup();
@@ -94,7 +94,7 @@ it("starts validation through an exact plan and keeps the run inspectable", asyn
   expect(within(validationSection!).getByRole("status")).toHaveTextContent("Validation state: running");
   await user.click(within(validationSection!).getByRole("button", {name: "Refresh validation"}));
   expect(within(validationSection!).getByRole("status")).toHaveTextContent("Validation state: passed");
-  expect(within(validationSection!).getByText("spark-a — succeeded (2/2)")).toBeVisible();
+  expect(within(validationSection!).getByText("node-a — succeeded (2/2)")).toBeVisible();
 });
 
 it("separates downloads from active generations and requires an exact removal preview", async () => {
@@ -104,15 +104,15 @@ it("separates downloads from active generations and requires an exact removal pr
   const control = {
     ...api(),
     packageInventory: async () => ({nodes: [{
-      node_id: "spark-a",
-      display_name: "Alpha Spark",
+      node_id: "node-a",
+      display_name: "Alpha GPU node",
       online: true,
       storage: {total_bytes: 1000, used_bytes: 650, free_bytes: 350, reserved_bytes: 50, reclaimable_bytes: 200},
       resources: {host_memory_total_bytes: 1000, host_memory_free_bytes: 500, gpu_memory_total_bytes: 1000, gpu_memory_free_bytes: 700, gpu_count: 1},
       packages: [
-        {deployment_id: "chat", family_id: "llm-runtime", release_digest: removalDigest, content_group: "weights", state: "available", bytes_total: 1000, bytes_complete: 1000, bytes_remaining: 0, installed_bytes: 400, reclaimable_bytes: 400, reserved_bytes: 0, active: false, retained: false, leased: false, resources: {download_bytes: 1000, installed_bytes: 400, transient_bytes: 100, output_bytes: 0, host_memory_bytes: 100, resident_memory_bytes: 100, auxiliary_memory_bytes: 0, activation_memory_bytes: 0, workspace_memory_bytes: 0, gpu_memory_bytes: 200, gpu_count: 1, cpu_millicores: 1, kv_cache_base_bytes: 10, kv_cache_per_token_bytes: 1, required_sparks: 1, topology: "single", world_size: 1, ranks: [{rank: 0, role: "primary"}], fabric: {kind: "none", min_bandwidth_mbps: 0}}},
-        {deployment_id: "chat", family_id: "llm-runtime", release_digest: removalDigest, content_group: "runtime", state: "downloading", bytes_total: 2000, bytes_complete: 1000, bytes_remaining: 1000, installed_bytes: 0, reclaimable_bytes: 0, reserved_bytes: 2000, active: false, retained: false, leased: false, resources: {download_bytes: 2000, installed_bytes: 0, transient_bytes: 300, output_bytes: 0, host_memory_bytes: 512, resident_memory_bytes: 512, auxiliary_memory_bytes: 0, activation_memory_bytes: 0, workspace_memory_bytes: 0, gpu_memory_bytes: 768, gpu_count: 1, cpu_millicores: 1, kv_cache_base_bytes: 128, kv_cache_per_token_bytes: 2, required_sparks: 2, topology: "gang", world_size: 2, ranks: [{rank: 0, role: "primary"}, {rank: 1, role: "secondary"}], fabric: {kind: "rdma", min_bandwidth_mbps: 1}}},
-        {deployment_id: "chat", family_id: "llm-runtime", release_digest: removalDigest, content_group: "active", state: "active", bytes_total: 100, bytes_complete: 100, bytes_remaining: 0, installed_bytes: 100, reclaimable_bytes: 0, reserved_bytes: 0, active: true, retained: false, leased: true, resources: {download_bytes: 100, installed_bytes: 100, transient_bytes: 0, output_bytes: 0, host_memory_bytes: 100, resident_memory_bytes: 100, auxiliary_memory_bytes: 0, activation_memory_bytes: 0, workspace_memory_bytes: 0, gpu_memory_bytes: 300, gpu_count: 1, cpu_millicores: 1, kv_cache_base_bytes: 10, kv_cache_per_token_bytes: 1, required_sparks: 1, topology: "single", world_size: 1, ranks: [{rank: 0, role: "primary"}], fabric: {kind: "none", min_bandwidth_mbps: 0}}},
+        {deployment_id: "chat", family_id: "llm-runtime", release_digest: removalDigest, content_group: "weights", state: "available", bytes_total: 1000, bytes_complete: 1000, bytes_remaining: 0, installed_bytes: 400, reclaimable_bytes: 400, reserved_bytes: 0, active: false, retained: false, leased: false, resources: {download_bytes: 1000, installed_bytes: 400, transient_bytes: 100, output_bytes: 0, host_memory_bytes: 100, resident_memory_bytes: 100, auxiliary_memory_bytes: 0, activation_memory_bytes: 0, workspace_memory_bytes: 0, gpu_memory_bytes: 200, gpu_count: 1, cpu_millicores: 1, kv_cache_base_bytes: 10, kv_cache_per_token_bytes: 1, required_nodes: 1, topology: "single", world_size: 1, ranks: [{rank: 0, role: "primary"}], fabric: {kind: "none", min_bandwidth_mbps: 0}}},
+        {deployment_id: "chat", family_id: "llm-runtime", release_digest: removalDigest, content_group: "runtime", state: "downloading", bytes_total: 2000, bytes_complete: 1000, bytes_remaining: 1000, installed_bytes: 0, reclaimable_bytes: 0, reserved_bytes: 2000, active: false, retained: false, leased: false, resources: {download_bytes: 2000, installed_bytes: 0, transient_bytes: 300, output_bytes: 0, host_memory_bytes: 512, resident_memory_bytes: 512, auxiliary_memory_bytes: 0, activation_memory_bytes: 0, workspace_memory_bytes: 0, gpu_memory_bytes: 768, gpu_count: 1, cpu_millicores: 1, kv_cache_base_bytes: 128, kv_cache_per_token_bytes: 2, required_nodes: 2, topology: "gang", world_size: 2, ranks: [{rank: 0, role: "primary"}, {rank: 1, role: "secondary"}], fabric: {kind: "rdma", min_bandwidth_mbps: 1}}},
+        {deployment_id: "chat", family_id: "llm-runtime", release_digest: removalDigest, content_group: "active", state: "active", bytes_total: 100, bytes_complete: 100, bytes_remaining: 0, installed_bytes: 100, reclaimable_bytes: 0, reserved_bytes: 0, active: true, retained: false, leased: true, resources: {download_bytes: 100, installed_bytes: 100, transient_bytes: 0, output_bytes: 0, host_memory_bytes: 100, resident_memory_bytes: 100, auxiliary_memory_bytes: 0, activation_memory_bytes: 0, workspace_memory_bytes: 0, gpu_memory_bytes: 300, gpu_count: 1, cpu_millicores: 1, kv_cache_base_bytes: 10, kv_cache_per_token_bytes: 1, required_nodes: 1, topology: "single", world_size: 1, ranks: [{rank: 0, role: "primary"}], fabric: {kind: "none", min_bandwidth_mbps: 0}}},
       ],
     }], total: 1}),
     previewPackageRemoval: async (input: {deployment_id: string; release_digest: string; node_ids: string[]}) => { calls.push(JSON.stringify(input)); return {digest: removalDigest}; },
@@ -135,14 +135,14 @@ it("separates downloads from active generations and requires an exact removal pr
   expect(downloading).toHaveTextContent("50%");
   expect(downloading).toHaveTextContent("1000 B remaining");
   expect(screen.getByText(/Downloaded packages are local and resumable/)).toBeVisible();
-  expect(screen.getByLabelText("Alpha Spark disk usage")).toBeVisible();
+  expect(screen.getByLabelText("Alpha GPU node disk usage")).toBeVisible();
   await user.click(screen.getByRole("button", {name: "Preview removal"}));
   expect(await screen.findByLabelText("Type the exact removal preview digest")).toBeVisible();
   const input = screen.getByLabelText("Type the exact removal preview digest");
   expect(screen.getByRole("button", {name: "Remove exact generation"})).toBeDisabled();
   await user.type(input, removalDigest);
   await user.click(screen.getByRole("button", {name: "Remove exact generation"}));
-  expect(calls).toEqual([JSON.stringify({deployment_id: "chat", release_digest: removalDigest, node_ids: ["spark-a"]}), removalDigest]);
+  expect(calls).toEqual([JSON.stringify({deployment_id: "chat", release_digest: removalDigest, node_ids: ["node-a"]}), removalDigest]);
   await user.click(screen.getByRole("button", {name: "Preview cleanup"}));
   expect(await screen.findByLabelText("Type the exact cleanup preview digest")).toBeVisible();
   const cleanupInput = screen.getByLabelText("Type the exact cleanup preview digest");

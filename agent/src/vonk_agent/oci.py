@@ -294,7 +294,7 @@ def _snapshot_policy_file(
         if before.st_size > 1024 * 1024:
             raise OCIError("release policy file is too large")
         snapshot = os.memfd_create(
-            "dgx-oras-policy", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
+            "vonk-oras-policy", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
         )
         remaining = before.st_size
         while remaining:

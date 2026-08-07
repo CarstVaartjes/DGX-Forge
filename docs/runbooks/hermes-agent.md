@@ -28,13 +28,13 @@ release runtime UID/GID `1100:1100`:
 
 ```bash
 sudo install -d -m 0700 -o 1100 -g 1100 \
-  /srv/dgx-forge/hermes/data \
-  /srv/dgx-forge/hermes/workspaces \
-  /srv/dgx-forge/hermes/cache
-sudo install -d -m 0700 -o root -g root /srv/dgx-forge/secrets
-sudo sh -c 'umask 077; openssl rand -base64 32 | tr "+/" "-_" | tr -d "=\n" > /srv/dgx-forge/secrets/hermes-api-key; printf "\n" >> /srv/dgx-forge/secrets/hermes-api-key'
-sudo chown root:root /srv/dgx-forge/secrets/hermes-api-key
-sudo chmod 0400 /srv/dgx-forge/secrets/hermes-api-key
+  /srv/vonk-forge/hermes/data \
+  /srv/vonk-forge/hermes/workspaces \
+  /srv/vonk-forge/hermes/cache
+sudo install -d -m 0700 -o root -g root /srv/vonk-forge/secrets
+sudo sh -c 'umask 077; openssl rand -base64 32 | tr "+/" "-_" | tr -d "=\n" > /srv/vonk-forge/secrets/hermes-api-key; printf "\n" >> /srv/vonk-forge/secrets/hermes-api-key'
+sudo chown root:root /srv/vonk-forge/secrets/hermes-api-key
+sudo chmod 0400 /srv/vonk-forge/secrets/hermes-api-key
 ```
 
 Set these non-secret paths and values in the host-local `.env`:
@@ -42,8 +42,8 @@ Set these non-secret paths and values in the host-local `.env`:
 ```dotenv
 HERMES_UID=1100
 HERMES_GID=1100
-HERMES_DATA_ROOT=/srv/dgx-forge/hermes
-HERMES_API_KEY_FILE=/srv/dgx-forge/secrets/hermes-api-key
+HERMES_DATA_ROOT=/srv/vonk-forge/hermes
+HERMES_API_KEY_FILE=/srv/vonk-forge/secrets/hermes-api-key
 HERMES_DASHBOARD_ORIGIN=https://EXACT-SVC-HERMES-DASHBOARD-URL
 ```
 
@@ -67,20 +67,20 @@ the networks, resolve the immutable active generation, review the plan, apply
 it once, and verify it:
 
 ```bash
-active=$(sudo cat /srv/dgx-forge/control-host/active-generation)
-hardener="/srv/dgx-forge/control-host/generations/$active/bin/harden-hermes-egress"
-export COMPOSE_PROJECT_NAME=dgx-forge-control
-export DGX_MANAGEMENT_CIDRS=10.0.0.0/24
-export DGX_DIRECT_FABRIC_CIDRS=192.168.100.0/24,192.168.101.0/24
-sudo --preserve-env=COMPOSE_PROJECT_NAME,DGX_MANAGEMENT_CIDRS,DGX_DIRECT_FABRIC_CIDRS \
+active=$(sudo cat /srv/vonk-forge/control-host/active-generation)
+hardener="/srv/vonk-forge/control-host/generations/$active/bin/harden-hermes-egress"
+export COMPOSE_PROJECT_NAME=vonk-forge-control
+export VONK_MANAGEMENT_CIDRS=10.0.0.0/24
+export VONK_DIRECT_FABRIC_CIDRS=192.168.100.0/24,192.168.101.0/24
+sudo --preserve-env=COMPOSE_PROJECT_NAME,VONK_MANAGEMENT_CIDRS,VONK_DIRECT_FABRIC_CIDRS \
   "$hardener" --check
-sudo --preserve-env=COMPOSE_PROJECT_NAME,DGX_MANAGEMENT_CIDRS,DGX_DIRECT_FABRIC_CIDRS \
+sudo --preserve-env=COMPOSE_PROJECT_NAME,VONK_MANAGEMENT_CIDRS,VONK_DIRECT_FABRIC_CIDRS \
   "$hardener" --apply
-sudo --preserve-env=COMPOSE_PROJECT_NAME,DGX_MANAGEMENT_CIDRS,DGX_DIRECT_FABRIC_CIDRS \
+sudo --preserve-env=COMPOSE_PROJECT_NAME,VONK_MANAGEMENT_CIDRS,VONK_DIRECT_FABRIC_CIDRS \
   "$hardener" --verify
 ```
 
-The owned chain denies direct access from Hermes to Spark management,
+The owned chain denies direct access from Hermes to GPU node management,
 direct-fabric, link-local metadata, and sibling project networks. Docker DNS
 and ordinary Internet tools remain available. The default action is the
 non-mutating `--check`.
@@ -92,8 +92,8 @@ master key. With LiteLLM healthy, review the selected-generation setup plan,
 then apply that exact allowlisted operation through the installed updater:
 
 ```bash
-sudo dgx-control-offline maintenance hermes-setup
-sudo dgx-control-offline maintenance hermes-setup \
+sudo vonk-control-offline maintenance hermes-setup
+sudo vonk-control-offline maintenance hermes-setup \
   --generation REPLACE_GENERATION_FROM_PLAN --apply
 ```
 
@@ -123,10 +123,10 @@ disposable.
 ## Start and verify
 
 ```bash
-sudo dgx-control-offline doctor
-sudo dgx-control-offline maintenance status
-sudo dgx-control-offline maintenance logs --service hermes-agent --since-minutes 30
-sudo dgx-control-offline maintenance logs --service tailscale-configurator --since-minutes 30
+sudo vonk-control-offline doctor
+sudo vonk-control-offline maintenance status
+sudo vonk-control-offline maintenance logs --service hermes-agent --since-minutes 30
+sudo vonk-control-offline maintenance logs --service tailscale-configurator --since-minutes 30
 ```
 
 Confirm Hermes and LiteLLM are healthy. Serve status must show HTTPS 443 for
@@ -147,7 +147,7 @@ bash deploy/compose/tests/hermes-agent-runtime.sh
 It checks the read-only root, exact five-capability supervisor allowlist,
 bounded mounts, gateway/dashboard health, persistence, and absence of the
 Docker socket and private control networks. Physical tailnet authorization,
-NAS firewall enforcement, and live Spark inference remain deployment
+NAS firewall enforcement, and live GPU node inference remain deployment
 acceptance checks.
 
 ## Backup and recovery
@@ -161,7 +161,7 @@ Journaled control-host recovery verifies the exact backup receipt before its
 fixed boundary restores the selected Hermes trees with their configured
 UID/GID and owner-only permissions. There is no repository restore script or
 operator-supplied decryption command. Restore and verify the API-key file
-separately, then let the updater start the selected generation. Fresh Spark
+separately, then let the updater start the selected generation. Fresh GPU node
 presence and a new LiteLLM lease are required; restored routes do not become
 live merely because they existed in a backup.
 

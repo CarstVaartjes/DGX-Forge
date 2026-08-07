@@ -17,7 +17,7 @@
   },
   "recorded_at": "2026-08-03T15:56:30Z",
   "nodes": [
-    {"node": "spark2", "boot_id": "abeace49-049a-4c8c-b079-b4ce66793b67"}
+    {"node": "node2", "boot_id": "abeace49-049a-4c8c-b079-b4ce66793b67"}
   ],
   "predecessor": "inventory/reports/model-definitions/qwen3-vl-8b-single-prepared.json",
   "gates": {

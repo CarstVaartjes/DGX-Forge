@@ -23,7 +23,7 @@ _DIGEST = re.compile(r"(?:sha256:)?([0-9a-f]{64})\Z")
 _NAME = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
 _MAX_ENTRIES = 100_000
 _MAX_UNPACKED_BYTES = 16 * 1024**4
-_RECEIPT = ".dgx-generation.json"
+_RECEIPT = ".vonk-generation.json"
 
 
 class MaterializationError(RuntimeError):
@@ -351,7 +351,7 @@ def _verify_oci_bundle_archive(
     This intentionally treats the OCI config as descriptive metadata only. The
     helper creates the execution config from the signed deployment policy, so
     image-provided command, environment, identity, mounts, and capabilities
-    cannot widen the DGX-Forge sandbox.
+    cannot widen the Vonk Forge sandbox.
     """
 
     expected_names = {"oci-manifest.json", "config.json", metadata.rootfs}

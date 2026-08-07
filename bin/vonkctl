@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Repository-local launcher for the developer Spark profile controller."""
+"""Repository-local launcher for the developer workload profile controller."""
 
 from pathlib import Path
 import sys

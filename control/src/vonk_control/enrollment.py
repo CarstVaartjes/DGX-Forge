@@ -1,4 +1,4 @@
-"""Durable, administrator-approved enrollment for immutable Spark agent identities."""
+"""Durable, administrator-approved enrollment for immutable GPU node agent identities."""
 
 from __future__ import annotations
 
@@ -1042,7 +1042,7 @@ def _load_csr(node_id: str, csr: bytes) -> tuple[bytes, bytes, str]:
     except x509.ExtensionNotFound as error:
         raise EnrollmentDenied("CSR node URI SAN is required") from error
     expected_sans = x509.SubjectAlternativeName([
-        x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{node_id}")
+        x509.UniformResourceIdentifier(f"spiffe://vonk-forge.local/node/{node_id}")
     ])
     if sans != expected_sans:
         raise EnrollmentDenied("CSR node URI SAN does not match enrollment node")

@@ -8,5 +8,5 @@
   "concurrency_3": {"decode_tok_s": [9.6, 13.4, 11.0], "prefill_tok_s": [1125.1, 260.2, 419.2]},
   "acceptance_floor": {"single_decode_tok_s": 35},
   "passed": false,
-  "reason": "The pinned DS4 Q2-imatrix single-Spark lane is below the final single-decode throughput floor; it remains verified and unaccepted."
+  "reason": "The pinned DS4 Q2-imatrix single-GPU node lane is below the final single-decode throughput floor; it remains verified and unaccepted."
 }

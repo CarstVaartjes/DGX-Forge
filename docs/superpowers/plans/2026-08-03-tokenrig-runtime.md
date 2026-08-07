@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build and qualify an isolated Spark2 TokenRig/SkinTokens runtime with its own immutable release, Python environment, checkpoints, loopback API, and rigging-quality evidence.
+**Goal:** Build and qualify an isolated GPU node 2 TokenRig/SkinTokens runtime with its own immutable release, Python environment, checkpoints, loopback API, and rigging-quality evidence.
 
 **Architecture:** A digest-qualified Bash adapter owns preparation, verification, start, health, inference, stop, and release checks. It downloads the pinned SkinTokens source and both official checkpoints into model-specific paths, while a small loopback HTTP server loads the official `demo.py` pipeline once and validates confined mesh/GLB requests. Maturity advances only after live artifact, API, skeleton/skin-weight, lifecycle, and resource evidence.
 
@@ -13,7 +13,7 @@
 - Keep source, weights, scratch/venv, inputs, outputs, logs, PID, and endpoint namespaces unique to `tokenrig-single`.
 - Preserve source commit `273b691d35989d71cd17ff2895fdc735097b92d1` and checkpoint revision `79736cad0fd84de384d5eede659b4ebd24effe33` until a new fingerprint is intentionally recorded.
 - Use Python >=3.11 and CUDA >=12.1 as required by the official runtime.
-- Do not start TokenRig while the accepted Mia dual runtime is active; restore Mia worker first/head second after each Spark2 qualification window.
+- Do not start TokenRig while the accepted Mia dual runtime is active; restore Mia worker first/head second after each GPU node 2 qualification window.
 - Keep `tokenrig-single` planned until prepared and verified evidence reports validate through `Catalog.load`.
 
 ---
@@ -56,7 +56,7 @@
 - [ ] **Step 5: Hash all release files**, write the immutable manifest, update the workload runtime release and definition fingerprint, and run focused tests plus catalog load.
 - [ ] **Step 6: Commit** the runtime release and lock updates as `feat: add isolated TokenRig runtime`.
 
-### Task 3: Deploy and qualify on Spark2
+### Task 3: Deploy and qualify on GPU node 2
 
 **Files:**
 - Create: `inventory/reports/model-definitions/tokenrig-single-prepared.json`
@@ -67,10 +67,10 @@
 - Modify: `docs/superpowers/plans/2026-08-03-phase4-model-definition-rollout.md`
 
 **Interfaces:**
-- Spark2 release path: `/opt/spark/model-adapters/tokenrig-single/releases/<manifest-sha256>/`.
+- GPU node 2 release path: `/opt/node/model-adapters/tokenrig-single/releases/<manifest-sha256>/`.
 - Model-owned roots: `/srv/models/snapshots/tokenrig-single`, `/srv/models/runtime-cache/tokenrig-single`, `/srv/models/inputs/tokenrig-single`, `/srv/models/outputs/tokenrig-single`.
 
-- [ ] **Step 1: Stop Mia worker/head in the required order**, deploy the digest-qualified release, and record Spark2 boot ID.
+- [ ] **Step 1: Stop Mia worker/head in the required order**, deploy the digest-qualified release, and record GPU node 2 boot ID.
 - [ ] **Step 2: Run `prepare` and `verify`**, recording source/checkpoint files, dependency versions, disk use, and venv identity.
 - [ ] **Step 3: Run API health and one official example mesh**, then validate output GLB has a skeleton hierarchy and per-vertex weights normalized to approximately 1.0.
 - [ ] **Step 4: Run** three start/health/stop/verify-release cycles and a no-autostart reboot gate when authorization permits.

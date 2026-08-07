@@ -4,11 +4,11 @@
 
 **Status:** Approved for specification review
 
-**Scope:** First DGX-Forge platform release only
+**Scope:** First Vonk Forge platform release only
 
 ## Purpose
 
-GitHub Actions was in a major outage while DGX-Forge was preparing its first
+GitHub Actions was in a major outage while Vonk Forge was preparing its first
 real release. Builds remained queued for hours even though Git operations,
 Packages, and the GitHub API remained usable. This design keeps deterministic
 build and verification work moving locally without weakening the platform's
@@ -87,7 +87,7 @@ The workstation may:
   report obsolete results after service recovery.
 
 The draft release is explicitly non-installable. It must not be announced as a
-release, selected by a NAS, added to the `stable` channel, or used as a Spark
+release, selected by a NAS, added to the `stable` channel, or used as a GPU node
 update source.
 
 ## Actions-only trust lane
@@ -127,7 +127,7 @@ Publication freezes the following as one release unit:
 - authority and `stable` channel receipts.
 
 The NAS is installed only from the signed immutable TUF target through
-`dgx-control-offline`. Direct production Compose deployment from a checkout or
+`vonk-control-offline`. Direct production Compose deployment from a checkout or
 from the three image tags remains forbidden.
 
 ## Failure and recovery

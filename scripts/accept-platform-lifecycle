@@ -13,9 +13,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-if os.environ.get("DGX_LIFECYCLE_LOCKED_ENV") != "1":
+if os.environ.get("VONK_LIFECYCLE_LOCKED_ENV") != "1":
     environment = dict(os.environ)
-    environment["DGX_LIFECYCLE_LOCKED_ENV"] = "1"
+    environment["VONK_LIFECYCLE_LOCKED_ENV"] = "1"
     raise SystemExit(subprocess.run(["uv", "run", "--project", str(ROOT / "control"), "--with", "jsonschema==4.26.0", "python", __file__, *sys.argv[1:]], env=environment, check=False).returncode)
 sys.path[:0] = [str(ROOT / "src"), str(ROOT / "control/src")]
 
@@ -75,7 +75,7 @@ CAPABILITIES = (
 def _operation_result(claim) -> dict[str, object]:
     if claim.operation.value == "node.probe":
         evidence = {
-            "dgx_forge": {
+            "vonk_forge": {
                 "schema_version": 1,
                 "memory": {"available_bytes": 1_000, "total_bytes": 4_000},
                 "storage": {"available_bytes": 2_000, "total_bytes": 8_000},
@@ -215,7 +215,7 @@ stop_order = "independent"
 ''',
         "config/workloads/test-model.toml": f'''schema_version = 2
 id = "test-model"
-adapter = "spark-runtime-v1"
+adapter = "node-runtime-v1"
 definition_hash = "{'d' * 64}"
 conflicts = []
 distributed_supported = true
@@ -233,7 +233,7 @@ distributed_supported = true
             "schema_version": 1,
             "workload_id": "test-model",
             "release_digest": "a" * 64,
-            "adapter_id": "spark-runtime-v1",
+            "adapter_id": "node-runtime-v1",
         } | extra
     documents["manifests/releases/test-model.json"] = json.dumps(
         {
@@ -246,7 +246,7 @@ distributed_supported = true
                 "oci_manifest_digest": "sha256:" + "9" * 64,
                 "target_digest": "a" * 64,
                 "provenance_digest": "b" * 64,
-                "adapter_id": "spark-runtime-v1",
+                "adapter_id": "node-runtime-v1",
             },
             "workload_requests": workload_requests,
             "endpoint": {"scheme": "http", "port": 8000, "path": "/v1"},
@@ -264,7 +264,7 @@ distributed_supported = true
 
 def run(host: str, display_name: str) -> dict[str, object]:
     node_id = NodeId.parse("spk_00000000000000000000000000000001")
-    with tempfile.TemporaryDirectory(prefix="dgx-lifecycle-") as raw:
+    with tempfile.TemporaryDirectory(prefix="vonk-lifecycle-") as raw:
         workspace = Path(raw)
         now = datetime(2026, 8, 3, tzinfo=UTC)
         handler = lambda _request: StepResult(b"accepted", b"")
@@ -443,7 +443,7 @@ def run(host: str, display_name: str) -> dict[str, object]:
             {
                 "status": "ok",
                 "evidence": {
-                    "dgx_forge": {
+                    "vonk_forge": {
                         "schema_version": 1,
                         "memory": {
                             "available_bytes": 1_000,
@@ -463,7 +463,7 @@ def run(host: str, display_name: str) -> dict[str, object]:
             },
         )
         claimed += 1
-        if os.environ.get("DGX_DEBUG_LIFECYCLE"):
+        if os.environ.get("VONK_DEBUG_LIFECYCLE"):
             with sessions() as debug_session:
                 from vonk_control.models import AgentOperation, Job, Reconciliation
                 print("DEBUG jobs", [(j.id, j.reconciliation_id, j.state, j.kind) for j in debug_session.query(Job).all()], file=sys.stderr)
@@ -578,15 +578,15 @@ def run(host: str, display_name: str) -> dict[str, object]:
                 "occupied": durable[0].occupied,
             },
             "served_status": served_status, "withdrawn_status": withdrawn_status, "audit_events": audit,
-            "physical_spark_exercised": False, "code_host_pr_merge_exercised": False,
-            "remaining_release_gates": ["approved-physical-spark-lifecycle", "protected-code-host-pr-lifecycle"],
+            "physical_node_exercised": False, "code_host_pr_merge_exercised": False,
+            "remaining_release_gates": ["approved-physical-node-lifecycle", "protected-code-host-pr-lifecycle"],
         }
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--host", default="new-spark.local")
-    parser.add_argument("--display-name", default="new-spark")
+    parser.add_argument("--host", default="new-node.local")
+    parser.add_argument("--display-name", default="new-node")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args()

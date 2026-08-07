@@ -678,7 +678,7 @@ class PinnedNodeProbe:
                     pass
 
         evidence = {
-            "dgx_forge": health,
+            "vonk_forge": health,
             "nvidia": {
                 "bundle_version": self.policy.bundle_version,
                 "bundle_sha256": self.policy.bundle_sha256,

@@ -152,7 +152,7 @@ def _lock(
         {
             "name": "adapter",
             "kind": "adapter",
-            "media_type": "application/vnd.dgx-forge.workload-adapter.v1",
+            "media_type": "application/vnd.vonk-forge.workload-adapter.v1",
             "materialization": {"method": "executable"},
         }
     )
@@ -402,7 +402,7 @@ def test_consumes_the_shared_release_lock_without_a_compiled_family_catalog(
                 adapter,
                 "adapter",
                 "executable",
-                "application/vnd.dgx-forge.workload-adapter.v1",
+                "application/vnd.vonk-forge.workload-adapter.v1",
             ),
             "adapter_abi": 1,
             "compatibility": {

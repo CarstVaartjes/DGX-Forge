@@ -27,7 +27,7 @@ from cluster_profiles.state import ControllerState, StateStore
 from cluster_profiles.switcher import ProfileSwitcher
 
 SHA_A = "a" * 64
-BOOT_IDS = {"spark1": "1" * 32, "spark2": "2" * 32}
+BOOT_IDS = {"node1": "1" * 32, "node2": "2" * 32}
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -50,9 +50,9 @@ def workload(
     distributed: bool = False,
     deadlines: OperationTimeouts | None = None,
 ) -> WorkloadDefinition:
-    nodes = ("spark1", "spark2") if distributed else ("spark2",)
-    start_order = ("spark2", "spark1") if distributed else ("spark2",)
-    stop_order = ("spark1", "spark2") if distributed else ("spark2",)
+    nodes = ("node1", "node2") if distributed else ("node2",)
+    start_order = ("node2", "node1") if distributed else ("node2",)
+    stop_order = ("node1", "node2") if distributed else ("node2",)
     command = lambda operation: (f"profile-{operation}", identifier)
     return WorkloadDefinition(
         id=identifier,
@@ -91,7 +91,7 @@ def workload(
 
 
 def profile(identifier: str, definition: WorkloadDefinition | None) -> ClusterProfile:
-    placements = {"spark1": (), "spark2": ()}
+    placements = {"node1": (), "node2": ()}
     endpoints = {}
     if definition is not None:
         for node in definition.nodes:
@@ -218,17 +218,17 @@ def inventory(
 ) -> dict[str, dict[str, int | bool | str]]:
     live_boot_ids = boot_ids or BOOT_IDS
     return {
-        "spark1": {
+        "node1": {
             "healthy": True,
             "free_memory_bytes": 100,
             "free_disk_bytes": 100,
-            "boot_id": live_boot_ids["spark1"],
+            "boot_id": live_boot_ids["node1"],
         },
-        "spark2": {
+        "node2": {
             "healthy": True,
             "free_memory_bytes": 100,
             "free_disk_bytes": 100,
-            "boot_id": live_boot_ids["spark2"],
+            "boot_id": live_boot_ids["node2"],
         },
     }
 
@@ -279,8 +279,8 @@ def test_distributed_stop_is_head_first_and_start_is_worker_first() -> None:
     stopped = switcher.switch_profile("maintenance")
     assert stopped.status == "stopped"
     assert [event for event in events if event[0] == "remote"][:2] == [
-        ("remote", "spark1", ("profile-stop", "deepseek-agent-dual", "head")),
-        ("remote", "spark2", ("profile-stop", "deepseek-agent-dual", "worker")),
+        ("remote", "node1", ("profile-stop", "deepseek-agent-dual", "head")),
+        ("remote", "node2", ("profile-stop", "deepseek-agent-dual", "worker")),
     ]
 
     events.clear()
@@ -292,17 +292,17 @@ def test_distributed_stop_is_head_first_and_start_is_worker_first() -> None:
         if event[0] == "remote" and event[2][0] == "profile-start"
     ]
     assert start_calls == [
-        ("remote", "spark2", ("profile-start", "deepseek-agent-dual", "worker")),
-        ("remote", "spark1", ("profile-start", "deepseek-agent-dual", "head")),
+        ("remote", "node2", ("profile-start", "deepseek-agent-dual", "worker")),
+        ("remote", "node1", ("profile-start", "deepseek-agent-dual", "head")),
     ]
 
 
-def test_single_spark_lifecycle_never_touches_spark2_or_appends_a_role() -> None:
+def test_single_spark_lifecycle_never_touches_node2_or_appends_a_role() -> None:
     definition = replace(
         workload("deepseek-agent-single"),
-        nodes=("spark1",),
-        start_order=("spark1",),
-        stop_order=("spark1",),
+        nodes=("node1",),
+        start_order=("node1",),
+        stop_order=("node1",),
         deadlines=OperationTimeouts(10, 10, 10, 10, 10, 10, 10),
     )
     target = profile("agent-single", definition)
@@ -322,19 +322,19 @@ def test_single_spark_lifecycle_never_touches_spark2_or_appends_a_role() -> None
     assert stopped.status == "stopped"
     remote = [event for event in events if event[0] == "remote"]
     assert remote == [
-        ("remote", "spark1", ("profile-prepare", "deepseek-agent-single")),
-        ("remote", "spark1", ("profile-verify", "deepseek-agent-single")),
-        ("remote", "spark1", ("profile-start", "deepseek-agent-single")),
-        ("remote", "spark1", ("profile-health", "deepseek-agent-single")),
-        ("remote", "spark1", ("profile-infer", "deepseek-agent-single")),
-        ("remote", "spark1", ("profile-stop", "deepseek-agent-single")),
+        ("remote", "node1", ("profile-prepare", "deepseek-agent-single")),
+        ("remote", "node1", ("profile-verify", "deepseek-agent-single")),
+        ("remote", "node1", ("profile-start", "deepseek-agent-single")),
+        ("remote", "node1", ("profile-health", "deepseek-agent-single")),
+        ("remote", "node1", ("profile-infer", "deepseek-agent-single")),
+        ("remote", "node1", ("profile-stop", "deepseek-agent-single")),
         (
             "remote",
-            "spark1",
+            "node1",
             ("profile-verify-release", "deepseek-agent-single"),
         ),
     ]
-    assert all(event[1] != "spark2" for event in remote)
+    assert all(event[1] != "node2" for event in remote)
     assert all(event[2][-1] not in {"head", "worker"} for event in remote)
 
 
@@ -431,8 +431,8 @@ def test_prepare_holds_the_shared_lock_and_does_not_mutate_state() -> None:
     assert report.status == "prepared"
     assert events[0] == ("lock",)
     assert set(events[1:]) == {
-        ("remote", "spark2", ("profile-prepare", "deepseek-agent-dual", "worker")),
-        ("remote", "spark1", ("profile-prepare", "deepseek-agent-dual", "head")),
+        ("remote", "node2", ("profile-prepare", "deepseek-agent-dual", "worker")),
+        ("remote", "node1", ("profile-prepare", "deepseek-agent-dual", "head")),
     }
     assert [timeout for _, _, timeout in backend.calls] == [86400, 86400]
     assert [result.status for result in report.results] == ["prepared", "prepared"]
@@ -458,7 +458,7 @@ def test_prepare_starts_all_workload_nodes_in_parallel_and_orders_results() -> N
         ) -> CommandResult:
             self.events.append(("remote", node, argv))
             self.calls.append((node, argv, timeout))
-            if node == "spark2":
+            if node == "node2":
                 worker_started.set()
                 if not head_started.wait(0.5):
                     return command_result(False, b"head did not start concurrently")
@@ -483,8 +483,8 @@ def test_prepare_starts_all_workload_nodes_in_parallel_and_orders_results() -> N
     assert worker_started.is_set()
     assert head_started.is_set()
     assert [(result.node, result.role) for result in report.results] == [
-        ("spark2", "worker"),
-        ("spark1", "head"),
+        ("node2", "worker"),
+        ("node1", "head"),
     ]
     assert [result.timeout_seconds for result in report.results] == [86400, 86400]
     assert store.saves == []
@@ -547,7 +547,7 @@ def test_prepare_timeout_is_resumable_and_never_stops_the_remote_job() -> None:
     backend = FakeBackend(
         events,
         results={
-            ("spark2", "profile-prepare"): command_result(
+            ("node2", "profile-prepare"): command_result(
                 False, b"still running", timed_out=True
             )
         },
@@ -565,8 +565,8 @@ def test_prepare_timeout_is_resumable_and_never_stops_the_remote_job() -> None:
     assert report.status == "in-progress"
     assert report.resumable is True
     assert [(result.node, result.status, result.timed_out) for result in report.results] == [
-        ("spark2", "in-progress", True),
-        ("spark1", "prepared", False),
+        ("node2", "in-progress", True),
+        ("node1", "prepared", False),
     ]
     assert all(event[2][0] == "profile-prepare" for event in events if event[0] == "remote")
     assert store.saves == []
@@ -703,8 +703,8 @@ def test_checked_in_production_home_still_requires_live_capacity() -> None:
 
     assert report.target_profile == "agent-full-dual"
     assert report.status == "blocked"
-    assert "insufficient measured memory on spark1" in report.errors
-    assert "insufficient measured disk on spark2" in report.errors
+    assert "insufficient measured memory on node1" in report.errors
+    assert "insufficient measured disk on node2" in report.errors
     assert [event for event in events if event[0] == "remote"] == []
     assert store.saves == []
 
@@ -793,7 +793,7 @@ def test_boot_id_change_forces_restart_instead_of_retention() -> None:
     catalog_value = catalog(current, target, definition=definition)
     events: list[tuple] = []
     store = FakeStore(active_state(current, definition), events)
-    new_boot_ids = {"spark1": BOOT_IDS["spark1"], "spark2": "3" * 32}
+    new_boot_ids = {"node1": BOOT_IDS["node1"], "node2": "3" * 32}
     switcher = ProfileSwitcher(
         catalog=catalog_value,
         backend=FakeBackend(events),
@@ -818,7 +818,7 @@ def test_activation_fails_closed_when_live_boot_id_is_missing() -> None:
     events: list[tuple] = []
     store = FakeStore(ControllerState.stopped(), events)
     incomplete = inventory()
-    del incomplete["spark2"]["boot_id"]
+    del incomplete["node2"]["boot_id"]
     switcher = ProfileSwitcher(
         catalog=catalog_value,
         backend=FakeBackend(events),
@@ -829,7 +829,7 @@ def test_activation_fails_closed_when_live_boot_id_is_missing() -> None:
     report = switcher.switch_profile("target")
 
     assert report.status == "blocked"
-    assert report.errors == ("live boot ID unavailable on spark2",)
+    assert report.errors == ("live boot ID unavailable on node2",)
     assert [event for event in events if event[0] == "remote"] == []
     assert store.saves == []
 
@@ -899,10 +899,10 @@ def test_failed_distributed_start_still_runs_full_ordered_cleanup() -> None:
         and event[2][0] in {"profile-stop", "profile-verify-release"}
     ]
     assert cleanup == [
-        ("remote", "spark1", ("profile-stop", "generator", "head")),
-        ("remote", "spark2", ("profile-stop", "generator", "worker")),
-        ("remote", "spark1", ("profile-verify-release", "generator", "head")),
-        ("remote", "spark2", ("profile-verify-release", "generator", "worker")),
+        ("remote", "node1", ("profile-stop", "generator", "head")),
+        ("remote", "node2", ("profile-stop", "generator", "worker")),
+        ("remote", "node1", ("profile-verify-release", "generator", "head")),
+        ("remote", "node2", ("profile-verify-release", "generator", "worker")),
     ]
     assert store.state.status == "stopped"
 
@@ -933,10 +933,10 @@ def test_final_state_save_failure_stops_distributed_workload_in_order() -> None:
         and event[2][0] in {"profile-stop", "profile-verify-release"}
     ]
     assert cleanup == [
-        ("remote", "spark1", ("profile-stop", "generator", "head")),
-        ("remote", "spark2", ("profile-stop", "generator", "worker")),
-        ("remote", "spark1", ("profile-verify-release", "generator", "head")),
-        ("remote", "spark2", ("profile-verify-release", "generator", "worker")),
+        ("remote", "node1", ("profile-stop", "generator", "head")),
+        ("remote", "node2", ("profile-stop", "generator", "worker")),
+        ("remote", "node1", ("profile-verify-release", "generator", "head")),
+        ("remote", "node2", ("profile-verify-release", "generator", "worker")),
     ]
     assert store.state.status == "stopped"
 
@@ -967,7 +967,7 @@ def test_recovery_save_failure_returns_degraded_after_cleanup() -> None:
         for event in events
         if event[0] == "remote" and event[2][0] == "profile-stop"
     ]
-    assert cleanup_nodes == ["spark1", "spark2"]
+    assert cleanup_nodes == ["node1", "node2"]
     assert store.state.status == "transitioning"
 
 
@@ -1241,7 +1241,7 @@ def test_unknown_current_definition_blocks_without_using_new_commands() -> None:
     unknown_current = replace(
         target,
         id="unknown-current",
-        placements={"spark1": (), "spark2": ("removed-runtime",)},
+        placements={"node1": (), "node2": ("removed-runtime",)},
         endpoints={},
     )
     catalog_value = catalog(unknown_current, target, definition=definition)
@@ -1272,7 +1272,7 @@ def test_unknown_target_definition_is_a_stable_block_not_key_error() -> None:
     unknown = replace(
         valid,
         id="unknown",
-        placements={"spark1": (), "spark2": ("missing",)},
+        placements={"node1": (), "node2": ("missing",)},
         endpoints={},
     )
     catalog_value = catalog(valid, unknown, definition=definition)
@@ -1317,7 +1317,7 @@ def test_unexpected_backend_exception_is_normalized_and_cleanup_continues() -> N
             self.events.append(("remote", node, argv))
             if argv[0] == "profile-health":
                 raise RuntimeError("runtime exploded")
-            if argv[0] == "profile-stop" and node == "spark1":
+            if argv[0] == "profile-stop" and node == "node1":
                 raise OSError("one cleanup node failed")
             return command_result()
 
@@ -1338,7 +1338,7 @@ def test_unexpected_backend_exception_is_normalized_and_cleanup_continues() -> N
         for event in events
         if event[0] == "remote" and event[2][0] == "profile-stop"
     ]
-    assert cleanup_nodes == ["spark1", "spark2"]
+    assert cleanup_nodes == ["node1", "node2"]
     assert store.state.status == "degraded"
 
 

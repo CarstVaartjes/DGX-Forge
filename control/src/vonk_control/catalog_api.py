@@ -127,7 +127,7 @@ class RecipeSummaryResponse(StrictModel):
     recipe_id: str = Field(pattern=_UUID)
     slug: str = Field(pattern=_SLUG)
     title: str = Field(min_length=1, max_length=120)
-    origin: Literal["local", "sparkrun", "global"]
+    origin: Literal["local", "workload_run", "global"]
     revision_number: int = Field(ge=1)
     lifecycle: Literal["draft", "blocked", "resolved", "deprecated"]
     content_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")

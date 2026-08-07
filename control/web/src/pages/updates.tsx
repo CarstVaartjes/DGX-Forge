@@ -49,7 +49,7 @@ function PlanReview({plan}: {plan: UpdatePlan}) {
 
     <section><h4>Batch order</h4>
       {plan.batches.length === 0
-        ? <p>No online Sparks require this release.</p>
+        ? <p>No online GPU nodes require this release.</p>
         : <ol>{plan.batches.map((batch, index) => <li key={`${index}-${batch.join("-")}`}>
           {index === 0 ? "Canary: " : `Batch ${index + 1}: `}
           {batch.map(node => <code key={node}>{bounded(node)} </code>)}
@@ -61,8 +61,8 @@ function PlanReview({plan}: {plan: UpdatePlan}) {
         <li key={workload.workload_id}>{bounded(workload.workload_id)} — minimum {workload.minimum_available} available; members {workload.members.map(member => bounded(member)).join(", ")}</li>)}</ul>}
     </section>
     <section><h4>Affected routes</h4><StringList items={plan.affected_routes} empty="No published routes are affected."/></section>
-    <section><h4>Offline pending Sparks</h4><StringList items={plan.offline_pending} empty="No Sparks are offline pending."/></section>
-    <section><h4>Incompatible Sparks</h4><StringList items={plan.incompatible} empty="No incompatible Sparks."/></section>
+    <section><h4>Offline pending GPU nodes</h4><StringList items={plan.offline_pending} empty="No GPU nodes are offline pending."/></section>
+    <section><h4>Incompatible GPU nodes</h4><StringList items={plan.incompatible} empty="No incompatible GPU nodes."/></section>
     <section><h4>Rollback slots</h4>
       {Object.keys(plan.rollback_slots).length === 0 ? <p>No rollback slots are required.</p> : <ul>{Object.entries(plan.rollback_slots).slice(0, 1024).map(([node, slot]) =>
         <li key={node}><code>{bounded(node)}</code>: {slot ?? "unavailable"}</li>)}</ul>}
@@ -80,8 +80,8 @@ function RolloutStatus({rollout}: {rollout: UpdateRollout}) {
     <p>State: <strong>{bounded(rollout.state)}</strong>; current batch {rollout.current_batch + 1}.</p>
     <p>Job: <code>{bounded(rollout.job_id)}</code></p>
     {rollout.failure_reason && <p role="alert">{bounded(rollout.failure_reason)}</p>}
-    <div className="table-scroll"><table aria-label="Spark update progress">
-      <thead><tr><th scope="col">Spark</th><th scope="col">State</th></tr></thead>
+    <div className="table-scroll"><table aria-label="GPU node update progress">
+      <thead><tr><th scope="col">GPU node</th><th scope="col">State</th></tr></thead>
       <tbody>{rollout.nodes.slice(0, 1024).map(node => <tr key={node.node_id}>
         <th scope="row"><code>{bounded(node.node_id)}</code></th><td>{bounded(node.state)}</td>
       </tr>)}</tbody>
@@ -180,7 +180,7 @@ export function UpdatesPage({api}: {api: ControlApi}) {
       setRollout(await api.approveUpdateResume(rollout.id));
       setRollbackConfirmation("");
       setStatus(action === "authorize-rollback"
-        ? `Administrator authorized Spark rollback for rollout ${bounded(rollout.id)}.`
+        ? `Administrator authorized GPU node rollback for rollout ${bounded(rollout.id)}.`
         : `Administrator approved rollout ${bounded(rollout.id)} to resume.`);
     } catch (value) {
       setError(errorText(value));
@@ -193,7 +193,7 @@ export function UpdatesPage({api}: {api: ControlApi}) {
     || loading;
 
   return <>
-    <div className="page-heading"><div><h2>Platform updates</h2><p>Preview and administer signed DGX-Forge updates for Spark agents.</p></div></div>
+    <div className="page-heading"><div><h2>Platform updates</h2><p>Preview and administer signed Vonk Forge updates for GPU node agents.</p></div></div>
     {loading && <p role="status">Loading authoritative update state…</p>}
     {error && <p role="alert">{error}</p>}
     {status && <p role="status">{status}</p>}
@@ -209,8 +209,8 @@ export function UpdatesPage({api}: {api: ControlApi}) {
       </dl>
       <label>Exact immutable TUF target<input value={release} readOnly maxLength={512}/></label>
       <button type="button" disabled={loading || release.length === 0} onClick={() => void preview()}>Preview signed update plan</button>
-      <div className="table-scroll"><table aria-label="Spark platform skew">
-        <thead><tr><th scope="col">Spark</th><th scope="col">Running identity</th><th scope="col">Slot</th><th scope="col">Compatibility</th><th scope="col">Affected services</th></tr></thead>
+      <div className="table-scroll"><table aria-label="GPU node platform skew">
+        <thead><tr><th scope="col">GPU node</th><th scope="col">Running identity</th><th scope="col">Slot</th><th scope="col">Compatibility</th><th scope="col">Affected services</th></tr></thead>
         <tbody>{skew.nodes.slice(0, 1024).map(node => <tr key={node.node_id}>
           <th scope="row">{bounded(node.display_name)}<small>{bounded(node.node_id)}</small></th>
           <td>{bounded(node.platform_version)}<small><code>{bounded(node.build_digest)}</code></small></td>
@@ -222,7 +222,7 @@ export function UpdatesPage({api}: {api: ControlApi}) {
     </section>}
     {plan && <>
       <PlanReview plan={plan}/>
-      {plan.incompatible.length > 0 && <p role="alert">Incompatible Spark skew blocks this update mutation.</p>}
+      {plan.incompatible.length > 0 && <p role="alert">Incompatible GPU node skew blocks this update mutation.</p>}
       <label>Type the exact plan digest to confirm<input value={confirmation} onChange={event => setConfirmation(event.target.value)} autoComplete="off" spellCheck={false}/></label>
       <button type="button" disabled={applyBlocked} onClick={() => void apply()}>Apply exact update plan</button>
     </>}
@@ -231,7 +231,7 @@ export function UpdatesPage({api}: {api: ControlApi}) {
       <button type="button" disabled={loading} onClick={() => void refresh()}>Refresh rollout status</button>{" "}
       {rollout.required_action === "authorize-rollback" && <>
         <label>Type <code>ROLLBACK {bounded(rollout.id)}</code> to confirm<input value={rollbackConfirmation} onChange={event => setRollbackConfirmation(event.target.value)} autoComplete="off" spellCheck={false}/></label>
-        <button className="danger" type="button" disabled={loading || rollbackConfirmation !== `ROLLBACK ${rollout.id}`} onClick={() => void approveRequiredAction()}>Authorize Spark rollback</button>
+        <button className="danger" type="button" disabled={loading || rollbackConfirmation !== `ROLLBACK ${rollout.id}`} onClick={() => void approveRequiredAction()}>Authorize GPU node rollback</button>
       </>}
       {rollout.required_action === "approve-resume" && <button type="button" disabled={loading} onClick={() => void approveRequiredAction()}>Approve rollout resume</button>}
       {rollout.resume_required && rollout.required_action === null && <p>Administrator approval is required to continue this rollout.</p>}

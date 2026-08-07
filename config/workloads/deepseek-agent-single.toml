@@ -2,9 +2,9 @@ id = "deepseek-agent-single"
 adapter = "deepseek-ds4"
 topology = "single"
 placement_class = "single-exclusive"
-nodes = ["spark1"]
-start_order = ["spark1"]
-stop_order = ["spark1"]
+nodes = ["node1"]
+start_order = ["node1"]
+stop_order = ["node1"]
 conflicts = []
 co_location = "exclusive"
 accepted_evidence = "inventory/reports/accepted-cluster-profiles.json"
@@ -20,7 +20,7 @@ manifest = "/srv/models/runtime-cache/deepseek-agent-single/checkpoint-manifest.
 manifest_sha256 = "1f6f88d7f968e51e76a118af83f0f7cae7f5df5b915a6cf30db5265228f70c99"
 
 [image]
-reference = "ghcr.io/carstvaartjes/spark-ds4@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615"
+reference = "ghcr.io/carstvaartjes/node-ds4@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615"
 
 [runtime_release]
 manifest = "adapters/deepseek/ds4/runtime-manifest.json"
@@ -36,13 +36,13 @@ host = "127.0.0.1"
 port = 8888
 
 [commands]
-prepare = ["/opt/spark/model-adapters/deepseek-agent-single/releases/ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2/bin/ds4-deepseek-single", "prepare"]
-verify = ["/opt/spark/model-adapters/deepseek-agent-single/releases/ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2/bin/ds4-deepseek-single", "verify"]
-start = ["/opt/spark/model-adapters/deepseek-agent-single/releases/ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2/bin/ds4-deepseek-single", "start"]
-health = ["/opt/spark/model-adapters/deepseek-agent-single/releases/ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2/bin/ds4-deepseek-single", "health"]
-infer = ["/opt/spark/model-adapters/deepseek-agent-single/releases/ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2/bin/ds4-deepseek-single", "infer"]
-stop = ["/opt/spark/model-adapters/deepseek-agent-single/releases/ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2/bin/ds4-deepseek-single", "stop"]
-verify-release = ["/opt/spark/model-adapters/deepseek-agent-single/releases/ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2/bin/ds4-deepseek-single", "verify-release"]
+prepare = ["/opt/node/model-adapters/deepseek-agent-single/releases/ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2/bin/ds4-deepseek-single", "prepare"]
+verify = ["/opt/node/model-adapters/deepseek-agent-single/releases/ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2/bin/ds4-deepseek-single", "verify"]
+start = ["/opt/node/model-adapters/deepseek-agent-single/releases/ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2/bin/ds4-deepseek-single", "start"]
+health = ["/opt/node/model-adapters/deepseek-agent-single/releases/ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2/bin/ds4-deepseek-single", "health"]
+infer = ["/opt/node/model-adapters/deepseek-agent-single/releases/ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2/bin/ds4-deepseek-single", "infer"]
+stop = ["/opt/node/model-adapters/deepseek-agent-single/releases/ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2/bin/ds4-deepseek-single", "stop"]
+verify-release = ["/opt/node/model-adapters/deepseek-agent-single/releases/ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2/bin/ds4-deepseek-single", "verify-release"]
 
 [deadlines]
 prepare = 86400

@@ -123,7 +123,7 @@ def workload_package_inputs(root: Path) -> tuple[str, ...]:
 
     The verifier is also used by small isolated fixture repositories in the
     test suite, so absent package trees are treated as an older baseline.  A
-    complete DGX-Forge checkout always has all three boundaries and therefore
+    complete Vonk Forge checkout always has all three boundaries and therefore
     gets every package implementation file hashed into the supply-chain
     manifest.
     """
@@ -248,8 +248,8 @@ def spdx(
         "dataLicense": "CC0-1.0",
         "SPDXID": "SPDXRef-DOCUMENT",
         "name": name,
-        "documentNamespace": f"https://dgx-forge.invalid/sbom/{name}/{lock_digest}",
-        "creationInfo": {"created": "1970-01-01T00:00:00Z", "creators": ["Tool: DGX-Forge verify-supply-chain"]},
+        "documentNamespace": f"https://vonk-forge.invalid/sbom/{name}/{lock_digest}",
+        "creationInfo": {"created": "1970-01-01T00:00:00Z", "creators": ["Tool: Vonk Forge verify-supply-chain"]},
         "packages": described,
         "relationships": relationships,
     }
@@ -312,7 +312,7 @@ def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
         "src/cluster_profiles/schemas/platform-update-manifest.schema.json",
         "agent/pyproject.toml", "agent/uv.lock", "agent_protocol/pyproject.toml",
         "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
-        "bin/dgx-control-offline",
+        "bin/vonk-control-offline",
         "control/src/vonk_control/offline.py",
         "control/src/vonk_control/generation_launch.py",
         "control/src/vonk_control/host_backup.py",
@@ -414,7 +414,7 @@ def image_errors(root: Path) -> list[str]:
             "context": ".",
             "dockerfile": "control/Dockerfile",
             "environment": "CONTROL_API_IMAGE",
-            "package": "dgx-forge-api",
+            "package": "vonk-forge-api",
             "required": True,
             "target": "api",
         },
@@ -422,7 +422,7 @@ def image_errors(root: Path) -> list[str]:
             "context": ".",
             "dockerfile": "control/Dockerfile",
             "environment": "CONTROL_WORKER_IMAGE",
-            "package": "dgx-forge-worker",
+            "package": "vonk-forge-worker",
             "required": True,
             "target": "worker",
         },
@@ -430,7 +430,7 @@ def image_errors(root: Path) -> list[str]:
             "context": "deploy/compose/hermes-agent",
             "dockerfile": "deploy/compose/hermes-agent/Dockerfile",
             "environment": "HERMES_AGENT_IMAGE",
-            "package": "dgx-forge-hermes",
+            "package": "vonk-forge-hermes",
             "required": True,
             "target": "managed",
         },

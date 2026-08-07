@@ -7,15 +7,15 @@ from ...client import AuthenticatedClient, Client
 from ...types import Response, UNSET
 from ... import errors
 
+from ...models.apply_request import ApplyRequest
 from ...models.http_validation_error import HTTPValidationError
-from ...models.preview_request import PreviewRequest
 from typing import cast
 
 
 
 def _get_kwargs(
     *,
-    body: PreviewRequest,
+    body: ApplyRequest,
 
 ) -> dict[str, Any]:
     headers: dict[str, Any] = {}
@@ -27,7 +27,7 @@ def _get_kwargs(
 
     _kwargs: dict[str, Any] = {
         "method": "post",
-        "url": "/api/v1/catalog/imports/sparkrun/preview",
+        "url": "/api/v1/catalog/imports/workload_run",
     }
 
     _kwargs["json"] = body.to_dict()
@@ -41,9 +41,9 @@ def _get_kwargs(
 
 
 def _parse_response(*, client: Union[AuthenticatedClient, Client], response: httpx.Response) -> Optional[Union[Any, HTTPValidationError]]:
-    if response.status_code == 200:
-        response_200 = response.json()
-        return response_200
+    if response.status_code == 201:
+        response_201 = response.json()
+        return response_201
 
     if response.status_code == 422:
         response_422 = HTTPValidationError.from_dict(response.json())
@@ -70,13 +70,13 @@ def _build_response(*, client: Union[AuthenticatedClient, Client], response: htt
 def sync_detailed(
     *,
     client: AuthenticatedClient,
-    body: PreviewRequest,
+    body: ApplyRequest,
 
 ) -> Response[Union[Any, HTTPValidationError]]:
-    """ Preview
+    """ Apply
 
     Args:
-        body (PreviewRequest):
+        body (ApplyRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -101,13 +101,13 @@ def sync_detailed(
 def sync(
     *,
     client: AuthenticatedClient,
-    body: PreviewRequest,
+    body: ApplyRequest,
 
 ) -> Optional[Union[Any, HTTPValidationError]]:
-    """ Preview
+    """ Apply
 
     Args:
-        body (PreviewRequest):
+        body (ApplyRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -127,13 +127,13 @@ body=body,
 async def asyncio_detailed(
     *,
     client: AuthenticatedClient,
-    body: PreviewRequest,
+    body: ApplyRequest,
 
 ) -> Response[Union[Any, HTTPValidationError]]:
-    """ Preview
+    """ Apply
 
     Args:
-        body (PreviewRequest):
+        body (ApplyRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.
@@ -158,13 +158,13 @@ async def asyncio_detailed(
 async def asyncio(
     *,
     client: AuthenticatedClient,
-    body: PreviewRequest,
+    body: ApplyRequest,
 
 ) -> Optional[Union[Any, HTTPValidationError]]:
-    """ Preview
+    """ Apply
 
     Args:
-        body (PreviewRequest):
+        body (ApplyRequest):
 
     Raises:
         errors.UnexpectedStatus: If the server returns an undocumented status code and Client.raise_on_unexpected_status is True.

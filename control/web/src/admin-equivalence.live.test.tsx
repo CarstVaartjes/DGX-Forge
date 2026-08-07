@@ -5,11 +5,11 @@ import {ApiClient} from "./api/client";
 import type {ReconciliationPlan} from "./api/types";
 import {ProfilesPage} from "./pages/profiles";
 
-const origin = process.env.DGX_LIVE_ORIGIN;
-const token = process.env.DGX_LIVE_TOKEN;
-const stateFile = process.env.DGX_LIVE_STATE_FILE;
-const expectedFile = process.env.DGX_LIVE_EXPECTED_FILE;
-const resultFile = process.env.DGX_LIVE_RESULT_FILE;
+const origin = process.env.VONK_LIVE_ORIGIN;
+const token = process.env.VONK_LIVE_TOKEN;
+const stateFile = process.env.VONK_LIVE_STATE_FILE;
+const expectedFile = process.env.VONK_LIVE_EXPECTED_FILE;
+const resultFile = process.env.VONK_LIVE_RESULT_FILE;
 const enabled = Boolean(origin && token && stateFile && expectedFile && resultFile);
 
 (enabled ? it : it.skip)("crosses generated CLI and rendered browser clients against one live API", async () => {
@@ -19,15 +19,15 @@ const enabled = Boolean(origin && token && stateFile && expectedFile && resultFi
   let browserPlan: ReconciliationPlan | undefined;
   let raceNextApply = false;
   let staleStatus = 0;
-  document.cookie = `dgx_session=${token}; path=/`;
-  document.cookie = "dgx_csrf=live-csrf; path=/";
+  document.cookie = `vonk_session=${token}; path=/`;
+  document.cookie = "vonk_csrf=live-csrf; path=/";
 
   globalThis.fetch = async (input: string | URL | Request, init?: RequestInit) => {
     const request = input instanceof Request
       ? new Request(input, init)
       : new Request(new URL(String(input), origin), init);
     const headers = new Headers(request.headers);
-    headers.set("Cookie", `dgx_session=${token}; dgx_csrf=live-csrf`);
+    headers.set("Cookie", `vonk_session=${token}; vonk_csrf=live-csrf`);
     const authenticated = new Request(request, {headers});
     const url = new URL(authenticated.url);
     if (authenticated.method === "POST" && url.pathname === "/api/v1/reconciliations") {

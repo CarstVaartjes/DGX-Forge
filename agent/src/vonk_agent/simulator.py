@@ -594,7 +594,7 @@ def simulate_agent_lifecycle(*, nodes: int, seed: int = 20260803) -> dict[str, A
         "schema_version": 1,
         "evidence_kind": "simulated",
         "environment": "deterministic-in-memory-transport",
-        "physical_sparks_exercised": False,
+        "physical_nodes_exercised": False,
         "seed": seed,
         "simulated_at": clock.instant().isoformat().replace("+00:00", "Z"),
         "node_count": nodes,
@@ -675,7 +675,7 @@ def lifecycle_evidence_passes(report: Mapping[str, Any]) -> bool:
         report.get("schema_version") == 1
         and report.get("evidence_kind") == "simulated"
         and report.get("environment") == "deterministic-in-memory-transport"
-        and report.get("physical_sparks_exercised") is False
+        and report.get("physical_nodes_exercised") is False
         and report.get("faults") == expected_faults
         and report.get("invariants") == expected_invariants
     )
@@ -715,7 +715,7 @@ def _release_claim(
         "oci_manifest_digest": "sha256:" + _digest(seed, index, scenario, "manifest"),
         "target_digest": _digest(seed, index, scenario, "target"),
         "provenance_digest": _digest(seed, index, scenario, "provenance"),
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
     }
     return AgentClaim(
         schema_version=1,

@@ -58,7 +58,7 @@ _REQUIRED_CAPABILITIES = frozenset(
     }
 )
 _IMPLEMENTED_CAPABILITIES = _REQUIRED_CAPABILITIES
-_SUPPORTED_ADAPTERS = frozenset({"spark-runtime-v1"})
+_SUPPORTED_ADAPTERS = frozenset({"node-runtime-v1"})
 _PLANNED_OPERATIONS = (
     AgentOperation.WORKLOAD_STOP.value,
     AgentOperation.RELEASE_INSTALL.value,

@@ -111,7 +111,7 @@ class PackageRolloutWorker:
     @staticmethod
     def _advisory_key(rollout_id: str) -> int:
         value = int.from_bytes(
-            hashlib.sha256(f"dgx-forge:package:{rollout_id}".encode()).digest()[:8],
+            hashlib.sha256(f"vonk-forge:package:{rollout_id}".encode()).digest()[:8],
             "big",
         ) & (2**63 - 1)
         return value or 1

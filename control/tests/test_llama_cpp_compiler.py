@@ -2,11 +2,11 @@ import pytest
 from vonk_control.import_report import ImportReportBuilder
 from vonk_control.runtime_compilers.common import RuntimeCompileError
 from vonk_control.runtime_compilers.llama_cpp import compile_llama_cpp
-from vonk_control.sparkrun_source import parse_sparkrun_yaml
+from vonk_control.workload_run_source import parse_workload_run_yaml
 
 
 def source(command: str, *, nodes: int = 1):
-    return parse_sparkrun_yaml(f"model: bartowski/Qwen-GGUF\nmodel_revision: 0123456789abcdef0123456789abcdef01234567\nruntime: llama.cpp\nmin_nodes: {nodes}\nmax_nodes: {nodes}\ncommand: {command!r}\n".encode())
+    return parse_workload_run_yaml(f"model: bartowski/Qwen-GGUF\nmodel_revision: 0123456789abcdef0123456789abcdef01234567\nruntime: llama.cpp\nmin_nodes: {nodes}\nmax_nodes: {nodes}\ncommand: {command!r}\n".encode())
 
 
 def test_llama_cpp_maps_gguf_server_flags() -> None:

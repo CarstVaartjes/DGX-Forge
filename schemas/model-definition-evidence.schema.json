@@ -12,7 +12,7 @@
     "checkpoint": {"type": "object", "additionalProperties": false, "required": ["repository", "revision", "manifest_sha256"], "properties": {"repository": {"type": "string", "minLength": 1}, "revision": {"type": "string", "pattern": "^[0-9a-f]{40}$"}, "manifest_sha256": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"}}},
     "image": {"type": "object", "additionalProperties": false, "required": ["reference"], "properties": {"reference": {"type": "string", "pattern": "^.+@sha256:[0-9a-f]{64}$"}}},
     "recorded_at": {"type": "string", "format": "date-time"},
-    "nodes": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": {"type": "object", "additionalProperties": false, "required": ["node", "boot_id"], "properties": {"node": {"enum": ["spark1", "spark2"]}, "boot_id": {"type": "string", "minLength": 1}}}},
+    "nodes": {"type": "array", "minItems": 1, "maxItems": 2, "uniqueItems": true, "items": {"type": "object", "additionalProperties": false, "required": ["node", "boot_id"], "properties": {"node": {"enum": ["node1", "node2"]}, "boot_id": {"type": "string", "minLength": 1}}}},
     "predecessor": {"type": ["string", "null"], "minLength": 1},
     "gates": {"type": "object"}
   },

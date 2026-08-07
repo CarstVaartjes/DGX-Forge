@@ -25,7 +25,7 @@ UPDATE_REPORT = "platform-update"
 UPDATE_PHYSICAL_GATES = {
     "control_host_update_recovery": "physical-control-host-update-recovery",
     "signed_platform_update_manifest": "signed-platform-update-manifest-evidence",
-    "spark_canary_and_rollback": "physical-spark-canary-rollback",
+    "node_canary_and_rollback": "physical-node-canary-rollback",
 }
 UPDATE_PHYSICAL_REPORTS = {
     "control_host_update_recovery": (
@@ -36,9 +36,9 @@ UPDATE_PHYSICAL_REPORTS = {
         "platform-update-signed-manifest.json",
         "signed-platform-update-manifest",
     ),
-    "spark_canary_and_rollback": (
-        "platform-update-spark-canary-rollback.json",
-        "spark-canary-and-rollback",
+    "node_canary_and_rollback": (
+        "platform-update-node-canary-rollback.json",
+        "node-canary-and-rollback",
     ),
 }
 _MAX_PHYSICAL_EVIDENCE_BYTES = 1024 * 1024
@@ -270,7 +270,7 @@ def _physical_claims_valid(
             and _SHA256.fullmatch(value["rollback_evidence_sha256"]) is not None
             and value.get("rolled_back_generation") == from_generation
         )
-    if evidence_type == "spark-canary-and-rollback":
+    if evidence_type == "node-canary-and-rollback":
         if set(value) != {
             "architecture",
             "canary_node",
@@ -321,16 +321,16 @@ def _physical_claims_valid(
     return False
 
 
-def _spark_claim_matches_manifest(manifest: object, spark: object) -> bool:
-    if not isinstance(manifest, dict) or not isinstance(spark, dict):
+def _node_claim_matches_manifest(manifest: object, node: object) -> bool:
+    if not isinstance(manifest, dict) or not isinstance(node, dict):
         return False
     payloads = manifest.get("agent_payload_sha256")
-    architecture = spark.get("architecture")
+    architecture = node.get("architecture")
     return (
         isinstance(payloads, dict)
         and isinstance(architecture, str)
-        and payloads.get(architecture) == spark.get("target_agent_sha256")
-        and manifest.get("build_digest") == spark.get("target_build_digest")
+        and payloads.get(architecture) == node.get("target_agent_sha256")
+        and manifest.get("build_digest") == node.get("target_build_digest")
     )
 
 
@@ -386,7 +386,7 @@ def _workload_acceptance_valid(report: object) -> bool:
         "report_type",
         "status",
         "evidence_kind",
-        "physical_sparks_exercised",
+        "physical_nodes_exercised",
         "unknown_family_without_agent_update",
         "agent_digest_unchanged",
         "release_two_activated",
@@ -400,12 +400,12 @@ def _workload_acceptance_valid(report: object) -> bool:
         not required <= set(report)
         or report.get("schema_version") != 1
         or report.get("report_type") not in {
-            "dgx-forge-workload-package-acceptance",
+            "vonk-forge-workload-package-acceptance",
             "workload-package-acceptance",
         }
         or report.get("status") != "passed"
         or report.get("evidence_kind") not in {"assertion", "simulated", "physical"}
-        or report.get("physical_sparks_exercised") not in {True, False}
+        or report.get("physical_nodes_exercised") not in {True, False}
         or not all(report.get(field) is True for field in (
             "unknown_family_without_agent_update",
             "agent_digest_unchanged",
@@ -426,13 +426,13 @@ def _failure_matrix_valid(report: object) -> bool:
     if (
         report.get("schema_version") != 1
         or report.get("report_type") not in {
-            "dgx-forge-workload-package-failure-matrix",
+            "vonk-forge-workload-package-failure-matrix",
             "workload-package-failure-matrix",
         }
         or report.get("status") != "passed"
         or report.get("evidence_kind") not in {"assertion", "simulated", "physical"}
         or report.get("failure_matrix") is not True
-        or report.get("physical_sparks_exercised") not in {True, False}
+        or report.get("physical_nodes_exercised") not in {True, False}
         or report.get("ssh_calls") != 0
         or report.get("agent_update_calls") != 0
         or report.get("restart_recovery") != "passed"
@@ -685,7 +685,7 @@ def _update_evidence(
         missing.append(f"{UPDATE_REPORT}:content-addressed")
     if (
         report.get("schema_version") != 1
-        or report.get("report_type") != "dgx-forge-platform-update"
+        or report.get("report_type") != "vonk-forge-platform-update"
     ):
         missing.append(f"{UPDATE_REPORT}:schema")
     if report.get("status") != "passed":
@@ -754,11 +754,11 @@ def _update_evidence(
                 physical_claims[name] = claims
                 gates[name] = True
         manifest_claims = physical_claims.get("signed_platform_update_manifest")
-        spark_claims = physical_claims.get("spark_canary_and_rollback")
-        if gates["spark_canary_and_rollback"] and not _spark_claim_matches_manifest(
-            manifest_claims, spark_claims
+        node_claims = physical_claims.get("node_canary_and_rollback")
+        if gates["node_canary_and_rollback"] and not _node_claim_matches_manifest(
+            manifest_claims, node_claims
         ):
-            gates["spark_canary_and_rollback"] = False
+            gates["node_canary_and_rollback"] = False
     declared_remaining = report.get("remaining_release_gates")
     if isinstance(declared_remaining, list) and all(
         isinstance(item, str) and item for item in declared_remaining

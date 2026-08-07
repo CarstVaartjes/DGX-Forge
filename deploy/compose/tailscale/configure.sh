@@ -3,7 +3,7 @@ set -eu
 
 socket=${TS_SOCKET_PATH:-/var/run/tailscale/tailscaled.sock}
 remaining=120
-expected_service_map='{"services":{"svc:dgx-forge":{"endpoints":{"tcp:443":"http://caddy:8080"}},"svc:hermes-api":{"endpoints":{"tcp:443":"http://hermes-agent:8642"}},"svc:hermes-dashboard":{"endpoints":{"tcp:443":"http://hermes-agent:9119"}}},"version":"0.0.1"}'
+expected_service_map='{"services":{"svc:hermes-api":{"endpoints":{"tcp:443":"http://hermes-agent:8642"}},"svc:hermes-dashboard":{"endpoints":{"tcp:443":"http://hermes-agent:9119"}},"svc:vonk-forge":{"endpoints":{"tcp:443":"http://caddy:8080"}}},"version":"0.0.1"}'
 
 ts() {
     tailscale --socket="${socket}" "$@"
@@ -28,7 +28,7 @@ serve_is_exact() {
     tr -d '[:space:]' </tmp/tailscale-serve-status.json >/tmp/tailscale-serve-status.compact
     tr -d '[:space:]' </tmp/tailscale-serve-config.json >/tmp/tailscale-serve-config.compact
 
-    grep -Fq '"svc:dgx-forge":{"TCP":{"443":{"HTTPS":true}}' \
+    grep -Fq '"svc:vonk-forge":{"TCP":{"443":{"HTTPS":true}}' \
         /tmp/tailscale-serve-status.compact \
         && ! grep -Fq '"443":{"HTTP":true}' /tmp/tailscale-serve-status.compact \
         && ! grep -Fq '"TCPForward"' /tmp/tailscale-serve-status.compact \
@@ -46,10 +46,10 @@ configure_services() {
     # Reset the complete map so undeclared services or endpoints cannot survive
     # reconciliation from an earlier gateway configuration.
     ts serve reset
-    ts serve --service=svc:dgx-forge --https=443 http://caddy:8080
+    ts serve --service=svc:vonk-forge --https=443 http://caddy:8080
     ts serve --service=svc:hermes-api --https=443 http://hermes-agent:8642
     ts serve --service=svc:hermes-dashboard --https=443 http://hermes-agent:9119
-    ts serve advertise svc:dgx-forge
+    ts serve advertise svc:vonk-forge
     ts serve advertise svc:hermes-api
     ts serve advertise svc:hermes-dashboard
 }

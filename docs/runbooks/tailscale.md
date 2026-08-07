@@ -3,7 +3,7 @@
 The NAS project contains one userspace Tailscale gateway and has no host
 Tailscale dependency. Human control, inference, Grafana, and Hermes enter only
 through named Tailscale Services. The sole LAN listener is Caddy's restricted
-Spark backend at the reserved NAS address.
+GPU node backend at the reserved NAS address.
 
 ## Identity and access policy
 
@@ -13,29 +13,29 @@ grants network reachability only: it is not the Hermes API key and gives Hermes
 no repository credential.
 
 The gateway never receives a GitHub token. Create a separate OAuth client under
-Trust credentials with only `auth_keys` write scope and `tag:dgx-gateway` as its
+Trust credentials with only `auth_keys` write scope and `tag:vonk-gateway` as its
 only tag. Define these exact Services in the admin console:
 
-- `svc:dgx-forge`, endpoint `tcp:443`;
+- `svc:vonk-forge`, endpoint `tcp:443`;
 - `svc:hermes-dashboard`, endpoint `tcp:443`; and
 - `svc:hermes-api`, endpoint `tcp:443`.
 
 Merge the reviewed sections of `deploy/compose/tailscale/grants.example.hujson`
 into tailnet policy after replacing the GitHub-login placeholder. Administrators
 reach only the `vonk-forge` Service through its grant. `group:hermes-users` reaches
-only the two Hermes Services. Auto-approval permits only `tag:dgx-gateway` to
+only the two Hermes Services. Auto-approval permits only `tag:vonk-gateway` to
 advertise the three named Services. Never use `svc:*` or an allow-all ACL.
 
 ## Secrets and unattended startup
 
 ```bash
 umask 077
-install -d -m 0700 /srv/dgx-forge/secrets
+install -d -m 0700 /srv/vonk-forge/secrets
 printf '%s' 'PASTE_TAILSCALE_CLIENT_ID' \
-  > /srv/dgx-forge/secrets/tailscale-oauth-client-id
+  > /srv/vonk-forge/secrets/tailscale-oauth-client-id
 printf '%s' 'PASTE_TAILSCALE_CLIENT_SECRET' \
-  > /srv/dgx-forge/secrets/tailscale-oauth-client-secret
-chmod 0600 /srv/dgx-forge/secrets/tailscale-oauth-client-*
+  > /srv/vonk-forge/secrets/tailscale-oauth-client-secret
+chmod 0600 /srv/vonk-forge/secrets/tailscale-oauth-client-*
 ```
 
 Set only the file paths in the root-owned site environment. The installed host
@@ -43,8 +43,8 @@ updater starts the complete selected generation during first install, upgrade,
 rollback, or recovery. Verify it without invoking Compose from a checkout:
 
 ```bash
-sudo dgx-control-offline doctor
-sudo dgx-control-offline maintenance status
+sudo vonk-control-offline doctor
+sudo vonk-control-offline maintenance status
 ```
 
 Persisted state and `TS_AUTH_ONCE=true` retain node identity. After clean state
@@ -56,7 +56,7 @@ The configurator waits for Caddy and Hermes health. It resets any missing,
 extra, downgraded, or retargeted Serve map and deterministically creates:
 
 ```text
-svc:dgx-forge         HTTPS 443 -> http://caddy:8080
+svc:vonk-forge         HTTPS 443 -> http://caddy:8080
 svc:hermes-api        HTTPS 443 -> http://hermes-agent:8642
 svc:hermes-dashboard  HTTPS 443 -> http://hermes-agent:9119
 ```
@@ -68,23 +68,23 @@ All listeners use explicit `--https=443`; plaintext HTTP on 443 is rejected.
 Reserve `10.0.0.2` for the NAS and resolve these only on the management LAN:
 
 ```text
-enroll.dgx-forge.lan   10.0.0.2
-agents.dgx-forge.lan   10.0.0.2
-registry.dgx-forge.lan 10.0.0.2
+enroll.vonk-forge.lan   10.0.0.2
+agents.vonk-forge.lan   10.0.0.2
+registry.vonk-forge.lan 10.0.0.2
 ```
 
-Allow TCP 8443 only from `10.0.0.0/24`, preferably narrowed to reserved Spark
-leases. Do not allow LAN access to human or Hermes endpoints. Spark DHCP
+Allow TCP 8443 only from `10.0.0.0/24`, preferably narrowed to reserved GPU node
+leases. Do not allow LAN access to human or Hermes endpoints. GPU node DHCP
 reservations improve stability, but identity and routing use authenticated
 agent presence rather than a hard-coded address.
 
 ## Verification
 
 ```bash
-sudo dgx-control-offline maintenance tailscale-status
-sudo dgx-control-offline maintenance tailscale-serve-status
-sudo dgx-control-offline maintenance tailscale-serve-config
-sudo dgx-control-offline maintenance logs \
+sudo vonk-control-offline maintenance tailscale-status
+sudo vonk-control-offline maintenance tailscale-serve-status
+sudo vonk-control-offline maintenance tailscale-serve-config
+sudo vonk-control-offline maintenance logs \
   --service tailscale-configurator --since-minutes 30
 ```
 
@@ -99,7 +99,7 @@ reach either Hermes endpoint.
 
 Do not run `docker compose down`; it bypasses the selected-generation journal.
 A platform transition or recovery uses the updater's fixed stop/start sequence.
-For a full host drain, withdraw Spark routes and human access, complete the
+For a full host drain, withdraw GPU node routes and human access, complete the
 encrypted control-host backup, then stop the Docker host through its normal OS
 shutdown procedure. Back up `tailscale-state` and the OAuth files with the same
 encrypted generation as the control database and Hermes state. Restore state

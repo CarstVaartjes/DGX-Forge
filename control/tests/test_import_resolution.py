@@ -5,8 +5,8 @@ from pathlib import Path
 from vonk_control.import_resolution import resolve_import
 from vonk_control.model_resolution import ModelFile, SnapshotEnvelope
 from vonk_control.registry_resolution import ManifestEnvelope
-from vonk_control.sparkrun_importer import import_sparkrun
-from vonk_control.sparkrun_source import parse_sparkrun_yaml
+from vonk_control.workload_run_importer import import_workload_run
+from vonk_control.workload_run_source import parse_workload_run_yaml
 
 
 class Registry:
@@ -36,8 +36,8 @@ class Models:
 
 
 def test_complete_overlays_resolve_import_to_valid_recipe() -> None:
-    raw = (Path(__file__).parent / "fixtures/sparkrun/minimal-vllm.yaml").read_bytes()
-    imported = import_sparkrun(parse_sparkrun_yaml(raw))
+    raw = (Path(__file__).parent / "fixtures/workload_run/minimal-vllm.yaml").read_bytes()
+    imported = import_workload_run(parse_workload_run_yaml(raw))
     result = resolve_import(
         imported,
         {

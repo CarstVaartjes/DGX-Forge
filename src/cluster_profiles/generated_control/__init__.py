@@ -1,5 +1,5 @@
 
-""" A client library for accessing DGX Forge Control """
+""" A client library for accessing Vonk Forge Control """
 from .client import AuthenticatedClient, Client
 
 __all__ = (

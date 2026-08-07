@@ -10,25 +10,25 @@
   },
   "manual_plan": {
     "status": "applied_and_verified",
-    "source": "NVIDIA dgx-spark-playbooks Connect Two Sparks README",
+    "source": "NVIDIA vonk-node-playbooks Connect Two GPU nodes README",
     "source_commit": "1fb66f059ee427c5a3678b3117ef73aab042b458",
-    "netplan_file": "/etc/netplan/99-dgx-spark-direct-fabric.yaml",
+    "netplan_file": "/etc/netplan/99-vonk-node-direct-fabric.yaml",
     "mtu": 1500,
     "dhcp4": false,
     "nodes": {
-      "spark1": [
+      "node1": [
         {"interface": "enp1s0f1np1", "hca": "rocep1s0f1", "address": "192.168.100.10/24"},
         {"interface": "enP2p1s0f1np1", "hca": "roceP2p1s0f1", "address": "192.168.101.10/24"}
       ],
-      "spark2": [
+      "node2": [
         {"interface": "enp1s0f1np1", "hca": "rocep1s0f1", "address": "192.168.100.11/24"},
         {"interface": "enP2p1s0f1np1", "hca": "roceP2p1s0f1", "address": "192.168.101.11/24"}
       ]
     }
   },
   "observed_preconfiguration": {
-    "spark1": {
-      "ssh_alias": "dgx-spark-1",
+    "node1": {
+      "ssh_alias": "vonk-node-1",
       "management_ip": "192.168.1.211",
       "active_qsfp_functions": [
         {
@@ -49,8 +49,8 @@
         }
       ]
     },
-    "spark2": {
-      "ssh_alias": "dgx-spark-2",
+    "node2": {
+      "ssh_alias": "vonk-node-2",
       "management_ip": "192.168.1.212",
       "active_qsfp_functions": [
         {
@@ -100,7 +100,7 @@
     {
       "name": "manual CLI rollout",
       "status": "passed",
-      "evidence": "Spark2 worker apply and local validation completed before Spark1 head apply and local validation. NVIDIA Sync and discover-sparks were not used."
+      "evidence": "Spark2 worker apply and local validation completed before Spark1 head apply and local validation. NVIDIA Sync and discover-nodes were not used."
     },
     {
       "name": "fabric acceptance",
@@ -110,12 +110,12 @@
     }
   ],
   "cluster_ssh": {
-    "private_key_location": "Spark1 ~/.ssh/dgx_spark_fabric_ed25519 only",
+    "private_key_location": "Spark1 ~/.ssh/vonk_spark_fabric_ed25519 only",
     "private_key_fingerprint": "SHA256:xAsqCZnOIq34EVQR2O5+z+qaLlXFIdT7Qp9wreg4rfg",
     "worker_authorized_key_options": "restrict,from=192.168.100.10,192.168.101.10",
     "worker_host_ed25519_fingerprint": "SHA256:Q/0cf26vxC6Z+xH6pfB5uoGNXfIEum6KOFVhnl4nngg",
-    "head_alias": "dgx-spark-2-fabric",
-    "head_alias_result": "spark-2297"
+    "head_alias": "vonk-node-2-fabric",
+    "head_alias_result": "node-2297"
   },
   "host_mutations_performed": true,
   "staging_commit": "bae20253943c954774ecd31692bf434754998481",

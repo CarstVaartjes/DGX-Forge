@@ -139,14 +139,14 @@ id = "missing-worker"
 accepted_evidence = "inventory/reports/missing-worker.json"
 
 [placements]
-spark1 = ["deepseek-agent-dual"]
+node1 = ["deepseek-agent-dual"]
 
 [endpoints]
 agent = "deepseek-agent-dual"
 """,
     )
 
-    with pytest.raises(ProfileValidationError, match="spark2"):
+    with pytest.raises(ProfileValidationError, match="node2"):
         load_cluster_profile(path)
 
 
@@ -160,8 +160,8 @@ accepted_evidence = "inventory/reports/unknown-key.json"
 surprise = true
 
 [placements]
-spark1 = []
-spark2 = []
+node1 = []
+node2 = []
 
 [endpoints]
 """,
@@ -177,9 +177,9 @@ def test_distributed_workload_declares_rank_order() -> None:
     )
 
     assert workload.topology == "distributed"
-    assert workload.nodes == ("spark1", "spark2")
-    assert workload.start_order == ("spark2", "spark1")
-    assert workload.stop_order == ("spark1", "spark2")
+    assert workload.nodes == ("node1", "node2")
+    assert workload.start_order == ("node2", "node1")
+    assert workload.stop_order == ("node1", "node2")
 
 
 def test_distributed_workload_requires_worker_first_start_order(
@@ -192,8 +192,8 @@ def test_distributed_workload_requires_worker_first_start_order(
         tmp_path,
         "head-first-start.toml",
         source.replace(
-            'start_order = ["spark2", "spark1"]',
-            'start_order = ["spark1", "spark2"]',
+            'start_order = ["node2", "node1"]',
+            'start_order = ["node1", "node2"]',
         ),
     )
 
@@ -211,8 +211,8 @@ def test_distributed_workload_requires_head_first_stop_order(
         tmp_path,
         "worker-first-stop.toml",
         source.replace(
-            'stop_order = ["spark1", "spark2"]',
-            'stop_order = ["spark2", "spark1"]',
+            'stop_order = ["node1", "node2"]',
+            'stop_order = ["node2", "node1"]',
         ),
     )
 
@@ -248,6 +248,13 @@ def test_repository_schema_mirrors_match_canonical_package_schemas() -> None:
         ).read_bytes()
 
 
+def test_owned_schema_identifiers_use_the_vonk_forge_namespace() -> None:
+    for path in sorted(REPOSITORY_SCHEMA_ROOT.glob("*.json")):
+        document = __import__("json").loads(path.read_text(encoding="utf-8"))
+        if "$id" in document:
+            assert document["$id"].startswith("https://vonk-forge.")
+
+
 def test_built_wheel_contains_every_canonical_schema(tmp_path: Path) -> None:
     subprocess.run(
         ["uv", "build", "--wheel", "--out-dir", str(tmp_path)],
@@ -277,7 +284,7 @@ def test_home_workload_uses_an_immutable_image_and_declarative_adapter_commands(
     assert workload.endpoint.host == "127.0.0.1"
     release_sha256 = "92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e"
     adapter = (
-        "/opt/spark/model-adapters/deepseek-agent-dual/releases/"
+        "/opt/node/model-adapters/deepseek-agent-dual/releases/"
         f"{release_sha256}/bin/mia-deepseek-dual"
     )
     assert workload.commands.verify_release == (adapter, "verify-release")
@@ -307,9 +314,9 @@ def test_mia_dual_workload_uses_the_audited_immutable_runtime_contract() -> None
         "@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8"
     )
     assert workload.topology == "distributed"
-    assert workload.nodes == ("spark1", "spark2")
-    assert workload.start_order == ("spark2", "spark1")
-    assert workload.stop_order == ("spark1", "spark2")
+    assert workload.nodes == ("node1", "node2")
+    assert workload.start_order == ("node2", "node1")
+    assert workload.stop_order == ("node1", "node2")
     assert workload.endpoint.host == "127.0.0.1"
     assert workload.endpoint.port == 8888
 
@@ -320,7 +327,7 @@ def test_mia_documentation_marks_the_prior_staged_lane_as_superseded() -> None:
     ).read_text(encoding="utf-8")
     platform_design = (
         REPOSITORY_ROOT
-        / "docs/superpowers/specs/2026-08-01-dual-dgx-spark-platform-design.md"
+        / "docs/superpowers/specs/2026-08-01-dual-vonk-node-platform-design.md"
     ).read_text(encoding="utf-8")
     multi_runtime_design = (
         REPOSITORY_ROOT
@@ -328,7 +335,7 @@ def test_mia_documentation_marks_the_prior_staged_lane_as_superseded() -> None:
     ).read_text(encoding="utf-8")
 
     audited_commit = "b131b2a22164675890dd1465fd8862b5cfb6ff13"
-    assert "Superseded by the Mia dual-Spark implementation plan" in historical_plan
+    assert "Superseded by the Mia dual-GPU node implementation plan" in historical_plan
     assert "Historical, superseded staged-lane design" in platform_design
     assert "Mia-first audit selected" in multi_runtime_design
     assert audited_commit in historical_plan
@@ -346,8 +353,8 @@ def test_profile_overview_records_the_audited_ds4_q2_imatrix_lane() -> None:
         / "docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md"
     ).read_text(encoding="utf-8")
 
-    assert "Audited DS4 v0.5.3 Q2-imatrix + DSpark GGUF pair" in overview
-    assert "MXFP4 remains deferred until both loader support and measured one-Spark admission exist." in design
+    assert "Audited DS4 v0.5.3 Q2-imatrix + draft-model GGUF pair" in overview
+    assert "MXFP4 remains deferred until both loader support and measured one-GPU node admission exist." in design
     assert "DS4 Flash 0731 MXFP4 candidate" not in overview
     assert "`deepseek`" in overview
 
@@ -449,9 +456,9 @@ id = "missing-operation"
 adapter = "test"
 topology = "single"
 placement_class = "single-exclusive"
-nodes = ["spark1"]
-start_order = ["spark1"]
-stop_order = ["spark1"]
+nodes = ["node1"]
+start_order = ["node1"]
+stop_order = ["node1"]
 conflicts = []
 co_location = "exclusive"
 accepted_evidence = "inventory/reports/missing-operation.json"
@@ -517,8 +524,8 @@ def test_home_profile_uses_canonical_id_and_deepseek_alias() -> None:
 
     assert profile.id == "agent-full-dual"
     assert profile.placements == {
-        "spark1": ("deepseek-agent-dual",),
-        "spark2": ("deepseek-agent-dual",),
+        "node1": ("deepseek-agent-dual",),
+        "node2": ("deepseek-agent-dual",),
     }
     assert profile.endpoints == {"deepseek": "deepseek-agent-dual"}
     assert not hasattr(profile, "restore_home")
@@ -534,8 +541,8 @@ restore_home = false
 accepted_evidence = "inventory/reports/restoration-policy.json"
 
 [placements]
-spark1 = []
-spark2 = []
+node1 = []
+node2 = []
 
 [endpoints]
 """,
@@ -551,4 +558,4 @@ def test_cluster_profile_collections_are_immutable() -> None:
     )
 
     with pytest.raises(TypeError):
-        profile.placements["spark1"] = ()
+        profile.placements["node1"] = ()

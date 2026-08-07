@@ -364,7 +364,7 @@ def test_deployment_cross_reference_requires_exact_digest_and_family() -> None:
         lambda value: value["arguments"].append("../host-file"),
         lambda value: value["secrets"].update({"token": "actual-secret-value"}),
         lambda value: value["selector"].update({"node_count": 0}),
-        lambda value: value["selector"]["preferred_node_ids"].append("spark1"),
+        lambda value: value["selector"]["preferred_node_ids"].append("node1"),
     ],
 )
 def test_deployment_rejects_mutable_payload_secret_and_selector_inputs(

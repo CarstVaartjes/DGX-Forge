@@ -1,4 +1,4 @@
-"""Certificate issuance boundary for outbound Spark agents.
+"""Certificate issuance boundary for outbound GPU node agents.
 
 The built-in issuer deliberately owns only the online intermediate key.  The
 offline root never appears in this API or in the control service's runtime
@@ -122,7 +122,7 @@ class BuiltinCertificateAuthority(CertificateAuthority):
             .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.CLIENT_AUTH]), critical=True)
             .add_extension(
                 x509.SubjectAlternativeName(
-                    [x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{node_id}")]
+                    [x509.UniformResourceIdentifier(f"spiffe://vonk-forge.local/node/{node_id}")]
                 ),
                 critical=False,
             )
@@ -150,7 +150,7 @@ class BuiltinCertificateAuthority(CertificateAuthority):
         return self.issue_node(node_id, csr_pem, now)
 
     def revoke_node(self, serial: str, now: datetime) -> None:
-        # The built-in provider has no durable CA database. DGX-Forge's local
+        # The built-in provider has no durable CA database. Vonk Forge's local
         # certificate row is the immediate revocation authority for ingress.
         if not serial.isdecimal() or int(serial) <= 0:
             raise ValueError("certificate serial must be a positive decimal integer")
@@ -228,7 +228,7 @@ def _load_node_csr(node_id: str, csr_pem: bytes) -> x509.CertificateSigningReque
     except x509.ExtensionNotFound as error:
         raise ValueError("node CSR must contain the node URI SAN") from error
     expected_sans = x509.SubjectAlternativeName(
-        [x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{node_id}")]
+        [x509.UniformResourceIdentifier(f"spiffe://vonk-forge.local/node/{node_id}")]
     )
     if sans != expected_sans:
         raise ValueError("node CSR URI SAN does not match node identity")

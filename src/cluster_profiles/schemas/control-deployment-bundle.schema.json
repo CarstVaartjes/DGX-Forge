@@ -1,13 +1,13 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://dgx-forge.invalid/schemas/control-deployment-bundle.schema.json",
-  "title": "DGX-Forge control deployment bundle",
+  "$id": "https://vonk-forge.invalid/schemas/control-deployment-bundle.schema.json",
+  "title": "Vonk Forge control deployment bundle",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "format", "files"],
   "properties": {
     "schema_version": {"const": 1},
-    "format": {"const": "dgx-control-deployment-bundle-v1"},
+    "format": {"const": "vonk-control-deployment-bundle-v1"},
     "files": {
       "type": "array",
       "minItems": 1,

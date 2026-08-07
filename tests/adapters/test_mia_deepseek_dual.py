@@ -133,8 +133,8 @@ def _valid_compose_config(role: str) -> dict[str, object]:
                     "TRANSFORMERS_OFFLINE": "1",
                     "HF_HUB_DISABLE_XET": "1",
                     "NODE_RANK": "0" if role == "head" else "1",
-                    "DSPARK_MODEL": "/models/deepseek-ai/DeepSeek-V4-Flash-0731",
-                    "DSPARK_ENCODING_FILE": "/models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py",
+                    "DVONK_MODEL": "/models/deepseek-ai/DeepSeek-V4-Flash-0731",
+                    "DVONK_ENCODING_FILE": "/models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py",
                     "VLLM_HOST_IP": (
                         "192.168.100.10" if role == "head" else "192.168.100.11"
                     ),
@@ -340,7 +340,7 @@ def test_startup_identity_record_is_container_release_and_boot_qualified(
 
 
 def render(role: str) -> str:
-    hostname = "spark-3542" if role == "head" else "spark-2297"
+    hostname = "node-3542" if role == "head" else "node-2297"
     completed = subprocess.run(
         [str(ADAPTER), "render", role],
         cwd=ROOT,
@@ -390,8 +390,8 @@ def test_render_pins_model_mounts_fabric_and_vllm_arguments() -> None:
         "read_only: true",
         "source: /srv/models/runtime-cache/deepseek-agent-dual",
         "target: /runtime-cache",
-        "DSPARK_MODEL: /models/deepseek-ai/DeepSeek-V4-Flash-0731",
-        "DSPARK_ENCODING_FILE: /models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py",
+        "DVONK_MODEL: /models/deepseek-ai/DeepSeek-V4-Flash-0731",
+        "DVONK_ENCODING_FILE: /models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py",
         "VLLM_CACHE_ROOT: /runtime-cache/vllm",
         "FLASHINFER_WORKSPACE_BASE: /runtime-cache/flashinfer",
         "HF_HOME: /runtime-cache/huggingface",
@@ -472,11 +472,11 @@ def test_render_rejects_a_valid_role_on_the_wrong_physical_node() -> None:
         check=False,
         capture_output=True,
         text=True,
-        env={**os.environ, "MIA_LOCAL_HOSTNAME": "spark-2297"},
+        env={**os.environ, "MIA_LOCAL_HOSTNAME": "node-2297"},
     )
 
     assert completed.returncode == 2
-    assert "head requires spark1/spark-3542" in completed.stderr
+    assert "head requires node1/node-3542" in completed.stderr
 
 
 def fake_command(tmp_path: Path, name: str, body: str) -> Path:
@@ -554,7 +554,7 @@ fi
             "MIA_DF_BIN": str(df),
             "MIA_MODEL_MANIFEST_TOOL": str(verifier),
             "MIA_MODELS_ROOT": str(models_root),
-            "MIA_LOCAL_HOSTNAME": "spark-2297",
+            "MIA_LOCAL_HOSTNAME": "node-2297",
             "MIA_RELEASE_SHA256": release_digest,
             "FAKE_CONTAINER_STATE": container_state,
             "FAKE_RUNTIME_LABEL": runtime_label,
@@ -599,8 +599,8 @@ def test_prepare_starts_a_durable_exact_revision_job(tmp_path: Path) -> None:
     assert "--security-opt no-new-privileges" in calls
     assert "--user " in calls
     assert "NVIDIA_VISIBLE_DEVICES=void" in calls
-    assert "spark.runtime-release=" + "a" * 64 in calls
-    assert "spark.checkpoint-manifest=82e965" in calls
+    assert "node.runtime-release=" + "a" * 64 in calls
+    assert "node.checkpoint-manifest=82e965" in calls
     assert "HF_HUB_DISABLE_XET=1" in calls
     assert "HF_HUB_DISABLE_SYMLINKS=1" in calls
     assert "deepseek-ai/DeepSeek-V4-Flash-0731" in calls
@@ -713,19 +713,19 @@ def test_start_and_stop_control_only_the_local_role(tmp_path: Path) -> None:
         [str(ADAPTER), "start", "worker"],
         cwd=ROOT,
         check=True,
-        env={**environment, "MIA_LOCAL_HOSTNAME": "spark-2297"},
+        env={**environment, "MIA_LOCAL_HOSTNAME": "node-2297"},
     )
     subprocess.run(
         [str(ADAPTER), "stop", "head"],
         cwd=ROOT,
         check=True,
-        env={**environment, "MIA_LOCAL_HOSTNAME": "spark-3542"},
+        env={**environment, "MIA_LOCAL_HOSTNAME": "node-3542"},
     )
 
     calls = log.read_text(encoding="utf-8")
-    assert "spark2.env" in calls
+    assert "node2.env" in calls
     assert "up --detach --no-build --pull never --remove-orphans" in calls
-    assert "spark1.env" in calls
+    assert "node1.env" in calls
     assert "down --timeout 120 --remove-orphans" in calls
 
 
@@ -791,7 +791,7 @@ def _verification_fixture(tmp_path: Path) -> dict[str, str]:
         **os.environ,
         "MIA_DOCKER_BIN": str(docker),
         "MIA_IP_BIN": str(ip),
-        "MIA_LOCAL_HOSTNAME": "spark-2297",
+        "MIA_LOCAL_HOSTNAME": "node-2297",
         "MIA_MODELS_ROOT": str(models_root),
         "MIA_MODEL_MANIFEST_TOOL": str(verifier),
         "MIA_SYS_CLASS_NET": str(sys_class_net),
@@ -927,7 +927,7 @@ fi
             **os.environ,
             "MIA_DOCKER_BIN": str(docker),
             "MIA_CURL_BIN": str(curl),
-            "MIA_LOCAL_HOSTNAME": "spark-2297",
+            "MIA_LOCAL_HOSTNAME": "node-2297",
             "FAKE_IMAGE_REFERENCE": IMAGE,
         },
     )
@@ -949,7 +949,7 @@ def test_worker_inference_is_rejected_without_calling_curl(tmp_path: Path) -> No
         env={
             **os.environ,
             "MIA_CURL_BIN": str(curl),
-            "MIA_LOCAL_HOSTNAME": "spark-2297",
+            "MIA_LOCAL_HOSTNAME": "node-2297",
         },
     )
 
@@ -1279,7 +1279,7 @@ fi
         env={
             **os.environ,
             "MIA_DOCKER_BIN": str(docker),
-            "MIA_LOCAL_HOSTNAME": "spark-2297",
+            "MIA_LOCAL_HOSTNAME": "node-2297",
             "MIA_RELEASE_SHA256": "a" * 64,
             "FAKE_IMAGE_REFERENCE": IMAGE,
         },
@@ -1328,7 +1328,7 @@ if [[ $* == *"/v1/models"* ]]; then printf '{{"data":[{{"id":"deepseek"}}]}}\\n'
             **os.environ,
             "MIA_DOCKER_BIN": str(docker),
             "MIA_CURL_BIN": str(curl),
-            "MIA_LOCAL_HOSTNAME": "spark-3542",
+            "MIA_LOCAL_HOSTNAME": "node-3542",
             "MIA_MODELS_ROOT": str(models_root),
             "MIA_RELEASE_SHA256": "a" * 64,
             "MIA_BOOT_ID_PATH": str(boot_id),
@@ -1354,7 +1354,7 @@ if [[ $* == *"/v1/models"* ]]; then printf '{{"data":[{{"id":"deepseek"}}]}}\\n'
             **os.environ,
             "MIA_DOCKER_BIN": str(docker),
             "MIA_CURL_BIN": str(curl),
-            "MIA_LOCAL_HOSTNAME": "spark-3542",
+            "MIA_LOCAL_HOSTNAME": "node-3542",
             "MIA_MODELS_ROOT": str(models_root),
             "MIA_RELEASE_SHA256": "a" * 64,
             "MIA_BOOT_ID_PATH": str(boot_id),
@@ -1395,7 +1395,7 @@ printf "%s\\n" "$output"
         text=True,
         env={
             **os.environ,
-            "MIA_LOCAL_HOSTNAME": "spark-3542",
+            "MIA_LOCAL_HOSTNAME": "node-3542",
             "MIA_MODELS_ROOT": str(models_root),
             "MIA_RELEASE_SHA256": "a" * 64,
             "MIA_BOOT_ID_PATH": str(boot_id),
@@ -1432,7 +1432,7 @@ def test_start_records_idle_memory_baseline_before_compose_up(tmp_path: Path) ->
         env={
             **os.environ,
             "MIA_DOCKER_BIN": str(docker),
-            "MIA_LOCAL_HOSTNAME": "spark-2297",
+            "MIA_LOCAL_HOSTNAME": "node-2297",
             "MIA_MODELS_ROOT": str(models_root),
             "MIA_RELEASE_SHA256": "a" * 64,
             "MIA_BOOT_ID_PATH": str(boot_id),
@@ -1498,7 +1498,7 @@ exit 0
             "MIA_CURL_BIN": str(curl),
             "MIA_SS_BIN": str(ss),
             "MIA_SYSTEMCTL_BIN": str(systemctl),
-            "MIA_LOCAL_HOSTNAME": "spark-2297",
+            "MIA_LOCAL_HOSTNAME": "node-2297",
             "MIA_MODELS_ROOT": str(models_root),
             "MIA_RELEASE_SHA256": "a" * 64,
             "MIA_BOOT_ID_PATH": str(boot_id),

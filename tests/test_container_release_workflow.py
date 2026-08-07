@@ -88,7 +88,7 @@ def test_release_metadata_is_tag_only_and_read_only() -> None:
         "${{ steps.release.outputs.deployment_bundle_repository }}"
     ) in metadata
     assert "platform_channel: ${{ steps.release.outputs.platform_channel }}" in metadata
-    assert "vars.DGX_PLATFORM_RELEASES_ENABLED == 'true'" in metadata
+    assert "vars.VONK_PLATFORM_RELEASES_ENABLED == 'true'" in metadata
 
 
 def test_tag_release_builds_and_publishes_exact_platform_target() -> None:
@@ -109,8 +109,8 @@ def test_tag_release_builds_and_publishes_exact_platform_target() -> None:
     publish = workflow_step("publish-platform-target", "Publish immutable platform target")
     assert "scripts/publish-platform-target publish-authority" in publish
     assert "scripts/platform-release-authority" in publish
-    assert "DGX_PLATFORM_AUTHORITY_URL: ${{ vars.DGX_PLATFORM_AUTHORITY_URL }}" in publish
-    assert "DGX_PLATFORM_AUTHORITY_AUDIENCE:" in publish
+    assert "VONK_PLATFORM_AUTHORITY_URL: ${{ vars.VONK_PLATFORM_AUTHORITY_URL }}" in publish
+    assert "VONK_PLATFORM_AUTHORITY_AUDIENCE:" in publish
     assert "ROOT_KEY" not in publish
 
 
@@ -139,7 +139,7 @@ def test_host_updater_has_a_separate_minimal_provenance_attestation_job() -> Non
     assert "packages: write" not in attestor
     assert "permissions:\n      contents: read\n      id-token: write\n      attestations: write" in attestor
     assert "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6" in attestor
-    assert "subject-path: release-output/dgx-forge-host-updater.tar" in attestor
+    assert "subject-path: release-output/vonk-forge-host-updater.tar" in attestor
     assert "attest-host-updater" in release.split("needs:", 1)[1].splitlines()[0]
 
 
@@ -162,7 +162,7 @@ def test_host_updater_uses_the_wheels_built_from_distribution_metadata() -> None
 
     assert (
         "--control-wheel "
-        "release-output/wheels/dgx_control-0.1.0-py3-none-any.whl"
+        "release-output/wheels/vonk_control-0.1.0-py3-none-any.whl"
     ) in build
     assert (
         "--platform-wheel "
@@ -187,7 +187,7 @@ def test_release_chain_is_default_off_and_dependency_gated() -> None:
     publisher = job("publish-images")
     manifest = job("release-manifest")
 
-    assert "vars.DGX_CONTAINER_RELEASES_ENABLED == 'true'" in metadata
+    assert "vars.VONK_CONTAINER_RELEASES_ENABLED == 'true'" in metadata
     assert "needs: [lint, generated-clients, test, release-metadata]" in publisher
     assert (
         "needs: [release-metadata, publish-images, attest-host-updater, "
@@ -217,12 +217,12 @@ def test_publisher_needs_every_ci_gate_and_alone_can_write_packages() -> None:
 def test_all_container_publications_are_serialized_without_cancellation() -> None:
     publisher = job("publish-images")
 
-    assert "concurrency:\n      group: dgx-forge-container-publication" in publisher
+    assert "concurrency:\n      group: vonk-forge-container-publication" in publisher
     assert "cancel-in-progress: false" in publisher
     assert publisher.index("concurrency:") < publisher.index(
         "Refuse an existing release version"
     )
-    assert workflow().count("group: dgx-forge-container-publication") == 1
+    assert workflow().count("group: vonk-forge-container-publication") == 1
 
 
 def test_publisher_uses_pinned_docker_actions_and_exact_artifacts() -> None:
@@ -235,9 +235,9 @@ def test_publisher_uses_pinned_docker_actions_and_exact_artifacts() -> None:
         assert action in text
     assert text.count("docker/build-push-action@") == 3
     for package in (
-        "dgx-forge-api",
-        "dgx-forge-worker",
-        "dgx-forge-hermes",
+        "vonk-forge-api",
+        "vonk-forge-worker",
+        "vonk-forge-hermes",
     ):
         assert package in text
     assert text.count("platforms: linux/amd64") == 3
@@ -406,8 +406,8 @@ def test_manifest_rejects_invalid_digests_before_creating_assets(
         )
 
         assert result.returncode != 0
-        assert not (target / "dgx-forge-images.env").exists()
-        assert not (target / "dgx-forge-images.env.sha256").exists()
+        assert not (target / "vonk-forge-images.env").exists()
+        assert not (target / "vonk-forge-images.env.sha256").exists()
 
 
 def test_manifest_accepts_valid_digests_and_checksums_the_asset(
@@ -435,13 +435,13 @@ def test_manifest_accepts_valid_digests_and_checksums_the_asset(
     )
 
     assert result.returncode == 0, result.stderr
-    assert (tmp_path / "dgx-forge-images.env").read_text() == (
+    assert (tmp_path / "vonk-forge-images.env").read_text() == (
         f"CONTROL_API_IMAGE=ghcr.io/example/api:1.2.3@{digest}\n"
         f"CONTROL_WORKER_IMAGE=ghcr.io/example/worker:1.2.3@{digest}\n"
         f"HERMES_AGENT_IMAGE=ghcr.io/example/hermes:1.2.3@{digest}\n"
     )
     checksum = subprocess.run(
-        ["sha256sum", "--check", "dgx-forge-images.env.sha256"],
+        ["sha256sum", "--check", "vonk-forge-images.env.sha256"],
         cwd=tmp_path,
         check=False,
         capture_output=True,
@@ -457,7 +457,7 @@ def test_final_job_creates_checksum_protected_public_release_asset() -> None:
         "needs: [release-metadata, publish-images, attest-host-updater, "
         "publish-platform-target]" in text
     )
-    assert "dgx-forge-images.env" in text
+    assert "vonk-forge-images.env" in text
     assert "sha256sum" in text
     assert "gh release create" in text
     assert "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in text

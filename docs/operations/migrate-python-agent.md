@@ -1,4 +1,4 @@
-# Migrate a Python Spark agent to Rust
+# Migrate a Python GPU node agent to Rust
 
 This is a credential replacement, not a private-key copy. The Rust agent
 creates a new Ed25519 key locally. A dedicated, short-lived migration grant
@@ -7,7 +7,7 @@ protocol-3 claim atomically marks migration complete and locally revokes all
 older certificates.
 
 The Python service remains the test oracle for one release. Do not remove its
-files or units until the physical Spark soak is accepted.
+files or units until the physical GPU node soak is accepted.
 
 ## Preconditions
 
@@ -25,9 +25,9 @@ Stop the legacy unit and snapshot only its receipt database. Replace the unit
 and source path below if the legacy installation used different names:
 
 ```bash
-sudo systemctl stop dgx-agent.service
+sudo systemctl stop vonk-agent.service
 sudo install -o vonk-agent -g vonk-agent -m 0400 \
-  /var/lib/dgx-forge/agent/agent-state.sqlite3 \
+  /var/lib/vonk-forge/agent/agent-state.sqlite3 \
   /var/lib/vonk-forge/agent/python-receipts.sqlite3
 sudo -u vonk-agent -- \
   /var/lib/vonk-forge/supervisor/current/vonk-agent \
@@ -64,7 +64,7 @@ Only then disable the legacy service and delete the token and staged receipt
 copy:
 
 ```bash
-sudo systemctl disable dgx-agent.service
+sudo systemctl disable vonk-agent.service
 sudo rm -f /run/secrets/vonk-migration-token
 sudo rm -f /var/lib/vonk-forge/agent/python-receipts.sqlite3
 ```

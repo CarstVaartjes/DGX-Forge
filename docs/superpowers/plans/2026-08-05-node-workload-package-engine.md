@@ -1,4 +1,4 @@
-# Spark Workload Package Engine Implementation Plan
+# GPU node Workload Package Engine Implementation Plan
 
 > **Implementation status (2026-08-06): complete for the installed capability
 > set.** W5–W8 and W10 are implemented on `main`; W9 provides the generic ABI,
@@ -8,9 +8,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Give every Spark one durable, resumable, content-addressed package engine that can materialize and run arbitrary signed workload releases through stable unprivileged backends.
+**Goal:** Give every GPU node one durable, resumable, content-addressed package engine that can materialize and run arbitrary signed workload releases through stable unprivileged backends.
 
-**Architecture:** The compiled agent exposes only generic package operations and a versioned unprivileged adapter ABI. A Spark-local SQLite journal coordinates capacity reservations, downloads, derived artifacts, generations, leases, rollback, repair, and garbage collection; immutable bytes enter the verified store only after complete digest/size checks. The privileged boundary applies fixed typed primitives, while release-provided adapters run as the workload identity in a restricted sandbox.
+**Architecture:** The compiled agent exposes only generic package operations and a versioned unprivileged adapter ABI. A GPU node-local SQLite journal coordinates capacity reservations, downloads, derived artifacts, generations, leases, rollback, repair, and garbage collection; immutable bytes enter the verified store only after complete digest/size checks. The privileged boundary applies fixed typed primitives, while release-provided adapters run as the workload identity in a restricted sandbox.
 
 **Tech Stack:** Python 3.12, SQLite, Linux dirfd/openat2-style confinement, systemd/cgroups, OCI/ORAS, Hugging Face HTTP revisions, Python `pylock.toml`, pytest
 
@@ -22,26 +22,26 @@
 - Every download is ranged/resumable, journaled, capacity-reserved, cancellable, restart-safe, size/digest verified, and atomically promoted from a partial namespace.
 - Activation changes one generation pointer only after the complete dependency graph is materialized and validated.
 - Active, retained rollback, staged, leased, and explicitly pinned objects are never garbage-collected.
-- Existing `release.install` and `spark-runtime-v1` behavior remains a legacy compatibility path until W17 migration acceptance passes.
+- Existing `release.install` and `node-runtime-v1` behavior remains a legacy compatibility path until W17 migration acceptance passes.
 
 ---
 
 ### Task W5: Generic package operation protocol and capabilities
 
 **Files:**
-- Modify: `agent_protocol/src/dgx_agent_protocol/contracts.py`
-- Modify: `agent_protocol/src/dgx_agent_protocol/schemas/agent-job.schema.json`
-- Create: `agent_protocol/src/dgx_agent_protocol/schemas/agent-directive.schema.json`
+- Modify: `agent_protocol/src/vonk_agent_protocol/contracts.py`
+- Modify: `agent_protocol/src/vonk_agent_protocol/schemas/agent-job.schema.json`
+- Create: `agent_protocol/src/vonk_agent_protocol/schemas/agent-directive.schema.json`
 - Modify: `agent_protocol/pyproject.toml`
 - Modify: `agent_protocol/uv.lock`
-- Delete: `inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl`
-- Create: `inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl`
-- Create: `agent/src/dgx_agent/package_trust.py`
-- Create: `agent/src/dgx_agent/package_operations.py`
-- Modify: `agent/src/dgx_agent/operations.py`
-- Modify: `agent/src/dgx_agent/client.py`
-- Modify: `agent/src/dgx_agent/main.py`
-- Modify: `agent/src/dgx_agent/state.py`
+- Delete: `inventory/wheels/vonk_agent_protocol-1.0.0-py3-none-any.whl`
+- Create: `inventory/wheels/vonk_agent_protocol-2.0.0-py3-none-any.whl`
+- Create: `agent/src/vonk_agent/package_trust.py`
+- Create: `agent/src/vonk_agent/package_operations.py`
+- Modify: `agent/src/vonk_agent/operations.py`
+- Modify: `agent/src/vonk_agent/client.py`
+- Modify: `agent/src/vonk_agent/main.py`
+- Modify: `agent/src/vonk_agent/state.py`
 - Modify: `agent/pyproject.toml`
 - Modify: `agent/uv.lock`
 - Modify: `control/pyproject.toml`
@@ -65,7 +65,7 @@
 - Adds compiled operations `package.prepare`, `package.activate`, `package.health`, `package.stop`, `package.rollback`, `package.remove`, `package.repair`, and `package.gc`.
 - Release-bound payloads contain only `schema_version`, `deployment_id`, `release_digest`, `deployment_digest`, and operation-specific bounded flags. `package.gc` contains only `schema_version`, `dry_run`, and optional positive `target_bytes`; filesystem paths and commands remain forbidden.
 - Produces `PackageOperationRequest.parse(operation, payload) -> PackageOperationRequest`, `AgentDirective.parse(value) -> AgentDirective`, agent-side `WorkloadTrust.refresh()` / `trusted_lock(digest) -> PackageReleaseLock`, and adds all eight operation names to advertised capabilities.
-- Packages the backward-readable job/result contracts plus the new directive, workload lock, and package operations as `dgx-agent-protocol==2.0.0`; control accepts protocol 1 and 2 during the Spark rollout, while package operations require protocol 2.
+- Packages the backward-readable job/result contracts plus the new directive, workload lock, and package operations as `vonk-agent-protocol==2.0.0`; control accepts protocol 1 and 2 during the GPU node rollout, while package operations require protocol 2.
 
 - [ ] **Step 1: Write RED protocol and closed-vocabulary tests**
 
@@ -119,16 +119,16 @@ Expected: PASS; legacy operations still parse and agents advertise both legacy a
 - [ ] **Step 5: Commit W5**
 
 ```bash
-git add agent_protocol inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl agent/src/dgx_agent/package_trust.py agent/src/dgx_agent/package_operations.py agent/src/dgx_agent/operations.py agent/src/dgx_agent/client.py agent/src/dgx_agent/main.py agent/src/dgx_agent/state.py agent/pyproject.toml agent/uv.lock control/pyproject.toml control/uv.lock control/Dockerfile .dockerignore scripts/verify-supply-chain inventory/sbom/agent-protocol.spdx.json inventory/sbom/agent-python.spdx.json inventory/sbom/control-python.spdx.json inventory/sbom/manifest.json agent/tests/test_package_trust.py agent/tests/test_operations.py agent/tests/test_state.py agent/tests/test_slot_artifact.py control/tests/security/test_agent_protocol.py tests/scripts/test_verify_supply_chain.py && git add -u inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl
+git add agent_protocol inventory/wheels/vonk_agent_protocol-2.0.0-py3-none-any.whl agent/src/vonk_agent/package_trust.py agent/src/vonk_agent/package_operations.py agent/src/vonk_agent/operations.py agent/src/vonk_agent/client.py agent/src/vonk_agent/main.py agent/src/vonk_agent/state.py agent/pyproject.toml agent/uv.lock control/pyproject.toml control/uv.lock control/Dockerfile .dockerignore scripts/verify-supply-chain inventory/sbom/agent-protocol.spdx.json inventory/sbom/agent-python.spdx.json inventory/sbom/control-python.spdx.json inventory/sbom/manifest.json agent/tests/test_package_trust.py agent/tests/test_operations.py agent/tests/test_state.py agent/tests/test_slot_artifact.py control/tests/security/test_agent_protocol.py tests/scripts/test_verify_supply_chain.py && git add -u inventory/wheels/vonk_agent_protocol-1.0.0-py3-none-any.whl
 git commit -m "feat: add generic package operation vocabulary"
 ```
 
 ### Task W6: Durable package store, reservations, and operation journal
 
 **Files:**
-- Create: `agent/src/dgx_agent/packages/__init__.py`
-- Create: `agent/src/dgx_agent/packages/state.py`
-- Create: `agent/src/dgx_agent/packages/store.py`
+- Create: `agent/src/vonk_agent/packages/__init__.py`
+- Create: `agent/src/vonk_agent/packages/state.py`
+- Create: `agent/src/vonk_agent/packages/store.py`
 - Test: `agent/tests/packages/test_state.py`
 - Test: `agent/tests/packages/test_store.py`
 
@@ -174,16 +174,16 @@ Expected: PASS across repeated crash-window parametrization and two concurrent i
 - [ ] **Step 5: Commit W6**
 
 ```bash
-git add agent/src/dgx_agent/packages agent/tests/packages/test_state.py agent/tests/packages/test_store.py
-git commit -m "feat: add durable Spark package store"
+git add agent/src/vonk_agent/packages agent/tests/packages/test_state.py agent/tests/packages/test_store.py
+git commit -m "feat: add durable GPU node package store"
 ```
 
 ### Task W7: Resumable multi-provider acquisition
 
 **Files:**
-- Create: `agent/src/dgx_agent/packages/fetch.py`
-- Create: `agent/src/dgx_agent/packages/providers.py`
-- Modify: `agent/src/dgx_agent/oci.py`
+- Create: `agent/src/vonk_agent/packages/fetch.py`
+- Create: `agent/src/vonk_agent/packages/providers.py`
+- Modify: `agent/src/vonk_agent/oci.py`
 - Test: `agent/tests/packages/test_fetch.py`
 - Test: `agent/tests/packages/test_providers.py`
 
@@ -226,15 +226,15 @@ Expected: PASS; interrupted multi-gigabyte fixtures resume and no partial bytes 
 - [ ] **Step 5: Commit W7**
 
 ```bash
-git add agent/src/dgx_agent/packages/fetch.py agent/src/dgx_agent/packages/providers.py agent/src/dgx_agent/oci.py agent/tests/packages/test_fetch.py agent/tests/packages/test_providers.py
+git add agent/src/vonk_agent/packages/fetch.py agent/src/vonk_agent/packages/providers.py agent/src/vonk_agent/oci.py agent/tests/packages/test_fetch.py agent/tests/packages/test_providers.py
 git commit -m "feat: acquire workload components resumably"
 ```
 
 ### Task W8: Immutable materialization and Python environments
 
 **Files:**
-- Create: `agent/src/dgx_agent/packages/materialize.py`
-- Create: `agent/src/dgx_agent/packages/python_env.py`
+- Create: `agent/src/vonk_agent/packages/materialize.py`
+- Create: `agent/src/vonk_agent/packages/python_env.py`
 - Test: `agent/tests/packages/test_materialize.py`
 - Test: `agent/tests/packages/test_python_env.py`
 
@@ -280,32 +280,32 @@ Expected: PASS with identical locks sharing environments and failed staging leav
 - [ ] **Step 5: Commit W8**
 
 ```bash
-git add agent/src/dgx_agent/packages/materialize.py agent/src/dgx_agent/packages/python_env.py agent/tests/packages/test_materialize.py agent/tests/packages/test_python_env.py
+git add agent/src/vonk_agent/packages/materialize.py agent/src/vonk_agent/packages/python_env.py agent/tests/packages/test_materialize.py agent/tests/packages/test_python_env.py
 git commit -m "feat: materialize immutable workload environments"
 ```
 
 ### Task W9: Unprivileged adapter ABI and execution backends
 
 **Files:**
-- Create: `agent/src/dgx_agent/packages/adapter.py`
-- Create: `agent/src/dgx_agent/packages/backends.py`
-- Create: `agent/src/dgx_agent/packages/sandbox.py`
-- Create: `agent/src/dgx_agent/package_helper_protocol.py`
-- Create: `agent/src/dgx_agent/package_helper.py`
-- Create: `agent/systemd/dgx-forge-package-helper.service`
-- Create: `agent/systemd/dgx-forge-package-helper.socket`
+- Create: `agent/src/vonk_agent/packages/adapter.py`
+- Create: `agent/src/vonk_agent/packages/backends.py`
+- Create: `agent/src/vonk_agent/packages/sandbox.py`
+- Create: `agent/src/vonk_agent/package_helper_protocol.py`
+- Create: `agent/src/vonk_agent/package_helper.py`
+- Create: `agent/systemd/vonk-forge-package-helper.service`
+- Create: `agent/systemd/vonk-forge-package-helper.socket`
 - Modify: `agent/pyproject.toml`
-- Modify: `agent/src/dgx_agent/nvidia_tools.py`
-- Modify: `nodes/bin/install-dgx-agent`
+- Modify: `agent/src/vonk_agent/nvidia_tools.py`
+- Modify: `nodes/bin/install-vonk-agent`
 - Test: `agent/tests/packages/test_adapter.py`
 - Test: `agent/tests/packages/test_backends.py`
 - Test: `agent/tests/packages/test_sandbox.py`
 - Test: `agent/tests/test_package_helper.py`
-- Modify: `tests/nodes/test_install_dgx_agent.py`
+- Modify: `tests/nodes/test_install_vonk_agent.py`
 
 **Interfaces:**
 - Produces ABI v1 operations `prepare`, `verify`, `start`, `health`, `infer`, `stop`, and `verify-release` with canonical JSON stdin/stdout bound to job/operation/attempt/fence/release/generation.
-- Backends are exactly `oci`, `python-venv`, and `native`. The socket-activated root-owned package helper accepts canonical validated backend structs from the `dgx-agent` peer UID, re-verifies signed receipts and operation fences, launches only the dedicated workload UID, and returns bounded evidence.
+- Backends are exactly `oci`, `python-venv`, and `native`. The socket-activated root-owned package helper accepts canonical validated backend structs from the `vonk-agent` peer UID, re-verifies signed receipts and operation fences, launches only the dedicated workload UID, and returns bounded evidence.
 
 - [ ] **Step 1: Write RED privilege and dynamic-adapter tests**
 
@@ -325,7 +325,7 @@ assert evidence.fence == invocation.fence
 
 - [ ] **Step 2: Run the RED tests**
 
-Run: `uv run --project agent --frozen pytest agent/tests/packages/test_adapter.py agent/tests/packages/test_backends.py agent/tests/packages/test_sandbox.py agent/tests/test_package_helper.py -v && uv run --frozen pytest tests/nodes/test_install_dgx_agent.py -v`
+Run: `uv run --project agent --frozen pytest agent/tests/packages/test_adapter.py agent/tests/packages/test_backends.py agent/tests/packages/test_sandbox.py agent/tests/test_package_helper.py -v && uv run --frozen pytest tests/nodes/test_install_vonk_agent.py -v`
 
 Expected: FAIL because package adapters/backends do not exist and current `CompiledAdapterPolicy` is ID-specific.
 
@@ -362,17 +362,17 @@ Expected: PASS; new adapter digests execute within ABI v1 without adding an adap
 - [ ] **Step 5: Commit W9**
 
 ```bash
-git add agent/src/dgx_agent/packages/adapter.py agent/src/dgx_agent/packages/backends.py agent/src/dgx_agent/packages/sandbox.py agent/src/dgx_agent/package_helper_protocol.py agent/src/dgx_agent/package_helper.py agent/src/dgx_agent/nvidia_tools.py agent/systemd/dgx-forge-package-helper.service agent/systemd/dgx-forge-package-helper.socket agent/pyproject.toml nodes/bin/install-dgx-agent agent/tests/packages agent/tests/test_package_helper.py tests/nodes/test_install_dgx_agent.py
+git add agent/src/vonk_agent/packages/adapter.py agent/src/vonk_agent/packages/backends.py agent/src/vonk_agent/packages/sandbox.py agent/src/vonk_agent/package_helper_protocol.py agent/src/vonk_agent/package_helper.py agent/src/vonk_agent/nvidia_tools.py agent/systemd/vonk-forge-package-helper.service agent/systemd/vonk-forge-package-helper.socket agent/pyproject.toml nodes/bin/install-vonk-agent agent/tests/packages agent/tests/test_package_helper.py tests/nodes/test_install_vonk_agent.py
 git commit -m "feat: run dynamic workload adapters safely"
 ```
 
 ### Task W10: Atomic generations, rollback, repair, and garbage collection
 
 **Files:**
-- Create: `agent/src/dgx_agent/packages/engine.py`
-- Create: `agent/src/dgx_agent/packages/gc.py`
-- Modify: `agent/src/dgx_agent/main.py`
-- Modify: `agent/src/dgx_agent/operations.py`
+- Create: `agent/src/vonk_agent/packages/engine.py`
+- Create: `agent/src/vonk_agent/packages/gc.py`
+- Modify: `agent/src/vonk_agent/main.py`
+- Modify: `agent/src/vonk_agent/operations.py`
 - Test: `agent/tests/packages/test_engine.py`
 - Test: `agent/tests/packages/test_gc.py`
 - Test: `agent/tests/test_lifecycle.py`
@@ -421,6 +421,6 @@ Expected: PASS; an unknown synthetic package completes prepare/activate/rollback
 - [ ] **Step 5: Commit W10**
 
 ```bash
-git add agent/src/dgx_agent/packages/engine.py agent/src/dgx_agent/packages/gc.py agent/src/dgx_agent/main.py agent/src/dgx_agent/operations.py agent/tests/packages agent/tests/test_lifecycle.py
+git add agent/src/vonk_agent/packages/engine.py agent/src/vonk_agent/packages/gc.py agent/src/vonk_agent/main.py agent/src/vonk_agent/operations.py agent/tests/packages agent/tests/test_lifecycle.py
 git commit -m "feat: reconcile atomic workload generations"
 ```

@@ -397,7 +397,7 @@ def _execute_request(
     if isinstance(request, NodeProbeRequest):
         evidence = context.probe.collect(deadline)
         if request.require_zero_compute:
-            health = evidence.get("dgx_forge")
+            health = evidence.get("vonk_forge")
             accelerator = (
                 health.get("accelerator") if isinstance(health, Mapping) else None
             )

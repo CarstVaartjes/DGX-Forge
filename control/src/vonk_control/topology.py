@@ -60,7 +60,7 @@ def validate_topology(
     if any("runtime.vonk.v1" not in capabilities.get(node, ()) for node in nodes):
         raise TopologyError(
             "topology.runtime_capability_missing",
-            "every Spark must advertise runtime.vonk.v1",
+            "every GPU node must advertise runtime.vonk.v1",
         )
     fabric = profile.get("fabric")
     if not isinstance(fabric, Mapping):

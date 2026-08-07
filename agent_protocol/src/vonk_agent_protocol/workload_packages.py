@@ -22,9 +22,9 @@ MAX_SOURCES = 8
 MAX_EVIDENCE = 16
 MAX_PACKAGE_HELPER_GRANT_SECONDS = 15 * 60
 
-PACKAGE_HELPER_AUTHORITY = "dgx.workload-package-helper"
-PACKAGE_HELPER_GRANT_DOMAIN = b"DGX-WORKLOAD-PACKAGE-HELPER-GRANT-V1\0"
-PACKAGE_OBJECT_RECEIPT_DOMAIN = b"DGX-WORKLOAD-PACKAGE-OBJECT-RECEIPT-V1\0"
+PACKAGE_HELPER_AUTHORITY = "vonk.workload-package-helper"
+PACKAGE_HELPER_GRANT_DOMAIN = b"Vonk Forge-WORKLOAD-PACKAGE-HELPER-GRANT-V1\0"
+PACKAGE_OBJECT_RECEIPT_DOMAIN = b"Vonk Forge-WORKLOAD-PACKAGE-OBJECT-RECEIPT-V1\0"
 
 IDENTIFIER = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
 PLATFORM = re.compile(r"[a-z0-9][a-z0-9._-]*/[a-z0-9][a-z0-9._-]*\Z")
@@ -796,7 +796,7 @@ def _parse_resource_envelope(value: Any) -> Mapping[str, object]:
             "schema_version",
             "per_node",
             "aggregate",
-            "required_sparks",
+            "required_nodes",
             "topology",
             "world_size",
             "ranks",
@@ -810,18 +810,18 @@ def _parse_resource_envelope(value: Any) -> Mapping[str, object]:
         envelope["schema_version"], bool
     ):
         raise AgentProtocolError("resource_envelope schema_version is invalid")
-    required_sparks = _positive_integer(
-        envelope["required_sparks"],
-        name="resource_envelope required_sparks",
+    required_nodes = _positive_integer(
+        envelope["required_nodes"],
+        name="resource_envelope required_nodes",
         maximum=512,
     )
     topology = envelope["topology"]
     if topology not in {"single", "replicated", "gang"}:
         raise AgentProtocolError("resource_envelope topology is invalid")
-    if topology == "single" and required_sparks != 1:
-        raise AgentProtocolError("single resource_envelope requires one Spark")
-    if topology == "gang" and required_sparks < 2:
-        raise AgentProtocolError("gang resource_envelope requires multiple Sparks")
+    if topology == "single" and required_nodes != 1:
+        raise AgentProtocolError("single resource_envelope requires one GPU node")
+    if topology == "gang" and required_nodes < 2:
+        raise AgentProtocolError("gang resource_envelope requires multiple GPU nodes")
     world_size = _positive_integer(
         envelope["world_size"],
         name="resource_envelope world_size",
@@ -833,9 +833,9 @@ def _parse_resource_envelope(value: Any) -> Mapping[str, object]:
         raise AgentProtocolError(
             "replicated resource_envelope requires world_size one per replica"
         )
-    if topology == "gang" and world_size < required_sparks:
+    if topology == "gang" and world_size < required_nodes:
         raise AgentProtocolError(
-            "gang resource_envelope world_size cannot be below required Sparks"
+            "gang resource_envelope world_size cannot be below required GPU nodes"
         )
 
     ranks_raw = _sequence(
@@ -925,7 +925,7 @@ def _parse_resource_envelope(value: Any) -> Mapping[str, object]:
         envelope["aggregate"], name="resource_envelope aggregate"
     )
     for field in _RESOURCE_FIELDS:
-        minimum = per_node[field] * required_sparks
+        minimum = per_node[field] * required_nodes
         if aggregate[field] < minimum:
             raise AgentProtocolError(
                 f"resource_envelope aggregate {field} is below per-node total"
@@ -944,7 +944,7 @@ def _parse_resource_envelope(value: Any) -> Mapping[str, object]:
             "schema_version": 1,
             "per_node": per_node,
             "aggregate": aggregate,
-            "required_sparks": required_sparks,
+            "required_nodes": required_nodes,
             "topology": topology,
             "world_size": world_size,
             "ranks": ranks,

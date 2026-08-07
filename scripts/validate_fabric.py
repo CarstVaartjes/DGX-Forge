@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Fail-closed acceptance checks for the one-link/two-function DGX Spark fabric.
+"""Fail-closed acceptance checks for the one-link/two-function Vonk Forge GPU node fabric.
 
-The script deliberately uses the head's ``dgx-spark-2-fabric`` SSH alias for
-every Spark1-to-Spark2 action.  It never enables agent forwarding and never
+The script deliberately uses the head's ``vonk-node-2-fabric`` SSH alias for
+every Node-1-to-node-2 action.  It never enables agent forwarding and never
 copies a private key.  NCCL is built natively from pinned NVIDIA sources only
 as a documented prerequisite; this validator verifies the completed artifacts
 worker-first before the live fabric gates.
@@ -35,7 +35,7 @@ NCCL_COMMIT = "73cf112295c33aee2b895f329f592f2a9b4b0f97"
 NCCL_TESTS_COMMIT = "a0b82b2260cf5152b9f8c061bbf7eaf0ba096432"
 CUDA_NVCC = "/usr/local/cuda/bin/nvcc"
 MPI_HOME = "/usr/lib/aarch64-linux-gnu/openmpi"
-FABRIC_WORKER_ALIAS = "dgx-spark-2-fabric"
+FABRIC_WORKER_ALIAS = "vonk-node-2-fabric"
 SSH_OPTIONS = ("-o", "BatchMode=yes", "-o", "ForwardAgent=no", "-o", "ConnectTimeout=10")
 PHYSICAL_LINK_MIN_GBPS = 184.0
 WRITE_FUNCTION_MIN_GBPS = 98.01
@@ -256,7 +256,7 @@ def load_hosts(inventory_path: Path) -> tuple[Host, Host]:
     with inventory_path.open("rb") as handle:
         inventory = tomllib.load(handle)
     hosts: list[Host] = []
-    for name in ("spark1", "spark2"):
+    for name in ("node1", "node2"):
         raw = inventory.get("hosts", {}).get(name)
         if not isinstance(raw, dict):
             raise GateError(f"inventory has no hosts.{name}")
@@ -283,7 +283,7 @@ def load_hosts(inventory_path: Path) -> tuple[Host, Host]:
 def validate_consumers(head: Host, worker: Host) -> None:
     """Reject a stale inventory before it can select different HCAs/GIDs."""
     if [rail.name for rail in head.rails] != [rail.name for rail in worker.rails]:
-        raise GateError("Spark fabric-function names do not match")
+        raise GateError("GPU node fabric-function names do not match")
     for left, right in zip(head.rails, worker.rails, strict=True):
         if (left.interface, left.hca, left.gid_index) != (right.interface, right.hca, right.gid_index):
             raise GateError(f"mismatched HCA/GID consumers on {left.name}")

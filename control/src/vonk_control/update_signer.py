@@ -1,4 +1,4 @@
-"""Bounded networkless Unix-socket boundary for Spark update authorization."""
+"""Bounded networkless Unix-socket boundary for GPU node update authorization."""
 
 from __future__ import annotations
 

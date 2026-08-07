@@ -16,22 +16,22 @@
 - Every production defect receives an observed behavioral RED before its production fix.
 - Repository-wide `uvx --from ruff==0.16.1 ruff check .` must exit zero without weakening Ruff configuration or suppressing legitimate findings.
 - Systemd verification uses `scripts/verify-agent-systemd`; it installs the production units and executable into a disposable root and runs both verify and offline security by installed unit name.
-- The physical device acceptance gate is a later real-DGX inventory/health smoke; local tests must still prove the complete closed read-only effective policy.
-- Do not modify `.superpowers/sdd/2026-08-03-spark-agent-runtime/progress.md`.
+- The physical device acceptance gate is a later real-Vonk Forge inventory/health smoke; local tests must still prove the complete closed read-only effective policy.
+- Do not modify `.superpowers/sdd/2026-08-03-node-agent-runtime/progress.md`.
 
 ---
 
 ### Task 1: Critical startup and trust-boundary fixes
 
 **Files:**
-- Modify: `agent/supervisor/dgx-agent-supervisor`
-- Modify: `agent/systemd/dgx-forge-agent-supervisor.service`
+- Modify: `agent/supervisor/vonk-agent-supervisor`
+- Modify: `agent/systemd/vonk-forge-agent-supervisor.service`
 - Modify: `agent/tests/test_supervisor.py`
-- Modify: `nodes/bin/install-dgx-agent`
-- Modify: `tests/nodes/test_install_dgx_agent.py`
+- Modify: `nodes/bin/install-vonk-agent`
+- Modify: `tests/nodes/test_install_vonk_agent.py`
 
 **Interfaces:**
-- Consumes: the fixed `/usr/bin/python3` interpreter, clean `/run/dgx-forge-agent`, and public PEM CA bundle input.
+- Consumes: the fixed `/usr/bin/python3` interpreter, clean `/run/vonk-forge-agent`, and public PEM CA bundle input.
 - Produces: isolated supervisor startup, exact minimal coordinator capabilities, and certificate-only CA output.
 
 - [x] **Step 1: Add isolated-startup RED**
@@ -45,7 +45,7 @@ Expected: FAIL because the existing `#!/usr/bin/python3` entry point imports use
 
 - [x] **Step 3: Isolate the fixed entry point and verify GREEN**
 
-Change the production shebang to `#!/usr/bin/python3 -I`, retain the fixed `ExecStart=/usr/libexec/dgx-agent-supervisor ...` interface, and rerun the focused test.
+Change the production shebang to `#!/usr/bin/python3 -I`, retain the fixed `ExecStart=/usr/libexec/vonk-agent-supervisor ...` interface, and rerun the focused test.
 
 - [x] **Step 4: Add clean-boot capability RED**
 
@@ -61,14 +61,14 @@ Relabel real private-key DER as `CERTIFICATE`, supply a valid leaf certificate w
 
 - [x] **Step 7: Observe CA RED, implement bounded DER X.509 CA parsing, and verify GREEN**
 
-Run `uv run pytest tests/nodes/test_install_dgx_agent.py -k ca -v`; parse each exact PEM block as a structurally valid X.509 certificate, require the critical/basic-constraints CA boolean, reject duplicates/mixed/trailing material, and rerun.
+Run `uv run pytest tests/nodes/test_install_vonk_agent.py -k ca -v`; parse each exact PEM block as a structurally valid X.509 certificate, require the critical/basic-constraints CA boolean, reject duplicates/mixed/trailing material, and rerun.
 
 ### Task 2: Activation/readiness correctness
 
 **Files:**
-- Modify: `agent/src/dgx_agent/main.py`
+- Modify: `agent/src/vonk_agent/main.py`
 - Modify: `agent/tests/test_lifecycle.py`
-- Modify: `agent/supervisor/dgx-agent-supervisor`
+- Modify: `agent/supervisor/vonk-agent-supervisor`
 - Modify: `agent/tests/test_supervisor.py`
 
 **Interfaces:**
@@ -102,9 +102,9 @@ Atomically rename `readiness.json` to a random root-only quarantine name, open/v
 ### Task 3: Installer ancestry and GPU device policy
 
 **Files:**
-- Modify: `nodes/bin/install-dgx-agent`
-- Modify: `tests/nodes/test_install_dgx_agent.py`
-- Modify: `agent/systemd/dgx-forge-agent.service`
+- Modify: `nodes/bin/install-vonk-agent`
+- Modify: `tests/nodes/test_install_vonk_agent.py`
+- Modify: `agent/systemd/vonk-forge-agent.service`
 - Modify: `agent/tests/test_supervisor.py`
 
 **Interfaces:**
@@ -113,7 +113,7 @@ Atomically rename `readiness.json` to a random root-only quarantine name, open/v
 
 - [x] **Step 1: Add and observe unsafe existing-parent RED**
 
-Precreate a publication parent with wrong owner or group/world-writable non-sticky mode and assert installation fails before root-owned publication. Run `uv run pytest tests/nodes/test_install_dgx_agent.py::test_root_publication_rejects_untrusted_existing_parent -v`.
+Precreate a publication parent with wrong owner or group/world-writable non-sticky mode and assert installation fails before root-owned publication. Run `uv run pytest tests/nodes/test_install_vonk_agent.py::test_root_publication_rejects_untrusted_existing_parent -v`.
 
 - [x] **Step 2: Validate every opened ancestor and final parent, then verify GREEN**
 
@@ -121,11 +121,11 @@ Always call `_ensure_directory` before publication and make `_open_destination_d
 
 - [x] **Step 3: Add and observe complete device-policy RED**
 
-Parse the installed unit's effective `DevicePolicy`, `DeviceAllow`, and bind paths. Require the reviewed DGX Spark set: read-only `/dev/nvidiactl`, `/dev/nvidia0`, modeset, UVM, UVM tools, and monitor capability `/dev/nvidia-caps/nvidia-cap2` under `DevicePolicy=closed`. Do not grant the MIG configuration capability or nonexistent DGX Spark NVSwitch devices.
+Parse the installed unit's effective `DevicePolicy`, `DeviceAllow`, and bind paths. Require the reviewed Vonk Forge GPU node set: read-only `/dev/nvidiactl`, `/dev/nvidia0`, modeset, UVM, UVM tools, and monitor capability `/dev/nvidia-caps/nvidia-cap2` under `DevicePolicy=closed`. Do not grant the MIG configuration capability or nonexistent Vonk Forge GPU node NVSwitch devices.
 
 - [x] **Step 4: Add the reviewed read-only allowlist and verify GREEN**
 
-Retain `PrivateDevices=yes`, grant only `r`, and document that the existing `approved-physical-spark-lifecycle` release gate runs real inventory and health adapters against the installed unit on every supported DGX Spark device inventory.
+Retain `PrivateDevices=yes`, grant only `r`, and document that the existing `approved-physical-node-lifecycle` release gate runs real inventory and health adapters against the installed unit on every supported Vonk Forge GPU node device inventory.
 
 ### Task 4: Executable systemd harness and repository lint cleanup
 
@@ -140,8 +140,8 @@ Retain `PrivateDevices=yes`, grant only `r`, and document that the existing `app
 
 - [x] **Step 1: Preserve literal systemd RED**
 
-Run `systemd-analyze verify agent/systemd/dgx-forge-agent.service agent/systemd/dgx-forge-agent-supervisor.service`.
-Expected: exit 1 with `/usr/libexec/dgx-agent-supervisor is not executable`.
+Run `systemd-analyze verify agent/systemd/vonk-forge-agent.service agent/systemd/vonk-forge-agent-supervisor.service`.
+Expected: exit 1 with `/usr/libexec/vonk-agent-supervisor is not executable`.
 
 - [x] **Step 2: Add harness RED, implement the disposable installed root, and verify GREEN**
 
@@ -166,7 +166,7 @@ Run `uvx --from ruff==0.16.1 ruff check .`; expected exit 0 with `All checks pas
 ### Task 5: Full verification, evidence, and delivery
 
 **Files:**
-- Modify: `.superpowers/sdd/2026-08-03-spark-agent-runtime/task-5-report.md`
+- Modify: `.superpowers/sdd/2026-08-03-node-agent-runtime/task-5-report.md`
 
 **Interfaces:**
 - Produces: one local fix commit; no push or PR.

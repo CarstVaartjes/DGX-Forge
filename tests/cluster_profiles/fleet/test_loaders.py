@@ -23,7 +23,7 @@ def test_load_fleet_uses_generated_ids_and_preserves_connection_data(
         "beta",
     )
     beta = fleet.node(NodeId.parse("spk_00000000000000000000000000000002"))
-    assert beta.management.host == "spark-beta.local"
+    assert beta.management.host == "node-beta.local"
     assert beta.management.user == "operator"
     assert beta.management.port == 2222
     assert beta.management.credential_ref is None
@@ -72,7 +72,7 @@ port = 22
     [
         "schema_version = 3\n[nodes]\n",
         "schema_version = 2\nunknown = true\n[nodes]\n",
-        "schema_version = 2\n[nodes.spark1]\n",
+        "schema_version = 2\n[nodes.node1]\n",
     ],
 )
 def test_load_fleet_rejects_unsupported_or_unknown_structure(

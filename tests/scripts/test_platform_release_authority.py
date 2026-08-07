@@ -65,8 +65,8 @@ def test_cli_rejects_symlink_target_before_oidc_request(tmp_path: Path) -> None:
         str(linked),
         env={
             "PATH": os.environ["PATH"],
-            "DGX_PLATFORM_AUTHORITY_URL": "https://authority.example.invalid",
-            "DGX_PLATFORM_AUTHORITY_AUDIENCE": "audience",
+            "VONK_PLATFORM_AUTHORITY_URL": "https://authority.example.invalid",
+            "VONK_PLATFORM_AUTHORITY_AUDIENCE": "audience",
             "ACTIONS_ID_TOKEN_REQUEST_URL": "https://oidc.example.invalid",
             "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "x" * 32,
         },

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from spark_profiles.deployment_bundle import REQUIRED_DEPLOYMENT_ASSETS
+from cluster_profiles.deployment_bundle import REQUIRED_DEPLOYMENT_ASSETS
 
 
 def test_deployment_bundle_exposes_no_mutable_host_backup_program() -> None:

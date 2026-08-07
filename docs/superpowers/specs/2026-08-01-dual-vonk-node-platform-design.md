@@ -1,9 +1,9 @@
-# Dual DGX Spark Model Platform Design
+# Dual Vonk Forge GPU node Model Platform Design
 
-> **Historical two-Spark baseline.** This document records the original
+> **Historical two-GPU node baseline.** This document records the original
 > physical lab inventory and early bring-up choices. It is superseded for
-> architecture and operations by the [scalable Spark platform and control
-> plane design](2026-08-03-scalable-spark-platform-control-plane-design.md)
+> architecture and operations by the [scalable GPU node platform and control
+> plane design](2026-08-03-scalable-node-platform-control-plane-design.md)
 > and the [generalized workload package system](2026-08-05-generalized-workload-package-system-design.md).
 > Its addresses, names, and SSH/bootstrap procedures are not application
 > defaults and must not be copied into a generalized fleet deployment.
@@ -12,7 +12,7 @@ Date: 2026-08-01
 
 ## Purpose
 
-Configure two DGX Spark systems as a reliable local model platform. The primary workload is `deepseek-ai/DeepSeek-V4-Flash-0731` running across both Sparks. The platform also runs the complete required model set defined in the [multi-runtime profile design](2026-08-02-multi-runtime-model-profiles-design.md), including Nemotron, Qwen image and vision models, Pixal3D, TRELLIS.2, rigging, and the requested alternative 3D generators. It exposes suitable model APIs, provides a browser UI later, and supports secure Tailscale access later.
+Configure two Vonk Forge GPU node systems as a reliable local model platform. The primary workload is `deepseek-ai/DeepSeek-V4-Flash-0731` running across both GPU nodes. The platform also runs the complete required model set defined in the [multi-runtime profile design](2026-08-02-multi-runtime-model-profiles-design.md), including Nemotron, Qwen image and vision models, Pixal3D, TRELLIS.2, rigging, and the requested alternative 3D generators. It exposes suitable model APIs, provides a browser UI later, and supports secure Tailscale access later.
 
 This specification uses measurable defaults and acceptance gates. A measured value may replace a provisional threshold only when the command, result, date, and reason are committed to the private inventory or benchmark record.
 
@@ -23,21 +23,21 @@ The completed host and fabric preparation is recorded chronologically in the
 detailed runbooks and checked-in evidence remain the operational source of
 truth.
 
-- Spark 1 LAN address: `192.168.1.211`
-- Spark 2 LAN address: `192.168.1.212`
+- GPU node 1 LAN address: `192.168.1.211`
+- GPU node 2 LAN address: `192.168.1.212`
 - Linux user on both systems: `carst`
 - Both LAN addresses are static.
 - One 1 m Amphenol `NJAAKK-C106` passive copper cable directly connects the two systems. Its exact OEM identifier is not in the public NVIDIA compatibility list, but its two PCIe/RoCE functions report the same 200 Gb/s physical-link state. Simultaneous traffic across both functions reached 185.14 Gb/s in each direction and passed RDMA, latency, error-counter, and NCCL acceptance.
 - The administration computer is a Mac using the 1Password SSH agent.
-- The dedicated Ed25519 key named `DGX Spark Admin` is installed on both Sparks. Fresh key-only access passes, password and keyboard-interactive SSH are disabled, and the private key remains in 1Password.
+- The dedicated Ed25519 key named `Vonk Forge GPU node Admin` is installed on both GPU nodes. Fresh key-only access passes, password and keyboard-interactive SSH are disabled, and the private key remains in 1Password.
 - A Synology DS218+ exists but is not part of the initial deployment. A new NAS or other external container host will be added later for Caddy, the controller, UI, LiteLLM, and Tailscale ingress.
-- Both systems have a 4,031,871,553,536-byte root filesystem, more than 3.78 TB free at baseline, DGX OS OTA `7.5.0`, kernel `6.17.0-1029-nvidia`, driver `580.173.02`, CUDA Toolkit package `13.0.3-1`, Docker `29.2.1`, and Compose `5.0.2`.
+- Both systems have a 4,031,871,553,536-byte root filesystem, more than 3.78 TB free at baseline, Vonk Forge OS OTA `7.5.0`, kernel `6.17.0-1029-nvidia`, driver `580.173.02`, CUDA Toolkit package `13.0.3-1`, Docker `29.2.1`, and Compose `5.0.2`.
 - `earlyoom` is absent and inactive on both nodes.
 - The direct one-link/two-function RoCEv2 fabric is configured with MTU 1500, GID index 3, no default route, a passing 185.14 Gb/s simultaneous aggregate in each direction, and a passing two-rank NCCL result of 19.308 GB/s average bus bandwidth.
 
 ## Goals
 
-1. Establish secure, key-based administration from the Mac to both Sparks.
+1. Establish secure, key-based administration from the Mac to both GPU nodes.
 2. Update and inventory both systems before changing cluster networking.
 3. Configure and validate the direct ConnectX-7 fabric with NVIDIA-supported tooling.
 4. Validate NCCL/RoCE communication independently of any model runtime.
@@ -55,13 +55,13 @@ truth.
 - Automatic operating-system, firmware, container, model, or distributed-profile updates.
 - Running unreviewed remote installation scripts directly from a pipe to a shell.
 - Hiding low-level Docker, SSH, NCCL, or vLLM behavior behind a custom orchestration daemon.
-- Running Caddy, the profile controller, browser UI, LiteLLM, Tailscale ingress, or general-purpose monitoring containers on either Spark.
+- Running Caddy, the profile controller, browser UI, LiteLLM, Tailscale ingress, or general-purpose monitoring containers on either GPU node.
 
 ## Prerequisites and Inventory
 
-Before model installation, the repository records the following for each Spark:
+Before model installation, the repository records the following for each GPU node:
 
-- hostname, LAN address, DGX OS, kernel, firmware, NVIDIA driver, CUDA, Docker, and Compose versions;
+- hostname, LAN address, Vonk Forge OS, kernel, firmware, NVIDIA driver, CUDA, Docker, and Compose versions;
 - installed and free memory, swap configuration, SSD model, SSD capacity, filesystem, and free bytes;
 - `earlyoom` package, enabled, and active state;
 - LAN and fabric interface names, MTU, link mode and rate, HCA name, RoCE version, GID index, and fabric IP;
@@ -94,20 +94,20 @@ Upstream recommends disabling `earlyoom` because it can kill a vLLM head or work
 
 ### Administration plane
 
-The Mac is the trusted administration workstation. The `DGX Spark Admin` private key is held by the 1Password SSH agent. The security property is: no unencrypted private-key material exists in `~/.ssh`, and no private-key file is usable without unlocking the 1Password vault. Only the public key is installed in `carst`'s `authorized_keys` on each Spark.
+The Mac is the trusted administration workstation. The `Vonk Forge GPU node Admin` private key is held by the 1Password SSH agent. The security property is: no unencrypted private-key material exists in `~/.ssh`, and no private-key file is usable without unlocking the 1Password vault. Only the public key is installed in `carst`'s `authorized_keys` on each GPU node.
 
-SSH host aliases provide stable names for the two LAN addresses, select the 1Password agent explicitly, set `IdentitiesOnly yes`, and select only the dedicated DGX key. The first implementation step installs that public key on both Sparks using the existing Linux password and verifies fresh key-authenticated sessions before password authentication is disabled.
+SSH host aliases provide stable names for the two LAN addresses, select the 1Password agent explicitly, set `IdentitiesOnly yes`, and select only the dedicated Vonk Forge key. The first implementation step installs that public key on both GPU nodes using the existing Linux password and verifies fresh key-authenticated sessions before password authentication is disabled.
 
-Cluster jobs require separate node-to-node SSH credentials. These credentials are generated on the Sparks, are not reused for Mac administration, and are restricted to the private cluster fabric where the supported tooling permits. SSH agent forwarding is not used.
+Cluster jobs require separate node-to-node SSH credentials. These credentials are generated on the GPU nodes, are not reused for Mac administration, and are restricted to the private cluster fabric where the supported tooling permits. SSH agent forwarding is not used.
 
 ### Compute plane
 
-Spark 1 is the head node and Spark 2 is the worker. DeepSeek runs as one logical vLLM service with tensor parallel size two, pipeline parallel size one, and the `mp` distributed executor. TP=2 is mandatory for this checkpoint: the snapshot is about 155.44 GiB, or about 77.72 GiB of weight payload per rank before runtime workspaces and metadata.
+GPU node 1 is the head node and GPU node 2 is the worker. DeepSeek runs as one logical vLLM service with tensor parallel size two, pipeline parallel size one, and the `mp` distributed executor. TP=2 is mandatory for this checkpoint: the snapshot is about 155.44 GiB, or about 77.72 GiB of weight payload per rank before runtime workspaces and metadata.
 
 Inter-node model traffic uses the direct ConnectX-7 fabric. During initial AI bring-up, vLLM and TRELLIS.2 bind to loopback and the Mac reaches them through SSH tunnels. After the new external host arrives, Caddy, the profile controller, browser UI, optional LiteLLM, Tailscale ingress, and any later general-purpose monitoring services run there.
 
-The installed fabric uses the official manual two-Spark procedure from pinned
-NVIDIA `dgx-spark-playbooks` commit
+The installed fabric uses the official manual two-GPU node procedure from pinned
+NVIDIA `vonk-node-playbooks` commit
 `1fb66f059ee427c5a3678b3117ef73aab042b458`. NVIDIA Sync Cluster Assistant was
 not used because its setup flow expected password-based SSH bootstrap and did
 not import the existing hardened 1Password SSH configuration. The manual path
@@ -116,7 +116,7 @@ same topology, addressing, RDMA, and NCCL acceptance gates.
 
 ### Storage plane
 
-Each Spark keeps its own complete, verified local model cache. In this document, **verified model cache** means:
+Each GPU node keeps its own complete, verified local model cache. In this document, **verified model cache** means:
 
 1. a pinned Hugging Face snapshot revision;
 2. a checked-in manifest containing every required relative filename, byte count, and SHA-256 value from repository/LFS metadata;
@@ -129,22 +129,22 @@ The NAS may store configuration backups, benchmark results, and optional downloa
 
 ### Access plane
 
-The initial phase has no gateway: vLLM binds to `127.0.0.1:8888` on Spark 1 and TRELLIS.2 binds to loopback on Spark 2; the Mac uses SSH local forwarding for direct validation. No AI service binds to a LAN-facing address during this phase.
+The initial phase has no gateway: vLLM binds to `127.0.0.1:8888` on GPU node 1 and TRELLIS.2 binds to loopback on GPU node 2; the Mac uses SSH local forwarding for direct validation. No AI service binds to a LAN-facing address during this phase.
 
-When the new NAS or external container host is available, Caddy becomes the stable client endpoint at `https://spark-gateway.home.arpa:8443`. The host receives a static DHCP reservation or static LAN address and the name is installed in local DNS. Caddy uses an internal/private CA certificate whose root is installed only on approved clients. It enforces bearer API keys, serves controller status, actively health-checks the advertised upstream, and has two atomic route states:
+When the new NAS or external container host is available, Caddy becomes the stable client endpoint at `https://node-gateway.home.arpa:8443`. The host receives a static DHCP reservation or static LAN address and the name is installed in local DNS. Caddy uses an internal/private CA certificate whose root is installed only on approved clients. It enforces bearer API keys, serves controller status, actively health-checks the advertised upstream, and has two atomic route states:
 
 - **active:** proxy the advertised profile to its firewall-restricted LAN upstream and return HTTP 503 if that upstream becomes unhealthy;
 - **draining/maintenance:** reject new inference with HTTP 503 and `Retry-After: 30` while existing proxied requests receive their configured grace period.
 
-After gateway deployment, clients and the browser UI always use Caddy. The vLLM upstream then binds on Spark 1's LAN address, but its host firewall permits port 8888 only from the external gateway and local host. Caddy is limited to 0.5 CPU and 256 MiB of memory and may start when the control host boots, always using the fail-closed maintenance configuration until the controller advertises a healthy profile. The external host is a prerequisite for this phase; neither Spark is a gateway fallback.
+After gateway deployment, clients and the browser UI always use Caddy. The vLLM upstream then binds on GPU node 1's LAN address, but its host firewall permits port 8888 only from the external gateway and local host. Caddy is limited to 0.5 CPU and 256 MiB of memory and may start when the control host boots, always using the fail-closed maintenance configuration until the controller advertises a healthy profile. The external host is a prerequisite for this phase; neither GPU node is a gateway fallback.
 
-The profile controller is a one-shot container on the same external control host as Caddy. It changes Caddy state through a private container network and uses dedicated restricted SSH keys to invoke a root-owned `spark-nodectl` forced command on each Spark. That command accepts only the explicit runtime operations required by the controller; it does not provide a general shell. Caddy's admin API is reachable only on the private container network and is never exposed on the LAN.
+The profile controller is a one-shot container on the same external control host as Caddy. It changes Caddy state through a private container network and uses dedicated restricted SSH keys to invoke a root-owned `node-nodectl` forced command on each GPU node. That command accepts only the explicit runtime operations required by the controller; it does not provide a general shell. Caddy's admin API is reachable only on the private container network and is never exposed on the LAN.
 
 The browser UI is added only after the new external host exists and the direct API passes correctness and load gates. That host must have a supported container runtime, at least 4 GiB installed memory, at least 2 GiB available memory before start, and at least 20 GiB free disk. Its UI container is limited to 1 CPU and 2 GiB.
 
 LiteLLM is optional and deferred until routing multiple simultaneously active endpoints provides value. If deployed, the DS218+ must have at least 6 GiB installed memory and 3 GiB available before LiteLLM plus the UI start. LiteLLM is limited to 1 CPU and 1 GiB in addition to the UI allocation.
 
-Tailscale is added after LAN acceptance as a container or signed-package installation on an external gateway host rather than through its convenience `curl | sh` installer. Remote clients use a named Tailscale Service and, where needed, a restricted subnet route protected by grants or ACLs. No Tailscale daemon is required on the Sparks initially, and no Spark API port is exposed directly to the public internet.
+Tailscale is added after LAN acceptance as a container or signed-package installation on an external gateway host rather than through its convenience `curl | sh` installer. Remote clients use a named Tailscale Service and, where needed, a restricted subnet route protected by grants or ACLs. No Tailscale daemon is required on the GPU nodes initially, and no GPU node API port is exposed directly to the public internet.
 
 ### Port and bind map
 
@@ -155,12 +155,12 @@ Tailscale is added after LAN acceptance as a container or signed-package install
 | Controller SSH | both | 22/TCP | external control-host source only | forced-command controller key |
 | Caddy API/status, future | external host | 8443/TCP | LAN, later Tailscale | private CA TLS plus bearer key |
 | Caddy admin API, future | external host | 2019/TCP | private container network only | controller-network isolation |
-| vLLM API, initial | Spark 1 | 8888/TCP | loopback only through SSH tunnel | vLLM API key plus SSH |
-| vLLM API upstream, future | Spark 1 | 8888/TCP | Spark 1 LAN; firewall source gateway and local host only | vLLM API key plus proxy isolation |
+| vLLM API, initial | GPU node 1 | 8888/TCP | loopback only through SSH tunnel | vLLM API key plus SSH |
+| vLLM API upstream, future | GPU node 1 | 8888/TCP | GPU node 1 LAN; firewall source gateway and local host only | vLLM API key plus proxy isolation |
 | vLLM `mp` rendezvous | both | 25000/TCP | fabric peer only | network isolation |
 | NCCL/Gloo/TP runtime traffic | both | runtime-selected | fabric peer only | direct-link firewall isolation |
-| TRELLIS.2, initial | Spark 2 | 7860/TCP | loopback only through SSH tunnel | SSH plus application token where supported |
-| TRELLIS.2 upstream, future | Spark 2 | 7860/TCP | Spark 2 LAN; firewall source gateway only | upstream token plus proxy isolation |
+| TRELLIS.2, initial | GPU node 2 | 7860/TCP | loopback only through SSH tunnel | SSH plus application token where supported |
+| TRELLIS.2 upstream, future | GPU node 2 | 7860/TCP | GPU node 2 LAN; firewall source gateway only | upstream token plus proxy isolation |
 | Browser UI | external host | 3000/TCP | LAN; exact host firewall source list | UI login plus Caddy API key |
 
 No client route exists on the fabric. Because the fabric is a dedicated point-to-point network, its peer-to-peer runtime port range is allowed only between the two recorded fabric IPs rather than exposed on the LAN.
@@ -173,21 +173,21 @@ This staged-lane ladder is retained as historical qualification rationale. It
 does not define the active `deepseek-agent-dual` configuration: the approved
 Mia-first implementation uses commit
 `b131b2a22164675890dd1465fd8862b5cfb6ff13` for the planned, 1M-capable
-dual-Spark candidate. It remains unaccepted until its exact runtime and
+dual-GPU node candidate. It remains unaccepted until its exact runtime and
 acceptance evidence are recorded.
 
 The three experimental features—speculative decoding, padded NVFP4 KV, and million-token context—are not enabled simultaneously on first boot. They are introduced one at a time:
 
-| Model Definition candidate | Context ceiling | `max_num_seqs` | KV cache | DSpark | Purpose |
+| Model Definition candidate | Context ceiling | `max_num_seqs` | KV cache | draft-model | Purpose |
 | --- | ---: | ---: | --- | --- | --- |
 | `deepseek-baseline` | 16,384 | 1 | FP8 | off | prove TP=2 weight load, encoding, API, and deterministic output |
-| `deepseek-dspark` | 16,384 | 1 | FP8 | MTP=5 | isolate speculative decoding and record acceptance |
+| `deepseek-draft` | 16,384 | 1 | FP8 | MTP=5 | isolate speculative decoding and record acceptance |
 | `deepseek-nvfp4` | 16,384 | 1 | `nvfp4_ds_mla` | MTP=5 | validate the padded Stage-C NVFP4 workaround, including an 8K prompt |
 | `deepseek-agent-dual` | 200,000 | 6 | `nvfp4_ds_mla` | MTP=5 | normal short/mid-context concurrent agent traffic backing `agent-full-dual` |
 | `deepseek-long-dual` | 1,048,576 | derived, maximum 2 | `nvfp4_ds_mla` | MTP=5 | controlled deep-context work backing a separately accepted `agent-long-dual` Cluster Profile |
 
 Only accepted serving definitions are referenced by activatable Cluster
-Profiles. Each dual definition reserves both Sparks, starts the worker first,
+Profiles. Each dual definition reserves both GPU nodes, starts the worker first,
 starts the head second, stops the head first, and exposes only the head. Both
 serving definitions advertise the stable OpenAI model name `deepseek`; clients
 select a Cluster Profile, never an internal qualification definition.
@@ -198,8 +198,8 @@ The `nvfp4_ds_mla` path is the upstream **padded Stage-C workaround** using the 
 
 The 128 GB per-node memory figure is marketed unified memory, not wholly
 available runtime memory. Inventory exposes 121.69 GiB per node, and the
-initial admission budgets after an 8 GiB OS reserve are 110.27 GiB on Spark 1
-and 110.23 GiB on Spark 2. TP=2 partitions roughly 155.44 GiB of SafeTensor
+initial admission budgets after an 8 GiB OS reserve are 110.27 GiB on GPU node 1
+and 110.23 GiB on GPU node 2. TP=2 partitions roughly 155.44 GiB of SafeTensor
 payload to about 77.72 GiB per rank, while the OS, CUDA graphs, JIT artifacts,
 model metadata, and runtime workspaces consume additional memory. Raw
 subtraction is not used to declare KV capacity.
@@ -228,7 +228,7 @@ Context and concurrency acceptance tests are coupled to these lanes: six request
 The approved planned candidate is MiaAI-Lab commit
 `b131b2a22164675890dd1465fd8862b5cfb6ff13`, model revision
 `9e165c30e2704aec5d9d593cce3eebd58bbef1cb`, and image
-`ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8`.
+`ghcr.io/anemll/draft-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8`.
 Deployment does not use mutable branches, tags, or an unverified image.
 
 The local configuration pins:
@@ -247,19 +247,19 @@ The prebuilt Anemll image is acceptable only after provenance and contents are i
 
 ### `trellis2`
 
-- Requires any conflicting dual-Spark DeepSeek definition to be stopped first.
-  Co-residency with the accepted single-Spark DeepSeek definition on Spark 1 is
+- Requires any conflicting dual-GPU node DeepSeek definition to be stopped first.
+  Co-residency with the accepted single-GPU node DeepSeek definition on GPU node 1 is
   permitted only through an exact accepted Cluster Profile such as
   `creative-3d`.
-- Runs in its own pinned container/environment on Spark 2.
+- Runs in its own pinned container/environment on GPU node 2.
 - Uses local checkpoints and output storage.
 - Starts with 512-cubed generation for acceptance testing before higher resolutions.
-- Initially binds to Spark 2 loopback and is reached through an SSH tunnel. After gateway deployment it binds to Spark 2's LAN address with a firewall rule allowing only the gateway and is advertised through Caddy.
+- Initially binds to GPU node 2 loopback and is reached through an SSH tunnel. After gateway deployment it binds to GPU node 2's LAN address with a firewall rule allowing only the gateway and is advertised through Caddy.
 
 ### `maintenance`
 
 - Stops all GPU model containers on both nodes.
-- Leaves Spark SSH and DGX Dashboard available; external Caddy continues returning its maintenance response.
+- Leaves GPU node SSH and Vonk Forge Dashboard available; external Caddy continues returning its maintenance response.
 - Is the required state before OS, firmware, driver, or fabric maintenance.
 
 ### Multi-runtime Model Definitions and Cluster Profiles
@@ -274,17 +274,17 @@ health, output-quality, capacity, and lifecycle gates.
 
 ## Cluster Profile controller
 
-There is no NVIDIA-standard Cluster Profile switcher for DGX Spark. The
-platform therefore uses thin, project-local `sparkctl` logic over ordinary
+There is no NVIDIA-standard Cluster Profile switcher for Vonk Forge GPU node. The
+platform therefore uses thin, project-local `vonkctl` logic over ordinary
 runtime commands and SSH. It is not a daemon and does not hide the underlying
 commands.
 
 Before the external control host arrives, the controller executes on the
-developer machine and stores state under `.state/sparkctl`. After the external
+developer machine and stores state under `.state/vonkctl`. After the external
 host arrives, the same contract moves to a one-shot container with
-`/var/lib/dgx-spark-platform` as a persistent bind mount. State contains the
+`/var/lib/vonk-node-platform` as a persistent bind mount. State contains the
 prior canonical profile, target canonical profile, phase, controller PID, host
-identity, start timestamp, last error, and both Spark boot IDs.
+identity, start timestamp, last error, and both GPU node boot IDs.
 
 The developer-machine lock records PID, host identity, and timestamp; breaking
 it is an explicit operation that refuses a live PID or a lock younger than the
@@ -292,7 +292,7 @@ configured threshold. The future container uses the control host kernel's
 `flock` on the bind-mounted lock for mutual exclusion. If state shows an
 interrupted transition, status reports `recovery-required`; recovery is
 permitted only after it proves no controller process and no Model Definition
-process is still active on either Spark.
+process is still active on either GPU node.
 
 The controller provides:
 
@@ -321,7 +321,7 @@ A profile switch performs this sequence:
 
 If startup or validation fails, the controller restores Caddy's maintenance route, stops the partial target deployment, preserves logs, and leaves the system in a known stopped state. It does not automatically restart the previous heavyweight workload.
 
-Distributed and GPU-heavy profiles use `restart: "no"`. They never auto-start after a Spark reboot because Compose cannot enforce cross-host worker-before-head order. Caddy may auto-start on the NAS, but it starts fail-closed and returns maintenance or upstream-unhealthy HTTP 503. A Spark boot-ID change causes controller status to report `stopped-after-reboot`; an operator must run `doctor` and explicitly start a profile.
+Distributed and GPU-heavy profiles use `restart: "no"`. They never auto-start after a GPU node reboot because Compose cannot enforce cross-host worker-before-head order. Caddy may auto-start on the NAS, but it starts fail-closed and returns maintenance or upstream-unhealthy HTTP 503. A GPU node boot-ID change causes controller status to report `stopped-after-reboot`; an operator must run `doctor` and explicitly start a profile.
 
 Compose uses explicit project names, health checks, `stop_grace_period: 120s`, and Docker JSON log rotation of `max-size: 50m` and `max-file: 5` per container. The external Caddy container alone may use `restart: unless-stopped`; controller runs use `restart: "no"`. Production overrides contain runtime settings without duplicating base definitions.
 
@@ -343,12 +343,12 @@ The validation fixture pins sampling parameters and records the runtime digest, 
 
 ## Security
 
-- Install the `DGX Spark Admin` public key on both Sparks, then verify fresh agent-backed sessions before changing SSH authentication.
+- Install the `Vonk Forge GPU node Admin` public key on both GPU nodes, then verify fresh agent-backed sessions before changing SSH authentication.
 - Run `sshd -t` before every SSH configuration reload.
 - After key verification on both nodes, set `PasswordAuthentication no` and `KbdInteractiveAuthentication no` in a managed drop-in and reload SSH.
-- Verify key login again, then verify a connection with public-key authentication disabled is rejected. Retain local console/DGX Dashboard recovery access.
-- Do not copy the Mac's private key to either Spark or use SSH agent forwarding.
-- Keep the controller's dedicated private key only on the external control host; each Spark restricts its public key with a forced `spark-nodectl` command and source-address rule.
+- Verify key login again, then verify a connection with public-key authentication disabled is rejected. Retain local console/Vonk Forge Dashboard recovery access.
+- Do not copy the Mac's private key to either GPU node or use SSH agent forwarding.
+- Keep the controller's dedicated private key only on the external control host; each GPU node restricts its public key with a forced `node-nodectl` command and source-address rule.
 - Keep secrets out of Git, Compose files, logs, process arguments where avoidable, and command histories.
 - Store API keys and future Tailscale or LiteLLM credentials in 1Password and render runtime-only secret files under `/run` with mode `0600`.
 - Require a bearer API key at Caddy and a separate upstream key at vLLM.
@@ -360,16 +360,16 @@ The validation fixture pins sampling parameters and records the runtime digest, 
 
 ## Updates and Change Control
 
-Both Sparks must end maintenance on matching supported DGX OS, driver, CUDA, firmware, and container-runtime versions. Initial updates use DGX Dashboard, which NVIDIA recommends over ad-hoc package upgrades.
+Both GPU nodes must end maintenance on matching supported Vonk Forge OS, driver, CUDA, firmware, and container-runtime versions. Initial updates use Vonk Forge Dashboard, which NVIDIA recommends over ad-hoc package upgrades.
 
 Updates occur only in `maintenance`:
 
 1. Back up configuration, export the inventory, and record current versions.
 2. Review release notes, known issues, and firmware reversibility.
-3. Update Spark 2 first.
-4. Reboot Spark 2 and validate SSH, DGX Dashboard, GPU visibility, Docker GPU access, storage, and fabric-interface state without starting a distributed profile.
-5. Stop if Spark 2 fails; do not update Spark 1.
-6. Update and reboot Spark 1.
+3. Update GPU node 2 first.
+4. Reboot GPU node 2 and validate SSH, Vonk Forge Dashboard, GPU visibility, Docker GPU access, storage, and fabric-interface state without starting a distributed profile.
+5. Stop if GPU node 2 fails; do not update GPU node 1.
+6. Update and reboot GPU node 1.
 7. Compare both nodes, then rerun fabric, RDMA, NCCL, container, profile-ladder, quality, and performance gates.
 
 This sequencing provides a detection point before both nodes change; it is not a promise of rollback. Firmware is commonly non-reversible, so firmware changes require a documented vendor recovery path or explicit acceptance that recovery may be roll-forward only.
@@ -386,12 +386,12 @@ Model, runtime, image, encoder, and sampling changes use new pins and repeat the
 - LAN and fabric connectivity, MTU, link rate, and resolved NCCL variables;
 - disk bytes free and model-manifest verification time/result;
 - available memory, swap use, and `earlyoom` enabled/active state;
-- GPU/SoC temperature, clocks, power, and thermal-throttling indicators exposed by DGX-supported tools;
+- GPU/SoC temperature, clocks, power, and thermal-throttling indicators exposed by Vonk Forge-supported tools;
 - vLLM model identity, context ceiling, `max_num_seqs`, live KV-pool tokens, and active requests;
 - last 100 log lines plus current bounded log sizes;
 - last successful structural, output-quality, capacity, and performance test with pin set.
 
-Spark runtime metrics and logs remain on the Sparks initially and are queried by the external controller. Any later Prometheus or centralized logging containers run only on external hosts.
+GPU node runtime metrics and logs remain on the GPU nodes initially and are queried by the external controller. Any later Prometheus or centralized logging containers run only on external hosts.
 
 ## Failure Handling
 
@@ -422,29 +422,29 @@ The source results came from specific upstream hardware state and profile settin
 1. Install the 1Password-managed public key on both nodes and verify fresh key-backed sessions.
 2. Validate SSH configuration, disable password and keyboard-interactive login, then verify key login and password rejection.
 3. Inventory hardware, storage, software, thermals, interfaces, NCCL variables, cable, and `earlyoom` on both nodes.
-4. Enter maintenance; update Spark 2, validate it, then update Spark 1 and compare versions.
+4. Enter maintenance; update GPU node 2, validate it, then update GPU node 1 and compare versions.
 5. Disable `earlyoom` on both nodes and verify its state.
 6. Configure the ConnectX-7 fabric with NVIDIA Sync Cluster Assistant.
 7. Verify bidirectional fabric IP connectivity, matching MTU, link rate, raw RDMA, and NCCL bandwidth.
 8. Validate Docker GPU access and image architecture on both nodes.
 9. Audit and pin the MiaAI-Lab source, Anemll image digest, patches, encoder, configuration, and sampling presets.
 10. Check disk gates; download the pinned snapshot online during maintenance, generate/verify manifests on both nodes, then enforce offline mode.
-11. Run `deepseek-baseline` through a Spark 1 SSH tunnel and pass structural plus deterministic quality gates.
-12. Add DSpark, pass quality gates, and record speculative acceptance.
+11. Run `deepseek-baseline` through a GPU node 1 SSH tunnel and pass structural plus deterministic quality gates.
+12. Add draft-model, pass quality gates, and record speculative acceptance.
 13. Add padded NVFP4, pass the greater-than-411-token regression and 8K quality gates.
 14. Run `deepseek-agent`, verify `P >= 1,200,000`, six concurrent requests with at most 200,000 live tokens each, and overload behavior.
 15. Run `deepseek-long`, derive `Cfull` from the boot log, complete a 900K sentinel request at the admitted limit, and verify one excess request queues or rejects safely.
 16. Run reasoning, tool-call, streaming, restart, output-quality, and performance gates through the SSH tunnel.
 17. Stop DeepSeek; verify memory recovery and the clean stopped state.
-18. Install and validate TRELLIS.2 at 512-cubed resolution through a Spark 2 SSH tunnel.
+18. Install and validate TRELLIS.2 at 512-cubed resolution through a GPU node 2 SSH tunnel.
 19. Switch repeatedly between DeepSeek and TRELLIS.2 with direct scripts and confirm deterministic recovery.
-20. After the new external host arrives, install Caddy and the one-shot controller, install forced `spark-nodectl` access, and validate TLS, bearer rejection, upstream failure, private admin networking, restricted node control, route switching, state locking, and log limits.
-21. Reboot both Sparks while the external host remains available; confirm Caddy returns HTTP 503 and status says `stopped-after-reboot` until an explicit start.
+20. After the new external host arrives, install Caddy and the one-shot controller, install forced `node-nodectl` access, and validate TLS, bearer rejection, upstream failure, private admin networking, restricted node control, route switching, state locking, and log limits.
+21. Reboot both GPU nodes while the external host remains available; confirm Caddy returns HTTP 503 and status says `stopped-after-reboot` until an explicit start.
 22. Add the browser UI, then apply the LiteLLM gate and add Tailscale in separate acceptance steps.
 
 ## Acceptance Criteria
 
-- The Mac reaches both Sparks using the 1Password agent with no Linux password, no unencrypted private-key material in `~/.ssh`, and no private-key file usable while the vault is locked.
+- The Mac reaches both GPU nodes using the 1Password agent with no Linux password, no unencrypted private-key material in `~/.ssh`, and no private-key file usable while the vault is locked.
 - Password and keyboard-interactive SSH are disabled only after fresh key sessions pass on both nodes; negative password-auth tests then fail as expected.
 - Both nodes have matching supported platform software and pass the numeric memory and disk gates.
 - `earlyoom` is stopped and disabled on both nodes before DeepSeek starts.
@@ -456,7 +456,7 @@ The source results came from specific upstream hardware state and profile settin
 - Deterministic, script/language, repetition, XML-leakage, reasoning, streaming, and tool-call quality gates pass both directly and through Caddy.
 - All performance floors pass, and the 15-minute run has no thermal throttling or greater than 15% sustained regression.
 - NAS-hosted Caddy is the only client endpoint, enforces TLS and bearer keys, exposes no LAN admin API, and returns HTTP 503 during drains, upstream failures, and post-reboot state.
-- The Sparks run only AI/model containers; gateway, controller, UI, LiteLLM, Tailscale ingress, and general monitoring containers run on non-Spark hosts.
+- The GPU nodes run only AI/model containers; gateway, controller, UI, LiteLLM, Tailscale ingress, and general monitoring containers run on non-GPU node hosts.
 - Profile switches are serialized by kernel `flock`, use the numeric timeouts, and fail to a known stopped state.
 - After reboot, no distributed/GPU-heavy profile starts automatically.
 - TRELLIS.2 produces a valid GLB from a sample image at 512-cubed resolution.
@@ -466,13 +466,13 @@ The source results came from specific upstream hardware state and profile settin
 
 ## References
 
-- [NVIDIA DGX Spark user guide](https://docs.nvidia.com/dgx/dgx-spark/)
+- [NVIDIA Vonk Forge GPU node user guide](https://docs.nvidia.com/)
 - [NVIDIA ConnectX-7 Cluster Assistant](https://docs.nvidia.com/sync/latest/cluster-assistant.html)
-- [NVIDIA two-Spark networking guide](https://build.nvidia.com/spark/connect-two-sparks/stacked-sparks)
-- [NVIDIA DGX Spark update guide](https://docs.nvidia.com/dgx/dgx-spark/os-and-component-update.html)
+- [NVIDIA two-GPU node networking guide](https://build.nvidia.com/node/connect-two-nodes/stacked-nodes)
+- [NVIDIA Vonk Forge GPU node update guide](https://docs.nvidia.com/)
 - [DeepSeek-V4-Flash-0731 model card](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731)
-- [MiaAI-Lab dual-Spark 0731 recipe](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/tree/b131b2a22164675890dd1465fd8862b5cfb6ff13)
-- [MiaAI-Lab 0731 measurements](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docs/DEEPSEEK_V4_FLASH_0731.md)
+- [MiaAI-Lab dual-GPU node 0731 recipe](https://github.com/ node/tree/b131b2a22164675890dd1465fd8862b5cfb6ff13)
+- [MiaAI-Lab 0731 measurements](https://github.com/ node/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docs/DEEPSEEK_V4_FLASH_0731.md)
 - [Microsoft TRELLIS.2](https://github.com/microsoft/TRELLIS.2)
 - [Docker Compose production guidance](https://docs.docker.com/compose/how-tos/production/)
 - [Caddy configuration API](https://caddyserver.com/docs/api)

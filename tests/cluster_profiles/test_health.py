@@ -51,11 +51,11 @@ INVENTORY = {
             "fabric": {
                 "mtu": 1500,
                 "link_rate_mbps": 200000,
-                "function100": {"interface": "enp1s0f1np1", "hca": "rocep1s0f1", "gid_index": 3, "fabric_ip": "192.168.100.10" if node == "spark1" else "192.168.100.11", "peer_ip": "192.168.100.11" if node == "spark1" else "192.168.100.10"},
-                "function101": {"interface": "enP2p1s0f1np1", "hca": "roceP2p1s0f1", "gid_index": 3, "fabric_ip": "192.168.101.10" if node == "spark1" else "192.168.101.11", "peer_ip": "192.168.101.11" if node == "spark1" else "192.168.101.10"},
+                "function100": {"interface": "enp1s0f1np1", "hca": "rocep1s0f1", "gid_index": 3, "fabric_ip": "192.168.100.10" if node == "node1" else "192.168.100.11", "peer_ip": "192.168.100.11" if node == "node1" else "192.168.100.10"},
+                "function101": {"interface": "enP2p1s0f1np1", "hca": "roceP2p1s0f1", "gid_index": 3, "fabric_ip": "192.168.101.10" if node == "node1" else "192.168.101.11", "peer_ip": "192.168.101.11" if node == "node1" else "192.168.101.10"},
             },
         }
-        for node, hostname in (("spark1", "spark-3542"), ("spark2", "spark-2297"))
+        for node, hostname in (("node1", "node-3542"), ("node2", "node-2297"))
     }
 }
 BASELINE = {
@@ -72,7 +72,7 @@ BASELINE = {
     },
     "rdma_counters_after": {
         f"{node}/{hca}/{counter}": 0
-        for node in ("spark1", "spark2")
+        for node in ("node1", "node2")
         for hca in ("rocep1s0f1", "roceP2p1s0f1")
         for counter in COUNTERS
     }
@@ -96,7 +96,7 @@ class FakeBackend:
 
 
 def service(*, barrier=None) -> tuple[NodeHealthService, FakeBackend, dict[str, dict[str, object]]]:
-    raws = {"spark1": raw_node("spark-3542"), "spark2": raw_node("spark-2297")}
+    raws = {"node1": raw_node("node-3542"), "node2": raw_node("node-2297")}
     backend = FakeBackend(raws, barrier=barrier)
     result = NodeHealthService(
         backend=backend,
@@ -171,40 +171,40 @@ def test_node_probes_overlap_and_results_are_canonical():
     result = subject.collect()
 
     assert barrier.parties == 2
-    assert tuple(result.nodes) == ("spark1", "spark2")
-    assert {call[0] for call in backend.calls} == {"spark1", "spark2"}
+    assert tuple(result.nodes) == ("node1", "node2")
+    assert {call[0] for call in backend.calls} == {"node1", "node2"}
     assert all(call[2][:4] == ("--json", "--cpu-sample-ms", "250", "--interface") for call in backend.calls)
 
 
 @pytest.mark.parametrize("field", ("earlyoom_enabled", "earlyoom_active"))
 def test_active_or_enabled_earlyoom_is_critical(field):
     subject, _, raws = service()
-    raws["spark2"]["services"][field] = True
+    raws["node2"]["services"][field] = True
 
     result = subject.collect()
 
-    assert result.nodes["spark2"].status == "critical"
-    assert field in result.nodes["spark2"].errors
+    assert result.nodes["node2"].status == "critical"
+    assert field in result.nodes["node2"].errors
 
 
 def test_available_memory_is_not_a_generic_health_failure():
     subject, _, raws = service()
-    raws["spark1"]["memory"]["available_bytes"] = 1
+    raws["node1"]["memory"]["available_bytes"] = 1
 
     result = subject.collect()
 
-    assert result.nodes["spark1"].memory.available_bytes == 1
-    assert "memory_low" not in result.nodes["spark1"].errors
+    assert result.nodes["node1"].memory.available_bytes == 1
+    assert "memory_low" not in result.nodes["node1"].errors
 
 
 def test_rdma_counter_is_compared_with_accepted_absolute_baseline():
     subject, _, raws = service()
-    subject.rdma_baseline["rdma_counters_after"]["spark1/rocep1s0f1/packet_seq_err"] = 2
-    raws["spark1"]["fabric"]["functions"][0]["counters"]["packet_seq_err"] = 3
+    subject.rdma_baseline["rdma_counters_after"]["node1/rocep1s0f1/packet_seq_err"] = 2
+    raws["node1"]["fabric"]["functions"][0]["counters"]["packet_seq_err"] = 3
 
     result = subject.collect()
 
-    assert "rdma_counter_above_baseline" in result.nodes["spark1"].errors
+    assert "rdma_counter_above_baseline" in result.nodes["node1"].errors
 
 
 @pytest.mark.parametrize(
@@ -220,9 +220,9 @@ def test_rdma_counter_is_compared_with_accepted_absolute_baseline():
 )
 def test_foundation_failures_are_critical(mutation, code):
     subject, _, raws = service()
-    mutation(raws["spark1"])
+    mutation(raws["node1"])
 
-    node = subject.collect().nodes["spark1"]
+    node = subject.collect().nodes["node1"]
 
     assert node.status == "critical"
     assert code in node.errors
@@ -230,16 +230,16 @@ def test_foundation_failures_are_critical(mutation, code):
 
 def test_thermal_critical_wins_and_warning_trips_are_stable_sorted():
     subject, _, raws = service()
-    raws["spark1"]["thermal_zones"] = [{
+    raws["node1"]["thermal_zones"] = [{
         "zone": "thermal_zone0", "type": "soc", "temperature_c": 90,
         "trip_points": [
             {"type": "hot", "temperature_c": 80, "reached": True},
             {"type": "critical", "temperature_c": 85, "reached": True},
         ],
     }]
-    raws["spark1"]["services"]["earlyoom_active"] = True
+    raws["node1"]["services"]["earlyoom_active"] = True
 
-    node = subject.collect().nodes["spark1"]
+    node = subject.collect().nodes["node1"]
 
     assert node.status == "critical"
     assert node.errors == tuple(sorted(node.errors))
@@ -249,14 +249,14 @@ def test_thermal_critical_wins_and_warning_trips_are_stable_sorted():
 
 def test_capacity_and_wholly_missing_optional_sources_warn_only():
     subject, _, raws = service()
-    raw = raws["spark1"]
+    raw = raws["node1"]
     raw["swap"]["used_bytes"] = 1073741825
     raw["root_filesystem"]["available_bytes"] = 150 * 1024**3 - 1
     raw["services"]["docker_available"] = False
     raw["services"]["docker_version"] = None
     raw["thermal_zones"] = []
 
-    node = subject.collect().nodes["spark1"]
+    node = subject.collect().nodes["node1"]
 
     assert node.status == "warning"
     assert node.warnings == tuple(sorted(("docker_unavailable", "root_free_low", "swap_used_high", "thermal_unavailable")))
@@ -264,11 +264,11 @@ def test_capacity_and_wholly_missing_optional_sources_warn_only():
 
 def test_individual_optional_accelerator_fields_remain_null_without_warning():
     subject, _, raws = service()
-    raw = raws["spark1"]["accelerator"]
+    raw = raws["node1"]["accelerator"]
     raw["power_watts"] = None
     raw["temperature_c"] = None
 
-    node = subject.collect().nodes["spark1"]
+    node = subject.collect().nodes["node1"]
 
     assert node.status == "healthy"
     assert node.accelerator.power_watts is None
@@ -286,9 +286,9 @@ def test_individual_optional_accelerator_fields_remain_null_without_warning():
 )
 def test_remote_collector_failures_are_bounded_critical_results(result, code):
     subject, backend, _ = service()
-    backend.results["spark1"] = result
+    backend.results["node1"] = result
 
-    node = subject.collect().nodes["spark1"]
+    node = subject.collect().nodes["node1"]
 
     assert node.status == "critical"
     assert node.errors == (code,)
@@ -296,31 +296,31 @@ def test_remote_collector_failures_are_bounded_critical_results(result, code):
 
 def test_ssh_connection_failure_is_unreachable_and_preserves_other_node():
     subject, backend, _ = service()
-    backend.results["spark2"] = CommandResult(255, b"", b"permission denied", False, False, False)
+    backend.results["node2"] = CommandResult(255, b"", b"permission denied", False, False, False)
 
     result = subject.collect()
 
     assert result.status == "critical"
-    assert result.nodes["spark1"].status == "healthy"
-    assert result.nodes["spark2"].status == "unreachable"
-    assert result.nodes["spark2"].to_dict()["identity"] is None
+    assert result.nodes["node1"].status == "healthy"
+    assert result.nodes["node2"].status == "unreachable"
+    assert result.nodes["node2"].to_dict()["identity"] is None
 
 
 def test_result_validates_schema_and_rounds_percentages():
     subject, _, raws = service()
-    raws["spark1"]["cpu"]["utilization_percent"] = 12.345
+    raws["node1"]["cpu"]["utilization_percent"] = 12.345
 
     document = subject.collect().to_dict()
 
     jsonschema.validate(document, json.loads((ROOT / "schemas/node-health.schema.json").read_text()))
-    assert document["nodes"]["spark1"]["cpu"]["utilization_percent"] == 12.3
+    assert document["nodes"]["node1"]["cpu"]["utilization_percent"] == 12.3
 
 
 def test_hostname_mismatch_is_critical():
     subject, _, raws = service()
-    raws["spark1"]["identity"]["hostname"] = "spark-2297"
+    raws["node1"]["identity"]["hostname"] = "node-2297"
 
-    node = subject.collect().nodes["spark1"]
+    node = subject.collect().nodes["node1"]
 
     assert node.status == "critical"
     assert "hostname_mismatch" in node.errors
@@ -336,21 +336,21 @@ def test_hostname_mismatch_is_critical():
 )
 def test_unknown_critical_foundation_fields_fail_closed(path, code):
     subject, _, raws = service()
-    value = raws["spark1"]
+    value = raws["node1"]
     for part in path[:-1]:
         value = value[part]
     value[path[-1]] = None
 
-    node = subject.collect().nodes["spark1"]
+    node = subject.collect().nodes["node1"]
 
     assert node.status == "critical"
     assert code in node.errors
 
 
 def test_missing_baseline_entry_fails_before_probe():
-    backend = FakeBackend({"spark1": raw_node("spark-3542"), "spark2": raw_node("spark-2297")})
+    backend = FakeBackend({"node1": raw_node("node-3542"), "node2": raw_node("node-2297")})
     baseline = deepcopy(BASELINE)
-    del baseline["rdma_counters_after"]["spark1/rocep1s0f1/packet_seq_err"]
+    del baseline["rdma_counters_after"]["node1/rocep1s0f1/packet_seq_err"]
 
     with pytest.raises(LocalHealthError, match="missing RDMA baseline"):
         NodeHealthService(
@@ -365,7 +365,7 @@ def test_missing_baseline_entry_fails_before_probe():
 
 def test_cross_node_gid_drift_fails_locally_but_gid_is_not_remote_argv():
     inventory = deepcopy(INVENTORY)
-    inventory["hosts"]["spark2"]["fabric"]["function100"]["gid_index"] = 4
+    inventory["hosts"]["node2"]["fabric"]["function100"]["gid_index"] = 4
     backend = FakeBackend({})
 
     with pytest.raises(LocalHealthError, match="accepted GID index"):
@@ -383,7 +383,7 @@ def test_cross_node_gid_drift_fails_locally_but_gid_is_not_remote_argv():
 
 def test_inventory_gid_must_match_accepted_baseline_consumers():
     inventory = deepcopy(INVENTORY)
-    for node in ("spark1", "spark2"):
+    for node in ("node1", "node2"):
         for name in ("function100", "function101"):
             inventory["hosts"][node]["fabric"][name]["gid_index"] = 4
 
@@ -402,7 +402,7 @@ def test_inventory_gid_must_match_accepted_baseline_consumers():
 )
 def test_symmetric_inventory_link_drift_is_rejected(field, value):
     inventory = deepcopy(INVENTORY)
-    for node in ("spark1", "spark2"):
+    for node in ("node1", "node2"):
         inventory["hosts"][node]["fabric"][field] = value
 
     with pytest.raises(LocalHealthError, match="approved MTU and link rate"):
@@ -416,7 +416,7 @@ def test_symmetric_inventory_link_drift_is_rejected(field, value):
 
 def test_symmetric_function101_gid_drift_is_rejected():
     inventory = deepcopy(INVENTORY)
-    for node in ("spark1", "spark2"):
+    for node in ("node1", "node2"):
         inventory["hosts"][node]["fabric"]["function101"]["gid_index"] = 4
 
     with pytest.raises(LocalHealthError, match="accepted GID index"):
@@ -429,7 +429,7 @@ def test_symmetric_function101_gid_drift_is_rejected():
 
 
 def test_malformed_toml_shapes_are_bounded_local_health_errors():
-    inventory = {"hosts": ["spark1", "spark2"]}
+    inventory = {"hosts": ["node1", "node2"]}
 
     with pytest.raises(LocalHealthError, match="invalid health inventory"):
         NodeHealthService(
@@ -443,8 +443,8 @@ def test_malformed_toml_shapes_are_bounded_local_health_errors():
 def test_output_schema_enforces_unreachable_null_envelope():
     subject, _, _ = service()
     document = subject.collect().to_dict()
-    document["nodes"]["spark1"]["status"] = "unreachable"
-    document["nodes"]["spark1"]["errors"] = ["ssh_unreachable"]
+    document["nodes"]["node1"]["status"] = "unreachable"
+    document["nodes"]["node1"]["errors"] = ["ssh_unreachable"]
 
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(document, json.loads((ROOT / "schemas/node-health.schema.json").read_text()))

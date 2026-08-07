@@ -148,7 +148,7 @@ def test_linux_node_runtime_cases_skip_on_non_linux_hosts() -> None:
     assert "5 skipped" in result.stdout
 
 
-def test_dgx_agent_installer_preserves_exact_non_linux_boundaries(
+def test_vonk_agent_installer_preserves_exact_non_linux_boundaries(
     tmp_path: Path,
 ) -> None:
     fake_bin = tmp_path / "bin"

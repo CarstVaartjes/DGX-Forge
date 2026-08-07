@@ -352,7 +352,7 @@ def test_sigstore_attests_provenance_and_sbom_without_tuf_credentials() -> None:
     assert "subject-digest: ${{ steps.build.outputs.digest }}" in provenance
     assert "push-to-registry: true" in provenance
     assert (
-        "predicate-type: https://dgx-forge.dev/attestations/"
+        "predicate-type: https://vonk-forge.dev/attestations/"
         "workload-artifact-build/v1"
     ) in provenance
     assert "predicate-path: workload-artifact-output/provenance-predicate.json" in provenance
@@ -397,8 +397,8 @@ def test_build_workflow_has_no_release_or_desired_state_authority() -> None:
     text = workflow().lower()
 
     for forbidden in (
-        "dgx_workload_tuf",
-        "dgx_platform_tuf",
+        "vonk_workload_tuf",
+        "vonk_platform_tuf",
         "workload_tuf_key",
         "platform_tuf_key",
         "desired_state",
@@ -415,9 +415,9 @@ def test_workload_outputs_are_distinct_from_fixed_platform_images() -> None:
     text = workflow()
     publisher = job("publish-workload-artifact")
 
-    assert "group: dgx-forge-workload-artifact-publication" in publisher
+    assert "group: vonk-forge-workload-artifact-publication" in publisher
     assert "cancel-in-progress: false" in publisher
-    assert "dgx-forge-api" not in text
-    assert "dgx-forge-worker" not in text
-    assert "dgx-forge-hermes" not in text
+    assert "vonk-forge-api" not in text
+    assert "vonk-forge-worker" not in text
+    assert "vonk-forge-hermes" not in text
     assert "platform-release" not in text

@@ -100,7 +100,7 @@ def test_ipv6_upstream_is_rendered_with_brackets(tmp_path: Path) -> None:
         (_endpoint(scheme="https"), "scheme"),
         (_endpoint(port=9999), "port"),
         (_endpoint("user@10.0.0.42"), "IP literal"),
-        (_endpoint("spark-a.internal"), "IP literal"),
+        (_endpoint("node-a.internal"), "IP literal"),
         (_endpoint("10.0.0.241"), "forbidden"),
         (_endpoint("10.0.1.42"), "outside"),
     ),

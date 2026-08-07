@@ -4,7 +4,7 @@
   "definition_sha256": "de79fa38af556356008f8e3bfa46222d1a1aabebf47653e2e14e03abb6c971bb",
   "runtime_manifest_sha256": "92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e",
   "source": {
-    "repository": "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark",
+    "repository": "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-Vonk Forge-GPU node",
     "commit": "b131b2a22164675890dd1465fd8862b5cfb6ff13"
   },
   "checkpoint": {
@@ -17,8 +17,8 @@
   },
   "recorded_at": "2026-08-03T12:50:10Z",
   "nodes": [
-    {"node": "spark1", "boot_id": "a0de8588-3d5d-44aa-8d1d-dd25dbcf6fc2"},
-    {"node": "spark2", "boot_id": "abeace49-049a-4c8c-b079-b4ce66793b67"}
+    {"node": "node1", "boot_id": "a0de8588-3d5d-44aa-8d1d-dd25dbcf6fc2"},
+    {"node": "node2", "boot_id": "abeace49-049a-4c8c-b079-b4ce66793b67"}
   ],
   "predecessor": "inventory/reports/model-definitions/deepseek-agent-dual-verified.json",
   "gates": {

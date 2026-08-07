@@ -35,7 +35,7 @@ REQUEST_DIGEST = "d" * 64
 def grant_claims() -> PackageHelperGrantClaims:
     return PackageHelperGrantClaims(
         schema_version=1,
-        authority="dgx.workload-package-helper",
+        authority="vonk.workload-package-helper",
         request_id=REQUEST_ID,
         node_id="spk_" + "1" * 32,
         job_id=JOB_ID,
@@ -54,7 +54,7 @@ def grant_claims() -> PackageHelperGrantClaims:
 def receipt_claims() -> PackageObjectReceiptClaims:
     return PackageObjectReceiptClaims(
         schema_version=1,
-        authority="dgx.workload-package-helper",
+        authority="vonk.workload-package-helper",
         object_digest="e" * 64,
         size=4096,
         relative_name=f"objects/sha256/{'e' * 64}",
@@ -78,8 +78,8 @@ def test_helper_grant_signing_bytes_are_domain_separated_and_canonical() -> None
     encoded = package_helper_grant_signing_bytes(grant_claims())
 
     assert encoded == (
-        b"DGX-WORKLOAD-PACKAGE-HELPER-GRANT-V1\x00"
-        b'{"attempt":2,"authority":"dgx.workload-package-helper",'
+        b"Vonk Forge-WORKLOAD-PACKAGE-HELPER-GRANT-V1\x00"
+        b'{"attempt":2,"authority":"vonk.workload-package-helper",'
         b'"expires_at":2000000900,"fence":"40000000-0000-4000-8000-000000000004",'
         b'"generation":"gen-future-stack-001",'
         b'"issued_at":2000000000,"job_id":"20000000-0000-4000-8000-000000000002",'
@@ -120,7 +120,7 @@ def test_object_receipt_has_explicit_same_key_envelope_but_distinct_domain() -> 
     assert parsed == receipt
     assert parsed.claims.relative_name == "objects/sha256/" + "e" * 64
     assert package_object_receipt_signing_bytes(parsed.claims).startswith(
-        b"DGX-WORKLOAD-PACKAGE-OBJECT-RECEIPT-V1\x00"
+        b"Vonk Forge-WORKLOAD-PACKAGE-OBJECT-RECEIPT-V1\x00"
     )
     assert package_object_receipt_signing_bytes(
         parsed.claims
@@ -148,7 +148,7 @@ def test_host_helper_grant_has_a_distinct_narrow_authority_domain() -> None:
     encoded = host_helper_grant_signing_bytes(claims)
 
     assert encoded.startswith(HOST_HELPER_GRANT_DOMAIN)
-    assert not encoded.startswith(b"DGX-WORKLOAD-PACKAGE-HELPER-GRANT-V1\x00")
+    assert not encoded.startswith(b"Vonk Forge-WORKLOAD-PACKAGE-HELPER-GRANT-V1\x00")
 
 
 @pytest.mark.parametrize(

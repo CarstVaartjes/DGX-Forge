@@ -180,7 +180,7 @@ class RunAdmissionService:
             elif snapshot.stale:
                 blockers.append(
                     AdmissionReason(
-                        "run.stale_inventory", "Spark memory inventory is stale."
+                        "run.stale_inventory", "GPU node memory inventory is stale."
                     )
                 )
             role = role_by_name.get(placement.role)
@@ -235,7 +235,7 @@ class RunAdmissionService:
                 blockers.append(
                     AdmissionReason(
                         "run.port_occupied",
-                        f"Port {port} is already reserved on this Spark.",
+                        f"Port {port} is already reserved on this GPU node.",
                     )
                 )
             rendezvous_port = (
@@ -308,7 +308,7 @@ class RunAdmissionService:
         if multi_node and len(fabric_addresses) != len(set(fabric_addresses)):
             duplicate = AdmissionReason(
                 "run.fabric_address_duplicate",
-                "Mapped Sparks must have unique direct-fabric addresses.",
+                "Mapped GPU nodes must have unique direct-fabric addresses.",
             )
             plans = [
                 replace(item, allowed=False, blockers=(*item.blockers, duplicate))

@@ -1,5 +1,5 @@
 [project]
-name = "dgx-control"
+name = "vonk-control"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [project.scripts]
-dgx-control-offline = "vonk_control.offline:main"
+vonk-control-offline = "vonk_control.offline:main"
 
 [tool.uv.sources]
 vonk-agent-protocol = { path = "../inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl" }

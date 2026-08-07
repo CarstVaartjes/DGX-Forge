@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "DGX Spark raw inventory",
+  "title": "Vonk Forge GPU node raw inventory",
   "type": "object",
   "required": [
     "hostname",

@@ -1,4 +1,4 @@
-"""Thin, content-addressed administration over Spark platform updates."""
+"""Thin, content-addressed administration over GPU node platform updates."""
 
 from __future__ import annotations
 
@@ -44,12 +44,12 @@ from .updates import (
 
 _MAX_PLANNED_UPDATES = 256
 _ROUTE_ID = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
-_SPARK_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
+_VONK_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
 
 
 @dataclass(frozen=True)
 class RouteImpact:
-    """One accepted route alias and the Spark workload membership it exposes."""
+    """One accepted route alias and the GPU node workload membership it exposes."""
 
     alias: str
     workload_id: str
@@ -64,7 +64,7 @@ class RouteImpact:
             or not isinstance(self.nodes, tuple)
             or not self.nodes
             or len(set(self.nodes)) != len(self.nodes)
-            or any(_SPARK_ID.fullmatch(node_id) is None for node_id in self.nodes)
+            or any(_VONK_ID.fullmatch(node_id) is None for node_id in self.nodes)
         ):
             raise ValueError("platform update route impact is invalid")
 

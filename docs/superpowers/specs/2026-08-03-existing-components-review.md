@@ -2,15 +2,15 @@
 
 **Date:** 2026-08-03
 
-**Scope:** The generic Docker-hosted DGX-Forge control plane, one-to-N Spark
+**Scope:** The generic Docker-hosted Vonk Forge control plane, one-to-N GPU node
 installation, outbound agent, Git-backed administration, observability, and
 platform updates.
 
 ## Outcome
 
-DGX-Forge still needs a small amount of domain-specific software: the
+Vonk Forge still needs a small amount of domain-specific software: the
 Git-to-fleet reconciler, fenced node-operation state machine, immutable
-Spark identity/evidence approval, placement logic, and the CLI/web workflows
+GPU node identity/evidence approval, placement logic, and the CLI/web workflows
 that operate those concepts. Those boundaries do not exist as an off-the-shelf
 product.
 
@@ -21,32 +21,32 @@ on UGREEN-specific APIs or a fixed fleet size.
 
 ## Decisions
 
-| Concern | Existing component | Decision | DGX-Forge boundary |
+| Concern | Existing component | Decision | Vonk Forge boundary |
 |---|---|---|---|
-| Machine PKI | Smallstep `step-ca` | Adopt as the recommended production CA; retain the built-in issuer as a zero-dependency bootstrap/development provider | DGX-Forge owns enrollment grants, physical evidence approval, node inventory, certificate-to-node binding, and audit. `step-ca` owns issuance, renewal, revocation, CA key lifecycle, and policy. |
+| Machine PKI | Smallstep `step-ca` | Adopt as the recommended production CA; retain the built-in issuer as a zero-dependency bootstrap/development provider | Vonk Forge owns enrollment grants, physical evidence approval, node inventory, certificate-to-node binding, and audit. `step-ca` owns issuance, renewal, revocation, CA key lifecycle, and policy. |
 | General secret management | HashiCorp Vault | Do not require for the small-cluster default | Vault is a good provider when an operator already runs it, but adds sealing, storage, policy, token, backup, and HA operations beyond this project's PKI-only need. Keep the CA interface open for a future Vault provider. |
-| Workload identity | SPIRE | Do not adopt now | SPIRE's workload/node attestation is valuable at larger or heterogeneous scale, but it adds server and per-node agent machinery. Revisit when DGX Spark has a trustworthy TPM/device-attestation path or workload-level SVIDs become a requirement. |
+| Workload identity | SPIRE | Do not adopt now | SPIRE's workload/node attestation is valuable at larger or heterogeneous scale, but it adds server and per-node agent machinery. Revisit when Vonk Forge GPU node has a trustworthy TPM/device-attestation path or workload-level SVIDs become a requirement. |
 | Release/artifact storage | CNCF Distribution registry plus ORAS | Adopt | OCI stores immutable blobs/manifests. Agents pull exact digest references with a pinned ORAS client. Keep the control API artifact route only for bounded bootstrap/recovery artifacts, not normal release distribution. |
 | Update trust and rollback protection | The Update Framework (TUF) | Adopt | TUF authorizes versions and digests and protects against rollback/freeze/mix-and-match attacks. OCI transports the bytes; TUF metadata determines whether they are installable. |
-| Host installation/hardening | Ansible roles plus Ansible Runner | Adopt | Bootstrap may use SSH once. It transfers/runs a pinned local role bundle; after enrollment, typed agent operations invoke the same local Runner boundary. Do not run an autonomous `ansible-pull` loop that bypasses DGX-Forge jobs and audit. |
-| DGX Spark lifecycle collectors | NVIDIA Enterprise Manageability scripts | Adopt behind a pinned, tested adapter | Install the exact MIT-licensed bundle as a DGX-Forge release target. NVIDIA supplies reference implementations for device, hardware, firmware, OS, driver, software, diagnostic, reset-reason, and reboot/kernel-rollback collection. DGX-Forge owns bounded invocation, normalization, redaction, evidence retention, and the job fence. Keep the existing collector only for DGX-Forge-specific fabric/runtime fields and explicit compatibility fallback. |
-| Fresh or replacement-node provisioning | NVIDIA DGX Spark cloud-init/OEMDATA workflow | Adopt as an installation-mode option | Use NVIDIA's BaseOS/FastOS customization and OEMDATA contracts for fresh/reimaged devices. `spark-install` supplies a versioned DGX-Forge seed/policy and resumes at physical identity approval; already-running devices retain the one-time SSH bootstrap path. DGX-Forge does not fork the NVIDIA installer or embed fixed users, names, or addresses. |
-| Ubuntu fleet management | Canonical Landscape | Optional provider, not a default service | NVIDIA recommends Landscape for enterprise DGX Spark fleets, but DGX-Forge's small-cluster default already needs its domain agent and control plane. Operators that already run Landscape may use it for Ubuntu policy/package channels; it never becomes model/profile authority or a second routine mutation path. |
-| Spark cabling/bootstrap | NVIDIA Sync Cluster Assistant | Optional operator aid | It can validate and configure supported small direct/switch topologies, but its documented device limits and SSH setup do not define DGX-Forge inventory, identity, topology, or normal control. Import only reviewed evidence; never infer a fleet-size limit from it. |
-| Durable operation delivery | PostgreSQL queue with `SKIP LOCKED` | Keep current design | NATS JetStream and Temporal still provide at-least-once execution and require additional services. They do not remove DGX-Forge's need for node fences, mutation inspection, compensation, and operator-wait states. PostgreSQL is appropriate for this small fleet. |
-| Python/TypeScript API clients | `openapi-python-client`, `openapi-typescript`, and `openapi-fetch` | Adopt | FastAPI OpenAPI is the contract. Generated clients/types are checked for drift in CI. Thin DGX wrappers retain safe polling, request-ID reuse, and typed domain errors. |
-| Host/GPU telemetry | Prometheus node exporter, NVIDIA DCGM exporter, and Grafana Alloy | Adopt | Exporters bind to loopback on each Spark. Alloy scrapes locally and sends mTLS `remote_write` outbound through Caddy to the NAS. The Spark opens no listener to the LAN and the DGX agent does not reimplement exporter metrics. |
-| Dashboards and alerts | Grafana and Prometheus | Adopt; already planned | Grafana owns charts, dashboard variables, and alert visualization. DGX-Forge web shows operational state/actions and links to the relevant provisioned dashboard instead of rebuilding Grafana. |
-| Inference gateway administration | LiteLLM Admin UI | Reuse for gateway-specific administration | LiteLLM owns virtual keys, teams, spend, request logs, and gateway status. Dynamic model authority remains disabled: DGX-Forge Git repositories own model/profile/placement definitions and publish generated LiteLLM routes. DGX-Forge admin links to the scoped LiteLLM UI rather than duplicating it. |
-| Container-host administration | Portainer Edge Agent | Optional for the NAS only | Portainer can help an operator inspect Docker services. It does not replace the Spark agent or Git reconciler and must not receive Spark control authority or become a required dependency. |
-| Agent A/B activation | systemd service plus DGX-Forge supervisor | Keep current design | `systemd-sysupdate` is aimed at image/resource updates and is not a portable replacement for the agent's application-level reconnect/readiness/fence rollback contract. Revisit for full OS-image management. |
+| Host installation/hardening | Ansible roles plus Ansible Runner | Adopt | Bootstrap may use SSH once. It transfers/runs a pinned local role bundle; after enrollment, typed agent operations invoke the same local Runner boundary. Do not run an autonomous `ansible-pull` loop that bypasses Vonk Forge jobs and audit. |
+| Vonk Forge GPU node lifecycle collectors | NVIDIA Enterprise Manageability scripts | Adopt behind a pinned, tested adapter | Install the exact MIT-licensed bundle as a Vonk Forge release target. NVIDIA supplies reference implementations for device, hardware, firmware, OS, driver, software, diagnostic, reset-reason, and reboot/kernel-rollback collection. Vonk Forge owns bounded invocation, normalization, redaction, evidence retention, and the job fence. Keep the existing collector only for Vonk Forge-specific fabric/runtime fields and explicit compatibility fallback. |
+| Fresh or replacement-node provisioning | NVIDIA Vonk Forge GPU node cloud-init/OEMDATA workflow | Adopt as an installation-mode option | Use NVIDIA's BaseOS/FastOS customization and OEMDATA contracts for fresh/reimaged devices. `node-install` supplies a versioned Vonk Forge seed/policy and resumes at physical identity approval; already-running devices retain the one-time SSH bootstrap path. Vonk Forge does not fork the NVIDIA installer or embed fixed users, names, or addresses. |
+| Ubuntu fleet management | Canonical Landscape | Optional provider, not a default service | NVIDIA recommends Landscape for enterprise Vonk Forge GPU node fleets, but Vonk Forge's small-cluster default already needs its domain agent and control plane. Operators that already run Landscape may use it for Ubuntu policy/package channels; it never becomes model/profile authority or a second routine mutation path. |
+| GPU node cabling/bootstrap | NVIDIA Sync Cluster Assistant | Optional operator aid | It can validate and configure supported small direct/switch topologies, but its documented device limits and SSH setup do not define Vonk Forge inventory, identity, topology, or normal control. Import only reviewed evidence; never infer a fleet-size limit from it. |
+| Durable operation delivery | PostgreSQL queue with `SKIP LOCKED` | Keep current design | NATS JetStream and Temporal still provide at-least-once execution and require additional services. They do not remove Vonk Forge's need for node fences, mutation inspection, compensation, and operator-wait states. PostgreSQL is appropriate for this small fleet. |
+| Python/TypeScript API clients | `openapi-python-client`, `openapi-typescript`, and `openapi-fetch` | Adopt | FastAPI OpenAPI is the contract. Generated clients/types are checked for drift in CI. Thin Vonk Forge wrappers retain safe polling, request-ID reuse, and typed domain errors. |
+| Host/GPU telemetry | Prometheus node exporter, NVIDIA DCGM exporter, and Grafana Alloy | Adopt | Exporters bind to loopback on each GPU node. Alloy scrapes locally and sends mTLS `remote_write` outbound through Caddy to the NAS. The GPU node opens no listener to the LAN and the Vonk Forge agent does not reimplement exporter metrics. |
+| Dashboards and alerts | Grafana and Prometheus | Adopt; already planned | Grafana owns charts, dashboard variables, and alert visualization. Vonk Forge web shows operational state/actions and links to the relevant provisioned dashboard instead of rebuilding Grafana. |
+| Inference gateway administration | LiteLLM Admin UI | Reuse for gateway-specific administration | LiteLLM owns virtual keys, teams, spend, request logs, and gateway status. Dynamic model authority remains disabled: Vonk Forge Git repositories own model/profile/placement definitions and publish generated LiteLLM routes. Vonk Forge admin links to the scoped LiteLLM UI rather than duplicating it. |
+| Container-host administration | Portainer Edge Agent | Optional for the NAS only | Portainer can help an operator inspect Docker services. It does not replace the GPU node agent or Git reconciler and must not receive GPU node control authority or become a required dependency. |
+| Agent A/B activation | systemd service plus Vonk Forge supervisor | Keep current design | `systemd-sysupdate` is aimed at image/resource updates and is not a portable replacement for the agent's application-level reconnect/readiness/fence rollback contract. Revisit for full OS-image management. |
 
 ## Why these choices fit the target scale
 
 The likely deployment has one Docker service host, one PostgreSQL database,
-and a small number of Sparks and administrators. A separate message broker,
+and a small number of GPU nodes and administrators. A separate message broker,
 workflow cluster, service mesh, workload-identity server, or mandatory Vault
-cluster would increase failure modes more than it reduces DGX-Forge code.
+cluster would increase failure modes more than it reduces Vonk Forge code.
 
 Conversely, PKI, software-update trust, artifact distribution, configuration
 application, and GPU telemetry are security-sensitive standards-heavy areas.
@@ -66,7 +66,7 @@ The resulting deployment is a composed system, not a monolith:
 
 ```text
 Caddy
-  -> DGX control API / worker / web
+  -> Vonk Forge control API / worker / web
   -> LiteLLM
   -> Grafana
   -> agent mTLS and metrics ingress
@@ -74,8 +74,8 @@ Caddy
 PostgreSQL        step-ca          OCI registry
 Prometheus        Grafana          LiteLLM
 
-Spark (outbound only)
-  -> DGX agent -> control API
+GPU node (outbound only)
+  -> Vonk Forge agent -> control API
   -> pinned NVIDIA lifecycle tools behind fixed typed operations
   -> ORAS -> OCI registry
   -> Alloy -> Prometheus remote_write through Caddy
@@ -91,7 +91,7 @@ These are deliberately non-overlapping:
 - PostgreSQL is operational state: jobs, fences, observations, enrollment,
   reconciliation, audit, and rollout progress.
 - TUF metadata is release trust authority; OCI is only content transport.
-- `step-ca` is certificate authority; DGX-Forge decides which physical node may
+- `step-ca` is certificate authority; Vonk Forge decides which physical node may
   enroll and records the node/certificate relationship.
 - LiteLLM is inference traffic policy and accounting, not model repository
   authority.
@@ -101,7 +101,7 @@ These are deliberately non-overlapping:
   agent operation.
 - NVIDIA lifecycle tools are node-local implementation dependencies, not a
   transport or authority. Their JSON is untrusted bounded input until the
-  DGX-Forge adapter validates, normalizes, and redacts it.
+  Vonk Forge adapter validates, normalizes, and redacts it.
 - Landscape and NVIDIA Sync are optional external operator tools. Their state
   cannot make a node eligible, change repository desired state, or bypass a
   fenced operation.
@@ -119,24 +119,24 @@ that already owns each boundary:
 3. Unified Admin Tasks 1-4 generate both clients from OpenAPI and add links to
    LiteLLM/Grafana for their native administration surfaces.
 4. Platform Update Tasks 1-3 replace custom signed-manifest trust with TUF
-   roles/metadata while retaining the DGX compatibility manifest as a TUF
+   roles/metadata while retaining the Vonk Forge compatibility manifest as a TUF
    target. OCI references transport target blobs.
 5. Installation/onboarding policy steps become versioned Ansible roles invoked
    through Ansible Runner, with SSH limited to first bootstrap and explicit
    recovery.
-6. Observability installs node exporter, DCGM exporter, and Alloy per Spark;
-   control-plane metrics remain native because they describe DGX-specific
+6. Observability installs node exporter, DCGM exporter, and Alloy per GPU node;
+   control-plane metrics remain native because they describe Vonk Forge-specific
    operational state.
 7. Agent Runtime Tasks 2 and 5 add a fixed-path adapter and install a pinned
    NVIDIA Enterprise Manageability bundle. Routine probes combine its safe
-   platform evidence with the existing DGX-Forge fabric/runtime fields;
+   platform evidence with the existing Vonk Forge fabric/runtime fields;
    diagnostic/log modes remain explicit, bounded, and redacted.
 8. Agent Migration Tasks 1, 3, 5, and 6 add fresh/reimage cloud-init mode,
-   record NVIDIA-tool provenance, and distinguish DGX OS maintenance from
-   DGX-Forge application releases. Existing-node SSH bootstrap remains a
+   record NVIDIA-tool provenance, and distinguish Vonk Forge OS maintenance from
+   Vonk Forge application releases. Existing-node SSH bootstrap remains a
    one-time compatibility path.
-9. Platform Update Tasks retain TUF/OCI for DGX-Forge. NVIDIA
-   `spark_updatectl.py` contributes reboot readiness, next-boot kernel, and
+9. Platform Update Tasks retain TUF/OCI for Vonk Forge. NVIDIA
+   `vendor update adapter` contributes reboot readiness, next-boot kernel, and
    rollback evidence only; it does not replace NAS generations or agent A/B
    fan-out.
 
@@ -152,10 +152,10 @@ that already owns each boundary:
 - [The Update Framework specification](https://theupdateframework.github.io/specification/latest/)
 - [Ansible Runner](https://docs.ansible.com/projects/runner/en/stable/index.html)
   and [ansible-pull](https://docs.ansible.com/projects/ansible-core/devel/cli/ansible-pull.html)
-- [NVIDIA DGX Spark Enterprise Manageability](https://docs.nvidia.com/dgx/dgx-spark/enterprise-manageability.html),
-  [Enterprise Lifecycle Integration](https://docs.nvidia.com/dgx/dgx-spark/enterprise-fleet-lifecycle.html),
-  and [custom installation with cloud-init](https://docs.nvidia.com/dgx/dgx-spark/enterprise-custom-install.html)
-- [DGX Spark clustering and Cluster Assistant boundaries](https://docs.nvidia.com/dgx/dgx-spark/spark-clustering.html)
+- [NVIDIA Vonk Forge GPU node Enterprise Manageability](https://docs.nvidia.com/),
+  [Enterprise Lifecycle Integration](https://docs.nvidia.com/),
+  and [custom installation with cloud-init](https://docs.nvidia.com/)
+- [Vonk Forge GPU node clustering and Cluster Assistant boundaries](https://docs.nvidia.com/)
 - [Canonical Landscape self-hosted deployment](https://documentation.ubuntu.com/landscape/explanation/landscape/self-hosted-landscape/)
 - [PostgreSQL `SKIP LOCKED`](https://www.postgresql.org/docs/current/sql-select.html),
   [NATS JetStream consumers](https://docs.nats.io/nats-concepts/jetstream/consumers),

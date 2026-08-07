@@ -22,7 +22,7 @@ T = TypeVar("T", bound="PackageResourceEnvelope")
 
 @_attrs_define
 class PackageResourceEnvelope:
-    """ Bounded per-Spark resource requirements from a promoted release.
+    """ Bounded per-node resource requirements from a promoted release.
 
         Attributes:
             activation_memory_bytes (int):
@@ -38,7 +38,7 @@ class PackageResourceEnvelope:
             kv_cache_per_token_bytes (int):
             output_bytes (int):
             ranks (list['PackageRank']):
-            required_sparks (int):
+            required_nodes (int):
             resident_memory_bytes (int):
             topology (str):
             transient_bytes (int):
@@ -59,7 +59,7 @@ class PackageResourceEnvelope:
     kv_cache_per_token_bytes: int
     output_bytes: int
     ranks: list['PackageRank']
-    required_sparks: int
+    required_nodes: int
     resident_memory_bytes: int
     topology: str
     transient_bytes: int
@@ -104,7 +104,7 @@ class PackageResourceEnvelope:
 
 
 
-        required_sparks = self.required_sparks
+        required_nodes = self.required_nodes
 
         resident_memory_bytes = self.resident_memory_bytes
 
@@ -133,7 +133,7 @@ class PackageResourceEnvelope:
             "kv_cache_per_token_bytes": kv_cache_per_token_bytes,
             "output_bytes": output_bytes,
             "ranks": ranks,
-            "required_sparks": required_sparks,
+            "required_nodes": required_nodes,
             "resident_memory_bytes": resident_memory_bytes,
             "topology": topology,
             "transient_bytes": transient_bytes,
@@ -187,7 +187,7 @@ class PackageResourceEnvelope:
             ranks.append(ranks_item)
 
 
-        required_sparks = d.pop("required_sparks")
+        required_nodes = d.pop("required_nodes")
 
         resident_memory_bytes = d.pop("resident_memory_bytes")
 
@@ -213,7 +213,7 @@ class PackageResourceEnvelope:
             kv_cache_per_token_bytes=kv_cache_per_token_bytes,
             output_bytes=output_bytes,
             ranks=ranks,
-            required_sparks=required_sparks,
+            required_nodes=required_nodes,
             resident_memory_bytes=resident_memory_bytes,
             topology=topology,
             transient_bytes=transient_bytes,

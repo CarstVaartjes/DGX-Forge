@@ -4,7 +4,7 @@
 
 **Goal:** Close every local-agent and control-plane issue from the joint repository review.
 
-**Architecture:** Pin the global OCI policy as a vendored contract, enforce bounded DNS-pinned artifact acquisition at the Spark boundary, and make admission plus orchestration database-atomic. Gang failure recovery is represented as an ordinary idempotent stop job so existing agent fencing and result projection remain authoritative.
+**Architecture:** Pin the global OCI policy as a vendored contract, enforce bounded DNS-pinned artifact acquisition at the GPU node boundary, and make admission plus orchestration database-atomic. Gang failure recovery is represented as an ordinary idempotent stop job so existing agent fencing and result projection remain authoritative.
 
 **Tech Stack:** Rust, Podman, curl, oras, Python 3.12, SQLAlchemy 2, PostgreSQL/SQLite tests, FastAPI, React, GitHub Actions.
 
@@ -44,7 +44,7 @@
 
 ### Task 3: Atomic acceptance and capacity locking
 
-**Files:** `control/src/dgx_control/install_admission.py`, `run_admission.py`, `recipe_operations.py`, `models.py`, and `control/tests/test_*admission.py`, `test_recipe_operations.py`.
+**Files:** `control/src/vonk_control/install_admission.py`, `run_admission.py`, `recipe_operations.py`, `models.py`, and `control/tests/test_*admission.py`, `test_recipe_operations.py`.
 
 **Interfaces:** Produces `accept_install_in_session(...)` and `accept_run_in_session(...)` methods; orchestration queues parent/child jobs in the same `Session`.
 
@@ -56,7 +56,7 @@
 
 ### Task 4: Gang-start compensation
 
-**Files:** `control/src/dgx_control/recipe_operations.py`, `control/tests/test_recipe_operations.py`, `rust/crates/vonk-agent/src/oci.rs`, and Rust tests.
+**Files:** `control/src/vonk_control/recipe_operations.py`, `control/tests/test_recipe_operations.py`, `rust/crates/vonk-agent/src/oci.rs`, and Rust tests.
 
 **Interfaces:** A terminal failed `recipe.start` creates one deterministic `recipe.stop` cleanup job for all run nodes; agent stop is idempotent for absent containers.
 

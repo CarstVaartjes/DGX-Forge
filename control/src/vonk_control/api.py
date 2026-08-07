@@ -90,8 +90,8 @@ from .reconcile import IneligibleCommit, StaleFleetEvidence
 from .repository import RepositoryPolicyError
 from .settings import StartupMode
 from .source_bundles import SourceBundleStore
-from .sparkrun_api import install_sparkrun_routes
-from .sparkrun_workflow import SparkRunWorkflow
+from .workload_run_api import install_workload_run_routes
+from .workload_run_workflow import WorkloadRunWorkflow
 
 _CONTROL_GENERATION = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
 _CONTROL_OPERATION = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
@@ -568,7 +568,7 @@ def create_preselection_app(service: GenerationReadinessService) -> FastAPI:
     """Return an inert route-only candidate app with no production registration."""
 
     app = FastAPI(
-        title="DGX Forge Control Preselection",
+        title="Vonk Forge Control Preselection",
         version="1.0",
         openapi_url=None,
         docs_url=None,
@@ -890,11 +890,11 @@ def create_app(
     packages: PackageApiServices | None = None,
     catalog: CatalogService | None = None,
     global_catalog: Any | None = None,
-    sparkrun: SparkRunWorkflow | None = None,
+    workload_run: WorkloadRunWorkflow | None = None,
     recipe_operations: RecipeOperationService | None = None,
 ) -> FastAPI:
     app = FastAPI(
-        title="DGX Forge Control", version="1.0", docs_url=None, redoc_url=None
+        title="Vonk Forge Control", version="1.0", docs_url=None, redoc_url=None
     )
     cursor_codec = tokens.cursor_codec()
 
@@ -990,7 +990,7 @@ def create_app(
         if authorization.startswith("Bearer "):
             encoded = authorization.removeprefix("Bearer ")
         else:
-            encoded = request.cookies.get("dgx_session", "")
+            encoded = request.cookies.get("vonk_session", "")
             cookie_auth = bool(encoded)
         if not encoded:
             raise HTTPException(status_code=401, detail="authentication required")
@@ -1001,7 +1001,7 @@ def create_app(
                 status_code=401, detail="authentication failed"
             ) from None
         if cookie_auth and request.method not in {"GET", "HEAD", "OPTIONS"}:
-            cookie = request.cookies.get("dgx_csrf")
+            cookie = request.cookies.get("vonk_csrf")
             header = request.headers.get("x-csrf-token")
             if not cookie or not header or not secrets.compare_digest(cookie, header):
                 raise HTTPException(status_code=403, detail="CSRF validation failed")
@@ -1042,8 +1042,8 @@ def create_app(
         service=catalog,
         global_catalog=global_catalog,
     )
-    install_sparkrun_routes(
-        app, actor_dependency=authenticated_actor, audits=audits, workflow=sparkrun
+    install_workload_run_routes(
+        app, actor_dependency=authenticated_actor, audits=audits, workflow=workload_run
     )
     install_recipe_operation_routes(
         app,
@@ -2110,7 +2110,7 @@ def production_app() -> FastAPI:
             source_bundles=SourceBundleStore(settings.state_path / "source-bundles"),
         ),
         global_catalog=global_catalog,
-        sparkrun=SparkRunWorkflow(
+        workload_run=WorkloadRunWorkflow(
             sessions,
             clock=clock,
             bundles=SourceBundleStore(settings.state_path / "source-bundles"),

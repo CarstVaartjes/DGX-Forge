@@ -46,7 +46,7 @@ def package_lock() -> PackageReleaseLock:
             | {
                 "name": "adapter",
                 "kind": "adapter",
-                "media_type": "application/vnd.dgx-forge.workload-adapter.v1",
+                "media_type": "application/vnd.vonk-forge.workload-adapter.v1",
                 "materialization": {"method": "executable"},
             },
             "adapter_abi": 1,

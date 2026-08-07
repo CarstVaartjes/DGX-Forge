@@ -16,13 +16,13 @@ def adapt_legacy_profile(profile: ClusterProfile, fleet: Fleet) -> GenericCluste
         if record.lifecycle != "retired"
     ]
     if len(active) < 2:
-        raise ValueError("legacy two-Spark profiles require at least two active fleet nodes")
-    aliases = {"spark1": active[0], "spark2": active[1]}
+        raise ValueError("legacy two-workload profiles require at least two active fleet nodes")
+    aliases = {"node1": active[0], "node2": active[1]}
     if set(profile.placements) != set(aliases):
-        raise ValueError("legacy profile must contain exact spark1/spark2 placements")
+        raise ValueError("legacy profile must contain exact node1/node2 placements")
     assigned: dict[str, list[str]] = {}
     per_alias_count = {alias: len(profile.placements[alias]) for alias in aliases}
-    for alias in ("spark1", "spark2"):
+    for alias in ("node1", "node2"):
         for workload in profile.placements[alias]:
             assigned.setdefault(workload, []).append(aliases[alias].value)
     requirements = []

@@ -13,7 +13,7 @@ content-addressed and available only to operator/administrator API roles.
 
 Inspect the reconciliation job and affected-node health. Keep routes withdrawn
 until the pinned commit, releases, leases, and acceptance checks all pass. Do
-not manually point LiteLLM at an unaccepted Spark endpoint.
+not manually point LiteLLM at an unaccepted GPU node endpoint.
 
 ## Stale node probe
 

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the developer-machine workload catalog, whole-cluster profile model, and fail-to-stopped `sparkctl` switcher used by every local AI workload.
+**Goal:** Build the developer-machine workload catalog, whole-cluster profile model, and fail-to-stopped `vonkctl` switcher used by every local AI workload.
 
-**Architecture:** Immutable Model Definitions describe one model service; Cluster Profiles compose the complete desired state of both Sparks. A developer-machine controller resolves stable selectors, validates content-addressed maturity and placement evidence, reconciles node state through key-only SSH, and publishes only healthy accepted loopback endpoints. Explicit restoration runs as a second ordinary transition after temporary outputs are recovered.
+**Architecture:** Immutable Model Definitions describe one model service; Cluster Profiles compose the complete desired state of both GPU nodes. A developer-machine controller resolves stable selectors, validates content-addressed maturity and placement evidence, reconciles node state through key-only SSH, and publishes only healthy accepted loopback endpoints. Explicit restoration runs as a second ordinary transition after temporary outputs are recovered.
 
 **Tech Stack:** Python 3.12, dataclasses, `tomllib`, JSON Schema, pytest, Bash, OpenSSH, Docker Compose, TOML.
 
@@ -14,15 +14,15 @@
 
 - The canonical home Cluster Profile ID is `agent-full-dual`; `default` and `agent` are convenience selectors for it, not profile IDs.
 - Both DeepSeek definitions expose the stable client-facing model name `deepseek`; clients never select `single`, `dual`, `full`, `lite`, Mia, or DS4 as model names.
-- A cluster profile specifies the complete state of Spark 1 and Spark 2.
-- Dual-Spark workloads reserve both nodes; worker starts first and head stops first.
+- A cluster profile specifies the complete state of GPU node 1 and GPU node 2.
+- Dual-GPU node workloads reserve both nodes; worker starts first and head stops first.
 - Co-location is denied unless the exact cluster profile has passed measured acceptance.
 - Every endpoint remains loopback-only and is consumed through SSH tunnels until the NAS control plane exists.
 - Failed transitions end stopped or degraded and never silently select another model.
 - Canonical artifacts and controller state live on the developer machine.
 - Container images, source commits, checkpoints, and manifests are immutable.
 - A cataloged production definition may remain `planned`; configuration presence never implies installation, acceptance, or activatability.
-- The user-facing workload always selects the best accepted DGX Spark-optimized path; generic upstream paths are non-serving correctness references.
+- The user-facing workload always selects the best accepted Vonk Forge GPU node-optimized path; generic upstream paths are non-serving correctness references.
 - Every adapter exposes `prepare`, `verify`, `start`, `health`, `infer`, `stop`, and `verify-release` operations.
 - No model profile auto-starts after reboot.
 - Work proceeds directly on `main` by explicit user instruction.
@@ -37,17 +37,17 @@ intent rather than claiming that its Phase 3 adapter and manifest are already
 installed or accepted.
 
 **Files:**
-- Modify: `src/spark_profiles/contracts.py`
+- Modify: `src/cluster_profiles/contracts.py`
 - Modify: `schemas/cluster-profile.schema.json`
-- Modify: `src/spark_profiles/schemas/cluster-profile.schema.json`
-- Modify: `tests/spark_profiles/test_contracts.py`
+- Modify: `src/cluster_profiles/schemas/cluster-profile.schema.json`
+- Modify: `tests/cluster_profiles/test_contracts.py`
 - Rename: `config/cluster-profiles/default.toml` to `config/cluster-profiles/agent-full-dual.toml`
 - Create: `config/profile-selectors.toml`
 
 **Interfaces:**
 - Produces: `load_workload(path: Path) -> WorkloadDefinition`.
 - Produces: `load_cluster_profile(path: Path) -> ClusterProfile`.
-- `ClusterProfile.placements` maps exactly `spark1` and `spark2` to tuples of workload IDs.
+- `ClusterProfile.placements` maps exactly `node1` and `node2` to tuples of workload IDs.
 - `ClusterProfile` does not contain restoration policy; restoration is an explicit switch request.
 - `CheckpointPin.manifest_sha256` is optional while a definition is planned and must match `^[0-9a-f]{64}$` when present.
 
@@ -55,15 +55,15 @@ installed or accepted.
 
 ```python
 def test_cluster_profile_requires_both_nodes(tmp_path):
-    path = write_profile(tmp_path, {"spark1": ["deepseek-agent-dual"]})
-    with pytest.raises(ProfileValidationError, match="spark2"):
+    path = write_profile(tmp_path, {"node1": ["deepseek-agent-dual"]})
+    with pytest.raises(ProfileValidationError, match="node2"):
         load_cluster_profile(path)
 
 def test_distributed_workload_declares_rank_order(workload_path):
     workload = load_workload(workload_path)
     assert workload.topology == "distributed"
-    assert workload.start_order == ("spark2", "spark1")
-    assert workload.stop_order == ("spark1", "spark2")
+    assert workload.start_order == ("node2", "node1")
+    assert workload.stop_order == ("node1", "node2")
 
 def test_home_profile_uses_canonical_id_and_deepseek_alias():
     profile = load_cluster_profile(
@@ -76,7 +76,7 @@ def test_home_profile_uses_canonical_id_and_deepseek_alias():
 
 - [x] **Step 2: Run the focused tests and confirm failure**
 
-Run: `uv run --with pytest --with jsonschema pytest tests/spark_profiles/test_contracts.py -v`
+Run: `uv run --with pytest --with jsonschema pytest tests/cluster_profiles/test_contracts.py -v`
 
 Expected: FAIL because `agent-full-dual.toml` is absent and the existing
 contract still requires `restore_home`.
@@ -110,28 +110,28 @@ agent = "agent-full-dual"
 
 - [x] **Step 5: Run validation and commit**
 
-Run: `uv run --with pytest --with jsonschema pytest tests/spark_profiles/test_contracts.py -v && git diff --check`
+Run: `uv run --with pytest --with jsonschema pytest tests/cluster_profiles/test_contracts.py -v && git diff --check`
 
 Expected: PASS.
 
 ```bash
-git add src/spark_profiles/contracts.py src/spark_profiles/schemas \
-  schemas/cluster-profile.schema.json tests/spark_profiles/test_contracts.py \
+git add src/cluster_profiles/contracts.py src/cluster_profiles/schemas \
+  schemas/cluster-profile.schema.json tests/cluster_profiles/test_contracts.py \
   config/cluster-profiles config/profile-selectors.toml
-git commit -m "fix: reconcile canonical Spark home profile"
+git commit -m "fix: reconcile canonical GPU node home profile"
 ```
 
 ### Task 2: Build catalog and admission validation
 
 **Files:**
-- Create: `src/spark_profiles/catalog.py`
-- Create: `src/spark_profiles/admission.py`
-- Create: `tests/spark_profiles/test_catalog.py`
-- Create: `tests/spark_profiles/test_admission.py`
+- Create: `src/cluster_profiles/catalog.py`
+- Create: `src/cluster_profiles/admission.py`
+- Create: `tests/cluster_profiles/test_catalog.py`
+- Create: `tests/cluster_profiles/test_admission.py`
 - Create: `schemas/model-definitions.schema.json`
 - Create: `schemas/accepted-cluster-profiles.schema.json`
-- Create: `src/spark_profiles/schemas/model-definitions.schema.json`
-- Create: `src/spark_profiles/schemas/accepted-cluster-profiles.schema.json`
+- Create: `src/cluster_profiles/schemas/model-definitions.schema.json`
+- Create: `src/cluster_profiles/schemas/accepted-cluster-profiles.schema.json`
 - Modify: `pyproject.toml`
 - Create: `locks/model-definitions.toml`
 - Create: `inventory/reports/model-definitions.json`
@@ -148,7 +148,7 @@ git commit -m "fix: reconcile canonical Spark home profile"
 
 ```python
 def test_unknown_workload_is_rejected(catalog, profile):
-    profile = replace(profile, placements={"spark1": ("missing",), "spark2": ()})
+    profile = replace(profile, placements={"node1": ("missing",), "node2": ()})
     assert check_admission(profile, catalog, inventory()).ok is False
 
 def test_colocation_requires_exact_acceptance(catalog, colocated_profile):
@@ -183,7 +183,7 @@ def test_evidence_indexes_satisfy_packaged_schemas(catalog_root):
 
 - [x] **Step 2: Confirm tests fail**
 
-Run: `uv run --with pytest pytest tests/spark_profiles/test_catalog.py tests/spark_profiles/test_admission.py -v`
+Run: `uv run --with pytest pytest tests/cluster_profiles/test_catalog.py tests/cluster_profiles/test_admission.py -v`
 
 Expected: import failure for catalog/admission modules.
 
@@ -211,10 +211,10 @@ invalidates prior acceptance. TOML whitespace and comments do not.
 
 - [x] **Step 5: Run tests and commit**
 
-Run: `uv run --with pytest pytest tests/spark_profiles/test_catalog.py tests/spark_profiles/test_admission.py -v && git diff --check`
+Run: `uv run --with pytest pytest tests/cluster_profiles/test_catalog.py tests/cluster_profiles/test_admission.py -v && git diff --check`
 
 ```bash
-git add src/spark_profiles schemas pyproject.toml tests/spark_profiles \
+git add src/cluster_profiles schemas pyproject.toml tests/cluster_profiles \
   locks/model-definitions.toml \
   inventory/reports/model-definitions.json \
   inventory/reports/accepted-cluster-profiles.json
@@ -224,24 +224,24 @@ git commit -m "feat: validate content-addressed profile admission"
 ### Task 3: Implement SSH node backend and persisted state
 
 **Files:**
-- Create: `src/spark_profiles/backend.py`
-- Create: `src/spark_profiles/state.py`
-- Create: `tests/spark_profiles/test_backend.py`
-- Create: `tests/spark_profiles/test_state.py`
+- Create: `src/cluster_profiles/backend.py`
+- Create: `src/cluster_profiles/state.py`
+- Create: `tests/cluster_profiles/test_backend.py`
+- Create: `tests/cluster_profiles/test_state.py`
 - Create: `config/controller.toml`
 
 **Interfaces:**
 - Produces: `SshBackend.run(node, argv, timeout) -> CommandResult`.
 - Produces: `SshBackend.run_script(node, script, argv, timeout) -> CommandResult` for fixed repository-owned read-only collectors sent over stdin.
 - Produces: `StateStore.acquire() -> ContextManager[ControllerState]`.
-- Stores state under `.state/sparkctl/state.json` and locks
-  `.state/sparkctl/switch.lock` on the developer machine.
+- Stores state under `.state/vonkctl/state.json` and locks
+  `.state/vonkctl/switch.lock` on the developer machine.
 
 - [x] **Step 1: Write failing backend and stale-lock tests**
 
 ```python
 def test_backend_never_uses_shell(fake_exec):
-    SshBackend(fake_exec).run("spark1", ("profile-status", "--json"), 10)
+    SshBackend(fake_exec).run("node1", ("profile-status", "--json"), 10)
     assert fake_exec.shell is False
     assert "BatchMode=yes" in fake_exec.argv
     assert "ForwardAgent=no" in fake_exec.argv
@@ -250,7 +250,7 @@ def test_backend_never_uses_shell(fake_exec):
 
 def test_run_script_delivers_fixed_bytes_on_stdin(fake_exec):
     SshBackend(fake_exec).run_script(
-        "spark2", b"printf '{}\\n'\n", ("--json",), 10
+        "node2", b"printf '{}\\n'\n", ("--json",), 10
     )
     assert fake_exec.input_bytes == b"printf '{}\\n'\n"
     assert fake_exec.shell is False
@@ -263,7 +263,7 @@ def test_state_write_is_atomic(store, interrupted_replace):
 
 - [x] **Step 2: Confirm tests fail**
 
-Run: `uv run --with pytest pytest tests/spark_profiles/test_backend.py tests/spark_profiles/test_state.py -v`
+Run: `uv run --with pytest pytest tests/cluster_profiles/test_backend.py tests/cluster_profiles/test_state.py -v`
 
 - [x] **Step 3: Implement safe command and state boundaries**
 
@@ -284,18 +284,18 @@ logs, live lock, old dead lock, and interrupted state replacement.
 
 - [x] **Step 5: Run tests and commit**
 
-Run: `uv run --with pytest pytest tests/spark_profiles/test_backend.py tests/spark_profiles/test_state.py -v`
+Run: `uv run --with pytest pytest tests/cluster_profiles/test_backend.py tests/cluster_profiles/test_state.py -v`
 
 ```bash
-git add src/spark_profiles config/controller.toml tests/spark_profiles
-git commit -m "feat: add Spark controller backend and state"
+git add src/cluster_profiles config/controller.toml tests/cluster_profiles
+git commit -m "feat: add GPU node controller backend and state"
 ```
 
 ### Task 4: Implement fail-to-stopped profile switching
 
 **Files:**
-- Create: `src/spark_profiles/switcher.py`
-- Create: `tests/spark_profiles/test_switcher.py`
+- Create: `src/cluster_profiles/switcher.py`
+- Create: `tests/cluster_profiles/test_switcher.py`
 - Create: `docs/runbooks/model-switching.md`
 
 **Interfaces:**
@@ -308,8 +308,8 @@ git commit -m "feat: add Spark controller backend and state"
 def test_distributed_stop_is_head_first(harness):
     harness.switch("default", "maintenance")
     assert harness.remote_calls[:2] == [
-        ("spark1", ("profile-stop", "deepseek-agent-dual", "head")),
-        ("spark2", ("profile-stop", "deepseek-agent-dual", "worker")),
+        ("node1", ("profile-stop", "deepseek-agent-dual", "head")),
+        ("node2", ("profile-stop", "deepseek-agent-dual", "worker")),
     ]
 
 def test_failed_start_finishes_stopped(harness):
@@ -321,7 +321,7 @@ def test_failed_start_finishes_stopped(harness):
 
 - [x] **Step 2: Confirm tests fail**
 
-Run: `uv run --with pytest pytest tests/spark_profiles/test_switcher.py -v`
+Run: `uv run --with pytest pytest tests/cluster_profiles/test_switcher.py -v`
 
 - [x] **Step 3: Implement reconciliation**
 
@@ -342,20 +342,20 @@ profile and definition fingerprints remain in the caller's switch result.
 
 - [x] **Step 5: Run tests and commit**
 
-Run: `uv run --with pytest pytest tests/spark_profiles/test_switcher.py -v && git diff --check`
+Run: `uv run --with pytest pytest tests/cluster_profiles/test_switcher.py -v && git diff --check`
 
 ```bash
-git add src/spark_profiles/switcher.py tests/spark_profiles/test_switcher.py docs/runbooks/model-switching.md
-git commit -m "feat: reconcile Spark cluster profiles"
+git add src/cluster_profiles/switcher.py tests/cluster_profiles/test_switcher.py docs/runbooks/model-switching.md
+git commit -m "feat: reconcile GPU node cluster profiles"
 ```
 
-### Task 5: Expose the developer-machine `sparkctl` CLI
+### Task 5: Expose the developer-machine `vonkctl` CLI
 
 **Files:**
-- Create: `src/spark_profiles/cli.py`
-- Create: `bin/sparkctl`
-- Create: `tests/spark_profiles/test_cli.py`
-- Create: `docs/runbooks/sparkctl.md`
+- Create: `src/cluster_profiles/cli.py`
+- Create: `bin/vonkctl`
+- Create: `tests/cluster_profiles/test_cli.py`
+- Create: `docs/runbooks/vonkctl.md`
 
 **Interfaces:**
 - Produces commands: `catalog`, `validate`, `status`, `switch`,
@@ -384,7 +384,7 @@ def test_planned_home_is_visible_but_not_activatable(cli):
 
 - [x] **Step 2: Confirm tests fail**
 
-Run: `uv run --with pytest pytest tests/spark_profiles/test_cli.py -v`
+Run: `uv run --with pytest pytest tests/cluster_profiles/test_cli.py -v`
 
 - [x] **Step 3: Implement stable human and JSON output**
 
@@ -399,7 +399,7 @@ Reserve 4 and 5 for live node health.
 
 - [x] **Step 4: Verify the local default profile**
 
-Run: `uv run sparkctl catalog --json && uv run sparkctl validate default --json && uv run sparkctl status --json`
+Run: `uv run vonkctl catalog --json && uv run vonkctl validate default --json && uv run vonkctl status --json`
 
 Expected: catalog and contracts load; `default` resolves to
 `agent-full-dual`; admission is truthfully denied because
@@ -408,9 +408,9 @@ and stopped, with no remote mutation.
 
 - [x] **Step 5: Run the suite and commit**
 
-Run: `uv run --with pytest pytest tests/spark_profiles -v && git diff --check`
+Run: `uv run --with pytest pytest tests/cluster_profiles -v && git diff --check`
 
 ```bash
-git add src/spark_profiles/cli.py bin/sparkctl tests/spark_profiles/test_cli.py docs/runbooks/sparkctl.md
-git commit -m "feat: add developer Spark profile controller"
+git add src/cluster_profiles/cli.py bin/vonkctl tests/cluster_profiles/test_cli.py docs/runbooks/vonkctl.md
+git commit -m "feat: add developer workload profile controller"
 ```

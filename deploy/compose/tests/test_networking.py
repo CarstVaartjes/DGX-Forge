@@ -17,7 +17,7 @@ def _rendered() -> dict:
         "LITELLM_IMAGE": "example/litellm:1@sha256:" + "d" * 64,
         "PROMETHEUS_IMAGE": "prom/prometheus:1@sha256:" + "e" * 64,
         "GRAFANA_IMAGE": "grafana/grafana:1@sha256:" + "f" * 64,
-        "REPOSITORY_PATH": "/srv/dgx-forge/repository",
+        "REPOSITORY_PATH": "/srv/vonk-forge/repository",
         "DATABASE_URL_FILE": "/dev/null",
         "POSTGRES_PASSWORD_FILE": "/dev/null",
         "TOKEN_SIGNING_KEY_FILE": "/dev/null",
@@ -33,13 +33,13 @@ def _rendered() -> dict:
         "WORKLOAD_TIMESTAMP_KEY_FILE": "/dev/null",
         "ADMIN_GRANT_PUBLIC_KEY_FILE": "/dev/null",
         "AGENT_TUF_BOOTSTRAP_ROOT_FILE": "/dev/null",
-        "CONTROL_IDENTITY_PATH": "/srv/dgx-forge/control-identity",
-        "DGX_PLATFORM_VERSION": "1.0.0",
-        "DGX_PLATFORM_RELEASE_DIGEST": "sha256:" + "2" * 64,
-        "DGX_PLATFORM_BUILD_DIGEST": "sha256:" + "3" * 64,
-        "DGX_CONTROL_GENERATION_ID": "gen-" + "2" * 24,
-        "DGX_DATABASE_REVISION": "0012_control_process_heartbeats",
-        "DGX_CONTROL_START_NONCE": "4" * 64,
+        "CONTROL_IDENTITY_PATH": "/srv/vonk-forge/control-identity",
+        "VONK_PLATFORM_VERSION": "1.0.0",
+        "VONK_PLATFORM_RELEASE_DIGEST": "sha256:" + "2" * 64,
+        "VONK_PLATFORM_BUILD_DIGEST": "sha256:" + "3" * 64,
+        "VONK_CONTROL_GENERATION_ID": "gen-" + "2" * 24,
+        "VONK_DATABASE_REVISION": "0012_control_process_heartbeats",
+        "VONK_CONTROL_START_NONCE": "4" * 64,
         "GRAFANA_ADMIN_PASSWORD_FILE": "/dev/null",
         "LITELLM_MASTER_KEY_FILE": "/dev/null",
         "LITELLM_UPSTREAM_KEY_FILE": "/dev/null",
@@ -56,19 +56,19 @@ def _rendered() -> dict:
         "STEP_CA_ROOT_CERTIFICATE_FILE": "/dev/null",
         "STEP_CA_INTERMEDIATE_KEY_FILE": "/dev/null",
         "STEP_CA_PASSWORD_FILE": "/dev/null",
-        "DGX_CONTROL_HOSTNAME": "control.test.example",
-        "DGX_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
-        "DGX_AGENT_HOSTNAME": "agents.test.example",
-        "DGX_REGISTRY_HOSTNAME": "registry.test.example",
-        "DGX_MANAGEMENT_CIDRS": "10.0.0.0/24",
-        "DGX_DIRECT_FABRIC_CIDRS": "192.168.100.0/24,192.168.101.0/24",
+        "VONK_CONTROL_HOSTNAME": "control.test.example",
+        "VONK_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
+        "VONK_AGENT_HOSTNAME": "agents.test.example",
+        "VONK_REGISTRY_HOSTNAME": "registry.test.example",
+        "VONK_MANAGEMENT_CIDRS": "10.0.0.0/24",
+        "VONK_DIRECT_FABRIC_CIDRS": "192.168.100.0/24,192.168.101.0/24",
         "NAS_LAN_IP": "10.0.0.2",
-        "DGX_BACKEND_PORT": "8443",
+        "VONK_BACKEND_PORT": "8443",
         "TAILSCALE_OAUTH_CLIENT_ID_FILE": "/dev/null",
         "TAILSCALE_OAUTH_CLIENT_SECRET_FILE": "/dev/null",
         "HERMES_UID": "1100",
         "HERMES_GID": "1100",
-        "HERMES_DATA_ROOT": "/srv/dgx-forge/hermes",
+        "HERMES_DATA_ROOT": "/srv/vonk-forge/hermes",
         "HERMES_API_KEY_FILE": "/dev/null",
         "HERMES_DASHBOARD_ORIGIN": "https://hermes.test.example",
     }
@@ -116,7 +116,7 @@ def test_caddy_publishes_only_reserved_nas_backend_listener() -> None:
             "host_ip": "10.0.0.2",
         }
     ]
-    assert caddy["environment"]["DGX_BACKEND_PORT"] == "8443"
+    assert caddy["environment"]["VONK_BACKEND_PORT"] == "8443"
 
 
 def test_database_has_only_data_network_and_ingress_is_segmented() -> None:
@@ -149,10 +149,10 @@ def test_database_has_only_data_network_and_ingress_is_segmented() -> None:
     }
     assert set(services["prometheus"]["networks"]) == {"application"}
     for service in ("control-api", "control-worker"):
-        assert services[service]["environment"]["DGX_MANAGEMENT_CIDRS"] == (
+        assert services[service]["environment"]["VONK_MANAGEMENT_CIDRS"] == (
             "10.0.0.0/24"
         )
-        assert services[service]["environment"]["DGX_DIRECT_FABRIC_CIDRS"] == (
+        assert services[service]["environment"]["VONK_DIRECT_FABRIC_CIDRS"] == (
             "192.168.100.0/24,192.168.101.0/24"
         )
 
@@ -178,12 +178,12 @@ def test_worker_has_a_distinct_minimal_image_and_runtime_boundary() -> None:
         "/routes",
         "/supervisor",
         "/state",
-        "/run/dgx-signer",
-        "/run/dgx-forge/control-identity",
+        "/run/vonk-signer",
+        "/run/vonk-forge/control-identity",
     }
-    assert "DGX_REPOSITORY_PATH" not in worker["environment"]
-    assert "DGX_GIT_SIGNING_KEY_FILE" not in worker["environment"]
-    assert worker["environment"]["DGX_INTERNAL_API_URL"] == "http://control-api:8000"
+    assert "VONK_REPOSITORY_PATH" not in worker["environment"]
+    assert "VONK_GIT_SIGNING_KEY_FILE" not in worker["environment"]
+    assert worker["environment"]["VONK_INTERNAL_API_URL"] == "http://control-api:8000"
 
     signer = services["control-signer"]
     assert signer["network_mode"] == "none"
@@ -197,7 +197,7 @@ def test_worker_has_a_distinct_minimal_image_and_runtime_boundary() -> None:
     assert {item["target"] for item in signer["volumes"]} == {
         "/control-identity",
         "/publication",
-        "/run/dgx-signer",
+        "/run/vonk-signer",
         "/verifier",
     }
     socket_initializer = services["signer-runtime-init"]
@@ -230,8 +230,8 @@ def test_selected_services_reopen_the_root_owned_identity_directory_read_only() 
     services = rendered["services"]
     expected_mount = {
         "type": "bind",
-        "source": "/srv/dgx-forge/control-identity",
-        "target": "/run/dgx-forge/control-identity",
+        "source": "/srv/vonk-forge/control-identity",
+        "target": "/run/vonk-forge/control-identity",
         "read_only": True,
         "bind": {"create_host_path": False},
     }
@@ -241,27 +241,27 @@ def test_selected_services_reopen_the_root_owned_identity_directory_read_only() 
     for service_name in ("control-api", "control-worker"):
         service = services[service_name]
         mounts = {volume["target"]: volume for volume in service["volumes"]}
-        assert mounts["/run/dgx-forge/control-identity"] == expected_mount
+        assert mounts["/run/vonk-forge/control-identity"] == expected_mount
         assert not any(
             "control-host" in volume.get("source", "")
             or "control-generations" in volume.get("source", "")
             for volume in service["volumes"]
         )
 
-    assert services["control-api"]["environment"]["DGX_CONTROL_IDENTITY_ROOT"] == (
-        "/run/dgx-forge/control-identity"
+    assert services["control-api"]["environment"]["VONK_CONTROL_IDENTITY_ROOT"] == (
+        "/run/vonk-forge/control-identity"
     )
-    assert services["control-worker"]["environment"]["DGX_CONTROL_IDENTITY_ROOT"] == (
-        "/run/dgx-forge/control-identity"
+    assert services["control-worker"]["environment"]["VONK_CONTROL_IDENTITY_ROOT"] == (
+        "/run/vonk-forge/control-identity"
     )
     signer = services["control-signer"]
     signer_mounts = {volume["target"]: volume for volume in signer["volumes"]}
     assert signer_mounts["/control-identity"] == expected_mount | {
         "target": "/control-identity"
     }
-    assert signer["environment"]["DGX_CONTROL_IDENTITY_ROOT"] == "/control-identity"
-    assert signer["environment"]["DGX_CONTROL_PROCESS_IMAGE"] == signer["image"]
-    assert "DGX_ACTIVE_CONTROL_STATE_ROOT" not in signer["environment"]
+    assert signer["environment"]["VONK_CONTROL_IDENTITY_ROOT"] == "/control-identity"
+    assert signer["environment"]["VONK_CONTROL_PROCESS_IMAGE"] == signer["image"]
+    assert "VONK_ACTIVE_CONTROL_STATE_ROOT" not in signer["environment"]
 
 
 def test_selected_api_and_worker_receive_one_dynamic_exact_generation_identity() -> None:
@@ -269,19 +269,19 @@ def test_selected_api_and_worker_receive_one_dynamic_exact_generation_identity()
     api = services["control-api"]
     worker = services["control-worker"]
     common = {
-        "DGX_CONTROL_STARTUP_MODE": "selected",
-        "DGX_CONTROL_GENERATION_ID": "gen-" + "2" * 24,
-        "DGX_DATABASE_REVISION": "0012_control_process_heartbeats",
-        "DGX_PLATFORM_VERSION": "1.0.0",
-        "DGX_PLATFORM_RELEASE_DIGEST": "sha256:" + "2" * 64,
-        "DGX_PLATFORM_BUILD_DIGEST": "sha256:" + "3" * 64,
-        "DGX_CONTROL_START_NONCE": "4" * 64,
+        "VONK_CONTROL_STARTUP_MODE": "selected",
+        "VONK_CONTROL_GENERATION_ID": "gen-" + "2" * 24,
+        "VONK_DATABASE_REVISION": "0012_control_process_heartbeats",
+        "VONK_PLATFORM_VERSION": "1.0.0",
+        "VONK_PLATFORM_RELEASE_DIGEST": "sha256:" + "2" * 64,
+        "VONK_PLATFORM_BUILD_DIGEST": "sha256:" + "3" * 64,
+        "VONK_CONTROL_START_NONCE": "4" * 64,
     }
 
     for service in (api, worker):
         assert common.items() <= service["environment"].items()
-    assert api["environment"]["DGX_CONTROL_PROCESS_IMAGE"] == api["image"]
-    assert worker["environment"]["DGX_CONTROL_PROCESS_IMAGE"] == worker["image"]
+    assert api["environment"]["VONK_CONTROL_PROCESS_IMAGE"] == api["image"]
+    assert worker["environment"]["VONK_CONTROL_PROCESS_IMAGE"] == worker["image"]
 
 
 def test_signer_runtime_initializer_executes_its_fixed_directory_setup(
@@ -333,12 +333,12 @@ def test_admin_grant_signing_key_is_available_only_to_the_api() -> None:
     runtime_mount = next(
         volume
         for volume in services["control-api"]["volumes"]
-        if volume["target"] == "/run/dgx-api-secrets"
+        if volume["target"] == "/run/vonk-api-secrets"
     )
     assert runtime_mount["read_only"] is True
     assert services["control-api"]["environment"][
-        "DGX_ADMIN_GRANT_PRIVATE_KEY_FILE"
-    ] == "/run/dgx-api-secrets/admin-grant-private-key.pem"
+        "VONK_ADMIN_GRANT_PRIVATE_KEY_FILE"
+    ] == "/run/vonk-api-secrets/admin-grant-private-key.pem"
 
 
 def test_tailnet_backends_have_readiness_checks() -> None:
@@ -348,15 +348,7 @@ def test_tailnet_backends_have_readiness_checks() -> None:
         "CMD-SHELL",
         "wget -q -O /dev/null http://127.0.0.1:8080/healthz",
     ]
-    assert set(services["hermes-agent"]["networks"]) == {
-        "hermes-egress",
-        "hermes-inference",
-        "tailnet-hermes-edge",
-    }
-    assert "8642" in json.dumps(services["hermes-agent"]["healthcheck"]["test"])
-    assert "9119" in json.dumps(services["hermes-agent"]["healthcheck"]["test"])
-    assert services["hermes-agent"]["environment"]["HERMES_UID"] == "1100"
-    assert services["hermes-agent"]["environment"]["HERMES_GID"] == "1100"
+    assert "hermes-agent" not in services
 
 
 def test_litellm_routes_use_a_dedicated_atomic_config_volume() -> None:
@@ -384,7 +376,7 @@ def test_litellm_routes_use_a_dedicated_atomic_config_volume() -> None:
         "volume": {},
     }
     assert litellm_volumes["/supervisor"]["source"] == "litellm-supervisor-state"
-    assert "DGX_LITELLM_CONFIG_PATH" not in services["control-worker"]["environment"]
+    assert "VONK_LITELLM_CONFIG_PATH" not in services["control-worker"]["environment"]
     assert "litellm-upstream-key" not in {
         secret["source"] for secret in services["control-worker"]["secrets"]
     }

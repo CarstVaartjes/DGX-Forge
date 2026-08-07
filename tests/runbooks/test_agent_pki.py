@@ -120,7 +120,7 @@ def test_recovery_requires_explicit_node_bound_grant_and_never_identity_copy() -
     recovery = text[text.index("expiry and identity-loss recovery"):]
     assert "fresh" in recovery and "enrollment grant" in recovery
     assert "node-bound" in recovery
-    assert "copy" in recovery and "another spark" in recovery
+    assert "copy" in recovery and "another node" in recovery
     assert "existing mtls identity" in text
 
 

@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build and qualify an isolated Qwen3-VL-8B-Instruct single-Spark runtime through the approved vLLM path, or record a reproducible Spark prerequisite blocker without advertising the model.
+**Goal:** Build and qualify an isolated Qwen3-VL-8B-Instruct single-GPU node runtime through the approved vLLM path, or record a reproducible GPU node prerequisite blocker without advertising the model.
 
 **Architecture:** The model owns one adapter release, source snapshot, checkpoint snapshot, scratch/venv, input/output roots, log/PID files, and endpoint. The adapter prepares the pinned upstream repository and checkpoint, starts a model-specific vLLM OpenAI-compatible server, confines requests to the model input/output roots, and fails closed until the catalog evidence chain reaches the required maturity.
 
-**Tech Stack:** Bash lifecycle adapter, Python 3.12 runtime helpers, vLLM, Transformers processor, `qwen-vl-utils==0.0.14`, JSON evidence, pytest, SSH/Spark 2.
+**Tech Stack:** Bash lifecycle adapter, Python 3.12 runtime helpers, vLLM, Transformers processor, `qwen-vl-utils==0.0.14`, JSON evidence, pytest, SSH/GPU node 2.
 
 ## Global Constraints
 
@@ -75,11 +75,11 @@
 
 - [ ] **Step 1: Add the runtime manifest digest and model-specific command paths** without changing maturity until live gates exist.
 - [ ] **Step 2: Recompute the definition lock and maturity fingerprint** with `PYTHONPATH=src .venv/bin/python` and validate via `Catalog.load(Path("."))`.
-- [ ] **Step 3: Add the audit schema-shaped report** recording prerequisite checks and the exact Spark result.
+- [ ] **Step 3: Add the audit schema-shaped report** recording prerequisite checks and the exact GPU node result.
 - [ ] **Step 4: Run catalog, adapter, and full tests**; require no shared path or stale fingerprint.
 - [ ] **Step 5: Commit** with `git add config locks inventory docs && git commit -m "catalog isolated qwen3 vl runtime"`.
 
-### Task 4: Prepare and qualify on Spark 2
+### Task 4: Prepare and qualify on GPU node 2
 
 **Files:**
 - Remote model-owned state under `/srv/models/{sources,snapshots,runtime-cache,inputs,outputs,logs}/qwen3-vl-8b-single`.
@@ -91,10 +91,10 @@
 - Qualification requires health identity, a deterministic visual fixture response, resource/thermal measurements, three start-infer-stop cycles, release recovery, and direct loopback/SSH validation.
 
 - [ ] **Step 1: Confirm Mia is healthy and retain its exact restore command before the qualification window.**
-- [ ] **Step 2: Run `prepare` and `verify` for Qwen3-VL on Spark 2**, recording versions, image digest, disk use, and checkpoint manifest.
+- [ ] **Step 2: Run `prepare` and `verify` for Qwen3-VL on GPU node 2**, recording versions, image digest, disk use, and checkpoint manifest.
 - [ ] **Step 3: If preparation succeeds, run `start`, `health`, and one deterministic fixture inference**, validating structured classification/ranking output.
 - [ ] **Step 4: Run three lifecycle cycles plus resource, thermal, and release-recovery checks**, never overlapping another active model.
-- [ ] **Step 5: Restore Mia and verify its health before leaving Spark 2.**
+- [ ] **Step 5: Restore Mia and verify its health before leaving GPU node 2.**
 - [ ] **Step 6: Record `prepared`/`verified` maturity only when the evidence validator accepts the complete chain; otherwise record the blocker and retain `planned`.**
 - [ ] **Step 7: Run `.venv/bin/pytest -q`, `git diff --check`, and `git ls-remote origin refs/heads/main`, then push the qualification commit to `origin/main`.**
 

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Isolate Spark update signing in a networkless process and atomically publish only receipts backed by durable, revalidated authorization intents.
+**Goal:** Isolate GPU node update signing in a networkless process and atomically publish only receipts backed by durable, revalidated authorization intents.
 
 **Architecture:** A typed Unix-socket client/server separates the worker from the private authority. The orchestrator reserves an immutable database intent, calls the signer outside transactions, then performs an exact CAS transaction that queues the operation or marks the intent stale.
 
@@ -26,9 +26,9 @@
 ### Task 1: Typed signer IPC and independent signer policy
 
 **Files:**
-- Create: `control/src/dgx_control/update_signer.py`
+- Create: `control/src/vonk_control/update_signer.py`
 - Create: `control/tests/test_update_signer.py`
-- Modify: `control/src/dgx_control/update_authority.py`
+- Modify: `control/src/vonk_control/update_authority.py`
 
 **Interfaces:**
 - Produces `UnixUpdateSignerClient.authorize(request) -> dict[str, object]`.
@@ -43,7 +43,7 @@
 ### Task 2: Durable authorization intent schema
 
 **Files:**
-- Modify: `control/src/dgx_control/models.py`
+- Modify: `control/src/vonk_control/models.py`
 - Modify: `control/migrations/versions/0011_update_rollouts.py`
 - Modify: `control/tests/test_update_rollout_migration.py`
 
@@ -58,8 +58,8 @@
 ### Task 3: A/B/C queue publication and recovery
 
 **Files:**
-- Modify: `control/src/dgx_control/agent_jobs.py`
-- Modify: `control/src/dgx_control/updates.py`
+- Modify: `control/src/vonk_control/agent_jobs.py`
+- Modify: `control/src/vonk_control/updates.py`
 - Modify: `control/tests/test_agent_jobs.py`
 - Modify: `control/tests/test_update_orchestrator.py`
 
@@ -77,8 +77,8 @@
 ### Task 4: Production settings and Compose separation
 
 **Files:**
-- Modify: `control/src/dgx_control/settings.py`
-- Modify: `control/src/dgx_control/worker.py`
+- Modify: `control/src/vonk_control/settings.py`
+- Modify: `control/src/vonk_control/worker.py`
 - Modify: `control/tests/test_settings.py`
 - Modify: `control/tests/test_production_worker.py`
 - Modify: `deploy/compose/compose.yaml`
@@ -117,6 +117,6 @@
   passed **12 tests in 1.37s**.
 - Ruff `0.16.1`, Python entry-point compilation, and `git diff --check` passed.
 - No code-level blocker remains for signer isolation. The first real release
-  still requires external physical control-host update/recovery, Spark
+  still requires external physical control-host update/recovery, GPU node
   canary/rollback, replacement-host, authenticated-encryption, and signed
   platform-manifest evidence; this checkpoint does not fabricate those gates.

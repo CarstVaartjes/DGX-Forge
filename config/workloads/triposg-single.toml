@@ -2,9 +2,9 @@ id = "triposg-single"
 adapter = "creative-triposg"
 topology = "single"
 placement_class = "single-exclusive"
-nodes = ["spark2"]
-start_order = ["spark2"]
-stop_order = ["spark2"]
+nodes = ["node2"]
+start_order = ["node2"]
+stop_order = ["node2"]
 conflicts = ["deepseek-agent-dual", "deepseek-agent-single"]
 co_location = "exclusive"
 accepted_evidence = "inventory/reports/accepted-cluster-profiles.json"
@@ -35,13 +35,13 @@ host = "127.0.0.1"
 port = 9109
 
 [commands]
-prepare = ["/opt/spark/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "prepare"]
-verify = ["/opt/spark/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "verify"]
-start = ["/opt/spark/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "start"]
-health = ["/opt/spark/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "health"]
-infer = ["/opt/spark/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "infer"]
-stop = ["/opt/spark/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "stop"]
-verify-release = ["/opt/spark/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "verify-release"]
+prepare = ["/opt/node/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "prepare"]
+verify = ["/opt/node/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "verify"]
+start = ["/opt/node/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "start"]
+health = ["/opt/node/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "health"]
+infer = ["/opt/node/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "infer"]
+stop = ["/opt/node/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "stop"]
+verify-release = ["/opt/node/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "verify-release"]
 
 [deadlines]
 prepare = 86400

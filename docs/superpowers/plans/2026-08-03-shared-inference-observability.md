@@ -4,7 +4,7 @@
 
 **Goal:** Publish only healthy accepted model endpoints through Caddy and LiteLLM and provide actionable metrics, dashboards, alerts, and bounded logs.
 
-**Architecture:** The reconciler renders desired route fragments from an eligible commit and healthy concrete placement. Caddy owns public TLS/auth/maintenance behavior; LiteLLM owns OpenAI-compatible aliases, keys, teams, quotas, usage, and its native gateway UI, but not model authority. Prometheus and Grafana remain separate standard containers with provisioned, versioned configuration. Each Spark runs loopback-only node/DCGM exporters and Grafana Alloy sends metrics outbound over mTLS.
+**Architecture:** The reconciler renders desired route fragments from an eligible commit and healthy concrete placement. Caddy owns public TLS/auth/maintenance behavior; LiteLLM owns OpenAI-compatible aliases, keys, teams, quotas, usage, and its native gateway UI, but not model authority. Prometheus and Grafana remain separate standard containers with provisioned, versioned configuration. Each GPU node runs loopback-only node/DCGM exporters and Grafana Alloy sends metrics outbound over mTLS.
 
 **Tech Stack:** Caddy 2, LiteLLM, Prometheus, Grafana, Grafana Alloy, Prometheus node exporter, NVIDIA DCGM exporter, optional Alertmanager, OpenMetrics, pytest, Docker Compose integration.
 
@@ -23,7 +23,7 @@
 ### Task 1: Implement atomic route publication
 
 **Files:**
-- Create: `control/src/dgx_control/routes.py`
+- Create: `control/src/vonk_control/routes.py`
 - Create: `control/tests/test_routes.py`
 - Modify: `deploy/compose/Caddyfile`
 
@@ -64,7 +64,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit route publication**
 
 ```bash
-git add control/src/dgx_control/routes.py control/tests/test_routes.py deploy/compose/Caddyfile
+git add control/src/vonk_control/routes.py control/tests/test_routes.py deploy/compose/Caddyfile
 git commit -m "feat: publish fail-closed inference routes"
 ```
 
@@ -73,12 +73,12 @@ git commit -m "feat: publish fail-closed inference routes"
 **Files:**
 - Modify: `deploy/compose/compose.yaml`
 - Create: `deploy/compose/litellm/config.yaml`
-- Create: `control/src/dgx_control/litellm.py`
+- Create: `control/src/vonk_control/litellm.py`
 - Create: `control/tests/test_litellm.py`
 
 **Interfaces:**
 - `LiteLlmPublisher.render(route_snapshot, policy) -> bytes` and `apply(generation)`.
-- LiteLLM aliases map only to control-plane internal Caddy upstream routes or validated Spark endpoints on the private path.
+- LiteLLM aliases map only to control-plane internal Caddy upstream routes or validated GPU node endpoints on the private path.
 
 - [ ] **Step 1: Write failing authority and secret tests**
 
@@ -105,7 +105,7 @@ Disable dynamic model administration so Git remains authoritative, persist only
 required usage records, bind privately, require Caddy-origin authentication,
 validate config before reload, and keep the prior generation on failure. Expose
 LiteLLM's Caddy-protected native Admin UI for keys, teams, spend, logs, and
-gateway status; DGX-Forge web links to it and does not duplicate those pages.
+gateway status; Vonk Forge web links to it and does not duplicate those pages.
 
 - [ ] **Step 4: Run tests and Compose validation**
 
@@ -115,15 +115,15 @@ Expected: PASS.
 - [ ] **Step 5: Commit LiteLLM**
 
 ```bash
-git add deploy/compose control/src/dgx_control/litellm.py control/tests/test_litellm.py
+git add deploy/compose control/src/vonk_control/litellm.py control/tests/test_litellm.py
 git commit -m "feat: route accepted models through LiteLLM"
 ```
 
 ### Task 3: Export sanitized control and fleet metrics
 
 **Files:**
-- Create: `control/src/dgx_control/metrics.py`
-- Modify: `control/src/dgx_control/api.py`
+- Create: `control/src/vonk_control/metrics.py`
+- Modify: `control/src/vonk_control/api.py`
 - Create: `control/tests/test_metrics.py`
 - Create: `deploy/agent-observability/alloy.alloy`
 - Create: `deploy/agent-observability/*.service`
@@ -132,15 +132,15 @@ git commit -m "feat: route accepted models through LiteLLM"
 - Modify: `deploy/compose/compose.yaml`
 
 **Interfaces:**
-- Private `/metrics` exports DGX-specific job/reconciliation/route/API state.
-- Each Spark's node exporter and DCGM exporter bind only to loopback; Alloy scrapes them and sends mTLS remote-write outbound through Caddy.
+- Private `/metrics` exports Vonk Forge-specific job/reconciliation/route/API state.
+- Each GPU node's node exporter and DCGM exporter bind only to loopback; Alloy scrapes them and sends mTLS remote-write outbound through Caddy.
 
 - [ ] **Step 1: Write failing cardinality and secret-leak tests**
 
 ```python
 def test_metrics_use_node_id_not_hostname_or_address(metrics_text):
     assert 'node_id="spk_' in metrics_text
-    assert "192.168." not in metrics_text and "spark.local" not in metrics_text
+    assert "192.168." not in metrics_text and "node.local" not in metrics_text
 
 
 def test_metrics_do_not_contain_request_content(metrics_text):
@@ -158,7 +158,7 @@ Expected: FAIL.
 Use stable enum labels and node IDs, no job/request IDs as labels, histograms
 with explicit operational buckets, scrape auth on private network,
 retention/resource bounds, and no public Prometheus port. Do not reimplement
-host/GPU metric collection in the DGX agent: install pinned node exporter,
+host/GPU metric collection in the Vonk Forge agent: install pinned node exporter,
 NVIDIA DCGM exporter, and Alloy units; bind exporters to `127.0.0.1`; configure
 Alloy remote-write with the agent certificate/key and CA secret files; expose
 only the Caddy mTLS remote-write route. Relabel away hostnames, addresses,
@@ -172,7 +172,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit metrics**
 
 ```bash
-git add control/src/dgx_control/metrics.py control/src/dgx_control/api.py control/tests/test_metrics.py deploy/agent-observability tests/agent/test_observability_exporters.py deploy/compose
+git add control/src/vonk_control/metrics.py control/src/vonk_control/api.py control/tests/test_metrics.py deploy/agent-observability tests/agent/test_observability_exporters.py deploy/compose
 git commit -m "feat: expose sanitized platform metrics"
 ```
 
@@ -228,7 +228,7 @@ git commit -m "feat: provision fleet observability"
 ### Task 5: Bound and expose correlated operational logs
 
 **Files:**
-- Create: `control/src/dgx_control/logging.py`
+- Create: `control/src/vonk_control/logging.py`
 - Create: `control/tests/test_logging.py`
 - Modify: `deploy/compose/compose.yaml`
 - Create: `docs/runbooks/observability.md`
@@ -268,6 +268,6 @@ Expected: PASS.
 - [ ] **Step 5: Commit logging and runbook**
 
 ```bash
-git add control/src/dgx_control/logging.py control/tests/test_logging.py deploy/compose/compose.yaml docs/runbooks/observability.md
+git add control/src/vonk_control/logging.py control/tests/test_logging.py deploy/compose/compose.yaml docs/runbooks/observability.md
 git commit -m "feat: add bounded operational logging"
 ```

@@ -11,8 +11,8 @@ RUN groupmod -o --gid "${HERMES_GID}" hermes \
     && usermod -o --uid "${HERMES_UID}" --gid "${HERMES_GID}" hermes \
     && chown "${HERMES_UID}:${HERMES_GID}" /opt/data
 
-COPY entrypoint.sh /usr/local/bin/dgx-hermes-entrypoint
-RUN chmod 0755 /usr/local/bin/dgx-hermes-entrypoint
+COPY entrypoint.sh /usr/local/bin/vonk-hermes-entrypoint
+RUN chmod 0755 /usr/local/bin/vonk-hermes-entrypoint
 
-ENTRYPOINT ["/usr/local/bin/dgx-hermes-entrypoint"]
+ENTRYPOINT ["/usr/local/bin/vonk-hermes-entrypoint"]
 CMD ["gateway", "run"]

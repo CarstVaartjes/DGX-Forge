@@ -1,4 +1,4 @@
-"""Typed, content-addressed Spark release installation boundary."""
+"""Typed, content-addressed GPU node release installation boundary."""
 from __future__ import annotations
 
 import ctypes

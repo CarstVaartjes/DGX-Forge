@@ -1,6 +1,6 @@
 apiVersion: 1
 providers:
-  - name: DGX Forge
+  - name: Vonk Forge
     type: file
     disableDeletion: true
     editable: false

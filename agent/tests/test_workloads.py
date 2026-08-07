@@ -26,7 +26,7 @@ BASE = {
     "schema_version": 1,
     "workload_id": "deepseek-v4-flash-a",
     "release_digest": "4" * 64,
-    "adapter_id": "spark-runtime-v1",
+    "adapter_id": "node-runtime-v1",
 }
 
 
@@ -110,14 +110,14 @@ def _installed_adapter(
     executable.chmod(0o500)
     descriptor_document = {
         "schema_version": 1,
-        "target_name": "spark-runtime-2026-08",
+        "target_name": "node-runtime-2026-08",
         "target_digest": release_digest,
         "target_length": executable.stat().st_size,
         "registry_origin": "https://registry.test.example",
-        "repository": "dgx/releases",
+        "repository": "vonk/releases",
         "oci_manifest_digest": "sha256:" + "1" * 64,
         "provenance_digest": "3" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
         "adapter_version": "1.0.0",
         "architecture": "linux-arm64",
         "agent_min_version": "0.1.0",
@@ -148,8 +148,8 @@ def _installed_adapter(
 
     operations = WorkloadOperations._for_test(
         tmp_path / "releases",
-        {"spark-runtime-v1": CompiledAdapterPolicy(
-            "spark-runtime-v1", "bin/runtime-adapter", 2, 64 * 1024,
+        {"node-runtime-v1": CompiledAdapterPolicy(
+            "node-runtime-v1", "bin/runtime-adapter", 2, 64 * 1024,
             allow_unprivileged_test_files=True,
         )},
         Trust(),
@@ -270,7 +270,7 @@ def test_production_adapter_registry_is_compiled_and_not_constructor_supplied(tm
             raise AssertionError
 
     operations = WorkloadOperations(tmp_path / "releases", Trust())
-    assert set(operations.adapter_ids) == {"spark-runtime-v1"}
+    assert set(operations.adapter_ids) == {"node-runtime-v1"}
     with pytest.raises(WorkloadValidationError):
         WorkloadOperations(tmp_path / "releases", {"attacker": object()})
 

@@ -23,7 +23,7 @@ CHECKPOINT_MANIFEST = (
 WORKLOAD = ROOT / "config/workloads/deepseek-agent-single.toml"
 
 IMAGE = (
-    "ghcr.io/carstvaartjes/spark-ds4"
+    "ghcr.io/carstvaartjes/node-ds4"
     "@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615"
 )
 CHECKPOINT_MANIFEST_SHA256 = (
@@ -71,7 +71,7 @@ print(os.stat(sys.argv[3]).st_gid)
     release = "a" * 64
     environment = {
         **os.environ,
-        "DS4_LOCAL_HOSTNAME": "spark-3542",
+        "DS4_LOCAL_HOSTNAME": "node-3542",
         "DS4_MODELS_ROOT": str(models_root),
         "DS4_BOOT_ID_PATH": str(boot_id),
         "DS4_MEMINFO_PATH": str(meminfo),
@@ -284,7 +284,7 @@ def _compile_runtime_fixture(tmp_path: Path) -> Path:
     compiler = os.environ.get("CC", "cc")
     if shutil.which(compiler) is None:
         if sys.platform == "darwin":
-            pytest.skip("native C compiler unavailable on macOS; Spark ARM64 harness is run separately")
+            pytest.skip("native C compiler unavailable on macOS; GPU node ARM64 harness is run separately")
         pytest.fail(f"C compiler required for behavioral harness is unavailable: {compiler}")
 
     source = _apply_served_name_patch(tmp_path)
@@ -298,7 +298,7 @@ def _compile_runtime_fixture(tmp_path: Path) -> Path:
     if completed.returncode != 0:
         if sys.platform == "darwin":
             pytest.skip(
-                "native C compiler unavailable on macOS; Spark ARM64 harness is run separately: "
+                "native C compiler unavailable on macOS; GPU node ARM64 harness is run separately: "
                 + completed.stderr.strip()
             )
         pytest.fail(f"behavioral harness compilation failed:\\n{completed.stderr}")
@@ -330,8 +330,8 @@ def test_runtime_recipe_uses_the_pinned_cuda_sources_and_safe_runtime_contract()
     assert dockerfile.index('echo "${DS4_PATCH_SHA256}  /tmp/served-model-name.patch"') < dockerfile.index(
         "patch -p1 --input /tmp/served-model-name.patch"
     )
-    assert "make cuda-spark" in dockerfile
-    assert "DS4_CUDA_SPARK_HBM_CACHE=1" in dockerfile
+    assert "make cuda-node" in dockerfile
+    assert "DS4_CUDA_VONK_HBM_CACHE=1" in dockerfile
     assert "compute_121a" in dockerfile
     assert "sm_121a" in dockerfile
     assert "DS4_NO_UPDATE_CHECK=1" in dockerfile
@@ -350,7 +350,7 @@ def test_runtime_recipe_uses_the_pinned_cuda_sources_and_safe_runtime_contract()
     assert "network_mode: host" in compose
     assert "read_only: true" in compose
     assert "ports:" not in compose
-    assert "DS4_IMAGE=ghcr.io/carstvaartjes/spark-ds4:ds4-v0.5.3-q2-0731-health" in runtime_env
+    assert "DS4_IMAGE=ghcr.io/carstvaartjes/node-ds4:ds4-v0.5.3-q2-0731-health" in runtime_env
 
 
 def test_compose_renders_a_loopback_only_nonrestarting_service() -> None:
@@ -427,7 +427,7 @@ def test_served_model_patch_adds_a_deterministic_health_route(tmp_path: Path) ->
     ) in patched
 
 
-def test_single_adapter_is_pinned_to_spark1_and_exposes_only_controller_operations(
+def test_single_adapter_is_pinned_to_node1_and_exposes_only_controller_operations(
     tmp_path: Path,
 ) -> None:
     completed = subprocess.run(
@@ -437,13 +437,13 @@ def test_single_adapter_is_pinned_to_spark1_and_exposes_only_controller_operatio
         text=True,
         env={
             **os.environ,
-            "DS4_LOCAL_HOSTNAME": "spark-9999",
+            "DS4_LOCAL_HOSTNAME": "node-9999",
             "DS4_MODELS_ROOT": str(tmp_path / "models"),
         },
     )
 
     assert completed.returncode == 2
-    assert "spark1/spark-3542" in completed.stderr
+    assert "node1/node-3542" in completed.stderr
     assert "role" not in completed.stderr.lower()
 
     extra = subprocess.run(
@@ -451,7 +451,7 @@ def test_single_adapter_is_pinned_to_spark1_and_exposes_only_controller_operatio
         check=False,
         capture_output=True,
         text=True,
-        env={**os.environ, "DS4_LOCAL_HOSTNAME": "spark-3542"},
+        env={**os.environ, "DS4_LOCAL_HOSTNAME": "node-3542"},
     )
     assert extra.returncode == 2
     assert "exactly one operation" in extra.stderr
@@ -548,7 +548,7 @@ def test_health_executes_loopback_health_identity_and_no_copy_checks(
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert completed.stdout == "healthy node=spark1 model=deepseek\n"
+    assert completed.stdout == "healthy node=node1 model=deepseek\n"
     calls = [json.loads(line) for line in curl_log.read_text(encoding="utf-8").splitlines()]
     assert calls[0][-1] == "http://127.0.0.1:8888/health"
     assert calls[1][-1] == "http://127.0.0.1:8888/v1/models"
@@ -631,7 +631,7 @@ def test_infer_executes_reasoning_contract_and_rejects_private_leakage(
     )
 
     assert passed.returncode == 0, passed.stderr
-    assert passed.stdout == "inference-verified node=spark1 model=deepseek\n"
+    assert passed.stdout == "inference-verified node=node1 model=deepseek\n"
     requests = []
     for line in curl_log.read_text(encoding="utf-8").splitlines()[:6]:
         arguments = json.loads(line)
@@ -649,7 +649,7 @@ def test_single_workload_values_match_the_adapter_and_checkpoint_contract() -> N
 
     assert workload["id"] == "deepseek-agent-single"
     assert workload["topology"] == "single"
-    assert workload["nodes"] == ["spark1"]
+    assert workload["nodes"] == ["node1"]
     assert workload["image"]["reference"] == IMAGE
     assert workload["checkpoint"]["manifest_sha256"] == CHECKPOINT_MANIFEST_SHA256
     assert manifest["total_bytes"] == 93_691_352_992

@@ -1,4 +1,4 @@
-"""Persist fenced Spark agent operations."""
+"""Persist fenced GPU node agent operations."""
 
 import sqlalchemy as sa
 from alembic import op

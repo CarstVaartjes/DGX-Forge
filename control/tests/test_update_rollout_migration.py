@@ -199,7 +199,7 @@ def test_models_persist_pinned_rollout_and_node_evidence(tmp_path: Path) -> None
     now = datetime(2026, 8, 5, tzinfo=UTC)
     digest = "a" * 64
     with Session.begin() as session:
-        session.add(AgentNode(node_id="spark-1", state="active", capabilities=[]))
+        session.add(AgentNode(node_id="node-1", state="active", capabilities=[]))
         session.add(
             UpdateRollout(
                 id="rollout-1",
@@ -213,7 +213,7 @@ def test_models_persist_pinned_rollout_and_node_evidence(tmp_path: Path) -> None
                 target_platform_version="1.1.0",
                 target_build_digest=f"sha256:{'1' * 64}",
                 tuf_targets_version=7,
-                plan={"batches": [["spark-1"]], "schema_version": 1},
+                plan={"batches": [["node-1"]], "schema_version": 1},
                 current_batch=0,
                 soak_until=now + timedelta(minutes=5),
                 created_at=now,
@@ -224,7 +224,7 @@ def test_models_persist_pinned_rollout_and_node_evidence(tmp_path: Path) -> None
             UpdateRolloutNode(
                 id="rollout-node-1",
                 rollout_id="rollout-1",
-                node_id="spark-1",
+                node_id="node-1",
                 batch_index=0,
                 node_order=0,
                 is_canary=True,
@@ -250,7 +250,7 @@ def test_models_persist_pinned_rollout_and_node_evidence(tmp_path: Path) -> None
         rollout = session.get(UpdateRollout, "rollout-1")
         node = session.get(UpdateRolloutNode, "rollout-node-1")
         assert rollout is not None
-        assert rollout.plan == {"batches": [["spark-1"]], "schema_version": 1}
+        assert rollout.plan == {"batches": [["node-1"]], "schema_version": 1}
         assert rollout.plan_digest == digest
     assert node is not None
     assert node.is_canary is True
@@ -316,7 +316,7 @@ def test_node_state_order_and_identity_are_bounded(tmp_path: Path) -> None:
         connection.execute(
             text(
                 "INSERT INTO agent_nodes (node_id,state,capabilities) "
-                "VALUES ('spark-1','active','[]')"
+                "VALUES ('node-1','active','[]')"
             )
         )
         connection.execute(
@@ -347,7 +347,7 @@ def test_node_state_order_and_identity_are_bounded(tmp_path: Path) -> None:
                 "(id,rollout_id,node_id,batch_index,node_order,is_canary,state,"
                 "source_identity_digest,target_artifact_digest,"
                 "observed_active_slot,created_at,updated_at) VALUES "
-                "('bad-node','rollout-1','spark-1',-1,0,0,'unknown',:source,"
+                "('bad-node','rollout-1','node-1',-1,0,0,'unknown',:source,"
                 ":target,'C',:now,:now)"
             ),
             {
@@ -413,7 +413,7 @@ def test_node_dispatch_window_is_complete_ordered_and_state_bound(
         connection.execute(
             text(
                 "INSERT INTO agent_nodes (node_id,state,capabilities) "
-                "VALUES ('spark-1','active','[]')"
+                "VALUES ('node-1','active','[]')"
             )
         )
         connection.execute(
@@ -443,7 +443,7 @@ def test_node_dispatch_window_is_complete_ordered_and_state_bound(
                     "(id,rollout_id,node_id,batch_index,node_order,is_canary,state,"
                     "source_identity_digest,target_artifact_digest,dispatch_at,"
                     "activation_deadline,created_at,updated_at) VALUES "
-                    "('bad-node','rollout-1','spark-1',0,0,0,:state,:source,"
+                    "('bad-node','rollout-1','node-1',0,0,0,:state,:source,"
                     ":target,:dispatch_at,:activation_deadline,:now,:now)"
                 ),
                 {

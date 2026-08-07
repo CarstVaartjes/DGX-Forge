@@ -272,9 +272,9 @@ class PackageObjectReceiptIssuer:
 
 
 class PackageHelperAuthorityService:
-    """Database-bound issuer used by the authenticated Spark grant routes.
+    """Database-bound issuer used by the authenticated GPU node grant routes.
 
-    The private keys remain control-plane secrets.  A Spark can ask for a
+    The private keys remain control-plane secrets.  A GPU node can ask for a
     receipt only for an object present in the control plane's signed workload
     release target, and can ask for a grant only while it owns the exact
     running operation attempt.  This keeps the agent's fixed executor ABI

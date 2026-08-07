@@ -36,7 +36,7 @@ The production host uses a dedicated root-owned tree, separate from the
 application `control-state` volume:
 
 ```text
-/srv/dgx-forge/control-host/              root:root 0700
+/srv/vonk-forge/control-host/              root:root 0700
   operation.lock                          root:root 0600
   tuf/{metadata,targets}/                 root:root 0700
   bundles/sha256-<digest>/                root:root 0700
@@ -44,7 +44,7 @@ application `control-state` volume:
   operations/<operation-id>/              root:root 0700
   backups/                                root:root 0700
   active-generation                       root:root 0600
-/srv/dgx-forge/control-identity/           root:root 0755
+/srv/vonk-forge/control-identity/           root:root 0755
   active.json                              root:root 0444
   candidates/                              root:root 0755
     <operation-id>.json                    root:root 0444

@@ -18,7 +18,7 @@ from cluster_profiles.install.orchestrator import (
 from cluster_profiles.install.store import InstallStore
 
 ROOT = Path(__file__).resolve().parents[3]
-LAUNCHER = ROOT / "bin" / "spark-install"
+LAUNCHER = ROOT / "bin" / "node-install"
 NOW = datetime(2026, 8, 3, 10, 0, tzinfo=UTC)
 
 

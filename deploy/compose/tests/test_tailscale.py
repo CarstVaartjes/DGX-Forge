@@ -15,7 +15,7 @@ TAILSCALE_IMAGE = (
 EXPECTED_MAP = {
     "version": "0.0.1",
     "services": {
-        "svc:dgx-forge": {"endpoints": {"tcp:443": "http://caddy:8080"}},
+        "svc:vonk-forge": {"endpoints": {"tcp:443": "http://caddy:8080"}},
         "svc:hermes-api": {
             "endpoints": {"tcp:443": "http://hermes-agent:8642"}
         },
@@ -73,8 +73,8 @@ def test_gateway_is_persistent_userspace_and_unpublished() -> None:
         "TS_AUTH_ONCE": "true",
         "TS_CLIENT_ID": "file:/run/secrets/tailscale-oauth-client-id",
         "TS_CLIENT_SECRET": "file:/run/secrets/tailscale-oauth-client-secret",
-        "TS_EXTRA_ARGS": "--advertise-tags=tag:dgx-gateway",
-        "TS_HOSTNAME": "dgx-forge-gateway",
+        "TS_EXTRA_ARGS": "--advertise-tags=tag:vonk-gateway",
+        "TS_HOSTNAME": "vonk-forge-gateway",
         "TS_SOCKET": "/var/run/tailscale/tailscaled.sock",
         "TS_STATE_DIR": "/var/lib/tailscale",
         "TS_USERSPACE": "true",
@@ -103,8 +103,9 @@ def test_configurator_waits_for_every_exact_backend_health_gate() -> None:
     assert volumes["/usr/local/bin/configure-tailscale"]["read_only"] is True
     assert configurator["restart"] == "unless-stopped"
     assert configurator["depends_on"] == {
-        service: {"condition": "service_healthy", "required": True, "restart": True}
-        for service in ("caddy", "hermes-agent", "tailscale-gateway")
+        "caddy": {"condition": "service_healthy", "required": True, "restart": True},
+        "hermes-agent": {"condition": "service_healthy", "required": False, "restart": True},
+        "tailscale-gateway": {"condition": "service_healthy", "required": True, "restart": True},
     }
 
 
@@ -115,7 +116,7 @@ def test_service_map_and_configurator_are_exact_https_and_fail_closed() -> None:
 
     assert "serve set-config" not in text
     for command in (
-        "--service=svc:dgx-forge --https=443 http://caddy:8080",
+        "--service=svc:vonk-forge --https=443 http://caddy:8080",
         "--service=svc:hermes-api --https=443 http://hermes-agent:8642",
         "--service=svc:hermes-dashboard --https=443 http://hermes-agent:9119",
     ):
@@ -157,8 +158,8 @@ def test_configurator_repairs_plaintext_or_extra_service_map(tmp_path: Path) -> 
         "else printf '%s\\n' '{\"version\":\"0.0.1\",\"services\":{\"svc:extra\":{\"endpoints\":{\"tcp:99\":\"tcp://unexpected:99\"}}}}'; fi ;;\n"
         "  *\"serve status --json\"*)\n"
         f"    if [ -f \"$repaired\" ]; then printf '%s\\n' '{healthy_status}'; "
-        "else printf '%s\\n' '{\"Services\":{\"svc:dgx-forge\":{\"TCP\":{\"443\":{\"HTTP\":true}}}}}'; fi ;;\n"
-        "  *\"--service=svc:dgx-forge --https=443 http://caddy:8080\"*)\n"
+        "else printf '%s\\n' '{\"Services\":{\"svc:vonk-forge\":{\"TCP\":{\"443\":{\"HTTP\":true}}}}}'; fi ;;\n"
+        "  *\"--service=svc:vonk-forge --https=443 http://caddy:8080\"*)\n"
         "    printf '%s\\n' \"$*\" >>\"$log\"; touch \"$repaired\" ;;\n"
         "  *\"status --json\"*) printf '%s\\n' '{\"Capabilities\":[\"service-host\"]}' ;;\n"
         "  *) printf '%s\\n' \"$*\" >>\"$log\" ;;\n"
@@ -184,7 +185,7 @@ def test_configurator_repairs_plaintext_or_extra_service_map(tmp_path: Path) -> 
     assert result.returncode == 0, result.stderr
     calls = log.read_text()
     for command in (
-        "--service=svc:dgx-forge --https=443 http://caddy:8080",
+        "--service=svc:vonk-forge --https=443 http://caddy:8080",
         "--service=svc:hermes-api --https=443 http://hermes-agent:8642",
         "--service=svc:hermes-dashboard --https=443 http://hermes-agent:9119",
         "serve reset",
@@ -196,7 +197,7 @@ def test_configurator_repairs_plaintext_or_extra_service_map(tmp_path: Path) -> 
 def test_grants_example_is_exact_service_least_privilege() -> None:
     policy = json.loads((COMPOSE / "tailscale/grants.example.hujson").read_text())
 
-    assert policy["tagOwners"] == {"tag:dgx-gateway": ["autogroup:admin"]}
+    assert policy["tagOwners"] == {"tag:vonk-gateway": ["autogroup:admin"]}
     assert policy["groups"] == {
         "group:hermes-users": ["replace-with-your-login@github"]
     }
@@ -204,7 +205,7 @@ def test_grants_example_is_exact_service_least_privilege() -> None:
     assert policy["grants"] == [
         {
             "src": ["autogroup:admin"],
-            "dst": ["svc:dgx-forge"],
+            "dst": ["svc:vonk-forge"],
             "ip": ["tcp:443"],
         },
         {
@@ -215,12 +216,12 @@ def test_grants_example_is_exact_service_least_privilege() -> None:
     ]
     assert policy["autoApprovers"] == {
         "services": {
-            service: ["tag:dgx-gateway"] for service in EXPECTED_MAP["services"]
+            service: ["tag:vonk-gateway"] for service in EXPECTED_MAP["services"]
         }
     }
     assert policy["tests"] == [
-        {"src": "autogroup:admin", "accept": ["svc:dgx-forge:443"]},
-        {"src": "autogroup:member", "deny": ["svc:dgx-forge:443"]},
+        {"src": "autogroup:admin", "accept": ["svc:vonk-forge:443"]},
+        {"src": "autogroup:member", "deny": ["svc:vonk-forge:443"]},
         {
             "src": "replace-with-your-login@github",
             "accept": ["svc:hermes-api:443", "svc:hermes-dashboard:443"],

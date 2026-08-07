@@ -17,7 +17,7 @@ _PRIORITY = {
     "lifecycle": 5,
 }
 _ADAPTER = re.compile(r"[a-z0-9][a-z0-9-]{1,63}")
-_EXECUTABLE = re.compile(r"/opt/spark/model-adapters/[a-z0-9-]+/releases/[0-9a-f]{64}/bin/[A-Za-z0-9._-]+")
+_EXECUTABLE = re.compile(r"/opt/node/model-adapters/[a-z0-9-]+/releases/[0-9a-f]{64}/bin/[A-Za-z0-9._-]+")
 
 
 def _workload_policy(document: Mapping[str, object]) -> None:

@@ -1,9 +1,10 @@
 # Vonk Forge
 
-Vonk Forge is a local-first control plane for one or more NVIDIA DGX Sparks.
-Each Spark is onboarded independently; the Docker-capable service host runs
-separate Caddy, API/worker, PostgreSQL, LiteLLM, Hermes Agent, Prometheus, and Grafana
-services. Administration is available through both `sparkctl admin` and the
+Vonk Forge is a local-first control plane for one or more NVIDIA GB10 GPU systems.
+Each GPU node is onboarded independently; the Docker-capable service host runs
+separate Caddy, API/worker, PostgreSQL, LiteLLM, Prometheus, and Grafana
+services; Hermes Agent is an optional Compose profile disabled by default.
+Administration is available through both `vonkctl admin` and the
 web UX. The target recipe workflow is local-first: PostgreSQL is authoritative
 for recipe families, authored/imported revisions, installations, placements,
 and runs. Git/TUF remains the authority for platform source and the existing
@@ -11,7 +12,7 @@ workload-release path while the catalog migration is completed; a recipe never
 needs a Git commit or pull request in order to be imported or run.
 
 The initial product has no Railway or global-catalog dependency. This repository
-owns the Spark/NAS runtime and its GitHub Actions agent release: signed ARM64
+owns the GPU node/NAS runtime and its GitHub Actions agent release: signed ARM64
 `vonk-forge-agent` Debian packages are published to the Cloudflare R2 APT
 repository at `packages.vonkforge.ai`. The separate `vonk-forge-web` repository
 will later publish a global catalog frontend through Cloudflare Pages and may
@@ -25,7 +26,7 @@ transition and must not be enabled from simulator evidence.
 
 Vonk Forge is a collection of contracts, controllers, runtime adapters, and
 operational tooling for defining, validating, deploying, and operating
-model-serving profiles across NVIDIA DGX Spark systems. The repository keeps
+model-serving profiles across NVIDIA GB10 systems. The repository keeps
 cluster admission and model maturity fail-closed: a checked-in definition is
 not treated as production-ready until its evidence gates are accepted.
 
@@ -33,29 +34,29 @@ not treated as production-ready until its evidence gates are accepted.
 
 - Validate and reconcile the existing content-addressed platform and cluster
   definitions from Git/TUF.
-- Author recipes locally, import SparkRun profiles with a field-by-field report,
+- Author recipes locally, import WorkloadRun profiles with a field-by-field report,
   or download immutable revisions from the optional global catalog. Local
   PostgreSQL remains usable when the global service or Git remote is unavailable.
 - Execute routine lifecycle and probe operations through outbound, fenced,
-  mutually authenticated Spark agents; the control worker never SSHes to a
-  Spark.
+  mutually authenticated GPU node agents; the control worker never SSHes to a
+  GPU node.
 - Collect durable node, NVIDIA, Docker, thermal, and storage state reported by
   authenticated agents.
-- Configure and validate the direct RoCE/NCCL fabric between Spark nodes.
+- Configure and validate the direct RoCE/NCCL fabric between GPU nodes.
 - Build and operate model-specific runtime adapters, including the checked-in
   DeepSeek Mia and DS4 definitions.
 - Publish and operate generic, signed workload packages independently from
   Vonk Forge platform releases; ordinary model/runtime releases do not require
   an agent update.
-- Review and apply NAS-to-Spark platform skew updates through the Admin web UX
-  or `sparkctl`, with explicit signed fan-out over the outbound agent channel.
+- Review and apply NAS-to-GPU node platform skew updates through the Admin web UX
+  or `vonkctl`, with explicit signed fan-out over the outbound agent channel.
 
 ## Prerequisites
 
 - Python 3.12 or newer
 - [`uv`](https://docs.astral.sh/uv/)
 - SSH access for one-time onboarding and explicit operator recovery only
-- Docker installed and accessible on each DGX Spark host
+- Docker installed and accessible on each Vonk Forge GPU node host
 
 ## Quick start
 
@@ -95,11 +96,11 @@ Configure the authenticated control origin and restrictive token file, then
 inspect current node state and preview the exact server reconciliation plan:
 
 ```bash
-export DGX_CONTROL_URL=https://control.example.invalid
-export DGX_CONTROL_TOKEN_FILE=/run/secrets/dgx-control-token
-uv run --project /path/to/vonk-forge sparkctl nodes status --json
-uv run --project /path/to/vonk-forge sparkctl validate PROFILE --json
-uv run --project /path/to/vonk-forge sparkctl switch PROFILE --json
+export VONK_CONTROL_URL=https://control.example.invalid
+export VONK_CONTROL_TOKEN_FILE=/run/secrets/vonk-control-token
+uv run --project /path/to/vonk-forge vonkctl nodes status --json
+uv run --project /path/to/vonk-forge vonkctl validate PROFILE --json
+uv run --project /path/to/vonk-forge vonkctl switch PROFILE --json
 ```
 
 `prepare`, `switch`, and `restore-default` are plan-only unless `--apply` is
@@ -112,18 +113,18 @@ The old local controller remains available only as an explicitly named
 migration/recovery compatibility tool:
 
 ```bash
-uv run --no-project --with jsonschema -- bin/sparkctl-legacy status --json
+uv run --no-project --with jsonschema -- bin/vonkctl-legacy status --json
 ```
 
-Never use or configure `sparkctl-legacy` as a production command. It is never
+Never use or configure `vonkctl-legacy` as a production command. It is never
 selected implicitly. Routine production work is repository-planned by the API,
-persisted in PostgreSQL, claimed outbound by each Spark agent over mTLS, and
+persisted in PostgreSQL, claimed outbound by each GPU node agent over mTLS, and
 reconciled by the repository-less worker.
 
 ## Repository layout
 
 - `bin/` — repository-local command launchers
-- `src/spark_profiles/` — profile catalog, admission, state, health, and CLI
+- `src/cluster_profiles/` — profile catalog, admission, state, health, and CLI
 - `adapters/` — model-specific runtime definitions and lifecycle tooling
 - `config/` — controller, workload, and cluster-profile configuration
 - `nodes/` — node bootstrap, health, fabric, and recovery utilities
@@ -135,23 +136,23 @@ reconciled by the repository-less worker.
 
 - [Documentation index](docs/README.md)
 - [Architecture overview](docs/architecture-overview.md)
-- [Recipe catalog and SparkRun operations](docs/runbooks/workload-packages.md)
-- [NAS pull-only Compose deployment](deploy/compose/README.md)
+- [Recipe catalog and WorkloadRun operations](docs/runbooks/workload-packages.md)
+- [Source-first local Compose deployment](deploy/compose/README.md)
 - [Control-plane bootstrap](docs/runbooks/control-plane-bootstrap.md)
-- [`sparkctl` runbook](docs/runbooks/sparkctl.md)
+- [`vonkctl` runbook](docs/runbooks/vonkctl.md)
 - [Inventory runbook](docs/runbooks/inventory.md)
 - [Generic fleet migration](docs/runbooks/fleet-migration.md) — generated node
   identities and compatibility with the current inventory, with no fixed node
   count
 - [Direct-fabric runbook](docs/runbooks/fabric.md)
 - [Runtime release runbook](docs/runbooks/runtime-release.md)
-- [Spark agent PKI and recovery runbook](docs/runbooks/agent-pki.md)
+- [GPU node agent PKI and recovery runbook](docs/runbooks/agent-pki.md)
 - [Tailnet-only NAS ingress runbook](docs/runbooks/tailscale.md)
 - [Hermes Agent runbook](docs/runbooks/hermes-agent.md)
 - [Workload package operations](docs/runbooks/workload-packages.md) — generic
   family/release publication, rollout, rollback, repair, GC, and first-release
   evidence
-- [Platform update runbook](docs/runbooks/platform-update.md) — NAS/Spark
+- [Platform update runbook](docs/runbooks/platform-update.md) — NAS/GPU node
   platform skew and recovery boundaries
 
 ## Security

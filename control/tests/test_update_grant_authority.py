@@ -75,7 +75,7 @@ def test_internal_update_grant_refresh_is_authenticated_and_exact() -> None:
         "/internal/v1/updates/grant",
         json=body,
         headers={
-            "x-dgx-worker-signature": worker_document_signature(
+            "x-vonk-worker-signature": worker_document_signature(
                 TOKEN, body, purpose="request"
             ),
             "x-request-id": "20000000-0000-4000-8000-000000000002",

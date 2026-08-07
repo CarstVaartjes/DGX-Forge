@@ -34,9 +34,9 @@ from cluster_profiles.platform_release import (
 )
 
 _MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
-_LAYER_MEDIA_TYPE = "application/vnd.dgx-forge.control-deployment.v1.tar"
+_LAYER_MEDIA_TYPE = "application/vnd.vonk-forge.control-deployment.v1.tar"
 _CONFIG_MEDIA_TYPE = "application/vnd.oci.empty.v1+json"
-_ARTIFACT_TYPE = "application/vnd.dgx-forge.control-deployment.v1"
+_ARTIFACT_TYPE = "application/vnd.vonk-forge.control-deployment.v1"
 _REPOSITORY = re.compile(
     r"[a-z0-9.-]+(?::[0-9]+)?/[a-z0-9](?:[a-z0-9._/-]*[a-z0-9])?\Z"
 )
@@ -52,8 +52,8 @@ _AUTHORITY_ENVIRONMENT = (
     *_BASE_ENVIRONMENT,
     "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
     "ACTIONS_ID_TOKEN_REQUEST_URL",
-    "DGX_PLATFORM_AUTHORITY_AUDIENCE",
-    "DGX_PLATFORM_AUTHORITY_URL",
+    "VONK_PLATFORM_AUTHORITY_AUDIENCE",
+    "VONK_PLATFORM_AUTHORITY_URL",
 )
 
 
@@ -364,14 +364,14 @@ def _publish(
         tuf_publisher = None
         channel_publisher = None
         if publish_bundle:
-            oras = _tool("DGX_PLATFORM_ORAS_BIN")
+            oras = _tool("VONK_PLATFORM_ORAS_BIN")
             tools.append(oras)
         if publish_authority:
-            tuf_publisher = _tool("DGX_PLATFORM_TUF_PUBLISHER_BIN")
+            tuf_publisher = _tool("VONK_PLATFORM_TUF_PUBLISHER_BIN")
             tools.append(tuf_publisher)
-            channel_publisher = _tool("DGX_PLATFORM_CHANNEL_PUBLISHER_BIN")
+            channel_publisher = _tool("VONK_PLATFORM_CHANNEL_PUBLISHER_BIN")
             tools.append(channel_publisher)
-        with tempfile.TemporaryDirectory(prefix="dgx-platform-publication-") as temporary:
+        with tempfile.TemporaryDirectory(prefix="vonk-platform-publication-") as temporary:
             staging = Path(temporary)
             config_path = staging / "oci-empty-config.json"
             bundle_path = staging / "control-deployment.tar"

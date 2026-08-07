@@ -9,27 +9,27 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add TRELLIS.2 as a mutually exclusive Spark AI profile and provide the external browser UI, explicit LiteLLM decision gate, and Tailscale-secured remote access.
+**Goal:** Add TRELLIS.2 as a mutually exclusive GPU node AI profile and provide the external browser UI, explicit LiteLLM decision gate, and Tailscale-secured remote access.
 
-**Architecture:** TRELLIS.2 was the first additional workload considered and runs on Spark 2 after conflicting profiles are fully stopped. The current model design adds the remaining approved workloads and measured co-residency. Browser UI, LiteLLM when justified, and Tailscale ingress run only on external container hosts and consume the stable Caddy endpoint.
+**Architecture:** TRELLIS.2 was the first additional workload considered and runs on GPU node 2 after conflicting profiles are fully stopped. The current model design adds the remaining approved workloads and measured co-residency. Browser UI, LiteLLM when justified, and Tailscale ingress run only on external container hosts and consume the stable Caddy endpoint.
 
 **Tech Stack:** Microsoft TRELLIS.2 pinned Git commit, CUDA/ARM64 container, Docker Compose, Python/pytest, GLB validation, Open WebUI pinned image, optional LiteLLM 1.83.7 or later, Tailscale Services and grants.
 
 ## Global Constraints
 
 - DeepSeek and TRELLIS.2 never run concurrently.
-- TRELLIS.2 begins with 512-cubed acceptance and writes outputs to Spark 2 local storage.
-- No UI, LiteLLM, Tailscale, proxy, controller, or monitoring container runs on a Spark.
+- TRELLIS.2 begins with 512-cubed acceptance and writes outputs to GPU node 2 local storage.
+- No UI, LiteLLM, Tailscale, proxy, controller, or monitoring container runs on a GPU node.
 - Every image is pinned by immutable digest; every source checkout is pinned by commit.
 - UI and remote users reach AI services only through Caddy.
 - LiteLLM is deployed only if the documented gate passes; otherwise its state is explicitly recorded as disabled.
 - Tailscale uses a named service and restrictive grants/ACLs; no public port forwarding is allowed.
-- Tasks 1–2 are in the immediate scope and use a Spark 2 loopback endpoint through an SSH tunnel.
+- Tasks 1–2 are in the immediate scope and use a GPU node 2 loopback endpoint through an SSH tunnel.
 - Tasks 3–6 require the new external container host and are deferred until it is installed.
 
 ---
 
-### Task 1: Audit and pin TRELLIS.2 for DGX Spark
+### Task 1: Audit and pin TRELLIS.2 for Vonk Forge GPU node
 
 **Files:**
 - Create: `docs/audits/trellis2.md`
@@ -42,15 +42,15 @@
 - Create: `tests/profiles/test_trellis2_profile.py`
 
 **Interfaces:**
-- Produces: node-local Compose project `dgx-trellis2` on Spark 2 and loopback port 7860.
+- Produces: node-local Compose project `vonk-trellis2` on GPU node 2 and loopback port 7860.
 - Consumes: local checkpoint path and local output path; no NAS mount.
 
 - [ ] **Step 1: Write failing placement and isolation tests**
 
 ```python
-def test_trellis_runs_only_on_spark2(profile):
-    assert profile.nodes == ("spark2",)
-    assert profile.stop_conflicts == ("deepseek-baseline", "deepseek-dspark", "deepseek-nvfp4", "deepseek-agent", "deepseek-long")
+def test_trellis_runs_only_on_node2(profile):
+    assert profile.nodes == ("node2",)
+    assert profile.stop_conflicts == ("deepseek-baseline", "deepseek-draft", "deepseek-nvfp4", "deepseek-agent", "deepseek-long")
 
 def test_trellis_has_no_nas_mount(compose):
     mounts = compose["services"]["trellis2"].get("volumes", [])
@@ -69,13 +69,13 @@ Resolve Microsoft TRELLIS.2 `HEAD`, inspect its license, dependency pins, checkp
 
 - [ ] **Step 4: Build a pinned ARM64/CUDA image**
 
-Use the installed Spark CUDA/driver compatibility recorded in Plan 1. Run as non-root where GPU access permits, bind only local checkpoint/output directories, bind 7860 to `127.0.0.1`, set `restart: "no"`, and configure 50 MiB × 5 logs.
+Use the installed GPU node CUDA/driver compatibility recorded in Plan 1. Run as non-root where GPU access permits, bind only local checkpoint/output directories, bind 7860 to `127.0.0.1`, set `restart: "no"`, and configure 50 MiB × 5 logs.
 
 - [ ] **Step 5: Run profile tests and image smoke build**
 
 Run: `pytest tests/profiles/test_trellis2_profile.py -v && docker compose -f profiles/trellis2/compose.yaml config --quiet`
 
-Expected: PASS; the built image reports ARM64 and sees the GPU on Spark 2.
+Expected: PASS; the built image reports ARM64 and sees the GPU on GPU node 2.
 
 - [ ] **Step 6: Commit TRELLIS artifacts**
 
@@ -128,7 +128,7 @@ Expected: PASS.
 
 - [ ] **Step 5: Run live 512-cubed acceptance**
 
-Stop DeepSeek, start TRELLIS.2, open `ssh -L 7860:127.0.0.1:7860 dgx-spark-2`, submit the committed input image at 512-cubed resolution through the tunnel, validate the returned GLB, stop TRELLIS.2, and require Spark 2 memory to recover within 5 GiB of baseline in 120 seconds.
+Stop DeepSeek, start TRELLIS.2, open `ssh -L 7860:127.0.0.1:7860 vonk-node-2`, submit the committed input image at 512-cubed resolution through the tunnel, validate the returned GLB, stop TRELLIS.2, and require GPU node 2 memory to recover within 5 GiB of baseline in 120 seconds.
 
 - [ ] **Step 6: Commit TRELLIS evidence**
 
@@ -146,7 +146,7 @@ git commit -m "test: accept TRELLIS2 generation"
 - Create: `docs/runbooks/browser-ui.md`
 
 **Interfaces:**
-- Produces: external UI on port 3000 using only `https://spark-gateway.home.arpa:8443/v1`.
+- Produces: external UI on port 3000 using only `https://node-gateway.home.arpa:8443/v1`.
 - Resource limit: 1 CPU and 2 GiB; host gate: 4 GiB installed, 2 GiB available, 20 GiB free disk.
 
 - [ ] **Step 1: Write failing placement and endpoint tests**
@@ -154,7 +154,7 @@ git commit -m "test: accept TRELLIS2 generation"
 ```python
 def test_ui_uses_only_gateway(compose):
     env = compose["services"]["ui"]["environment"]
-    assert env["OPENAI_API_BASE_URL"] == "https://spark-gateway.home.arpa:8443/v1"
+    assert env["OPENAI_API_BASE_URL"] == "https://node-gateway.home.arpa:8443/v1"
     assert "192.168.1.211" not in json.dumps(env)
 
 def test_ui_resource_limits(compose):
@@ -186,7 +186,7 @@ With maintenance active, require the UI to show no healthy model. Advertise `dee
 
 ```bash
 git add control/ui tests/control/test_ui_compose.py docs/runbooks/browser-ui.md
-git commit -m "feat: add external Spark browser UI"
+git commit -m "feat: add external GPU node browser UI"
 ```
 
 ### Task 4: Apply the LiteLLM deployment gate
@@ -249,8 +249,8 @@ git commit -m "docs: record LiteLLM deployment decision"
 - Create: `docs/runbooks/tailscale.md`
 
 **Interfaces:**
-- Produces: named Tailscale Service for Caddy and a restricted subnet route only if remote Spark SSH is required.
-- No Tailscale process runs on either Spark.
+- Produces: named Tailscale Service for Caddy and a restricted subnet route only if remote GPU node SSH is required.
+- No Tailscale process runs on either GPU node.
 
 - [ ] **Step 1: Write failing policy tests**
 
@@ -285,7 +285,7 @@ Expected: PASS.
 
 - [ ] **Step 6: Validate remote behavior**
 
-From an approved tailnet client, require authenticated access to the named service, rejection from an unapproved identity, no public reachability, and no direct Spark API reachability.
+From an approved tailnet client, require authenticated access to the named service, rejection from an unapproved identity, no public reachability, and no direct GPU node API reachability.
 
 - [ ] **Step 7: Commit remote-access configuration**
 
@@ -342,5 +342,5 @@ Expected: every required phase passes; any failure leaves Caddy in maintenance a
 
 ```bash
 git add validation/platform_acceptance.py tests/validation/test_platform_acceptance.py inventory/reports/platform-acceptance.json docs/runbooks/operations.md
-git commit -m "test: accept complete dual-Spark platform"
+git commit -m "test: accept complete dual-GPU node platform"
 ```

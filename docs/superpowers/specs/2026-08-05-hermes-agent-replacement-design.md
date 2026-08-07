@@ -15,8 +15,8 @@ fallback.
 This document supersedes the AI-devbox-specific sections of
 `2026-08-05-containerized-nas-access-and-devbox-design.md`. The rest of that
 design remains in force: the NAS hosts one Compose project, human ingress is
-Tailscale-only, Spark enrollment/agent/registry traffic uses the restricted LAN
-mTLS path, and Spark identity and inference routing remain repository-driven.
+Tailscale-only, GPU node enrollment/agent/registry traffic uses the restricted LAN
+mTLS path, and GPU node identity and inference routing remain repository-driven.
 
 ## Decisions and alternatives
 
@@ -58,13 +58,13 @@ authorized GitHub-backed tailnet identity
   -> dedicated internal inference network
   -> LiteLLM model group: hermes-agent
   -> best eligible, already-running local agent model
-  -> agent-observed Spark management address
+  -> agent-observed GPU node management address
 ```
 
-The separate Spark path remains:
+The separate GPU node path remains:
 
 ```text
-Spark on reserved 10.0.0.x management LAN
+GPU node on reserved 10.0.0.x management LAN
   -> Caddy restricted backend port
   -> mTLS enrollment / agent / registry routes
 ```
@@ -103,7 +103,7 @@ configurable numeric NAS UID/GID when the official image supports `PUID` and
   when a running-container test proves the pinned image requires that exact
   capability and the reason is recorded in the threat model;
 - no privileged mode, host networking, devices, or Docker socket;
-- no control, database, agent-proxy, registry, or Spark-egress network; and
+- no control, database, agent-proxy, registry, or GPU node-egress network; and
 - bounded CPU, memory, shared-memory, temporary-filesystem, and log limits.
 
 The root filesystem is read-only. If upstream Hermes requires runtime writes
@@ -167,7 +167,7 @@ replace it:
   `http://hermes-agent:9119`; and
 - `svc:hermes-api`, HTTPS port 443 to `http://hermes-agent:8642`.
 
-The existing `svc:dgx-forge` web Service remains unchanged. The persistent
+The existing `svc:vonk-forge` web Service remains unchanged. The persistent
 configurator verifies the complete exported three-Service map, the HTTPS
 listener type, and each exact upstream. Any extra, missing, drained, downgraded,
 or retargeted Service causes a complete reset and deterministic recreation.
@@ -177,7 +177,7 @@ the operator's GitHub-backed Tailscale identity, to the two Hermes Services.
 The API still requires its independent API key. Dashboard CORS is restricted to
 the actual dashboard Service origin; a wildcard origin is not used.
 
-The scoped Tailscale OAuth client and `tag:dgx-gateway` recovery path remain
+The scoped Tailscale OAuth client and `tag:vonk-gateway` recovery path remain
 unchanged except that auto-approval names the two Hermes Services instead of the
 old SSH Service. Loss of Tailscale state may recreate only the exact declared
 Services and never opens a LAN fallback.
@@ -185,18 +185,18 @@ Services and never opens a LAN fallback.
 ## Local agent-model selection
 
 Hermes is permanently configured with one OpenAI-compatible model name:
-`hermes-agent`. It never names a Spark, management IP, workload port, cluster
+`hermes-agent`. It never names a GPU node, management IP, workload port, cluster
 profile, or model vendor directly.
 
-DGX-Forge owns `config/hermes-agent-policy.toml`. Its schema contains an exact
+Vonk Forge owns `config/hermes-agent-policy.toml`. Its schema contains an exact
 version, alias `hermes-agent`, `local_only = true`, and an ordered candidate
 list. Every candidate has only a workload ID, unique integer priority, and
 minimum maturity. Unknown fields, duplicate priorities, unknown workloads, and
 anything below `accepted` maturity are rejected. Initial ordering prefers:
 
-1. the accepted dual-Spark DeepSeek agent runtime when that workload is already
+1. the accepted dual-GPU node DeepSeek agent runtime when that workload is already
    running and healthy;
-2. the accepted single-Spark DeepSeek agent runtime when it is already running
+2. the accepted single-GPU node DeepSeek agent runtime when it is already running
    as part of a single or mixed profile; and
 3. future local agent runtimes only after their definitions and exact profile
    have reached the policy's accepted state.
@@ -262,7 +262,7 @@ that no stale LiteLLM route becomes active before fresh validation.
 - Missing API authentication, invalid CORS, or absent setup state fails closed.
 - LiteLLM or all eligible local models being unavailable yields an explicit
   unavailable result; it never invokes a cloud model.
-- A stale Spark observation, changed management address, failed probe, revoked
+- A stale GPU node observation, changed management address, failed probe, revoked
   node, or ineligible Git commit withdraws the candidate within the existing
   route-lease window.
 - Hermes cannot recover itself by manipulating Docker. Container recovery is
@@ -285,7 +285,7 @@ Structural tests render the complete Compose project and prove:
   networks;
 - LiteLLM shares only the dedicated inference network with Hermes;
 - every pulled image is digest pinned and included in supply verification; and
-- the complete Tailscale export contains exactly the DGX Forge, Hermes
+- the complete Tailscale export contains exactly the Vonk Forge, Hermes
   dashboard, and Hermes API Services.
 
 Runtime tests prove:
@@ -294,7 +294,7 @@ Runtime tests prove:
 - the gateway and dashboard become healthy with a read-only root;
 - the dashboard is reachable only through its authorized Tailscale identity;
 - the API rejects absent and invalid keys even for an authorized tailnet user;
-- the container cannot reach the Docker socket, NAS management address, Spark
+- the container cannot reach the Docker socket, NAS management address, GPU node
   management CIDR, direct fabric, or control/data networks;
 - workspaces and Hermes memory survive restart; and
 - the service runs as the expected non-root UID/GID with no additional
@@ -303,9 +303,9 @@ Runtime tests prove:
 Routing tests prove:
 
 - Hermes always requests `hermes-agent` through LiteLLM;
-- accepted healthy dual-Spark DeepSeek outranks an eligible single-Spark
+- accepted healthy dual-GPU node DeepSeek outranks an eligible single-GPU node
   candidate;
-- a mixed profile selects its already-running accepted single-Spark agent;
+- a mixed profile selects its already-running accepted single-GPU node agent;
 - an unhealthy primary falls back only to a simultaneously running, accepted,
   fresh local candidate;
 - ambiguous partial generations are not replayed;
@@ -318,7 +318,7 @@ Routing tests prove:
 Deployment acceptance confirms that an authorized GitHub-backed tailnet user
 can use the dashboard and separately authenticated API, an unauthorized
 tailnet identity is denied, an ordinary LAN client cannot reach Hermes, and the
-NAS firewall blocks direct Hermes-to-Spark traffic while LiteLLM-backed local
+NAS firewall blocks direct Hermes-to-GPU node traffic while LiteLLM-backed local
 inference succeeds.
 
 ## Documentation changes
@@ -338,10 +338,10 @@ None implies either of the others.
 
 ## Scope boundaries
 
-- Hermes does not administer Docker, Compose, the NAS host, or the Spark
+- Hermes does not administer Docker, Compose, the NAS host, or the GPU node
   control plane.
-- Hermes does not receive SSH access to the Sparks.
-- This change does not alter Spark mTLS enrollment, agent discovery, registry,
+- Hermes does not receive SSH access to the GPU nodes.
+- This change does not alter GPU node mTLS enrollment, agent discovery, registry,
   or manual hardening.
 - It does not auto-switch cluster profiles in response to an inference error.
 - It does not use remote model providers as fallback.

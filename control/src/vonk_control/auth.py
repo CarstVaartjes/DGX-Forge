@@ -16,10 +16,10 @@ from starlette.responses import Response
 
 _ROLES = frozenset({"viewer", "operator", "administrator"})
 _AGENT_NODE_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
-_AGENT_IDENTITY_SCOPE_KEY = "dgx.agent_identity"
-_AGENT_SOURCE_SCOPE_KEY = "dgx.agent_source"
+_AGENT_IDENTITY_SCOPE_KEY = "vonk.agent_identity"
+_AGENT_SOURCE_SCOPE_KEY = "vonk.agent_source"
 _CURSOR_TOKEN = re.compile(r"v1\.[A-Za-z0-9_-]{1,384}\.[A-Za-z0-9_-]{43}\Z")
-_CURSOR_DOMAIN = b"dgx-forge/control-cursor/v1\0"
+_CURSOR_DOMAIN = b"vonk-forge/control-cursor/v1\0"
 _MAX_CURSOR_LENGTH = 512
 
 MUTATION_ROLES = {
@@ -95,7 +95,7 @@ MUTATION_ROLES = {
     ("POST", "/api/v1/packages/inventory/remove"): frozenset(
         {"operator", "administrator"}
     ),
-    # Local catalog authoring and SparkRun imports change the controller's
+    # Local catalog authoring and WorkloadRun imports change the controller's
     # authoritative PostgreSQL state. Keep them administrator-only and list
     # preview calls too: previews accept untrusted source documents and are
     # part of the same explicitly audited authorization surface.
@@ -105,8 +105,8 @@ MUTATION_ROLES = {
         {"administrator"}
     ),
     ("POST", "/api/v1/catalog/recipes/{recipe_id}/fork"): frozenset({"administrator"}),
-    ("POST", "/api/v1/catalog/imports/sparkrun/preview"): frozenset({"administrator"}),
-    ("POST", "/api/v1/catalog/imports/sparkrun"): frozenset({"administrator"}),
+    ("POST", "/api/v1/catalog/imports/workload_run/preview"): frozenset({"administrator"}),
+    ("POST", "/api/v1/catalog/imports/workload_run"): frozenset({"administrator"}),
     ("POST", "/api/v1/catalog/imports/global/preview"): frozenset({"administrator"}),
     ("POST", "/api/v1/catalog/imports/global"): frozenset({"administrator"}),
     ("PUT", "/api/v1/catalog/recipes/{recipe_id}/publication-report"): frozenset(
@@ -212,7 +212,7 @@ def agent_source_from_scope(scope: dict[str, Any]) -> AgentSource | None:
 class TrustedProxyAgentIdentityMiddleware:
     """Convert forwarded mTLS metadata from configured private peers only.
 
-    It deliberately removes every incoming ``X-DGX-Agent-*`` header before
+    It deliberately removes every incoming ``X-Vonk-Agent-*`` header before
     invoking the application.  Consequently downstream code can only consume
     the typed ASGI scope value, never a client supplied header.
     """
@@ -238,7 +238,7 @@ class TrustedProxyAgentIdentityMiddleware:
         forwarded: dict[str, str] = {}
         duplicate_forwarded_headers = False
         for key, value in raw_headers:
-            if not key.lower().startswith(b"x-dgx-agent-"):
+            if not key.lower().startswith(b"x-vonk-agent-"):
                 continue
             name = key.decode("latin-1").lower()
             if name in forwarded:
@@ -247,13 +247,13 @@ class TrustedProxyAgentIdentityMiddleware:
         sanitized = tuple(
             (key, value)
             for key, value in raw_headers
-            if not key.lower().startswith(b"x-dgx-agent-")
+            if not key.lower().startswith(b"x-vonk-agent-")
         )
         safe_scope = dict(scope)
         safe_scope.pop(_AGENT_IDENTITY_SCOPE_KEY, None)
         safe_scope.pop(_AGENT_SOURCE_SCOPE_KEY, None)
         safe_scope["headers"] = sanitized
-        supplied_proxy_auth = forwarded.get("x-dgx-agent-proxy-auth", "").encode()
+        supplied_proxy_auth = forwarded.get("x-vonk-agent-proxy-auth", "").encode()
         if (
             self._trusted_proxy_auth
             and hmac.compare_digest(supplied_proxy_auth, self._trusted_proxy_auth)
@@ -261,14 +261,14 @@ class TrustedProxyAgentIdentityMiddleware:
         ):
             try:
                 identity = AgentIdentity(
-                    node_id=forwarded["x-dgx-agent-node"],
-                    certificate_serial=forwarded["x-dgx-agent-serial"],
-                    certificate_fingerprint=forwarded["x-dgx-agent-fingerprint"],
-                    verified=forwarded["x-dgx-agent-verified"] == "1",
+                    node_id=forwarded["x-vonk-agent-node"],
+                    certificate_serial=forwarded["x-vonk-agent-serial"],
+                    certificate_fingerprint=forwarded["x-vonk-agent-fingerprint"],
+                    verified=forwarded["x-vonk-agent-verified"] == "1",
                 )
                 source = AgentSource(
                     identity=identity,
-                    management_address=forwarded["x-dgx-agent-source"],
+                    management_address=forwarded["x-vonk-agent-source"],
                 )
                 safe_scope[_AGENT_IDENTITY_SCOPE_KEY] = identity
                 safe_scope[_AGENT_SOURCE_SCOPE_KEY] = source

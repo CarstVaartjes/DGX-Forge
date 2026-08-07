@@ -2,7 +2,7 @@
 """Emit canonical W19 workload-package failure-matrix evidence.
 
 The report is intentionally simulated evidence: it proves the deterministic
-generic contracts and records that no physical Spark fault injection occurred.
+generic contracts and records that no physical GPU node fault injection occurred.
 The focused pytest gate exercises the same package store with real restart,
 corruption, GC, cancellation, and concurrent-download boundaries.
 """
@@ -81,11 +81,11 @@ def report() -> dict[str, object]:
         )
     value: dict[str, object] = {
         "schema_version": 1,
-        "report_type": "dgx-forge-workload-package-failure-matrix",
+        "report_type": "vonk-forge-workload-package-failure-matrix",
         "status": "passed",
         "evidence_kind": "simulated",
         "failure_matrix": True,
-        "physical_sparks_exercised": False,
+        "physical_nodes_exercised": False,
         "ssh_calls": 0,
         "agent_update_calls": 0,
         "concurrent_identical_downloads": "one-fetch-many-consumers",

@@ -6,7 +6,7 @@
 
 **Architecture:** A pure persisted-plan validator in the orchestration boundary canonicalizes and cross-checks the complete plan, graph, payload, digest, commit, target, and reconciliation identity before either restart loading or workload replay can consume it. Separately, the existing bounded node-probe contract will report only an occupancy classification, which the control plane persists and combines with accepted reconciliation evidence so unexplained compute always makes placement unavailable.
 
-**Tech Stack:** Python 3.12, SQLAlchemy 2, PostgreSQL 16, Alembic, pytest, dgx-agent-protocol, Ruff.
+**Tech Stack:** Python 3.12, SQLAlchemy 2, PostgreSQL 16, Alembic, pytest, vonk-agent-protocol, Ruff.
 
 ## Global Constraints
 
@@ -20,8 +20,8 @@
 ### Task 1: Shared persisted-plan authentication
 
 **Files:**
-- Modify: `control/src/dgx_control/orchestration.py`
-- Modify: `control/src/dgx_control/desired_state.py`
+- Modify: `control/src/vonk_control/orchestration.py`
+- Modify: `control/src/vonk_control/desired_state.py`
 - Test: `control/tests/test_orchestration.py`
 - Test: `control/tests/test_desired_state.py`
 

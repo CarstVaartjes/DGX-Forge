@@ -37,7 +37,7 @@ const skew: UpdateSkew = {
     active_workloads: ["model-a"],
     build_digest: `sha256:${"e".repeat(64)}`,
     compatible: true,
-    display_name: "Alpha Spark",
+    display_name: "Alpha GPU node",
     node_id: nodeId,
     platform_version: "1.0.0",
     protocol_version: 1,
@@ -229,7 +229,7 @@ it("requires the exact destructive confirmation before rollback authorization, t
   await user.type(screen.getByLabelText(/Type the exact plan digest/), planDigest);
   await user.click(screen.getByRole("button", {name: "Apply exact update plan"}));
 
-  const authorize = await screen.findByRole("button", {name: "Authorize Spark rollback"});
+  const authorize = await screen.findByRole("button", {name: "Authorize GPU node rollback"});
   expect(authorize).toHaveClass("danger");
   expect(authorize).toBeDisabled();
   expect(screen.queryByRole("button", {name: "Approve rollout resume"})).not.toBeInTheDocument();
@@ -262,22 +262,22 @@ it("keeps the NAS-newer fleet prompt persistent per exact skew digest without au
   const first = render(<FleetPage api={control}/>);
   const user = userEvent.setup();
 
-  const prompt = await screen.findByRole("region", {name: "Spark update available"});
+  const prompt = await screen.findByRole("region", {name: "GPU node update available"});
   expect(prompt).toHaveTextContent("2.0.0");
   expect(prompt).toHaveTextContent(target.build_digest);
-  expect(prompt).toHaveTextContent("Alpha Spark");
+  expect(prompt).toHaveTextContent("Alpha GPU node");
   expect(applies).toBe(0);
   await user.click(within(prompt).getByRole("button", {name: "Dismiss this exact update notice"}));
-  expect(screen.queryByRole("region", {name: "Spark update available"})).not.toBeInTheDocument();
+  expect(screen.queryByRole("region", {name: "GPU node update available"})).not.toBeInTheDocument();
 
   first.unmount();
   const second = render(<FleetPage api={control}/>);
   await waitFor(() => expect(control.updateSkew).toBeDefined());
-  expect(screen.queryByRole("region", {name: "Spark update available"})).not.toBeInTheDocument();
+  expect(screen.queryByRole("region", {name: "GPU node update available"})).not.toBeInTheDocument();
   second.unmount();
 
   render(<FleetPage api={api({fleet: async () => fleet, updateSkew: async () => ({...skew, digest: `sha256:${"e".repeat(64)}`})})}/>);
-  expect(await screen.findByRole("region", {name: "Spark update available"})).toBeVisible();
+  expect(await screen.findByRole("region", {name: "GPU node update available"})).toBeVisible();
   expect(applies).toBe(0);
 });
 

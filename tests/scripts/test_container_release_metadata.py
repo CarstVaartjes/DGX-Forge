@@ -26,12 +26,12 @@ def test_stable_tag_emits_exact_public_package_metadata() -> None:
     assert result.stdout.splitlines() == [
         "version=1.2.3",
         f"commit_tag=sha-{SHA}",
-        "api_image=ghcr.io/carstvaartjes/dgx-forge-api",
-        "worker_image=ghcr.io/carstvaartjes/dgx-forge-worker",
-        "hermes_image=ghcr.io/carstvaartjes/dgx-forge-hermes",
+        "api_image=ghcr.io/carstvaartjes/vonk-forge-api",
+        "worker_image=ghcr.io/carstvaartjes/vonk-forge-worker",
+        "hermes_image=ghcr.io/carstvaartjes/vonk-forge-hermes",
         (
             "deployment_bundle_repository="
-            "ghcr.io/carstvaartjes/dgx-forge-control-deployment"
+            "ghcr.io/carstvaartjes/vonk-forge-control-deployment"
         ),
         "platform_channel=stable",
     ]

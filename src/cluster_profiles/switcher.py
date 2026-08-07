@@ -1,4 +1,4 @@
-"""Fail-closed reconciliation of whole-cluster Spark profiles."""
+"""Fail-closed reconciliation of whole-cluster workload profiles."""
 
 from __future__ import annotations
 

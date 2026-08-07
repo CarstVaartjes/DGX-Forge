@@ -1,4 +1,4 @@
-# Aggregate DGX Spark Fabric Acceptance Implementation Plan
+# Aggregate Vonk Forge GPU node Fabric Acceptance Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -10,14 +10,14 @@
 
 ## Global Constraints
 
-- One physical QSFP cable connects one 200000 Mb/s port on each Spark; the two Linux/RoCE functions are not two independent 200 Gb/s rails.
-- Aggregate RDMA write bandwidth must be at least 184 Gb/s in Spark 1 to Spark 2 and Spark 2 to Spark 1 directions.
+- One physical QSFP cable connects one 200000 Mb/s port on each GPU node; the two Linux/RoCE functions are not two independent 200 Gb/s rails.
+- Aggregate RDMA write bandwidth must be at least 184 Gb/s in GPU node 1 to GPU node 2 and GPU node 2 to GPU node 1 directions.
 - A valid aggregate contains exactly two successful component measurements whose execution intervals overlap.
 - Per-function write bandwidth must remain at least 98.01 Gb/s; per-function read bandwidth must remain at least 72.37 Gb/s.
 - NCCL must select both RoCE HCAs and report at least 17.44 GB/s bus bandwidth.
 - Latency uses a fixed command and records its distribution as a baseline; no absolute latency threshold is invented for the first accepted run.
 - RDMA error counters are captured before and after the tests; growing retry, sequence, or timeout errors fail acceptance.
-- Worker access continues through `dgx-spark-2-fabric`, with `BatchMode=yes`, `ForwardAgent=no`, and strict host-key checking.
+- Worker access continues through `vonk-node-2-fabric`, with `BatchMode=yes`, `ForwardAgent=no`, and strict host-key checking.
 - The validator remains non-mutating apart from bounded temporary perftest files that it removes.
 
 ---
@@ -93,7 +93,7 @@ Expected: PASS, including low-bandwidth, non-overlap, partial-failure, and concu
 
 ```bash
 git add scripts/validate_fabric.py tests/scripts/test_validate_fabric.py
-git commit -m "fix: require aggregate Spark fabric bandwidth"
+git commit -m "fix: require aggregate GPU node fabric bandwidth"
 ```
 
 ### Task 2: Capture fixed latency and RDMA error-counter evidence
@@ -140,7 +140,7 @@ Expected: PASS with no live SSH invocation from tests.
 
 ```bash
 git add scripts/validate_fabric.py tests/scripts/test_validate_fabric.py
-git commit -m "feat: record Spark fabric latency and errors"
+git commit -m "feat: record GPU node fabric latency and errors"
 ```
 
 ### Task 3: Run live acceptance and reconcile documentation
@@ -150,11 +150,11 @@ git commit -m "feat: record Spark fabric latency and errors"
 - Modify: `docs/runbooks/fabric.md`
 - Modify: `docs/installation-record.md`
 - Modify: `docs/architecture-overview.md`
-- Modify: `docs/superpowers/specs/2026-08-01-dual-dgx-spark-platform-design.md`
+- Modify: `docs/superpowers/specs/2026-08-01-dual-vonk-node-platform-design.md`
 - Modify: `docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md`
 
 **Interfaces:**
-- Consumes: the updated `scripts/validate-fabric` wrapper and key-only Spark SSH aliases.
+- Consumes: the updated `scripts/validate-fabric` wrapper and key-only GPU node SSH aliases.
 - Produces: a checked-in report proving or rejecting 184 Gb/s aggregate performance in both directions plus the first latency baseline.
 
 - [x] **Step 1: Run the read-only preflight**
@@ -199,7 +199,7 @@ Also verify every local Markdown link in the changed documents resolves.
 ```bash
 git add inventory/reports/rdma-nccl.json docs/runbooks/fabric.md \
   docs/installation-record.md docs/architecture-overview.md \
-  docs/superpowers/specs/2026-08-01-dual-dgx-spark-platform-design.md \
+  docs/superpowers/specs/2026-08-01-dual-vonk-node-platform-design.md \
   docs/superpowers/specs/2026-08-02-multi-runtime-model-profiles-design.md
-git commit -m "docs: record aggregate Spark fabric acceptance"
+git commit -m "docs: record aggregate GPU node fabric acceptance"
 ```

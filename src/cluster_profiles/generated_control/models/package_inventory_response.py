@@ -12,7 +12,7 @@ from typing import cast, Union
 from typing import Union
 
 if TYPE_CHECKING:
-  from ..models.package_spark_inventory import PackageSparkInventory
+  from ..models.package_node_inventory import PackageNodeInventory
 
 
 
@@ -26,12 +26,12 @@ T = TypeVar("T", bound="PackageInventoryResponse")
 class PackageInventoryResponse:
     """
         Attributes:
-            nodes (list['PackageSparkInventory']):
+            nodes (list['PackageNodeInventory']):
             total (int):
             next_cursor (Union[None, Unset, str]):
      """
 
-    nodes: list['PackageSparkInventory']
+    nodes: list['PackageNodeInventory']
     total: int
     next_cursor: Union[None, Unset, str] = UNSET
 
@@ -40,7 +40,7 @@ class PackageInventoryResponse:
 
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.package_spark_inventory import PackageSparkInventory
+        from ..models.package_node_inventory import PackageNodeInventory
         nodes = []
         for nodes_item_data in self.nodes:
             nodes_item = nodes_item_data.to_dict()
@@ -72,12 +72,12 @@ class PackageInventoryResponse:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.package_spark_inventory import PackageSparkInventory
+        from ..models.package_node_inventory import PackageNodeInventory
         d = dict(src_dict)
         nodes = []
         _nodes = d.pop("nodes")
         for nodes_item_data in (_nodes):
-            nodes_item = PackageSparkInventory.from_dict(nodes_item_data)
+            nodes_item = PackageNodeInventory.from_dict(nodes_item_data)
 
 
 

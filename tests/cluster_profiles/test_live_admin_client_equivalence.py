@@ -79,11 +79,11 @@ def test_generated_cli_and_rendered_browser_share_live_plan_and_apply_contract(
         result_file = tmp_path / "browser-result.json"
         environment = {
             **os.environ,
-            "DGX_LIVE_ORIGIN": origin,
-            "DGX_LIVE_TOKEN": token,
-            "DGX_LIVE_STATE_FILE": str(state_file),
-            "DGX_LIVE_EXPECTED_FILE": str(expected_file),
-            "DGX_LIVE_RESULT_FILE": str(result_file),
+            "VONK_LIVE_ORIGIN": origin,
+            "VONK_LIVE_TOKEN": token,
+            "VONK_LIVE_STATE_FILE": str(state_file),
+            "VONK_LIVE_EXPECTED_FILE": str(expected_file),
+            "VONK_LIVE_RESULT_FILE": str(result_file),
         }
         subprocess.run(
             [

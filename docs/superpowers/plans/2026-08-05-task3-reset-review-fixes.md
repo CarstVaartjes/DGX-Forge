@@ -6,7 +6,7 @@
 
 **Architecture:** PostgreSQL target locks continue to serialize reconciliation traffic. Claim-triggered uncertainty reuses whole-reconciliation quiescence, automatic ticks validate the completed publication owner before falling through to one actionable row, and an existing `withdrawal-pending` publication row is the durable successor-handoff intent. That newer intent fences predecessor renewal/cancellation writes, and the singleton owner changes only after the exact maintenance marker has been acknowledged.
 
-**Tech Stack:** Python 3.12, SQLAlchemy 2, PostgreSQL 16, pytest, `dgx_agent_protocol`, atomic route publisher/supervisor acknowledgement.
+**Tech Stack:** Python 3.12, SQLAlchemy 2, PostgreSQL 16, pytest, `vonk_agent_protocol`, atomic route publisher/supervisor acknowledgement.
 
 ## Global Constraints
 
@@ -23,7 +23,7 @@
 
 **Files:**
 - Modify: `control/tests/test_agent_reconciliation_postgres.py`
-- Modify: `control/src/dgx_control/agent_jobs.py`
+- Modify: `control/src/vonk_control/agent_jobs.py`
 
 **Interfaces:**
 - Consumes: `AgentJobService._quiesce_reconciliation_operations(Session, reconciliation_id, now)` and linked `Job.reconciliation_id` authority.
@@ -63,7 +63,7 @@ Expected: all selected cases pass.
 
 **Files:**
 - Modify: `control/tests/test_agent_reconciliation_postgres.py`
-- Modify: `control/src/dgx_control/agent_reconciliation.py`
+- Modify: `control/src/vonk_control/agent_reconciliation.py`
 - Verify: `control/tests/test_worker.py`
 
 **Interfaces:**
@@ -112,7 +112,7 @@ Expected: multi-row scheduling, owner maintenance, stale-candidate protection, a
 
 **Files:**
 - Modify: `control/tests/test_agent_reconciliation_postgres.py`
-- Modify: `control/src/dgx_control/agent_reconciliation.py`
+- Modify: `control/src/vonk_control/agent_reconciliation.py`
 
 **Interfaces:**
 - Consumes: `RoutePublication.state == "withdrawal-pending"`, `AtomicRouteBundlePublisher.withdraw()`, exact supervisor acknowledgement before that call returns, and locked `RoutePublicationOwner` ordering.

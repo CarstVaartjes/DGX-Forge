@@ -59,7 +59,7 @@ export type PackageRolloutPreview = PackagePreview & {
   resource_envelope?: {
     per_node: PackageResourceValues;
     aggregate: PackageResourceValues;
-    required_sparks: number;
+    required_nodes: number;
     topology: string;
     world_size: number;
     ranks: {rank: number; role: string}[];
@@ -95,7 +95,7 @@ export type PackageRollout = {
 };
 
 /**
- * Read-only projection of the package store on each Spark.  The projection is
+ * Read-only projection of the package store on each GPU node.  The projection is
  * deliberately separate from deployment state: a package can be downloaded
  * (and useful for a future activation) without being the process currently
  * serving traffic.
@@ -133,7 +133,7 @@ export type PackageInventoryEntry = {
     cpu_millicores: number;
     kv_cache_base_bytes: number;
     kv_cache_per_token_bytes: number;
-    required_sparks: number;
+    required_nodes: number;
     topology: string;
     world_size: number;
     ranks: {rank: number; role: string}[];

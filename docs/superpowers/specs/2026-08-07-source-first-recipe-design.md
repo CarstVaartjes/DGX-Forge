@@ -9,7 +9,7 @@ planning
 
 Define the initial Vonk Forge recipe model without carrying compatibility debt
 from unreleased internal drafts. A Vonk recipe must be able to express every
-workload represented by SparkRun while making build inputs, artifacts,
+workload represented by WorkloadRun while making build inputs, artifacts,
 topology, sizing, security, installation, and runtime behavior more explicit.
 
 The central decision is:
@@ -18,7 +18,7 @@ The central decision is:
 > with everything needed to build its runtime container.
 
 Vonk does not require workload publishers to operate a container registry.
-One Spark builds a recipe once, and every target Spark imports and verifies the
+One GPU node builds a recipe once, and every target GPU node imports and verifies the
 same resulting OCI image.
 
 This design covers workload recipes. The prebuilt service images used to start
@@ -37,9 +37,9 @@ current draft schemas, fixtures, and implementation:
 - the global service does not require, host, or validate a community image
   registry reference;
 - global publication uploads recipe source, not a workload image;
-- a SparkRun container reference can become a pinned base image in a generated
+- a WorkloadRun container reference can become a pinned base image in a generated
   Dockerfile instead of being the canonical runtime identity;
-- SparkRun mods and setup material are translated into the source bundle or a
+- WorkloadRun mods and setup material are translated into the source bundle or a
   confined in-container lifecycle action instead of being categorically
   discarded; and
 - supported node arrangements are explicit deployment profiles, not one loose
@@ -53,21 +53,21 @@ The operational model is:
 ```text
 portable recipe revision
   -> local cluster mapping
-  -> installed content on mapped Sparks
+  -> installed content on mapped GPU nodes
   -> zero or more fenced runs over time
 ```
 
 ## Product boundary
 
-SparkRun remains a useful source ecosystem and import format. Vonk is a
+WorkloadRun remains a useful source ecosystem and import format. Vonk is a
 capability superset rather than a permissive syntax clone:
 
-- every supported SparkRun behavior must have a Vonk representation;
+- every supported WorkloadRun behavior must have a Vonk representation;
 - imported implicit behavior becomes explicit typed data;
 - unknown or unsafe behavior is preserved and explained, never silently run;
 - missing sizing or topology facts leave an editable draft rather than being
   guessed as zero; and
-- the final Vonk recipe runs without SparkRun being installed or invoked.
+- the final Vonk recipe runs without WorkloadRun being installed or invoked.
 
 ## Authorities and stored objects
 
@@ -124,7 +124,7 @@ not need to expose the registry protocol.
 
 A cluster mapping is a local, mutable desired-state object that binds one exact
 recipe revision and one deployment profile to the user's cluster. It records
-the chosen physical Sparks, role and rank assignment, non-secret parameter
+the chosen physical GPU nodes, role and rank assignment, non-secret parameter
 values, local secret references, artifact placement, endpoint allocation, and
 capacity reservations or policy. PostgreSQL is authoritative for the mapping.
 
@@ -150,15 +150,15 @@ to fenced run records. They never enter the portable recipe.
 All authoring paths create the same local draft:
 
 ```text
-SparkRun import ---------+
+WorkloadRun import ---------+
 Start from standard -----+--> local recipe draft --> validate --> build
 Fully custom ------------+
 ```
 
-### Import SparkRun
+### Import WorkloadRun
 
-The user imports a local YAML document, URL, Spark Arena export, or supported
-SparkRun registry reference. Vonk retrieves the bounded source and associated
+The user imports a local YAML document, URL, GPU node Arena export, or supported
+WorkloadRun registry reference. Vonk retrieves the bounded source and associated
 mods or tuning material, creates a source bundle, translates fields, and shows
 an exhaustive import report before the draft becomes runnable.
 
@@ -299,7 +299,7 @@ other positive node count are valid when the runtime adapter and declared
 topology support them. A three-node GLM 5.2 profile is a first-class case, not
 an exception.
 
-The recipe declares roles and connectivity, not physical Spark identities.
+The recipe declares roles and connectivity, not physical GPU node identities.
 During placement the controller selects actual nodes and assigns deterministic
 ranks. The resulting assignment is persisted as the cluster mapping.
 
@@ -341,7 +341,7 @@ The runtime envelope includes, per node role:
 - CPU and accelerator requirements; and
 - expected versus hard maximum values where the runtime can enforce them.
 
-Memory declares whether it is unified, host, or accelerator memory. DGX Spark
+Memory declares whether it is unified, host, or accelerator memory. Vonk Forge GPU node
 unified memory is counted once, not once as RAM and again as VRAM.
 
 Drafts may contain missing resource values. Build, installation, run, and
@@ -364,7 +364,7 @@ record. A new observation does not rewrite the recipe. An author can create a
 new revision when measured evidence justifies changing the conservative
 resource envelope.
 
-## SparkRun translation
+## WorkloadRun translation
 
 Import accounts for every source element exactly once and produces an editable
 draft plus a report. Report dispositions are:
@@ -379,7 +379,7 @@ draft plus a report. Report dispositions are:
 
 Core mappings include:
 
-| SparkRun concept | Vonk representation |
+| WorkloadRun concept | Vonk representation |
 | --- | --- |
 | `model`, revision, GGUF selector | artifact identity and selection |
 | `container` | digest-pinned `FROM` in a generated Dockerfile |
@@ -394,7 +394,7 @@ Core mappings include:
 | benchmark block/profile | Vonk benchmark definition |
 | descriptive metadata | catalog metadata and provenance |
 
-When a SparkRun recipe supplies only a container image, the generated
+When a WorkloadRun recipe supplies only a container image, the generated
 Dockerfile uses its resolved ARM64 digest as a base. This remains dependent on
 an upstream publisher-built binary, and the import report says so. It does not
 require Vonk to run a workload registry.
@@ -414,7 +414,7 @@ build.
 
 ### Build once
 
-The planner chooses one compatible Spark with enough temporary disk and memory
+The planner chooses one compatible GPU node with enough temporary disk and memory
 as the builder. The agent builds through a rootless isolated builder with:
 
 - no Docker socket or root-equivalent daemon access;
@@ -433,7 +433,7 @@ The build result is not yet an installation or runtime authorization.
 
 ### Distribute the exact image
 
-For a multi-node deployment, Vonk never rebuilds independently on each Spark.
+For a multi-node deployment, Vonk never rebuilds independently on each GPU node.
 It transfers the exact OCI layout from the local cache or builder to every
 target node through the existing authenticated artifact operation, then
 verifies the manifest digest after import. All ranks therefore run identical
@@ -459,7 +459,7 @@ artifact identities, and the resolved cluster-mapping generation. It starts the
 mapped workload as one fenced group, waits for every required readiness result,
 and publishes only the mapped entrypoint to LiteLLM.
 
-A three-node profile therefore results in three selected compatible Sparks,
+A three-node profile therefore results in three selected compatible GPU nodes,
 one persisted cluster mapping with a deterministic rank map, validation of
 every required fabric edge, and one group readiness barrier. A partial group is
 never routed.
@@ -481,14 +481,14 @@ Within one installation or multi-node run, exact image equality is mandatory.
 
 ## Local interface behavior
 
-The recipe editor starts with three equal choices: import SparkRun, start from a
+The recipe editor starts with three equal choices: import WorkloadRun, start from a
 standard, and fully custom. All enter the same editor after creation.
 
 The editor groups fields into overview, source, artifacts, parameters, runtime,
 deployment profiles, resources, validation, and provenance. It provides:
 
 - a browsable Dockerfile and source-bundle file tree;
-- a field-by-field SparkRun import report;
+- a field-by-field WorkloadRun import report;
 - profile cards for arbitrary node counts, including three-node layouts;
 - declared, derived, and measured sizing with evidence links;
 - build, install, and run previews as separate actions;
@@ -498,13 +498,13 @@ deployment profiles, resources, validation, and provenance. It provides:
 - test results bound to a selected deployment profile; and
 - publication readiness with every blocker explained.
 
-Cluster views show, per Spark, installed images and artifacts with sizes,
+Cluster views show, per GPU node, installed images and artifacts with sizes,
 running and pending workloads with reservations and observations, and linked
 multi-node roles. Prospective placement overlays show which profiles fit now
 without mutating the cluster.
 
 Recipe pages therefore offer **Map to cluster**, not a combined install/run
-mutation. The mapping preview shows selected profile, exact Sparks, roles,
+mutation. The mapping preview shows selected profile, exact GPU nodes, roles,
 ranks, required transfers, reusable content, disk and memory headroom, fabric
 edges, and blockers. Once accepted, installation makes that mapping available
 to run; each later start creates a new fenced run without redefining the
@@ -534,7 +534,7 @@ resource envelopes, and evidence binding.
 
 Public download returns the immutable recipe and source bundle. The local
 controller imports both into its own authoritative catalog, repeats local
-policy checks, and builds on a selected Spark. Global availability is not
+policy checks, and builds on a selected GPU node. Global availability is not
 required after download.
 
 Official status is a publisher role and evidence level, not a bypass around
@@ -549,7 +549,7 @@ local build isolation or admission.
 - A build timeout, output overflow, policy violation, or digest mismatch fails
   without installing or starting the result.
 - A builder failure can resume from safe cached content or restart on another
-  eligible Spark; completed images are accepted only by verified digest.
+  eligible GPU node; completed images are accepted only by verified digest.
 - An image transfer or import mismatch blocks the complete target group.
 - Missing disk, unknown runtime memory, unsupported fabric, or an unhealthy
   required node prevents mutation or route publication.
@@ -566,12 +566,12 @@ local build isolation or admission.
 
 - Canonical recipe and source-bundle digests are stable in both repositories.
 - Every seeded standard materializes as an ordinary recipe and Dockerfile.
-- Standard, custom, and SparkRun origins produce the same executable contract.
+- Standard, custom, and WorkloadRun origins produce the same executable contract.
 - Drafts allow incomplete metadata, while build/install/run/publication gates
   reject the corresponding missing requirements.
 - Unknown recipe fields and unsafe bundle paths fail closed.
 
-### SparkRun coverage
+### WorkloadRun coverage
 
 - Golden fixtures cover every current core field, deprecated topology fields,
   arbitrary defaults, environment references, runtime configuration, mods,
@@ -632,7 +632,7 @@ local build isolation or admission.
 
 - A Vonk-hosted public workload container registry.
 - A global build farm for community submissions.
-- Building independently on every target Spark.
+- Building independently on every target GPU node.
 - Host-side recipe scripts or publisher-supplied agent plugins.
 - Hidden inference of missing resource values as zero.
 - Automatic interpolation between deployment profile node counts.
@@ -648,8 +648,8 @@ The design should be implemented in contract-led increments:
    source-first v1 contract;
 2. add local/global content-addressed source-bundle storage and validation;
 3. seed standard source recipes and implement the unified editor paths;
-4. translate the complete supported SparkRun surface into drafts and bundles;
-5. implement isolated build planning and typed Spark agent build operations;
+4. translate the complete supported WorkloadRun surface into drafts and bundles;
+5. implement isolated build planning and typed GPU node agent build operations;
 6. store, distribute, verify, and inventory derived OCI results;
 7. connect explicit deployment profiles to disk, memory, topology, install, and
    run admission; and

@@ -1,20 +1,20 @@
 # Phase 4 model-definition rollout
 
 The active qualification pass is intentionally LLM-only. It covers the
-accepted Mia service, the DS4 single-Spark definition (including a possible
-`bleysg` DSpark merge into the DS4 branch), Nemotron, Qwen3-VL, and Laguna S
+accepted Mia service, the DS4 single-GPU node definition (including a possible
+`bleysg` draft-model merge into the DS4 branch), Nemotron, Qwen3-VL, and Laguna S
 2.1. The image/3D definitions remain cataloged for the broader approved
 design, but are deferred from this pass and cannot be activated or advertised
 as serving endpoints.
 
-Each LLM candidate has one immutable, single-Spark or dual-Spark definition.
+Each LLM candidate has one immutable, single-GPU node or dual-GPU node definition.
 Source and checkpoint revisions are pinned, placement and resource contracts
 are explicit, and all lifecycle commands route through a fail-closed adapter
 boundary. Laguna S 2.1 is cataloged as `laguna-s21-single` and remains
-`planned` pending a Spark-native runtime qualification.
+`planned` pending a GPU node-native runtime qualification.
 
 Each candidate advances independently through `prepared -> verified ->
-accepted` only after its Spark-native loader, image digest, artifact manifest,
+accepted` only after its GPU node-native loader, image digest, artifact manifest,
 quality fixtures, resource envelope, lifecycle recovery, and exact profile
 co-residency gates have been recorded. Unqualified candidates remain behind
 the fail-closed adapter and are not advertised as endpoints.

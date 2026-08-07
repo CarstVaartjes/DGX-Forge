@@ -1,8 +1,8 @@
-# DGX Spark platform update
+# Vonk Forge GPU node platform update
 
-This runbook updates the two Founders Edition DGX Sparks through DGX
-Dashboard. It is intentionally worker-first and fail-stopped: validate Spark 2
-completely before changing Spark 1. Never run a distributed model during this
+This runbook updates the two Founders Edition Vonk Forge GPU nodes through Vonk Forge
+Dashboard. It is intentionally worker-first and fail-stopped: validate GPU node 2
+completely before changing GPU node 1. Never run a distributed model during this
 procedure, and never use ad-hoc `apt` or `fwupdmgr` updates while the Dashboard
 path is available.
 
@@ -15,24 +15,24 @@ new model/runtime release.
 
 The authoritative NVIDIA references checked on 2026-08-01 are:
 
-- [DGX Spark release notes](https://docs.nvidia.com/dgx/dgx-spark/release-notes.html)
-- [OS and component update guide](https://docs.nvidia.com/dgx/dgx-spark/os-and-component-update.html)
-- [DGX Dashboard access](https://docs.nvidia.com/dgx/dgx-spark/dgx-dashboard.html)
-- [NVIDIA container runtime validation](https://docs.nvidia.com/dgx/dgx-spark/nvidia-container-runtime-for-docker.html)
-- [DGX Spark system recovery](https://docs.nvidia.com/dgx/dgx-spark/system-recovery.html)
-- [May 2026 DGX Spark security bulletin](https://nvidia.custhelp.com/app/answers/detail/a_id/5835)
+- [Vonk Forge GPU node release notes](https://docs.nvidia.com/)
+- [OS and component update guide](https://docs.nvidia.com/)
+- [Vonk Forge Dashboard access](https://docs.nvidia.com/)
+- [NVIDIA container runtime validation](https://docs.nvidia.com/)
+- [Vonk Forge GPU node system recovery](https://docs.nvidia.com/)
+- [May 2026 Vonk Forge GPU node security bulletin](https://nvidia.custhelp.com/app/answers/detail/a_id/5835)
 
 ## Target and observed preparation state
 
 NVIDIA's current-version table applies only to Founders Edition units. Both
-machines report `NVIDIA_DGX_Spark`, and both already report effective OTA
-`7.5.0`. `/etc/dgx-release` retains the factory image as
-`DGX_SWBUILD_VERSION=7.2.3`; use `DGX_OTA_VERSION`, not the factory build field,
+machines report `vendor-reported platform identity`, and both already report effective OTA
+`7.5.0`. `/etc/vonk-release` retains the factory image as
+`VONK_SWBUILD_VERSION=7.2.3`; use `VONK_OTA_VERSION`, not the factory build field,
 to determine the installed OTA level.
 
-| Component | NVIDIA current table | Spark 1 observed | Spark 2 observed | Gate |
+| Component | NVIDIA current table | GPU node 1 observed | GPU node 2 observed | Gate |
 | --- | --- | --- | --- | --- |
-| Effective DGX OS OTA | `7.5.0` | `7.5.0` | `7.5.0` | Dashboard says no update is pending |
+| Effective Vonk Forge OS OTA | `7.5.0` | `7.5.0` | `7.5.0` | Dashboard says no update is pending |
 | Ubuntu | not separately pinned | `24.04.4 LTS` | `24.04.4 LTS` | exact match |
 | Kernel | `6.17` family | `6.17.0-1029-nvidia` | `6.17.0-1029-nvidia` | exact match after update |
 | NVIDIA driver | `580.159.03` | `580.173.02` | `580.173.02` | do not downgrade; exact node match |
@@ -49,7 +49,7 @@ to determine the installed OTA level.
 
 The installed driver and CUDA package revisions are newer than the values in
 NVIDIA's current-version table. Treat that table as the release reference, not
-as a downgrade instruction. Accept the installed revisions only when DGX
+as a downgrade instruction. Accept the installed revisions only when Vonk Forge
 Dashboard reports the machine fully updated, and require both nodes to finish
 on identical revisions. If Dashboard offers a newer release, record its
 release highlights and versions before installing it and replace the target
@@ -66,8 +66,8 @@ Before opening the update controls:
 1. Confirm both units use their supplied power adapters and stable power.
 2. Stop all applications and containers and save work. No distributed profile
    may be active.
-3. Keep Spark 1 unchanged while validating Spark 2. If Spark 2 fails any gate,
-   stop; do not update Spark 1.
+3. Keep GPU node 1 unchanged while validating GPU node 2. If GPU node 2 fails any gate,
+   stop; do not update GPU node 1.
 4. Have a wired keyboard, display, a 16 GB or larger USB drive, and access to
    NVIDIA's Founders Edition recovery image. NVIDIA's recovery procedure
    reflashes the internal SSD and erases its data, so back up irreplaceable
@@ -78,21 +78,21 @@ Before opening the update controls:
 6. After regenerating `/etc/machine-id`, reboot each node once before trusting
    persistent journal checks. A runtime machine-ID change leaves the current
    journald instance writing beneath the old machine-ID directory. Reboot
-   Spark 2 and validate it fully before rebooting Spark 1.
+   GPU node 2 and validate it fully before rebooting GPU node 1.
 
 NVIDIA does not document an in-place firmware downgrade in the update guide.
 Treat firmware rollback as unavailable. The published recovery path restores
 the system with recovery media and is destructive; it is not an automatic
-rollback. On failure, preserve logs, leave the other Spark unchanged, and use
+rollback. On failure, preserve logs, leave the other GPU node unchanged, and use
 recovery media or NVIDIA support rather than attempting a downgrade.
 
 ## Dashboard access
 
-Dashboard listens on loopback port 11000 on each Spark. Bind the Mac end of
+Dashboard listens on loopback port 11000 on each GPU node. Bind the Mac end of
 the tunnel to loopback too; never expose Dashboard directly on the LAN. Use a
 distinct local port for each node and keep strict host-key checking enabled.
 
-Open the Spark 2 tunnel first:
+Open the GPU node 2 tunnel first:
 
 ```bash
 ssh -N -T \
@@ -100,24 +100,24 @@ ssh -N -T \
   -o ServerAliveInterval=30 \
   -o ServerAliveCountMax=3 \
   -L 127.0.0.1:11002:127.0.0.1:11000 \
-  dgx-spark-2
+  vonk-node-2
 ```
 
 While that command remains open, visit <http://127.0.0.1:11002>. Confirm that
-the page identifies `spark-2297`. Dashboard requires the initial user's sudo
+the page identifies `node-2297`. Dashboard requires the initial user's sudo
 authorization to apply updates; enter that password only in the local
 Dashboard prompt, never in chat, a script, or a repository file.
 
 Inspect the available updates and release highlights without starting an
 installation. If Dashboard reports no pending update, record that result and
 do not force a reinstall. This cluster still requires the one-time sequential
-reboot after its machine-ID repair: reboot Spark 2 first, wait for fresh
+reboot after its machine-ID repair: reboot GPU node 2 first, wait for fresh
 key-only SSH and Dashboard access, then validate it. If Dashboard offers an
-update, apply it only to Spark 2, monitor it to completion, and follow its
-reboot direction. Do not reboot or start the Spark 1 update yet.
+update, apply it only to GPU node 2, monitor it to completion, and follow its
+reboot direction. Do not reboot or start the GPU node 1 update yet.
 
-After Spark 2 passes every gate, close the Spark 2 tunnel and use the same
-procedure for Spark 1:
+After GPU node 2 passes every gate, close the GPU node 2 tunnel and use the same
+procedure for GPU node 1:
 
 ```bash
 ssh -N -T \
@@ -125,24 +125,24 @@ ssh -N -T \
   -o ServerAliveInterval=30 \
   -o ServerAliveCountMax=3 \
   -L 127.0.0.1:11001:127.0.0.1:11000 \
-  dgx-spark-1
+  vonk-node-1
 ```
 
-Visit <http://127.0.0.1:11001> and confirm `spark-3542` before using any update
+Visit <http://127.0.0.1:11001> and confirm `node-3542` before using any update
 control.
 
 ## Validate one node
 
-Set `host`, `before`, and `after` to Spark 2 first. If an update was installed,
+Set `host`, `before`, and `after` to GPU node 2 first. If an update was installed,
 wait for the machine to reboot and for a fresh key-only SSH session to work.
 If Dashboard reported no pending update, do not claim an update occurred. The
 one-time reboot after identity regeneration is nevertheless required, and its
 new boot ID must differ from the pre-change inventory.
 
 ```bash
-host=dgx-spark-2
-before=inventory/raw/spark2-pre.json
-after=inventory/raw/spark2-post-update.json
+host=vonk-node-2
+before=inventory/raw/node2-pre.json
+after=inventory/raw/node2-post-update.json
 
 ssh -o BatchMode=yes -o ConnectTimeout=10 "$host" 'hostname'
 ssh -o BatchMode=yes "$host" 'bash -s' \
@@ -186,7 +186,7 @@ REMOTE
 
 Stage the audited privileged validator from the Mac and compare its local and
 remote SHA-256 before running it. The script uses the exact CUDA image in
-NVIDIA's DGX Spark container-runtime guide. The validator still intentionally
+NVIDIA's Vonk Forge GPU node container-runtime guide. The validator still intentionally
 runs with sudo even though `carst` now belongs to the Docker group: it also
 reads the root-only kernel log and validates privileged storage/filesystem
 state, failing closed on read errors or storage/filesystem errors.
@@ -199,7 +199,7 @@ ssh -o BatchMode=yes "$host" \
 shasum -a 256 nodes/bin/validate-platform-update-root
 ```
 
-The hashes must match. In an interactive SSH session on that Spark, run one
+The hashes must match. In an interactive SSH session on that GPU node, run one
 audited privileged command:
 
 ```bash
@@ -210,13 +210,13 @@ It must exit zero, display the GPU and driver, and end with `PASS: GPU
 container and current-boot storage checks passed`. A successful image pull
 alone is not a pass. Remove the staged script after recording the result.
 
-Do not touch Spark 1 unless every Spark 2 command passes and Dashboard remains
+Do not touch GPU node 1 unless every GPU node 2 command passes and Dashboard remains
 reachable. Repeat this section with:
 
 ```bash
-host=dgx-spark-1
-before=inventory/raw/spark1-pre.json
-after=inventory/raw/spark1-post-update.json
+host=vonk-node-1
+before=inventory/raw/node1-pre.json
+after=inventory/raw/node1-post-update.json
 ```
 
 ## Capture and compare matched versions
@@ -232,7 +232,7 @@ capture_platform() {
 
   ssh -o BatchMode=yes "$host" 'bash -s' > "$output" <<'REMOTE'
 set -euo pipefail
-dgx_ota="$(awk -F= '$1 == "DGX_OTA_VERSION" {gsub(/"/, "", $2); print $2}' /etc/dgx-release)"
+vonk_ota="$(awk -F= '$1 == "VONK_OTA_VERSION" {gsub(/"/, "", $2); print $2}' /etc/vonk-release)"
 kernel="$(uname -r)"
 driver="$(nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1)"
 cuda_toolkit="$(dpkg-query -W -f='${Version}' cuda-toolkit-13-0)"
@@ -241,7 +241,7 @@ compose="$(docker compose version --short)"
 containerd="$(dpkg-query -W -f='${Version}' containerd.io)"
 nvidia_ctk="$(dpkg-query -W -f='${Version}' nvidia-container-toolkit)"
 jq -n \
-  --arg dgx_ota "$dgx_ota" \
+  --arg vonk_ota "$vonk_ota" \
   --arg kernel "$kernel" \
   --arg driver "$driver" \
   --arg cuda_toolkit "$cuda_toolkit" \
@@ -249,22 +249,22 @@ jq -n \
   --arg compose "$compose" \
   --arg containerd "$containerd" \
   --arg nvidia_ctk "$nvidia_ctk" \
-  '{dgx_ota: $dgx_ota, kernel: $kernel, driver: $driver,
+  '{vonk_ota: $vonk_ota, kernel: $kernel, driver: $driver,
     cuda_toolkit: $cuda_toolkit, docker: $docker, compose: $compose,
     containerd: $containerd, nvidia_container_toolkit: $nvidia_ctk}'
 REMOTE
 }
 
-capture_platform dgx-spark-2 /tmp/dgx-spark-2-platform.json
-capture_platform dgx-spark-1 /tmp/dgx-spark-1-platform.json
-jq -S . /tmp/dgx-spark-2-platform.json
-jq -S . /tmp/dgx-spark-1-platform.json
-cmp -s /tmp/dgx-spark-2-platform.json /tmp/dgx-spark-1-platform.json
+capture_platform vonk-node-2 /tmp/vonk-node-2-platform.json
+capture_platform vonk-node-1 /tmp/vonk-node-1-platform.json
+jq -S . /tmp/vonk-node-2-platform.json
+jq -S . /tmp/vonk-node-1-platform.json
+cmp -s /tmp/vonk-node-2-platform.json /tmp/vonk-node-1-platform.json
 ```
 
 `cmp` must exit zero. Also compare the Dashboard firmware versions exactly;
 the inventory collector does not capture every firmware component. A mismatch
-in DGX OS, kernel, driver, CUDA, Docker, Compose, containerd, NVIDIA Container
+in Vonk Forge OS, kernel, driver, CUDA, Docker, Compose, containerd, NVIDIA Container
 Toolkit, UEFI, EC, USB PD, TPM, or SoC is a hard stop.
 
 ## Update record
@@ -272,13 +272,13 @@ Toolkit, UEFI, EC, USB PD, TPM, or SoC is a hard stop.
 Fill this only after both nodes pass. Do not commit placeholder post-update
 inventories.
 
-| Field | Spark 2 (worker) | Spark 1 (head) |
+| Field | GPU node 2 (worker) | GPU node 1 (head) |
 | --- | --- | --- |
 | Dashboard checked at (UTC) | 2026-08-01; exact time not recorded | 2026-08-01; exact time not recorded |
 | Dashboard result | `No Available Updates` (user-confirmed) | `No Available Updates` (user-confirmed) |
 | Installation completed at (UTC), or `not required` | `not required` | `not required` |
 | Reboot completed at (UTC), or `not required` | `2026-08-01T20:39:02Z`; identity-repair reboot | `2026-08-01T20:47:12Z`; identity-repair reboot |
-| Effective DGX OS OTA | `7.5.0` | `7.5.0` |
+| Effective Vonk Forge OS OTA | `7.5.0` | `7.5.0` |
 | Kernel | `6.17.0-1029-nvidia` | `6.17.0-1029-nvidia` |
 | NVIDIA driver | `580.173.02` | `580.173.02` |
 | CUDA Toolkit package | `13.0.3-1` | `13.0.3-1` |
@@ -297,8 +297,8 @@ inventories.
 | Filesystem/kernel-log gate | pass: non-empty log matched running boot | pass: non-empty log matched running boot |
 | Interface-presence gate | pass: exact pre/post interface-name set | pass: exact pre/post interface-name set |
 
-Commit `inventory/raw/spark2-post-update.json`,
-`inventory/raw/spark1-post-update.json`, and this completed record together
+Commit `inventory/raw/node2-post-update.json`,
+`inventory/raw/node1-post-update.json`, and this completed record together
 only after all gates pass.
 
 ### Completed comparison
@@ -307,7 +307,7 @@ No package or firmware installation was necessary. Both Dashboards reported
 no available updates; the only reboots were the required worker-first and
 head-second reboots that completed the earlier machine-ID repair.
 
-The two live normalized platform captures matched byte-for-byte across DGX
+The two live normalized platform captures matched byte-for-byte across Vonk Forge
 build/OTA, Ubuntu, kernel, driver, CUDA Toolkit, Docker Engine/CLI, Compose,
 containerd, NVIDIA Container Toolkit, BIOS version/date, and every
 fwupd-exposed firmware name, version, and GUID. The normalized post-inventory
@@ -323,7 +323,7 @@ current with no available update.
 
 ## Disable the earlyoom userspace killer
 
-DeepSeek uses most of each Spark's unified memory. An independently acting
+DeepSeek uses most of each GPU node's unified memory. An independently acting
 `earlyoom` service could kill a distributed worker before the runtime can
 preserve useful diagnostics, so it must not be active or enabled. This check
 is deliberately separate from swap and memory-capacity admission controls.
@@ -353,8 +353,8 @@ Stage and validate the worker first, comparing its checksum with the local
 artifact:
 
 ```bash
-scp nodes/bin/disable-earlyoom dgx-spark-2:/tmp/disable-earlyoom
-ssh -o BatchMode=yes dgx-spark-2 \
+scp nodes/bin/disable-earlyoom vonk-node-2:/tmp/disable-earlyoom
+ssh -o BatchMode=yes vonk-node-2 \
   'chmod 0700 /tmp/disable-earlyoom && sha256sum /tmp/disable-earlyoom'
 shasum -a 256 nodes/bin/disable-earlyoom
 ```
@@ -368,7 +368,7 @@ sudo bash /tmp/disable-earlyoom --apply
 
 It must exit zero and print a `PASS` line. Record a fresh after-state with
 exact exit codes before staging and repeating the same procedure on
-`dgx-spark-1`. Never claim an after-state from the pre-change observation.
+`vonk-node-1`. Never claim an after-state from the pre-change observation.
 
 If an installed service was changed and the decision is explicitly reversed,
 restore its recorded prior state rather than using one generic rollback:
@@ -391,37 +391,37 @@ node and mark the evidence document complete.
 
 ### Completed earlyoom record
 
-The audited apply path ran on Spark 2 first and Spark 1 second. Both executions
+The audited apply path ran on GPU node 2 first and GPU node 1 second. Both executions
 classified the service as `absent` and printed `PASS: earlyoom is absent; no
 change required`; both commands exited zero. No package, unit, or host
 configuration was changed. The exact interactive execution times were not
 recorded and are left null rather than inferred.
 
-Independent post-action probes at `2026-08-01T21:42:43Z` on Spark 2 and
-`2026-08-01T21:42:44Z` on Spark 1 reproduced the before state and exact exit
+Independent post-action probes at `2026-08-01T21:42:43Z` on GPU node 2 and
+`2026-08-01T21:42:44Z` on GPU node 1 reproduced the before state and exact exit
 codes: `LoadState=not-found`/0, `is-enabled=not-found`/4,
 `is-active=inactive`/4, and absent package/1. The worker and head therefore
 both meet the DeepSeek earlyoom gate without a mutation. The staged script
 used SHA-256
 `e9a16bce353cf85600b48dc4641db64635035c67328b8f10a2cb9d06d377657f`.
 
-## NAS-to-Spark platform skew
+## NAS-to-GPU node platform skew
 
-The NAS Docker services and Spark worker code are updated as a platform
+The NAS Docker services and GPU node worker code are updated as a platform
 operation. In the Admin → Updates page, or with the CLI below, compare the
-NAS's signed platform target with each authenticated Spark agent:
+NAS's signed platform target with each authenticated GPU node agent:
 
 ```bash
-sparkctl admin updates skew --json
-sparkctl admin updates plan --target-version 2.0.0 --json
-sparkctl admin updates apply --plan-digest PLAN_DIGEST --json
-sparkctl admin updates status --json
+vonkctl admin updates skew --json
+vonkctl admin updates plan --target-version 2.0.0 --json
+vonkctl admin updates apply --plan-digest PLAN_DIGEST --json
+vonkctl admin updates status --json
 ```
 
 When the NAS is newer, the UI shows the exact target digest, affected node
 IDs, compatibility result, canary order, and predecessor. Nothing is sent
 until an administrator explicitly confirms the signed plan. The control plane
-then fans out `agent.update` over each Spark's outbound mTLS channel using the
+then fans out `agent.update` over each GPU node's outbound mTLS channel using the
 supervisor's A/B slots; SSH is not used for this standard path. A compatible
 older agent may continue serving workload packages while the operator reviews
 the skew. The workload package path remains independent and must be used for

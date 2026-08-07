@@ -56,8 +56,8 @@ def test_wsl_falls_back_to_posix_transport_when_windows_binary_is_unavailable() 
 
 def test_explicit_transport_overrides_all_platform_defaults() -> None:
     environment = {
-        "SPARK_SSH_BIN": "/opt/custom/ssh-wrapper",
-        "SPARK_SCP_BIN": "/opt/custom/scp-wrapper",
+        "VONK_SSH_BIN": "/opt/custom/ssh-wrapper",
+        "VONK_SCP_BIN": "/opt/custom/scp-wrapper",
         "WSL_INTEROP": "/run/WSL/1_interop",
     }
 
@@ -73,8 +73,8 @@ def test_explicit_windows_path_style_does_not_depend_on_wrapper_name() -> None:
     selected = select_transport(
         "scp",
         environ={
-            "SPARK_SCP_BIN": "/opt/custom/windows-scp-wrapper",
-            "SPARK_SCP_PATH_STYLE": "windows",
+            "VONK_SCP_BIN": "/opt/custom/windows-scp-wrapper",
+            "VONK_SCP_PATH_STYLE": "windows",
         },
         platform_release="6.8.0-linux",
         which=lambda _: None,
@@ -88,8 +88,8 @@ def test_explicit_posix_path_style_overrides_an_exe_wrapper_name() -> None:
     selected = select_transport(
         "scp",
         environ={
-            "SPARK_SCP_BIN": "/opt/custom/scp.exe",
-            "SPARK_SCP_PATH_STYLE": "posix",
+            "VONK_SCP_BIN": "/opt/custom/scp.exe",
+            "VONK_SCP_PATH_STYLE": "posix",
         },
         platform_release="microsoft",
         which=lambda _: "/ignored",
@@ -100,10 +100,10 @@ def test_explicit_posix_path_style_overrides_an_exe_wrapper_name() -> None:
 
 
 def test_scp_path_style_rejects_unsafe_values() -> None:
-    with pytest.raises(ValueError, match="SPARK_SCP_PATH_STYLE must be posix or windows"):
+    with pytest.raises(ValueError, match="VONK_SCP_PATH_STYLE must be posix or windows"):
         select_transport(
             "scp",
-            environ={"SPARK_SCP_PATH_STYLE": "powershell; rm -rf"},
+            environ={"VONK_SCP_PATH_STYLE": "powershell; rm -rf"},
             platform_release="6.8.0-linux",
             which=lambda _: None,
         )

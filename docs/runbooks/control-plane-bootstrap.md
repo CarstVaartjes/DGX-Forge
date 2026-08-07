@@ -13,18 +13,18 @@ host may be a NAS, but the configuration has no NAS vendor dependency.
 Choose a stable LAN address for the Docker service host and set it as
 `NAS_LAN_IP` (the variable name is retained for compatibility; the host need
 not be a NAS). Create local-only DNS records
-`enroll.dgx-forge.lan`, `agents.dgx-forge.lan`, and
-`registry.dgx-forge.lan`, all resolving to that address. Set
-`DGX_MANAGEMENT_CIDRS` to the actual canonical Spark management network(s), and
+`enroll.vonk-forge.lan`, `agents.vonk-forge.lan`, and
+`registry.vonk-forge.lan`, all resolving to that address. Set
+`VONK_MANAGEMENT_CIDRS` to the actual canonical GPU node management network(s), and
 permit TCP 8443 to the service-host address only from those networks or the
-reserved Spark leases. Do not expose LAN ports for control, inference, Grafana,
+reserved GPU node leases. Do not expose LAN ports for control, inference, Grafana,
 or Hermes.
-Spark reservations are recommended, but no Spark IP belongs in Compose or fleet
+GPU node reservations are recommended, but no GPU node IP belongs in Compose or fleet
 identity: authenticated agent presence supplies the current validated address.
 
-1. Prepare `/srv/dgx-forge/control-host` and `/srv/dgx-forge/site` with their
+1. Prepare `/srv/vonk-forge/control-host` and `/srv/vonk-forge/site` with their
    documented root ownership and copy the non-secret settings from
-   `deploy/compose/.env.example` to `/srv/dgx-forge/site/.env`. The selected
+   `deploy/compose/.env.example` to `/srv/vonk-forge/site/.env`. The selected
    platform target, not this file, supplies image and deployment assets.
 2. Create the database URL, PostgreSQL password, token-signing-key, Tailscale
    OAuth, and Hermes API-key files outside Git. Restrict them
@@ -35,8 +35,8 @@ identity: authenticated agent presence supplies the current validated address.
 
    ```bash
    umask 077
-   openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' > /srv/dgx-forge/secrets/agent-proxy-auth
-   openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' > /srv/dgx-forge/secrets/worker-api-token
+   openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' > /srv/vonk-forge/secrets/agent-proxy-auth
+   openssl rand -base64 32 | tr '+/' '-_' | tr -d '=' > /srv/vonk-forge/secrets/worker-api-token
    ```
 
    Spaces, internal line breaks, padding, and other punctuation are rejected
@@ -49,7 +49,7 @@ identity: authenticated agent presence supplies the current validated address.
    one operation lock. Production never executes Compose from the repository checkout,
    and operators must not reproduce the updater sequence manually.
 4. After the guide's successful first selection, check `/api/v1/healthz`
-   through the `svc:dgx-forge` Tailscale Service.
+   through the `svc:vonk-forge` Tailscale Service.
 
    The base file deliberately has no CA provider selection, so it is not a
    runnable production configuration. A development-only generation may use
@@ -60,23 +60,23 @@ identity: authenticated agent presence supplies the current validated address.
 The API and worker are separate targets built from the same release commit and
 remain separate services. The API image contains Git/OpenSSH for signed
 repository administration. The worker image contains neither Git nor OpenSSH,
-mounts no repository or Git key, and has no Spark-facing network.
+mounts no repository or Git key, and has no GPU node-facing network.
 PostgreSQL, Caddy, LiteLLM, Prometheus, Grafana, Tailscale, and Hermes Agent are
 independent containers in this one project. Only Caddy publishes a host port,
-and that is the `10.0.0.2:8443` Spark backend. The Tailscale gateway publishes
+and that is the `10.0.0.2:8443` GPU node backend. The Tailscale gateway publishes
 no Docker port and advertises separate `vonk-forge`, Hermes dashboard, and Hermes
 API Services.
 
 Caddy receives tailnet web traffic on the private `tailnet-web-edge` network.
 It sends `/v1/*` to `litellm:4000` on the existing internal `ingress` network.
-LiteLLM then reaches only the accepted, fresh agent-derived Spark endpoint via
+LiteLLM then reaches only the accepted, fresh agent-derived GPU node endpoint via
 `cluster-egress`; Docker routes that connection out through the NAS LAN. Model
-and tensor runtimes remain on the DGX Sparks, and direct-fabric traffic never
+and tensor runtimes remain on the Vonk Forge GPU nodes, and direct-fabric traffic never
 passes through the NAS.
 
 Hermes reaches LiteLLM only through `hermes-inference` and uses the fixed
 `hermes-agent` alias. Apply and verify `bin/harden-hermes-egress` after Docker
-creates the bridge so terminal tools cannot connect directly to Spark
+creates the bridge so terminal tools cannot connect directly to GPU node
 management/fabric networks or sibling control-plane networks.
 
 The checked-in LiteLLM file is a fail-closed empty bootstrap. The API retains

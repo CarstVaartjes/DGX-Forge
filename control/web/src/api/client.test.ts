@@ -1,7 +1,7 @@
 import {ApiClient} from "./client";
 
 afterEach(() => {
-  document.cookie = "dgx_csrf=; Max-Age=0; path=/";
+  document.cookie = "vonk_csrf=; Max-Age=0; path=/";
   document.cookie = "other_cookie=; Max-Age=0; path=/";
   document.cookie = "third_cookie=; Max-Age=0; path=/";
   vi.unstubAllGlobals();
@@ -25,7 +25,7 @@ it("uses the generated fleet operation with same-origin credentials", async () =
 });
 
 it("adds the session CSRF token to generated enrollment mutations", async () => {
-  document.cookie = "dgx_csrf=csrf-value; path=/";
+  document.cookie = "vonk_csrf=csrf-value; path=/";
   let captured: Request | undefined;
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
     captured = input as Request;
@@ -62,7 +62,7 @@ it.each(["nonce=", "nonce==", "nonce=middle=="]) (
   async csrfValue => {
     // Break caught: splitting every '=' silently truncates padded CSRF tokens.
     document.cookie = "other_cookie=other-value; path=/";
-    document.cookie = `dgx_csrf=${csrfValue}; path=/`;
+    document.cookie = `vonk_csrf=${csrfValue}; path=/`;
     document.cookie = "third_cookie=third-value; path=/";
     let captured: Request | undefined;
     vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -88,7 +88,7 @@ it.each(["nonce=", "nonce==", "nonce=middle=="]) (
 it("uses one exact API contract for update plan, apply, status, and administrator resume", async () => {
   // Break caught: the browser update workflow drifts from CLI routes or omits
   // the exact server plan digest on the only fan-out mutation.
-  document.cookie = "dgx_csrf=csrf-value; path=/";
+  document.cookie = "vonk_csrf=csrf-value; path=/";
   const digest = `sha256:${"c".repeat(64)}`;
   const targetName = `platform/releases/2.0.0/${"7".repeat(64)}.json`;
   const target = {

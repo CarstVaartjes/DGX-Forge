@@ -10,20 +10,20 @@ bounded output, deadlines, disk reservation, and pre-opened file descriptors.
 
 Keep these paths root-owned and outside every container-writable tree:
 
-- `/srv/dgx-forge/control-host`, mode `0700`, for generations, operations,
+- `/srv/vonk-forge/control-host`, mode `0700`, for generations, operations,
   encrypted backups, and the single host-operation lock;
-- `/srv/dgx-forge/control-identity`, mode `0755`, for bounded read-only active
+- `/srv/vonk-forge/control-identity`, mode `0755`, for bounded read-only active
   and candidate projections;
-- `/srv/dgx-forge/site`, mode `0700`, for the allowlisted site configuration;
+- `/srv/vonk-forge/site`, mode `0700`, for the allowlisted site configuration;
 - the root-owned age recipients file named by
-  `DGX_BACKUP_RECIPIENTS_FILE`; and
-- the root-owned age identity file named by `DGX_BACKUP_IDENTITY_FILE`.
+  `VONK_BACKUP_RECIPIENTS_FILE`; and
+- the root-owned age identity file named by `VONK_BACKUP_IDENTITY_FILE`.
 
 The age recipients and identity files must be regular, non-linked files with
 the exact private modes enforced by the updater. Store the recovery identity
 offline as well as on the host. Never place the identity, a TUF private key, or
 a registry credential in the deployment bundle, admin repository, online API,
-worker, or a Spark.
+worker, or a GPU node.
 
 Retain enough free space for the current and candidate generations, one new
 encrypted backup, and transient OCI acquisition. Before every maintenance
@@ -42,7 +42,7 @@ generation staging but before migration or selection. The fixed boundary:
 3. builds the canonical checksum-bound archive;
 4. encrypts it with the root-owned age recipients file; and
 5. fsyncs a new owner-only artifact and exact backup receipt under
-   `/srv/dgx-forge/control-host/backups`.
+   `/srv/vonk-forge/control-host/backups`.
 
 The receipt binds the operation, selected generation, generation receipt,
 encrypted byte count and SHA-256, archive-manifest SHA-256, and recipients
@@ -61,7 +61,7 @@ contiguous hash-chained journal, probes each recorded effect, and only adopts
 or repeats an exact idempotent action:
 
 ```bash
-sudo dgx-control-offline --state-path /srv/dgx-forge/control-host \
+sudo vonk-control-offline --state-path /srv/vonk-forge/control-host \
   recover --apply
 ```
 
@@ -82,9 +82,9 @@ delete the pending operation.
 Plan the exact retained generation first, then apply the same generation ID:
 
 ```bash
-sudo dgx-control-offline --state-path /srv/dgx-forge/control-host \
+sudo vonk-control-offline --state-path /srv/vonk-forge/control-host \
   rollback --generation REPLACE_GENERATION_ID
-sudo dgx-control-offline --state-path /srv/dgx-forge/control-host \
+sudo vonk-control-offline --state-path /srv/vonk-forge/control-host \
   rollback --generation REPLACE_GENERATION_ID --apply
 ```
 

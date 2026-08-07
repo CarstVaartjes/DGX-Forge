@@ -120,7 +120,7 @@ def test_removal_apply_queues_typed_worker_operations_and_replays(tmp_path) -> N
     assert service.remove(preview["digest"], "admin", "request-1") == result
 
 
-def test_gc_preview_and_apply_fan_out_per_spark_without_stopping_workloads(tmp_path) -> None:
+def test_gc_preview_and_apply_fan_out_per_node_without_stopping_workloads(tmp_path) -> None:
     engine = build_engine(f"sqlite:///{tmp_path / 'plans.sqlite'}")
     Base.metadata.create_all(engine)
     sessions = session_factory(engine)
@@ -225,7 +225,7 @@ def test_rollout_preview_and_apply_use_digest_plan_and_existing_orchestrator(tmp
     assert preview["state"] == "ready"
     assert preview["download_bytes"] == 93_691_352_994
     assert preview["storage_bytes"] == 213_691_352_994
-    assert preview["resource_envelope"]["required_sparks"] == 1
+    assert preview["resource_envelope"]["required_nodes"] == 1
     assert preview["resource_envelope"]["per_node"]["resident_memory_bytes"] > 0
     assert preview["resource_envelope"]["world_size"] == 1
     assert preview["resource_envelope"]["fabric"]["kind"] == "none"
@@ -297,7 +297,7 @@ def test_inventory_projects_resource_envelope_from_signed_release_not_agent_summ
                         "gpu_memory_bytes": 0,
                         "kv_cache_base_bytes": 0,
                         "kv_cache_per_token_bytes": 0,
-                        "required_sparks": 1,
+                        "required_nodes": 1,
                         "topology": "single",
                     },
                 },

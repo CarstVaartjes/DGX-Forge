@@ -12,12 +12,12 @@ from ..types import UNSET, Unset
 
 
 
-T = TypeVar("T", bound="PackageSparkStorage")
+T = TypeVar("T", bound="PackageNodeStorage")
 
 
 
 @_attrs_define
-class PackageSparkStorage:
+class PackageNodeStorage:
     """
         Attributes:
             free_bytes (int):
@@ -76,7 +76,7 @@ class PackageSparkStorage:
 
         used_bytes = d.pop("used_bytes")
 
-        package_spark_storage = cls(
+        package_node_storage = cls(
             free_bytes=free_bytes,
             reclaimable_bytes=reclaimable_bytes,
             reserved_bytes=reserved_bytes,
@@ -84,4 +84,4 @@ class PackageSparkStorage:
             used_bytes=used_bytes,
         )
 
-        return package_spark_storage
+        return package_node_storage

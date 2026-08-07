@@ -5,8 +5,8 @@ set -euo pipefail
 # opens SSH itself and never handles private-key material.
 
 netplan_directory="${DIRECT_FABRIC_NETPLAN_DIRECTORY:-/etc/netplan}"
-managed_netplan="$netplan_directory/99-dgx-spark-direct-fabric.yaml"
-rollback_directory="${DIRECT_FABRIC_ROLLBACK_DIRECTORY:-/root/dgx-spark-fabric-rollback}"
+managed_netplan="$netplan_directory/99-vonk-node-direct-fabric.yaml"
+rollback_directory="${DIRECT_FABRIC_ROLLBACK_DIRECTORY:-/root/vonk-node-fabric-rollback}"
 sys_class_net="${DIRECT_FABRIC_SYS_CLASS_NET:-/sys/class/net}"
 sys_class_infiniband="${DIRECT_FABRIC_SYS_CLASS_INFINIBAND:-/sys/class/infiniband}"
 node=''
@@ -15,7 +15,7 @@ runtime_before=()
 
 usage() {
     cat <<'USAGE'
-Usage: configure-direct-fabric --node spark1|spark2 --emit-netplan|--check|--apply|--local-postcheck|--postcheck|--rollback
+Usage: configure-direct-fabric --node node1|node2 --emit-netplan|--check|--apply|--local-postcheck|--postcheck|--rollback
 
 --emit-netplan prints the reviewed persistent Netplan document without changing
 anything. --check and --local-postcheck are read-only. --apply and --rollback
@@ -32,7 +32,7 @@ fail() {
 while (($#)); do
     case "$1" in
         --node)
-            (($# >= 2)) || fail '--node needs spark1 or spark2'
+            (($# >= 2)) || fail '--node needs node1 or node2'
             node="$2"
             shift 2
             ;;
@@ -49,15 +49,15 @@ while (($#)); do
     esac
 done
 
-[[ "$node" == spark1 || "$node" == spark2 ]] || fail 'node must be spark1 or spark2'
+[[ "$node" == node1 || "$node" == node2 ]] || fail 'node must be node1 or node2'
 [[ -n "$action" ]] || fail 'an action is required'
 
 case "$node" in
-    spark1)
+    node1)
         addresses=('192.168.100.10/24' '192.168.101.10/24')
         peers=('192.168.100.11' '192.168.101.11')
         ;;
-    spark2)
+    node2)
         addresses=('192.168.100.11/24' '192.168.101.11/24')
         peers=('192.168.100.10' '192.168.101.10')
         ;;
@@ -199,7 +199,7 @@ restore_plan_and_runtime() {
 
 install_candidate_plan() {
     local candidate
-    candidate="$(mktemp "$netplan_directory/.99-dgx-spark-direct-fabric.XXXXXX")"
+    candidate="$(mktemp "$netplan_directory/.99-vonk-node-direct-fabric.XXXXXX")"
     emit_netplan > "$candidate"
     chmod 0600 "$candidate"
     install -m 0600 "$candidate" "$managed_netplan"
@@ -211,7 +211,7 @@ apply() {
     require_root
     check
     capture_runtime_state
-    prior_plan="$(mktemp "$netplan_directory/.99-dgx-spark-direct-fabric.previous.XXXXXX")"
+    prior_plan="$(mktemp "$netplan_directory/.99-vonk-node-direct-fabric.previous.XXXXXX")"
     if [[ -e "$managed_netplan" ]]; then
         cp -p "$managed_netplan" "$prior_plan"
         had_prior_plan=true
@@ -303,7 +303,7 @@ rollback() {
     require_root
     [[ -e "$managed_netplan" ]] || fail "managed Netplan is absent: $managed_netplan"
     capture_runtime_state
-    prior_plan="$(mktemp "$netplan_directory/.99-dgx-spark-direct-fabric.previous.XXXXXX")"
+    prior_plan="$(mktemp "$netplan_directory/.99-vonk-node-direct-fabric.previous.XXXXXX")"
     cp -p "$managed_netplan" "$prior_plan"
     rm -f "$managed_netplan"
     if ! netplan generate; then

@@ -12,9 +12,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-if os.environ.get("DGX_ACCEPTANCE_LOCKED_ENV") != "1":
+if os.environ.get("VONK_ACCEPTANCE_LOCKED_ENV") != "1":
     environment = dict(os.environ)
-    environment["DGX_ACCEPTANCE_LOCKED_ENV"] = "1"
+    environment["VONK_ACCEPTANCE_LOCKED_ENV"] = "1"
     raise SystemExit(subprocess.run(["uv", "run", "--project", str(ROOT / "control"), "python", __file__, *sys.argv[1:]], env=environment, check=False).returncode)
 sys.path.insert(0, str(ROOT / "control/src"))
 from vonk_control.acceptance import simulate  # noqa: E402

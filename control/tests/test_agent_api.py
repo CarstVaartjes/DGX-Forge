@@ -74,7 +74,7 @@ CAPABILITIES = [
 PROBE_RESULT = {
     "status": "ok",
     "evidence": {
-        "dgx_forge": {
+        "vonk_forge": {
             "schema_version": 1,
             "memory": {"available_bytes": 1_000, "total_bytes": 4_000},
             "storage": {"available_bytes": 2_000, "total_bytes": 8_000},
@@ -236,12 +236,12 @@ def agent_system(tmp_path):
 
 def agent_headers(node: str, serial: str) -> dict[str, str]:
     return {
-        "x-dgx-agent-node": node,
-        "x-dgx-agent-serial": serial,
-        "x-dgx-agent-fingerprint": f"fingerprint-{serial}",
-        "x-dgx-agent-verified": "1",
-        "x-dgx-agent-proxy-auth": "p" * 32,
-        "x-dgx-agent-source": "10.0.0.42",
+        "x-vonk-agent-node": node,
+        "x-vonk-agent-serial": serial,
+        "x-vonk-agent-fingerprint": f"fingerprint-{serial}",
+        "x-vonk-agent-verified": "1",
+        "x-vonk-agent-proxy-auth": "p" * 32,
+        "x-vonk-agent-source": "10.0.0.42",
     }
 
 
@@ -483,7 +483,7 @@ def valid_enrollment_body(token: str) -> bytes:
             x509.SubjectAlternativeName(
                 [
                     x509.UniformResourceIdentifier(
-                        f"spiffe://dgx-forge.local/node/{NODE_A}"
+                        f"spiffe://vonk-forge.local/node/{NODE_A}"
                     )
                 ]
             ),
@@ -590,7 +590,7 @@ def test_spoofed_agent_header_is_rejected() -> None:
     )
 
     response = TestClient(app).post(
-        "/agent/v1/claim", headers={"x-dgx-agent-node": NODE_A}
+        "/agent/v1/claim", headers={"x-vonk-agent-node": NODE_A}
     )
 
     assert response.status_code == 401
@@ -667,7 +667,7 @@ def test_untrusted_proxy_and_malformed_forwarded_identity_are_rejected(
             "/agent/v1/claim",
             headers={
                 **agent_headers(NODE_A, "serial-a"),
-                "x-dgx-agent-verified": "false",
+                "x-vonk-agent-verified": "false",
             },
         ).status_code
         == 401
@@ -697,14 +697,14 @@ def test_verified_identity_cannot_claim_other_node(agent_system) -> None:
 def test_claim_requires_a_trusted_policy_bounded_source(agent_system) -> None:
     client, services, _, _ = agent_system
     missing = agent_headers(NODE_A, "serial-a")
-    missing.pop("x-dgx-agent-source")
+    missing.pop("x-vonk-agent-source")
 
     assert client.post("/agent/v1/claim", headers=missing).status_code == 401
     outside = client.post(
         "/agent/v1/claim",
         headers={
             **agent_headers(NODE_A, "serial-a"),
-            "x-dgx-agent-source": "10.1.0.42",
+            "x-vonk-agent-source": "10.1.0.42",
         },
     )
     assert outside.status_code == 422
@@ -790,9 +790,9 @@ def test_authenticated_claim_records_protocol_contact_for_metrics(agent_system) 
     metrics = MetricsRegistry()
     OperationalMetricsCollector(metrics, services.sessions, clock=clock).refresh()
     rendered = metrics.render()
-    assert f'dgx_agent_last_seen_age_seconds{{node_id="{NODE_A}"}} 0' in rendered
+    assert f'vonk_agent_last_seen_age_seconds{{node_id="{NODE_A}"}} 0' in rendered
     assert (
-        f'dgx_agent_version_compatibility{{node_id="{NODE_A}",version_bucket="supported"}} 1'
+        f'vonk_agent_version_compatibility{{node_id="{NODE_A}",version_bucket="supported"}} 1'
         in rendered
     )
 
@@ -973,7 +973,7 @@ def test_authenticated_heartbeat_preserves_claim_advertised_protocol_after_exact
         "/agent/v1/heartbeat",
         headers={
             **agent_headers(NODE_A, "serial-a"),
-            "x-dgx-agent-source": "10.0.0.43",
+            "x-vonk-agent-source": "10.0.0.43",
         },
         json=progress,
     )
@@ -1030,7 +1030,7 @@ def test_authenticated_result_preserves_claim_advertised_protocol_after_exact_fe
         "/agent/v1/result",
         headers={
             **agent_headers(NODE_A, "serial-a"),
-            "x-dgx-agent-source": "10.0.0.44",
+            "x-vonk-agent-source": "10.0.0.44",
         },
         json=result,
     )
@@ -1191,7 +1191,7 @@ def test_untrusted_and_stale_requests_do_not_record_agent_contact(agent_system) 
         "/agent/v1/result",
         headers={
             **agent_headers(NODE_A, "serial-a"),
-            "x-dgx-agent-source": "10.0.0.43",
+            "x-vonk-agent-source": "10.0.0.43",
         },
         json=stale,
     )
@@ -1332,7 +1332,7 @@ def test_enrollment_routes_are_admin_only_and_pending_exact_replay_is_idempotent
             x509.SubjectAlternativeName(
                 [
                     x509.UniformResourceIdentifier(
-                        f"spiffe://dgx-forge.local/node/{NODE_A}"
+                        f"spiffe://vonk-forge.local/node/{NODE_A}"
                     )
                 ]
             ),
@@ -1580,7 +1580,7 @@ def test_approved_exact_enrollment_replay_picks_up_certificate_and_mismatch_is_d
             x509.SubjectAlternativeName(
                 [
                     x509.UniformResourceIdentifier(
-                        f"spiffe://dgx-forge.local/node/{NODE_C}"
+                        f"spiffe://vonk-forge.local/node/{NODE_C}"
                     )
                 ]
             ),
@@ -1765,7 +1765,7 @@ def _csr_for(node_id: str) -> bytes:
             x509.SubjectAlternativeName(
                 [
                     x509.UniformResourceIdentifier(
-                        f"spiffe://dgx-forge.local/node/{node_id}"
+                        f"spiffe://vonk-forge.local/node/{node_id}"
                     )
                 ]
             ),
@@ -1838,7 +1838,7 @@ def test_staged_certificate_can_only_activate_and_activation_is_idempotent_after
     assert first.json() == replay.json()
     issued = first.json()
     staged_headers = agent_headers(NODE_A, issued["serial"])
-    staged_headers["x-dgx-agent-fingerprint"] = issued["fingerprint"]
+    staged_headers["x-vonk-agent-fingerprint"] = issued["fingerprint"]
 
     assert client.post("/agent/v1/claim", headers=staged_headers).status_code == 401
     assert (
@@ -2644,7 +2644,7 @@ def test_enrollment_overflow_burns_valid_grant_before_rejection(agent_system) ->
             x509.SubjectAlternativeName(
                 [
                     x509.UniformResourceIdentifier(
-                        f"spiffe://dgx-forge.local/node/{NODE_A}"
+                        f"spiffe://vonk-forge.local/node/{NODE_A}"
                     )
                 ]
             ),
@@ -2693,7 +2693,7 @@ def test_enrollment_unknown_top_level_field_burns_valid_grant(agent_system) -> N
             x509.SubjectAlternativeName(
                 [
                     x509.UniformResourceIdentifier(
-                        f"spiffe://dgx-forge.local/node/{NODE_A}"
+                        f"spiffe://vonk-forge.local/node/{NODE_A}"
                     )
                 ]
             ),

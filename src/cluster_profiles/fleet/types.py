@@ -1,4 +1,4 @@
-"""Immutable, address-independent domain types for DGX Spark fleets."""
+"""Immutable, address-independent domain types for Vonk Forge GPU node fleets."""
 
 from __future__ import annotations
 
@@ -53,7 +53,7 @@ class ManagementEndpoint:
 
 @dataclass(frozen=True)
 class NodeRecord:
-    """Sanitized desired record for one physical DGX Spark."""
+    """Sanitized desired record for one physical Vonk Forge GPU node."""
 
     id: NodeId
     display_name: str

@@ -235,7 +235,7 @@ class Packages:
                                 "cpu_millicores": 1,
                                 "kv_cache_base_bytes": 40,
                                 "kv_cache_per_token_bytes": 1,
-                                "required_sparks": 1,
+                                "required_nodes": 1,
                                 "topology": "single",
                                 "world_size": 1,
                                 "ranks": [{"rank": 0, "role": "primary"}],
@@ -376,7 +376,7 @@ def test_package_operation_ids_are_registered_when_the_app_is_mounted() -> None:
     assert schema["paths"]["/api/v1/packages/candidates"]["get"]["operationId"] == "listPackageCandidates"
 
 
-def test_inventory_projects_spark_storage_resource_and_package_lifecycle() -> None:
+def test_inventory_projects_node_storage_resource_and_package_lifecycle() -> None:
     client, headers, _packages, _audits = _client("viewer")
 
     response = client.get(

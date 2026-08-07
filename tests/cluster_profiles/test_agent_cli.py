@@ -286,10 +286,10 @@ def test_documented_console_command_runs_from_outside_project_environment(
     environment.pop("PYTHONPATH", None)
     environment.update(
         {
-            "DGX_CONTROL_URL": "placeholder",
-            "DGX_CONTROL_TOKEN_FILE": str(token),
+            "VONK_CONTROL_URL": "placeholder",
+            "VONK_CONTROL_TOKEN_FILE": str(token),
             "SPARKCTL_SSH_MARKER": str(ssh_marker),
-            "SPARK_SSH_BIN": str(fake_ssh),
+            "VONK_SSH_BIN": str(fake_ssh),
             "SSL_CERT_FILE": str(certificate),
         }
     )
@@ -297,7 +297,7 @@ def test_documented_console_command_runs_from_outside_project_environment(
         server,
         url,
     ):
-        environment["DGX_CONTROL_URL"] = url
+        environment["VONK_CONTROL_URL"] = url
         completed = REAL_SUBPROCESS_RUN(
             [
                 "uv",

@@ -38,7 +38,7 @@ COMMIT = "a" * 40
 PROBE_RESULT = {
     "status": "ok",
     "evidence": {
-        "dgx_forge": {
+        "vonk_forge": {
             "schema_version": 1,
             "memory": {"available_bytes": 1_000},
             "storage": {"available_bytes": 2_000},

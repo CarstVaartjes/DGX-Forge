@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Migrate existing Sparks from direct SSH control to outbound agents, preserve explicit recovery paths, and make the generic workflow clear to outside operators.
+**Goal:** Migrate existing GPU nodes from direct SSH control to outbound agents, preserve explicit recovery paths, and make the generic workflow clear to outside operators.
 
 **Architecture:** Migration is evidence-driven and reversible until agent acceptance. Public docs use a guided entry point; historical fixed-node material is scope-labelled rather than rewritten, and automated checks protect navigation/configuration coverage.
 
@@ -22,18 +22,18 @@
 ### Task 1: Agent migration planner and per-node journal
 
 **Files:**
-- Create: `src/spark_profiles/agent_migration.py`
-- Modify: `src/spark_profiles/install/orchestrator.py`
-- Modify: `src/spark_profiles/install/cli.py`
-- Create: `deploy/ansible/roles/dgx_agent/`
-- Create: `src/spark_profiles/install/cloud_init.py`
-- Test: `tests/spark_profiles/install/test_agent_migration.py`
-- Test: `tests/spark_profiles/install/test_cloud_init.py`
+- Create: `src/cluster_profiles/agent_migration.py`
+- Modify: `src/cluster_profiles/install/orchestrator.py`
+- Modify: `src/cluster_profiles/install/cli.py`
+- Create: `deploy/ansible/roles/vonk_agent/`
+- Create: `src/cluster_profiles/install/cloud_init.py`
+- Test: `tests/cluster_profiles/install/test_agent_migration.py`
+- Test: `tests/cluster_profiles/install/test_cloud_init.py`
 
 **Interfaces:**
 - Produces `AgentMigrationPlan` and resumable steps: preflight, grant, install, connect, evidence approval, certificate, probe, routine-transport acceptance, SSH-disable-for-routine marker.
-- CLI: `spark-install node enroll-agent NODE_ID [--apply] [--json]`.
-- CLI: `spark-install node prepare-media --baseos-release RELEASE --output DIR [--apply] [--json]` emits a sanitized, versioned seed overlay for NVIDIA's documented BaseOS/FastOS/OEMDATA workflow; it never writes an ISO or removable device itself.
+- CLI: `node-install node enroll-agent NODE_ID [--apply] [--json]`.
+- CLI: `node-install node prepare-media --baseos-release RELEASE --output DIR [--apply] [--json]` emits a sanitized, versioned seed overlay for NVIDIA's documented BaseOS/FastOS/OEMDATA workflow; it never writes an ISO or removable device itself.
 
 - [ ] **Step 1: Write failing resume/rollback tests**
 
@@ -48,7 +48,7 @@ silently inheriting its old certificate.
 
 - [ ] **Step 2: Run and observe absent migration**
 
-Run: `uv run pytest tests/spark_profiles/install/test_agent_migration.py -v`
+Run: `uv run pytest tests/cluster_profiles/install/test_agent_migration.py -v`
 Expected: FAIL importing migration planner/CLI command.
 
 - [ ] **Step 3: Implement journaled migration gates**
@@ -56,13 +56,13 @@ Expected: FAIL importing migration planner/CLI command.
 Express agent user, directories, systemd units, pinned ORAS/Alloy/exporter
 packages, the pinned NVIDIA lifecycle bundle, and local policy as versioned
 idempotent Ansible roles. Invoke them
-locally on the Spark through a pinned Ansible Runner bundle; bootstrap SSH only
+locally on the GPU node through a pinned Ansible Runner bundle; bootstrap SSH only
 transfers/starts that bounded bundle and does not run repository-selected shell.
 Extend existing install journal without changing immutable node ID. Each step
 records canonical evidence and expected digest; approval is an external wait
 state. Only after an authenticated agent probe succeeds does the fleet record
 gain accepted agent protocol/version metadata. Do not delete recovery SSH.
-For fresh/reimage mode, generate only the DGX-Forge cloud-init/OEMDATA overlay
+For fresh/reimage mode, generate only the Vonk Forge cloud-init/OEMDATA overlay
 consumed by NVIDIA's documented image tooling. Require the operator-supplied
 NVIDIA BaseOS/FastOS media outside the repository, verify its declared digest,
 and pause after first boot for the same physical identity/evidence gate. Do not
@@ -71,22 +71,22 @@ devices.
 
 - [ ] **Step 4: Run onboarding and migration suites**
 
-Run: `uv run pytest tests/spark_profiles/install/test_agent_migration.py tests/spark_profiles/install/test_cloud_init.py tests/spark_profiles/install/test_install_cli.py tests/spark_profiles/install/test_orchestrator.py -v`
+Run: `uv run pytest tests/cluster_profiles/install/test_agent_migration.py tests/cluster_profiles/install/test_cloud_init.py tests/cluster_profiles/install/test_install_cli.py tests/cluster_profiles/install/test_orchestrator.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit migration mode**
 
 ```bash
-git add src/spark_profiles/agent_migration.py src/spark_profiles/install/orchestrator.py src/spark_profiles/install/cli.py src/spark_profiles/install/cloud_init.py deploy/ansible/roles/dgx_agent tests/spark_profiles/install/test_agent_migration.py tests/spark_profiles/install/test_cloud_init.py
-git commit -m "feat: migrate Sparks to outbound agents"
+git add src/cluster_profiles/agent_migration.py src/cluster_profiles/install/orchestrator.py src/cluster_profiles/install/cli.py src/cluster_profiles/install/cloud_init.py deploy/ansible/roles/vonk_agent tests/cluster_profiles/install/test_agent_migration.py tests/cluster_profiles/install/test_cloud_init.py
+git commit -m "feat: migrate GPU nodes to outbound agents"
 ```
 
 ### Task 2: Explicit agent repair and replacement tooling
 
 **Files:**
-- Create: `bin/dgx-agent-repair`
-- Create: `src/spark_profiles/agent_recovery.py`
-- Test: `tests/spark_profiles/test_agent_recovery.py`
+- Create: `bin/vonk-agent-repair`
+- Create: `src/cluster_profiles/agent_recovery.py`
+- Test: `tests/cluster_profiles/test_agent_recovery.py`
 - Create: `docs/runbooks/agent-recovery.md`
 
 **Interfaces:**
@@ -101,7 +101,7 @@ logs redact grant/token/key material.
 
 - [ ] **Step 2: Run and observe missing tool**
 
-Run: `uv run pytest tests/spark_profiles/test_agent_recovery.py -v`
+Run: `uv run pytest tests/cluster_profiles/test_agent_recovery.py -v`
 Expected: FAIL because launcher/module are absent.
 
 - [ ] **Step 3: Implement fixed recovery operations over audited SSH adapter**
@@ -113,14 +113,14 @@ according to explicit fleet identity policy and revokes prior certificate.
 
 - [ ] **Step 4: Run recovery tests and redaction checks**
 
-Run: `uv run pytest tests/spark_profiles/test_agent_recovery.py tests/spark_profiles/install/test_remote.py -v`
+Run: `uv run pytest tests/cluster_profiles/test_agent_recovery.py tests/cluster_profiles/install/test_remote.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit recovery tooling**
 
 ```bash
-git add bin/dgx-agent-repair src/spark_profiles/agent_recovery.py tests/spark_profiles/test_agent_recovery.py docs/runbooks/agent-recovery.md
-git commit -m "feat: repair Spark agents through explicit recovery"
+git add bin/vonk-agent-repair src/cluster_profiles/agent_recovery.py tests/cluster_profiles/test_agent_recovery.py docs/runbooks/agent-recovery.md
+git commit -m "feat: repair GPU node agents through explicit recovery"
 ```
 
 ### Task 3: Rewrite README as generic guided entry point
@@ -139,7 +139,7 @@ def test_readme_links_complete_generic_journey() -> None:
     links = markdown_links(Path("README.md").read_text())
     assert REQUIRED_START_HERE <= links
 
-def test_recommended_readme_does_not_require_exactly_two_sparks() -> None:
+def test_recommended_readme_does_not_require_exactly_two_nodes() -> None:
     recommended = section("README.md", "Recommended workflow")
     assert "both configured nodes" not in recommended
     assert "inventory/cluster.toml" not in recommended
@@ -157,7 +157,7 @@ Expected: FAIL missing links and containing fixed two-node quick-start language.
 
 - [ ] **Step 3: Rewrite README around roles and newcomer sequence**
 
-Lead with any-count Sparks plus generic Docker host and separate services.
+Lead with any-count GPU nodes plus generic Docker host and separate services.
 Explain one production path, bootstrap/recovery SSH exception, Git authority,
 CLI/web parity, model data not transiting NAS, current release status, quick
 local development, grouped documentation, legacy compatibility, security, and
@@ -172,7 +172,7 @@ Expected: PASS.
 
 ```bash
 git add README.md tests/runbooks/test_public_docs.py
-git commit -m "docs: guide generic DGX-Forge operators"
+git commit -m "docs: guide generic Vonk Forge operators"
 ```
 
 ### Task 4: Complete Compose configuration reference
@@ -223,7 +223,7 @@ git commit -m "docs: reference control-plane Compose configuration"
 - Modify: `docs/runbooks/platform-operations.md`
 - Modify: `docs/runbooks/node-onboarding.md`
 - Modify: `docs/runbooks/repository-administration.md`
-- Modify: `docs/runbooks/sparkctl.md`
+- Modify: `docs/runbooks/vonkctl.md`
 - Modify: `docs/runbooks/model-switching.md`
 - Modify: `docs/runbooks/observability.md`
 - Modify: `docs/runbooks/control-plane-recovery.md`
@@ -235,11 +235,11 @@ git commit -m "docs: reference control-plane Compose configuration"
 
 **Interfaces:**
 - Current docs link along recommended journey and state API/agent behavior.
-- Historical/fixed-node docs begin with `> **Legacy two-Spark scope:** ...` and link back to README migration guidance.
+- Historical/fixed-node docs begin with `> **Legacy two-GPU node scope:** ...` and link back to README migration guidance.
 
 - [ ] **Step 1: Write failing scope/obsolete-language tests**
 
-Current docs must not say `future NAS controller`, `both Sparks`, or direct SSH
+Current docs must not say `future NAS controller`, `both GPU nodes`, or direct SSH
 for routine status/switch/deploy. Historical documents containing fixed
 addresses/users/exact-two procedures must contain the legacy scope marker.
 Check every local Markdown link resolves.
@@ -247,7 +247,7 @@ Check every local Markdown link resolves.
 - [ ] **Step 2: Run and observe contradictions**
 
 Run: `uv run pytest tests/runbooks/test_documentation_scope.py -v`
-Expected: FAIL on current `sparkctl` and control bootstrap language.
+Expected: FAIL on current `vonkctl` and control bootstrap language.
 
 - [ ] **Step 3: Update current workflow and label historical procedures**
 

@@ -45,7 +45,7 @@ ASSETS = (
     "trust/litellm-cosign.pub",
 )
 OCI_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
-OCI_LAYER_MEDIA_TYPE = "application/vnd.dgx-forge.control-deployment.v1.tar"
+OCI_LAYER_MEDIA_TYPE = "application/vnd.vonk-forge.control-deployment.v1.tar"
 
 
 def _bundle_module():
@@ -60,7 +60,7 @@ def _descriptor(raw: bytes) -> OciDeploymentBundle:
     manifest = b"canonical OCI manifest fixture"
     manifest_digest = _digest(manifest)
     return OciDeploymentBundle(
-        reference=("registry.example/dgx-forge/control-deployment@" + manifest_digest),
+        reference=("registry.example/vonk-forge/control-deployment@" + manifest_digest),
         manifest_digest=manifest_digest,
         manifest_size=len(manifest),
         manifest_media_type=OCI_MANIFEST_MEDIA_TYPE,
@@ -184,7 +184,7 @@ def test_bundle_schema_rejects_unsafe_or_noncanonical_paths(
                 "size": 1,
             }
         ],
-        "format": "dgx-control-deployment-bundle-v1",
+        "format": "vonk-control-deployment-bundle-v1",
         "schema_version": 1,
     }
 
@@ -204,7 +204,7 @@ def test_bundle_schema_rejects_duplicate_file_entries() -> None:
     }
     document = {
         "files": [entry, dict(entry)],
-        "format": "dgx-control-deployment-bundle-v1",
+        "format": "vonk-control-deployment-bundle-v1",
         "schema_version": 1,
     }
 
@@ -517,7 +517,7 @@ def test_verifier_rejects_unsafe_archive_paths(unsafe_name: str) -> None:
                 "size": 6,
             }
         ],
-        "format": "dgx-control-deployment-bundle-v1",
+        "format": "vonk-control-deployment-bundle-v1",
         "schema_version": 1,
     }
     manifest_raw = (

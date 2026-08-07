@@ -230,7 +230,7 @@ def _spec(
             "source_builds": list(source_builds),
             "build_recipe": {
                 "schema_version": 1,
-                "build_identity": "dgx-workload-build",
+                "build_identity": "vonk-workload-build",
                 "network": False,
             },
             "imports": list(imports),
@@ -544,7 +544,7 @@ def test_rejects_live_resolution_missing_hashes_and_unknown_fields(
         "source_builds": [],
         "build_recipe": {
             "schema_version": 1,
-            "build_identity": "dgx-workload-build",
+            "build_identity": "vonk-workload-build",
             "network": False,
         },
         "imports": ["demo"],
@@ -595,7 +595,7 @@ def test_source_build_is_digest_bound_and_networkless(tmp_path: Path) -> None:
     assert store.is_immutable(result)
     assert sandbox.calls == [
         {
-            "build_identity": "dgx-workload-build",
+            "build_identity": "vonk-workload-build",
             "deadline": None,
             "devices": (),
             "host_mounts": (),
@@ -661,7 +661,7 @@ def test_import_validation_uses_the_networkless_cancellable_sandbox(
 
     assert sandbox.validation_calls == [
         {
-            "build_identity": "dgx-workload-build",
+            "build_identity": "vonk-workload-build",
             "deadline": deadline,
             "devices": (),
             "host_mounts": (),

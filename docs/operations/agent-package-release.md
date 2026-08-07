@@ -1,6 +1,6 @@
-# Spark agent package release operations
+# GPU node agent package release operations
 
-The production Spark service is distributed as one reproducible ARM64 Debian
+The production GPU node service is distributed as one reproducible ARM64 Debian
 package. A tag such as `v0.1.0` builds natively on Ubuntu 24.04 ARM64, runs the
 Rust and Debian lifecycle gates, creates a keyless Sigstore attestation, uploads
 the exact artifacts to the GitHub Release, and then publishes that same verified
@@ -91,10 +91,10 @@ revocation procedure for both identities.
 ## Release procedure
 
 1. Run the complete read-only CI on the intended commit.
-2. Run `Rust Spark agent release` manually from `main` with the intended version.
+2. Run `Rust GPU node agent release` manually from `main` with the intended version.
    Manual runs validate, build, test, and attest but do not publish.
 3. Review the package verifier output, systemd exposure reports, lifecycle test,
-   Sigstore identity, and physical Spark acceptance evidence.
+   Sigstore identity, and physical GPU node acceptance evidence.
 4. Create the exact annotated tag `v<major>.<minor>.<patch>` on that reviewed
    commit and push it. Never move or reuse a release tag.
 5. Approve `agent-release`, then separately approve `apt-release` after the

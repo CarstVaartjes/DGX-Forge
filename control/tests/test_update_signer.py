@@ -186,7 +186,7 @@ def _platform_manifest() -> bytes:
         return {
             "name": name,
             "provenance_sha256": "d" * 64,
-            "reference": f"registry.example/dgx-forge/{name}@sha256:{digest}",
+            "reference": f"registry.example/vonk-forge/{name}@sha256:{digest}",
             "sbom_sha256": "e" * 64,
             "sha256": digest,
             "size": 1024,
@@ -197,19 +197,19 @@ def _platform_manifest() -> bytes:
             {
                 "architecture": "linux-arm64",
                 "artifact": artifact("agent-linux-arm64", "a" * 64),
-                "payload": {"name": "dgx-agent", "sha256": "b" * 64, "size": 4096},
+                "payload": {"name": "vonk-agent", "sha256": "b" * 64, "size": 4096},
                 "protocol": {"maximum": 2, "minimum": 1},
             }
         ],
         "build_digest": "sha256:" + "c" * 64,
         "deployment_bundle": {
             "layer_digest": "sha256:" + "a" * 64,
-            "layer_media_type": "application/vnd.dgx-forge.control-deployment.v1.tar",
+            "layer_media_type": "application/vnd.vonk-forge.control-deployment.v1.tar",
             "layer_size": 1048576,
             "manifest_digest": "sha256:" + "f" * 64,
             "manifest_media_type": "application/vnd.oci.image.manifest.v1+json",
             "manifest_size": 4096,
-            "reference": "registry.example/dgx-forge/control@sha256:" + "f" * 64,
+            "reference": "registry.example/vonk-forge/control@sha256:" + "f" * 64,
         },
         "host_updater_abi": {"maximum": 2, "minimum": 1},
         "control": {
@@ -347,29 +347,29 @@ def test_signer_settings_require_exact_running_image_and_identity_projection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     for variable in (
-        "DGX_AGENT_UPDATE_AUTHORITY_KEY_FILE",
-        "DGX_ADMIN_GRANT_PUBLIC_KEY_FILE",
-        "DGX_AGENT_TUF_BOOTSTRAP_ROOT_FILE",
+        "VONK_AGENT_UPDATE_AUTHORITY_KEY_FILE",
+        "VONK_ADMIN_GRANT_PUBLIC_KEY_FILE",
+        "VONK_AGENT_TUF_BOOTSTRAP_ROOT_FILE",
     ):
         secret = tmp_path / variable.lower()
         secret.write_text("fixture")
         monkeypatch.setenv(variable, str(secret))
     identity_root = tmp_path / "control-identity"
-    monkeypatch.setenv("DGX_CONTROL_IDENTITY_ROOT", str(identity_root))
-    monkeypatch.setenv("DGX_PLATFORM_VERSION", "1.2.3")
-    monkeypatch.setenv("DGX_PLATFORM_RELEASE_DIGEST", "sha256:" + "a" * 64)
-    monkeypatch.setenv("DGX_PLATFORM_BUILD_DIGEST", "sha256:" + "b" * 64)
+    monkeypatch.setenv("VONK_CONTROL_IDENTITY_ROOT", str(identity_root))
+    monkeypatch.setenv("VONK_PLATFORM_VERSION", "1.2.3")
+    monkeypatch.setenv("VONK_PLATFORM_RELEASE_DIGEST", "sha256:" + "a" * 64)
+    monkeypatch.setenv("VONK_PLATFORM_BUILD_DIGEST", "sha256:" + "b" * 64)
     monkeypatch.setenv(
-        "DGX_CONTROL_PROCESS_IMAGE",
-        "registry.example/dgx-forge/worker@sha256:" + "c" * 64,
+        "VONK_CONTROL_PROCESS_IMAGE",
+        "registry.example/vonk-forge/worker@sha256:" + "c" * 64,
     )
 
     settings = SignerSettings.from_env_and_secrets()
 
     assert settings.control_identity_root == identity_root
     assert settings.process_image.endswith("@sha256:" + "c" * 64)
-    monkeypatch.setenv("DGX_CONTROL_PROCESS_IMAGE", "worker:latest")
-    with pytest.raises(SettingsError, match="DGX_CONTROL_PROCESS_IMAGE"):
+    monkeypatch.setenv("VONK_CONTROL_PROCESS_IMAGE", "worker:latest")
+    with pytest.raises(SettingsError, match="VONK_CONTROL_PROCESS_IMAGE"):
         SignerSettings.from_env_and_secrets()
 
 
@@ -561,8 +561,8 @@ def test_signer_loads_fresh_active_projection_and_refreshes_its_exact_target(
         release_digest=str(generation["release_digest"]),
         build_digest="sha256:" + "c" * 64,
         platform_version="1.2.3",
-        api_image="registry.example/dgx-forge/api@sha256:" + "a" * 64,
-        worker_image="registry.example/dgx-forge/worker@sha256:" + "b" * 64,
+        api_image="registry.example/vonk-forge/api@sha256:" + "a" * 64,
+        worker_image="registry.example/vonk-forge/worker@sha256:" + "b" * 64,
         migration_revision="0011_update_rollouts",
     )
     assert source.target_names == [generation["platform_target_name"]]
@@ -630,7 +630,7 @@ def test_signer_rejects_unsafe_or_mismatched_active_projection(
             release_digest=running.release_digest,
             build_digest=running.build_digest,
             platform_version=running.platform_version,
-            process_image="registry.example/dgx-forge/other@sha256:" + "0" * 64,
+            process_image="registry.example/vonk-forge/other@sha256:" + "0" * 64,
         )
 
     loader = SignerActiveControlReleaseLoader(

@@ -39,7 +39,7 @@ def test_top_level_docs_link_the_two_admin_surfaces_and_workload_runbook() -> No
     assert "vonkctl admin" in readme
     assert "web UX" in readme
     platform = (ROOT / "docs/runbooks/platform-update.md").read_text()
-    assert "NAS-to-Spark platform skew" in platform
+    assert "NAS-to-GPU node platform skew" in platform
     assert "outbound mTLS channel" in platform
     assert "workload package path remains independent" in platform
 

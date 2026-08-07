@@ -144,7 +144,7 @@ def test_hermes_group_is_local_ordered_and_retry_bounded(tmp_path: Path) -> None
     "deployment",
     (
         LiteLlmDeployment("hermes-agent", "cloud", "https://api.openai.com/v1", 1, 1, 1),
-        LiteLlmDeployment("hermes-agent", "host", "http://spark.local:8888/v1", 1, 1, 1),
+        LiteLlmDeployment("hermes-agent", "host", "http://node.local:8888/v1", 1, 1, 1),
         LiteLlmDeployment("other", "local", "http://10.0.0.42:8888/v1", 1, 1, 1),
     ),
 )

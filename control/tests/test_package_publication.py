@@ -62,7 +62,7 @@ def _lock_bytes() -> bytes:
                 "activation_memory_bytes", "workspace_memory_bytes", "gpu_memory_bytes",
                 "gpu_count", "cpu_millicores", "kv_cache_base_bytes", "kv_cache_per_token_bytes",
             )} | {"auxiliary_memory_bytes": 0, "activation_memory_bytes": 0, "workspace_memory_bytes": 0},
-            "required_sparks": 1,
+            "required_nodes": 1,
             "topology": "single",
             "world_size": 1,
             "ranks": [{"rank": 0, "role": "primary"}],

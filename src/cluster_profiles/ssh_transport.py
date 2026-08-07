@@ -8,7 +8,7 @@ import shutil
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
-_OVERRIDES = {"ssh": "SPARK_SSH_BIN", "scp": "SPARK_SCP_BIN"}
+_OVERRIDES = {"ssh": "VONK_SSH_BIN", "scp": "VONK_SCP_BIN"}
 
 
 @dataclass(frozen=True)
@@ -38,9 +38,9 @@ def select_transport(
     windows_command = f"{command}.exe"
     use_windows_bridge = bool(is_wsl and which(windows_command))
 
-    path_style = environment.get("SPARK_SCP_PATH_STYLE") if command == "scp" else None
+    path_style = environment.get("VONK_SCP_PATH_STYLE") if command == "scp" else None
     if path_style is not None and path_style not in {"posix", "windows"}:
-        raise ValueError("SPARK_SCP_PATH_STYLE must be posix or windows")
+        raise ValueError("VONK_SCP_PATH_STYLE must be posix or windows")
     if override := environment.get(override_name):
         return TransportSelection(override, path_style or "posix")
     if use_windows_bridge:

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://dgx-forge.local/schemas/package-family.schema.json",
-  "title": "DGX-Forge workload package family",
+  "$id": "https://vonk-forge.local/schemas/package-family.schema.json",
+  "title": "Vonk Forge workload package family",
   "type": "object",
   "additionalProperties": false,
   "required": [

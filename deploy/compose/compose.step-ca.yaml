@@ -7,19 +7,19 @@ x-bounded-logging: &bounded-logging
 services:
   control-api:
     environment:
-      DGX_AGENT_CA_PROVIDER: step-ca
-      DGX_AGENT_RUNTIME: enabled
-      DGX_AGENT_CLIENT_CA_FILE: /run/secrets/agent-client-ca
-      DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE: /run/secrets/agent-intermediate-certificate
-      DGX_AGENT_CA_CREDENTIAL_FILE: /run/secrets/agent-ca-credential
-      DGX_AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE: /run/secrets/agent-ca-provisioner-public-jwk
-      DGX_AGENT_CA_ROOT_FILE: /run/secrets/step-ca-root-certificate
-      DGX_AGENT_CA_URL: https://step-ca:9000
-      DGX_AGENT_CA_PROVISIONER_NAME: ${AGENT_CA_PROVISIONER_NAME:-dgx-forge-agent}
-      DGX_AGENT_CA_PROVISIONER_KID: ${AGENT_CA_PROVISIONER_KID:?set agent CA provisioner key ID}
-      DGX_AGENT_CA_TIMEOUT_SECONDS: ${AGENT_CA_TIMEOUT_SECONDS:-3}
-      DGX_AGENT_CA_MAX_RESPONSE_BYTES: ${AGENT_CA_MAX_RESPONSE_BYTES:-65536}
-      DGX_AGENT_PROXY_AUTH_FILE: /run/secrets/agent-proxy-auth
+      VONK_AGENT_CA_PROVIDER: step-ca
+      VONK_AGENT_RUNTIME: enabled
+      VONK_AGENT_CLIENT_CA_FILE: /run/secrets/agent-client-ca
+      VONK_AGENT_INTERMEDIATE_CERTIFICATE_FILE: /run/secrets/agent-intermediate-certificate
+      VONK_AGENT_CA_CREDENTIAL_FILE: /run/secrets/agent-ca-credential
+      VONK_AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE: /run/secrets/agent-ca-provisioner-public-jwk
+      VONK_AGENT_CA_ROOT_FILE: /run/secrets/step-ca-root-certificate
+      VONK_AGENT_CA_URL: https://step-ca:9000
+      VONK_AGENT_CA_PROVISIONER_NAME: ${AGENT_CA_PROVISIONER_NAME:-vonk-forge-agent}
+      VONK_AGENT_CA_PROVISIONER_KID: ${AGENT_CA_PROVISIONER_KID:?set agent CA provisioner key ID}
+      VONK_AGENT_CA_TIMEOUT_SECONDS: ${AGENT_CA_TIMEOUT_SECONDS:-3}
+      VONK_AGENT_CA_MAX_RESPONSE_BYTES: ${AGENT_CA_MAX_RESPONSE_BYTES:-65536}
+      VONK_AGENT_PROXY_AUTH_FILE: /run/secrets/agent-proxy-auth
     secrets: [agent-ca-credential, agent-ca-provisioner-public-jwk, step-ca-root-certificate]
     networks: [ca]
     depends_on:

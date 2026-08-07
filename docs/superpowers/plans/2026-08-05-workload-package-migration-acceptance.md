@@ -10,9 +10,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Migrate current Mia, DS4, and repository model state onto the generalized package path, prove an entirely unknown workload can be delivered without SSH or a DGX-Forge update, and make the result a first-release gate.
+**Goal:** Migrate current Mia, DS4, and repository model state onto the generalized package path, prove an entirely unknown workload can be delivered without SSH or a Vonk Forge update, and make the result a first-release gate.
 
-**Architecture:** Compatibility readers keep existing APIs and accepted evidence usable while generic family/release/deployment documents become the only newly authored form. Acceptance uses a synthetic upstream created after the installed agent build, exercises publication through NAS Git/TUF, direct Spark acquisition, activation, rollback, rejection, restart, GC, and no-SSH assertions. Final release verification consumes both workload-plane and platform-plane evidence without merging their trust or update mechanisms.
+**Architecture:** Compatibility readers keep existing APIs and accepted evidence usable while generic family/release/deployment documents become the only newly authored form. Acceptance uses a synthetic upstream created after the installed agent build, exercises publication through NAS Git/TUF, direct GPU node acquisition, activation, rollback, rejection, restart, GC, and no-SSH assertions. Final release verification consumes both workload-plane and platform-plane evidence without merging their trust or update mechanisms.
 
 **Tech Stack:** Python 3.12, TOML/JSON, OCI test registry, local signed HTTP fixture, TUF, pytest, Docker Compose, Bash acceptance scripts
 
@@ -21,7 +21,7 @@
 - No new Mia-, DS4-, model-, runtime-, or adapter-specific package-engine branch or agent operation may be introduced.
 - Current accepted evidence is preserved; migration cannot claim new physical acceptance that was not observed.
 - Legacy model/profile API behavior remains available until generic-path equivalence passes, then becomes read-only compatibility behavior.
-- The decisive test uses a family, adapter digest, release, and deployment unknown when the installed DGX-Forge agent artifact was built.
+- The decisive test uses a family, adapter digest, release, and deployment unknown when the installed Vonk Forge agent artifact was built.
 - Ordinary new workload releases use workload Git/TUF/package operations only; they never use `agent.update`, platform TUF, or SSH.
 - Tasks 32–37 cannot close the first-release gate until W17–W20 pass.
 
@@ -36,10 +36,10 @@
 - Create: `config/workload-deployments/ds4-deepseek-single.toml`
 - Create: `manifests/workload-releases/mia-deepseek/`
 - Create: `manifests/workload-releases/ds4-deepseek/`
-- Create: `src/spark_profiles/workload_packages/legacy.py`
-- Modify: `src/spark_profiles/catalog.py`
-- Modify: `control/src/dgx_control/desired_state.py`
-- Test: `tests/spark_profiles/test_workload_package_migration.py`
+- Create: `src/cluster_profiles/workload_packages/legacy.py`
+- Modify: `src/cluster_profiles/catalog.py`
+- Modify: `control/src/vonk_control/desired_state.py`
+- Test: `tests/cluster_profiles/test_workload_package_migration.py`
 - Test: `tests/adapters/test_mia_deepseek_dual.py`
 - Test: `tests/adapters/test_ds4_runtime.py`
 
@@ -49,7 +49,7 @@
 
 - [ ] **Step 1: Write RED equivalence and no-special-case tests**
 
-Assert current public profile/model IDs and maturity evidence project identically, definitions contain exact existing pins, Mia multi-node lifecycle and DS4 single-node placement remain unchanged, shared components deduplicate, and no source under `agent/src/dgx_agent/packages/` contains `mia`, `ds4`, `deepseek`, or any migrated model ID.
+Assert current public profile/model IDs and maturity evidence project identically, definitions contain exact existing pins, Mia multi-node lifecycle and DS4 single-node placement remain unchanged, shared components deduplicate, and no source under `agent/src/vonk_agent/packages/` contains `mia`, `ds4`, `deepseek`, or any migrated model ID.
 
 ```python
 legacy = LegacyWorkloadReader.read(old_definition)
@@ -59,7 +59,7 @@ assert legacy.public_projection() == generic.public_projection()
 
 - [ ] **Step 2: Run the RED tests**
 
-Run: `uv run --frozen pytest tests/spark_profiles/test_workload_package_migration.py tests/adapters/test_mia_deepseek_dual.py tests/adapters/test_ds4_runtime.py -v`
+Run: `uv run --frozen pytest tests/cluster_profiles/test_workload_package_migration.py tests/adapters/test_mia_deepseek_dual.py tests/adapters/test_ds4_runtime.py -v`
 
 Expected: FAIL because generic fixtures and compatibility reader are absent.
 
@@ -74,14 +74,14 @@ def read_legacy_workload(document: Mapping[str, object]) -> WorkloadDeployment:
 
 - [ ] **Step 4: Verify migration and existing catalog behavior**
 
-Run: `uv run --frozen pytest tests/spark_profiles/test_workload_package_migration.py tests/spark_profiles/test_catalog.py tests/spark_profiles/test_phase4_model_catalog.py tests/adapters/test_mia_deepseek_dual.py tests/adapters/test_ds4_runtime.py -q`
+Run: `uv run --frozen pytest tests/cluster_profiles/test_workload_package_migration.py tests/cluster_profiles/test_catalog.py tests/cluster_profiles/test_phase4_model_catalog.py tests/adapters/test_mia_deepseek_dual.py tests/adapters/test_ds4_runtime.py -q`
 
 Expected: PASS; DS4 remains `verified`, Mia retains its existing maturity, and no acceptance evidence is upgraded.
 
 - [ ] **Step 5: Commit W17**
 
 ```bash
-git add config/package-families config/workload-deployments manifests/workload-releases src/spark_profiles/workload_packages/legacy.py src/spark_profiles/catalog.py control/src/dgx_control/desired_state.py tests/spark_profiles/test_workload_package_migration.py tests/adapters/test_mia_deepseek_dual.py tests/adapters/test_ds4_runtime.py
+git add config/package-families config/workload-deployments manifests/workload-releases src/cluster_profiles/workload_packages/legacy.py src/cluster_profiles/catalog.py control/src/vonk_control/desired_state.py tests/cluster_profiles/test_workload_package_migration.py tests/adapters/test_mia_deepseek_dual.py tests/adapters/test_ds4_runtime.py
 git commit -m "feat: migrate Mia and DS4 to workload packages"
 ```
 
@@ -99,7 +99,7 @@ git commit -m "feat: migrate Mia and DS4 to workload packages"
 
 - [ ] **Step 1: Build a failing synthetic lifecycle test**
 
-Generate two deterministic native/OCI fixture releases and an ABI-v1 adapter after capturing the installed agent artifact digest. Require direct Spark/provider bytes, exact locks, NAS promotion, durable progress, atomic generation, route publication, offline rollback, and audit evidence; monkeypatch every SSH entry point and `agent.update` to fail on invocation.
+Generate two deterministic native/OCI fixture releases and an ABI-v1 adapter after capturing the installed agent artifact digest. Require direct GPU node/provider bytes, exact locks, NAS promotion, durable progress, atomic generation, route publication, offline rollback, and audit evidence; monkeypatch every SSH entry point and `agent.update` to fail on invocation.
 
 ```python
 assert agent_digest_after == agent_digest_before
@@ -116,7 +116,7 @@ Expected: FAIL before W1–W17 because generic publication/reconciliation is inc
 
 - [ ] **Step 3: Implement the hermetic acceptance harness**
 
-Use disposable Git, TUF metadata, HTTPS/OCI provider fixtures, control database, agent state/store, and Spark simulator boundaries. Create the family only after the agent is instantiated; promote release 1, activate it, promote release 2, activate it, remove network access, roll back to release 1, then prove unsigned/revoked/unpromoted release rejection.
+Use disposable Git, TUF metadata, HTTPS/OCI provider fixtures, control database, agent state/store, and GPU node simulator boundaries. Create the family only after the agent is instantiated; promote release 1, activate it, promote release 2, activate it, remove network access, roll back to release 1, then prove unsigned/revoked/unpromoted release rejection.
 
 ```bash
 scripts/accept-workload-packages --mode simulated --json
@@ -202,7 +202,7 @@ git commit -m "test: harden workload package operations"
 
 - [ ] **Step 1: Write RED documentation and release-gate tests**
 
-Require README links and commands for both CLI/web, no-SSH normal operation, Git/TUF/OCI authority boundaries, model payload direct-fetch behavior, NAS backup scope, workload rollback without network, DGX-Forge skew prompt behavior, and explicit physical-vs-simulated evidence fields.
+Require README links and commands for both CLI/web, no-SSH normal operation, Git/TUF/OCI authority boundaries, model payload direct-fetch behavior, NAS backup scope, workload rollback without network, Vonk Forge skew prompt behavior, and explicit physical-vs-simulated evidence fields.
 
 ```python
 assert evidence["workload_packages"]["unknown_family_without_agent_update"] is True
@@ -217,19 +217,19 @@ Expected: FAIL because the workload runbook and release evidence requirements ar
 
 - [ ] **Step 3: Write operator docs and aggregate evidence**
 
-Explain that NAS Docker services update through the host-local platform updater, compatible old Spark agents remain operational, the web/CLI prompts for signed topology-aware `agent.update` fan-out when NAS is newer, and workload releases remain independent. Include preview/apply/status/rollback/repair/GC examples with exact digest confirmation and recovery-only SSH boundaries.
+Explain that NAS Docker services update through the host-local platform updater, compatible old GPU node agents remain operational, the web/CLI prompts for signed topology-aware `agent.update` fan-out when NAS is newer, and workload releases remain independent. Include preview/apply/status/rollback/repair/GC examples with exact digest confirmation and recovery-only SSH boundaries.
 
 ```text
-sparkctl admin packages candidates list --family synthetic-stack --json
-sparkctl admin packages promote --candidate 00000000-0000-4000-8000-000000000001 --preview-digest aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --json
-sparkctl admin deployments rollout --deployment synthetic-canary --plan-digest bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --json
+vonkctl admin packages candidates list --family synthetic-stack --json
+vonkctl admin packages promote --candidate 00000000-0000-4000-8000-000000000001 --preview-digest aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --json
+vonkctl admin deployments rollout --deployment synthetic-canary --plan-digest bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb --json
 ```
 
 - [ ] **Step 4: Run full repository and hosted-equivalent gates**
 
 Run: `uvx --from ruff==0.16.1 ruff check . && uv run --python 3.12 --frozen --with pytest==9.1.1 pytest && uv run --project agent --frozen pytest && uv run --project agent_protocol --frozen pytest && npm --prefix control/web test -- --run && npm --prefix control/web run build && scripts/accept-workload-packages --mode simulated --json && uv run --frozen pytest tests/scripts/test_verify_platform_release.py -q && git diff --check`
 
-Expected: all automated gates pass; any unperformed physical Spark acceptance remains an explicit external release blocker rather than being synthesized.
+Expected: all automated gates pass; any unperformed physical GPU node acceptance remains an explicit external release blocker rather than being synthesized.
 
 - [ ] **Step 5: Commit W20**
 

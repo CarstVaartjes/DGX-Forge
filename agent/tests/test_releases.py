@@ -57,11 +57,11 @@ from tuf.ngclient._internal.trusted_metadata_set import TrustedMetadataSet
 
 VALID_RELEASE = {
     "schema_version": 1,
-    "target_name": "spark-runtime-2026-08",
+    "target_name": "node-runtime-2026-08",
     "oci_manifest_digest": "sha256:" + "1" * 64,
     "target_digest": "2" * 64,
     "provenance_digest": "3" * 64,
-    "adapter_id": "spark-runtime-v1",
+    "adapter_id": "node-runtime-v1",
 }
 
 
@@ -72,7 +72,7 @@ def _descriptor() -> dict[str, object]:
         "target_digest": VALID_RELEASE["target_digest"],
         "target_length": 17,
         "registry_origin": "https://registry.test.example",
-        "repository": "dgx/releases",
+        "repository": "vonk/releases",
         "oci_manifest_digest": VALID_RELEASE["oci_manifest_digest"],
         "provenance_digest": VALID_RELEASE["provenance_digest"],
         "adapter_id": VALID_RELEASE["adapter_id"],
@@ -231,7 +231,7 @@ def _delegated_repository(invalid: bool = False) -> tuple[bytes, RepositoryFetch
     delegated.sign(delegated_signer)
     delegated_bytes = delegated.to_bytes()
     role = DelegatedRole(
-        "spark", [delegated_signer.public_key.keyid], 2 if invalid else 1,
+        "node", [delegated_signer.public_key.keyid], 2 if invalid else 1,
         True, paths=[str(descriptor["target_name"])],
     )
     top = Metadata(
@@ -240,7 +240,7 @@ def _delegated_repository(invalid: bool = False) -> tuple[bytes, RepositoryFetch
             targets={},
             delegations=Delegations(
                 {delegated_signer.public_key.keyid: delegated_signer.public_key},
-                {"spark": role},
+                {"node": role},
             ),
         )
     )
@@ -251,7 +251,7 @@ def _delegated_repository(invalid: bool = False) -> tuple[bytes, RepositoryFetch
             expires=expiry,
             meta={
                 "targets.json": MetaFile.from_data(1, top_bytes, ["sha256"]),
-                "spark.json": MetaFile.from_data(1, delegated_bytes, ["sha256"]),
+                "node.json": MetaFile.from_data(1, delegated_bytes, ["sha256"]),
             },
         )
     )
@@ -268,7 +268,7 @@ def _delegated_repository(invalid: bool = False) -> tuple[bytes, RepositoryFetch
         "timestamp.json": timestamp.to_bytes(),
         "snapshot.json": snapshot_bytes,
         "targets.json": top_bytes,
-        "spark.json": delegated_bytes,
+        "node.json": delegated_bytes,
         str(descriptor["target_name"]): target_bytes,
     })
     return root_bytes, fetcher
@@ -277,11 +277,11 @@ def _delegated_repository(invalid: bool = False) -> tuple[bytes, RepositoryFetch
 def test_release_request_accepts_only_the_exact_versioned_digest_boundary() -> None:
     request = ReleaseRequest.parse(VALID_RELEASE)
 
-    assert request.target_name == "spark-runtime-2026-08"
+    assert request.target_name == "node-runtime-2026-08"
     assert request.oci_manifest_digest == "sha256:" + "1" * 64
     assert request.target_digest == "2" * 64
     assert request.provenance_digest == "3" * 64
-    assert request.adapter_id == "spark-runtime-v1"
+    assert request.adapter_id == "node-runtime-v1"
 
     for changed in (
         VALID_RELEASE | {"command": ["id"]},
@@ -300,7 +300,7 @@ def test_release_evidence_and_inspection_are_bounded_typed_values() -> None:
         status="installed",
         release_digest="2" * 64,
         manifest_digest="sha256:" + "1" * 64,
-        adapter_id="spark-runtime-v1",
+        adapter_id="node-runtime-v1",
     )
     inspection = ReleaseInspection(ReleaseDisposition.COMPLETED, evidence)
 
@@ -308,7 +308,7 @@ def test_release_evidence_and_inspection_are_bounded_typed_values() -> None:
         "status": "installed",
         "release_digest": "2" * 64,
         "manifest_digest": "sha256:" + "1" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
     }
     assert inspection.evidence is evidence
 
@@ -323,7 +323,7 @@ def test_real_tuf_updater_authorizes_exact_signed_release_descriptor(tmp_path: P
         bootstrap_root=root_bytes,
         fetcher=fetcher,
         registry_origin="https://registry.test.example",
-        repository="dgx/releases",
+        repository="vonk/releases",
         architecture="linux-arm64",
     )
 
@@ -339,7 +339,7 @@ def test_real_tuf_updater_authorizes_exact_signed_release_descriptor(tmp_path: P
         "https://control.test.example/agent/v1/tuf/metadata/timestamp.json",
         "https://control.test.example/agent/v1/tuf/metadata/snapshot.json",
         "https://control.test.example/agent/v1/tuf/metadata/targets.json",
-        "https://control.test.example/agent/v1/tuf/targets/spark-runtime-2026-08",
+        "https://control.test.example/agent/v1/tuf/targets/node-runtime-2026-08",
     ]
 
 
@@ -351,21 +351,21 @@ def test_real_tuf_rejects_expired_metadata_and_wrong_target_bytes(tmp_path: Path
             "https://control.test.example/agent/v1/tuf/metadata/",
             "https://control.test.example/agent/v1/tuf/targets/",
             expired_root, expired_fetcher,
-            "https://registry.test.example", "dgx/releases", "linux-arm64",
+            "https://registry.test.example", "vonk/releases", "linux-arm64",
         ).authorize(
             ReleaseRequest.parse(VALID_RELEASE),
             datetime.now(UTC) + timedelta(seconds=2),
         )
 
     root_bytes, fetcher = _signed_repository(_descriptor())
-    fetcher.files["spark-runtime-2026-08"] = b"tampered"
+    fetcher.files["node-runtime-2026-08"] = b"tampered"
     with pytest.raises(TUFTrustError):
         TUFReleaseTrust(
             tmp_path / "wrong-metadata", tmp_path / "wrong-targets",
             "https://control.test.example/agent/v1/tuf/metadata/",
             "https://control.test.example/agent/v1/tuf/targets/",
             root_bytes, fetcher,
-            "https://registry.test.example", "dgx/releases", "linux-arm64",
+            "https://registry.test.example", "vonk/releases", "linux-arm64",
         ).authorize(
             ReleaseRequest.parse(VALID_RELEASE),
             datetime.now(UTC) + timedelta(seconds=2),
@@ -380,7 +380,7 @@ def test_real_tuf_rejects_bad_signature_threshold_and_unsafe_cache_root(tmp_path
             "https://control.test.example/agent/v1/tuf/metadata/",
             "https://control.test.example/agent/v1/tuf/targets/",
             root_bytes, fetcher,
-            "https://registry.test.example", "dgx/releases", "linux-arm64",
+            "https://registry.test.example", "vonk/releases", "linux-arm64",
         ).authorize(
             ReleaseRequest.parse(VALID_RELEASE),
             datetime.now(UTC) + timedelta(seconds=2),
@@ -397,12 +397,12 @@ def test_tuf_rejects_oversized_signed_target_before_target_download(tmp_path: Pa
             "https://control.test.example/agent/v1/tuf/metadata/",
             "https://control.test.example/agent/v1/tuf/targets/",
             root_bytes, fetcher,
-            "https://registry.test.example", "dgx/releases", "linux-arm64",
+            "https://registry.test.example", "vonk/releases", "linux-arm64",
         ).authorize(
             ReleaseRequest.parse(VALID_RELEASE),
             datetime.now(UTC) + timedelta(seconds=2),
         )
-    assert not any(url.endswith("spark-runtime-2026-08") for url in fetcher.urls)
+    assert not any(url.endswith("node-runtime-2026-08") for url in fetcher.urls)
 
 
 def test_tuf_target_memfd_is_write_sealed_before_descriptor_parsing() -> None:
@@ -430,7 +430,7 @@ def test_real_tuf_rejects_version_and_consistency_attacks(tmp_path: Path, attack
         "https://control.test.example/agent/v1/tuf/metadata/",
         "https://control.test.example/agent/v1/tuf/targets/",
         root_bytes, fetcher,
-        "https://registry.test.example", "dgx/releases", "linux-arm64",
+        "https://registry.test.example", "vonk/releases", "linux-arm64",
     )
     request = ReleaseRequest.parse(VALID_RELEASE)
     trust.authorize(request, datetime.now(UTC) + timedelta(seconds=2))
@@ -470,7 +470,7 @@ def test_real_tuf_enforces_root_rotation_and_delegation_thresholds(
         "https://control.test.example/agent/v1/tuf/metadata/",
         "https://control.test.example/agent/v1/tuf/targets/",
         root_bytes, fetcher,
-        "https://registry.test.example", "dgx/releases", "linux-arm64",
+        "https://registry.test.example", "vonk/releases", "linux-arm64",
     )
     if accepted:
         result = trust.authorize(
@@ -499,7 +499,7 @@ def test_tuf_rejects_symlinked_metadata_and_nonempty_target_cache(tmp_path: Path
             "https://control.test.example/agent/v1/tuf/metadata/",
             "https://control.test.example/agent/v1/tuf/targets/",
             root_bytes, fetcher,
-            "https://registry.test.example", "dgx/releases", "linux-arm64",
+            "https://registry.test.example", "vonk/releases", "linux-arm64",
         ).authorize(
             ReleaseRequest.parse(VALID_RELEASE),
             datetime.now(UTC) + timedelta(seconds=2),
@@ -507,7 +507,7 @@ def test_tuf_rejects_symlinked_metadata_and_nonempty_target_cache(tmp_path: Path
 
     target_cache = tmp_path / "target-cache"
     target_cache.mkdir(mode=0o700)
-    (target_cache / "spark-runtime-2026-08").symlink_to(tmp_path / "victim")
+    (target_cache / "node-runtime-2026-08").symlink_to(tmp_path / "victim")
     root_bytes, fetcher = _signed_repository(_descriptor())
     with pytest.raises(TUFTrustError, match="not empty"):
         TUFReleaseTrust(
@@ -515,7 +515,7 @@ def test_tuf_rejects_symlinked_metadata_and_nonempty_target_cache(tmp_path: Path
             "https://control.test.example/agent/v1/tuf/metadata/",
             "https://control.test.example/agent/v1/tuf/targets/",
             root_bytes, fetcher,
-            "https://registry.test.example", "dgx/releases", "linux-arm64",
+            "https://registry.test.example", "vonk/releases", "linux-arm64",
         ).authorize(
             ReleaseRequest.parse(VALID_RELEASE),
             datetime.now(UTC) + timedelta(seconds=2),
@@ -540,7 +540,7 @@ def test_tuf_cache_is_single_writer_and_second_updater_fails_closed(tmp_path: Pa
         "https://control.test.example/agent/v1/tuf/metadata/",
         "https://control.test.example/agent/v1/tuf/targets/",
         root_bytes, fetcher,
-        "https://registry.test.example", "dgx/releases", "linux-arm64",
+        "https://registry.test.example", "vonk/releases", "linux-arm64",
     )
     first = TUFReleaseTrust(*arguments)
     second = TUFReleaseTrust(*arguments)
@@ -584,7 +584,7 @@ def test_tuf_interrupted_refresh_fails_closed_and_same_new_version_recovers(
         "https://control.test.example/agent/v1/tuf/metadata/",
         "https://control.test.example/agent/v1/tuf/targets/",
         root_bytes, fetcher,
-        "https://registry.test.example", "dgx/releases", "linux-arm64",
+        "https://registry.test.example", "vonk/releases", "linux-arm64",
     )
     request = ReleaseRequest.parse(VALID_RELEASE)
     trust.authorize(request, datetime.now(UTC) + timedelta(seconds=2))
@@ -675,7 +675,7 @@ def test_tuf_error_persistence_receives_same_expired_deadline_and_stops(
         "https://control.test.example/agent/v1/tuf/metadata/",
         "https://control.test.example/agent/v1/tuf/targets/",
         root_bytes, fetcher,
-        "https://registry.test.example", "dgx/releases", "linux-arm64",
+        "https://registry.test.example", "vonk/releases", "linux-arm64",
     )
     request = ReleaseRequest.parse(VALID_RELEASE)
     trust.authorize(request, datetime.now(UTC) + timedelta(seconds=2))
@@ -715,7 +715,7 @@ def test_tuf_deadline_interrupts_signed_metadata_before_persistence(
         "https://control.test.example/agent/v1/tuf/metadata/",
         "https://control.test.example/agent/v1/tuf/targets/",
         root_bytes, fetcher,
-        "https://registry.test.example", "dgx/releases", "linux-arm64",
+        "https://registry.test.example", "vonk/releases", "linux-arm64",
     )
     clock = [0.0]
     writes: list[str] = []
@@ -754,7 +754,7 @@ def test_tuf_deadline_interrupts_constructor_after_root_verification_before_pers
         "https://control.test.example/agent/v1/tuf/metadata/",
         "https://control.test.example/agent/v1/tuf/targets/",
         root_bytes, fetcher,
-        "https://registry.test.example", "dgx/releases", "linux-arm64",
+        "https://registry.test.example", "vonk/releases", "linux-arm64",
     )
     clock = [0.0]
     persisted: list[int] = []
@@ -789,7 +789,7 @@ def test_tuf_deadline_interrupts_target_hash_before_destination_copy(
         "https://control.test.example/agent/v1/tuf/metadata/",
         "https://control.test.example/agent/v1/tuf/targets/",
         root_bytes, fetcher,
-        "https://registry.test.example", "dgx/releases", "linux-arm64",
+        "https://registry.test.example", "vonk/releases", "linux-arm64",
     )
     clock = [0.0]
     destination_opens: list[str] = []
@@ -827,7 +827,7 @@ def test_tuf_deadline_stops_between_local_parse_phases(
         "https://control.test.example/agent/v1/tuf/metadata/",
         "https://control.test.example/agent/v1/tuf/targets/",
         root_bytes, fetcher,
-        "https://registry.test.example", "dgx/releases", "linux-arm64",
+        "https://registry.test.example", "vonk/releases", "linux-arm64",
     )
     clock = [0.0]
     target_memfds: list[str] = []
@@ -880,7 +880,7 @@ def test_tuf_deadline_after_target_memfd_creation_starts_no_download(
         "https://control.test.example/agent/v1/tuf/metadata/",
         "https://control.test.example/agent/v1/tuf/targets/",
         root_bytes, fetcher,
-        "https://registry.test.example", "dgx/releases", "linux-arm64",
+        "https://registry.test.example", "vonk/releases", "linux-arm64",
     )
     clock = [0.0]
     downloads = 0
@@ -890,7 +890,7 @@ def test_tuf_deadline_after_target_memfd_creation_starts_no_download(
 
     def create_then_expire(name, flags):
         descriptor = original_memfd(name, flags)
-        if name == "dgx-tuf-target":
+        if name == "vonk-tuf-target":
             clock[0] = 11.0
         return descriptor
 
@@ -1053,7 +1053,7 @@ def test_tuf_bootstrap_marker_and_authorization_require_successful_fsync(
         "https://control.test.example/agent/v1/tuf/metadata/",
         "https://control.test.example/agent/v1/tuf/targets/",
         root_bytes, fetcher,
-        "https://registry.test.example", "dgx/releases", "linux-arm64",
+        "https://registry.test.example", "vonk/releases", "linux-arm64",
     )
     request = ReleaseRequest.parse(VALID_RELEASE)
     original = update_trust._fsync_cache
@@ -1094,7 +1094,7 @@ def test_tuf_recovers_stale_marker_temp_and_missing_root_pointer(tmp_path: Path)
         "https://control.test.example/agent/v1/tuf/metadata/",
         "https://control.test.example/agent/v1/tuf/targets/",
         root_bytes, fetcher,
-        "https://registry.test.example", "dgx/releases", "linux-arm64",
+        "https://registry.test.example", "vonk/releases", "linux-arm64",
     )
     request = ReleaseRequest.parse(VALID_RELEASE)
     trust.authorize(request, datetime.now(UTC) + timedelta(seconds=2))
@@ -1122,7 +1122,7 @@ def test_tuf_never_bootstrap_rolls_back_when_established_rotated_root_is_lost(
         "https://control.test.example/agent/v1/tuf/metadata/",
         "https://control.test.example/agent/v1/tuf/targets/",
         root_bytes, fetcher,
-        "https://registry.test.example", "dgx/releases", "linux-arm64",
+        "https://registry.test.example", "vonk/releases", "linux-arm64",
     )
     request = ReleaseRequest.parse(VALID_RELEASE)
     trust.authorize(request, datetime.now(UTC) + timedelta(seconds=2))
@@ -1242,7 +1242,7 @@ def _oras_policy(tmp_path: Path) -> tuple[ORASPolicy, Path]:
         files[name] = path
     policy = ORASPolicy(
         registry_origin="https://registry.test.example",
-        repository="dgx/releases",
+        repository="vonk/releases",
         executable=executable,
         executable_sha256=hashlib.sha256(executable.read_bytes()).hexdigest(),
         executable_version="1.3.3",
@@ -1269,7 +1269,7 @@ def test_oras_uses_only_digest_reference_fixed_files_and_fixed_environment(tmp_p
     assert invocation["argv"][0].startswith("/proc/self/fd/")
     assert invocation["argv"][1:] == [
         "pull",
-        "registry.test.example/dgx/releases@sha256:" + "1" * 64,
+        "registry.test.example/vonk/releases@sha256:" + "1" * 64,
         "--output",
         str(staging),
         "--registry-config",
@@ -1663,7 +1663,7 @@ def test_release_install_is_atomic_verified_and_idempotent(tmp_path: Path) -> No
         "https://control.test.example/agent/v1/tuf/metadata/",
         "https://control.test.example/agent/v1/tuf/targets/",
         root_bytes, fetcher,
-        "https://registry.test.example", "dgx/releases", "linux-arm64",
+        "https://registry.test.example", "vonk/releases", "linux-arm64",
     )
     policy, record = _oras_policy(tmp_path)
     releases_root = tmp_path / "release-store"
@@ -3358,7 +3358,7 @@ def test_inspection_observes_same_release_published_while_waiting_for_root_lock(
                 "already-installed",
                 "2" * 64,
                 "sha256:" + "1" * 64,
-                "spark-runtime-v1",
+                "node-runtime-v1",
             ),
         )
     ]

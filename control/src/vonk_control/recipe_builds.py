@@ -122,7 +122,7 @@ class RecipeBuildService:
                 )
             node = session.get(AgentNode, builder_node_id)
             if node is None:
-                raise RecipeBuildError("build.node_unknown", "builder Spark is unknown")
+                raise RecipeBuildError("build.node_unknown", "builder GPU node is unknown")
             _validate_builder(node)
             document = copy.deepcopy(revision.document)
             build = document.get("build")
@@ -347,7 +347,7 @@ class RecipeBuildService:
             ) from error
         node = session.get(AgentNode, plan.builder_node_id, with_for_update=True)
         if node is None:
-            raise RecipeBuildError("build.node_unknown", "builder Spark is unknown")
+            raise RecipeBuildError("build.node_unknown", "builder GPU node is unknown")
         _validate_builder(node)
         if snapshot.stale:
             raise RecipeBuildError(
@@ -463,7 +463,7 @@ class RecipeBuildService:
                 ):
                     raise RecipeBuildError(
                         "build.import_capability_missing",
-                        "a mapped Spark cannot import the exact OCI result",
+                        "a mapped GPU node cannot import the exact OCI result",
                     )
                 targets.append(
                     (
@@ -500,7 +500,7 @@ def _validate_builder(node: AgentNode) -> None:
         or "recipe.build.v1" not in node.capabilities
     ):
         raise RecipeBuildError(
-            "build.node_incompatible", "builder Spark is inactive or incompatible"
+            "build.node_incompatible", "builder GPU node is inactive or incompatible"
         )
 
 

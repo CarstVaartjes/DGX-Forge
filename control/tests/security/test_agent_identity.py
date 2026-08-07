@@ -16,24 +16,24 @@ NODE = "spk_" + "a" * 32
 
 
 def test_agent_scope_identity_must_be_typed_and_verified() -> None:
-    assert agent_identity_from_scope({"dgx.agent_identity": {"node_id": NODE}}) is None
+    assert agent_identity_from_scope({"vonk.agent_identity": {"node_id": NODE}}) is None
     identity = AgentIdentity(NODE, "serial", "fingerprint", True)
-    assert agent_identity_from_scope({"dgx.agent_identity": identity}) == identity
+    assert agent_identity_from_scope({"vonk.agent_identity": identity}) == identity
 
 
 def test_agent_scope_source_must_be_typed_and_bound_to_identity() -> None:
     identity = AgentIdentity(NODE, "serial", "fingerprint", True)
     source = AgentSource(identity=identity, management_address="10.0.0.42")
 
-    assert agent_source_from_scope({"dgx.agent_source": source}) is None
+    assert agent_source_from_scope({"vonk.agent_source": source}) is None
     assert agent_source_from_scope(
-        {"dgx.agent_identity": identity, "dgx.agent_source": source}
+        {"vonk.agent_identity": identity, "vonk.agent_source": source}
     ) == source
-    assert agent_source_from_scope({"dgx.agent_source": "10.0.0.42"}) is None
+    assert agent_source_from_scope({"vonk.agent_source": "10.0.0.42"}) is None
     assert agent_source_from_scope(
         {
-            "dgx.agent_identity": identity,
-            "dgx.agent_source": AgentSource(
+            "vonk.agent_identity": identity,
+            "vonk.agent_source": AgentSource(
                 identity=AgentIdentity(NODE, "other", "other", True),
                 management_address="10.0.0.42",
             ),
@@ -62,12 +62,12 @@ def test_non_secret_caller_on_any_network_cannot_populate_agent_scope() -> None:
     scope = {
         "type": "http", "path": "/ordinary", "client": ("arbitrary-network-peer", 443),
         "headers": (
-            (b"x-dgx-agent-node", NODE.encode()),
-            (b"x-dgx-agent-serial", b"123"),
-            (b"x-dgx-agent-fingerprint", b"fingerprint"),
-            (b"x-dgx-agent-verified", b"1"),
-            (b"x-dgx-agent-proxy-auth", b"wrong-secret"),
-            (b"x-dgx-agent-source", b"10.0.0.42"),
+            (b"x-vonk-agent-node", NODE.encode()),
+            (b"x-vonk-agent-serial", b"123"),
+            (b"x-vonk-agent-fingerprint", b"fingerprint"),
+            (b"x-vonk-agent-verified", b"1"),
+            (b"x-vonk-agent-proxy-auth", b"wrong-secret"),
+            (b"x-vonk-agent-source", b"10.0.0.42"),
         ),
     }
 
@@ -92,12 +92,12 @@ def test_trusted_proxy_builds_one_typed_source_and_strips_forwarded_headers() ->
         "type": "http",
         "path": "/ordinary",
         "headers": (
-            (b"x-dgx-agent-node", NODE.encode()),
-            (b"x-dgx-agent-serial", b"123"),
-            (b"x-dgx-agent-fingerprint", b"fingerprint"),
-            (b"x-dgx-agent-verified", b"1"),
-            (b"x-dgx-agent-proxy-auth", b"p" * 32),
-            (b"x-dgx-agent-source", b"10.0.0.42"),
+            (b"x-vonk-agent-node", NODE.encode()),
+            (b"x-vonk-agent-serial", b"123"),
+            (b"x-vonk-agent-fingerprint", b"fingerprint"),
+            (b"x-vonk-agent-verified", b"1"),
+            (b"x-vonk-agent-proxy-auth", b"p" * 32),
+            (b"x-vonk-agent-source", b"10.0.0.42"),
         ),
     }
 

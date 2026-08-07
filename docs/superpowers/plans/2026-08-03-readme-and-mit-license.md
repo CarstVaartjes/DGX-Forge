@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a concise, accurate public README and the canonical MIT License to DGX-Forge.
+**Goal:** Add a concise, accurate public README and the canonical MIT License to Vonk Forge.
 
-**Architecture:** Keep the repository root as the public entry point: `README.md` provides orientation and links into the existing detailed documentation, while `LICENSE` carries the complete legal terms. Derive commands and claims from checked-in configuration and runbooks, without changing application behavior or contacting DGX Spark nodes.
+**Architecture:** Keep the repository root as the public entry point: `README.md` provides orientation and links into the existing detailed documentation, while `LICENSE` carries the complete legal terms. Derive commands and claims from checked-in configuration and runbooks, without changing application behavior or contacting Vonk Forge GPU nodes.
 
 **Tech Stack:** Markdown, MIT License text, Git, `uv`, Python 3.12+
 
@@ -13,8 +13,8 @@
 - Use `Copyright (c) 2026 Carst Vaartjes` in the MIT License.
 - Keep the README concise and operator-facing.
 - Do not add badges, contribution policy, support promises, or production-readiness claims for unaccepted model definitions.
-- Require Python 3.12 or newer, `uv`, SSH access to the DGX Spark nodes, and Docker on those nodes.
-- Do not exercise or mutate remote DGX Spark nodes during verification.
+- Require Python 3.12 or newer, `uv`, SSH access to the Vonk Forge GPU nodes, and Docker on those nodes.
+- Do not exercise or mutate remote Vonk Forge GPU nodes during verification.
 
 ---
 
@@ -65,13 +65,13 @@ git commit -m "docs: add MIT license"
 - Create: `README.md`
 - Reference: `pyproject.toml`
 - Reference: `docs/architecture-overview.md`
-- Reference: `docs/runbooks/sparkctl.md`
+- Reference: `docs/runbooks/vonkctl.md`
 - Reference: `docs/runbooks/inventory.md`
 - Reference: `docs/runbooks/fabric.md`
 - Reference: `docs/runbooks/runtime-release.md`
 
 **Interfaces:**
-- Consumes: The `LICENSE` file from Task 1, the `spark-profiles` package metadata, the repository launcher `bin/sparkctl`, and existing documentation paths.
+- Consumes: The `LICENSE` file from Task 1, the `vonk-cluster-profiles` package metadata, the repository launcher `bin/vonkctl`, and existing documentation paths.
 - Produces: The root landing page and navigation path into operator documentation.
 
 - [ ] **Step 1: Write the README**
@@ -79,19 +79,19 @@ git commit -m "docs: add MIT license"
 Create `README.md` with these sections and content boundaries:
 
 ```markdown
-# DGX-Forge
+# Vonk Forge
 
-DGX-Forge is a collection of contracts, controllers, runtime adapters, and
+Vonk Forge is a collection of contracts, controllers, runtime adapters, and
 operational tooling for defining, validating, deploying, and operating
-model-serving profiles across NVIDIA DGX Spark systems. The repository keeps
+model-serving profiles across NVIDIA Vonk Forge GPU node systems. The repository keeps
 cluster admission and model maturity fail-closed: a checked-in definition is
 not treated as production-ready until its evidence gates are accepted.
 
 ## Capabilities
 
-- Validate and switch content-addressed cluster profiles with `sparkctl`.
+- Validate and switch content-addressed cluster profiles with `vonkctl`.
 - Collect live node, NVIDIA, Docker, thermal, and storage health over SSH.
-- Configure and validate the direct RoCE/NCCL fabric between Spark nodes.
+- Configure and validate the direct RoCE/NCCL fabric between GPU nodes.
 - Build and operate model-specific runtime adapters, including the checked-in
   DeepSeek Mia and DS4 definitions.
 
@@ -99,8 +99,8 @@ not treated as production-ready until its evidence gates are accepted.
 
 - Python 3.12 or newer
 - [`uv`](https://docs.astral.sh/uv/)
-- SSH access to the DGX Spark hosts configured in `inventory/cluster.toml`
-- Docker installed and accessible on each DGX Spark host
+- SSH access to the Vonk Forge GPU node hosts configured in `inventory/cluster.toml`
+- Docker installed and accessible on each Vonk Forge GPU node host
 
 ## Quick start
 
@@ -111,26 +111,26 @@ uv sync --dev
 uv run pytest
 ```
 
-Inspect the local catalog and controller state without changing either Spark:
+Inspect the local catalog and controller state without changing either GPU node:
 
 ```bash
-uv run --no-project --with jsonschema -- bin/sparkctl catalog --json
-uv run --no-project --with jsonschema -- bin/sparkctl status --json
+uv run --no-project --with jsonschema -- bin/vonkctl catalog --json
+uv run --no-project --with jsonschema -- bin/vonkctl status --json
 ```
 
 Collect fresh, read-only health data from both configured nodes:
 
 ```bash
-uv run --no-project --with jsonschema -- bin/sparkctl nodes status --json
+uv run --no-project --with jsonschema -- bin/vonkctl nodes status --json
 ```
 
-The last command performs live SSH probes. Read the `sparkctl` runbook before
+The last command performs live SSH probes. Read the `vonkctl` runbook before
 running mutating commands such as `prepare` or `switch`.
 
 ## Repository layout
 
 - `bin/` — repository-local command launchers
-- `src/spark_profiles/` — profile catalog, admission, state, health, and CLI
+- `src/cluster_profiles/` — profile catalog, admission, state, health, and CLI
 - `adapters/` — model-specific runtime definitions and lifecycle tooling
 - `config/` — controller, workload, and cluster-profile configuration
 - `nodes/` — node bootstrap, health, fabric, and recovery utilities
@@ -141,7 +141,7 @@ running mutating commands such as `prepare` or `switch`.
 ## Documentation
 
 - [Architecture overview](docs/architecture-overview.md)
-- [`sparkctl` runbook](docs/runbooks/sparkctl.md)
+- [`vonkctl` runbook](docs/runbooks/vonkctl.md)
 - [Inventory runbook](docs/runbooks/inventory.md)
 - [Direct-fabric runbook](docs/runbooks/fabric.md)
 - [Runtime release runbook](docs/runbooks/runtime-release.md)
@@ -154,7 +154,7 @@ Docker group is root-equivalent and should be limited to trusted operators.
 
 ## License
 
-DGX-Forge is available under the [MIT License](LICENSE).
+Vonk Forge is available under the [MIT License](LICENSE).
 ```
 
 Keep model definitions described according to their checked-in maturity; do
@@ -166,8 +166,8 @@ use.
 Run:
 
 ```bash
-for path in LICENSE docs/architecture-overview.md docs/runbooks/sparkctl.md docs/runbooks/inventory.md docs/runbooks/fabric.md docs/runbooks/runtime-release.md; do test -e "$path" || exit 1; done
-for heading in "# DGX-Forge" "## Capabilities" "## Prerequisites" "## Quick start" "## Repository layout" "## Documentation" "## Security" "## License"; do rg -F "$heading" README.md >/dev/null || exit 1; done
+for path in LICENSE docs/architecture-overview.md docs/runbooks/vonkctl.md docs/runbooks/inventory.md docs/runbooks/fabric.md docs/runbooks/runtime-release.md; do test -e "$path" || exit 1; done
+for heading in "# Vonk Forge" "## Capabilities" "## Prerequisites" "## Quick start" "## Repository layout" "## Documentation" "## Security" "## License"; do rg -F "$heading" README.md >/dev/null || exit 1; done
 ```
 
 Expected: both loops exit `0` and produce no output.

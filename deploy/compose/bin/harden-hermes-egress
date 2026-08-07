@@ -12,8 +12,8 @@ mode=${1:---check}
 
 docker_bin=${DOCKER_BIN:-docker}
 iptables_bin=${IPTABLES_BIN:-iptables}
-project=${COMPOSE_PROJECT_NAME:-dgx-forge-control}
-chain=DGX_HERMES_EGRESS
+project=${COMPOSE_PROJECT_NAME:-vonk-forge-control}
+chain=VONK_HERMES_EGRESS
 
 [[ $project =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,62}$ ]] || {
     printf 'ERROR: invalid Compose project name\n' >&2
@@ -91,8 +91,8 @@ add_csv() {
     done
 }
 
-add_csv "${DGX_MANAGEMENT_CIDRS:-10.0.0.0/24}"
-add_csv "${DGX_DIRECT_FABRIC_CIDRS:-}"
+add_csv "${VONK_MANAGEMENT_CIDRS:-10.0.0.0/24}"
+add_csv "${VONK_DIRECT_FABRIC_CIDRS:-}"
 add_destination 169.254.0.0/16
 
 project_output=$("$docker_bin" network ls \

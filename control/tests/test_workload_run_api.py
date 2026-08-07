@@ -12,7 +12,7 @@ from vonk_control.model_resolution import ModelFile, SnapshotEnvelope
 from vonk_control.models import Base, LocalRecipe, RecipeImport
 from vonk_control.registry_resolution import ManifestEnvelope
 from vonk_control.source_bundles import SourceBundleStore
-from vonk_control.sparkrun_workflow import SparkRunWorkflow
+from vonk_control.workload_run_workflow import WorkloadRunWorkflow
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
@@ -36,7 +36,7 @@ def setup(tmp_path):
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
     clock = lambda: datetime(2026, 8, 7, tzinfo=UTC)
-    workflow = SparkRunWorkflow(
+    workflow = WorkloadRunWorkflow(
         sessions, clock=clock, bundles=SourceBundleStore(tmp_path / "bundles")
     )
     codec = TokenCodec(b"s" * 32)
@@ -47,7 +47,7 @@ def setup(tmp_path):
         audits=audits,
         fleet=lambda: {"nodes": []},
         now=lambda: 10,
-        sparkrun=workflow,
+        workload_run=workflow,
     )
     token = codec.issue(Actor("admin", "administrator"), ttl_seconds=100, now=0)
     return TestClient(app), {"Authorization": f"Bearer {token}"}, sessions
@@ -55,9 +55,9 @@ def setup(tmp_path):
 
 def test_preview_does_not_persist_recipe(tmp_path: Path) -> None:
     client, headers, sessions = setup(tmp_path)
-    source = (Path(__file__).parent / "fixtures/sparkrun/minimal-vllm.yaml").read_text()
+    source = (Path(__file__).parent / "fixtures/workload_run/minimal-vllm.yaml").read_text()
     response = client.post(
-        "/api/v1/catalog/imports/sparkrun/preview",
+        "/api/v1/catalog/imports/workload_run/preview",
         headers=headers,
         json={"source_yaml": source},
     )
@@ -78,9 +78,9 @@ def test_preview_does_not_persist_recipe(tmp_path: Path) -> None:
 
 def test_apply_is_idempotent_and_persists_only_redacted_source(tmp_path: Path) -> None:
     client, headers, sessions = setup(tmp_path)
-    source = (Path(__file__).parent / "fixtures/sparkrun/minimal-vllm.yaml").read_text()
+    source = (Path(__file__).parent / "fixtures/workload_run/minimal-vllm.yaml").read_text()
     preview = client.post(
-        "/api/v1/catalog/imports/sparkrun/preview",
+        "/api/v1/catalog/imports/workload_run/preview",
         headers=headers,
         json={"source_yaml": source},
     ).json()
@@ -89,8 +89,8 @@ def test_apply_is_idempotent_and_persists_only_redacted_source(tmp_path: Path) -
         "source_sha256": preview["source_sha256"],
         "report_digest": preview["report_digest"],
     }
-    first = client.post("/api/v1/catalog/imports/sparkrun", headers=headers, json=body)
-    second = client.post("/api/v1/catalog/imports/sparkrun", headers=headers, json=body)
+    first = client.post("/api/v1/catalog/imports/workload_run", headers=headers, json=body)
+    second = client.post("/api/v1/catalog/imports/workload_run", headers=headers, json=body)
 
     assert first.status_code == second.status_code == 201
     assert first.json()["recipe_id"] == second.json()["recipe_id"]
@@ -102,9 +102,9 @@ def test_apply_is_idempotent_and_persists_only_redacted_source(tmp_path: Path) -
 
 def test_apply_rejects_stale_preview_and_operator(tmp_path: Path) -> None:
     client, headers, _sessions = setup(tmp_path)
-    source = (Path(__file__).parent / "fixtures/sparkrun/minimal-vllm.yaml").read_text()
+    source = (Path(__file__).parent / "fixtures/workload_run/minimal-vllm.yaml").read_text()
     stale = client.post(
-        "/api/v1/catalog/imports/sparkrun",
+        "/api/v1/catalog/imports/workload_run",
         headers=headers,
         json={
             "source_yaml": source,
@@ -113,21 +113,21 @@ def test_apply_rejects_stale_preview_and_operator(tmp_path: Path) -> None:
         },
     )
     assert stale.status_code == 409
-    assert stale.json()["code"] == "sparkrun.stale_preview"
+    assert stale.json()["code"] == "workload_run.stale_preview"
 
 
 def test_workflow_resolves_with_verified_metadata_and_overlays(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'resolve.sqlite'}")
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
-    workflow = SparkRunWorkflow(
+    workflow = WorkloadRunWorkflow(
         sessions,
         clock=lambda: datetime(2026, 8, 7, tzinfo=UTC),
         bundles=SourceBundleStore(tmp_path / "bundles"),
         registry=_Registry(),
         models=_Models(),
     )
-    raw = (Path(__file__).parent / "fixtures/sparkrun/minimal-vllm.yaml").read_bytes()
+    raw = (Path(__file__).parent / "fixtures/workload_run/minimal-vllm.yaml").read_bytes()
     preview = workflow.preview(raw)
     applied = workflow.apply(
         raw,

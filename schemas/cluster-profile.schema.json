@@ -7,10 +7,10 @@
     "id": {"type": "string", "minLength": 1},
     "accepted_evidence": {"type": "string", "minLength": 1},
     "placements": {
-      "type": "object", "additionalProperties": false, "required": ["spark1", "spark2"],
+      "type": "object", "additionalProperties": false, "required": ["node1", "node2"],
       "properties": {
-        "spark1": {"$ref": "#/$defs/workloadIds"},
-        "spark2": {"$ref": "#/$defs/workloadIds"}
+        "node1": {"$ref": "#/$defs/workloadIds"},
+        "node2": {"$ref": "#/$defs/workloadIds"}
       }
     },
     "endpoints": {

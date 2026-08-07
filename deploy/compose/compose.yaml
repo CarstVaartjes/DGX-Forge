@@ -2,7 +2,7 @@ include:
   - tailscale/compose.yaml
   - hermes-agent/compose.yaml
 
-name: ${COMPOSE_PROJECT_NAME:-dgx-forge-control}
+name: ${COMPOSE_PROJECT_NAME:-vonk-forge-control}
 
 x-bounded-logging: &bounded-logging
   driver: local
@@ -11,54 +11,54 @@ x-bounded-logging: &bounded-logging
     max-file: "5"
 
 x-selected-generation-environment: &selected-generation-environment
-  DGX_CONTROL_STARTUP_MODE: selected
-  DGX_CONTROL_GENERATION_ID: ${DGX_CONTROL_GENERATION_ID:?set selected generation ID}
-  DGX_DATABASE_REVISION: ${DGX_DATABASE_REVISION:?set selected database revision}
-  DGX_PLATFORM_VERSION: ${DGX_PLATFORM_VERSION:?set released platform version}
-  DGX_PLATFORM_RELEASE_DIGEST: ${DGX_PLATFORM_RELEASE_DIGEST:?set released platform digest}
-  DGX_PLATFORM_BUILD_DIGEST: ${DGX_PLATFORM_BUILD_DIGEST:?set released build digest}
+  VONK_CONTROL_STARTUP_MODE: selected
+  VONK_CONTROL_GENERATION_ID: ${VONK_CONTROL_GENERATION_ID:?set selected generation ID}
+  VONK_DATABASE_REVISION: ${VONK_DATABASE_REVISION:?set selected database revision}
+  VONK_PLATFORM_VERSION: ${VONK_PLATFORM_VERSION:?set released platform version}
+  VONK_PLATFORM_RELEASE_DIGEST: ${VONK_PLATFORM_RELEASE_DIGEST:?set released platform digest}
+  VONK_PLATFORM_BUILD_DIGEST: ${VONK_PLATFORM_BUILD_DIGEST:?set released build digest}
   # This is per selection attempt and must be supplied by the root host updater,
   # never persisted in the site .env file or immutable generation environment.
-  DGX_CONTROL_START_NONCE: ${DGX_CONTROL_START_NONCE:?set fresh selected start nonce}
+  VONK_CONTROL_START_NONCE: ${VONK_CONTROL_START_NONCE:?set fresh selected start nonce}
 
 x-api-environment: &api-environment
   <<: *selected-generation-environment
-  DGX_DEPLOYMENT_MODE: production
-  DGX_DATABASE_URL_FILE: /run/secrets/database-url
-  DGX_TOKEN_SIGNING_KEY_FILE: /run/secrets/token-signing-key
-  DGX_METRICS_TOKEN_FILE: /run/secrets/metrics-token
-  DGX_REPOSITORY_PATH: /repository
-  DGX_STATE_PATH: /state
-  DGX_GIT_SIGNING_KEY_FILE: /run/secrets/git-signing-key
-  DGX_DEPLOYMENT_BRANCH: ${DEPLOYMENT_BRANCH:-deploy}
-  DGX_REQUIRED_CHECKS: ${REQUIRED_CHECKS:-}
-  DGX_GLOBAL_CATALOG_URL: ${DGX_GLOBAL_CATALOG_URL:-https://vonkforge.ai}
-  DGX_MANAGEMENT_CIDRS: ${DGX_MANAGEMENT_CIDRS:?set trusted Spark management CIDRs}
-  DGX_DIRECT_FABRIC_CIDRS: ${DGX_DIRECT_FABRIC_CIDRS:-}
-  DGX_AGENT_ARTIFACT_ROOT: /state/agent-artifacts
-  DGX_AGENT_TUF_METADATA_ROOT: /agent-tuf/metadata
-  DGX_AGENT_TUF_TARGET_ROOT: /agent-tuf/targets
-  DGX_WORKLOAD_TUF_METADATA_ROOT: /workload-tuf/metadata
-  DGX_WORKLOAD_TUF_TARGET_ROOT: /workload-tuf/targets
-  DGX_WORKLOAD_SIGNER_SOCKET: /run/dgx-workload-signer/signer.sock
-  DGX_WORKER_API_TOKEN_FILE: /run/secrets/worker-api-token
-  DGX_ADMIN_GRANT_PRIVATE_KEY_FILE: /run/dgx-api-secrets/admin-grant-private-key.pem
-  DGX_PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE: /run/secrets/package-helper-grant-private-key
-  DGX_PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE: /run/secrets/package-helper-receipt-private-key
-  DGX_CONTROL_IDENTITY_ROOT: /run/dgx-forge/control-identity
-  DGX_CONTROL_PROCESS_IMAGE: ${CONTROL_API_IMAGE:?set a digest-pinned control-api image}
+  VONK_DEPLOYMENT_MODE: production
+  VONK_DATABASE_URL_FILE: /run/secrets/database-url
+  VONK_TOKEN_SIGNING_KEY_FILE: /run/secrets/token-signing-key
+  VONK_METRICS_TOKEN_FILE: /run/secrets/metrics-token
+  VONK_REPOSITORY_PATH: /repository
+  VONK_STATE_PATH: /state
+  VONK_GIT_SIGNING_KEY_FILE: /run/secrets/git-signing-key
+  VONK_DEPLOYMENT_BRANCH: ${DEPLOYMENT_BRANCH:-deploy}
+  VONK_REQUIRED_CHECKS: ${REQUIRED_CHECKS:-}
+  VONK_GLOBAL_CATALOG_URL: ${VONK_GLOBAL_CATALOG_URL:-https://vonkforge.ai}
+  VONK_MANAGEMENT_CIDRS: ${VONK_MANAGEMENT_CIDRS:?set trusted GPU node management CIDRs}
+  VONK_DIRECT_FABRIC_CIDRS: ${VONK_DIRECT_FABRIC_CIDRS:-}
+  VONK_AGENT_ARTIFACT_ROOT: /state/agent-artifacts
+  VONK_AGENT_TUF_METADATA_ROOT: /agent-tuf/metadata
+  VONK_AGENT_TUF_TARGET_ROOT: /agent-tuf/targets
+  VONK_WORKLOAD_TUF_METADATA_ROOT: /workload-tuf/metadata
+  VONK_WORKLOAD_TUF_TARGET_ROOT: /workload-tuf/targets
+  VONK_WORKLOAD_SIGNER_SOCKET: /run/vonk-workload-signer/signer.sock
+  VONK_WORKER_API_TOKEN_FILE: /run/secrets/worker-api-token
+  VONK_ADMIN_GRANT_PRIVATE_KEY_FILE: /run/vonk-api-secrets/admin-grant-private-key.pem
+  VONK_PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE: /run/secrets/package-helper-grant-private-key
+  VONK_PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE: /run/secrets/package-helper-receipt-private-key
+  VONK_CONTROL_IDENTITY_ROOT: /run/vonk-forge/control-identity
+  VONK_CONTROL_PROCESS_IMAGE: ${CONTROL_API_IMAGE:?set a digest-pinned control-api image}
 
 x-worker-environment: &worker-environment
   <<: *selected-generation-environment
-  DGX_DEPLOYMENT_MODE: production
-  DGX_DATABASE_URL_FILE: /run/secrets/database-url
-  DGX_WORKER_API_TOKEN_FILE: /run/secrets/worker-api-token
-  DGX_INTERNAL_API_URL: http://control-api:8000
-  DGX_MANAGEMENT_CIDRS: ${DGX_MANAGEMENT_CIDRS:?set trusted Spark management CIDRs}
-  DGX_DIRECT_FABRIC_CIDRS: ${DGX_DIRECT_FABRIC_CIDRS:-}
-  DGX_UPDATE_SIGNER_SOCKET: /run/dgx-signer/signer.sock
-  DGX_CONTROL_IDENTITY_ROOT: /run/dgx-forge/control-identity
-  DGX_CONTROL_PROCESS_IMAGE: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
+  VONK_DEPLOYMENT_MODE: production
+  VONK_DATABASE_URL_FILE: /run/secrets/database-url
+  VONK_WORKER_API_TOKEN_FILE: /run/secrets/worker-api-token
+  VONK_INTERNAL_API_URL: http://control-api:8000
+  VONK_MANAGEMENT_CIDRS: ${VONK_MANAGEMENT_CIDRS:?set trusted GPU node management CIDRs}
+  VONK_DIRECT_FABRIC_CIDRS: ${VONK_DIRECT_FABRIC_CIDRS:-}
+  VONK_UPDATE_SIGNER_SOCKET: /run/vonk-signer/signer.sock
+  VONK_CONTROL_IDENTITY_ROOT: /run/vonk-forge/control-identity
+  VONK_CONTROL_PROCESS_IMAGE: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
 
 services:
   route-publication-init:
@@ -127,7 +127,7 @@ services:
     cap_drop: [ALL]
     cap_add: [CHOWN, FOWNER]
     security_opt: [no-new-privileges:true]
-    command: [python, -m, dgx_control.runtime_init]
+    command: [python, -m, vonk_control.runtime_init]
     secrets: [admin-grant-private-key]
     volumes:
       - api-admin-grant-runtime:/runtime
@@ -153,7 +153,7 @@ services:
     image: ${CONTROL_API_IMAGE:?set a digest-pinned control-api image}
     restart: unless-stopped
     logging: *bounded-logging
-    command: [python, -m, dgx_control.api]
+    command: [python, -m, vonk_control.api]
     read_only: true
     user: "10001:10001"
     cap_drop: [ALL]
@@ -166,12 +166,12 @@ services:
       - control-state:/state
       - agent-tuf-publication:/agent-tuf
       - workload-tuf-publication:/workload-tuf:ro
-      - workload-signer-socket:/run/dgx-workload-signer:ro
+      - workload-signer-socket:/run/vonk-workload-signer:ro
       - route-publications:/routes:ro
-      - api-admin-grant-runtime:/run/dgx-api-secrets:ro
+      - api-admin-grant-runtime:/run/vonk-api-secrets:ro
       - type: bind
         source: ${CONTROL_IDENTITY_PATH:?set control identity directory path}
-        target: /run/dgx-forge/control-identity
+        target: /run/vonk-forge/control-identity
         read_only: true
         bind:
           create_host_path: false
@@ -182,7 +182,7 @@ services:
       api-admin-grant-init: {condition: service_completed_successfully}
       workload-signer: {condition: service_healthy}
     healthcheck:
-      test: [CMD, python, -m, dgx_control.healthcheck]
+      test: [CMD, python, -m, vonk_control.healthcheck]
       interval: 10s
       timeout: 5s
       retries: 10
@@ -191,7 +191,7 @@ services:
     image: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
     restart: unless-stopped
     logging: *bounded-logging
-    command: [python, -m, dgx_control.worker]
+    command: [python, -m, vonk_control.worker]
     read_only: true
     user: "10001:10001"
     cap_drop: [ALL]
@@ -203,10 +203,10 @@ services:
       - route-publications:/routes
       - litellm-supervisor-state:/supervisor:ro
       - control-state:/state
-      - update-signer-socket:/run/dgx-signer
+      - update-signer-socket:/run/vonk-signer
       - type: bind
         source: ${CONTROL_IDENTITY_PATH:?set control identity directory path}
-        target: /run/dgx-forge/control-identity
+        target: /run/vonk-forge/control-identity
         read_only: true
         bind:
           create_host_path: false
@@ -246,32 +246,32 @@ services:
     image: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
     restart: unless-stopped
     logging: *bounded-logging
-    command: [python, -m, dgx_control.workload_signer]
+    command: [python, -m, vonk_control.workload_signer]
     read_only: true
     user: "10003:10001"
     network_mode: none
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     environment:
-      DGX_WORKLOAD_SIGNER_SOCKET: /run/dgx-workload-signer/signer.sock
-      DGX_WORKLOAD_TUF_METADATA_ROOT: /workload-tuf/metadata
-      DGX_WORKLOAD_TUF_TARGET_ROOT: /workload-tuf/targets
-      DGX_WORKLOAD_REPOSITORY_PATH: /repository
-      DGX_DEPLOYMENT_BRANCH: ${DEPLOYMENT_BRANCH:-deploy}
-      DGX_WORKLOAD_SIGNER_PEER_UID: "10001"
-      DGX_WORKLOAD_RELEASES_KEY_FILE: /run/secrets/workload-releases-key
-      DGX_WORKLOAD_SNAPSHOT_KEY_FILE: /run/secrets/workload-snapshot-key
-      DGX_WORKLOAD_TIMESTAMP_KEY_FILE: /run/secrets/workload-timestamp-key
+      VONK_WORKLOAD_SIGNER_SOCKET: /run/vonk-workload-signer/signer.sock
+      VONK_WORKLOAD_TUF_METADATA_ROOT: /workload-tuf/metadata
+      VONK_WORKLOAD_TUF_TARGET_ROOT: /workload-tuf/targets
+      VONK_WORKLOAD_REPOSITORY_PATH: /repository
+      VONK_DEPLOYMENT_BRANCH: ${DEPLOYMENT_BRANCH:-deploy}
+      VONK_WORKLOAD_SIGNER_PEER_UID: "10001"
+      VONK_WORKLOAD_RELEASES_KEY_FILE: /run/secrets/workload-releases-key
+      VONK_WORKLOAD_SNAPSHOT_KEY_FILE: /run/secrets/workload-snapshot-key
+      VONK_WORKLOAD_TIMESTAMP_KEY_FILE: /run/secrets/workload-timestamp-key
     secrets: [workload-releases-key, workload-snapshot-key, workload-timestamp-key]
     volumes:
       - ${REPOSITORY_PATH:?set repository path}:/repository:ro
       - workload-tuf-publication:/workload-tuf
-      - workload-signer-socket:/run/dgx-workload-signer
+      - workload-signer-socket:/run/vonk-workload-signer
     tmpfs: [/tmp]
     depends_on:
       workload-signer-runtime-init: {condition: service_completed_successfully}
     healthcheck:
-      test: [CMD, python, -c, "import os,stat; assert stat.S_ISSOCK(os.stat('/run/dgx-workload-signer/signer.sock').st_mode)"]
+      test: [CMD, python, -c, "import os,stat; assert stat.S_ISSOCK(os.stat('/run/vonk-workload-signer/signer.sock').st_mode)"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -280,31 +280,31 @@ services:
     image: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
     restart: unless-stopped
     logging: *bounded-logging
-    command: [python, -m, dgx_control.update_signer]
+    command: [python, -m, vonk_control.update_signer]
     read_only: true
     user: "10003:10001"
     network_mode: none
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     environment:
-      DGX_AGENT_UPDATE_AUTHORITY_KEY_FILE: /run/secrets/agent-update-authority-key
-      DGX_ADMIN_GRANT_PUBLIC_KEY_FILE: /run/secrets/admin-grant-public-key
-      DGX_AGENT_TUF_BOOTSTRAP_ROOT_FILE: /run/secrets/agent-tuf-bootstrap-root
-      DGX_AGENT_TUF_METADATA_ROOT: /publication/metadata
-      DGX_AGENT_TUF_TARGET_ROOT: /publication/targets
-      DGX_AGENT_TUF_VERIFIED_METADATA_ROOT: /verifier/metadata
-      DGX_AGENT_TUF_VERIFIED_TARGET_ROOT: /verifier/targets
-      DGX_CONTROL_IDENTITY_ROOT: /control-identity
-      DGX_CONTROL_PROCESS_IMAGE: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
-      DGX_UPDATE_SIGNER_SOCKET: /run/dgx-signer/signer.sock
-      DGX_PLATFORM_VERSION: ${DGX_PLATFORM_VERSION:?set released platform version}
-      DGX_PLATFORM_RELEASE_DIGEST: ${DGX_PLATFORM_RELEASE_DIGEST:?set released platform digest}
-      DGX_PLATFORM_BUILD_DIGEST: ${DGX_PLATFORM_BUILD_DIGEST:?set released build digest}
+      VONK_AGENT_UPDATE_AUTHORITY_KEY_FILE: /run/secrets/agent-update-authority-key
+      VONK_ADMIN_GRANT_PUBLIC_KEY_FILE: /run/secrets/admin-grant-public-key
+      VONK_AGENT_TUF_BOOTSTRAP_ROOT_FILE: /run/secrets/agent-tuf-bootstrap-root
+      VONK_AGENT_TUF_METADATA_ROOT: /publication/metadata
+      VONK_AGENT_TUF_TARGET_ROOT: /publication/targets
+      VONK_AGENT_TUF_VERIFIED_METADATA_ROOT: /verifier/metadata
+      VONK_AGENT_TUF_VERIFIED_TARGET_ROOT: /verifier/targets
+      VONK_CONTROL_IDENTITY_ROOT: /control-identity
+      VONK_CONTROL_PROCESS_IMAGE: ${CONTROL_WORKER_IMAGE:?set a digest-pinned control-worker image}
+      VONK_UPDATE_SIGNER_SOCKET: /run/vonk-signer/signer.sock
+      VONK_PLATFORM_VERSION: ${VONK_PLATFORM_VERSION:?set released platform version}
+      VONK_PLATFORM_RELEASE_DIGEST: ${VONK_PLATFORM_RELEASE_DIGEST:?set released platform digest}
+      VONK_PLATFORM_BUILD_DIGEST: ${VONK_PLATFORM_BUILD_DIGEST:?set released build digest}
     secrets: [agent-update-authority-key, admin-grant-public-key, agent-tuf-bootstrap-root]
     volumes:
       - agent-tuf-publication:/publication:ro
       - signer-tuf-verifier:/verifier
-      - update-signer-socket:/run/dgx-signer
+      - update-signer-socket:/run/vonk-signer
       - type: bind
         source: ${CONTROL_IDENTITY_PATH:?set control identity directory path}
         target: /control-identity
@@ -315,7 +315,7 @@ services:
     depends_on:
       signer-runtime-init: {condition: service_completed_successfully}
     healthcheck:
-      test: [CMD, python, -c, "import os,stat; assert stat.S_ISSOCK(os.stat('/run/dgx-signer/signer.sock').st_mode)"]
+      test: [CMD, python, -c, "import os,stat; assert stat.S_ISSOCK(os.stat('/run/vonk-signer/signer.sock').st_mode)"]
       interval: 5s
       timeout: 3s
       retries: 12
@@ -324,7 +324,7 @@ services:
     image: ${LITELLM_IMAGE:-ghcr.io/berriai/litellm:v1.83.14-stable@sha256:c81eb79cd4333c6cfe374c0ec929110fd23f0ee5f7fd198855a6fbddc77b83ba}
     restart: unless-stopped
     logging: *bounded-logging
-    entrypoint: [/app/dgx-entrypoint]
+    entrypoint: [/app/vonk-entrypoint]
     read_only: true
     user: "10002:10001"
     cap_drop: [ALL]
@@ -337,7 +337,7 @@ services:
     secrets: [litellm-master-key, litellm-upstream-key, litellm-database-url]
     volumes:
       - ./litellm/bootstrap-config.json:/app/bootstrap-config.json:ro
-      - ./litellm/entrypoint.sh:/app/dgx-entrypoint:ro
+      - ./litellm/entrypoint.sh:/app/vonk-entrypoint:ro
       - ./litellm/config_supervisor.py:/app/config-supervisor.py:ro
       - route-publications:/routes:ro
       - litellm-supervisor-state:/supervisor:rw
@@ -402,23 +402,23 @@ services:
     logging: *bounded-logging
     read_only: true
     ports:
-      - target: ${DGX_BACKEND_PORT:-8443}
-        published: "${DGX_BACKEND_PORT:-8443}"
+      - target: ${VONK_BACKEND_PORT:-8443}
+        published: "${VONK_BACKEND_PORT:-8443}"
         host_ip: ${NAS_LAN_IP:?set reserved NAS LAN IP}
         protocol: tcp
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - ./caddy/entrypoint.sh:/usr/local/bin/dgx-caddy-entrypoint:ro
+      - ./caddy/entrypoint.sh:/usr/local/bin/vonk-caddy-entrypoint:ro
       - caddy-data:/data
       - caddy-config:/config
     tmpfs: [/tmp]
-    entrypoint: [/bin/sh, /usr/local/bin/dgx-caddy-entrypoint]
+    entrypoint: [/bin/sh, /usr/local/bin/vonk-caddy-entrypoint]
     environment:
-      DGX_CONTROL_HOSTNAME: ${DGX_CONTROL_HOSTNAME:?set Caddy control hostname}
-      DGX_AGENT_ENROLL_HOSTNAME: ${DGX_AGENT_ENROLL_HOSTNAME:?set Caddy enrollment hostname}
-      DGX_AGENT_HOSTNAME: ${DGX_AGENT_HOSTNAME:?set Caddy agent hostname}
-      DGX_REGISTRY_HOSTNAME: ${DGX_REGISTRY_HOSTNAME:?set Caddy registry hostname}
-      DGX_BACKEND_PORT: ${DGX_BACKEND_PORT:-8443}
+      VONK_CONTROL_HOSTNAME: ${VONK_CONTROL_HOSTNAME:?set Caddy control hostname}
+      VONK_AGENT_ENROLL_HOSTNAME: ${VONK_AGENT_ENROLL_HOSTNAME:?set Caddy enrollment hostname}
+      VONK_AGENT_HOSTNAME: ${VONK_AGENT_HOSTNAME:?set Caddy agent hostname}
+      VONK_REGISTRY_HOSTNAME: ${VONK_REGISTRY_HOSTNAME:?set Caddy registry hostname}
+      VONK_BACKEND_PORT: ${VONK_BACKEND_PORT:-8443}
     secrets: [agent-client-ca, agent-proxy-auth]
     networks: [ingress, agent-proxy, registry-edge, tailnet-web-edge]
     depends_on:

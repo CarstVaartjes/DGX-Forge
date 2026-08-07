@@ -25,7 +25,7 @@ set -euo pipefail
 args=("$@")
 host=''
 for arg in "${args[@]}"; do
-  case "$arg" in dgx-spark-1|dgx-spark-2) host="$arg"; break;; esac
+  case "$arg" in vonk-node-1|vonk-node-2) host="$arg"; break;; esac
 done
 command="${args[*]}"
 if [[ "$command" == *'sha256sum /tmp/configure-direct-fabric'* ]]; then
@@ -57,24 +57,24 @@ run_case() {
   printf '%s\n' "$rc"
 }
 
-rc="$(run_case stage-failure env ROLLBACK_FAIL_STAGE=dgx-spark-2)"
+rc="$(run_case stage-failure env ROLLBACK_FAIL_STAGE=vonk-node-2)"
 test "$rc" -ne 0
-test "$(cat "$fixture_dir/stage-failure.log")" = 'stage:dgx-spark-2'
+test "$(cat "$fixture_dir/stage-failure.log")" = 'stage:vonk-node-2'
 
-rc="$(run_case checksum-failure env ROLLBACK_BAD_CHECKSUM=dgx-spark-2)"
+rc="$(run_case checksum-failure env ROLLBACK_BAD_CHECKSUM=vonk-node-2)"
 test "$rc" -ne 0
-test "$(cat "$fixture_dir/checksum-failure.log")" = $'stage:dgx-spark-2\nchecksum:dgx-spark-2'
+test "$(cat "$fixture_dir/checksum-failure.log")" = $'stage:vonk-node-2\nchecksum:vonk-node-2'
 
-rc="$(run_case worker-failure env ROLLBACK_FAIL_ROLLBACK=dgx-spark-2)"
+rc="$(run_case worker-failure env ROLLBACK_FAIL_ROLLBACK=vonk-node-2)"
 test "$rc" -ne 0
-test "$(cat "$fixture_dir/worker-failure.log")" = $'stage:dgx-spark-2\nchecksum:dgx-spark-2\nrollback:dgx-spark-2'
+test "$(cat "$fixture_dir/worker-failure.log")" = $'stage:vonk-node-2\nchecksum:vonk-node-2\nrollback:vonk-node-2'
 
-rc="$(run_case management-failure env ROLLBACK_FAIL_MANAGEMENT=dgx-spark-2)"
+rc="$(run_case management-failure env ROLLBACK_FAIL_MANAGEMENT=vonk-node-2)"
 test "$rc" -ne 0
-test "$(cat "$fixture_dir/management-failure.log")" = $'stage:dgx-spark-2\nchecksum:dgx-spark-2\nrollback:dgx-spark-2\nmanagement:dgx-spark-2'
+test "$(cat "$fixture_dir/management-failure.log")" = $'stage:vonk-node-2\nchecksum:vonk-node-2\nrollback:vonk-node-2\nmanagement:vonk-node-2'
 
 rc="$(run_case success env)"
 test "$rc" -eq 0
-test "$(cat "$fixture_dir/success.log")" = $'stage:dgx-spark-2\nchecksum:dgx-spark-2\nrollback:dgx-spark-2\nmanagement:dgx-spark-2\nstage:dgx-spark-1\nchecksum:dgx-spark-1\nrollback:dgx-spark-1\nmanagement:dgx-spark-1'
+test "$(cat "$fixture_dir/success.log")" = $'stage:vonk-node-2\nchecksum:vonk-node-2\nrollback:vonk-node-2\nmanagement:vonk-node-2\nstage:vonk-node-1\nchecksum:vonk-node-1\nrollback:vonk-node-1\nmanagement:vonk-node-1'
 
 printf 'fabric rollback hard gate: PASS\n'

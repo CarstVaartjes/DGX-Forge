@@ -107,8 +107,8 @@ def test_production_worker_has_no_cluster_egress_network() -> None:
         "git-signing-key",
         "token-signing-key",
         "metrics-token",
-        "DGX_REPOSITORY_PATH",
-        "DGX_GIT_SIGNING_KEY_FILE",
+        "VONK_REPOSITORY_PATH",
+        "VONK_GIT_SIGNING_KEY_FILE",
     ):
         assert forbidden not in worker
     assert "CONTROL_WORKER_IMAGE" in worker
@@ -123,7 +123,7 @@ def test_built_worker_image_contains_no_direct_transport_executable() -> None:
         check=False,
     ).returncode != 0:
         pytest.skip("Docker daemon is unavailable")
-    image = "dgx-control-worker:test-no-routine-ssh"
+    image = "vonk-control-worker:test-no-routine-ssh"
     build = subprocess.run(
         [
             "docker",

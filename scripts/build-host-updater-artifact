@@ -16,7 +16,7 @@ from pathlib import Path
 
 
 _WHEEL = re.compile(
-    r"(?:dgx_control-0\.1\.0|vonk_cluster_profiles-0\.1\.0|"
+    r"(?:vonk_control-0\.1\.0|vonk_cluster_profiles-0\.1\.0|"
     r"vonk_agent_protocol-2\.1\.0)-py3-none-any\.whl\Z"
 )
 _MAX_WHEEL = 256 * 1024 * 1024
@@ -102,7 +102,7 @@ def main(argv: list[str] | None = None) -> int:
         contents = {path.name: _read(path) for path in paths}
         manifest = _canonical(
             {
-                "entry_point": "dgx-control-offline",
+                "entry_point": "vonk-control-offline",
                 "install_mode": "offline-wheel-closure",
                 "schema_version": 1,
                 "wheels": {

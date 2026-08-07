@@ -76,7 +76,7 @@
   "deployment_profiles": [
     {
       "name": "solo",
-      "description": "One Spark.",
+      "description": "One GPU node.",
       "node_count": 1,
       "strategy": "single",
       "parallelism": {"tensor": 1, "pipeline": 1, "data": 1, "backend": "local"},

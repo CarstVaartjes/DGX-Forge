@@ -32,7 +32,7 @@ PLATFORM_TARGET = "platform/releases/1.2.3/" + "c" * 64 + ".json"
 PROBE_RESULT = {
     "status": "ok",
     "evidence": {
-        "dgx_forge": {
+        "vonk_forge": {
             "schema_version": 1,
             "memory": {"available_bytes": 1_000},
             "storage": {"available_bytes": 2_000},
@@ -56,7 +56,7 @@ def test_probe_persists_bounded_compute_occupancy(
     result = {
         "status": "ok",
         "evidence": {
-            "dgx_forge": {
+            "vonk_forge": {
                 "schema_version": 1,
                 "memory": {"available_bytes": 1_000},
                 "storage": {"available_bytes": 2_000},
@@ -83,7 +83,7 @@ def test_probe_total_capacity_must_be_bounded_and_cover_available(
     result = {
         "status": "ok",
         "evidence": {
-            "dgx_forge": {
+            "vonk_forge": {
                 "schema_version": 1,
                 "memory": {"available_bytes": 1_000, "total_bytes": total},
                 "storage": {"available_bytes": 2_000, "total_bytes": 8_000},
@@ -189,7 +189,7 @@ def update_payload() -> dict[str, object]:
         "artifact": {
             "architecture": "linux-arm64",
             "oci_manifest_digest": "sha256:" + "a" * 64,
-            "payload_name": "dgx-agent",
+            "payload_name": "vonk-agent",
             "payload_sha256": "b" * 64,
             "payload_size": 4096,
         },
@@ -932,7 +932,7 @@ def test_control_rejects_success_for_unsatisfied_zero_compute_gate(
     claim = jobs.claim(NODE_A, "serial-a", 30)
     assert claim is not None
     result = deepcopy(PROBE_RESULT)
-    result["evidence"]["dgx_forge"]["accelerator"][
+    result["evidence"]["vonk_forge"]["accelerator"][
         "active_nvidia_compute_processes"
     ] = count
 

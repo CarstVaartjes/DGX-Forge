@@ -1,4 +1,4 @@
-"""Content-addressed catalog for declarative Spark workload profiles."""
+"""Content-addressed catalog for declarative GPU node workload profiles."""
 
 from __future__ import annotations
 

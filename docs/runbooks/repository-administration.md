@@ -6,26 +6,26 @@ and the release projection described below. PostgreSQL is authoritative for
 local recipe catalog entries, immutable recipe revisions, imports,
 installations, placements, and runs; those records do not require a commit,
 branch, or pull request and remain available when the remote is unreachable.
-Use the catalog/API runbooks for recipe authoring and SparkRun import. Never
+Use the catalog/API runbooks for recipe authoring and WorkloadRun import. Never
 turn a recipe operation into a Git change merely to satisfy this runbook.
 
 ## Inspect and propose
 
-Use either the web application or `sparkctl admin`. Both call `/api/v1` and
+Use either the web application or `vonkctl admin`. Both call `/api/v1` and
 produce the same canonical proposal bytes. Every proposal pins a full 40-hex
 base commit, operates only on allowlisted typed documents, and shows validation,
 affected targets, and a diff before submission.
 
 ```bash
-sparkctl admin fleet --json
-sparkctl admin models --json
-sparkctl admin profiles --json
-sparkctl admin proposal --file change.json --json
+vonkctl admin fleet --json
+vonkctl admin models --json
+vonkctl admin profiles --json
+vonkctl admin proposal --file change.json --json
 ```
 
 Before the first real release, an administrator may explicitly submit a signed,
 audited direct commit. Enabling `release-pr-only` at the first release is a
-one-way transition. From then on, submission creates `dgx-control/<digest>` and
+one-way transition. From then on, submission creates `vonk-control/<digest>` and
 a pull request; it never force-pushes or deploys an unreviewed branch.
 
 ## Reconcile
@@ -77,5 +77,5 @@ failed probe, changed checkout, or invalid definition selects the empty
 bootstrap config. On a DHCP address change, maintenance is live before the
 replacement address is probed.
 
-Never use `dgx-control-offline` for ordinary repository administration. Its
+Never use `vonk-control-offline` for ordinary repository administration. Its
 exclusive lock and stopped-service proof are only for bootstrap and recovery.

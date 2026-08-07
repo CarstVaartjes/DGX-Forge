@@ -17,7 +17,7 @@
     "provisioners": [
       {
         "type": "JWK",
-        "name": "dgx-forge-agent",
+        "name": "vonk-forge-agent",
         "key": {
           "use": "sig",
           "kty": "EC",

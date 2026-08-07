@@ -2,12 +2,12 @@ import pytest
 from vonk_control.import_report import ImportReportBuilder
 from vonk_control.runtime_compilers.common import RuntimeCompileError
 from vonk_control.runtime_compilers.vllm import compile_vllm
-from vonk_control.sparkrun_source import parse_sparkrun_yaml
+from vonk_control.workload_run_source import parse_workload_run_yaml
 
 
 def parsed(command: str):
     raw = f"model: Qwen/Qwen3-1.7B\nmodel_revision: 0123456789abcdef0123456789abcdef01234567\nruntime: vllm\ncontainer: ghcr.io/demo/vllm:1\ndefaults:\n  max_len: 32768\ncommand: {command!r}\n".encode()
-    return parse_sparkrun_yaml(raw)
+    return parse_workload_run_yaml(raw)
 
 
 def test_vllm_command_becomes_typed_arguments() -> None:

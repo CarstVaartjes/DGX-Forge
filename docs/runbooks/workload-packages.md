@@ -17,7 +17,7 @@ new auxiliary component does not require a `vonk-forge` platform release.
 
 The NAS is the administration and authority host. Its Docker services (the
 API/worker, PostgreSQL, Caddy, LiteLLM, Hermes, Prometheus, and Grafana) are
-separate services and are updated by the host-local platform updater. Sparks
+separate services and are updated by the host-local platform updater. GPU nodes
 run the outbound mTLS agent and keep large model payloads in their local
 content-addressed stores. Payloads are fetched directly from the declared,
 authenticated Git, HTTPS, OCI, or other approved provider; the NAS is not a
@@ -29,10 +29,10 @@ Keep the two release planes independent:
 
 | Plane | Authority | Updates | Does not update |
 | --- | --- | --- | --- |
-| Platform | platform TUF and the signed platform manifest | NAS Docker generations, the Spark agent/supervisor, protocol and privileged helper ABI | model IDs, checkpoints, adapters, or ordinary runtime releases |
+| Platform | platform TUF and the signed platform manifest | NAS Docker generations, the GPU node agent/supervisor, protocol and privileged helper ABI | model IDs, checkpoints, adapters, or ordinary runtime releases |
 | Workload | NAS-admin Git/TUF repository and signed workload locks | families, releases, adapters, images, environments, checkpoints, configuration, and deployment plans | the agent, supervisor, platform services, or SSH configuration |
 
-The Spark agent contains a stable, typed package ABI and safe operation
+The GPU node agent contains a stable, typed package ABI and safe operation
 vocabulary. It must not contain a catalog of model names or adapter versions.
 The workload trust root authorizes immutable release-lock targets; node policy
 authorizes only the ABI operations and declared capabilities. The normal path
@@ -63,15 +63,15 @@ The CLI and web Admin → Workload packages expose the same API. Commands are
 plan-first and return a digest that an administrator must review.
 
 ```bash
-# Discover and inspect signed candidates (no Spark mutation)
-sparkctl admin packages candidates list --family synthetic-stack --json
-sparkctl admin packages candidates get --candidate CANDIDATE_UUID --json
+# Discover and inspect signed candidates (no GPU node mutation)
+vonkctl admin packages candidates list --family synthetic-stack --json
+vonkctl admin packages candidates get --candidate CANDIDATE_UUID --json
 
 # Validate and preview promotion. Keep the returned plan digest.
-sparkctl admin packages validation-preview --candidate CANDIDATE_UUID --json
-sparkctl admin packages validate --candidate CANDIDATE_UUID \
+vonkctl admin packages validation-preview --candidate CANDIDATE_UUID --json
+vonkctl admin packages validate --candidate CANDIDATE_UUID \
   --plan-digest VALIDATION_PLAN_DIGEST --json
-sparkctl admin packages promote \
+vonkctl admin packages promote \
   --candidate CANDIDATE_UUID \
   --preview-digest sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
   --json
@@ -83,7 +83,7 @@ Promotion is rejected when the lock is unsigned, unapproved, malformed,
 revoked, incompatible, or not the exact candidate selected by the signed
 review. A successful promotion records the immutable release digest, source
 commit, validation evidence, approver, and audit/job links. It does not fetch
-model weights to the NAS or alter a Spark.
+model weights to the NAS or alter a GPU node.
 
 ## Rollout and progress
 
@@ -92,21 +92,21 @@ The plan shows canary nodes, batches, offline nodes, storage/download
 requirements, compatibility, and the predecessor release.
 
 ```bash
-sparkctl admin deployments rollout-preview \
+vonkctl admin deployments rollout-preview \
   --deployment synthetic-canary --json
-sparkctl admin deployments rollout \
+vonkctl admin deployments rollout \
   --deployment synthetic-canary \
   --plan-digest sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb \
   --json
 
-sparkctl admin deployments status --deployment synthetic-canary \
+vonkctl admin deployments status --deployment synthetic-canary \
   --rollout ROLLOUT_ID --json
-sparkctl admin deployments repair-preview --deployment synthetic-canary --json
-sparkctl admin deployments repair --deployment synthetic-canary \
+vonkctl admin deployments repair-preview --deployment synthetic-canary --json
+vonkctl admin deployments repair --deployment synthetic-canary \
   --plan-digest REPAIR_PLAN_DIGEST --json
 ```
 
-The control plane queues typed package operations over each Spark's outbound
+The control plane queues typed package operations over each GPU node's outbound
 mTLS channel. A node resolves the signed lock, reserves storage, acquires
 components directly from their providers, verifies every digest and size,
 materializes a new immutable generation, then performs prepare, activate, and
@@ -124,20 +124,20 @@ generation.
 ## Rollback, repair, and Garbage collection
 
 ```bash
-sparkctl admin deployments rollback-preview \
+vonkctl admin deployments rollback-preview \
   --deployment synthetic-canary --rollout ROLLOUT_ID --json
-sparkctl admin deployments rollback \
+vonkctl admin deployments rollback \
   --deployment synthetic-canary \
   --rollout ROLLOUT_ID \
   --plan-digest ROLLBACK_PLAN_DIGEST \
   --json
 
-sparkctl admin packages gc-preview --json
-sparkctl admin packages gc --plan-digest GC_PLAN_DIGEST --json
+vonkctl admin packages gc-preview --json
+vonkctl admin packages gc --plan-digest GC_PLAN_DIGEST --json
 ```
 
 Rollback is possible offline when the predecessor generation and its verified
-objects are present on the Spark. Stop network access only after recording the
+objects are present on the GPU node. Stop network access only after recording the
 release and generation digests; the agent must not silently re-download or
 fall back to a NAS copy. Repair reconstructs missing indexes from verified
 objects and refuses path traversal, symlink substitution, digest mismatch, or
@@ -156,28 +156,28 @@ disposition; it does not expose a token or mark a partial download complete.
 Downloads use bounded, resumable ranges with durable progress, reservation,
 atomic promotion, cancellation, and restart recovery. A failed or cancelled
 transfer remains outside the active generation until its digest and size are
-verified. Providers are contacted by Sparks through their authenticated
+verified. Providers are contacted by GPU nodes through their authenticated
 outbound route; the NAS control worker does not proxy arbitrary URLs.
 
-## NAS platform updates and Spark skew
+## NAS platform updates and GPU node skew
 
-NAS Docker services and Spark worker code have separate update actions. When
+NAS Docker services and GPU node worker code have separate update actions. When
 the NAS reports a newer compatible `vonk-forge` platform release than one or more
-Sparks, the web Admin → Updates page and `sparkctl admin updates skew --json`
+GPU nodes, the web Admin → Updates page and `vonkctl admin updates skew --json`
 show the exact versions, affected nodes, signed target digest, and a
 topology-aware fan-out preview. The operator must explicitly confirm the
-signed `agent.update` command for each eligible Spark (canary first, then the
+signed `agent.update` command for each eligible GPU node (canary first, then the
 remaining nodes). The command uses the outbound mTLS agent channel and A/B
 supervisor; it does not use SSH.
 
 ```bash
-sparkctl admin updates skew --json
-sparkctl admin updates plan --target-version 2.0.0 --json
-sparkctl admin updates apply --plan-digest PLAN_DIGEST --json
-sparkctl admin updates status --json
+vonkctl admin updates skew --json
+vonkctl admin updates plan --target-version 2.0.0 --json
+vonkctl admin updates apply --plan-digest PLAN_DIGEST --json
+vonkctl admin updates status --json
 ```
 
-An older, compatible Spark agent may continue serving ordinary workload
+An older, compatible GPU node agent may continue serving ordinary workload
 releases while the operator reviews the skew prompt. A workload package never
 triggers this prompt: only a platform capability/protocol/agent update does.
 If a platform update is required for a package's genuinely new privileged ABI,
@@ -207,7 +207,7 @@ The first release requires both independent acceptance sets:
 The workload evidence must explicitly record that no SSH or `agent.update` call
 occurred and distinguish simulated from physical evidence. The platform
 release verifier combines these reports with platform update evidence; it does
-not treat a simulator as physical Spark acceptance.
+not treat a simulator as physical GPU node acceptance.
 
 ```bash
 scripts/accept-workload-packages --mode simulated --json
@@ -221,5 +221,5 @@ artifact. Hosted CI stores the two canonical outputs as
 `workload-package-acceptance.json` and
 `workload-package-failure-matrix.json`; the release verifier checks their
 content digests instead of trusting an unrecorded console result. Do not
-synthesize physical hardware evidence; record it later with the approved Spark
+synthesize physical hardware evidence; record it later with the approved GPU node
 inventory procedure.

@@ -191,7 +191,7 @@ class PythonEnvironmentSpec:
             or recipe.get("network") is not False
             or not isinstance(build_identity, str)
             or _PLATFORM.fullmatch(build_identity) is None
-            or build_identity != "dgx-workload-build"
+            or build_identity != "vonk-workload-build"
         ):
             raise PythonEnvironmentError(
                 "Python build recipe must use a networkless build identity"
@@ -441,14 +441,14 @@ def _environment_entries(
     entries: dict[str, tuple[bytes, int]] = {
         "pyvenv.cfg": (
             (
-                "dgx-forge-immutable = true\n"
+                "vonk-forge-immutable = true\n"
                 f"interpreter-digest = sha256:{spec.interpreter_digest}\n"
                 f"platform = {spec.platform}\n"
             ).encode(),
             0o444,
         ),
-        "share/dgx-forge/pylock.toml": (lock_bytes, 0o444),
-        "share/dgx-forge/derivation.json": (
+        "share/vonk-forge/pylock.toml": (lock_bytes, 0o444),
+        "share/vonk-forge/derivation.json": (
             _canonical(spec.identity_document()),
             0o444,
         ),

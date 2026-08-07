@@ -16,7 +16,7 @@
 - [x] Attach hash/image/topology-bound publisher test evidence and export a target-namespace-normalized metadata-only envelope.
 - [x] Keep OAuth entirely in the vonkforge.ai browser workspace; store no global access or refresh token on the NAS.
 - [x] Enforce Tailscale ingress and static-Caddy/dynamic-LiteLLM responsibility boundaries.
-- [ ] Complete hosted Railway OAuth acceptance and physical single-/multi-Spark soak evidence; these require external provider credentials and hardware.
+- [ ] Complete hosted Railway OAuth acceptance and physical single-/multi-GPU node soak evidence; these require external provider credentials and hardware.
 
 Tasks 4 and the token-bearing parts of Task 5 below are retained as historical design notes and are superseded by the browser-mediated export implemented above. They must not be implemented.
 
@@ -51,10 +51,10 @@ Tasks 4 and the token-bearing parts of Task 5 below are retained as historical d
 ## Task 2: Generate a bounded local global-catalog client
 
 **Files (`vonk-forge`):**
-- Create: `control/src/dgx_control/global_catalog_client.py`
-- Create: `control/src/dgx_control/global_catalog_models.py`
+- Create: `control/src/vonk_control/global_catalog_client.py`
+- Create: `control/src/vonk_control/global_catalog_models.py`
 - Create: `control/tests/test_global_catalog_client.py`
-- Modify: `control/src/dgx_control/settings.py`
+- Modify: `control/src/vonk_control/settings.py`
 - Modify: `control/pyproject.toml`
 
 - [ ] Write failing tests for list/detail/revision fetch, ETag/304, pagination, problem bodies, timeouts, Retry-After, body limits, TLS verification, redirects, offline operation, and base URL allowlisting.
@@ -68,12 +68,12 @@ Tasks 4 and the token-bearing parts of Task 5 below are retained as historical d
 ## Task 3: Import global revisions into the authoritative local catalog
 
 **Files (`vonk-forge`):**
-- Create: `control/src/dgx_control/global_import.py`
-- Create: `control/src/dgx_control/global_catalog_api.py`
+- Create: `control/src/vonk_control/global_import.py`
+- Create: `control/src/vonk_control/global_catalog_api.py`
 - Create: `control/tests/test_global_import.py`
 - Modify: `control/web/src/pages/catalog.tsx`
 - Modify: `control/web/src/pages/catalog.test.tsx`
-- Modify: `control/src/dgx_control/api.py`
+- Modify: `control/src/vonk_control/api.py`
 - Modify: `control/web/src/api/client.ts`
 - Modify: `control/web/src/app.tsx`
 
@@ -95,10 +95,10 @@ Tasks 4 and the token-bearing parts of Task 5 below are retained as historical d
 - Create: `web/src/pages/device-approval.test.tsx`
 
 **Files (`vonk-forge`):**
-- Create: `control/src/dgx_control/global_auth.py`
-- Create: `control/src/dgx_control/secrets.py`
+- Create: `control/src/vonk_control/global_auth.py`
+- Create: `control/src/vonk_control/secrets.py`
 - Create: `control/tests/test_global_auth.py`
-- Modify: `control/src/dgx_control/settings.py`
+- Modify: `control/src/vonk_control/settings.py`
 
 - [ ] Write global tests first for device code issuance, user code entropy, OAuth browser approval, publisher/scope selection, interval enforcement, expiry, denial, one-time exchange, refresh rotation/reuse detection, revocation, and no client secret for local installs.
 - [ ] Implement RFC 8628-style endpoints with scopes `draft:read`, `draft:write`, `publish`, and publisher namespace binding. Access tokens are short-lived and opaque; refresh tokens are hashed server-side.
@@ -110,12 +110,12 @@ Tasks 4 and the token-bearing parts of Task 5 below are retained as historical d
 ## Task 5: SUPERSEDED — browser upload replaces token-bearing local publishing
 
 **Files (`vonk-forge`):**
-- Create: `control/src/dgx_control/global_publishing.py`
-- Create: `control/src/dgx_control/test_evidence.py`
+- Create: `control/src/vonk_control/global_publishing.py`
+- Create: `control/src/vonk_control/test_evidence.py`
 - Create: `control/tests/test_global_publishing.py`
 - Create: `control/web/src/pages/publish-recipe.tsx`
 - Create: `control/web/src/pages/publish-recipe.test.tsx`
-- Modify: `control/src/dgx_control/global_catalog_api.py`
+- Modify: `control/src/vonk_control/global_catalog_api.py`
 - Modify: `control/web/src/api/client.ts`
 
 - [ ] Write failing tests for untested recipe, mutable image tag, private/unreachable image, wrong publisher, draft create/update, ETag conflict, idempotent retry, validation poll, registry failure, explicit publish, immutable result, token loss, and global outage.
@@ -142,9 +142,9 @@ Tasks 4 and the token-bearing parts of Task 5 below are retained as historical d
 - [ ] Run the security test; confirm current Compose violates or lacks the asserted final contract.
 - [ ] Make Tailscale the documented/default Compose profile, use auth-key or OAuth-client secret files, keep state in a dedicated volume, advertise no subnet routes by default, and fail readiness when the expected tailnet identity/certificate is absent.
 - [ ] Configure static Caddy routes for admin UI/API and `/v1/*` to LiteLLM, security headers, request limits, WebSocket/SSE support where needed, and trusted-proxy rules limited to the sidecar.
-- [ ] Verify Sparks remain management-LAN-only and do not need Tailscale; LiteLLM's egress network alone can reach validated Spark service endpoints.
+- [ ] Verify GPU nodes remain management-LAN-only and do not need Tailscale; LiteLLM's egress network alone can reach validated GPU node service endpoints.
 - [ ] Document onboarding, ACL examples, key rotation, logout/re-auth, NAS reboot, and recovery without opening a LAN port.
-- [ ] Run network namespace scans from tailnet, LAN, container networks, and a Spark simulator.
+- [ ] Run network namespace scans from tailnet, LAN, container networks, and a GPU node simulator.
 - [ ] Commit: `feat(access): make Tailscale the default ingress`
 
 ## Task 7: Prove static Caddy and dynamic LiteLLM responsibilities
@@ -161,7 +161,7 @@ Tasks 4 and the token-bearing parts of Task 5 below are retained as historical d
 - [ ] Run the test and confirm expected failure until admission/routing implementation is present.
 - [ ] Capture route generation lineage: recipe revision, run generation, node identity, entrypoint, health evidence timestamp, LiteLLM candidate hash, validation result, active hash, and withdrawal reason.
 - [ ] Test malformed candidate, LiteLLM reload failure, controller restart, stale agent lease, split multi-node readiness, and Caddy restart. The last validated config remains active only while its run leases remain valid.
-- [ ] Document the request path: Tailscale -> Caddy -> LiteLLM -> one Spark entrypoint -> Spark fabric workers.
+- [ ] Document the request path: Tailscale -> Caddy -> LiteLLM -> one GPU node entrypoint -> GPU node fabric workers.
 - [ ] Commit: `test(routing): prove controller-managed LiteLLM routes`
 
 ## Task 8: Execute the complete staging acceptance matrix
@@ -176,10 +176,10 @@ Tasks 4 and the token-bearing parts of Task 5 below are retained as historical d
 - Create: `docs/audits/vonk-forge-release-evidence.md`
 - Modify: `README.md`
 
-- [ ] Write one traceable acceptance scenario covering: local authoring; SparkRun import disposition report; local image digest and recipe test; global device login; private draft; validation; immutable publication; anonymous discovery on a second install; local import; disk planning/install; memory/topology planning; multi-node start; route publication; inference through Tailscale; stop; route withdrawal; offline rerun from local state.
-- [ ] Add negative scenarios for malicious SparkRun fields, insufficient disk, insufficient memory, mismatched nodes, missing ARM64 image, unreachable registry, revoked OAuth token, global outage, lost Spark, stale readiness, and failed LiteLLM candidate.
-- [ ] Use Railway staging and disposable local PostgreSQL databases first, then repeat workload-critical phases on physical DGX Sparks. Never point tests at production catalog data or production publisher tokens.
-- [ ] Record exact repo commits, contract release/hash, migration heads, container digests, `.deb` digest/signature, Spark firmware/driver/runtime, recipe revision, image/weight digests, node counts, route hashes, and backup/restore evidence.
+- [ ] Write one traceable acceptance scenario covering: local authoring; WorkloadRun import disposition report; local image digest and recipe test; global device login; private draft; validation; immutable publication; anonymous discovery on a second install; local import; disk planning/install; memory/topology planning; multi-node start; route publication; inference through Tailscale; stop; route withdrawal; offline rerun from local state.
+- [ ] Add negative scenarios for malicious WorkloadRun fields, insufficient disk, insufficient memory, mismatched nodes, missing ARM64 image, unreachable registry, revoked OAuth token, global outage, lost GPU node, stale readiness, and failed LiteLLM candidate.
+- [ ] Use Railway staging and disposable local PostgreSQL databases first, then repeat workload-critical phases on physical Vonk Forge GPU nodes. Never point tests at production catalog data or production publisher tokens.
+- [ ] Record exact repo commits, contract release/hash, migration heads, container digests, `.deb` digest/signature, GPU node firmware/driver/runtime, recipe revision, image/weight digests, node counts, route hashes, and backup/restore evidence.
 - [ ] Map every architecture-spec requirement to an automated test or named manual/physical artifact. Any unmapped requirement blocks the release.
 - [ ] Run full suites in both repositories, `git diff --check`, dependency/security scans, database restore drills, and 24-hour Rust-agent/multi-node soak.
 - [ ] Commit separately: `test: add global catalog staging acceptance` and `test: complete Vonk Forge end-to-end acceptance`.

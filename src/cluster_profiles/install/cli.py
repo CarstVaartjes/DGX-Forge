@@ -1,4 +1,4 @@
-"""Command-line interface for resumable per-Spark installation."""
+"""Command-line interface for resumable per-node installation."""
 
 from __future__ import annotations
 
@@ -37,7 +37,7 @@ def _node_id() -> NodeId:
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="spark-install")
+    parser = argparse.ArgumentParser(prog="node-install")
     commands = parser.add_subparsers(dest="scope", required=True)
     node = commands.add_parser("node")
     node_commands = node.add_subparsers(dest="command", required=True)
@@ -122,7 +122,7 @@ def build_dependencies(root: Path, arguments: argparse.Namespace) -> CliDependen
     from .remote import OpenSshInstallTransport
     from .steps import ProductionStepOptions, build_production_handlers
 
-    state_root = root / ".state" / "spark-install"
+    state_root = root / ".state" / "node-install"
     clock = lambda: datetime.now(UTC)
     store = InstallStore(state_root / "journals", clock=clock)
     transport = OpenSshInstallTransport()
@@ -220,5 +220,5 @@ def main(
             return 3
         return 3 if journal.state == "failed" else 0
     except (CliUsageError, ValueError, InstallConflict, InstallStoreError, InvalidInstallationTransition) as error:
-        print(f"spark-install: {error}", file=sys.stderr)
+        print(f"node-install: {error}", file=sys.stderr)
         return 2

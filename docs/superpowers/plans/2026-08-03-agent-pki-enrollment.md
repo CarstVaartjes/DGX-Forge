@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Enroll immutable Spark identities with single-use grants and issue, rotate, and revoke short-lived mTLS certificates through a replaceable CA provider.
+**Goal:** Enroll immutable GPU node identities with single-use grants and issue, rotate, and revoke short-lived mTLS certificates through a replaceable CA provider.
 
 **Architecture:** A provider interface isolates PKI implementation. The built-in provider signs from a protected intermediate for zero-dependency bootstrap/development, while a separate Smallstep `step-ca` container is the recommended production provider; both keep the root offline. Caddy authenticates established agents and forwards a stripped, verified identity to private API routes.
 
@@ -21,7 +21,7 @@
 ### Task 1: CA provider and built-in issuer
 
 **Files:**
-- Create: `control/src/dgx_control/pki.py`
+- Create: `control/src/vonk_control/pki.py`
 - Modify: `control/pyproject.toml`
 - Modify: `control/uv.lock`
 - Test: `control/tests/test_pki.py`
@@ -44,34 +44,34 @@ def test_issued_certificate_is_short_lived_and_node_bound(authority, public_key,
 - [ ] **Step 2: Run and observe missing provider**
 
 Run: `uv run --project control pytest control/tests/test_pki.py -v`
-Expected: FAIL importing `dgx_control.pki`.
+Expected: FAIL importing `vonk_control.pki`.
 
 - [ ] **Step 3: Implement provider and strict built-in issuer**
 
 Pin `cryptography`. Require Ed25519 intermediate key/certificate files to be
 regular non-symlinks with matching public keys, `CA=true`, path length zero,
 and at least seven days remaining. Issue 24-hour client-auth-only certificates
-whose SAN URI is `spiffe://dgx-forge.local/node/<node_id>`. Reject caller-supplied
+whose SAN URI is `spiffe://vonk-forge.local/node/<node_id>`. Reject caller-supplied
 subjects/SANs and public keys other than Ed25519.
 
 - [ ] **Step 4: Run PKI tests and static import smoke**
 
-Run: `uv run --project control pytest control/tests/test_pki.py -v && uv run --project control python -c 'from dgx_control.pki import BuiltinCertificateAuthority'`
+Run: `uv run --project control pytest control/tests/test_pki.py -v && uv run --project control python -c 'from vonk_control.pki import BuiltinCertificateAuthority'`
 Expected: PASS.
 
 - [ ] **Step 5: Commit provider**
 
 ```bash
-git add control/pyproject.toml control/uv.lock control/src/dgx_control/pki.py control/tests/test_pki.py
-git commit -m "feat: issue short-lived Spark agent certificates"
+git add control/pyproject.toml control/uv.lock control/src/vonk_control/pki.py control/tests/test_pki.py
+git commit -m "feat: issue short-lived GPU node agent certificates"
 ```
 
 ### Task 2: Enrollment grant service
 
 **Files:**
-- Modify: `control/src/dgx_control/models.py`
+- Modify: `control/src/vonk_control/models.py`
 - Create: `control/migrations/versions/0004_agent_enrollment.py`
-- Create: `control/src/dgx_control/enrollment.py`
+- Create: `control/src/vonk_control/enrollment.py`
 - Test: `control/tests/test_enrollment.py`
 
 **Interfaces:**
@@ -111,16 +111,16 @@ Expected: PASS including simultaneous replay where exactly one submit succeeds.
 - [ ] **Step 5: Commit enrollment service**
 
 ```bash
-git add control/src/dgx_control/models.py control/migrations/versions/0004_agent_enrollment.py control/src/dgx_control/enrollment.py control/tests/test_enrollment.py
-git commit -m "feat: enroll immutable Spark agent identities"
+git add control/src/vonk_control/models.py control/migrations/versions/0004_agent_enrollment.py control/src/vonk_control/enrollment.py control/tests/test_enrollment.py
+git commit -m "feat: enroll immutable GPU node agent identities"
 ```
 
 ### Task 3: Enrollment and agent-authenticated API routes
 
 **Files:**
-- Create: `control/src/dgx_control/agent_api.py`
-- Modify: `control/src/dgx_control/api.py`
-- Modify: `control/src/dgx_control/auth.py`
+- Create: `control/src/vonk_control/agent_api.py`
+- Modify: `control/src/vonk_control/api.py`
+- Modify: `control/src/vonk_control/auth.py`
 - Test: `control/tests/test_agent_api.py`
 - Test: `control/tests/security/test_agent_identity.py`
 
@@ -132,7 +132,7 @@ git commit -m "feat: enroll immutable Spark agent identities"
 
 ```python
 def test_spoofed_agent_header_is_rejected(client) -> None:
-    response = client.post("/agent/v1/claim", headers={"x-dgx-agent-node": NODE_ID})
+    response = client.post("/agent/v1/claim", headers={"x-vonk-agent-node": NODE_ID})
     assert response.status_code == 401
 
 def test_verified_identity_cannot_claim_other_node(agent_client) -> None:
@@ -165,8 +165,8 @@ Expected: PASS.
 - [ ] **Step 5: Commit APIs**
 
 ```bash
-git add control/src/dgx_control/agent_api.py control/src/dgx_control/api.py control/src/dgx_control/auth.py control/tests/test_agent_api.py control/tests/security/test_agent_identity.py
-git commit -m "feat: expose authenticated Spark agent API"
+git add control/src/vonk_control/agent_api.py control/src/vonk_control/api.py control/src/vonk_control/auth.py control/tests/test_agent_api.py control/tests/security/test_agent_identity.py
+git commit -m "feat: expose authenticated GPU node agent API"
 ```
 
 ### Task 4: Caddy mTLS boundary and Compose secrets
@@ -180,11 +180,11 @@ git commit -m "feat: expose authenticated Spark agent API"
 - Modify: `deploy/compose/.env.example`
 - Create: `deploy/compose/step-ca/ca.json`
 - Modify: `deploy/compose/tests/test.env`
-- Modify: `control/src/dgx_control/settings.py`
-- Modify: `control/src/dgx_control/auth.py`
-- Modify: `control/src/dgx_control/api.py`
-- Modify: `control/src/dgx_control/agent_api.py`
-- Modify: `control/src/dgx_control/pki.py`
+- Modify: `control/src/vonk_control/settings.py`
+- Modify: `control/src/vonk_control/auth.py`
+- Modify: `control/src/vonk_control/api.py`
+- Modify: `control/src/vonk_control/agent_api.py`
+- Modify: `control/src/vonk_control/pki.py`
 - Test: `deploy/compose/tests/test_agent_ingress.py`
 - Test: `deploy/compose/tests/test_networking.py`
 - Test: `control/tests/test_settings.py`
@@ -195,7 +195,7 @@ git commit -m "feat: expose authenticated Spark agent API"
 
 **Interfaces:**
 - Agent ingress uses a separately configured listener/hostname and client CA.
-- Caddy strips all incoming `X-DGX-Agent-*` headers and supplies verified identity metadata to the API.
+- Caddy strips all incoming `X-Vonk-Agent-*` headers and supplies verified identity metadata to the API.
 - `step-ca` is a separate private-network service with no published port; built-in CA mode remains an explicit deployment profile.
 
 - [ ] **Step 1: Write failing rendered-boundary tests**
@@ -215,7 +215,7 @@ Expected: FAIL because no mTLS agent route exists.
 - [ ] **Step 3: Implement segmented listener and settings**
 
 Add secret files `agent-client-ca`, `agent-intermediate-certificate`, and
-provider credentials; add `DGX_AGENT_*_FILE` and `DGX_AGENT_CA_PROVIDER`
+provider credentials; add `VONK_AGENT_*_FILE` and `VONK_AGENT_CA_PROVIDER`
 settings. Keep the generic base Compose file provider-neutral and require the
 production `compose.step-ca.yaml` overlay for the pinned `step-ca` image,
 persistent CA data, health check, no public port, and a separately initialized
@@ -237,17 +237,17 @@ Expected: PASS.
 - [ ] **Step 5: Commit ingress**
 
 ```bash
-git add deploy/compose/Caddyfile deploy/compose/caddy/entrypoint.sh deploy/compose/compose.yaml deploy/compose/compose.step-ca.yaml deploy/compose/compose.builtin-ca.yaml deploy/compose/.env.example deploy/compose/step-ca/ca.json deploy/compose/tests/test.env deploy/compose/tests/test_agent_ingress.py deploy/compose/tests/test_networking.py control/src/dgx_control/settings.py control/src/dgx_control/auth.py control/src/dgx_control/api.py control/src/dgx_control/agent_api.py control/src/dgx_control/pki.py control/tests/test_settings.py control/tests/test_agent_api.py control/tests/test_pki.py control/tests/security/test_agent_identity.py docs/runbooks/control-plane-bootstrap.md
+git add deploy/compose/Caddyfile deploy/compose/caddy/entrypoint.sh deploy/compose/compose.yaml deploy/compose/compose.step-ca.yaml deploy/compose/compose.builtin-ca.yaml deploy/compose/.env.example deploy/compose/step-ca/ca.json deploy/compose/tests/test.env deploy/compose/tests/test_agent_ingress.py deploy/compose/tests/test_networking.py control/src/vonk_control/settings.py control/src/vonk_control/auth.py control/src/vonk_control/api.py control/src/vonk_control/agent_api.py control/src/vonk_control/pki.py control/tests/test_settings.py control/tests/test_agent_api.py control/tests/test_pki.py control/tests/security/test_agent_identity.py docs/runbooks/control-plane-bootstrap.md
 git commit -m "feat: authenticate outbound agents through Caddy"
 ```
 
 ### Task 5: PKI recovery and verification
 
 **Files:**
-- Create: `control/src/dgx_control/step_ca.py`
+- Create: `control/src/vonk_control/step_ca.py`
 - Test: `control/tests/test_step_ca.py`
-- Modify: `control/src/dgx_control/api.py`
-- Modify: `control/src/dgx_control/settings.py`
+- Modify: `control/src/vonk_control/api.py`
+- Modify: `control/src/vonk_control/settings.py`
 - Modify: `deploy/compose/compose.yaml`
 - Modify: `deploy/compose/step-ca/ca.json`
 - Create: `docs/runbooks/agent-pki.md`
@@ -301,6 +301,6 @@ Expected: all pass.
 - [ ] **Step 5: Commit recovery documentation**
 
 ```bash
-git add control/src/dgx_control/step_ca.py control/src/dgx_control/api.py control/src/dgx_control/settings.py control/tests/test_step_ca.py deploy/compose/compose.yaml deploy/compose/step-ca/ca.json docs/runbooks/agent-pki.md docs/security/threat-model.md tests/runbooks/test_agent_pki.py
-git commit -m "docs: define Spark agent PKI recovery"
+git add control/src/vonk_control/step_ca.py control/src/vonk_control/api.py control/src/vonk_control/settings.py control/tests/test_step_ca.py deploy/compose/compose.yaml deploy/compose/step-ca/ca.json docs/runbooks/agent-pki.md docs/security/threat-model.md tests/runbooks/test_agent_pki.py
+git commit -m "docs: define GPU node agent PKI recovery"
 ```

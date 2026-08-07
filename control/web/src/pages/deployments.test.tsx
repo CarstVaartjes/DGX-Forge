@@ -17,9 +17,9 @@ function api() {
     }],
     previewPackageRollout: async () => ({
       digest,
-      canary: ["Alpha Spark"],
-      batches: [["Alpha Spark"], ["Beta Spark"]],
-      offline_pending: ["Gamma Spark"],
+      canary: ["Alpha GPU node"],
+      batches: [["Alpha GPU node"], ["Beta GPU node"]],
+      offline_pending: ["Gamma GPU node"],
       download_remaining_bytes: 8 * 1024 ** 3,
       storage_required_bytes: 12 * 1024 ** 3,
       resource_envelope: {
@@ -55,7 +55,7 @@ function api() {
           kv_cache_base_bytes: 2 * 1024 ** 3,
           kv_cache_per_token_bytes: 8192,
         },
-        required_sparks: 2,
+        required_nodes: 2,
         topology: "gang",
         world_size: 2,
         ranks: [{rank: 0, role: "leader"}, {rank: 1, role: "worker"}],
@@ -70,7 +70,7 @@ function api() {
       state: "rolling-back",
       phase: "rollback",
       failure_reason: "canary-failure",
-      nodes: [{name: "Alpha Spark", state: "rolled-back"}, {name: "Gamma Spark", state: "offline-pending"}],
+      nodes: [{name: "Alpha GPU node", state: "rolled-back"}, {name: "Gamma GPU node", state: "offline-pending"}],
     }),
     previewPackageRollback: async () => ({digest: `sha256:${"e".repeat(64)}`, previous_release_digest: `sha256:${"d".repeat(64)}`}),
     rollbackPackage: async () => ({id: "rollback-1"}),
@@ -79,7 +79,7 @@ function api() {
 
 it("shows aggregate capacity, offline progress, and stops at a canary failure", async () => {
   // Break caught: operators cannot see remaining acquisition work, offline
-  // Sparks, or an authoritative canary rollback state.
+  // GPU nodes, or an authoritative canary rollback state.
   render(<DeploymentsPage api={api()}/>);
   const user = userEvent.setup();
 
@@ -87,12 +87,12 @@ it("shows aggregate capacity, offline progress, and stops at a canary failure", 
   await user.click(screen.getByRole("button", {name: "Preview rollout for chat"}));
   const preview = await screen.findByRole("region", {name: "Package rollout preview"});
   expect(preview).toHaveTextContent("8.0 GiB remaining");
-  expect(preview).toHaveTextContent("2 Spark(s), gang");
+  expect(preview).toHaveTextContent("2 GPU node(s), gang");
   expect(preview).toHaveTextContent("12.0 GiB GPU memory");
   expect(preview).toHaveTextContent("1.0 GiB KV base");
   expect(preview).toHaveTextContent("8.0 GiB resident");
   expect(preview).toHaveTextContent("0:leader, 1:worker");
-  expect(preview).toHaveTextContent("Gamma Spark");
+  expect(preview).toHaveTextContent("Gamma GPU node");
   await user.type(screen.getByLabelText("Type the exact rollout preview digest"), digest);
   await user.click(screen.getByRole("button", {name: "Start exact rollout"}));
 

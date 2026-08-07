@@ -162,7 +162,7 @@ def test_issuer_defines_object_receipt_authority_with_a_separate_signature_domai
     with pytest.raises(InvalidSignature):
         authority.public_key.verify(
             bytes.fromhex(receipt.signature.value),
-            b"DGX-WORKLOAD-PACKAGE-HELPER-GRANT-V1\x00"
+            b"Vonk Forge-WORKLOAD-PACKAGE-HELPER-GRANT-V1\x00"
             + canonical_message(receipt.claims),
         )
     assert authority.public_key_document() == {

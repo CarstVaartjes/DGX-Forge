@@ -1,4 +1,4 @@
-"""Read-only adaptation of the original two-Spark inventory format."""
+"""Read-only adaptation of the original two-GPU node inventory format."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from .types import Fleet, ManagementEndpoint, NodeId, NodeRecord
 
 _PROJECT_NAMESPACE = uuid.uuid5(
     uuid.NAMESPACE_URL,
-    "https://github.com/CarstVaartjes/DGX-Forge",
+    "https://github.com/CarstVaartjes/vonk-forge",
 )
 
 

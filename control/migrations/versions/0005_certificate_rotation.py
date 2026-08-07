@@ -1,4 +1,4 @@
-"""Stage and atomically activate Spark agent credential generations."""
+"""Stage and atomically activate GPU node agent credential generations."""
 
 import sqlalchemy as sa
 from alembic import op

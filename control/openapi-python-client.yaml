@@ -1,4 +1,4 @@
 package_name_override: generated_control
-project_name_override: dgx-forge-control-client
+project_name_override: vonk-forge-control-client
 literal_enums: true
 post_hooks: []

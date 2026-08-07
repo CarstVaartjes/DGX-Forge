@@ -2,7 +2,7 @@
 
 ## Objective
 
-Move the Spark update-authority private key, bootstrap root, and persistent
+Move the GPU node update-authority private key, bootstrap root, and persistent
 TUF verification cache out of the generic control worker. The worker may ask
 for one exact authorization over a local Unix socket, but cannot read signing
 material or directly construct a root-verifiable receipt.

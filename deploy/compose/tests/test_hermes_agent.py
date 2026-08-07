@@ -31,6 +31,8 @@ def _rendered() -> dict[str, object]:
             "-f",
             str(COMPOSE / "compose.step-ca.yaml"),
             "--profile",
+            "hermes",
+            "--profile",
             "setup",
             "config",
             "--format",
@@ -44,6 +46,28 @@ def _rendered() -> dict[str, object]:
     return json.loads(result.stdout)
 
 
+def test_hermes_is_disabled_in_the_default_compose_profile() -> None:
+    result = subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(COMPOSE / "compose.yaml"),
+            "-f",
+            str(COMPOSE / "compose.step-ca.yaml"),
+            "config",
+            "--format",
+            "json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=_environment(),
+    )
+
+    assert "hermes-agent" not in json.loads(result.stdout)["services"]
+
+
 def test_wrapper_image_is_digest_pinned_and_contains_no_ssh_stack() -> None:
     dockerfile = (HERMES / "Dockerfile").read_text()
     project_text = "\n".join(
@@ -54,7 +78,7 @@ def test_wrapper_image_is_digest_pinned_and_contains_no_ssh_stack() -> None:
         "nousresearch/hermes-agent:v2026.7.20@sha256:"
         "f7b35053268f532f98955195c909f15a230470fbcbdacaa9fdecb95707dad04a"
     ) in dockerfile
-    assert 'ENTRYPOINT ["/usr/local/bin/dgx-hermes-entrypoint"]' in dockerfile
+    assert 'ENTRYPOINT ["/usr/local/bin/vonk-hermes-entrypoint"]' in dockerfile
     assert 'CMD ["gateway", "run"]' in dockerfile
     for forbidden in ("openssh", "sshd", "authorized_keys", "port: 22", "target: 22"):
         assert forbidden not in project_text
@@ -100,9 +124,9 @@ def test_compose_hermes_is_unpublished_bounded_and_segmented() -> None:
 
     volumes = {item["target"]: item for item in service["volumes"]}
     assert set(volumes) == {"/opt/data", "/workspace", "/opt/data/home/.cache"}
-    assert volumes["/opt/data"]["source"] == "/srv/dgx-forge/hermes/data"
-    assert volumes["/workspace"]["source"] == "/srv/dgx-forge/hermes/workspaces"
-    assert volumes["/opt/data/home/.cache"]["source"] == "/srv/dgx-forge/hermes/cache"
+    assert volumes["/opt/data"]["source"] == "/srv/vonk-forge/hermes/data"
+    assert volumes["/workspace"]["source"] == "/srv/vonk-forge/hermes/workspaces"
+    assert volumes["/opt/data/home/.cache"]["source"] == "/srv/vonk-forge/hermes/cache"
 
 
 def test_hermes_uses_only_local_litellm_and_authenticated_gateway() -> None:
@@ -131,7 +155,7 @@ def test_hermes_uses_only_local_litellm_and_authenticated_gateway() -> None:
 def test_setup_profile_shares_state_without_exposing_an_ingress() -> None:
     service = _rendered()["services"]["hermes-setup"]
 
-    assert service["profiles"] == ["setup"]
+    assert service["profiles"] == ["hermes", "setup"]
     assert set(service["networks"]) == {"hermes-egress", "hermes-inference"}
     assert not service.get("ports")
     assert service["stdin_open"] is True

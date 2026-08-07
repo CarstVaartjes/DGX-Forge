@@ -2,12 +2,12 @@
 
 This runbook updates `vonk-forge` itself: the Docker control services on a
 Docker-capable control host and the `vonk-forge` agents on any number of enrolled
-DGX Sparks. It does not update model packages, DGX OS, firmware, the kernel,
+Vonk Forge GPU nodes. It does not update model packages, Vonk Forge OS, firmware, the kernel,
 NVIDIA drivers, or CUDA. Workload packages have an independent release cadence;
 see [Runtime releases](runtime-release.md).
 
-The normal Spark path is the outbound, mutually authenticated agent channel.
-It is not SSH. An administrator can still SSH into a Spark, but SSH is reserved
+The normal GPU node path is the outbound, mutually authenticated agent channel.
+It is not SSH. An administrator can still SSH into a GPU node, but SSH is reserved
 for bootstrap and recovery and is never part of a successful rollout. See
 [SSH recovery](ssh-recovery.md) before an incident, not during one.
 
@@ -18,10 +18,10 @@ A platform update has two deliberately separate phases:
 1. A root-run, offline control-host operation selects a new immutable
    generation from a TUF-authorized release and digest-pinned OCI artifacts.
 2. The newly selected NAS/control version reports version skew. An administrator
-   previews and explicitly confirms a signed Spark update plan. The worker then
+   previews and explicitly confirms a signed GPU node update plan. The worker then
    advances one canary, its soak period, and batches of one by default.
 
-Updating the control host never automatically updates a Spark. Merely viewing
+Updating the control host never automatically updates a GPU node. Merely viewing
 the NAS-newer prompt also never mutates the fleet. The plan pins the exact
 release, fleet observations, topology, agent inputs, canary, batches, and
 rollback slots. A changed input makes the digest stale and requires a new plan.
@@ -33,7 +33,7 @@ Stop on any of these conditions:
 - the backup, free-space, compatibility, topology, workload-availability, or
   route-withdrawal gate fails;
 - the candidate control API or worker does not become ready;
-- a Spark is newer than the control release, outside its protocol range, or
+- a GPU node is newer than the control release, outside its protocol range, or
   lacks both `agent.update` and `agent.rollback`;
 - the canary fails, rolls back, or does not reconnect with its signed running
   identity; or
@@ -45,26 +45,26 @@ or running an update command over SSH.
 ## Install the host updater once
 
 The first control-host bootstrap installs the release's
-`dgx-forge-host-updater.tar`; later platform generations do not execute updater
+`vonk-forge-host-updater.tar`; later platform generations do not execute updater
 code from a Git checkout. Download the tar and checksum from the same immutable
 GitHub release, then verify its signed GitHub build provenance and digest before
 extracting it:
 
 ```bash
-gh attestation verify dgx-forge-host-updater.tar \
+gh attestation verify vonk-forge-host-updater.tar \
   --repo REPLACE_OWNER/REPLACE_REPOSITORY
-sha256sum --check dgx-forge-host-updater.tar.sha256
-install_root=/opt/dgx-forge/host-updater/0.1.0
+sha256sum --check vonk-forge-host-updater.tar.sha256
+install_root=/opt/vonk-forge/host-updater/0.1.0
 sudo python3 -m venv "$install_root"
 staging=$(mktemp -d)
-tar --extract --file dgx-forge-host-updater.tar --directory "$staging"
+tar --extract --file vonk-forge-host-updater.tar --directory "$staging"
 sudo "$install_root/bin/python" -m pip install \
-  --find-links "$staging" "$staging"/dgx_control-0.1.0-py3-none-any.whl
+  --find-links "$staging" "$staging"/vonk_control-0.1.0-py3-none-any.whl
 sudo install -d -m 0755 /usr/local/bin
-sudo ln -sfn "$install_root/bin/dgx-control-offline" \
-  /usr/local/bin/dgx-control-offline
+sudo ln -sfn "$install_root/bin/vonk-control-offline" \
+  /usr/local/bin/vonk-control-offline
 rm -rf -- "$staging"
-sudo dgx-control-offline --help
+sudo vonk-control-offline --help
 ```
 
 Perform this bootstrap from a trusted administrator session. Pin the release
@@ -82,7 +82,7 @@ the bundle by immutable OCI digest, adds the digest-derived manifest name to
 delegated TUF targets while retaining supported predecessors, and only then
 updates the stable discovery channel. The channel is never an install target.
 The offline TUF root private key is never present in CI, on the control host, or
-on a Spark; CI receives only the narrowly delegated signing authority required
+on a GPU node; CI receives only the narrowly delegated signing authority required
 by the publication policy.
 
 The guarded `platform-release` GitHub environment runs the equivalent of:
@@ -93,7 +93,7 @@ scripts/build-control-deployment-bundle \
   --output dist/control-deployment.tar
 scripts/publish-platform-target describe-bundle \
   --bundle dist/control-deployment.tar \
-  --repository ghcr.io/REPLACE_ORG/dgx-forge/control-deployment \
+  --repository ghcr.io/REPLACE_ORG/vonk-forge/control-deployment \
   > dist/control-deployment-descriptor.json
 scripts/build-platform-manifest \
   --input release/platform/REPLACE_VERSION.input.json \
@@ -106,12 +106,12 @@ scripts/publish-platform-target publish-bundle \
 # A separate protected OIDC job publishes the immutable target and channel.
 ```
 
-Publication requires both `DGX_CONTAINER_RELEASES_ENABLED` and
-`DGX_PLATFORM_RELEASES_ENABLED`. The workflow supplies absolute trusted-tool
-paths in `DGX_PLATFORM_ORAS_BIN`, `DGX_PLATFORM_TUF_PUBLISHER_BIN`, and
-`DGX_PLATFORM_CHANNEL_PUBLISHER_BIN`. The delegated publisher authenticates
-with the bounded `DGX_PLATFORM_AUTHORITY_URL`,
-`DGX_PLATFORM_AUTHORITY_AUDIENCE`, and GitHub Actions OIDC request variables;
+Publication requires both `VONK_CONTAINER_RELEASES_ENABLED` and
+`VONK_PLATFORM_RELEASES_ENABLED`. The workflow supplies absolute trusted-tool
+paths in `VONK_PLATFORM_ORAS_BIN`, `VONK_PLATFORM_TUF_PUBLISHER_BIN`, and
+`VONK_PLATFORM_CHANNEL_PUBLISHER_BIN`. The delegated publisher authenticates
+with the bounded `VONK_PLATFORM_AUTHORITY_URL`,
+`VONK_PLATFORM_AUTHORITY_AUDIENCE`, and GitHub Actions OIDC request variables;
 do not replace these with a TUF private-key environment variable.
 
 Use a dedicated maintenance window. Keep the current and candidate versioned
@@ -135,10 +135,10 @@ the already trusted root.
 The apply command requires these root-controlled inputs:
 
 ```bash
-export DGX_PLATFORM_TUF_ROOT=/srv/dgx-forge/trust/platform/root.json
-export DGX_PLATFORM_TUF_METADATA_URL=https://updates.example.invalid/platform/metadata/
-export DGX_PLATFORM_TUF_TARGET_URL=https://updates.example.invalid/platform/targets/
-export DGX_BACKUP_RECIPIENTS_FILE=/srv/dgx-forge/secrets/backup-recipients.txt
+export VONK_PLATFORM_TUF_ROOT=/srv/vonk-forge/trust/platform/root.json
+export VONK_PLATFORM_TUF_METADATA_URL=https://updates.example.invalid/platform/metadata/
+export VONK_PLATFORM_TUF_TARGET_URL=https://updates.example.invalid/platform/targets/
+export VONK_BACKUP_RECIPIENTS_FILE=/srv/vonk-forge/secrets/backup-recipients.txt
 target_name=platform/releases/2.0.0/REPLACE_MANIFEST_SHA256.json
 ```
 
@@ -150,8 +150,8 @@ mutable, unauthenticated files.
 First load and validate the release without mutation:
 
 ```bash
-sudo dgx-control-offline \
-  --state-path /srv/dgx-forge/control-host \
+sudo vonk-control-offline \
+  --state-path /srv/vonk-forge/control-host \
   upgrade --target-name "$target_name"
 ```
 
@@ -164,8 +164,8 @@ checkout: the host updater owns the fixed stop/start sequence and uses only the
 selected generation's verified deployment bundle.
 
 ```bash
-sudo dgx-control-offline \
-  --state-path /srv/dgx-forge/control-host \
+sudo vonk-control-offline \
+  --state-path /srv/vonk-forge/control-host \
   upgrade --target-name "$target_name" --apply
 ```
 
@@ -178,11 +178,11 @@ If the command exits with recovery-required status, do not retry blindly. First
 inspect the journaled recovery plan, then apply that exact plan:
 
 ```bash
-sudo dgx-control-offline \
-  --state-path /srv/dgx-forge/control-host \
+sudo vonk-control-offline \
+  --state-path /srv/vonk-forge/control-host \
   recover
-sudo dgx-control-offline \
-  --state-path /srv/dgx-forge/control-host \
+sudo vonk-control-offline \
+  --state-path /srv/vonk-forge/control-host \
   recover --apply
 ```
 
@@ -196,11 +196,11 @@ predecessor, and then apply it. The updater performs the service transition; do
 not run a separate mutable Compose command:
 
 ```bash
-sudo dgx-control-offline \
-  --state-path /srv/dgx-forge/control-host \
+sudo vonk-control-offline \
+  --state-path /srv/vonk-forge/control-host \
   rollback --generation REPLACE_RECORDED_PREDECESSOR
-sudo dgx-control-offline \
-  --state-path /srv/dgx-forge/control-host \
+sudo vonk-control-offline \
+  --state-path /srv/vonk-forge/control-host \
   rollback --generation REPLACE_RECORDED_PREDECESSOR --apply
 ```
 
@@ -214,10 +214,10 @@ After the control API and worker are healthy, view skew from the web Admin →
 Updates page or the CLI:
 
 ```bash
-sparkctl admin updates skew --json
+vonkctl admin updates skew --json
 ```
 
-The prompt is expected only when a Spark's semantic platform version or exact
+The prompt is expected only when a GPU node's semantic platform version or exact
 build digest differs from the active control generation. Review:
 
 - every affected, incompatible, retired, and offline-pending node;
@@ -233,12 +233,12 @@ Do not apply from the prompt. An offline old node remains pending. An
 incompatible node blocks mutation until the compatibility problem is resolved;
 it is not silently omitted.
 
-## Plan, confirm, and monitor Spark fan-out
+## Plan, confirm, and monitor GPU node fan-out
 
 Create a fresh preview from the versioned release name shown by skew:
 
 ```bash
-sparkctl admin updates plan \
+vonkctl admin updates plan \
   --release "$target_name" \
   --json
 ```
@@ -250,7 +250,7 @@ the safest representative. There is no compiled fleet-size limit.
 Confirm the exact plan digest in the web UI or CLI. This is the mutation point:
 
 ```bash
-sparkctl admin updates apply \
+vonkctl admin updates apply \
   --plan-digest sha256:REPLACE_PLAN_SHA256 \
   --json
 ```
@@ -266,7 +266,7 @@ self-test.
 Monitor without starting a second rollout:
 
 ```bash
-sparkctl admin updates status REPLACE_ROLLOUT_UUID --json
+vonkctl admin updates status REPLACE_ROLLOUT_UUID --json
 ```
 
 Check the canary's reported running version, build digest, protocol, supervisor
@@ -320,7 +320,7 @@ gates open:
 
 - `signed-platform-update-manifest-evidence`;
 - `physical-control-host-update-recovery`; and
-- `physical-spark-canary-rollback`.
+- `physical-node-canary-rollback`.
 
 The release verifier accepts those gates only from a canonical,
 content-addressed `platform-update.json` produced by the approved physical
@@ -344,7 +344,7 @@ supposed to authenticate. The fixed envelope names are:
 
 - `inventory/reports/platform-update-signed-manifest.json`;
 - `inventory/reports/platform-update-control-host-recovery.json`; and
-- `inventory/reports/platform-update-spark-canary-rollback.json`.
+- `inventory/reports/platform-update-node-canary-rollback.json`.
 
 If the approved physical exporter or trusted public key is unavailable, the
 release stays blocked.
@@ -360,7 +360,7 @@ The signed manifest claim must prove that the immutable target filename SHA is
 the shared release digest and must bind the build digest plus every published
 architecture's agent payload hash. The control-host claim separately binds the
 candidate generation recovered after a crash and the predecessor selected by
-the subsequent rollback. The Spark claim must include its architecture,
+the subsequent rollback. The GPU node claim must include its architecture,
 before/target platform versions, agent payload hashes, target build digest, A/B
 slot transition, supervisor generation, exact `outbound-mtls-agent-channel`
 transport, and `ssh_used_for_standard_path: false`; its target payload and build
@@ -372,20 +372,20 @@ Finally run:
 sudo scripts/verify-platform-release \
   --candidate REPLACE_SEMVER \
   --physical-evidence-public-key \
-    /srv/dgx-forge/trust/physical-acceptance-public.json \
+    /srv/vonk-forge/trust/physical-acceptance-public.json \
   --json
 ```
 
 The exit status remains blocked until the physical update gates and every other
 first-release gate are present.
 
-## DGX OS and NVIDIA maintenance boundary
+## Vonk Forge OS and NVIDIA maintenance boundary
 
-DGX OS, firmware, kernel, driver, and CUDA maintenance follows the separate
-[DGX platform update](platform-update.md) procedure. The pinned NVIDIA
-`spark_updatectl.py` adapter may contribute reboot readiness, next-boot kernel,
-and kernel rollback evidence to that workflow. It cannot authorize a DGX-Forge
-release, verify DGX-Forge TUF metadata, transport the DGX-Forge OCI bundle, sign
+Vonk Forge OS, firmware, kernel, driver, and CUDA maintenance follows the separate
+[Vonk Forge platform update](platform-update.md) procedure. The pinned NVIDIA
+`vendor update adapter` adapter may contribute reboot readiness, next-boot kernel,
+and kernel rollback evidence to that workflow. It cannot authorize a Vonk Forge
+release, verify Vonk Forge TUF metadata, transport the Vonk Forge OCI bundle, sign
 an agent operation, or replace the A/B supervisor. Likewise, a successful
-DGX-Forge rollout is not evidence that firmware or the operating system is
+Vonk Forge rollout is not evidence that firmware or the operating system is
 current.

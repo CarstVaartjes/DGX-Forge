@@ -599,7 +599,7 @@ def test_python_launcher_uses_signed_generation_interpreter_and_environment(
             files, sort_keys=True, separators=(",", ":"), ensure_ascii=False
         ).encode()
     ).hexdigest()
-    (release / ".dgx-generation.json").write_bytes(
+    (release / ".vonk-generation.json").write_bytes(
         canonical_helper_document(
             {
                 "environment_digest": environment_digest,
@@ -612,7 +612,7 @@ def test_python_launcher_uses_signed_generation_interpreter_and_environment(
             }
         ) + b"\n"
     )
-    (release / ".dgx-generation.json").chmod(0o444)
+    (release / ".vonk-generation.json").chmod(0o444)
     document = request_document()
     document["body"]["invocation"] = {
         **invocation_document("python-venv"),

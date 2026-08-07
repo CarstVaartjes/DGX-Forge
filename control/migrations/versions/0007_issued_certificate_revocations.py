@@ -39,7 +39,7 @@ def upgrade() -> None:
     dialect = op.get_bind().dialect.name
     if dialect == "postgresql":
         op.execute(sa.text("""
-            CREATE FUNCTION dgx_prevent_agent_node_delete()
+            CREATE FUNCTION vonk_prevent_agent_node_delete()
             RETURNS trigger
             LANGUAGE plpgsql
             AS $$
@@ -50,14 +50,14 @@ def upgrade() -> None:
             $$
         """))
         op.execute(sa.text("""
-            CREATE TRIGGER dgx_agent_nodes_retire_only
+            CREATE TRIGGER vonk_agent_nodes_retire_only
             BEFORE DELETE ON agent_nodes
             FOR EACH ROW
-            EXECUTE FUNCTION dgx_prevent_agent_node_delete()
+            EXECUTE FUNCTION vonk_prevent_agent_node_delete()
         """))
     elif dialect == "sqlite":
         op.execute(sa.text("""
-            CREATE TRIGGER dgx_agent_nodes_retire_only
+            CREATE TRIGGER vonk_agent_nodes_retire_only
             BEFORE DELETE ON agent_nodes
             FOR EACH ROW
             BEGIN
@@ -70,13 +70,13 @@ def downgrade() -> None:
     dialect = op.get_bind().dialect.name
     if dialect == "postgresql":
         op.execute(sa.text(
-            "DROP TRIGGER IF EXISTS dgx_agent_nodes_retire_only ON agent_nodes"
+            "DROP TRIGGER IF EXISTS vonk_agent_nodes_retire_only ON agent_nodes"
         ))
         op.execute(sa.text(
-            "DROP FUNCTION IF EXISTS dgx_prevent_agent_node_delete()"
+            "DROP FUNCTION IF EXISTS vonk_prevent_agent_node_delete()"
         ))
     elif dialect == "sqlite":
-        op.execute(sa.text("DROP TRIGGER IF EXISTS dgx_agent_nodes_retire_only"))
+        op.execute(sa.text("DROP TRIGGER IF EXISTS vonk_agent_nodes_retire_only"))
     op.drop_index(
         op.f("ix_agent_issued_certificate_revocations_state"),
         table_name="agent_issued_certificate_revocations",

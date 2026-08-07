@@ -1,21 +1,21 @@
-# `sparkctl` Live Node Health Design
+# `vonkctl` Live Node Health Design
 
 Date: 2026-08-02
 
 ## Purpose
 
-Add a live, read-only health view for both DGX Spark nodes without installing a
+Add a live, read-only health view for both Vonk Forge GPU nodes without installing a
 monitoring agent, creating a database, or moving monitoring services onto the
 AI hosts. The developer-machine controller exposes the view as:
 
 ```text
-sparkctl nodes status
-sparkctl nodes status --json
+vonkctl nodes status
+vonkctl nodes status --json
 ```
 
-The ordinary `sparkctl status` command remains the fast view of persisted
+The ordinary `vonkctl status` command remains the fast view of persisted
 Cluster Profile controller state. It does not initiate SSH calls and does not
-embed a stale node-health sample. `sparkctl nodes status` is always a fresh
+embed a stale node-health sample. `vonkctl nodes status` is always a fresh
 probe.
 
 ## Scope
@@ -30,7 +30,7 @@ The live probe answers three questions:
 
 The command does not decide whether a target Model Definition fits. Target-
 specific memory, disk, placement, fabric, and co-residency requirements remain
-the responsibility of `sparkctl validate <profile>` and the admission engine.
+the responsibility of `vonkctl validate <profile>` and the admission engine.
 An active model may legitimately consume most unified memory, so low available
 memory alone does not make a serving node unhealthy.
 
@@ -50,8 +50,8 @@ host or NAS and require a separate design.
 
 ## Command and concurrency
 
-`sparkctl nodes status` probes `spark2` and `spark1` concurrently. Results are
-always rendered in canonical `spark1`, `spark2` order regardless of completion
+`vonkctl nodes status` probes `node2` and `node1` concurrently. Results are
+always rendered in canonical `node1`, `node2` order regardless of completion
 order. One slow or unreachable node does not prevent the other node's result
 from being returned.
 
@@ -79,7 +79,7 @@ process over standard input:
 ssh <strict options> <alias> bash -s -- --json
 ```
 
-Nothing is copied to or retained on either Spark. The backend invokes the local
+Nothing is copied to or retained on either GPU node. The backend invokes the local
 SSH process with an argv vector and `shell=False`. It uses the configured node
 alias plus `BatchMode=yes`, `ForwardAgent=no`, `IdentitiesOnly=yes`, strict host
 key checking, an explicit connection timeout, bounded stdout/stderr, and the
@@ -120,7 +120,7 @@ it is never silently replaced with zero.
 | Fabric | both inventory-pinned function names, interface, HCA, operstate, carrier, speed, MTU, RDMA link state, and monitored error counters |
 | Services | Docker query availability/version and `earlyoom` load, enabled, and active state |
 
-DGX Spark unified memory is reported from `/proc/meminfo`. A missing or `N/A`
+Vonk Forge GPU node unified memory is reported from `/proc/meminfo`. A missing or `N/A`
 GPU-memory field from `nvidia-smi` is not treated as an error and is not exposed
 as a second memory pool.
 
@@ -143,12 +143,12 @@ baseline and quietly accept it.
   "captured_at": "2026-08-02T12:00:00Z",
   "status": "healthy",
   "nodes": {
-    "spark1": {
+    "node1": {
       "status": "healthy",
       "errors": [],
       "warnings": [],
       "identity": {
-        "hostname": "spark-3542",
+        "hostname": "node-3542",
         "boot_id": "...",
         "uptime_seconds": 12345
       },
@@ -199,7 +199,7 @@ baseline and quietly accept it.
         "earlyoom_active": false
       }
     },
-    "spark2": {}
+    "node2": {}
   }
 }
 ```
@@ -279,8 +279,8 @@ The default output is a compact table:
 
 ```text
 NODE    STATE    CPU    LOAD1   MEM AVAILABLE   SWAP USED   ROOT FREE   GPU   TEMP   FABRIC   UPTIME
-spark1  healthy  12.3%  1.20    111.8 GiB       0 B         3.44 TiB    0%    40 C   2/2 up   3d 04h
-spark2  warning  18.1%  2.10    109.4 GiB       1.2 GiB     3.42 TiB    4%    43 C   2/2 up   3d 04h
+node1  healthy  12.3%  1.20    111.8 GiB       0 B         3.44 TiB    0%    40 C   2/2 up   3d 04h
+node2  warning  18.1%  2.10    109.4 GiB       1.2 GiB     3.42 TiB    4%    43 C   2/2 up   3d 04h
 ```
 
 Stable warning and error codes appear below the table with short explanations.
@@ -308,8 +308,8 @@ warnings matter to their policy.
 - Nonzero remote exit, timeout, invalid UTF-8, invalid JSON, schema failure, or
   output truncation creates a `critical` node result with a specific code.
 - No failure mutates Cluster Profile state, endpoint publication, maturity
-  evidence, or the Sparks.
-- `sparkctl nodes status` never attempts automatic repair or profile switching.
+  evidence, or the GPU nodes.
+- `vonkctl nodes status` never attempts automatic repair or profile switching.
 
 ## Testing
 
@@ -329,12 +329,12 @@ Implementation follows test-first development and includes:
 7. a live read-only smoke test against both configured aliases after offline
    tests pass.
 
-No automated test changes either Spark.
+No automated test changes either GPU node.
 
 ## Documentation integration
 
 The static [model and profile overview](../../model-profile-overview.md) remains
 the human map of intended profiles and Model Definitions. Live node health is
-not embedded in that document. The `sparkctl catalog --json` and
-`sparkctl nodes status --json` interfaces provide machine-readable catalog and
+not embedded in that document. The `vonkctl catalog --json` and
+`vonkctl nodes status --json` interfaces provide machine-readable catalog and
 health views without generating or maintaining separate HTML.

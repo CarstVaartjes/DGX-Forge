@@ -16,9 +16,9 @@ def _node(index: int, *, lifecycle: str = "ready") -> NodeRecord:
     return NodeRecord(
         id=NodeId.parse(f"spk_{index:032x}"),
         display_name=f"lab-{index}",
-        hostname=f"spark-{index}",
+        hostname=f"node-{index}",
         management=ManagementEndpoint(
-            host=f"spark-{index}.local",
+            host=f"node-{index}.local",
             user="operator",
         ),
         labels={"rack": "lab"},
@@ -58,7 +58,7 @@ def test_node_record_and_copied_labels_are_immutable() -> None:
     record = NodeRecord(
         id=NodeId.parse("spk_00000000000000000000000000000001"),
         display_name="alpha",
-        hostname="spark-alpha",
+        hostname="node-alpha",
         management=ManagementEndpoint(host="alpha.local", user="operator"),
         labels=labels,
         lifecycle="ready",
@@ -75,7 +75,7 @@ def test_node_record_and_copied_labels_are_immutable() -> None:
 @pytest.mark.parametrize(
     "value",
     [
-        "spark1",
+        "node1",
         "",
         "spk_1",
         "spk_" + "g" * 32,
@@ -110,7 +110,7 @@ def test_management_endpoint_rejects_unusable_connection_data(
         NodeRecord(
             id=NodeId.parse("spk_00000000000000000000000000000001"),
             display_name="alpha",
-            hostname="spark-alpha",
+            hostname="node-alpha",
             management=endpoint,
             labels={},
             lifecycle="ready",

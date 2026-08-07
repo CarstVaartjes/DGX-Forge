@@ -85,7 +85,7 @@ def _target() -> TargetPlatform:
             PlatformAgentArtifact(
                 architecture="linux-arm64",
                 oci_manifest_digest="sha256:" + "d" * 64,
-                payload_name="dgx-agent",
+                payload_name="vonk-agent",
                 payload_sha256="e" * 64,
                 payload_size=4096,
             ),

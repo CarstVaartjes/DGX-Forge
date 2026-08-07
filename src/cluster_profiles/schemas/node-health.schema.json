@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://spark.local/schemas/node-health.schema.json",
-  "title": "Spark cluster live health",
+  "$id": "https://vonk-forge.local/schemas/node-health.schema.json",
+  "title": "GPU node cluster live health",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "captured_at", "status", "nodes"],
@@ -14,7 +14,7 @@
       "additionalProperties": false,
       "minProperties": 1,
       "patternProperties": {
-        "^(?:spk_[0-9a-f]{32}|spark[12])$": {"$ref": "#/$defs/node"}
+        "^(?:spk_[0-9a-f]{32}|node[12])$": {"$ref": "#/$defs/node"}
       }
     }
   },

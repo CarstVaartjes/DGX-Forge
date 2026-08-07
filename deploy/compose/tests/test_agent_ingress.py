@@ -20,7 +20,7 @@ def _environment() -> dict[str, str]:
         "GRAFANA_IMAGE": "grafana/grafana:1@sha256:" + "f" * 64,
         "STEP_CA_IMAGE": "smallstep/step-ca:0.30.2@sha256:" + "1" * 64,
         "TAILSCALE_IMAGE": "tailscale/tailscale:v1.98.8@sha256:d54b2e6a9c09f0e5ec52e82b9ad4af3d446b54a7c08075e92f11c39dd410105f",
-        "REPOSITORY_PATH": "/srv/dgx-forge/repository",
+        "REPOSITORY_PATH": "/srv/vonk-forge/repository",
         "DATABASE_URL_FILE": "/dev/null",
         "POSTGRES_PASSWORD_FILE": "/dev/null",
         "TOKEN_SIGNING_KEY_FILE": "/dev/null",
@@ -36,13 +36,13 @@ def _environment() -> dict[str, str]:
         "WORKLOAD_TIMESTAMP_KEY_FILE": "/dev/null",
         "ADMIN_GRANT_PUBLIC_KEY_FILE": "/dev/null",
         "AGENT_TUF_BOOTSTRAP_ROOT_FILE": "/dev/null",
-        "CONTROL_IDENTITY_PATH": "/srv/dgx-forge/control-identity",
-        "DGX_PLATFORM_VERSION": "1.0.0",
-        "DGX_PLATFORM_RELEASE_DIGEST": "sha256:" + "2" * 64,
-        "DGX_PLATFORM_BUILD_DIGEST": "sha256:" + "3" * 64,
-        "DGX_CONTROL_GENERATION_ID": "gen-" + "4" * 24,
-        "DGX_DATABASE_REVISION": "0012_control_process_heartbeats",
-        "DGX_CONTROL_START_NONCE": "5" * 64,
+        "CONTROL_IDENTITY_PATH": "/srv/vonk-forge/control-identity",
+        "VONK_PLATFORM_VERSION": "1.0.0",
+        "VONK_PLATFORM_RELEASE_DIGEST": "sha256:" + "2" * 64,
+        "VONK_PLATFORM_BUILD_DIGEST": "sha256:" + "3" * 64,
+        "VONK_CONTROL_GENERATION_ID": "gen-" + "4" * 24,
+        "VONK_DATABASE_REVISION": "0012_control_process_heartbeats",
+        "VONK_CONTROL_START_NONCE": "5" * 64,
         "GRAFANA_ADMIN_PASSWORD_FILE": "/dev/null",
         "LITELLM_MASTER_KEY_FILE": "/dev/null",
         "LITELLM_UPSTREAM_KEY_FILE": "/dev/null",
@@ -58,20 +58,20 @@ def _environment() -> dict[str, str]:
         "STEP_CA_PASSWORD_FILE": "/dev/null",
         "STEP_CA_ROOT_CERTIFICATE_FILE": "/dev/null",
         "AGENT_INTERMEDIATE_KEY_FILE": "/dev/null",
-        "DGX_CONTROL_HOSTNAME": "control.test.example",
-        "DGX_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
-        "DGX_AGENT_HOSTNAME": "agents.test.example",
-        "DGX_REGISTRY_HOSTNAME": "registry.test.example",
-        "DGX_AGENT_PROXY_AUTH": "test-proxy-secret",
-        "DGX_MANAGEMENT_CIDRS": "10.0.0.0/24",
-        "DGX_DIRECT_FABRIC_CIDRS": "192.168.100.0/24,192.168.101.0/24",
+        "VONK_CONTROL_HOSTNAME": "control.test.example",
+        "VONK_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
+        "VONK_AGENT_HOSTNAME": "agents.test.example",
+        "VONK_REGISTRY_HOSTNAME": "registry.test.example",
+        "VONK_AGENT_PROXY_AUTH": "test-proxy-secret",
+        "VONK_MANAGEMENT_CIDRS": "10.0.0.0/24",
+        "VONK_DIRECT_FABRIC_CIDRS": "192.168.100.0/24,192.168.101.0/24",
         "NAS_LAN_IP": "10.0.0.2",
-        "DGX_BACKEND_PORT": "8443",
+        "VONK_BACKEND_PORT": "8443",
         "TAILSCALE_OAUTH_CLIENT_ID_FILE": "/dev/null",
         "TAILSCALE_OAUTH_CLIENT_SECRET_FILE": "/dev/null",
         "HERMES_UID": "1100",
         "HERMES_GID": "1100",
-        "HERMES_DATA_ROOT": "/srv/dgx-forge/hermes",
+        "HERMES_DATA_ROOT": "/srv/vonk-forge/hermes",
         "HERMES_API_KEY_FILE": "/dev/null",
         "HERMES_DASHBOARD_ORIGIN": "https://hermes.test.example",
     }
@@ -90,12 +90,12 @@ def _adapted_caddy(environment: dict[str, str]) -> dict:
     result = subprocess.run(
         [
             "docker", "run", "--rm", "-i",
-            "-e", f"DGX_CONTROL_HOSTNAME={environment['DGX_CONTROL_HOSTNAME']}",
-            "-e", f"DGX_AGENT_ENROLL_HOSTNAME={environment['DGX_AGENT_ENROLL_HOSTNAME']}",
-            "-e", f"DGX_AGENT_HOSTNAME={environment['DGX_AGENT_HOSTNAME']}",
-            "-e", f"DGX_REGISTRY_HOSTNAME={environment['DGX_REGISTRY_HOSTNAME']}",
-            "-e", f"DGX_BACKEND_PORT={environment.get('DGX_BACKEND_PORT', '8443')}",
-            "-e", "DGX_AGENT_PROXY_AUTH=test-proxy-secret",
+            "-e", f"VONK_CONTROL_HOSTNAME={environment['VONK_CONTROL_HOSTNAME']}",
+            "-e", f"VONK_AGENT_ENROLL_HOSTNAME={environment['VONK_AGENT_ENROLL_HOSTNAME']}",
+            "-e", f"VONK_AGENT_HOSTNAME={environment['VONK_AGENT_HOSTNAME']}",
+            "-e", f"VONK_REGISTRY_HOSTNAME={environment['VONK_REGISTRY_HOSTNAME']}",
+            "-e", f"VONK_BACKEND_PORT={environment.get('VONK_BACKEND_PORT', '8443')}",
+            "-e", "VONK_AGENT_PROXY_AUTH=test-proxy-secret",
             "caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb",
             "caddy", "adapt", "--config", "-", "--adapter", "caddyfile",
         ],
@@ -125,22 +125,22 @@ def _entrypoint_result(
     entrypoint_arguments: tuple[str, ...] = (),
 ) -> subprocess.CompletedProcess[str]:
     environment = environment | {
-        "DGX_REGISTRY_HOSTNAME": environment.get(
-            "DGX_REGISTRY_HOSTNAME", "registry.test.example"
+        "VONK_REGISTRY_HOSTNAME": environment.get(
+            "VONK_REGISTRY_HOSTNAME", "registry.test.example"
         ),
-        "DGX_BACKEND_PORT": environment.get("DGX_BACKEND_PORT", "8443"),
+        "VONK_BACKEND_PORT": environment.get("VONK_BACKEND_PORT", "8443"),
     }
     command = ["docker", "run", "--rm"]
     for name, value in environment.items():
         command.extend(("-e", f"{name}={value}"))
     command.extend((
-        "-v", f"{ROOT / 'deploy/compose/caddy/entrypoint.sh'}:/usr/local/bin/dgx-caddy-entrypoint:ro",
+        "-v", f"{ROOT / 'deploy/compose/caddy/entrypoint.sh'}:/usr/local/bin/vonk-caddy-entrypoint:ro",
     ))
     if secret_source is not None:
         command.extend(("-v", f"{secret_source}:/run/secrets/agent-proxy-auth:ro"))
     command.extend((
         "caddy:2.10.2@sha256:c3d7ee5d2b11f9dc54f947f68a734c84e9c9666c92c88a7f30b9cba5da182adb",
-        "/bin/sh", "/usr/local/bin/dgx-caddy-entrypoint",
+        "/bin/sh", "/usr/local/bin/vonk-caddy-entrypoint",
     ))
     command.extend(entrypoint_arguments)
     return subprocess.run(
@@ -153,25 +153,25 @@ def _settings_result(rendered: dict, tmp_path: Path) -> subprocess.CompletedProc
     environment = {
         name: value
         for name, value in os.environ.items()
-        if not name.startswith("DGX_")
+        if not name.startswith("VONK_")
     }
     control_environment = rendered["services"]["control-api"]["environment"].copy()
     secret_values = {
-        "DGX_DATABASE_URL_FILE": "postgresql://control:pw@postgres/control\n",
-        "DGX_TOKEN_SIGNING_KEY_FILE": "t" * 32 + "\n",
-        "DGX_METRICS_TOKEN_FILE": "m" * 16 + "\n",
-        "DGX_GIT_SIGNING_KEY_FILE": "test-git-key\n",
-        "DGX_AGENT_CLIENT_CA_FILE": "test-client-ca\n",
-        "DGX_AGENT_INTERMEDIATE_CERTIFICATE_FILE": "test-intermediate-certificate\n",
-        "DGX_AGENT_CA_CREDENTIAL_FILE": "test-provider-credential\n",
-        "DGX_AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE": "test-provider-public-jwk\n",
-        "DGX_AGENT_CA_ROOT_FILE": "test-root-certificate\n",
-        "DGX_AGENT_INTERMEDIATE_KEY_FILE": "test-builtin-key\n",
-        "DGX_AGENT_PROXY_AUTH_FILE": "A" * 30 + "_-\r\n",
-        "DGX_WORKER_API_TOKEN_FILE": "W" * 32 + "\n",
-        "DGX_ADMIN_GRANT_PRIVATE_KEY_FILE": "test-admin-grant-private-key\n",
-        "DGX_PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE": "test-package-grant-key\n",
-        "DGX_PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE": "test-package-receipt-key\n",
+        "VONK_DATABASE_URL_FILE": "postgresql://control:pw@postgres/control\n",
+        "VONK_TOKEN_SIGNING_KEY_FILE": "t" * 32 + "\n",
+        "VONK_METRICS_TOKEN_FILE": "m" * 16 + "\n",
+        "VONK_GIT_SIGNING_KEY_FILE": "test-git-key\n",
+        "VONK_AGENT_CLIENT_CA_FILE": "test-client-ca\n",
+        "VONK_AGENT_INTERMEDIATE_CERTIFICATE_FILE": "test-intermediate-certificate\n",
+        "VONK_AGENT_CA_CREDENTIAL_FILE": "test-provider-credential\n",
+        "VONK_AGENT_CA_PROVISIONER_PUBLIC_JWK_FILE": "test-provider-public-jwk\n",
+        "VONK_AGENT_CA_ROOT_FILE": "test-root-certificate\n",
+        "VONK_AGENT_INTERMEDIATE_KEY_FILE": "test-builtin-key\n",
+        "VONK_AGENT_PROXY_AUTH_FILE": "A" * 30 + "_-\r\n",
+        "VONK_WORKER_API_TOKEN_FILE": "W" * 32 + "\n",
+        "VONK_ADMIN_GRANT_PRIVATE_KEY_FILE": "test-admin-grant-private-key\n",
+        "VONK_PACKAGE_HELPER_GRANT_PRIVATE_KEY_FILE": "test-package-grant-key\n",
+        "VONK_PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE": "test-package-receipt-key\n",
     }
     for name, value in tuple(control_environment.items()):
         if name not in secret_values:
@@ -179,14 +179,14 @@ def _settings_result(rendered: dict, tmp_path: Path) -> subprocess.CompletedProc
         secret = tmp_path / name.lower()
         secret.write_text(secret_values[name])
         control_environment[name] = str(secret)
-    control_environment.setdefault("DGX_AGENT_CA_PROVISIONER_NAME", "dgx-forge-agent")
-    control_environment.setdefault("DGX_AGENT_CA_PROVISIONER_KID", "test-provisioner-kid")
+    control_environment.setdefault("VONK_AGENT_CA_PROVISIONER_NAME", "vonk-forge-agent")
+    control_environment.setdefault("VONK_AGENT_CA_PROVISIONER_KID", "test-provisioner-kid")
     environment.update({name: str(value) for name, value in control_environment.items()})
     return subprocess.run(
         [
             "uv", "run", "--project", str(ROOT / "control"), "python", "-c",
             (
-                "from dgx_control.settings import Settings; "
+                "from vonk_control.settings import Settings; "
                 "settings = Settings.from_env_and_secrets(); "
                 "print(settings.agent_ca_provider); "
                 "print(settings.agent_proxy_auth.decode('ascii')); "
@@ -207,11 +207,11 @@ def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents(
     rendered_caddy = _rendered("compose.yaml")["services"]["caddy"]
     caddy_environment = rendered_caddy["environment"]
     assert {name: caddy_environment[name] for name in (
-        "DGX_CONTROL_HOSTNAME", "DGX_AGENT_ENROLL_HOSTNAME", "DGX_AGENT_HOSTNAME",
+        "VONK_CONTROL_HOSTNAME", "VONK_AGENT_ENROLL_HOSTNAME", "VONK_AGENT_HOSTNAME",
     )} == {name: environment[name] for name in (
-        "DGX_CONTROL_HOSTNAME", "DGX_AGENT_ENROLL_HOSTNAME", "DGX_AGENT_HOSTNAME",
+        "VONK_CONTROL_HOSTNAME", "VONK_AGENT_ENROLL_HOSTNAME", "VONK_AGENT_HOSTNAME",
     )}
-    adapted = _adapted_caddy(caddy_environment | {"DGX_AGENT_PROXY_AUTH": "test-proxy-secret"})
+    adapted = _adapted_caddy(caddy_environment | {"VONK_AGENT_PROXY_AUTH": "test-proxy-secret"})
     tailnet_server = _server_on_port(adapted, 8080)
     backend_server = _server_on_port(adapted, 8443)
 
@@ -249,15 +249,15 @@ def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents(
     agent_routes = agent_site["handle"][0]["routes"]
     agent_proxy = next(route for route in agent_routes if "control-api:8000" in json.dumps(route, sort_keys=True))
     request_headers = agent_proxy["handle"][0]["routes"][0]["handle"][0]["headers"]["request"]
-    assert request_headers["delete"] == ["X-DGX-Agent-*"]
+    assert request_headers["delete"] == ["X-Vonk-Agent-*"]
     replacements = {key.lower(): value for key, value in request_headers["set"].items()}
     assert replacements == {
-        "x-dgx-agent-node": ["{dgx_agent_node}"],
-        "x-dgx-agent-serial": ["{http.request.tls.client.serial}"],
-        "x-dgx-agent-fingerprint": ["{http.request.tls.client.fingerprint}"],
-        "x-dgx-agent-verified": ["1"],
-        "x-dgx-agent-proxy-auth": ["test-proxy-secret"],
-        "x-dgx-agent-source": ["{http.request.remote.host}"],
+        "x-vonk-agent-node": ["{vonk_agent_node}"],
+        "x-vonk-agent-serial": ["{http.request.tls.client.serial}"],
+        "x-vonk-agent-fingerprint": ["{http.request.tls.client.fingerprint}"],
+        "x-vonk-agent-verified": ["1"],
+        "x-vonk-agent-proxy-auth": ["test-proxy-secret"],
+        "x-vonk-agent-source": ["{http.request.remote.host}"],
     }
     assert any(route.get("match") == [{"not": [{"path": ["/agent/v1/enroll"]}], "path": ["/agent/v1/*"]}] for route in agent_routes)
     mappings = []
@@ -275,12 +275,12 @@ def test_caddy_adapts_three_sni_boundaries_for_admin_enrollment_and_mtls_agents(
     collect_maps(adapted)
     assert mappings == [{
         "handler": "map", "source": "{http.request.tls.client.subject}",
-        "destinations": ["{dgx_agent_node}"], "defaults": [""],
+        "destinations": ["{vonk_agent_node}"], "defaults": [""],
         "mappings": [{"input_regexp": "^CN=(spk_[0-9a-f]{32})$", "outputs": ["${1}"]}],
     }]
 
 
-def test_tailnet_and_spark_backend_routes_are_on_separate_listeners() -> None:
+def test_tailnet_and_node_backend_routes_are_on_separate_listeners() -> None:
     environment = _environment()
     adapted = _adapted_caddy(environment)
 
@@ -310,7 +310,7 @@ def test_caddy_activation_route_is_exposed_only_on_verified_mtls_agent_sni() -> 
         "environment"
     ]
     adapted = _adapted_caddy(
-        caddy_environment | {"DGX_AGENT_PROXY_AUTH": "test-proxy-secret"}
+        caddy_environment | {"VONK_AGENT_PROXY_AUTH": "test-proxy-secret"}
     )
     tailnet_server = _server_on_port(adapted, 8080)
     backend_server = _server_on_port(adapted, 8443)
@@ -364,40 +364,40 @@ def test_caddy_activation_route_is_exposed_only_on_verified_mtls_agent_sni() -> 
 
 def test_caddy_compose_requires_distinct_sni_hostnames_before_startup(tmp_path: Path) -> None:
     missing = _environment()
-    missing.pop("DGX_AGENT_HOSTNAME")
+    missing.pop("VONK_AGENT_HOSTNAME")
     command = ["docker", "compose", "-f", str(ROOT / "deploy/compose/compose.yaml"), "config", "--quiet"]
     absent = subprocess.run(
         command, capture_output=True, text=True, env=missing, check=False
     )
     assert absent.returncode != 0
-    assert "DGX_AGENT_HOSTNAME" in absent.stderr
+    assert "VONK_AGENT_HOSTNAME" in absent.stderr
 
     for duplicate in (
-        {"DGX_CONTROL_HOSTNAME": "same.test.example", "DGX_AGENT_ENROLL_HOSTNAME": "same.test.example", "DGX_AGENT_HOSTNAME": "agents.test.example"},
-        {"DGX_CONTROL_HOSTNAME": "same.test.example", "DGX_AGENT_ENROLL_HOSTNAME": "enroll.test.example", "DGX_AGENT_HOSTNAME": "same.test.example"},
-        {"DGX_CONTROL_HOSTNAME": "control.test.example", "DGX_AGENT_ENROLL_HOSTNAME": "same.test.example", "DGX_AGENT_HOSTNAME": "same.test.example"},
+        {"VONK_CONTROL_HOSTNAME": "same.test.example", "VONK_AGENT_ENROLL_HOSTNAME": "same.test.example", "VONK_AGENT_HOSTNAME": "agents.test.example"},
+        {"VONK_CONTROL_HOSTNAME": "same.test.example", "VONK_AGENT_ENROLL_HOSTNAME": "enroll.test.example", "VONK_AGENT_HOSTNAME": "same.test.example"},
+        {"VONK_CONTROL_HOSTNAME": "control.test.example", "VONK_AGENT_ENROLL_HOSTNAME": "same.test.example", "VONK_AGENT_HOSTNAME": "same.test.example"},
     ):
         result = _entrypoint_result(duplicate)
         assert result.returncode != 0
         assert "must be distinct" in result.stderr
 
     for equivalent in (
-        {"DGX_CONTROL_HOSTNAME": "CONTROL.test.example", "DGX_AGENT_ENROLL_HOSTNAME": "control.test.example.", "DGX_AGENT_HOSTNAME": "agents.test.example"},
-        {"DGX_CONTROL_HOSTNAME": "control.test.example", "DGX_AGENT_ENROLL_HOSTNAME": "ENROLL.test.example", "DGX_AGENT_HOSTNAME": "enroll.test.example."},
+        {"VONK_CONTROL_HOSTNAME": "CONTROL.test.example", "VONK_AGENT_ENROLL_HOSTNAME": "control.test.example.", "VONK_AGENT_HOSTNAME": "agents.test.example"},
+        {"VONK_CONTROL_HOSTNAME": "control.test.example", "VONK_AGENT_ENROLL_HOSTNAME": "ENROLL.test.example", "VONK_AGENT_HOSTNAME": "enroll.test.example."},
     ):
         result = _entrypoint_result(equivalent)
         assert result.returncode != 0
         assert "must be distinct" in result.stderr
 
     malformed = _entrypoint_result({
-        "DGX_CONTROL_HOSTNAME": "control test.example",
-        "DGX_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
-        "DGX_AGENT_HOSTNAME": "agents.test.example",
+        "VONK_CONTROL_HOSTNAME": "control test.example",
+        "VONK_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
+        "VONK_AGENT_HOSTNAME": "agents.test.example",
     })
     assert malformed.returncode != 0
     assert "invalid" in malformed.stderr
 
-    valid = {"DGX_CONTROL_HOSTNAME": "control.test.example", "DGX_AGENT_ENROLL_HOSTNAME": "enroll.test.example", "DGX_AGENT_HOSTNAME": "agents.test.example"}
+    valid = {"VONK_CONTROL_HOSTNAME": "control.test.example", "VONK_AGENT_ENROLL_HOSTNAME": "enroll.test.example", "VONK_AGENT_HOSTNAME": "agents.test.example"}
     for result in (_entrypoint_result(valid), _entrypoint_result(valid, "/dev/null")):
         assert result.returncode != 0
         assert "proxy authentication secret" in result.stderr
@@ -411,9 +411,9 @@ def test_caddy_compose_requires_distinct_sni_hostnames_before_startup(tmp_path: 
 
 def test_caddy_proxy_auth_is_one_canonical_base64url_like_line(tmp_path: Path) -> None:
     environment = {
-        "DGX_CONTROL_HOSTNAME": "control.test.example",
-        "DGX_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
-        "DGX_AGENT_HOSTNAME": "agents.test.example",
+        "VONK_CONTROL_HOSTNAME": "control.test.example",
+        "VONK_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
+        "VONK_AGENT_HOSTNAME": "agents.test.example",
     }
     token = "A" * 30 + "_-"
     valid_secret = tmp_path / "valid-agent-proxy-auth"
@@ -421,7 +421,7 @@ def test_caddy_proxy_auth_is_one_canonical_base64url_like_line(tmp_path: Path) -
     result = _entrypoint_result(
         environment,
         str(valid_secret),
-        ("/bin/sh", "-c", 'printf "%s" "$DGX_AGENT_PROXY_AUTH"'),
+        ("/bin/sh", "-c", 'printf "%s" "$VONK_AGENT_PROXY_AUTH"'),
     )
     assert result.returncode == 0, result.stderr
     assert result.stdout == token
@@ -477,15 +477,15 @@ def test_builtin_ca_override_is_explicit_and_only_it_mounts_the_builtin_signing_
     assert "agent-intermediate-key" not in production_secrets
     assert "agent-intermediate-key" in builtin_secrets
     assert "agent-ca-credential" not in builtin_secrets
-    assert builtin["services"]["control-api"]["environment"]["DGX_AGENT_CA_PROVIDER"] == "builtin"
-    assert builtin["services"]["control-api"]["environment"]["DGX_AGENT_BUILTIN_CA_BOOTSTRAP"] == "1"
-    assert "DGX_AGENT_CA_CREDENTIAL_FILE" not in builtin["services"]["control-api"]["environment"]
+    assert builtin["services"]["control-api"]["environment"]["VONK_AGENT_CA_PROVIDER"] == "builtin"
+    assert builtin["services"]["control-api"]["environment"]["VONK_AGENT_BUILTIN_CA_BOOTSTRAP"] == "1"
+    assert "VONK_AGENT_CA_CREDENTIAL_FILE" not in builtin["services"]["control-api"]["environment"]
 
 
 def test_provider_overlays_require_only_their_own_secrets() -> None:
     base = _rendered("compose.yaml")
     assert "step-ca" not in base["services"]
-    assert "DGX_AGENT_CA_PROVIDER" not in base["services"]["control-api"]["environment"]
+    assert "VONK_AGENT_CA_PROVIDER" not in base["services"]["control-api"]["environment"]
 
     builtin_environment = _environment()
     for name in ("AGENT_CA_CREDENTIAL_FILE", "STEP_CA_ROOT_CERTIFICATE_FILE", "STEP_CA_INTERMEDIATE_KEY_FILE", "STEP_CA_PASSWORD_FILE"):

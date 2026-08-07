@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://dgx-forge.local/schemas/fleet.schema.json",
-  "title": "DGX-Forge Fleet v2",
+  "$id": "https://vonk-forge.local/schemas/fleet.schema.json",
+  "title": "Vonk Forge Fleet v2",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "nodes"],

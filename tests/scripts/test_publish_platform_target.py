@@ -18,9 +18,9 @@ SHA_C = "c" * 64
 SHA_D = "d" * 64
 SHA_E = "e" * 64
 MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
-LAYER_MEDIA_TYPE = "application/vnd.dgx-forge.control-deployment.v1.tar"
+LAYER_MEDIA_TYPE = "application/vnd.vonk-forge.control-deployment.v1.tar"
 CONFIG_MEDIA_TYPE = "application/vnd.oci.empty.v1+json"
-ARTIFACT_TYPE = "application/vnd.dgx-forge.control-deployment.v1"
+ARTIFACT_TYPE = "application/vnd.vonk-forge.control-deployment.v1"
 
 
 def _sha256(raw: bytes) -> str:
@@ -30,7 +30,7 @@ def _sha256(raw: bytes) -> str:
 def _artifact(name: str, digest: str) -> dict[str, object]:
     return {
         "name": name,
-        "reference": f"ghcr.io/example/dgx-forge/{name}@sha256:{digest}",
+        "reference": f"ghcr.io/example/vonk-forge/{name}@sha256:{digest}",
         "sha256": digest,
         "size": 1024,
         "sbom_sha256": SHA_D,
@@ -65,7 +65,7 @@ def _bundle_descriptor(raw: bytes) -> dict[str, object]:
     manifest_digest = _sha256(manifest)
     return {
         "reference": (
-            "ghcr.io/example/dgx-forge/control-deployment"
+            "ghcr.io/example/vonk-forge/control-deployment"
             f"@sha256:{manifest_digest}"
         ),
         "manifest_digest": f"sha256:{manifest_digest}",
@@ -104,7 +104,7 @@ def _release(bundle: dict[str, object]) -> dict[str, object]:
                 "protocol": {"minimum": 1, "maximum": 2},
                 "artifact": _artifact("agent-linux-arm64", SHA_A),
                 "payload": {
-                    "name": "dgx-agent",
+                    "name": "vonk-agent",
                     "sha256": SHA_B,
                     "size": 4096,
                 },
@@ -126,7 +126,7 @@ def _release(bundle: dict[str, object]) -> dict[str, object]:
                 "architecture": "linux-arm64",
                 "artifact": _artifact("tooling-linux-arm64", SHA_C),
                 "payload": {
-                    "name": "dgx-forge-tooling",
+                    "name": "vonk-forge-tooling",
                     "sha256": SHA_D,
                     "size": 16384,
                 },
@@ -228,14 +228,14 @@ elif name == "channel-publisher":
         path.write_text(source, encoding="utf-8")
         path.chmod(0o755)
     env = os.environ | {
-        "DGX_PLATFORM_ORAS_BIN": str(fake_bin / "oras"),
-        "DGX_PLATFORM_TUF_PUBLISHER_BIN": str(fake_bin / "tuf-publisher"),
-        "DGX_PLATFORM_CHANNEL_PUBLISHER_BIN": str(fake_bin / "channel-publisher"),
-        "DGX_PLATFORM_AUTHORITY_URL": "https://authority.example.invalid",
-        "DGX_PLATFORM_AUTHORITY_AUDIENCE": "dgx-forge-platform-release",
+        "VONK_PLATFORM_ORAS_BIN": str(fake_bin / "oras"),
+        "VONK_PLATFORM_TUF_PUBLISHER_BIN": str(fake_bin / "tuf-publisher"),
+        "VONK_PLATFORM_CHANNEL_PUBLISHER_BIN": str(fake_bin / "channel-publisher"),
+        "VONK_PLATFORM_AUTHORITY_URL": "https://authority.example.invalid",
+        "VONK_PLATFORM_AUTHORITY_AUDIENCE": "vonk-forge-platform-release",
         "ACTIONS_ID_TOKEN_REQUEST_URL": "https://oidc.example.invalid/token",
         "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "oidc-request-token",
-        "DGX_PLATFORM_TUF_ROOT_KEY": "must-not-leak",
+        "VONK_PLATFORM_TUF_ROOT_KEY": "must-not-leak",
         "GITHUB_TOKEN": "must-not-leak",
     }
     return env, log
@@ -271,7 +271,7 @@ def test_describe_bundle_emits_exact_deterministic_oci_descriptor(
         "--bundle",
         str(bundle_path),
         "--repository",
-        "ghcr.io/example/dgx-forge/control-deployment",
+        "ghcr.io/example/vonk-forge/control-deployment",
     )
 
     assert result.returncode == 0, result.stderr
@@ -333,7 +333,7 @@ def test_publish_orders_exact_bundle_target_and_discovery_channel(
         "--media-type",
     ]
     assert entries[0]["argv"][4] == (
-        "ghcr.io/example/dgx-forge/control-deployment"
+        "ghcr.io/example/vonk-forge/control-deployment"
         f"@sha256:{_sha256(b'{}')}"
     )
     assert LAYER_MEDIA_TYPE in entries[1]["argv"]
@@ -358,14 +358,14 @@ def test_publish_orders_exact_bundle_target_and_discovery_channel(
         f"platform/releases/1.1.0/{SHA_B}.json",
     ]
     assert entries[4]["document"] == channel_document
-    assert "DGX_PLATFORM_TUF_ROOT_KEY" not in entries[0]["env_keys"]
-    assert "DGX_PLATFORM_AUTHORITY_URL" not in entries[0]["env_keys"]
+    assert "VONK_PLATFORM_TUF_ROOT_KEY" not in entries[0]["env_keys"]
+    assert "VONK_PLATFORM_AUTHORITY_URL" not in entries[0]["env_keys"]
     assert "ACTIONS_ID_TOKEN_REQUEST_TOKEN" not in entries[0]["env_keys"]
     assert "GITHUB_TOKEN" not in entries[0]["env_keys"]
     for entry in entries[3:]:
-        assert "DGX_PLATFORM_TUF_ROOT_KEY" not in entry["env_keys"]
+        assert "VONK_PLATFORM_TUF_ROOT_KEY" not in entry["env_keys"]
         assert "GITHUB_TOKEN" not in entry["env_keys"]
-        assert "DGX_PLATFORM_AUTHORITY_URL" in entry["env_keys"]
+        assert "VONK_PLATFORM_AUTHORITY_URL" in entry["env_keys"]
         assert "ACTIONS_ID_TOKEN_REQUEST_TOKEN" in entry["env_keys"]
 
 
@@ -531,7 +531,7 @@ def test_publish_rejects_unsafe_tool_before_mutation(
 ) -> None:
     release_path, bundle_path, _, _ = _write_release(tmp_path, canonical_bundle)
     env, log = _fake_publishers(tmp_path)
-    tool = Path(env["DGX_PLATFORM_ORAS_BIN"])
+    tool = Path(env["VONK_PLATFORM_ORAS_BIN"])
     if unsafe == "hardlink":
         os.link(tool, tmp_path / "oras-alias")
     else:

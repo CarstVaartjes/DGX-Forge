@@ -39,7 +39,7 @@ def _platform_manifest() -> bytes:
         return {
             "name": name,
             "provenance_sha256": "d" * 64,
-            "reference": f"registry.example/dgx-forge/releases@sha256:{digest}",
+            "reference": f"registry.example/vonk-forge/releases@sha256:{digest}",
             "sbom_sha256": "e" * 64,
             "sha256": digest,
             "size": 1024,
@@ -50,19 +50,19 @@ def _platform_manifest() -> bytes:
             {
                 "architecture": "linux-arm64",
                 "artifact": artifact("agent-linux-arm64", "a" * 64),
-                "payload": {"name": "dgx-agent", "sha256": "b" * 64, "size": 4096},
+                "payload": {"name": "vonk-agent", "sha256": "b" * 64, "size": 4096},
                 "protocol": {"maximum": 2, "minimum": 1},
             }
         ],
         "build_digest": "sha256:" + "c" * 64,
         "deployment_bundle": {
             "layer_digest": "sha256:" + "a" * 64,
-            "layer_media_type": "application/vnd.dgx-forge.control-deployment.v1.tar",
+            "layer_media_type": "application/vnd.vonk-forge.control-deployment.v1.tar",
             "layer_size": 1048576,
             "manifest_digest": "sha256:" + "f" * 64,
             "manifest_media_type": "application/vnd.oci.image.manifest.v1+json",
             "manifest_size": 4096,
-            "reference": "registry.example/dgx-forge/control@sha256:" + "f" * 64,
+            "reference": "registry.example/vonk-forge/control@sha256:" + "f" * 64,
         },
         "host_updater_abi": {"maximum": 2, "minimum": 1},
         "control": {
@@ -159,7 +159,7 @@ def _payload() -> dict[str, object]:
         "artifact": {
             "architecture": "linux-arm64",
             "oci_manifest_digest": "sha256:" + "a" * 64,
-            "payload_name": "dgx-agent",
+            "payload_name": "vonk-agent",
             "payload_sha256": "b" * 64,
             "payload_size": 4096,
         },
@@ -223,7 +223,7 @@ def test_authority_signs_exact_fenced_tuf_and_slot_bindings(tmp_path: Path) -> N
         "node_id": "spk_" + "a" * 32,
         "oci_manifest_digest": "sha256:" + "a" * 64,
         "operation_id": OPERATION_ID,
-        "payload_name": "dgx-agent",
+        "payload_name": "vonk-agent",
         "platform_target_name": _target_name(),
         "platform_target_sha256": hashlib.sha256(_platform_manifest()).hexdigest(),
         "platform_version": "1.2.3",

@@ -24,7 +24,7 @@ T = TypeVar("T", bound="PackageInventoryItem")
 
 @_attrs_define
 class PackageInventoryItem:
-    """ One release/content group as observed on one Spark.
+    """ One release/content group as observed on one GPU node.
 
         Attributes:
             active (bool):
@@ -38,7 +38,7 @@ class PackageInventoryItem:
             reclaimable_bytes (int):
             release_digest (str):
             reserved_bytes (int):
-            resources (PackageResourceEnvelope): Bounded per-Spark resource requirements from a promoted release.
+            resources (PackageResourceEnvelope): Bounded per-node resource requirements from a promoted release.
             retained (bool):
             state (str):
             family_id (Union[None, Unset, str]):

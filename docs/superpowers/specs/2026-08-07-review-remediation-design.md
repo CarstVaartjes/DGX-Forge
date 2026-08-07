@@ -2,7 +2,7 @@
 
 ## Scope
 
-This design closes the security, consistency, failure-recovery, and delivery gaps found in the joint review of `vonk-forge` and `vonk-forge-web`. The local repository remains authoritative for private recipes, installations, runs, and Spark state. The global service validates and distributes public immutable recipe revisions.
+This design closes the security, consistency, failure-recovery, and delivery gaps found in the joint review of `vonk-forge` and `vonk-forge-web`. The local repository remains authoritative for private recipes, installations, runs, and GPU node state. The global service validates and distributes public immutable recipe revisions.
 
 ## Shared runtime contract
 
@@ -12,7 +12,7 @@ Version 1 images are Linux/ARM64, digest-pinned OCI images with the exact label 
 
 The agent accepts only credential-free HTTPS URLs for generic HTTP artifacts. Each request hop is resolved before use, every DNS answer must be globally routable, curl is pinned to the validated address, redirects are handled one hop at a time, and the redirect count is bounded. Downloads have an enforced byte ceiling derived from `expected_bytes`; Hugging Face downloads share the same bounded transport and a cumulative remaining-byte budget. OCI artifacts remain supported, but only through HTTPS registries whose host passes the same public-address validation, and their staged output is monitored against the declared ceiling. Any failure removes staging data.
 
-The global worker independently verifies that image and artifact observations fit the recipe's declared download, staging, and installed sizes. The Spark agent repeats enforcement at execution time so a stale or dishonest declaration cannot consume unbounded local storage.
+The global worker independently verifies that image and artifact observations fit the recipe's declared download, staging, and installed sizes. The GPU node agent repeats enforcement at execution time so a stale or dishonest declaration cannot consume unbounded local storage.
 
 ## Atomic orchestration and admission
 

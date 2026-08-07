@@ -1,4 +1,4 @@
-"""Concurrent, read-only health evaluation for configured DGX Spark nodes."""
+"""Concurrent, read-only health evaluation for configured Vonk Forge GPU nodes."""
 
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ from .backend import CommandResult, SshBackend
 from .fleet import Fleet
 from .fleet.loaders import validate_topology_references
 
-_NODES = ("spark1", "spark2")
+_NODES = ("node1", "node2")
 _SWAP_WARNING_BYTES = 1024**3
 _ROOT_FREE_WARNING_BYTES = 150 * 1024**3
 _APPROVED_FABRIC_MTU = 1500
@@ -262,7 +262,7 @@ class NodeHealthService:
                 or self.rdma_baseline.get("inventory") != "inventory/cluster.toml"
                 or not isinstance(baseline, Mapping)
             ):
-                raise TypeError("inventory must define exactly spark1 and spark2")
+                raise TypeError("inventory must define exactly node1 and node2")
             counter_names = tuple(self.raw_schema["$defs"]["rdmaCounters"]["required"])
             functions: dict[str, tuple[tuple[str, str], ...]] = {}
             for node in _NODES:
@@ -319,8 +319,8 @@ class NodeHealthService:
                             f"invalid {node} {name} accepted GID index or address pin"
                         )
             for name in ("function100", "function101"):
-                left = hosts["spark1"]["fabric"][name]
-                right = hosts["spark2"]["fabric"][name]
+                left = hosts["node1"]["fabric"][name]
+                right = hosts["node2"]["fabric"][name]
                 if (
                     left["interface"] != right["interface"]
                     or left["hca"] != right["hca"]
@@ -329,8 +329,8 @@ class NodeHealthService:
                     or left["peer_ip"] != right["fabric_ip"]
                 ):
                     raise TypeError(f"cross-node fabric pins differ for {name}")
-            interfaces = ",".join(interface for interface, _ in functions["spark1"])
-            hcas = ",".join(f"{hca}:1" for _, hca in functions["spark1"])
+            interfaces = ",".join(interface for interface, _ in functions["node1"])
+            hcas = ",".join(f"{hca}:1" for _, hca in functions["node1"])
             expected_consumers = {
                 "GLOO_SOCKET_IFNAME": interfaces,
                 "NCCL_IB_GID_INDEX": _APPROVED_GID_INDEX,
@@ -399,7 +399,7 @@ class NodeHealthService:
 
     def collect(self) -> ClusterHealth:
         collected: dict[str, NodeHealth] = {}
-        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(self._nodes)), thread_name_prefix="spark-health") as pool:
+        with ThreadPoolExecutor(max_workers=min(self.max_workers, len(self._nodes)), thread_name_prefix="node-health") as pool:
             futures = {pool.submit(self._probe, node): node for node in reversed(self._nodes)}
             for future in as_completed(futures):
                 node = futures[future]

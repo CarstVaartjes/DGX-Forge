@@ -295,9 +295,9 @@ def validate_compose(config: Mapping[str, Any], role: str) -> None:
         ("TRANSFORMERS_OFFLINE", "1"),
         ("HF_HUB_DISABLE_XET", "1"),
         ("NODE_RANK", expected_rank),
-        ("DSPARK_MODEL", "/models/deepseek-ai/DeepSeek-V4-Flash-0731"),
+        ("DVONK_MODEL", "/models/deepseek-ai/DeepSeek-V4-Flash-0731"),
         (
-            "DSPARK_ENCODING_FILE",
+            "DVONK_ENCODING_FILE",
             "/models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py",
         ),
         ("VLLM_HOST_IP", expected_host_ip),

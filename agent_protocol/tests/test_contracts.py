@@ -201,7 +201,7 @@ def test_direct_result_construction_rejects_client_filesystem_paths() -> None:
         AgentResult(
             **raw,
             state="succeeded",
-            result={"evidence": "/var/lib/dgx-agent/result.json"},
+            result={"evidence": "/var/lib/vonk-agent/result.json"},
         )
 
 

@@ -28,8 +28,8 @@ import type {
   CatalogRecipeList,
   CatalogRecipeRevision,
   GlobalRecipeRevision,
-  SparkRunApplied,
-  SparkRunPreview,
+  WorkloadRunApplied,
+  WorkloadRunPreview,
   SourceBundleReceipt,
   SourcePolicyReport,
   RecipeBuildPlan,
@@ -50,7 +50,7 @@ function csrfToken(): string | undefined {
   const cookie = document.cookie
     .split(";")
     .map(value => value.trim())
-    .find(value => value.startsWith("dgx_csrf="));
+    .find(value => value.startsWith("vonk_csrf="));
   return cookie?.slice(cookie.indexOf("=") + 1);
 }
 
@@ -259,12 +259,12 @@ export class ApiClient implements ControlApi {
     return this.request("/api/v1/recipes/mappings", {method: "POST", body: JSON.stringify({recipe_revision_id: plan.recipe_revision_id, profile_name: plan.profile_name, node_ids: plan.nodes.map(node => node.node_id), parameters: plan.parameters, placement_digest: plan.placement_digest, request_key: crypto.randomUUID()})});
   }
 
-  previewSparkRun(sourceYaml: string): Promise<SparkRunPreview> {
-    return this.request("/api/v1/catalog/imports/sparkrun/preview", {method: "POST", body: JSON.stringify({source_yaml: sourceYaml})});
+  previewWorkloadRun(sourceYaml: string): Promise<WorkloadRunPreview> {
+    return this.request("/api/v1/catalog/imports/workload_run/preview", {method: "POST", body: JSON.stringify({source_yaml: sourceYaml})});
   }
 
-  applySparkRun(sourceYaml: string, sourceSha256: string, reportDigest: string): Promise<SparkRunApplied> {
-    return this.request("/api/v1/catalog/imports/sparkrun", {method: "POST", body: JSON.stringify({source_yaml: sourceYaml, source_sha256: sourceSha256, report_digest: reportDigest})});
+  applyWorkloadRun(sourceYaml: string, sourceSha256: string, reportDigest: string): Promise<WorkloadRunApplied> {
+    return this.request("/api/v1/catalog/imports/workload_run", {method: "POST", body: JSON.stringify({source_yaml: sourceYaml, source_sha256: sourceSha256, report_digest: reportDigest})});
   }
 
   async fleet(): Promise<FleetResponse> {

@@ -12,12 +12,12 @@ from ..types import UNSET, Unset
 
 
 
-T = TypeVar("T", bound="PackageSparkResources")
+T = TypeVar("T", bound="PackageNodeResources")
 
 
 
 @_attrs_define
-class PackageSparkResources:
+class PackageNodeResources:
     """
         Attributes:
             gpu_count (int):
@@ -76,7 +76,7 @@ class PackageSparkResources:
 
         host_memory_total_bytes = d.pop("host_memory_total_bytes")
 
-        package_spark_resources = cls(
+        package_node_resources = cls(
             gpu_count=gpu_count,
             gpu_memory_free_bytes=gpu_memory_free_bytes,
             gpu_memory_total_bytes=gpu_memory_total_bytes,
@@ -84,4 +84,4 @@ class PackageSparkResources:
             host_memory_total_bytes=host_memory_total_bytes,
         )
 
-        return package_spark_resources
+        return package_node_resources

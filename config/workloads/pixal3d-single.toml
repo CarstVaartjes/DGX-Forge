@@ -2,9 +2,9 @@ id = "pixal3d-single"
 adapter = "creative-pixal3d"
 topology = "single"
 placement_class = "single-exclusive"
-nodes = ["spark2"]
-start_order = ["spark2"]
-stop_order = ["spark2"]
+nodes = ["node2"]
+start_order = ["node2"]
+stop_order = ["node2"]
 conflicts = ["deepseek-agent-dual", "deepseek-agent-single"]
 co_location = "exclusive"
 accepted_evidence = "inventory/reports/accepted-cluster-profiles.json"
@@ -19,7 +19,7 @@ revision = "0b31f9160aa400719af409098bff7936a932f726"
 manifest = "/srv/models/manifests/pixal3d-single.json"
 
 [image]
-reference = "ghcr.io/dgx-forge/tencent/pixal3d@sha256:0000000000000000000000000000000000000000000000000000000000000000"
+reference = "ghcr.io/vonk-forge/tencent/pixal3d@sha256:0000000000000000000000000000000000000000000000000000000000000000"
 
 [paths]
 cache = "/srv/models/snapshots/pixal3d-single"
@@ -31,13 +31,13 @@ host = "127.0.0.1"
 port = 9104
 
 [commands]
-prepare = ["/opt/spark/model-adapters/pixal3d-single/bin/pixal3d-single", "prepare"]
-verify = ["/opt/spark/model-adapters/pixal3d-single/bin/pixal3d-single", "verify"]
-start = ["/opt/spark/model-adapters/pixal3d-single/bin/pixal3d-single", "start"]
-health = ["/opt/spark/model-adapters/pixal3d-single/bin/pixal3d-single", "health"]
-infer = ["/opt/spark/model-adapters/pixal3d-single/bin/pixal3d-single", "infer"]
-stop = ["/opt/spark/model-adapters/pixal3d-single/bin/pixal3d-single", "stop"]
-verify-release = ["/opt/spark/model-adapters/pixal3d-single/bin/pixal3d-single", "verify-release"]
+prepare = ["/opt/node/model-adapters/pixal3d-single/bin/pixal3d-single", "prepare"]
+verify = ["/opt/node/model-adapters/pixal3d-single/bin/pixal3d-single", "verify"]
+start = ["/opt/node/model-adapters/pixal3d-single/bin/pixal3d-single", "start"]
+health = ["/opt/node/model-adapters/pixal3d-single/bin/pixal3d-single", "health"]
+infer = ["/opt/node/model-adapters/pixal3d-single/bin/pixal3d-single", "infer"]
+stop = ["/opt/node/model-adapters/pixal3d-single/bin/pixal3d-single", "stop"]
+verify-release = ["/opt/node/model-adapters/pixal3d-single/bin/pixal3d-single", "verify-release"]
 
 [deadlines]
 prepare = 86400

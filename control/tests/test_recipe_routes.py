@@ -76,7 +76,7 @@ def setup(
         session.flush()
         mapping = ClusterMapping(
             recipe_revision_id=revision.id,
-            profile_name=f"{ranks}-spark",
+            profile_name=f"{ranks}-node",
             generation=1,
             node_count=ranks,
             state="ready",

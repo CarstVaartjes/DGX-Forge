@@ -19,7 +19,7 @@ def _sha256(path: Path) -> str:
 
 
 def _release_root(
-    tmp_path: Path, *, nodes: tuple[object, ...] = ("spark1", "spark2")
+    tmp_path: Path, *, nodes: tuple[object, ...] = ("node1", "node2")
 ) -> tuple[Path, str]:
     root = tmp_path / "repository"
     release = root / "adapters/example"
@@ -55,11 +55,11 @@ sha256 = "{digest}"
     inventory = root / "inventory/cluster.toml"
     inventory.parent.mkdir(parents=True)
     inventory.write_text(
-        '''[hosts.spark1]
-ssh_alias = "dgx-spark-1"
+        '''[hosts.node1]
+ssh_alias = "vonk-node-1"
 
-[hosts.spark2]
-ssh_alias = "dgx-spark-2"
+[hosts.node2]
+ssh_alias = "vonk-node-2"
 ''',
         encoding="utf-8",
     )
@@ -117,8 +117,8 @@ with open(os.environ["FAKE_SCP_LOG"], "a", encoding="utf-8") as log:
     for command in (ssh, scp):
         command.chmod(0o755)
     env = os.environ | {
-        "SPARK_SSH_BIN": str(ssh),
-        "SPARK_SCP_BIN": str(scp),
+        "VONK_SSH_BIN": str(ssh),
+        "VONK_SCP_BIN": str(scp),
         "FAKE_SSH_LOG": str(ssh_log),
         "FAKE_SCP_LOG": str(scp_log),
         "FAKE_PROBE": probe,
@@ -135,8 +135,8 @@ def _filesystem_remote_environment(
     fake_bin = tmp_path / "filesystem-fake-bin"
     fake_bin.mkdir()
     remote_root = tmp_path / "remote"
-    for alias in ("dgx-spark-1", "dgx-spark-2"):
-        (remote_root / alias / "opt/spark/model-adapters").mkdir(parents=True)
+    for alias in ("vonk-node-1", "vonk-node-2"):
+        (remote_root / alias / "opt/node/model-adapters").mkdir(parents=True)
 
     ssh = fake_bin / "ssh"
     ssh.write_text(
@@ -148,7 +148,7 @@ payload = sys.stdin.read()
 alias = sys.argv[-2]
 command = shlex.split(sys.argv[-1])
 arguments = command[command.index("--") + 1:]
-prefix = "/opt/spark/model-adapters"
+prefix = "/opt/node/model-adapters"
 base = Path(os.environ["FAKE_REMOTE_ROOT"]) / alias
 
 def mapped(value):
@@ -225,8 +225,8 @@ os.execv(real, [real, *sys.argv[1:]])
     for command in (ssh, scp, stat_command, python_command):
         command.chmod(0o755)
     environment = os.environ | {
-        "SPARK_SSH_BIN": str(ssh),
-        "SPARK_SCP_BIN": str(scp),
+        "VONK_SSH_BIN": str(ssh),
+        "VONK_SCP_BIN": str(scp),
         "FAKE_REMOTE_ROOT": str(remote_root),
         "REAL_PYTHON3": sys.executable,
     }
@@ -249,32 +249,32 @@ def _replace_manifest_digest(root: Path) -> None:
 def test_default_is_a_validated_dry_run_without_remote_commands(tmp_path: Path) -> None:
     root, digest = _release_root(tmp_path)
     env = os.environ | {
-        "SPARK_SSH_BIN": "/must-not-run/ssh",
-        "SPARK_SCP_BIN": "/must-not-run/scp",
+        "VONK_SSH_BIN": "/must-not-run/ssh",
+        "VONK_SCP_BIN": "/must-not-run/scp",
     }
 
     completed = _run(root, "example", env=env)
 
     assert completed.returncode == 0
     assert "dry-run" in completed.stdout
-    assert "dgx-spark-1" in completed.stdout
-    assert "dgx-spark-2" in completed.stdout
-    assert f"/opt/spark/model-adapters/example/releases/{digest}" in completed.stdout
+    assert "vonk-node-1" in completed.stdout
+    assert "vonk-node-2" in completed.stdout
+    assert f"/opt/node/model-adapters/example/releases/{digest}" in completed.stdout
 
 
 def test_dry_run_targets_only_the_workload_declared_node(tmp_path: Path) -> None:
-    root, _ = _release_root(tmp_path, nodes=("spark1",))
+    root, _ = _release_root(tmp_path, nodes=("node1",))
 
     completed = _run(root, "example")
 
     assert completed.returncode == 0, completed.stderr
-    assert json.loads(completed.stdout)["hosts"] == ["dgx-spark-1"]
+    assert json.loads(completed.stdout)["hosts"] == ["vonk-node-1"]
 
 
 def test_release_targets_resolved_generic_nodes(tmp_path: Path) -> None:
-    root, _ = _release_root(tmp_path, nodes=("spark1",))
+    root, _ = _release_root(tmp_path, nodes=("node1",))
     workload = root / "config/workloads/example.toml"
-    workload.write_text(workload.read_text().replace('nodes = ["spark1"]\n', ""))
+    workload.write_text(workload.read_text().replace('nodes = ["node1"]\n', ""))
     node_ids = [f"spk_{index:032x}" for index in (10, 20, 30)]
     fleet = ["schema_version = 2", ""]
     for index, node_id in enumerate(node_ids):
@@ -300,10 +300,10 @@ def test_release_targets_resolved_generic_nodes(tmp_path: Path) -> None:
     document = json.loads(completed.stdout)
     assert document["node_ids"] == node_ids
     assert document["hosts"] == [f"operator@10.0.0.{index + 1}" for index in range(3)]
-    assert "dgx-spark" not in completed.stdout
+    assert "vonk-node" not in completed.stdout
 
 
-@pytest.mark.parametrize("nodes", ((), ("spark1", "spark1"), ("spark3",)))
+@pytest.mark.parametrize("nodes", ((), ("node1", "node1"), ("spark3",)))
 def test_dry_run_rejects_invalid_workload_nodes(
     tmp_path: Path, nodes: tuple[object, ...]
 ) -> None:
@@ -312,7 +312,7 @@ def test_dry_run_rejects_invalid_workload_nodes(
     completed = _run(root, "example")
 
     assert completed.returncode != 0
-    assert "workload nodes must be a non-empty unique Spark node subset" in completed.stderr
+    assert "workload nodes must be a non-empty unique GPU node subset" in completed.stderr
 
 
 def test_dry_run_rejects_changed_manifest_and_payload(tmp_path: Path) -> None:
@@ -380,7 +380,7 @@ def test_workload_name_cannot_escape_the_release_namespace(tmp_path: Path) -> No
 
 
 def test_release_modes_follow_manifest_policy_on_non_posix_checkouts(tmp_path: Path) -> None:
-    root, digest = _release_root(tmp_path, nodes=("spark1",))
+    root, digest = _release_root(tmp_path, nodes=("node1",))
     adapter = root / "adapters/example/bin/adapter"
     config = root / "adapters/example/config/common.env"
     adapter.chmod(0o777)
@@ -392,7 +392,7 @@ def test_release_modes_follow_manifest_policy_on_non_posix_checkouts(tmp_path: P
     assert completed.returncode == 0, completed.stderr
     installed = (
         remote_root
-        / "dgx-spark-1/opt/spark/model-adapters/example/releases"
+        / "vonk-node-1/opt/node/model-adapters/example/releases"
         / digest
     )
     assert (installed / "bin/adapter").stat().st_mode & 0o777 == 0o755
@@ -419,7 +419,7 @@ def test_apply_stages_verifies_and_atomically_installs_both_nodes(
     scp_calls = _json_lines(scp_log)
     assert len(ssh_calls) == 10
     assert len(scp_calls) == 4
-    for alias in ("dgx-spark-1", "dgx-spark-2"):
+    for alias in ("vonk-node-1", "vonk-node-2"):
         calls = [call for call in ssh_calls if alias in call["argv"]]
         assert len(calls) == 5
         assert all("BatchMode=yes" in call["argv"] for call in calls)
@@ -454,7 +454,7 @@ def test_apply_stages_verifies_and_atomically_installs_both_nodes(
 
 
 def test_apply_targets_only_the_workload_declared_node(tmp_path: Path) -> None:
-    root, _ = _release_root(tmp_path, nodes=("spark1",))
+    root, _ = _release_root(tmp_path, nodes=("node1",))
     env, ssh_log, scp_log = _fake_remote_environment(tmp_path)
 
     completed = _run(root, "--apply", "example", env=env)
@@ -462,9 +462,9 @@ def test_apply_targets_only_the_workload_declared_node(tmp_path: Path) -> None:
     assert completed.returncode == 0, completed.stderr
     assert len(_json_lines(ssh_log)) == 5
     assert len(_json_lines(scp_log)) == 2
-    assert all("dgx-spark-1" in call["argv"] for call in _json_lines(ssh_log))
+    assert all("vonk-node-1" in call["argv"] for call in _json_lines(ssh_log))
     assert all(
-        call["argv"][-1].startswith("dgx-spark-1:")
+        call["argv"][-1].startswith("vonk-node-1:")
         for call in _json_lines(scp_log)
     )
 
@@ -472,16 +472,16 @@ def test_apply_targets_only_the_workload_declared_node(tmp_path: Path) -> None:
 def test_windows_style_scp_wrapper_receives_a_windows_local_source_path(
     tmp_path: Path,
 ) -> None:
-    root, _ = _release_root(tmp_path, nodes=("spark1",))
+    root, _ = _release_root(tmp_path, nodes=("node1",))
     env, _, scp_log = _fake_remote_environment(tmp_path)
-    scp = Path(env["SPARK_SCP_BIN"])
+    scp = Path(env["VONK_SCP_BIN"])
     wslpath = scp.parent / "wslpath"
     wslpath.write_text(
         "#!/bin/sh\nprintf 'WINDOWS_PATH:%s\\n' \"$2\"\n",
         encoding="utf-8",
     )
     wslpath.chmod(0o755)
-    env["SPARK_SCP_PATH_STYLE"] = "windows"
+    env["VONK_SCP_PATH_STYLE"] = "windows"
     env["PATH"] = f"{scp.parent}:{env['PATH']}"
 
     completed = _run(root, "--apply", "example", env=env)
@@ -496,13 +496,13 @@ def test_windows_style_scp_wrapper_receives_a_windows_local_source_path(
 def test_posix_style_scp_wrapper_named_exe_keeps_a_posix_source_path(
     tmp_path: Path,
 ) -> None:
-    root, _ = _release_root(tmp_path, nodes=("spark1",))
+    root, _ = _release_root(tmp_path, nodes=("node1",))
     env, _, scp_log = _fake_remote_environment(tmp_path)
-    scp = Path(env["SPARK_SCP_BIN"])
+    scp = Path(env["VONK_SCP_BIN"])
     misleading_name = scp.with_suffix(".exe")
     scp.rename(misleading_name)
-    env["SPARK_SCP_BIN"] = str(misleading_name)
-    env["SPARK_SCP_PATH_STYLE"] = "posix"
+    env["VONK_SCP_BIN"] = str(misleading_name)
+    env["VONK_SCP_PATH_STYLE"] = "posix"
 
     completed = _run(root, "--apply", "example", env=env)
 
@@ -514,14 +514,14 @@ def test_posix_style_scp_wrapper_named_exe_keeps_a_posix_source_path(
 
 
 def test_invalid_scp_path_style_fails_before_remote_commands(tmp_path: Path) -> None:
-    root, _ = _release_root(tmp_path, nodes=("spark1",))
+    root, _ = _release_root(tmp_path, nodes=("node1",))
     env, ssh_log, scp_log = _fake_remote_environment(tmp_path)
-    env["SPARK_SCP_PATH_STYLE"] = "windows; unsafe"
+    env["VONK_SCP_PATH_STYLE"] = "windows; unsafe"
 
     completed = _run(root, "--apply", "example", env=env)
 
     assert completed.returncode == 2
-    assert "SPARK_SCP_PATH_STYLE must be posix or windows" in completed.stderr
+    assert "VONK_SCP_PATH_STYLE must be posix or windows" in completed.stderr
     assert _json_lines(ssh_log) == []
     assert _json_lines(scp_log) == []
 
@@ -564,11 +564,11 @@ def test_filesystem_remote_executes_atomic_install_and_idempotent_probe(
     assert first.returncode == 0, first.stderr
     assert second.returncode == 0, second.stderr
     assert second.stdout.count("already installed") == 2
-    for alias in ("dgx-spark-1", "dgx-spark-2"):
+    for alias in ("vonk-node-1", "vonk-node-2"):
         installed = (
             remote_root
             / alias
-            / "opt/spark/model-adapters/example/releases"
+            / "opt/node/model-adapters/example/releases"
             / digest
         )
         assert (installed / "bin/adapter").read_text(encoding="utf-8") == (
@@ -588,11 +588,11 @@ def test_filesystem_remote_repairs_modes_not_preserved_by_scp(tmp_path: Path) ->
     completed = _run(root, "--apply", "example", env=environment)
 
     assert completed.returncode == 0, completed.stderr
-    for alias in ("dgx-spark-1", "dgx-spark-2"):
+    for alias in ("vonk-node-1", "vonk-node-2"):
         installed = (
             remote_root
             / alias
-            / "opt/spark/model-adapters/example/releases"
+            / "opt/node/model-adapters/example/releases"
             / digest
         )
         assert (installed / "bin/adapter").stat().st_mode & 0o777 == 0o755
@@ -608,7 +608,7 @@ def test_filesystem_remote_rejects_changed_extra_and_symlinked_content(
     assert first.returncode == 0, first.stderr
     installed = (
         remote_root
-        / "dgx-spark-1/opt/spark/model-adapters/example/releases"
+        / "vonk-node-1/opt/node/model-adapters/example/releases"
         / digest
     )
 
@@ -624,7 +624,7 @@ def test_filesystem_remote_rejects_changed_extra_and_symlinked_content(
 def test_filesystem_remote_refuses_symlinked_install_ancestors(tmp_path: Path) -> None:
     root, _ = _release_root(tmp_path)
     environment, remote_root = _filesystem_remote_environment(tmp_path)
-    trusted = remote_root / "dgx-spark-1/opt/spark/model-adapters"
+    trusted = remote_root / "vonk-node-1/opt/node/model-adapters"
     outside = tmp_path / "outside"
     outside.mkdir()
     (trusted / "example").symlink_to(outside, target_is_directory=True)
@@ -649,7 +649,7 @@ def test_filesystem_remote_destination_race_never_replaces_content(
     assert completed.returncode != 0
     final = (
         remote_root
-        / "dgx-spark-1/opt/spark/model-adapters/example/releases"
+        / "vonk-node-1/opt/node/model-adapters/example/releases"
         / digest
     )
     assert final.is_dir()

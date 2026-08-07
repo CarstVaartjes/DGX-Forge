@@ -1,4 +1,4 @@
-"""Deterministic version-skew analysis and topology-safe Spark rollout plans."""
+"""Deterministic version-skew analysis and topology-safe GPU node rollout plans."""
 
 from __future__ import annotations
 
@@ -718,7 +718,7 @@ class UpdateAgentQueue(Protocol):
 
 
 class UpdateOrchestrator:
-    """Persist and advance one explicit, administrator-approved Spark rollout."""
+    """Persist and advance one explicit, administrator-approved GPU node rollout."""
 
     def __init__(
         self,

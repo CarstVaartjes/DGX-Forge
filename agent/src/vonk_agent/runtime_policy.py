@@ -245,7 +245,7 @@ class RuntimePolicy:
             "adapter policy",
         )
         exact_adapter = {
-            "adapter_id": "spark-runtime-v1",
+            "adapter_id": "node-runtime-v1",
             "executable_relative_path": "bin/runtime-adapter",
             "timeout_seconds": 60,
             "output_limit_bytes": 64 * 1024,

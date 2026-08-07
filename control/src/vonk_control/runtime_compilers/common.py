@@ -8,7 +8,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from math import isfinite
 
-from ..sparkrun_source import SparkRunSource
+from ..workload_run_source import WorkloadRunSource
 
 _PLACEHOLDER = re.compile(r"\{([a-zA-Z][a-zA-Z0-9_]*)\}")
 _SAFE_VALUE = re.compile(r"^[A-Za-z0-9_./:+@%=-]{1,2048}$")
@@ -53,7 +53,7 @@ class RuntimeProjection:
         return result
 
 
-def tokens(source: SparkRunSource) -> list[str]:
+def tokens(source: WorkloadRunSource) -> list[str]:
     raw = source.command.raw.replace("\\\n", " ")
     if any(
         character in raw
@@ -130,7 +130,7 @@ def options(
     return tuple(emitted), parsed
 
 
-def environment(source: SparkRunSource, allowlist: frozenset[str]) -> dict[str, str]:
+def environment(source: WorkloadRunSource, allowlist: frozenset[str]) -> dict[str, str]:
     result: dict[str, str] = {}
     for key, value in source.environment.items():
         if key not in allowlist or not isinstance(value, (str, int, bool)):

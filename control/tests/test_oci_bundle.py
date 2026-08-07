@@ -14,7 +14,7 @@ from vonk_control.oci_bundle import OciBundleError, OciBundleSource
 from cluster_profiles.platform_release import OciDeploymentBundle
 
 MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
-LAYER_MEDIA_TYPE = "application/vnd.dgx-forge.control-deployment.v1.tar"
+LAYER_MEDIA_TYPE = "application/vnd.vonk-forge.control-deployment.v1.tar"
 
 
 def _digest(content: bytes) -> str:
@@ -31,7 +31,7 @@ def _manifest(layer: bytes, **layer_changes: object) -> bytes:
     document = {
         "schemaVersion": 2,
         "mediaType": MANIFEST_MEDIA_TYPE,
-        "artifactType": "application/vnd.dgx-forge.control-deployment.v1",
+        "artifactType": "application/vnd.vonk-forge.control-deployment.v1",
         "config": {
             "mediaType": "application/vnd.unknown.config.v1+json",
             "digest": "sha256:" + "0" * 64,
@@ -46,7 +46,7 @@ def _descriptor(manifest: bytes, layer: bytes) -> OciDeploymentBundle:
     manifest_digest = _digest(manifest)
     return OciDeploymentBundle(
         reference=(
-            "registry.example:5443/dgx-forge/control-deployment@" + manifest_digest
+            "registry.example:5443/vonk-forge/control-deployment@" + manifest_digest
         ),
         manifest_digest=manifest_digest,
         manifest_size=len(manifest),
@@ -141,7 +141,7 @@ def test_fetch_uses_only_raw_digest_manifest_and_blob_commands(tmp_path: Path) -
             "fetch",
             "--output",
             "-",
-            "registry.example:5443/dgx-forge/control-deployment@"
+            "registry.example:5443/vonk-forge/control-deployment@"
             + descriptor.layer_digest,
         ],
     ]
@@ -280,7 +280,7 @@ def test_fetch_rejects_noncanonical_or_ambiguous_manifest_json(tmp_path: Path) -
         source.fetch(descriptor)
 
     nonfinite = good.replace(
-        b'"artifactType":"application/vnd.dgx-forge.control-deployment.v1"',
+        b'"artifactType":"application/vnd.vonk-forge.control-deployment.v1"',
         b'"artifactType":NaN',
     )
     descriptor = _descriptor(nonfinite, layer)
@@ -319,7 +319,7 @@ def test_fetch_rejects_unbound_reference_without_starting_oras(tmp_path: Path) -
     manifest = _manifest(layer)
     descriptor = replace(
         _descriptor(manifest, layer),
-        reference="registry.example/dgx-forge/control-deployment:latest",
+        reference="registry.example/vonk-forge/control-deployment:latest",
     )
     source, log = _source(tmp_path, manifest, layer)
 

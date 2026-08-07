@@ -19,7 +19,7 @@
 (control_proxy) {
 	reverse_proxy control-api:8000 {
 		# Never permit a caller to inject agent identity into control-api.
-		header_up -X-DGX-Agent-*
+		header_up -X-Vonk-Agent-*
 	}
 }
 
@@ -63,7 +63,7 @@
 
 # Bootstrap is server-authenticated but intentionally does not request a client
 # certificate. It exposes exactly the bounded enrollment submission route.
-https://{$DGX_AGENT_ENROLL_HOSTNAME:enroll.example.invalid}:{$DGX_BACKEND_PORT:8443} {
+https://{$VONK_AGENT_ENROLL_HOSTNAME:enroll.example.invalid}:{$VONK_BACKEND_PORT:8443} {
 	import edge_guards
 
 	@not_enrollment not path /agent/v1/enroll
@@ -78,7 +78,7 @@ https://{$DGX_AGENT_ENROLL_HOSTNAME:enroll.example.invalid}:{$DGX_BACKEND_PORT:8
 # The agent endpoint is a distinct TLS SNI because client authentication cannot
 # be conditional on an HTTP path. The subject is mapped strictly to the exact
 # node-ID grammar before it reaches the application.
-https://{$DGX_AGENT_HOSTNAME:agents.example.invalid}:{$DGX_BACKEND_PORT:8443} {
+https://{$VONK_AGENT_HOSTNAME:agents.example.invalid}:{$VONK_BACKEND_PORT:8443} {
 	import edge_guards
 	tls {
 		client_auth {
@@ -86,7 +86,7 @@ https://{$DGX_AGENT_HOSTNAME:agents.example.invalid}:{$DGX_BACKEND_PORT:8443} {
 			mode require_and_verify
 		}
 	}
-	map {tls_client_subject} {dgx_agent_node} {
+	map {tls_client_subject} {vonk_agent_node} {
 		~^CN=(spk_[0-9a-f]{32})$ "${1}"
 		default ""
 	}
@@ -98,13 +98,13 @@ https://{$DGX_AGENT_HOSTNAME:agents.example.invalid}:{$DGX_BACKEND_PORT:8443} {
 	handle @agent_api {
 		reverse_proxy control-api:8000 {
 			# Strip first, then only Caddy supplies the verified TLS metadata.
-			header_up -X-DGX-Agent-*
-			header_up X-DGX-Agent-Node {dgx_agent_node}
-			header_up X-DGX-Agent-Serial {tls_client_serial}
-			header_up X-DGX-Agent-Fingerprint {tls_client_fingerprint}
-			header_up X-DGX-Agent-Verified "1"
-			header_up X-DGX-Agent-Proxy-Auth "{$DGX_AGENT_PROXY_AUTH}"
-			header_up X-DGX-Agent-Source {http.request.remote.host}
+			header_up -X-Vonk-Agent-*
+			header_up X-Vonk-Agent-Node {vonk_agent_node}
+			header_up X-Vonk-Agent-Serial {tls_client_serial}
+			header_up X-Vonk-Agent-Fingerprint {tls_client_fingerprint}
+			header_up X-Vonk-Agent-Verified "1"
+			header_up X-Vonk-Agent-Proxy-Auth "{$VONK_AGENT_PROXY_AUTH}"
+			header_up X-Vonk-Agent-Source {http.request.remote.host}
 		}
 	}
 	respond 404
@@ -112,7 +112,7 @@ https://{$DGX_AGENT_HOSTNAME:agents.example.invalid}:{$DGX_BACKEND_PORT:8443} {
 
 # Signed OCI artifacts are pull-only for authenticated agents. Operator
 # publication uses the private registry network, never this SNI.
-https://{$DGX_REGISTRY_HOSTNAME:registry.example.invalid}:{$DGX_BACKEND_PORT:8443} {
+https://{$VONK_REGISTRY_HOSTNAME:registry.example.invalid}:{$VONK_BACKEND_PORT:8443} {
 	import edge_guards
 	tls {
 		client_auth {

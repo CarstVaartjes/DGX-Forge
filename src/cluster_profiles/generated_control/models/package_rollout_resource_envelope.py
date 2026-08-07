@@ -33,7 +33,7 @@ class PackageRolloutResourceEnvelope:
             measurement (str):
             per_node (PackageResourceValues):
             ranks (list['PackageRank']):
-            required_sparks (int):
+            required_nodes (int):
             schema_version (int):
             topology (str):
             world_size (int):
@@ -45,7 +45,7 @@ class PackageRolloutResourceEnvelope:
     measurement: str
     per_node: 'PackageResourceValues'
     ranks: list['PackageRank']
-    required_sparks: int
+    required_nodes: int
     schema_version: int
     topology: str
     world_size: int
@@ -81,7 +81,7 @@ class PackageRolloutResourceEnvelope:
 
 
 
-        required_sparks = self.required_sparks
+        required_nodes = self.required_nodes
 
         schema_version = self.schema_version
 
@@ -99,7 +99,7 @@ class PackageRolloutResourceEnvelope:
             "measurement": measurement,
             "per_node": per_node,
             "ranks": ranks,
-            "required_sparks": required_sparks,
+            "required_nodes": required_nodes,
             "schema_version": schema_version,
             "topology": topology,
             "world_size": world_size,
@@ -153,7 +153,7 @@ class PackageRolloutResourceEnvelope:
             ranks.append(ranks_item)
 
 
-        required_sparks = d.pop("required_sparks")
+        required_nodes = d.pop("required_nodes")
 
         schema_version = d.pop("schema_version")
 
@@ -168,7 +168,7 @@ class PackageRolloutResourceEnvelope:
             measurement=measurement,
             per_node=per_node,
             ranks=ranks,
-            required_sparks=required_sparks,
+            required_nodes=required_nodes,
             schema_version=schema_version,
             topology=topology,
             world_size=world_size,

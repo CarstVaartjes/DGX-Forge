@@ -1,7 +1,7 @@
 # Runtime release deployment
 
 Use `scripts/deploy-runtime-release` from the developer machine to install the
-selected workload's checked adapter release on exactly its resolved Spark
+selected workload's checked adapter release on exactly its resolved GPU node
 nodes. For V2 repositories, targets come from `inventory/fleet.toml` and the
 content-addressed `inventory/placements/<workload>.json` plan. Legacy workload
 `nodes` and `inventory/cluster.toml` aliases remain a compatibility read path.
@@ -25,17 +25,17 @@ change the active Cluster Profile.
 - On the legacy path, `inventory/cluster.toml` contains hardened SSH aliases for
   every node declared by the workload.
 - Host keys have already been accepted through the SSH bootstrap runbook.
-- `/opt/spark/model-adapters` exists on every target node and is writable by
+- `/opt/node/model-adapters` exists on every target node and is writable by
   the controller SSH user. Bootstrap each target once with:
 
   ```bash
-  sudo install -d -o root -g root -m 0755 /opt/spark
-  sudo install -d -o carst -g carst -m 0755 /opt/spark/model-adapters
+  sudo install -d -o root -g root -m 0755 /opt/node
+  sudo install -d -o carst -g carst -m 0755 /opt/node/model-adapters
   ```
 
 Current examples are `adapters/deepseek/mia-vllm/runtime-manifest.json` for the
 two-node Mia workload and `adapters/deepseek/ds4/runtime-manifest.json` for the
-Spark-1-only DS4 workload. Repository paths such as
+GPU node-1-only DS4 workload. Repository paths such as
 `adapters/deepseek/mia-vllm/bin/mia-deepseek-dual` are installed with their
 manifest-parent prefix removed.
 
@@ -51,7 +51,7 @@ The JSON plan identifies the exact manifest digest, canonical node IDs,
 resolved management targets, stripped release paths, and immutable destination:
 
 ```text
-/opt/spark/model-adapters/deepseek-agent-dual/releases/<manifest-sha256>/
+/opt/node/model-adapters/deepseek-agent-dual/releases/<manifest-sha256>/
 ```
 
 Resolve every local manifest or payload error before applying. Do not bypass a
@@ -86,8 +86,8 @@ arguments.
 
 The controller selects native `ssh`/`scp` by default and auto-selects
 `ssh.exe`/`scp.exe` on WSL when they are discoverable. Custom commands use
-`SPARK_SSH_BIN` and `SPARK_SCP_BIN`. A custom SCP wrapper must also set
-`SPARK_SCP_PATH_STYLE=posix` or `SPARK_SCP_PATH_STYLE=windows` when its input
+`VONK_SSH_BIN` and `VONK_SCP_BIN`. A custom SCP wrapper must also set
+`VONK_SCP_PATH_STYLE=posix` or `VONK_SCP_PATH_STYLE=windows` when its input
 path syntax differs from the default POSIX wrapper contract; only those two
 exact values are accepted. Auto-selected WSL `scp.exe` uses Windows paths and
 native SCP uses POSIX paths regardless of executable basename. After every
@@ -101,7 +101,7 @@ compare it with the checked manifest. A failure before the final rename leaves
 the final path untouched; the digest-qualified temporary directory may remain
 for inspection. No automatic recursive cleanup runs.
 
-Deployment is atomic per node, not across both nodes. If Spark 1 installs and
-Spark 2 fails, correct the failure and rerun the same command. Spark 1 will be
-recognized as identical and skipped, while Spark 2 resumes through a new safe
+Deployment is atomic per node, not across both nodes. If GPU node 1 installs and
+GPU node 2 fails, correct the failure and rerun the same command. GPU node 1 will be
+recognized as identical and skipped, while GPU node 2 resumes through a new safe
 temporary directory. Do not create a mutable `current` symlink.

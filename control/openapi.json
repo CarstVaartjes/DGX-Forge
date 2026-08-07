@@ -2274,7 +2274,7 @@
       },
       "PackageInventoryItem": {
         "additionalProperties": false,
-        "description": "One release/content group as observed on one Spark.",
+        "description": "One release/content group as observed on one GPU node.",
         "properties": {
           "active": {
             "title": "Active",
@@ -2427,7 +2427,7 @@
           },
           "nodes": {
             "items": {
-              "$ref": "#/components/schemas/PackageSparkInventory"
+              "$ref": "#/components/schemas/PackageNodeInventory"
             },
             "maxItems": 512,
             "title": "Nodes",
@@ -2445,6 +2445,67 @@
           "total"
         ],
         "title": "PackageInventoryResponse",
+        "type": "object"
+      },
+      "PackageNodeInventory": {
+        "additionalProperties": false,
+        "properties": {
+          "current_generation": {
+            "anyOf": [
+              {
+                "pattern": "^sha256:[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Generation"
+          },
+          "node_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Node Id",
+            "type": "string"
+          },
+          "observed_at": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed At"
+          },
+          "online": {
+            "title": "Online",
+            "type": "boolean"
+          },
+          "packages": {
+            "items": {
+              "$ref": "#/components/schemas/PackageInventoryItem"
+            },
+            "maxItems": 2048,
+            "title": "Packages",
+            "type": "array"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/PackageNodeResources"
+          },
+          "storage": {
+            "$ref": "#/components/schemas/PackageNodeStorage"
+          }
+        },
+        "required": [
+          "node_id",
+          "online",
+          "storage",
+          "resources"
+        ],
+        "title": "PackageNodeInventory",
         "type": "object"
       },
       "PackageNodeProgress": {
@@ -2486,6 +2547,85 @@
           "total"
         ],
         "title": "PackageNodeProgress",
+        "type": "object"
+      },
+      "PackageNodeResources": {
+        "additionalProperties": false,
+        "properties": {
+          "gpu_count": {
+            "maximum": 512.0,
+            "minimum": 0.0,
+            "title": "Gpu Count",
+            "type": "integer"
+          },
+          "gpu_memory_free_bytes": {
+            "minimum": 0.0,
+            "title": "Gpu Memory Free Bytes",
+            "type": "integer"
+          },
+          "gpu_memory_total_bytes": {
+            "minimum": 0.0,
+            "title": "Gpu Memory Total Bytes",
+            "type": "integer"
+          },
+          "host_memory_free_bytes": {
+            "minimum": 0.0,
+            "title": "Host Memory Free Bytes",
+            "type": "integer"
+          },
+          "host_memory_total_bytes": {
+            "minimum": 0.0,
+            "title": "Host Memory Total Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "host_memory_total_bytes",
+          "host_memory_free_bytes",
+          "gpu_memory_total_bytes",
+          "gpu_memory_free_bytes",
+          "gpu_count"
+        ],
+        "title": "PackageNodeResources",
+        "type": "object"
+      },
+      "PackageNodeStorage": {
+        "additionalProperties": false,
+        "properties": {
+          "free_bytes": {
+            "minimum": 0.0,
+            "title": "Free Bytes",
+            "type": "integer"
+          },
+          "reclaimable_bytes": {
+            "minimum": 0.0,
+            "title": "Reclaimable Bytes",
+            "type": "integer"
+          },
+          "reserved_bytes": {
+            "minimum": 0.0,
+            "title": "Reserved Bytes",
+            "type": "integer"
+          },
+          "total_bytes": {
+            "minimum": 0.0,
+            "title": "Total Bytes",
+            "type": "integer"
+          },
+          "used_bytes": {
+            "minimum": 0.0,
+            "title": "Used Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "total_bytes",
+          "used_bytes",
+          "free_bytes",
+          "reserved_bytes",
+          "reclaimable_bytes"
+        ],
+        "title": "PackageNodeStorage",
         "type": "object"
       },
       "PackagePlanRequest": {
@@ -3106,7 +3246,7 @@
       },
       "PackageResourceEnvelope": {
         "additionalProperties": false,
-        "description": "Bounded per-Spark resource requirements from a promoted release.",
+        "description": "Bounded per-node resource requirements from a promoted release.",
         "properties": {
           "activation_memory_bytes": {
             "minimum": 0.0,
@@ -3174,10 +3314,10 @@
             "title": "Ranks",
             "type": "array"
           },
-          "required_sparks": {
+          "required_nodes": {
             "maximum": 512.0,
             "minimum": 1.0,
-            "title": "Required Sparks",
+            "title": "Required Nodes",
             "type": "integer"
           },
           "resident_memory_bytes": {
@@ -3223,7 +3363,7 @@
           "cpu_millicores",
           "kv_cache_base_bytes",
           "kv_cache_per_token_bytes",
-          "required_sparks",
+          "required_nodes",
           "topology",
           "world_size",
           "ranks",
@@ -3363,10 +3503,10 @@
             "title": "Ranks",
             "type": "array"
           },
-          "required_sparks": {
+          "required_nodes": {
             "maximum": 512.0,
             "minimum": 1.0,
-            "title": "Required Sparks",
+            "title": "Required Nodes",
             "type": "integer"
           },
           "schema_version": {
@@ -3391,7 +3531,7 @@
           "schema_version",
           "per_node",
           "aggregate",
-          "required_sparks",
+          "required_nodes",
           "topology",
           "world_size",
           "ranks",
@@ -3400,146 +3540,6 @@
           "evidence"
         ],
         "title": "PackageRolloutResourceEnvelope",
-        "type": "object"
-      },
-      "PackageSparkInventory": {
-        "additionalProperties": false,
-        "properties": {
-          "current_generation": {
-            "anyOf": [
-              {
-                "pattern": "^sha256:[0-9a-f]{64}$",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Current Generation"
-          },
-          "node_id": {
-            "maxLength": 128,
-            "minLength": 1,
-            "title": "Node Id",
-            "type": "string"
-          },
-          "observed_at": {
-            "anyOf": [
-              {
-                "maxLength": 64,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Observed At"
-          },
-          "online": {
-            "title": "Online",
-            "type": "boolean"
-          },
-          "packages": {
-            "items": {
-              "$ref": "#/components/schemas/PackageInventoryItem"
-            },
-            "maxItems": 2048,
-            "title": "Packages",
-            "type": "array"
-          },
-          "resources": {
-            "$ref": "#/components/schemas/PackageSparkResources"
-          },
-          "storage": {
-            "$ref": "#/components/schemas/PackageSparkStorage"
-          }
-        },
-        "required": [
-          "node_id",
-          "online",
-          "storage",
-          "resources"
-        ],
-        "title": "PackageSparkInventory",
-        "type": "object"
-      },
-      "PackageSparkResources": {
-        "additionalProperties": false,
-        "properties": {
-          "gpu_count": {
-            "maximum": 512.0,
-            "minimum": 0.0,
-            "title": "Gpu Count",
-            "type": "integer"
-          },
-          "gpu_memory_free_bytes": {
-            "minimum": 0.0,
-            "title": "Gpu Memory Free Bytes",
-            "type": "integer"
-          },
-          "gpu_memory_total_bytes": {
-            "minimum": 0.0,
-            "title": "Gpu Memory Total Bytes",
-            "type": "integer"
-          },
-          "host_memory_free_bytes": {
-            "minimum": 0.0,
-            "title": "Host Memory Free Bytes",
-            "type": "integer"
-          },
-          "host_memory_total_bytes": {
-            "minimum": 0.0,
-            "title": "Host Memory Total Bytes",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "host_memory_total_bytes",
-          "host_memory_free_bytes",
-          "gpu_memory_total_bytes",
-          "gpu_memory_free_bytes",
-          "gpu_count"
-        ],
-        "title": "PackageSparkResources",
-        "type": "object"
-      },
-      "PackageSparkStorage": {
-        "additionalProperties": false,
-        "properties": {
-          "free_bytes": {
-            "minimum": 0.0,
-            "title": "Free Bytes",
-            "type": "integer"
-          },
-          "reclaimable_bytes": {
-            "minimum": 0.0,
-            "title": "Reclaimable Bytes",
-            "type": "integer"
-          },
-          "reserved_bytes": {
-            "minimum": 0.0,
-            "title": "Reserved Bytes",
-            "type": "integer"
-          },
-          "total_bytes": {
-            "minimum": 0.0,
-            "title": "Total Bytes",
-            "type": "integer"
-          },
-          "used_bytes": {
-            "minimum": 0.0,
-            "title": "Used Bytes",
-            "type": "integer"
-          }
-        },
-        "required": [
-          "total_bytes",
-          "used_bytes",
-          "free_bytes",
-          "reserved_bytes",
-          "reclaimable_bytes"
-        ],
-        "title": "PackageSparkStorage",
         "type": "object"
       },
       "PlanEndpoint": {
@@ -4270,7 +4270,7 @@
           "origin": {
             "enum": [
               "local",
-              "sparkrun",
+              "workload_run",
               "global"
             ],
             "title": "Origin",
@@ -4395,7 +4395,7 @@
           "origin": {
             "enum": [
               "local",
-              "sparkrun",
+              "workload_run",
               "global"
             ],
             "title": "Origin",
@@ -5188,7 +5188,7 @@
     }
   },
   "info": {
-    "title": "DGX Forge Control",
+    "title": "Vonk Forge Control",
     "version": "1.0"
   },
   "openapi": "3.1.0",
@@ -5876,9 +5876,9 @@
         "summary": "Preview Global Import"
       }
     },
-    "/api/v1/catalog/imports/sparkrun": {
+    "/api/v1/catalog/imports/workload_run": {
       "post": {
-        "operationId": "applySparkRunImport",
+        "operationId": "applyWorkloadRunImport",
         "requestBody": {
           "content": {
             "application/json": {
@@ -5917,9 +5917,9 @@
         "summary": "Apply"
       }
     },
-    "/api/v1/catalog/imports/sparkrun/preview": {
+    "/api/v1/catalog/imports/workload_run/preview": {
       "post": {
-        "operationId": "previewSparkRunImport",
+        "operationId": "previewWorkloadRunImport",
         "requestBody": {
           "content": {
             "application/json": {
@@ -6561,7 +6561,7 @@
     },
     "/api/v1/catalog/recipes/{recipe_id}/resolve-import": {
       "post": {
-        "operationId": "resolveSparkRunImport",
+        "operationId": "resolveWorkloadRunImport",
         "parameters": [
           {
             "in": "path",

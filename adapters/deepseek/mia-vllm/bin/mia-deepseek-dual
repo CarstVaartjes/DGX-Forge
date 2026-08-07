@@ -25,8 +25,8 @@ minimum_free_disk_bytes=375809638400
 stop_memory_tolerance_bytes=1073741824
 
 case ${2:-} in
-  head) role_env="$adapter_root/config/spark1.env" ;;
-  worker) role_env="$adapter_root/config/spark2.env" ;;
+  head) role_env="$adapter_root/config/node1.env" ;;
+  worker) role_env="$adapter_root/config/node2.env" ;;
   *)
     echo "role must be head or worker" >&2
     exit 2
@@ -247,9 +247,9 @@ case "$operation" in
     container_exists=false
     if "$docker_bin" container inspect "$prepare_container" >/dev/null 2>&1; then
       container_exists=true
-      runtime_label=$(inspect_prepare_label spark.runtime-release)
-      checkpoint_label=$(inspect_prepare_label spark.checkpoint-manifest)
-      fingerprint_label=$(inspect_prepare_label spark.prepare-fingerprint)
+      runtime_label=$(inspect_prepare_label node.runtime-release)
+      checkpoint_label=$(inspect_prepare_label node.checkpoint-manifest)
+      fingerprint_label=$(inspect_prepare_label node.prepare-fingerprint)
       container_image_reference=$(
         "$docker_bin" inspect --format '{{.Config.Image}}' "$prepare_container"
       )
@@ -327,9 +327,9 @@ case "$operation" in
         --tmpfs /tmp:rw,noexec,nosuid,nodev,size=1g \
         --cap-drop ALL \
         --security-opt no-new-privileges \
-        --label "spark.runtime-release=$release_digest" \
-        --label "spark.checkpoint-manifest=$checkpoint_manifest_sha256" \
-        --label "spark.prepare-fingerprint=$prepare_fingerprint" \
+        --label "node.runtime-release=$release_digest" \
+        --label "node.checkpoint-manifest=$checkpoint_manifest_sha256" \
+        --label "node.prepare-fingerprint=$prepare_fingerprint" \
         --env NVIDIA_VISIBLE_DEVICES=void \
         --env PYTHONDONTWRITEBYTECODE=1 \
         --env HF_HOME=/prepare-cache/huggingface \

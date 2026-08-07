@@ -1,18 +1,18 @@
-# Live DGX Spark node health
+# Live Vonk Forge GPU node health
 
 Use the developer-machine controller for a fresh, read-only view of both
-Sparks:
+GPU nodes:
 
 ```bash
-uv run --no-project --with jsonschema -- bin/sparkctl nodes status
-uv run --no-project --with jsonschema -- bin/sparkctl nodes status --json
+uv run --no-project --with jsonschema -- bin/vonkctl nodes status
+uv run --no-project --with jsonschema -- bin/vonkctl nodes status --json
 ```
 
 The command starts both key-only SSH probes concurrently and always renders
-`spark1`, then `spark2`. It sends the checked-in `nodes/bin/collect-health`
+`node1`, then `node2`. It sends the checked-in `nodes/bin/collect-health`
 bytes to `bash -s` over standard input. It does not install a collector, use
 `sudo`, retain a sample, enumerate model processes, repair a node, or switch a
-Cluster Profile. `sparkctl status` remains the separate, fast local view of
+Cluster Profile. `vonkctl status` remains the separate, fast local view of
 persisted profile-controller state.
 
 ## What it reports
@@ -44,7 +44,7 @@ have observed GID 3. Use the accepted fabric validation in
 
 ## Accepted observation on 2026-08-02
 
-A fresh `sparkctl nodes status --json` exited `0`. Both nodes were `healthy`
+A fresh `vonkctl nodes status --json` exited `0`. Both nodes were `healthy`
 with no warnings or errors. Docker was available, each GPU reported 39 C, and
 both fabric functions on each node reported speed `200000`, MTU 1500, and RDMA
 state `ACTIVE`.
@@ -76,16 +76,16 @@ prerequisites for live collection.
 
 ## Troubleshooting
 
-1. Preserve JSON first: `bin/sparkctl nodes status --json > /tmp/spark-node-health.json`.
-2. For `ssh_unreachable`, verify `ssh dgx-spark-1 true` and
-   `ssh dgx-spark-2 true`, unlock/approve the 1Password SSH agent if required,
+1. Preserve JSON first: `bin/vonkctl nodes status --json > /tmp/node-node-health.json`.
+2. For `ssh_unreachable`, verify `ssh vonk-node-1 true` and
+   `ssh vonk-node-2 true`, unlock/approve the 1Password SSH agent if required,
    and do not weaken strict host-key checking.
 3. For `hostname_mismatch`, inspect the SSH alias target; do not accept the
    wrong logical node.
 4. For an unavailable Docker query, verify the login's group membership with
    `id -nG` and Docker daemon access with
    `docker version --format '{{.Server.Version}}'`. If `docker` is absent from
-   the group list, run `sudo usermod -aG docker carst` on that Spark, then log
+   the group list, run `sudo usermod -aG docker carst` on that GPU node, then log
    out and reconnect before retrying; an existing SSH session does not acquire
    the new supplementary group. Docker-group membership is root-equivalent and
    is approved only for the trusted `carst` administrator on these dedicated
@@ -95,7 +95,7 @@ prerequisites for live collection.
    `inventory/reports/rdma-nccl.json`. The health comparison uses the accepted
    absolute `rdma_counters_after` values, not the recorded deltas.
 6. For collector errors, run the checked-in collector tests locally. Do not
-   copy or leave the collector on a Spark.
+   copy or leave the collector on a GPU node.
 
 Warnings are observations, not automatic permission or denial for a model.
 Investigate unexpected changes before profile activation; never modify the

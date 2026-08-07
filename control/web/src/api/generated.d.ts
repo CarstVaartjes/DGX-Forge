@@ -174,7 +174,7 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/api/v1/catalog/imports/sparkrun": {
+    "/api/v1/catalog/imports/workload_run": {
         parameters: {
             query?: never;
             header?: never;
@@ -184,14 +184,14 @@ export interface paths {
         get?: never;
         put?: never;
         /** Apply */
-        post: operations["applySparkRunImport"];
+        post: operations["applyWorkloadRunImport"];
         delete?: never;
         options?: never;
         head?: never;
         patch?: never;
         trace?: never;
     };
-    "/api/v1/catalog/imports/sparkrun/preview": {
+    "/api/v1/catalog/imports/workload_run/preview": {
         parameters: {
             query?: never;
             header?: never;
@@ -201,7 +201,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Preview */
-        post: operations["previewSparkRunImport"];
+        post: operations["previewWorkloadRunImport"];
         delete?: never;
         options?: never;
         head?: never;
@@ -338,7 +338,7 @@ export interface paths {
         get?: never;
         put?: never;
         /** Resolve Imported */
-        post: operations["resolveSparkRunImport"];
+        post: operations["resolveWorkloadRunImport"];
         delete?: never;
         options?: never;
         head?: never;
@@ -2053,7 +2053,7 @@ export interface components {
         };
         /**
          * PackageInventoryItem
-         * @description One release/content group as observed on one Spark.
+         * @description One release/content group as observed on one GPU node.
          */
         PackageInventoryItem: {
             /** Active */
@@ -2097,9 +2097,24 @@ export interface components {
             /** Next Cursor */
             next_cursor?: string | null;
             /** Nodes */
-            nodes: components["schemas"]["PackageSparkInventory"][];
+            nodes: components["schemas"]["PackageNodeInventory"][];
             /** Total */
             total: number;
+        };
+        /** PackageNodeInventory */
+        PackageNodeInventory: {
+            /** Current Generation */
+            current_generation?: string | null;
+            /** Node Id */
+            node_id: string;
+            /** Observed At */
+            observed_at?: string | null;
+            /** Online */
+            online: boolean;
+            /** Packages */
+            packages?: components["schemas"]["PackageInventoryItem"][];
+            resources: components["schemas"]["PackageNodeResources"];
+            storage: components["schemas"]["PackageNodeStorage"];
         };
         /** PackageNodeProgress */
         PackageNodeProgress: {
@@ -2113,6 +2128,32 @@ export interface components {
             state: string;
             /** Total */
             total: number;
+        };
+        /** PackageNodeResources */
+        PackageNodeResources: {
+            /** Gpu Count */
+            gpu_count: number;
+            /** Gpu Memory Free Bytes */
+            gpu_memory_free_bytes: number;
+            /** Gpu Memory Total Bytes */
+            gpu_memory_total_bytes: number;
+            /** Host Memory Free Bytes */
+            host_memory_free_bytes: number;
+            /** Host Memory Total Bytes */
+            host_memory_total_bytes: number;
+        };
+        /** PackageNodeStorage */
+        PackageNodeStorage: {
+            /** Free Bytes */
+            free_bytes: number;
+            /** Reclaimable Bytes */
+            reclaimable_bytes: number;
+            /** Reserved Bytes */
+            reserved_bytes: number;
+            /** Total Bytes */
+            total_bytes: number;
+            /** Used Bytes */
+            used_bytes: number;
         };
         /** PackagePlanRequest */
         PackagePlanRequest: {
@@ -2279,7 +2320,7 @@ export interface components {
         };
         /**
          * PackageResourceEnvelope
-         * @description Bounded per-Spark resource requirements from a promoted release.
+         * @description Bounded per-node resource requirements from a promoted release.
          */
         PackageResourceEnvelope: {
             /** Activation Memory Bytes */
@@ -2307,8 +2348,8 @@ export interface components {
             output_bytes: number;
             /** Ranks */
             ranks: components["schemas"]["PackageRank"][];
-            /** Required Sparks */
-            required_sparks: number;
+            /** Required Nodes */
+            required_nodes: number;
             /** Resident Memory Bytes */
             resident_memory_bytes: number;
             /** Topology */
@@ -2367,55 +2408,14 @@ export interface components {
             per_node: components["schemas"]["PackageResourceValues"];
             /** Ranks */
             ranks: components["schemas"]["PackageRank"][];
-            /** Required Sparks */
-            required_sparks: number;
+            /** Required Nodes */
+            required_nodes: number;
             /** Schema Version */
             schema_version: number;
             /** Topology */
             topology: string;
             /** World Size */
             world_size: number;
-        };
-        /** PackageSparkInventory */
-        PackageSparkInventory: {
-            /** Current Generation */
-            current_generation?: string | null;
-            /** Node Id */
-            node_id: string;
-            /** Observed At */
-            observed_at?: string | null;
-            /** Online */
-            online: boolean;
-            /** Packages */
-            packages?: components["schemas"]["PackageInventoryItem"][];
-            resources: components["schemas"]["PackageSparkResources"];
-            storage: components["schemas"]["PackageSparkStorage"];
-        };
-        /** PackageSparkResources */
-        PackageSparkResources: {
-            /** Gpu Count */
-            gpu_count: number;
-            /** Gpu Memory Free Bytes */
-            gpu_memory_free_bytes: number;
-            /** Gpu Memory Total Bytes */
-            gpu_memory_total_bytes: number;
-            /** Host Memory Free Bytes */
-            host_memory_free_bytes: number;
-            /** Host Memory Total Bytes */
-            host_memory_total_bytes: number;
-        };
-        /** PackageSparkStorage */
-        PackageSparkStorage: {
-            /** Free Bytes */
-            free_bytes: number;
-            /** Reclaimable Bytes */
-            reclaimable_bytes: number;
-            /** Reserved Bytes */
-            reserved_bytes: number;
-            /** Total Bytes */
-            total_bytes: number;
-            /** Used Bytes */
-            used_bytes: number;
         };
         /** PlanEndpoint */
         PlanEndpoint: {
@@ -2677,7 +2677,7 @@ export interface components {
              * Origin
              * @enum {string}
              */
-            origin: "local" | "sparkrun" | "global";
+            origin: "local" | "workload_run" | "global";
             /** Profile Node Counts */
             profile_node_counts: number[];
             /** Recipe Id */
@@ -2719,7 +2719,7 @@ export interface components {
              * Origin
              * @enum {string}
              */
-            origin: "local" | "sparkrun" | "global";
+            origin: "local" | "workload_run" | "global";
             /** Profile Node Counts */
             profile_node_counts: number[];
             /** Recipe Id */
@@ -3493,7 +3493,7 @@ export interface operations {
             };
         };
     };
-    applySparkRunImport: {
+    applyWorkloadRunImport: {
         parameters: {
             query?: never;
             header?: never;
@@ -3526,7 +3526,7 @@ export interface operations {
             };
         };
     };
-    previewSparkRunImport: {
+    previewWorkloadRunImport: {
         parameters: {
             query?: never;
             header?: never;
@@ -3992,7 +3992,7 @@ export interface operations {
             };
         };
     };
-    resolveSparkRunImport: {
+    resolveWorkloadRunImport: {
         parameters: {
             query?: never;
             header?: never;

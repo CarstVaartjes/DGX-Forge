@@ -23,10 +23,10 @@ def test_workload_failure_matrix_report_is_structured_and_secret_free() -> None:
         check=True,
     )
     report = json.loads(completed.stdout)
-    assert report["report_type"] == "dgx-forge-workload-package-failure-matrix"
+    assert report["report_type"] == "vonk-forge-workload-package-failure-matrix"
     assert report["failure_matrix"] is True
     assert report["status"] == "passed"
-    assert report["physical_sparks_exercised"] is False
+    assert report["physical_nodes_exercised"] is False
     assert report["ssh_calls"] == report["agent_update_calls"] == 0
     assert len(report["cases"]) >= 15
     assert all(

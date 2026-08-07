@@ -24,7 +24,7 @@ from cluster_profiles.state import (
 from cluster_profiles.switcher import PrepareNodeResult, PrepareReport, SwitchReport
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
-BOOT_IDS = {"spark1": "1" * 32, "spark2": "2" * 32}
+BOOT_IDS = {"node1": "1" * 32, "node2": "2" * 32}
 
 
 class FakeStore:
@@ -102,7 +102,7 @@ class FakeSwitcher:
             results=(
                 PrepareNodeResult(
                     workload="deepseek-agent-dual",
-                    node="spark2",
+                    node="node2",
                     role="worker",
                     status="prepared",
                     timeout_seconds=86400,
@@ -160,14 +160,14 @@ class FakeHealthService:
         return self.result
 
 
-def health_result(*, spark2_status="healthy") -> ClusterHealth:
+def health_result(*, node2_status="healthy") -> ClusterHealth:
     def node(name: str, status: str) -> NodeHealth:
         full = status not in {"unreachable", "critical"}
         return NodeHealth.from_dict({
             "status": status,
             "errors": ["ssh_unreachable"] if status == "unreachable" else [],
             "warnings": [],
-            "identity": {"hostname": "spark", "boot_id": BOOT_IDS[name], "uptime_seconds": 12345} if full else None,
+            "identity": {"hostname": "node", "boot_id": BOOT_IDS[name], "uptime_seconds": 12345} if full else None,
             "cpu": {"logical_processors": 20, "utilization_percent": 12.3, "load_1": 1.2, "load_5": 1.0, "load_15": 0.8} if full else None,
             "memory": {"total_bytes": 130663231488, "available_bytes": 120000000000, "used_bytes": 10663231488, "used_percent": 8.2} if full else None,
             "swap": {"total_bytes": 0, "free_bytes": 0, "used_bytes": 0, "used_percent": 0.0} if full else None,
@@ -180,26 +180,26 @@ def health_result(*, spark2_status="healthy") -> ClusterHealth:
             ]} if full else None,
             "services": {"docker_available": True, "docker_version": "29", "earlyoom_load_state": "not-found", "earlyoom_enabled": False, "earlyoom_active": False} if full else None,
         })
-    nodes = {"spark1": node("spark1", "healthy"), "spark2": node("spark2", spark2_status)}
-    return ClusterHealth(1, "2026-08-02T12:00:00Z", "critical" if spark2_status in {"critical", "unreachable"} else "healthy", nodes)
+    nodes = {"node1": node("node1", "healthy"), "node2": node("node2", node2_status)}
+    return ClusterHealth(1, "2026-08-02T12:00:00Z", "critical" if node2_status in {"critical", "unreachable"} else "healthy", nodes)
 
 
 def live_inventory(
     *, boot_ids: Mapping[str, str] = BOOT_IDS,
-    spark2_healthy: bool = True,
+    node2_healthy: bool = True,
 ) -> Mapping[str, object]:
     return {
-        "spark1": {
+        "node1": {
             "healthy": True,
             "free_memory_bytes": 120_000_000_000,
             "free_disk_bytes": 3_700_000_000_000,
-            "boot_id": boot_ids["spark1"],
+            "boot_id": boot_ids["node1"],
         },
-        "spark2": {
-            "healthy": spark2_healthy,
+        "node2": {
+            "healthy": node2_healthy,
             "free_memory_bytes": 120_000_000_000,
             "free_disk_bytes": 3_700_000_000_000,
-            "boot_id": boot_ids["spark2"],
+            "boot_id": boot_ids["node2"],
         },
     }
 
@@ -254,9 +254,9 @@ def legacy_exclusive_colocation_catalog() -> Catalog:
             id=identifier,
             topology="single",
             placement_class="single-exclusive",
-            nodes=("spark1",),
-            start_order=("spark1",),
-            stop_order=("spark1",),
+            nodes=("node1",),
+            start_order=("node1",),
+            stop_order=("node1",),
             paths=replace(
                 original.paths,
                 cache=Path(f"/srv/models/snapshots/{identifier}"),
@@ -270,8 +270,8 @@ def legacy_exclusive_colocation_catalog() -> Catalog:
     profile = replace(
         base.profiles["agent-full-dual"],
         placements={
-            "spark1": tuple(definition.id for definition in definitions),
-            "spark2": (),
+            "node1": tuple(definition.id for definition in definitions),
+            "node2": (),
         },
         endpoints={"deepseek": "exclusive-one"},
     )
@@ -300,7 +300,7 @@ def accepted_empty_catalog(*, endpoint_target: str | None = None) -> Catalog:
     base = accepted_catalog()
     profile = replace(
         base.profiles["agent-full-dual"],
-        placements={"spark1": (), "spark2": ()},
+        placements={"node1": (), "node2": ()},
         endpoints={"deepseek": endpoint_target} if endpoint_target else {},
     )
     profile_fingerprint = fingerprint(profile)
@@ -365,7 +365,7 @@ def test_prepare_resolves_selector_and_emits_a_dedicated_payload() -> None:
         "results": [
             {
                 "workload": "deepseek-agent-dual",
-                "node": "spark2",
+                "node": "node2",
                 "role": "worker",
                 "status": "prepared",
                 "timeout_seconds": 86400,
@@ -387,7 +387,7 @@ def test_prepare_timeout_is_exit_eight_and_resumable() -> None:
         results=(
             PrepareNodeResult(
                 workload="deepseek-agent-dual",
-                node="spark2",
+                node="node2",
                 role="worker",
                 status="in-progress",
                 timeout_seconds=86400,
@@ -590,7 +590,7 @@ def test_endpoint_refuses_matching_but_planned_active_content() -> None:
     assert result.json == {
         "available": False,
         "endpoint": "deepseek",
-        "reason": "active state has no Spark boot IDs",
+        "reason": "active state has no GPU node boot IDs",
     }
 
 
@@ -771,7 +771,7 @@ def test_endpoint_refuses_legacy_empty_profile_endpoint(target: str) -> None:
 
 def test_endpoint_refuses_a_boot_id_mismatch() -> None:
     catalog_value = accepted_catalog()
-    changed = {"spark1": BOOT_IDS["spark1"], "spark2": "3" * 32}
+    changed = {"node1": BOOT_IDS["node1"], "node2": "3" * 32}
 
     result = invoke(
         "endpoint",
@@ -784,7 +784,7 @@ def test_endpoint_refuses_a_boot_id_mismatch() -> None:
 
     assert result.exit_code == 3
     assert result.json["available"] is False
-    assert result.json["reason"] == "Spark boot IDs changed since activation"
+    assert result.json["reason"] == "GPU node boot IDs changed since activation"
 
 
 def test_endpoint_refuses_an_unreachable_node() -> None:
@@ -796,12 +796,12 @@ def test_endpoint_refuses_an_unreachable_node() -> None:
         "--json",
         state=active_state(catalog_value),
         catalog_value=catalog_value,
-        inventory_provider=lambda: live_inventory(spark2_healthy=False),
+        inventory_provider=lambda: live_inventory(node2_healthy=False),
     )
 
     assert result.exit_code == 3
     assert result.json["available"] is False
-    assert result.json["reason"] == "live Spark health gate failed"
+    assert result.json["reason"] == "live GPU node health gate failed"
 
 
 @pytest.mark.parametrize("malformed", (None, []), ids=("none", "list"))
@@ -823,7 +823,7 @@ def test_endpoint_refuses_malformed_live_inventory_without_traceback(
     assert result.json == {
         "available": False,
         "endpoint": "deepseek",
-        "reason": "live Spark health gate failed",
+        "reason": "live GPU node health gate failed",
     }
     assert result.stderr == ""
 
@@ -946,7 +946,7 @@ def test_default_dependencies_use_local_state_and_conservative_inventory(
     )
 
     assert dependencies.state_store.load().status == "stopped"
-    assert dependencies.inventory_provider() == {"spark1": {}, "spark2": {}}
+    assert dependencies.inventory_provider() == {"node1": {}, "node2": {}}
     assert dependencies.health_service is None
     assert not (tmp_path / "vonkctl").exists()
 
@@ -1000,7 +1000,7 @@ pool = "default"
     dependencies = build_dependencies(repository, state_directory=tmp_path / "state")
 
     assert dependencies.inventory_provider() == {node_id: {}}
-    assert set(dependencies.switcher.backend._aliases) == {node_id, "spark1"}
+    assert set(dependencies.switcher.backend._aliases) == {node_id, "node1"}
 
 
 def test_node_health_dependencies_use_the_health_specific_output_cap(tmp_path: Path) -> None:
@@ -1233,15 +1233,15 @@ def test_validate_rejects_malformed_live_inventory_without_traceback(
 
 
 def test_nodes_status_json_preserves_reachable_node_and_exits_four() -> None:
-    service = FakeHealthService(health_result(spark2_status="unreachable"))
+    service = FakeHealthService(health_result(node2_status="unreachable"))
 
     result = invoke("nodes", "status", "--json", health_service=service)
 
     assert result.exit_code == 4
     assert result.json["schema_version"] == 1
-    assert list(result.json["nodes"]) == ["spark1", "spark2"]
-    assert result.json["nodes"]["spark1"]["status"] == "healthy"
-    assert result.json["nodes"]["spark2"]["status"] == "unreachable"
+    assert list(result.json["nodes"]) == ["node1", "node2"]
+    assert result.json["nodes"]["node1"]["status"] == "healthy"
+    assert result.json["nodes"]["node2"]["status"] == "unreachable"
     assert service.calls == 1
 
 
@@ -1255,14 +1255,14 @@ def test_nodes_status_human_table_has_approved_columns() -> None:
         "ROOT FREE", "GPU", "TEMP", "FABRIC", "UPTIME",
     ):
         assert column in header
-    assert "spark1" in result.stdout
+    assert "node1" in result.stdout
     assert "2/2 up" in result.stdout
 
 
 def test_nodes_status_warning_is_exit_zero() -> None:
     cluster = health_result()
-    warning = replace(cluster.nodes["spark2"], status="warning", warnings=("swap_used_high",))
-    service = FakeHealthService(replace(cluster, status="warning", nodes={"spark1": cluster.nodes["spark1"], "spark2": warning}))
+    warning = replace(cluster.nodes["node2"], status="warning", warnings=("swap_used_high",))
+    service = FakeHealthService(replace(cluster, status="warning", nodes={"node1": cluster.nodes["node1"], "node2": warning}))
 
     result = invoke("nodes", "status", "--json", health_service=service)
 

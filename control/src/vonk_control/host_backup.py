@@ -706,7 +706,7 @@ class HostBackupBoundary:
             )
             manifest = {
                 "files": {item.name: item.sha256 for item in archive_files},
-                "format": "dgx-control-backup-v2",
+                "format": "vonk-control-backup-v2",
                 "generation_id": generation.generation_id,
                 "operation_id": operation_id,
             }
@@ -1560,7 +1560,7 @@ class HostBackupBoundary:
             not isinstance(manifest, dict)
             or manifest_raw != _canonical(manifest)
             or set(manifest) != {"files", "format", "generation_id", "operation_id"}
-            or manifest.get("format") != "dgx-control-backup-v2"
+            or manifest.get("format") != "vonk-control-backup-v2"
             or manifest.get("generation_id") != receipt.generation_id
             or manifest.get("operation_id") != receipt.operation_id
             or manifest.get("files") != digests

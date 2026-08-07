@@ -1,4 +1,4 @@
-"""Persist topology-aware Spark agent update rollouts."""
+"""Persist topology-aware GPU node agent update rollouts."""
 
 import sqlalchemy as sa
 from alembic import op

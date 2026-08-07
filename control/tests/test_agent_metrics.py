@@ -175,22 +175,22 @@ def test_operational_metrics_project_existing_agent_state_with_bounded_labels(tm
     collector.refresh()
     rendered = metrics.render()
 
-    assert f'dgx_agent_state{{node_id="{NODE}",state="active"}} 1' in rendered
-    assert f'dgx_agent_version_compatibility{{node_id="{NODE}",version_bucket="supported"}} 1' in rendered
-    assert f'dgx_agent_version_compatibility{{node_id="{NEW_NODE}",version_bucket="new"}} 1' in rendered
-    assert f'dgx_agent_version_compatibility{{node_id="{OLD_NODE}",version_bucket="old"}} 1' in rendered
-    assert f'dgx_agent_version_compatibility{{node_id="{UNKNOWN_NODE}",version_bucket="incompatible"}} 1' in rendered
-    assert f'dgx_agent_certificate_expiry_seconds{{node_id="{NODE}"}} 3600' in rendered
-    assert f'dgx_agent_last_seen_age_seconds{{node_id="{NODE}"}} 90' in rendered
-    assert 'dgx_agent_operations{operation="release.install",state="failed"} 1' in rendered
-    assert 'dgx_agent_operations{operation="workload.start",state="running"} 1' in rendered
-    assert 'dgx_agent_operations{operation="other",state="other"} 1' in rendered
-    assert f'dgx_agent_operation_lease_age_seconds{{node_id="{NODE}",operation="workload.start"}} 12' in rendered
-    assert 'dgx_agent_rollouts{state="waiting-for-operator"} 1' in rendered
+    assert f'vonk_agent_state{{node_id="{NODE}",state="active"}} 1' in rendered
+    assert f'vonk_agent_version_compatibility{{node_id="{NODE}",version_bucket="supported"}} 1' in rendered
+    assert f'vonk_agent_version_compatibility{{node_id="{NEW_NODE}",version_bucket="new"}} 1' in rendered
+    assert f'vonk_agent_version_compatibility{{node_id="{OLD_NODE}",version_bucket="old"}} 1' in rendered
+    assert f'vonk_agent_version_compatibility{{node_id="{UNKNOWN_NODE}",version_bucket="incompatible"}} 1' in rendered
+    assert f'vonk_agent_certificate_expiry_seconds{{node_id="{NODE}"}} 3600' in rendered
+    assert f'vonk_agent_last_seen_age_seconds{{node_id="{NODE}"}} 90' in rendered
+    assert 'vonk_agent_operations{operation="release.install",state="failed"} 1' in rendered
+    assert 'vonk_agent_operations{operation="workload.start",state="running"} 1' in rendered
+    assert 'vonk_agent_operations{operation="other",state="other"} 1' in rendered
+    assert f'vonk_agent_operation_lease_age_seconds{{node_id="{NODE}",operation="workload.start"}} 12' in rendered
+    assert 'vonk_agent_rollouts{state="waiting-for-operator"} 1' in rendered
 
     allowed = {"node_id", "operation", "state", "version_bucket"}
     for line in rendered.splitlines():
-        if not line.startswith("dgx_agent_") or "{" not in line:
+        if not line.startswith("vonk_agent_") or "{" not in line:
             continue
         assert set(re.findall(r'([a-z_]+)="', line)) <= allowed
     for secret in (
@@ -222,9 +222,9 @@ def test_operational_metrics_refresh_replaces_stale_node_series(tmp_path) -> Non
     collector.refresh()
     rendered = metrics.render()
 
-    assert f'dgx_agent_state{{node_id="{NODE}",state="active"}}' not in rendered
-    assert f'dgx_agent_state{{node_id="{NODE}",state="retired"}} 1' in rendered
-    assert f'dgx_agent_last_seen_age_seconds{{node_id="{NODE}"}} 5' in rendered
+    assert f'vonk_agent_state{{node_id="{NODE}",state="active"}}' not in rendered
+    assert f'vonk_agent_state{{node_id="{NODE}",state="retired"}} 1' in rendered
+    assert f'vonk_agent_last_seen_age_seconds{{node_id="{NODE}"}} 5' in rendered
 
 
 def test_dashboard_projects_agent_recency_certificate_expiry_and_compatibility(tmp_path) -> None:

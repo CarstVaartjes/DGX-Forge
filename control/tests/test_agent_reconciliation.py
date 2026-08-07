@@ -170,7 +170,7 @@ def test_release_evidence_is_bound_to_the_exact_request() -> None:
         "oci_manifest_digest": "sha256:" + "9" * 64,
         "target_digest": "a" * 64,
         "provenance_digest": "b" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
     }
     result = {
         "status": "ok",
@@ -178,7 +178,7 @@ def test_release_evidence_is_bound_to_the_exact_request() -> None:
             "status": "installed",
             "release_digest": "a" * 64,
             "manifest_digest": "sha256:" + "9" * 64,
-            "adapter_id": "spark-runtime-v1",
+            "adapter_id": "node-runtime-v1",
         },
     }
 
@@ -211,7 +211,7 @@ def test_workload_evidence_binds_action_identity_release_and_verify_digest(
         "schema_version": 1,
         "workload_id": "model",
         "release_digest": "a" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
     } | extra
     result = {
         "status": "ok",
@@ -248,7 +248,7 @@ def test_node_gate_requires_exact_zero_compute_evidence() -> None:
     result = {
         "status": "ok",
         "evidence": {
-            "dgx_forge": {
+            "vonk_forge": {
                 "schema_version": 1,
                 "accelerator": {"active_nvidia_compute_processes": 0},
             },
@@ -257,7 +257,7 @@ def test_node_gate_requires_exact_zero_compute_evidence() -> None:
     }
 
     accepted_result_digests("node.probe", payload, result)
-    result["evidence"]["dgx_forge"]["accelerator"][
+    result["evidence"]["vonk_forge"]["accelerator"][
         "active_nvidia_compute_processes"
     ] = 1
     with pytest.raises(ValueError, match="compute gate"):
@@ -378,7 +378,7 @@ def _execution_fixture(
         "schema_version": 1,
         "workload_id": "model",
         "release_digest": "a" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
     }
     if operation_kind == "workload.verify":
         payload["expected_digest"] = "e" * 64
@@ -1281,7 +1281,7 @@ def _compensation_fixture(
         "schema_version": 1,
         "workload_id": "model",
         "release_digest": "a" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
         "preparation_digest": "d" * 64,
     }
     worker_id = f"model:{NODE_A}:workload.start"
@@ -1659,7 +1659,7 @@ def test_partial_start_failure_compensates_accepted_starts_in_reverse_order(
         "schema_version": 1,
         "workload_id": "model",
         "release_digest": "a" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
     }
     queue.succeed(compensation, _workload_result("stop"))
     service.tick(reconciliation_id)

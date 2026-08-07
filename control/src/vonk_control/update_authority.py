@@ -1,4 +1,4 @@
-"""Ed25519 authority for root-verifiable Spark agent activation receipts."""
+"""Ed25519 authority for root-verifiable GPU node agent activation receipts."""
 
 from __future__ import annotations
 
@@ -491,7 +491,7 @@ class UpdateAuthorizationAuthority:
         claim_deadline: int,
         now: datetime,
     ) -> dict[str, object]:
-        """Authorize one operator-requested rollback against observed Spark state."""
+        """Authorize one operator-requested rollback against observed GPU node state."""
         operation_id = _uuid4(operation_id, "rollback operation ID")
         fence = _uuid4(fence, "rollback operation fence")
         if now.tzinfo is None:
@@ -618,7 +618,7 @@ class UpdateAuthorizationAuthority:
 
 
 def export_public_authority(private_key_file: Path) -> bytes:
-    """Derive the canonical Spark trust document without exporting private material."""
+    """Derive the canonical GPU node trust document without exporting private material."""
     raw = _snapshot(
         Path(private_key_file),
         "update authority private key",
@@ -649,7 +649,7 @@ def export_public_authority(private_key_file: Path) -> bytes:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="export the public Spark update authority from an Ed25519 key"
+        description="export the public GPU node update authority from an Ed25519 key"
     )
     parser.add_argument("--private-key-file", required=True, type=Path)
     arguments = parser.parse_args(argv)

@@ -13,8 +13,8 @@
       --line: #27463d;
       --text: #edf8f4;
       --muted: #9bb9af;
-      --spark: #ffb23f;
-      --spark-soft: #4e3719;
+      --node: #ffb23f;
+      --node-soft: #4e3719;
       --mint: #55dbab;
       --blue: #76b7ff;
       --pink: #ff8baf;
@@ -56,7 +56,7 @@
 
     .eyebrow {
       margin: 0 0 8px;
-      color: var(--spark);
+      color: var(--node);
       font-size: 12px;
       font-weight: 800;
       letter-spacing: .14em;
@@ -85,7 +85,7 @@
       place-items: center;
       border: 1px solid #6c4b1d;
       border-radius: 24px;
-      color: var(--spark);
+      color: var(--node);
       background: linear-gradient(145deg, #2e2112, #121a16);
       box-shadow: 0 18px 45px rgba(0, 0, 0, .32);
       font-size: 42px;
@@ -186,7 +186,7 @@
       place-items: center;
       border-radius: 12px;
       color: #161006;
-      background: var(--spark);
+      background: var(--node);
       font-weight: 900;
     }
 
@@ -218,7 +218,7 @@
 
     .knowledge h3 {
       margin: 0 0 8px;
-      color: var(--spark);
+      color: var(--node);
       font-size: 14px;
     }
 
@@ -275,22 +275,22 @@
     <header>
       <div>
         <p class="eyebrow">Vonk Forge · architecture overview</p>
-        <h1>One control plane.<br>Many sparks.</h1>
-        <p class="lede">Sparks call home to the NAS. The controller decides what is healthy. LiteLLM routes inference. Caddy is the single Tailscale-facing door.</p>
+        <h1>One control plane.<br>Many nodes.</h1>
+        <p class="lede">GPU nodes call home to the NAS. The controller decides what is healthy. LiteLLM routes inference. Caddy is the single Tailscale-facing door.</p>
       </div>
       <div class="brand" aria-hidden="true">✦</div>
     </header>
 
     <section class="thesis" aria-label="Three key facts">
-      <div><strong>No network discovery</strong><span>Pairing writes one stable NAS hostname into the Spark agent configuration.</span></div>
+      <div><strong>No network discovery</strong><span>Pairing writes one stable NAS hostname into the GPU node agent configuration.</span></div>
       <div><strong>No model registration in Caddy</strong><span>Caddy has static paths. The controller publishes model endpoints to LiteLLM.</span></div>
-      <div><strong>No worker exposed</strong><span>A multi-node workload publishes only its healthy entrypoint; ranks use the Spark fabric.</span></div>
+      <div><strong>No worker exposed</strong><span>A multi-node workload publishes only its healthy entrypoint; ranks use the GPU node fabric.</span></div>
     </section>
 
     <section class="map" aria-label="Vonk Forge network and control architecture">
       <svg viewBox="0 0 1120 660" role="img" aria-labelledby="map-heading map-description">
         <title id="map-heading">Vonk Forge architecture</title>
-        <desc id="map-description">Clients enter through Tailscale and Caddy. Caddy sends inference to LiteLLM. LiteLLM sends requests directly to an approved Spark model endpoint. Spark agents initiate outbound mutual TLS connections to the controller. The controller publishes validated routes to LiteLLM.</desc>
+        <desc id="map-description">Clients enter through Tailscale and Caddy. Caddy sends inference to LiteLLM. LiteLLM sends requests directly to an approved GPU node model endpoint. GPU node agents initiate outbound mutual TLS connections to the controller. The controller publishes validated routes to LiteLLM.</desc>
         <defs>
           <marker id="arrow-mint" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#55dbab"/></marker>
           <marker id="arrow-blue" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#76b7ff"/></marker>
@@ -305,7 +305,7 @@
 
         <text x="38" y="126" class="map-title">Users</text>
         <text x="258" y="77" class="map-title">NAS / computer · Docker Compose</text>
-        <text x="792" y="126" class="map-title">DGX Spark execution plane</text>
+        <text x="792" y="126" class="map-title">Vonk Forge GPU node execution plane</text>
 
         <!-- Client side -->
         <rect x="42" y="168" width="142" height="72" rx="13" fill="#102520" stroke="#55dbab"/>
@@ -349,9 +349,9 @@
         <text x="468" y="527" text-anchor="middle" class="map-label">Agent backend endpoint on NAS LAN</text>
         <text x="468" y="548" text-anchor="middle" class="map-small">agents.vonk.lan:8443 · mTLS · no human access</text>
 
-        <!-- Sparks -->
+        <!-- GPU nodes -->
         <rect x="798" y="168" width="276" height="158" rx="16" fill="#1d1b15" stroke="#8c6023"/>
-        <text x="820" y="197" class="map-label">Spark 1 · entrypoint</text>
+        <text x="820" y="197" class="map-label">GPU node 1 · entrypoint</text>
         <rect x="820" y="216" width="112" height="76" rx="11" fill="#2a2115" stroke="#ffb23f"/>
         <text x="876" y="245" text-anchor="middle" class="map-label">Rust agent</text>
         <text x="876" y="265" text-anchor="middle" class="map-small">calls NAS</text>
@@ -360,7 +360,7 @@
         <text x="998" y="265" text-anchor="middle" class="map-small">:8000 /v1</text>
 
         <rect x="798" y="377" width="276" height="132" rx="16" fill="#1d1b15" stroke="#8c6023"/>
-        <text x="820" y="406" class="map-label">Spark 2 · worker rank</text>
+        <text x="820" y="406" class="map-label">GPU node 2 · worker rank</text>
         <rect x="820" y="424" width="112" height="58" rx="11" fill="#2a2115" stroke="#ffb23f"/>
         <text x="876" y="459" text-anchor="middle" class="map-label">Rust agent</text>
         <rect x="944" y="424" width="108" height="58" rx="11" fill="#2a2115" stroke="#ffb23f"/>
@@ -410,19 +410,19 @@
 
       <article class="flow">
         <span class="num">2</span>
-        <div><h3>Each Spark is paired once</h3><p><code>vonk-agent pair</code> stores the controller URL and CA, creates the key on the Spark, and exchanges an approved pairing code for its node certificate.</p></div>
-        <div class="route">Spark → agents.vonk.lan → Caddy's agent-only SNI → controller</div>
+        <div><h3>Each GPU node is paired once</h3><p><code>vonk-agent pair</code> stores the controller URL and CA, creates the key on the GPU node, and exchanges an approved pairing code for its node certificate.</p></div>
+        <div class="route">GPU node → agents.vonk.lan → Caddy's agent-only SNI → controller</div>
       </article>
 
       <article class="flow">
         <span class="num">3</span>
-        <div><h3>The agents call home</h3><p>Every Rust agent initiates outbound mTLS long polls. It reports inventory and claims only jobs for its certificate-bound node ID. The NAS never discovers or routinely SSHes into Sparks.</p></div>
+        <div><h3>The agents call home</h3><p>Every Rust agent initiates outbound mTLS long polls. It reports inventory and claims only jobs for its certificate-bound node ID. The NAS never discovers or routinely SSHes into GPU nodes.</p></div>
         <div class="route">agent: “I am spk_…; inventory X; give me my next fenced operation.”</div>
       </article>
 
       <article class="flow">
         <span class="num">4</span>
-        <div><h3>The controller chooses placement</h3><p>A local recipe declares the artifacts, runtime, alias, port, resources and topology. PostgreSQL contains current installations, reservations and workloads. The planner decides which Spark or gang can run it.</p></div>
+        <div><h3>The controller chooses placement</h3><p>A local recipe declares the artifacts, runtime, alias, port, resources and topology. PostgreSQL contains current installations, reservations and workloads. The planner decides which GPU node or gang can run it.</p></div>
         <div class="route">recipe + inventory + reservations → exact node/rank plan</div>
       </article>
 
@@ -440,8 +440,8 @@
 
       <article class="flow">
         <span class="num">7</span>
-        <div><h3>Requests enter through one door</h3><p>A remote client reaches Caddy through Tailscale. Caddy sends <code>/v1/*</code> to LiteLLM. LiteLLM authenticates the key, resolves the alias, and calls the approved Spark endpoint directly over the management LAN.</p></div>
-        <div class="route">client → Tailscale → Caddy → LiteLLM → Spark head model API</div>
+        <div><h3>Requests enter through one door</h3><p>A remote client reaches Caddy through Tailscale. Caddy sends <code>/v1/*</code> to LiteLLM. LiteLLM authenticates the key, resolves the alias, and calls the approved GPU node endpoint directly over the management LAN.</p></div>
+        <div class="route">client → Tailscale → Caddy → LiteLLM → GPU node head model API</div>
       </article>
 
       <article class="flow">
@@ -461,12 +461,12 @@
     </section>
 
     <section class="answer" aria-label="Direct answers">
-      <article><h3>Do Spark services connect to Caddy?</h3><p><strong>No.</strong> The agent calls the controller through Caddy's separate mTLS backend. Inference flows in the other direction: LiteLLM calls the validated entrypoint model service directly.</p></article>
+      <article><h3>Do GPU node services connect to Caddy?</h3><p><strong>No.</strong> The agent calls the controller through Caddy's separate mTLS backend. Inference flows in the other direction: LiteLLM calls the validated entrypoint model service directly.</p></article>
       <article><h3>How does LiteLLM know what exists?</h3><p><strong>Only through the controller.</strong> A recipe says what should exist; authenticated agent evidence proves what actually exists. Both must agree before the route is published.</p></article>
     </section>
 
     <footer>
-      <span>Vonk Forge · Many sparks. One forge.</span>
+      <span>Vonk Forge · Many nodes. One forge.</span>
       <span>Global catalog is optional; the local PostgreSQL control plane remains authoritative.</span>
     </footer>
   </main>

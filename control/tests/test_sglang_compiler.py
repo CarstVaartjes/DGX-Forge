@@ -2,11 +2,11 @@ import pytest
 from vonk_control.import_report import ImportReportBuilder
 from vonk_control.runtime_compilers.common import RuntimeCompileError
 from vonk_control.runtime_compilers.sglang import compile_sglang
-from vonk_control.sparkrun_source import parse_sparkrun_yaml
+from vonk_control.workload_run_source import parse_workload_run_yaml
 
 
 def source(command: str):
-    return parse_sparkrun_yaml(f"model: deepseek-ai/DeepSeek-V3\nruntime: sglang\ncommand: {command!r}\n".encode())
+    return parse_workload_run_yaml(f"model: deepseek-ai/DeepSeek-V3\nruntime: sglang\ncommand: {command!r}\n".encode())
 
 
 def test_sglang_normalizes_server_and_distributed_fields() -> None:

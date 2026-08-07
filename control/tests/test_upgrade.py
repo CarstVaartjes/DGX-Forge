@@ -43,7 +43,7 @@ SHA_E = "e" * 64
 def _artifact(name: str, digest: str) -> dict[str, object]:
     return {
         "name": name,
-        "reference": f"ghcr.io/example/dgx-forge/{name}@sha256:{digest}",
+        "reference": f"ghcr.io/example/vonk-forge/{name}@sha256:{digest}",
         "sha256": digest,
         "size": 1024,
         "sbom_sha256": SHA_D,
@@ -63,14 +63,14 @@ def _release(tmp_path: Path) -> PlatformRelease:
         "host_updater_abi": {"minimum": 2, "maximum": 3},
         "deployment_bundle": {
             "reference": (
-                f"ghcr.io/example/dgx-forge/control-deployment@sha256:{SHA_A}"
+                f"ghcr.io/example/vonk-forge/control-deployment@sha256:{SHA_A}"
             ),
             "manifest_digest": f"sha256:{SHA_A}",
             "manifest_size": 4096,
             "manifest_media_type": "application/vnd.oci.image.manifest.v1+json",
             "layer_digest": f"sha256:{SHA_B}",
             "layer_size": 1048576,
-            "layer_media_type": ("application/vnd.dgx-forge.control-deployment.v1.tar"),
+            "layer_media_type": ("application/vnd.vonk-forge.control-deployment.v1.tar"),
         },
         "control": {
             "config_version": 3,
@@ -91,21 +91,21 @@ def _release(tmp_path: Path) -> PlatformRelease:
                 "architecture": "linux-arm64",
                 "protocol": {"minimum": 1, "maximum": 2},
                 "artifact": _artifact("agent-linux-arm64", SHA_A),
-                "payload": _payload("dgx-agent", SHA_B),
+                "payload": _payload("vonk-agent", SHA_B),
             }
         ],
         "supervisors": [
             {
                 "architecture": "linux-arm64",
                 "artifact": _artifact("supervisor-linux-arm64", SHA_B),
-                "payload": _payload("dgx-agent-supervisor", SHA_C),
+                "payload": _payload("vonk-agent-supervisor", SHA_C),
             }
         ],
         "tooling": [
             {
                 "architecture": "linux-arm64",
                 "artifact": _artifact("tooling-linux-arm64", SHA_C),
-                "payload": _payload("dgx-forge-tooling", SHA_D),
+                "payload": _payload("vonk-forge-tooling", SHA_D),
             }
         ],
         "rollback": {
@@ -565,7 +565,7 @@ def test_active_control_release_rejects_missing_or_wrong_running_identity_type(
         ActiveControlReleaseLoader(state_root, lambda: target, None)  # type: ignore[arg-type]
 
     def missing_identity() -> RunningControlIdentity:
-        raise KeyError("DGX_PLATFORM_RELEASE_DIGEST")
+        raise KeyError("VONK_PLATFORM_RELEASE_DIGEST")
 
     with pytest.raises(UpgradeConflict, match="identity is unavailable"):
         ActiveControlReleaseLoader(state_root, lambda: target, missing_identity).load()
@@ -1479,8 +1479,8 @@ def test_upgrade_applies_backup_migration_readiness_and_commit_in_order(
         "check-online",
         "check-disk",
         (
-            "pull:ghcr.io/example/dgx-forge/api@sha256:"
-            f"{SHA_A},ghcr.io/example/dgx-forge/worker@sha256:{SHA_B}"
+            "pull:ghcr.io/example/vonk-forge/api@sha256:"
+            f"{SHA_A},ghcr.io/example/vonk-forge/worker@sha256:{SHA_B}"
         ),
         "render",
         "backup",
@@ -1672,12 +1672,12 @@ def test_offline_exact_upgrade_recover_and_rollback_cli_require_apply(
     monkeypatch.setattr(offline, "HostUpgradeBoundary", lambda **_kwargs: object())
     monkeypatch.setattr(offline, "_load_release_source", lambda _root: object())
     monkeypatch.setattr(offline, "asdict", lambda value: value)
-    monkeypatch.setenv("DGX_BACKUP_RECIPIENTS_FILE", str(tmp_path / "recipients"))
-    monkeypatch.setenv("DGX_BACKUP_IDENTITY_FILE", str(tmp_path / "identity"))
+    monkeypatch.setenv("VONK_BACKUP_RECIPIENTS_FILE", str(tmp_path / "recipients"))
+    monkeypatch.setenv("VONK_BACKUP_IDENTITY_FILE", str(tmp_path / "identity"))
     site_environment = tmp_path / "site.env"
-    site_environment.write_text("DGX_SITE_NAME=test\n", encoding="utf-8")
+    site_environment.write_text("VONK_SITE_NAME=test\n", encoding="utf-8")
     site_environment.chmod(0o600)
-    monkeypatch.setenv("DGX_CONTROL_SITE_ENV_FILE", str(site_environment))
+    monkeypatch.setenv("VONK_CONTROL_SITE_ENV_FILE", str(site_environment))
 
     assert (
         offline.main(
@@ -1762,12 +1762,12 @@ def test_offline_apply_requires_backup_identity_and_tuf_authorization(
     identity = tmp_path / "identity"
     recipients.write_text("age1test\n")
     identity.write_text("AGE-SECRET-KEY-test\n")
-    monkeypatch.setenv("DGX_BACKUP_RECIPIENTS_FILE", str(recipients))
-    monkeypatch.setenv("DGX_BACKUP_IDENTITY_FILE", str(identity))
+    monkeypatch.setenv("VONK_BACKUP_RECIPIENTS_FILE", str(recipients))
+    monkeypatch.setenv("VONK_BACKUP_IDENTITY_FILE", str(identity))
     site_environment = tmp_path / "site.env"
-    site_environment.write_text("DGX_SITE_NAME=test\n", encoding="utf-8")
+    site_environment.write_text("VONK_SITE_NAME=test\n", encoding="utf-8")
     site_environment.chmod(0o600)
-    monkeypatch.setenv("DGX_CONTROL_SITE_ENV_FILE", str(site_environment))
+    monkeypatch.setenv("VONK_CONTROL_SITE_ENV_FILE", str(site_environment))
 
     result = offline.main(
         [
@@ -1781,7 +1781,7 @@ def test_offline_apply_requires_backup_identity_and_tuf_authorization(
     )
 
     assert result == 2
-    assert "DGX_PLATFORM_TUF_ROOT" in capsys.readouterr().err
+    assert "VONK_PLATFORM_TUF_ROOT" in capsys.readouterr().err
     assert backend.events == []
 
 
@@ -1818,9 +1818,9 @@ def test_host_upgrade_boundary_uses_only_fixed_argv_and_exact_image_digests(
     environment = {
         "CONTROL_API_IMAGE": api,
         "CONTROL_WORKER_IMAGE": worker,
-        "DGX_PLATFORM_BUILD_DIGEST": f"sha256:{SHA_A}",
-        "DGX_PLATFORM_RELEASE_DIGEST": f"sha256:{SHA_C}",
-        "DGX_PLATFORM_VERSION": "1.2.0",
+        "VONK_PLATFORM_BUILD_DIGEST": f"sha256:{SHA_A}",
+        "VONK_PLATFORM_RELEASE_DIGEST": f"sha256:{SHA_C}",
+        "VONK_PLATFORM_VERSION": "1.2.0",
     }
     generation = tmp_path / "generation"
     generation.mkdir()
@@ -1861,8 +1861,8 @@ def test_control_release_image_contains_offline_migration_assets() -> None:
     root = Path(__file__).resolve().parents[2]
     dockerfile = (root / "control/Dockerfile").read_text(encoding="utf-8")
 
-    assert "COPY control/alembic.ini /srv/dgx-control/alembic.ini" in dockerfile
-    assert "COPY control/migrations /srv/dgx-control/migrations" in dockerfile
+    assert "COPY control/alembic.ini /srv/vonk-control/alembic.ini" in dockerfile
+    assert "COPY control/migrations /srv/vonk-control/migrations" in dockerfile
 
 
 def test_host_migration_command_failure_is_always_ambiguous(

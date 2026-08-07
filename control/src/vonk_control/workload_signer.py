@@ -392,14 +392,14 @@ def main() -> None:
             raise RuntimeError(f"{name} must be absolute")
         return path
 
-    metadata_root = absolute("DGX_WORKLOAD_TUF_METADATA_ROOT", "/workload-tuf/metadata")
-    target_root = absolute("DGX_WORKLOAD_TUF_TARGET_ROOT", "/workload-tuf/targets")
+    metadata_root = absolute("VONK_WORKLOAD_TUF_METADATA_ROOT", "/workload-tuf/metadata")
+    target_root = absolute("VONK_WORKLOAD_TUF_TARGET_ROOT", "/workload-tuf/targets")
     repository = RepositoryService(
-        absolute("DGX_WORKLOAD_REPOSITORY_PATH", "/repository")
+        absolute("VONK_WORKLOAD_REPOSITORY_PATH", "/repository")
     )
-    branch = os.environ.get("DGX_DEPLOYMENT_BRANCH", "deploy")
+    branch = os.environ.get("VONK_DEPLOYMENT_BRANCH", "deploy")
     if not branch or any(part in {"", ".", ".."} for part in branch.split("/")):
-        raise RuntimeError("DGX_DEPLOYMENT_BRANCH is invalid")
+        raise RuntimeError("VONK_DEPLOYMENT_BRANCH is invalid")
 
     def commit_eligible(commit: str) -> bool:
         try:
@@ -427,7 +427,7 @@ def main() -> None:
                 # The policy names evidence classes; the concrete digest
                 # fields are supplied by the signed family definition. Keep
                 # this boundary generic so a new runtime does not require a
-                # DGX-Forge release.
+                # Vonk Forge release.
                 fields = {
                     key
                     for key in evidence
@@ -457,22 +457,22 @@ def main() -> None:
         metadata_root=metadata_root,
         target_root=target_root,
         signers=WorkloadOnlineSigners(
-            releases=_load_signer(required_path("DGX_WORKLOAD_RELEASES_KEY_FILE")),
-            snapshot=_load_signer(required_path("DGX_WORKLOAD_SNAPSHOT_KEY_FILE")),
-            timestamp=_load_signer(required_path("DGX_WORKLOAD_TIMESTAMP_KEY_FILE")),
+            releases=_load_signer(required_path("VONK_WORKLOAD_RELEASES_KEY_FILE")),
+            snapshot=_load_signer(required_path("VONK_WORKLOAD_SNAPSHOT_KEY_FILE")),
+            timestamp=_load_signer(required_path("VONK_WORKLOAD_TIMESTAMP_KEY_FILE")),
         ),
         commit_eligible=commit_eligible,
         policy_authorized=policy_authorized,
         evidence_verified=evidence_verified,
         clock=lambda: datetime.now(UTC),
     )
-    peer_uid_raw = os.environ.get("DGX_WORKLOAD_SIGNER_PEER_UID", "10001")
+    peer_uid_raw = os.environ.get("VONK_WORKLOAD_SIGNER_PEER_UID", "10001")
     try:
         peer_uid = int(peer_uid_raw)
     except ValueError as error:
-        raise RuntimeError("DGX_WORKLOAD_SIGNER_PEER_UID is invalid") from error
+        raise RuntimeError("VONK_WORKLOAD_SIGNER_PEER_UID is invalid") from error
     serve_forever(
-        absolute("DGX_WORKLOAD_SIGNER_SOCKET", "/run/dgx-workload-signer/signer.sock"),
+        absolute("VONK_WORKLOAD_SIGNER_SOCKET", "/run/vonk-workload-signer/signer.sock"),
         WorkloadSignerConnectionHandler(
             WorkloadPublicationSignerPolicy(publisher),
             allowed_peer_uid=peer_uid,

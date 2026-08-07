@@ -124,7 +124,7 @@ jobs:
     needs: [authorize-request, read-only-ci-gate]
     runs-on: ubuntu-latest
     concurrency:
-      group: dgx-forge-workload-artifact-publication
+      group: vonk-forge-workload-artifact-publication
       cancel-in-progress: false
     permissions:
       artifact-metadata: write
@@ -409,7 +409,7 @@ jobs:
         with:
           subject-name: ${{ needs.authorize-request.outputs.output_repository }}
           subject-digest: ${{ steps.build.outputs.digest }}
-          predicate-type: https://dgx-forge.dev/attestations/workload-artifact-build/v1
+          predicate-type: https://vonk-forge.dev/attestations/workload-artifact-build/v1
           predicate-path: workload-artifact-output/provenance-predicate.json
           push-to-registry: true
       - name: Sign workload SBOM

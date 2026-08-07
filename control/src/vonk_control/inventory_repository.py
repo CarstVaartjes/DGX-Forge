@@ -1,4 +1,4 @@
-"""Append-only authenticated Spark inventory evidence."""
+"""Append-only authenticated GPU node inventory evidence."""
 
 from __future__ import annotations
 

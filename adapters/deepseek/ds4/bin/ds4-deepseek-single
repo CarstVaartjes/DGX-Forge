@@ -16,8 +16,8 @@ models_root=${DS4_MODELS_ROOT:-/srv/models}
 meminfo_path=${DS4_MEMINFO_PATH:-/proc/meminfo}
 boot_id_path=${DS4_BOOT_ID_PATH:-/proc/sys/kernel/random/boot_id}
 
-expected_hostname=spark-3542
-image_reference=ghcr.io/carstvaartjes/spark-ds4@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615
+expected_hostname=node-3542
+image_reference=ghcr.io/carstvaartjes/node-ds4@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615
 checkpoint_manifest_sha256=1f6f88d7f968e51e76a118af83f0f7cae7f5df5b915a6cf30db5265228f70c99
 minimum_free_memory_bytes=120000000000
 minimum_free_disk_bytes=120000000000
@@ -47,7 +47,7 @@ fi
 
 actual_hostname=${DS4_LOCAL_HOSTNAME:-$(hostname)}
 if [[ $actual_hostname != "$expected_hostname" ]]; then
-  echo "deepseek-agent-single requires spark1/$expected_hostname; local host is $actual_hostname" >&2
+  echo "deepseek-agent-single requires node1/$expected_hostname; local host is $actual_hostname" >&2
   exit 2
 fi
 
@@ -283,7 +283,7 @@ case "$operation" in
     fi
     "$python_bin" "$manifest_tool" verify \
       --manifest "$installed_manifest" --root "$snapshot" >/dev/null
-    printf 'prepared node=spark1\n'
+    printf 'prepared node=node1\n'
     ;;
   verify)
     runtime_release_digest >/dev/null
@@ -329,7 +329,7 @@ case "$operation" in
       exit 1
     fi
     verify_no_autostart
-    printf 'verified node=spark1\n'
+    printf 'verified node=node1\n'
     ;;
   start)
     release_digest=$(runtime_release_digest)
@@ -426,7 +426,7 @@ expected = {
 if record != expected:
     raise SystemExit("startup lifecycle record mismatch")
 ' "$startup_record" "$current_boot" "$container_id" "$image_reference" "$release_digest"
-    printf 'healthy node=spark1 model=deepseek\n'
+    printf 'healthy node=node1 model=deepseek\n'
     ;;
   infer)
     release_digest=$(runtime_release_digest)
@@ -492,7 +492,7 @@ arguments = json.loads(function.get("arguments", ""))
 if arguments != {"city": "Amsterdam"}:
     raise SystemExit("tool arguments must name Amsterdam")
 PY
-    printf 'inference-verified node=spark1 model=deepseek\n'
+    printf 'inference-verified node=node1 model=deepseek\n'
     ;;
   stop)
     compose down --timeout 120 --remove-orphans
@@ -559,7 +559,7 @@ with open(temporary, "w", encoding="utf-8") as target:
     target.write("\n")
 os.replace(temporary, path)
 PY
-    printf 'released node=spark1\n'
+    printf 'released node=node1\n'
     ;;
   *)
     echo "operation must be prepare, verify, start, health, infer, stop, or verify-release" >&2

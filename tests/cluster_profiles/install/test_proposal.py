@@ -22,7 +22,7 @@ def _journal(*, accepted: bool) -> InstallationJournal:
         InstallationRequest(
             node_id=NodeId.parse("spk_0123456789abcdef0123456789abcdef"),
             display_name='lab "alpha"',
-            endpoint=ManagementEndpoint("spark.local", "admin", 2222, "secret://ssh/admin"),
+            endpoint=ManagementEndpoint("node.local", "admin", 2222, "secret://ssh/admin"),
             labels={"zone": "west", "purpose": "inference"},
         ),
         at=now,

@@ -1,8 +1,8 @@
-# Agent-Derived Spark Endpoints Implementation Plan
+# Agent-Derived GPU node Endpoints Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make authenticated outbound-agent presence and current management addresses drive Spark availability and LiteLLM upstream publication without treating IP addresses as node identity.
+**Goal:** Make authenticated outbound-agent presence and current management addresses drive GPU node availability and LiteLLM upstream publication without treating IP addresses as node identity.
 
 **Architecture:** Caddy supplies the direct LAN peer address in a proxy-authenticated header on mTLS agent requests. A new presence service validates that address against configured management CIDRs, updates `AgentNode.last_seen_at`, and stores a bounded observation. Route publication consumes certificate-bound node IDs, fresh observations, and workload ports through a fail-closed endpoint policy; address changes enter maintenance before a replacement is published.
 
@@ -11,9 +11,9 @@
 ## Global Constraints
 
 - Preserve the existing outbound mTLS agent protocol and manual one-node onboarding flow.
-- Do not add subnet scans, SSH discovery, mDNS trust, or per-Spark IP configuration.
+- Do not add subnet scans, SSH discovery, mDNS trust, or per-node IP configuration.
 - A management address is an observation; the immutable node identity remains the accepted `spk_` ID and certificate.
-- Accept only canonical IP literals inside `DGX_MANAGEMENT_CIDRS`; reject loopback, link-local, multicast, unspecified, reserved, and direct-fabric CIDRs.
+- Accept only canonical IP literals inside `VONK_MANAGEMENT_CIDRS`; reject loopback, link-local, multicast, unspecified, reserved, and direct-fabric CIDRs.
 - Only repository-declared workload ports may become upstreams.
 - Withdraw an old route before validating a replacement address.
 - Keep Git authoritative for fleet membership and never publish an unaccepted node.
@@ -24,9 +24,9 @@
 ### Task 1: Validate and persist authenticated agent presence
 
 **Files:**
-- Create: `control/src/dgx_control/presence.py`
-- Modify: `control/src/dgx_control/settings.py`
-- Modify: `control/src/dgx_control/agent_api.py`
+- Create: `control/src/vonk_control/presence.py`
+- Modify: `control/src/vonk_control/settings.py`
+- Modify: `control/src/vonk_control/agent_api.py`
 - Modify: `deploy/compose/compose.yaml`
 - Test: `control/tests/test_presence.py`
 - Test: `control/tests/test_settings.py`
@@ -36,7 +36,7 @@
 - Produces: `ManagementAddressPolicy.parse(value: str, *, forbidden_cidrs: str = "") -> ManagementAddressPolicy`.
 - Produces: `AgentPresenceService.observe(node_id: str, address: str, observed_at: datetime) -> ManagementAddressObservation`.
 - Produces: `AgentPresenceService.latest(node_id: str, *, maximum_age_seconds: int, now: datetime) -> ManagementAddressObservation`.
-- Consumes: proxy-authenticated request header `X-DGX-Agent-Source` set only by Caddy.
+- Consumes: proxy-authenticated request header `X-Vonk-Agent-Source` set only by Caddy.
 
 - [ ] **Step 1: Write failing CIDR and observation tests**
 
@@ -46,7 +46,7 @@ Add tests that construct `ManagementAddressPolicy.parse("10.0.0.0/24,10.1.0.0/16
 
 Run: `uv run --project control pytest control/tests/test_presence.py -v`
 
-Expected: FAIL because `dgx_control.presence` does not exist.
+Expected: FAIL because `vonk_control.presence` does not exist.
 
 - [ ] **Step 3: Implement the bounded presence service**
 
@@ -54,15 +54,15 @@ Implement immutable `ManagementAddressObservation(node_id: str, address: str, ob
 
 - [ ] **Step 4: Add strict settings for management networks**
 
-Add `management_cidrs: str` and `direct_fabric_cidrs: str` to `Settings`. In production require non-empty `DGX_MANAGEMENT_CIDRS`; parse it at startup through `ManagementAddressPolicy`. Default `DGX_DIRECT_FABRIC_CIDRS` to an empty string. Add settings tests for missing production CIDRs, invalid CIDRs, overlaps where an allowed network is wholly forbidden, and a valid comma-separated value.
+Add `management_cidrs: str` and `direct_fabric_cidrs: str` to `Settings`. In production require non-empty `VONK_MANAGEMENT_CIDRS`; parse it at startup through `ManagementAddressPolicy`. Default `VONK_DIRECT_FABRIC_CIDRS` to an empty string. Add settings tests for missing production CIDRs, invalid CIDRs, overlaps where an allowed network is wholly forbidden, and a valid comma-separated value.
 
 - [ ] **Step 5: Record presence on every authenticated claim**
 
-Add `presence: AgentPresenceService` to `AgentApiServices`. After `_authenticated_identity()` succeeds in `/agent/v1/claim`, require exactly one `X-DGX-Agent-Source` value, pass it to `presence.observe(identity.node_id, source, services.clock())`, and reject invalid/missing values with HTTP 422 without claiming work. Extend test fixtures and assert that forged agent identity headers still fail before any observation is written.
+Add `presence: AgentPresenceService` to `AgentApiServices`. After `_authenticated_identity()` succeeds in `/agent/v1/claim`, require exactly one `X-Vonk-Agent-Source` value, pass it to `presence.observe(identity.node_id, source, services.clock())`, and reject invalid/missing values with HTTP 422 without claiming work. Extend test fixtures and assert that forged agent identity headers still fail before any observation is written.
 
 - [ ] **Step 6: Wire production configuration**
 
-Construct `AgentPresenceService` where `AgentApiServices` is assembled, using `Settings.management_cidrs` and `Settings.direct_fabric_cidrs`. Add `DGX_MANAGEMENT_CIDRS` and `DGX_DIRECT_FABRIC_CIDRS` to the shared control environment in `deploy/compose/compose.yaml` and safe examples to `.env.example` in the networking plan.
+Construct `AgentPresenceService` where `AgentApiServices` is assembled, using `Settings.management_cidrs` and `Settings.direct_fabric_cidrs`. Add `VONK_MANAGEMENT_CIDRS` and `VONK_DIRECT_FABRIC_CIDRS` to the shared control environment in `deploy/compose/compose.yaml` and safe examples to `.env.example` in the networking plan.
 
 - [ ] **Step 7: Run focused and regression tests**
 
@@ -73,15 +73,15 @@ Expected: PASS.
 - [ ] **Step 8: Commit authenticated presence**
 
 ```bash
-git add control/src/dgx_control/presence.py control/src/dgx_control/settings.py control/src/dgx_control/agent_api.py control/tests/test_presence.py control/tests/test_settings.py control/tests/test_agent_api.py deploy/compose/compose.yaml
-git commit -m "feat: record authenticated Spark presence"
+git add control/src/vonk_control/presence.py control/src/vonk_control/settings.py control/src/vonk_control/agent_api.py control/tests/test_presence.py control/tests/test_settings.py control/tests/test_agent_api.py deploy/compose/compose.yaml
+git commit -m "feat: record authenticated GPU node presence"
 ```
 
 ### Task 2: Replace exact upstream allowlists with endpoint policy
 
 **Files:**
-- Modify: `control/src/dgx_control/routes.py`
-- Modify: `control/src/dgx_control/litellm.py`
+- Modify: `control/src/vonk_control/routes.py`
+- Modify: `control/src/vonk_control/litellm.py`
 - Test: `control/tests/test_routes.py`
 - Test: `control/tests/test_litellm.py`
 
@@ -123,14 +123,14 @@ Expected: PASS.
 - [ ] **Step 7: Commit endpoint policy**
 
 ```bash
-git add control/src/dgx_control/routes.py control/src/dgx_control/litellm.py control/tests/test_routes.py control/tests/test_litellm.py
-git commit -m "feat: derive routes from Spark identity and presence"
+git add control/src/vonk_control/routes.py control/src/vonk_control/litellm.py control/tests/test_routes.py control/tests/test_litellm.py
+git commit -m "feat: derive routes from GPU node identity and presence"
 ```
 
 ### Task 3: Project agent availability without exposing addresses
 
 **Files:**
-- Modify: `control/src/dgx_control/dashboard.py`
+- Modify: `control/src/vonk_control/dashboard.py`
 - Test: `control/tests/test_dashboard.py`
 - Modify: `docs/runbooks/node-onboarding.md`
 - Modify: `docs/runbooks/platform-operations.md`
@@ -166,8 +166,8 @@ Expected: PASS.
 - [ ] **Step 6: Commit availability projection**
 
 ```bash
-git add control/src/dgx_control/dashboard.py control/tests/test_dashboard.py docs/runbooks/node-onboarding.md docs/runbooks/platform-operations.md
-git commit -m "feat: show agent-derived Spark availability"
+git add control/src/vonk_control/dashboard.py control/tests/test_dashboard.py docs/runbooks/node-onboarding.md docs/runbooks/platform-operations.md
+git commit -m "feat: show agent-derived GPU node availability"
 ```
 
 ### Task 4: Verify the dynamic-address boundary
@@ -182,7 +182,7 @@ git commit -m "feat: show agent-derived Spark availability"
 
 - [ ] **Step 1: Add a Caddy adaptation assertion**
 
-Extend the agent-ingress test to assert that Caddy deletes any incoming `X-DGX-Agent-*` headers and sets `X-DGX-Agent-Source` from `{http.request.remote.host}` only on the verified mTLS agent route.
+Extend the agent-ingress test to assert that Caddy deletes any incoming `X-Vonk-Agent-*` headers and sets `X-Vonk-Agent-Source` from `{http.request.remote.host}` only on the verified mTLS agent route.
 
 - [ ] **Step 2: Add threat-model entries**
 
@@ -198,5 +198,5 @@ Expected: PASS with no whitespace errors.
 
 ```bash
 git add deploy/compose/tests/test_agent_ingress.py docs/security/threat-model.md
-git commit -m "test: verify dynamic Spark address boundary"
+git commit -m "test: verify dynamic GPU node address boundary"
 ```

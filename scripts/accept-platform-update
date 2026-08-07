@@ -22,9 +22,9 @@ from io import StringIO
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-if os.environ.get("DGX_PLATFORM_UPDATE_LOCKED_ENV") != "1":
+if os.environ.get("VONK_PLATFORM_UPDATE_LOCKED_ENV") != "1":
     environment = dict(os.environ)
-    environment["DGX_PLATFORM_UPDATE_LOCKED_ENV"] = "1"
+    environment["VONK_PLATFORM_UPDATE_LOCKED_ENV"] = "1"
     environment.pop("VIRTUAL_ENV", None)
     raise SystemExit(
         subprocess.run(
@@ -131,7 +131,7 @@ def _artifact(name: str, digest: str) -> dict[str, object]:
     return {
         "name": name,
         "provenance_sha256": SHA_D,
-        "reference": f"registry.example/dgx-forge/{name}@sha256:{digest}",
+        "reference": f"registry.example/vonk-forge/{name}@sha256:{digest}",
         "sbom_sha256": SHA_E,
         "sha256": digest,
         "size": 1024,
@@ -156,7 +156,7 @@ def _platform_release(
                 "architecture": "linux-arm64",
                 "artifact": _artifact("agent-linux-arm64", SHA_A),
                 "payload": {
-                    "name": "dgx-agent",
+                    "name": "vonk-agent",
                     "sha256": agent_payload_sha256,
                     "size": agent_payload_size,
                 },
@@ -180,13 +180,13 @@ def _platform_release(
         },
         "deployment_bundle": {
             "layer_digest": f"sha256:{SHA_B}",
-            "layer_media_type": "application/vnd.dgx-forge.control-deployment.v1.tar",
+            "layer_media_type": "application/vnd.vonk-forge.control-deployment.v1.tar",
             "layer_size": 1048576,
             "manifest_digest": f"sha256:{SHA_A}",
             "manifest_media_type": "application/vnd.oci.image.manifest.v1+json",
             "manifest_size": 4096,
             "reference": (
-                "registry.example/dgx-forge/control-deployment@sha256:" + SHA_A
+                "registry.example/vonk-forge/control-deployment@sha256:" + SHA_A
             ),
         },
         "host_updater_abi": {"maximum": 2, "minimum": 1},
@@ -222,7 +222,7 @@ def _platform_release(
                 "architecture": "linux-arm64",
                 "artifact": _artifact("tooling-linux-arm64", SHA_C),
                 "payload": {
-                    "name": "dgx-forge-tooling",
+                    "name": "vonk-forge-tooling",
                     "sha256": SHA_D,
                     "size": 4096,
                 },
@@ -1112,7 +1112,7 @@ def _fleet_scenario(workspace: Path) -> dict[str, object]:
             PlatformAgentArtifact(
                 architecture="linux-arm64",
                 oci_manifest_digest=f"sha256:{SHA_A}",
-                payload_name="dgx-agent",
+                payload_name="vonk-agent",
                 payload_sha256=agent_payload_sha256,
                 payload_size=len(agent_content),
             ),
@@ -1577,7 +1577,7 @@ def _admin_interface_scenario(
 
 
 def simulate() -> dict[str, object]:
-    with tempfile.TemporaryDirectory(prefix="dgx-platform-update-") as raw:
+    with tempfile.TemporaryDirectory(prefix="vonk-platform-update-") as raw:
         workspace = Path(raw)
         host = _host_generation_scenario(workspace)
         fleet = _fleet_scenario(workspace)
@@ -1667,17 +1667,17 @@ def simulate() -> dict[str, object]:
                 "evidence_sha256": None,
                 "exercised": False,
             },
-            "spark_canary_and_rollback": {
+            "node_canary_and_rollback": {
                 "evidence_sha256": None,
                 "exercised": False,
             },
         },
         "remaining_release_gates": [
             "physical-control-host-update-recovery",
-            "physical-spark-canary-rollback",
+            "physical-node-canary-rollback",
             "signed-platform-update-manifest-evidence",
         ],
-        "report_type": "dgx-forge-platform-update",
+        "report_type": "vonk-forge-platform-update",
         "scenario_evidence": scenario_evidence,
         "scenarios": {name: "passed" for name in scenario_evidence},
         "schema_version": 1,
@@ -1691,7 +1691,7 @@ def simulate() -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Run the deterministic simulated DGX-Forge platform update gate."
+        description="Run the deterministic simulated Vonk Forge platform update gate."
     )
     parser.add_argument("--output", type=Path)
     parser.add_argument("--json", action="store_true")

@@ -99,7 +99,7 @@ def test_job_failure_redacts_sensitive_authorization() -> None:
     assert "[REDACTED]" in failed.failure_reason
 
 
-@pytest.mark.parametrize("value", ["", "job_1", "spark1", "job_" + "G" * 32])
+@pytest.mark.parametrize("value", ["", "job_1", "node1", "job_" + "G" * 32])
 def test_job_id_rejects_malformed_values(value: str) -> None:
     with pytest.raises(ValueError, match="job id"):
         JobId.parse(value)

@@ -23,7 +23,7 @@ COMMIT = "a" * 40
 PROBE_RESULT = {
     "status": "ok",
     "evidence": {
-        "dgx_forge": {
+        "vonk_forge": {
             "schema_version": 1,
             "memory": {"available_bytes": 1_000},
             "storage": {"available_bytes": 2_000},
@@ -234,7 +234,7 @@ def test_root_context_image_installs_the_verified_protocol_wheel() -> None:
         != 0
     ):
         pytest.skip("Docker daemon is unavailable")
-    image = "dgx-control:test-protocol-wheel"
+    image = "vonk-control:test-protocol-wheel"
     build = subprocess.run(
         [
             "docker", "build", "--file", "control/Dockerfile",

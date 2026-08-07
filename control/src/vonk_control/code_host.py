@@ -94,14 +94,14 @@ class RepositoryCodeHost:
                 if parent == base_commit and existing_message == message.strip():
                     return existing
                 raise RuntimeError("managed branch advanced from the proposal base")
-            temporary_root = Path(tempfile.mkdtemp(prefix="dgx-git-change-"))
+            temporary_root = Path(tempfile.mkdtemp(prefix="vonk-git-change-"))
             worktree = temporary_root / "worktree"
             try:
                 self._git("worktree", "add", "--detach", str(worktree), base_commit)
                 self._git("apply", "--index", "--binary", "--whitespace=nowarn", "-", cwd=worktree, input=patch)
                 self._git(
-                    "-c", "user.name=DGX Forge Control",
-                    "-c", "user.email=control@dgx-forge.invalid",
+                    "-c", "user.name=Vonk Forge Control",
+                    "-c", "user.email=control@vonk-forge.invalid",
                     "-c", "gpg.format=ssh", "-c", f"user.signingKey={self._key}",
                     "commit", "-S", "-m", message, cwd=worktree,
                 )

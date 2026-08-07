@@ -169,7 +169,7 @@ def test_rollback_grant_requires_and_signs_null_target(tmp_path: Path) -> None:
         ("parent_job_id", "ABCDEFAB-CDEF-4ABC-8DEF-ABCDEFABCDEF"),
         ("node_ids", []),
         ("node_ids", [NODE_A, NODE_A]),
-        ("node_ids", ["spark-a"]),
+        ("node_ids", ["node-a"]),
         ("node_ids", "not-a-sequence-of-node-ids"),
         ("expires_at", True),
         ("expires_at", 1_800_000_000),

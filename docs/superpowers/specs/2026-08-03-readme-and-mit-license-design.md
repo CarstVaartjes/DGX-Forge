@@ -2,7 +2,7 @@
 
 ## Goal
 
-Give DGX-Forge a concise public landing page and an explicit open-source
+Give Vonk Forge a concise public landing page and an explicit open-source
 license without duplicating its detailed operational documentation.
 
 ## Files
@@ -19,12 +19,12 @@ Copyright (c) 2026 Carst Vaartjes
 
 Add a concise, operator-facing project overview containing:
 
-- a one-paragraph description of DGX-Forge;
+- a one-paragraph description of Vonk Forge;
 - a short capability summary grounded in the checked-in implementation;
-- prerequisites, including Python 3.12 or newer, `uv`, SSH access to the DGX
-  Spark nodes, and Docker on those nodes;
+- prerequisites, including Python 3.12 or newer, `uv`, SSH access to the Vonk Forge
+  GPU nodes, and Docker on those nodes;
 - a quick start that installs the locked development environment, runs the
-  tests, and invokes safe read-only `sparkctl` commands;
+  tests, and invokes safe read-only `vonkctl` commands;
 - a compact repository map;
 - links to the existing architecture overview and relevant runbooks;
 - a security note directing users away from committing credentials; and
@@ -41,4 +41,4 @@ repository launchers, and the existing runbooks. Relative documentation links
 will be checked against the filesystem. The Markdown will be reviewed for
 placeholders, ambiguous maturity claims, and unnecessary duplication. Since
 the change is documentation-only, verification does not require exercising
-the remote DGX Spark nodes.
+the remote Vonk Forge GPU nodes.

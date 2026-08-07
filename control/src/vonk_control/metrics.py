@@ -278,110 +278,110 @@ class MetricsRegistry:
             package_rollouts = dict(self._package_rollouts)
             package_rollout_nodes = dict(self._package_rollout_nodes)
         lines = [
-            "# HELP dgx_route_state Current inference route state.",
-            "# TYPE dgx_route_state gauge",
+            "# HELP vonk_route_state Current inference route state.",
+            "# TYPE vonk_route_state gauge",
         ]
         for state in sorted(_ROUTE_STATES):
-            lines.append(f'dgx_route_state{{state="{state}"}} {1 if state == route_state else 0}')
+            lines.append(f'vonk_route_state{{state="{state}"}} {1 if state == route_state else 0}')
         if backup_age is not None:
             lines.extend((
-                "# HELP dgx_control_backup_age_seconds Age of the last successful encrypted control backup.",
-                "# TYPE dgx_control_backup_age_seconds gauge",
-                f"dgx_control_backup_age_seconds {backup_age:g}",
+                "# HELP vonk_control_backup_age_seconds Age of the last successful encrypted control backup.",
+                "# TYPE vonk_control_backup_age_seconds gauge",
+                f"vonk_control_backup_age_seconds {backup_age:g}",
             ))
-        lines.extend(("# HELP dgx_node_ready Whether the stable fleet node is ready.", "# TYPE dgx_node_ready gauge"))
+        lines.extend(("# HELP vonk_node_ready Whether the stable fleet node is ready.", "# TYPE vonk_node_ready gauge"))
         for node_id, (ready, memory, disk, age) in sorted(nodes.items()):
             label = f'node_id="{node_id}"'
             lines.extend((
-                f"dgx_node_ready{{{label}}} {1 if ready else 0}",
-                f"dgx_node_memory_available_bytes{{{label}}} {memory}",
-                f"dgx_node_disk_available_bytes{{{label}}} {disk}",
+                f"vonk_node_ready{{{label}}} {1 if ready else 0}",
+                f"vonk_node_memory_available_bytes{{{label}}} {memory}",
+                f"vonk_node_disk_available_bytes{{{label}}} {disk}",
             ))
             if age is not None:
-                lines.append(f"dgx_node_probe_age_seconds{{{label}}} {age:g}")
-        lines.extend(("# HELP dgx_jobs Number of control jobs by bounded kind and state.", "# TYPE dgx_jobs gauge"))
+                lines.append(f"vonk_node_probe_age_seconds{{{label}}} {age:g}")
+        lines.extend(("# HELP vonk_jobs Number of control jobs by bounded kind and state.", "# TYPE vonk_jobs gauge"))
         for (kind, state), count in sorted(jobs.items()):
-            lines.append(f'dgx_jobs{{kind="{kind}",state="{state}"}} {count}')
+            lines.append(f'vonk_jobs{{kind="{kind}",state="{state}"}} {count}')
         lines.extend((
-            "# HELP dgx_agent_state Current durable outbound-agent lifecycle state.",
-            "# TYPE dgx_agent_state gauge",
-            "# HELP dgx_agent_version_compatibility Agent protocol compatibility bucket.",
-            "# TYPE dgx_agent_version_compatibility gauge",
-            "# HELP dgx_agent_last_seen_age_seconds Age of the latest authenticated agent contact.",
-            "# TYPE dgx_agent_last_seen_age_seconds gauge",
-            "# HELP dgx_agent_certificate_expiry_seconds Seconds until the active agent certificate expires.",
-            "# TYPE dgx_agent_certificate_expiry_seconds gauge",
+            "# HELP vonk_agent_state Current durable outbound-agent lifecycle state.",
+            "# TYPE vonk_agent_state gauge",
+            "# HELP vonk_agent_version_compatibility Agent protocol compatibility bucket.",
+            "# TYPE vonk_agent_version_compatibility gauge",
+            "# HELP vonk_agent_last_seen_age_seconds Age of the latest authenticated agent contact.",
+            "# TYPE vonk_agent_last_seen_age_seconds gauge",
+            "# HELP vonk_agent_certificate_expiry_seconds Seconds until the active agent certificate expires.",
+            "# TYPE vonk_agent_certificate_expiry_seconds gauge",
         ))
         for node_id, (state, version_bucket, last_seen_age, certificate_expiry) in sorted(agent_nodes.items()):
             label = f'node_id="{node_id}"'
-            lines.append(f'dgx_agent_state{{{label},state="{state}"}} 1')
+            lines.append(f'vonk_agent_state{{{label},state="{state}"}} 1')
             lines.append(
-                f'dgx_agent_version_compatibility{{{label},version_bucket="{version_bucket}"}} 1'
+                f'vonk_agent_version_compatibility{{{label},version_bucket="{version_bucket}"}} 1'
             )
             if last_seen_age is not None:
-                lines.append(f"dgx_agent_last_seen_age_seconds{{{label}}} {last_seen_age:g}")
+                lines.append(f"vonk_agent_last_seen_age_seconds{{{label}}} {last_seen_age:g}")
             if certificate_expiry is not None:
                 lines.append(
-                    f"dgx_agent_certificate_expiry_seconds{{{label}}} {certificate_expiry:g}"
+                    f"vonk_agent_certificate_expiry_seconds{{{label}}} {certificate_expiry:g}"
                 )
         lines.extend((
-            "# HELP dgx_agent_operations Durable agent operations by bounded kind and state.",
-            "# TYPE dgx_agent_operations gauge",
+            "# HELP vonk_agent_operations Durable agent operations by bounded kind and state.",
+            "# TYPE vonk_agent_operations gauge",
         ))
         for (operation, state), count in sorted(agent_operations.items()):
             lines.append(
-                f'dgx_agent_operations{{operation="{operation}",state="{state}"}} {count}'
+                f'vonk_agent_operations{{operation="{operation}",state="{state}"}} {count}'
             )
         lines.extend((
-            "# HELP dgx_agent_operation_lease_age_seconds Age since the active operation lease was last updated.",
-            "# TYPE dgx_agent_operation_lease_age_seconds gauge",
+            "# HELP vonk_agent_operation_lease_age_seconds Age since the active operation lease was last updated.",
+            "# TYPE vonk_agent_operation_lease_age_seconds gauge",
         ))
         for (node_id, operation), age in sorted(agent_leases.items()):
             lines.append(
-                f'dgx_agent_operation_lease_age_seconds{{node_id="{node_id}",operation="{operation}"}} {age:g}'
+                f'vonk_agent_operation_lease_age_seconds{{node_id="{node_id}",operation="{operation}"}} {age:g}'
             )
         lines.extend((
-            "# HELP dgx_agent_rollouts Durable reconciliation jobs by bounded state.",
-            "# TYPE dgx_agent_rollouts gauge",
+            "# HELP vonk_agent_rollouts Durable reconciliation jobs by bounded state.",
+            "# TYPE vonk_agent_rollouts gauge",
         ))
         for state, count in sorted(agent_rollouts.items()):
-            lines.append(f'dgx_agent_rollouts{{state="{state}"}} {count}')
+            lines.append(f'vonk_agent_rollouts{{state="{state}"}} {count}')
         lines.extend((
-            "# HELP dgx_package_candidates Workload package candidates by bounded provider and state.",
-            "# TYPE dgx_package_candidates gauge",
+            "# HELP vonk_package_candidates Workload package candidates by bounded provider and state.",
+            "# TYPE vonk_package_candidates gauge",
         ))
         for (provider, state), count in sorted(package_candidates.items()):
-            lines.append(f'dgx_package_candidates{{provider="{provider}",state="{state}"}} {count}')
+            lines.append(f'vonk_package_candidates{{provider="{provider}",state="{state}"}} {count}')
         lines.extend((
-            "# HELP dgx_package_validations Workload package validation runs by bounded backend, state, and reason.",
-            "# TYPE dgx_package_validations gauge",
+            "# HELP vonk_package_validations Workload package validation runs by bounded backend, state, and reason.",
+            "# TYPE vonk_package_validations gauge",
         ))
         for (backend, state, reason), count in sorted(package_validations.items()):
-            lines.append(f'dgx_package_validations{{backend="{backend}",reason="{reason}",state="{state}"}} {count}')
+            lines.append(f'vonk_package_validations{{backend="{backend}",reason="{reason}",state="{state}"}} {count}')
         lines.extend((
-            "# HELP dgx_package_rollouts Workload package rollouts by bounded state, phase, and reason.",
-            "# TYPE dgx_package_rollouts gauge",
+            "# HELP vonk_package_rollouts Workload package rollouts by bounded state, phase, and reason.",
+            "# TYPE vonk_package_rollouts gauge",
         ))
         for (state, phase, reason), count in sorted(package_rollouts.items()):
-            lines.append(f'dgx_package_rollouts{{phase="{phase}",reason="{reason}",state="{state}"}} {count}')
+            lines.append(f'vonk_package_rollouts{{phase="{phase}",reason="{reason}",state="{state}"}} {count}')
         lines.extend((
-            "# HELP dgx_package_rollout_nodes Workload rollout node progress by bounded phase and state.",
-            "# TYPE dgx_package_rollout_nodes gauge",
+            "# HELP vonk_package_rollout_nodes Workload rollout node progress by bounded phase and state.",
+            "# TYPE vonk_package_rollout_nodes gauge",
         ))
         for (phase, state), count in sorted(package_rollout_nodes.items()):
-            lines.append(f'dgx_package_rollout_nodes{{phase="{phase}",state="{state}"}} {count}')
-        lines.extend(("# HELP dgx_api_requests_total API responses by method and status class.", "# TYPE dgx_api_requests_total counter"))
+            lines.append(f'vonk_package_rollout_nodes{{phase="{phase}",state="{state}"}} {count}')
+        lines.extend(("# HELP vonk_api_requests_total API responses by method and status class.", "# TYPE vonk_api_requests_total counter"))
         for (method, status_class), count in sorted(api_counts.items()):
             labels = f'method="{method}",status_class="{status_class}"'
-            lines.append(f"dgx_api_requests_total{{{labels}}} {count}")
+            lines.append(f"vonk_api_requests_total{{{labels}}} {count}")
             values = api_durations[(method, status_class)]
             cumulative = 0
             for bucket in _BUCKETS:
                 cumulative = sum(value <= bucket for value in values)
-                lines.append(f'dgx_api_request_duration_seconds_bucket{{{labels},le="{bucket:g}"}} {cumulative}')
-            lines.append(f'dgx_api_request_duration_seconds_bucket{{{labels},le="+Inf"}} {len(values)}')
-            lines.append(f"dgx_api_request_duration_seconds_sum{{{labels}}} {sum(values):g}")
-            lines.append(f"dgx_api_request_duration_seconds_count{{{labels}}} {len(values)}")
+                lines.append(f'vonk_api_request_duration_seconds_bucket{{{labels},le="{bucket:g}"}} {cumulative}')
+            lines.append(f'vonk_api_request_duration_seconds_bucket{{{labels},le="+Inf"}} {len(values)}')
+            lines.append(f"vonk_api_request_duration_seconds_sum{{{labels}}} {sum(values):g}")
+            lines.append(f"vonk_api_request_duration_seconds_count{{{labels}}} {len(values)}")
         lines.append("# EOF")
         return "\n".join(lines) + "\n"
 

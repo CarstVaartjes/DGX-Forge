@@ -141,7 +141,7 @@ def _workload_toml(
     *,
     definition_hash: str = DEFINITION_HASH,
     distributed_supported: bool = True,
-    adapter: str = "spark-runtime-v1",
+    adapter: str = "node-runtime-v1",
 ) -> str:
     distributed = str(distributed_supported).lower()
     return f'''schema_version = 2
@@ -175,7 +175,7 @@ def _release(
     *,
     definition_hash: str = DEFINITION_HASH,
     operations: tuple[str, ...] = REQUIRED_CAPABILITIES,
-    adapter: str = "spark-runtime-v1",
+    adapter: str = "node-runtime-v1",
 ) -> dict[str, object]:
     requests: dict[str, dict[str, object]] = {}
     for operation in operations:
@@ -222,7 +222,7 @@ def _repository(
     release_hash: str = DEFINITION_HASH,
     operations: tuple[str, ...] = REQUIRED_CAPABILITIES,
     workload_distributed_supported: bool = True,
-    workload_adapter: str = "spark-runtime-v1",
+    workload_adapter: str = "node-runtime-v1",
 ) -> tuple[RepositoryService, str, dict[str, bytes]]:
     root = tmp_path / "repository"
     root.mkdir(parents=True)
@@ -293,7 +293,7 @@ def _managed_group(
     return CurrentWorkloadState(
         workload_id,
         release_digest,
-        "spark-runtime-v1",
+        "node-runtime-v1",
         nodes=placement,
         entrypoint_node_id=placement[0],
         definition_hash=DEFINITION_HASH,
@@ -311,7 +311,7 @@ def _persisted_start_plan(
         "schema_version": 1,
         "workload_id": "model",
         "release_digest": "8" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
         "preparation_digest": "c" * 64,
     }
     payload_digest = hashlib.sha256(canonical_message(payload)).hexdigest()
@@ -342,7 +342,7 @@ def _persisted_start_plan(
                 "nodes": [node_id],
                 "entrypoint_node_id": node_id,
                 "release_digest": "8" * 64,
-                "adapter_id": "spark-runtime-v1",
+                "adapter_id": "node-runtime-v1",
                 "definition_hash": DEFINITION_HASH,
                 "profile_digest": "c" * 64,
                 "preparation_digest": "c" * 64,
@@ -412,7 +412,7 @@ def test_resolves_one_two_and_sixteen_nodes_from_exact_repository_objects(
             "nodes": targets,
             "entrypoint_node_id": targets[0],
             "release_digest": "a" * 64,
-            "adapter_id": "spark-runtime-v1",
+            "adapter_id": "node-runtime-v1",
             "definition_hash": DEFINITION_HASH,
             "profile_digest": "c" * 64,
             "preparation_digest": "e" * 64,
@@ -559,10 +559,10 @@ def test_generated_workload_graph_executes_through_production_agent_boundaries(
                 "target_digest": release_digest,
                 "target_length": executable.stat().st_size,
                 "registry_origin": "https://registry.example.invalid",
-                "repository": "dgx/releases",
+                "repository": "vonk/releases",
                 "oci_manifest_digest": "sha256:" + "9" * 64,
                 "provenance_digest": "b" * 64,
-                "adapter_id": "spark-runtime-v1",
+                "adapter_id": "node-runtime-v1",
                 "adapter_version": "1.0.0",
                 "architecture": "linux-arm64",
                 "agent_min_version": "0.1.0",
@@ -598,8 +598,8 @@ def test_generated_workload_graph_executes_through_production_agent_boundaries(
         workloads = WorkloadOperations._for_test(
             tmp_path / "releases",
             {
-                "spark-runtime-v1": CompiledAdapterPolicy(
-                    "spark-runtime-v1",
+                "node-runtime-v1": CompiledAdapterPolicy(
+                    "node-runtime-v1",
                     "bin/runtime-adapter",
                     2,
                     64 * 1024,
@@ -694,7 +694,7 @@ def test_start_and_stop_dependencies_follow_lifecycle_order(tmp_path: Path) -> N
         "schema_version": 1,
         "workload_id": "model",
         "release_digest": "8" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
     }
 
 
@@ -776,7 +776,7 @@ def test_fully_occupied_managed_node_can_replace_workload_using_total_capacity(
         "schema_version": 1,
         "workload_id": "model",
         "release_digest": "8" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
     }
     assert plan.operation_graph.dependencies(install_id) == (_gate_id(0),)
     assert plan.operation_graph.dependencies(_gate_id(0)) == (stop_id,)
@@ -811,7 +811,7 @@ def test_unmanaged_occupancy_is_never_reclaimed_for_desired_placement(
         disk_total_bytes=8_000,
         current_workloads=(
             CurrentWorkloadState(
-                "external", "8" * 64, "spark-runtime-v1", managed=False
+                "external", "8" * 64, "node-runtime-v1", managed=False
             ),
         ),
     )
@@ -835,7 +835,7 @@ def test_nonexclusive_desired_requirement_is_rejected_even_with_unmanaged_occupa
         compute_occupancy="unmanaged",
         current_workloads=(
             CurrentWorkloadState(
-                "external", "8" * 64, "spark-runtime-v1", managed=False
+                "external", "8" * 64, "node-runtime-v1", managed=False
             ),
         ),
     )
@@ -852,7 +852,7 @@ def test_current_co_resident_groups_are_rejected(
     other = CurrentWorkloadState(
         "external",
         "8" * 64,
-        "spark-runtime-v1",
+        "node-runtime-v1",
         managed=not mixed_unmanaged,
         **(
             {
@@ -1482,7 +1482,7 @@ def test_production_probe_compute_evidence_controls_placement(
     probe_result = {
         "status": "ok",
         "evidence": {
-            "dgx_forge": {
+            "vonk_forge": {
                 "schema_version": 1,
                 "memory": {"available_bytes": 1_000, "total_bytes": 4_000},
                 "storage": {"available_bytes": 2_000, "total_bytes": 8_000},

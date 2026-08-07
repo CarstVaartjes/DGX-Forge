@@ -12,15 +12,15 @@ metadata such as interface addresses, so this repository must remain private.
 ## Capture
 
 Stream the collector over SSH so it does not create or modify a file on either
-Spark:
+GPU node:
 
 ```bash
 set -euo pipefail
 mkdir -p inventory/raw
-ssh -o BatchMode=yes dgx-spark-1 'bash -s' \
-  < nodes/bin/collect-inventory > inventory/raw/spark1-pre.json
-ssh -o BatchMode=yes dgx-spark-2 'bash -s' \
-  < nodes/bin/collect-inventory > inventory/raw/spark2-pre.json
+ssh -o BatchMode=yes vonk-node-1 'bash -s' \
+  < nodes/bin/collect-inventory > inventory/raw/node1-pre.json
+ssh -o BatchMode=yes vonk-node-2 'bash -s' \
+  < nodes/bin/collect-inventory > inventory/raw/node2-pre.json
 ```
 
 Validate both captures against `inventory/schema.json`:
@@ -37,11 +37,11 @@ fabric interface, address, MTU, RDMA device, GID index, or NCCL setting until
 Cluster Assistant has configured and verified it.
 
 The NVIDIA driver and Docker client versions require supplementary probes on
-DGX Spark because the raw collector cannot currently normalize unified GPU
+Vonk Forge GPU node because the raw collector cannot currently normalize unified GPU
 memory and the unprivileged account cannot query the Docker daemon:
 
 ```bash
-for host in dgx-spark-1 dgx-spark-2; do
+for host in vonk-node-1 vonk-node-2; do
   ssh -o BatchMode=yes "$host" '
     nvidia-smi --query-gpu=driver_version --format=csv,noheader | head -n1
     docker --version
@@ -69,8 +69,8 @@ minimum_memory=$((100 * 1024 * 1024 * 1024))
 maximum_swap_used=$((1 * 1024 * 1024 * 1024))
 minimum_root_free=$((350 * 1024 * 1024 * 1024))
 
-for inventory_file in inventory/raw/spark1-pre.json \
-  inventory/raw/spark2-pre.json; do
+for inventory_file in inventory/raw/node1-pre.json \
+  inventory/raw/node2-pre.json; do
   jq -e \
     --argjson minimum_memory "$minimum_memory" \
     --argjson maximum_swap_used "$maximum_swap_used" \
@@ -99,9 +99,9 @@ not delete images, caches, models, or user data to recover disk space.
 
 ## Observed baseline on 2026-08-01
 
-| Measurement | Spark 1 | Spark 2 |
+| Measurement | GPU node 1 | GPU node 2 |
 | --- | ---: | ---: |
-| Hostname | `spark-3542` | `spark-2297` |
+| Hostname | `node-3542` | `node-2297` |
 | LAN address | `192.168.1.211` | `192.168.1.212` |
 | Total memory | 130,663,231,488 B | 130,663,231,488 B |
 | Available memory | 126,990,147,584 B | 126,946,283,520 B |
@@ -119,7 +119,7 @@ the expected addresses but marked them dynamic at the operating-system layer;
 the static behavior is therefore presumed to come from DHCP reservations and
 must be confirmed at the router before relying on it.
 
-The collector recorded `nvidia = null` because DGX Spark reports GPU memory as
+The collector recorded `nvidia = null` because Vonk Forge GPU node reports GPU memory as
 `N/A` for unified memory and the current parser rejects that value. Driver and
 temperature were confirmed separately with read-only `nvidia-smi` queries.
 The collector also recorded a null Docker engine object because `carst` could
@@ -135,15 +135,15 @@ their configuration.
 ## Post-bootstrap observation on 2026-08-02
 
 The preceding section remains the historical pre-change baseline. After
-bootstrap, `carst` was added to the `docker` group on both dedicated Sparks so
-`sparkctl` can manage profile containers without an interactive sudo prompt.
+bootstrap, `carst` was added to the `docker` group on both dedicated GPU nodes so
+`vonkctl` can manage profile containers without an interactive sudo prompt.
 This grants root-equivalent access and is intentionally scoped to the trusted
 administration account. Both sessions were closed and reopened before testing.
 
 Fresh checks on both nodes showed `docker` in `carst`'s groups and Docker
 Server `29.2.1`. Running
 `docker run --rm --gpus all nvcr.io/nvidia/cuda:13.0.1-devel-ubuntu24.04`
-exposed the NVIDIA GB10 with driver `580.173.02` on each Spark. A fresh
-`sparkctl nodes status --json` exited `0`; both nodes were healthy with no
+exposed the NVIDIA GB10 with driver `580.173.02` on each GPU node. A fresh
+`vonkctl nodes status --json` exited `0`; both nodes were healthy with no
 warnings or errors, Docker available, GPU temperature 39 C, and both fabric
 functions per node at speed `200000`, MTU 1500, and RDMA state `ACTIVE`.

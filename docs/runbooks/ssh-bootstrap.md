@@ -1,19 +1,19 @@
 # SSH bootstrap
 
-This runbook establishes administration of both DGX Sparks with the dedicated
-`DGX Spark Admin` key held by the 1Password SSH agent. Only the public half of
+This runbook establishes administration of both Vonk Forge GPU nodes with the dedicated
+`Vonk Forge GPU node Admin` key held by the 1Password SSH agent. Only the public half of
 the key is written to `~/.ssh`; do not export a private key and do not enable
 SSH agent forwarding.
 
-Do not enter either Spark's Linux password until the host-identity gate in
+Do not enter either GPU node's Linux password until the host-identity gate in
 section 2 has passed. An SSH host-key prompt is not sufficient verification.
 
 ## Hosts
 
 | Alias | Address | User |
 | --- | --- | --- |
-| `dgx-spark-1` | `192.168.1.211` | `carst` |
-| `dgx-spark-2` | `192.168.1.212` | `carst` |
+| `vonk-node-1` | `192.168.1.211` | `carst` |
+| `vonk-node-2` | `192.168.1.212` | `carst` |
 
 ## 1. Export and verify the public key
 
@@ -27,53 +27,53 @@ agent_sock="$HOME/Library/Group Containers/2BUA8C4S2C.com.1password/t/agent.sock
 expected_admin_fp='SHA256:66yS2tf5iK+wvPkO44m++PWfI1q1BHS63BRMJqsPaqM'
 mkdir -p "$HOME/.ssh"
 chmod 0700 "$HOME/.ssh"
-key_stage="$(mktemp "$HOME/.ssh/.dgx_spark_admin.pub.XXXXXX")"
+key_stage="$(mktemp "$HOME/.ssh/.vonk_node_admin.pub.XXXXXX")"
 trap 'rm -f "$key_stage"' EXIT
 SSH_AUTH_SOCK="$agent_sock" ssh-add -L \
-  | grep ' DGX Spark Admin$' > "$key_stage"
+  | grep ' Vonk Forge GPU node Admin$' > "$key_stage"
 test "$(awk 'END {print NR}' "$key_stage")" -eq 1
 actual_admin_fp="$(ssh-keygen -lf "$key_stage" | awk '{print $2}')"
 test "$actual_admin_fp" = "$expected_admin_fp"
 chmod 0644 "$key_stage"
-mv -f "$key_stage" "$HOME/.ssh/dgx_spark_admin.pub"
+mv -f "$key_stage" "$HOME/.ssh/vonk_node_admin.pub"
 trap - EXIT
-ssh-keygen -lf "$HOME/.ssh/dgx_spark_admin.pub"
-test ! -e "$HOME/.ssh/dgx_spark_admin"
+ssh-keygen -lf "$HOME/.ssh/vonk_node_admin.pub"
+test ! -e "$HOME/.ssh/vonk_node_admin"
 ```
 
 The final command must report fingerprint
 `SHA256:66yS2tf5iK+wvPkO44m++PWfI1q1BHS63BRMJqsPaqM`. The local file is
 intentionally a public key; there must be no unencrypted private-key file at
-`~/.ssh/dgx_spark_admin`.
+`~/.ssh/vonk_node_admin`.
 
 ## 2. Repair and verify host identities
 
 [NVIDIA CVE-2026-24218](https://nvidia.custhelp.com/app/answers/detail/a_id/5835)
-documents that pre-OTA0 DGX Spark factory images can clone SSH host keys and
-`/etc/machine-id`. Both Sparks in this cluster had the same machine ID and the
+documents that pre-OTA0 Vonk Forge GPU node factory images can clone SSH host keys and
+`/etc/machine-id`. Both GPU nodes in this cluster had the same machine ID and the
 same configured RSA, ECDSA, and Ed25519 host keys. Treat all of those original
-identifiers as compromised; neither Spark is a trusted identity anchor.
+identifiers as compromised; neither GPU node is a trusted identity anchor.
 
-Do this from a keyboard and display attached to each physical Spark. Before
-repairing identity, use DGX Dashboard to install every offered system update
+Do this from a keyboard and display attached to each physical GPU node. Before
+repairing identity, use Vonk Forge Dashboard to install every offered system update
 and reboot. The dashboard must report the update as installed with no pending
-update. At the local console, verify that `/etc/dgx-release` contains the OTA
+update. At the local console, verify that `/etc/vonk-release` contains the OTA
 history and record it in the private inventory:
 
 ```bash
-sudo awk -F= '/^(DGX_SWBUILD_VERSION|DGX_OTA_VERSION)=/ { print }' \
-  /etc/dgx-release
+sudo awk -F= '/^(VONK_SWBUILD_VERSION|VONK_OTA_VERSION)=/ { print }' \
+  /etc/vonk-release
 ```
 
 The security bulletin calls the fixed update `OTA0`; this is the update level,
-not necessarily the literal value printed in `DGX_OTA_VERSION`. If the
+not necessarily the literal value printed in `VONK_OTA_VERSION`. If the
 dashboard cannot confirm that OTA0 or a later update is installed, stop before
 entering a password or enabling SSH access.
 
-### Regenerate one physical Spark at a time
+### Regenerate one physical GPU node at a time
 
-Complete this procedure and the console-to-network fingerprint check for Spark
-1 before touching Spark 2. Identify the device by the serial printed on its
+Complete this procedure and the console-to-network fingerprint check for GPU node
+1 before touching GPU node 2. Identify the device by the serial printed on its
 chassis and by `/sys/class/dmi/id/product_serial`; never identify it by one of
 the cloned keys. Keep the local console open until a fresh SSH session has
 passed.
@@ -108,7 +108,7 @@ for key in "${host_keys[@]}"; do
   test -s "$key.pub"
 done
 
-backup_dir="$(mktemp -d /root/dgx-identity-backup.XXXXXX)"
+backup_dir="$(mktemp -d /root/vonk-identity-backup.XXXXXX)"
 chmod 0700 "$backup_dir"
 cp -p /etc/machine-id "$backup_dir/machine-id"
 for key in "${host_keys[@]}"; do
@@ -170,33 +170,33 @@ macOS `ssh-keyscan` can write banner comments to standard output.
 
 ```bash
 set -euo pipefail
-spark1_machine_id='PASTE_SPARK_1_MACHINE_ID'
-spark2_machine_id='PASTE_SPARK_2_MACHINE_ID'
-spark1_rsa_fp='PASTE_SPARK_1_RSA_SHA256_FINGERPRINT'
-spark1_ecdsa_fp='PASTE_SPARK_1_ECDSA_SHA256_FINGERPRINT'
-spark1_ed25519_fp='PASTE_SPARK_1_ED25519_SHA256_FINGERPRINT'
-spark2_rsa_fp='PASTE_SPARK_2_RSA_SHA256_FINGERPRINT'
-spark2_ecdsa_fp='PASTE_SPARK_2_ECDSA_SHA256_FINGERPRINT'
-spark2_ed25519_fp='PASTE_SPARK_2_ED25519_SHA256_FINGERPRINT'
+node1_machine_id='PASTE_VONK_1_MACHINE_ID'
+node2_machine_id='PASTE_VONK_2_MACHINE_ID'
+node1_rsa_fp='PASTE_VONK_1_RSA_SHA256_FINGERPRINT'
+node1_ecdsa_fp='PASTE_VONK_1_ECDSA_SHA256_FINGERPRINT'
+node1_ed25519_fp='PASTE_VONK_1_ED25519_SHA256_FINGERPRINT'
+node2_rsa_fp='PASTE_VONK_2_RSA_SHA256_FINGERPRINT'
+node2_ecdsa_fp='PASTE_VONK_2_ECDSA_SHA256_FINGERPRINT'
+node2_ed25519_fp='PASTE_VONK_2_ED25519_SHA256_FINGERPRINT'
 
-[[ "$spark1_machine_id" =~ ^[0-9a-f]{32}$ ]]
-[[ "$spark2_machine_id" =~ ^[0-9a-f]{32}$ ]]
-test "$spark1_machine_id" != "$spark2_machine_id"
+[[ "$node1_machine_id" =~ ^[0-9a-f]{32}$ ]]
+[[ "$node2_machine_id" =~ ^[0-9a-f]{32}$ ]]
+test "$node1_machine_id" != "$node2_machine_id"
 for fp in \
-  "$spark1_rsa_fp" "$spark1_ecdsa_fp" "$spark1_ed25519_fp" \
-  "$spark2_rsa_fp" "$spark2_ecdsa_fp" "$spark2_ed25519_fp"; do
+  "$node1_rsa_fp" "$node1_ecdsa_fp" "$node1_ed25519_fp" \
+  "$node2_rsa_fp" "$node2_ecdsa_fp" "$node2_ed25519_fp"; do
   case "$fp" in SHA256:*) ;; *) exit 1 ;; esac
 done
-test "$spark1_rsa_fp" != "$spark2_rsa_fp"
-test "$spark1_ecdsa_fp" != "$spark2_ecdsa_fp"
-test "$spark1_ed25519_fp" != "$spark2_ed25519_fp"
+test "$node1_rsa_fp" != "$node2_rsa_fp"
+test "$node1_ecdsa_fp" != "$node2_ecdsa_fp"
+test "$node1_ed25519_fp" != "$node2_ed25519_fp"
 
 mkdir -p "$HOME/.ssh"
 chmod 0700 "$HOME/.ssh"
-scan_dir="$(mktemp -d "$HOME/.ssh/.dgx-host-key-scan.XXXXXX")"
+scan_dir="$(mktemp -d "$HOME/.ssh/.vonk-host-key-scan.XXXXXX")"
 known_stage="$(mktemp "$HOME/.ssh/.known_hosts.XXXXXX")"
 cleanup_scan() {
-  rm -f "$scan_dir"/spark1-* "$scan_dir"/spark2-* \
+  rm -f "$scan_dir"/node1-* "$scan_dir"/node2-* \
     "$known_stage" "$known_stage.old"
   rmdir "$scan_dir" 2>/dev/null || true
 }
@@ -214,26 +214,26 @@ capture_key() {
   test "$(awk 'END { print NR }' "$destination")" -eq 1
 }
 
-capture_key 192.168.1.211 rsa ssh-rsa "$scan_dir/spark1-rsa"
+capture_key 192.168.1.211 rsa ssh-rsa "$scan_dir/node1-rsa"
 capture_key 192.168.1.211 ecdsa ecdsa-sha2-nistp256 \
-  "$scan_dir/spark1-ecdsa"
+  "$scan_dir/node1-ecdsa"
 capture_key 192.168.1.211 ed25519 ssh-ed25519 \
-  "$scan_dir/spark1-ed25519"
-capture_key 192.168.1.212 rsa ssh-rsa "$scan_dir/spark2-rsa"
+  "$scan_dir/node1-ed25519"
+capture_key 192.168.1.212 rsa ssh-rsa "$scan_dir/node2-rsa"
 capture_key 192.168.1.212 ecdsa ecdsa-sha2-nistp256 \
-  "$scan_dir/spark2-ecdsa"
+  "$scan_dir/node2-ecdsa"
 capture_key 192.168.1.212 ed25519 ssh-ed25519 \
-  "$scan_dir/spark2-ed25519"
+  "$scan_dir/node2-ed25519"
 
 fingerprint() {
   ssh-keygen -lf "$1" | awk '{ print $2 }'
 }
-test "$(fingerprint "$scan_dir/spark1-rsa")" = "$spark1_rsa_fp"
-test "$(fingerprint "$scan_dir/spark1-ecdsa")" = "$spark1_ecdsa_fp"
-test "$(fingerprint "$scan_dir/spark1-ed25519")" = "$spark1_ed25519_fp"
-test "$(fingerprint "$scan_dir/spark2-rsa")" = "$spark2_rsa_fp"
-test "$(fingerprint "$scan_dir/spark2-ecdsa")" = "$spark2_ecdsa_fp"
-test "$(fingerprint "$scan_dir/spark2-ed25519")" = "$spark2_ed25519_fp"
+test "$(fingerprint "$scan_dir/node1-rsa")" = "$node1_rsa_fp"
+test "$(fingerprint "$scan_dir/node1-ecdsa")" = "$node1_ecdsa_fp"
+test "$(fingerprint "$scan_dir/node1-ed25519")" = "$node1_ed25519_fp"
+test "$(fingerprint "$scan_dir/node2-rsa")" = "$node2_rsa_fp"
+test "$(fingerprint "$scan_dir/node2-ecdsa")" = "$node2_ecdsa_fp"
+test "$(fingerprint "$scan_dir/node2-ed25519")" = "$node2_ed25519_fp"
 
 if test -f "$HOME/.ssh/known_hosts"; then
   cp -p "$HOME/.ssh/known_hosts" "$known_stage"
@@ -244,10 +244,10 @@ ssh-keygen -R 192.168.1.211 -f "$known_stage" >/dev/null
 rm -f "$known_stage.old"
 ssh-keygen -R 192.168.1.212 -f "$known_stage" >/dev/null
 rm -f "$known_stage.old"
-cat "$scan_dir"/spark1-* "$scan_dir"/spark2-* >> "$known_stage"
+cat "$scan_dir"/node1-* "$scan_dir"/node2-* >> "$known_stage"
 chmod 0600 "$known_stage"
 mv -f "$known_stage" "$HOME/.ssh/known_hosts"
-rm -f "$scan_dir"/spark1-* "$scan_dir"/spark2-*
+rm -f "$scan_dir"/node1-* "$scan_dir"/node2-*
 rmdir "$scan_dir"
 trap - EXIT
 ```
@@ -258,11 +258,11 @@ host key interactively.
 
 ## 3. Install the public key
 
-Only after section 2 passes, install the public key on one Spark at a time:
+Only after section 2 passes, install the public key on one GPU node at a time:
 
 ```bash
-ssh-copy-id -f -i "$HOME/.ssh/dgx_spark_admin.pub" carst@192.168.1.211
-ssh-copy-id -f -i "$HOME/.ssh/dgx_spark_admin.pub" carst@192.168.1.212
+ssh-copy-id -f -i "$HOME/.ssh/vonk_node_admin.pub" carst@192.168.1.211
+ssh-copy-id -f -i "$HOME/.ssh/vonk_node_admin.pub" carst@192.168.1.212
 ```
 
 `-f` is required here because `IdentityFile` contains only the public half while
@@ -285,8 +285,8 @@ first active `Host` or `Match` block, or at the end when neither exists.
 set -euo pipefail
 mkdir -p "$HOME/.ssh/config.d"
 chmod 0700 "$HOME/.ssh" "$HOME/.ssh/config.d"
-install -m 0600 config/ssh/dgx-spark.conf.example \
-  "$HOME/.ssh/config.d/dgx-spark.conf"
+install -m 0600 config/ssh/vonk-node.conf.example \
+  "$HOME/.ssh/config.d/vonk-node.conf"
 touch "$HOME/.ssh/config"
 chmod 0600 "$HOME/.ssh/config"
 config_stage="$(mktemp "$HOME/.ssh/.config.XXXXXX")"
@@ -317,9 +317,9 @@ trap - EXIT
 Inspect the resolved settings without connecting:
 
 ```bash
-ssh -G dgx-spark-1 | grep -E \
+ssh -G vonk-node-1 | grep -E \
   '^(hostname|user|identityagent|identityfile|hostkeyalgorithms) '
-ssh -G dgx-spark-2 | grep -E \
+ssh -G vonk-node-2 | grep -E \
   '^(hostname|user|identityagent|identityfile|hostkeyalgorithms) '
 ```
 
@@ -330,9 +330,9 @@ fresh connection works. Unlock 1Password, then run:
 
 ```bash
 ssh -o BatchMode=yes -o PasswordAuthentication=no \
-  -o KbdInteractiveAuthentication=no dgx-spark-1 hostname
+  -o KbdInteractiveAuthentication=no vonk-node-1 hostname
 ssh -o BatchMode=yes -o PasswordAuthentication=no \
-  -o KbdInteractiveAuthentication=no dgx-spark-2 hostname
+  -o KbdInteractiveAuthentication=no vonk-node-2 hostname
 ```
 
 Both commands must print a hostname and exit with status zero. `BatchMode=yes`
@@ -341,7 +341,7 @@ use the key.
 
 If a check fails, leave password authentication enabled. Confirm from a trusted
 local console that the expected public key is one complete line in
-`~/.ssh/authorized_keys` on the affected Spark, correct its ownership and
+`~/.ssh/authorized_keys` on the affected GPU node, correct its ownership and
 permissions if necessary, and repeat the key-only check before proceeding.
 
 Also verify that the Ed25519 records installed in `known_hosts` still match the
@@ -354,19 +354,19 @@ known_ed25519_fp() {
     | ssh-keygen -lf - \
     | awk '{ print $2 }'
 }
-test "$(known_ed25519_fp 192.168.1.211)" = "$spark1_ed25519_fp"
-test "$(known_ed25519_fp 192.168.1.212)" = "$spark2_ed25519_fp"
+test "$(known_ed25519_fp 192.168.1.211)" = "$node1_ed25519_fp"
+test "$(known_ed25519_fp 192.168.1.212)" = "$node2_ed25519_fp"
 ```
 
 Only after both fresh key-only sessions and both fingerprint checks pass,
 remove the short-lived recovery directory from each trusted local console, one
-Spark at a time. Substitute the exact path printed during regeneration; the
+GPU node at a time. Substitute the exact path printed during regeneration; the
 guard deliberately rejects broader paths:
 
 ```bash
 sudo bash
 set -euo pipefail
-backup_dir='/root/dgx-identity-backup.PASTE_EXACT_SUFFIX'
+backup_dir='/root/vonk-identity-backup.PASTE_EXACT_SUFFIX'
 # BEGIN validated identity backup cleanup
 remove_identity_backup() {
   candidate="$1"
@@ -379,7 +379,7 @@ remove_identity_backup() {
   canonical_name="$(basename -- "$canonical")"
   test "$candidate" = "$canonical" || return 1
   test "$canonical_parent" = "$trusted_parent" || return 1
-  [[ "$canonical_name" =~ ^dgx-identity-backup\.[A-Za-z0-9]{6}$ ]] \
+  [[ "$canonical_name" =~ ^vonk-identity-backup\.[A-Za-z0-9]{6}$ ]] \
     || return 1
 
   expected_files=(

@@ -20,7 +20,7 @@ apply/recovery, signer separation, publication tooling, and the release
 verifier are all present and covered by focused tests.
 
 The remaining release work is external evidence only: physical control-host
-update/recovery, physical replacement-host recovery, physical Spark canary and
+update/recovery, physical replacement-host recovery, physical GPU node canary and
 rollback, authenticated-encryption recovery, and a signed platform-update
 manifest produced with the production release key. No simulator or local test
 is treated as proof of those gates.
@@ -29,12 +29,12 @@ is treated as proof of those gates.
 
 - Follow [the approved design](../specs/2026-08-06-control-host-generation-supply-chain-design.md).
 - Production never executes or deploys Compose/config/script content from a mutable repository checkout.
-- Only root writes `/srv/dgx-forge/control-host`; containers mount the root-owned `/srv/dgx-forge/control-identity/` directory read-only and reopen projections by dirfd/`O_NOFOLLOW`.
+- Only root writes `/srv/vonk-forge/control-host`; containers mount the root-owned `/srv/vonk-forge/control-identity/` directory read-only and reopen projections by dirfd/`O_NOFOLLOW`.
 - One exclusive `operation.lock` descriptor spans every apply, rollback, and recovery side effect through generation-bound worker readiness.
 - TUF target name, target SHA-256, targets version, release/build digest, OCI manifest/layer descriptors, and predecessor are exact bindings.
 - No shell, free-form command, mutable backup script, unbounded subprocess output, or unbounded deadline is permitted.
 - Every production change follows red-green-refactor with only the named focused tests; broad suites run once at the final gate.
-- Preserve the existing root-agent additions in `control/tests/test_upgrade.py` and `control/src/dgx_control/upgrade.py`; refactor them, do not replace or discard them.
+- Preserve the existing root-agent additions in `control/tests/test_upgrade.py` and `control/src/vonk_control/upgrade.py`; refactor them, do not replace or discard them.
 - Do not create a commit in this task stream.
 
 ---
@@ -43,10 +43,10 @@ is treated as proof of those gates.
 
 **Files:**
 - Modify: `schemas/platform-update-manifest.schema.json`
-- Modify: `src/spark_profiles/schemas/platform-update-manifest.schema.json`
-- Modify: `src/spark_profiles/platform_release.py`
-- Modify: `tests/spark_profiles/test_platform_release.py`
-- Modify: `control/src/dgx_control/update_authority.py`
+- Modify: `src/cluster_profiles/schemas/platform-update-manifest.schema.json`
+- Modify: `src/cluster_profiles/platform_release.py`
+- Modify: `tests/cluster_profiles/test_platform_release.py`
+- Modify: `control/src/vonk_control/update_authority.py`
 - Modify: `control/tests/test_update_authority.py`
 
 **Interfaces:**
@@ -65,7 +65,7 @@ is treated as proof of those gates.
 - [ ] **Step 2: Verify red**
 
   Run:
-  `uv run pytest -q tests/spark_profiles/test_platform_release.py control/tests/test_update_authority.py -k 'bundle or predecessor or target_name or versioned'`
+  `uv run pytest -q tests/cluster_profiles/test_platform_release.py control/tests/test_update_authority.py -k 'bundle or predecessor or target_name or versioned'`
 
   Expected: failures show the current schema lacks bundle/predecessor fields
   and the authority still uses the fixed target name.
@@ -85,9 +85,9 @@ is treated as proof of those gates.
 
 **Files:**
 - Create: `schemas/control-deployment-bundle.schema.json`
-- Create: `src/spark_profiles/schemas/control-deployment-bundle.schema.json`
-- Create: `src/spark_profiles/deployment_bundle.py`
-- Create: `tests/spark_profiles/test_deployment_bundle.py`
+- Create: `src/cluster_profiles/schemas/control-deployment-bundle.schema.json`
+- Create: `src/cluster_profiles/deployment_bundle.py`
+- Create: `tests/cluster_profiles/test_deployment_bundle.py`
 - Create: `scripts/build-control-deployment-bundle`
 - Create: `tests/scripts/test_build_control_deployment_bundle.py`
 - Modify: `scripts/verify-supply-chain`
@@ -116,7 +116,7 @@ def extract_deployment_bundle(raw: bytes, destination: Path, verified: VerifiedD
 - [ ] **Step 2: Verify red**
 
   Run:
-  `uv run pytest -q tests/spark_profiles/test_deployment_bundle.py tests/scripts/test_build_control_deployment_bundle.py`
+  `uv run pytest -q tests/cluster_profiles/test_deployment_bundle.py tests/scripts/test_build_control_deployment_bundle.py`
 
   Expected: module and builder are absent.
 
@@ -130,16 +130,16 @@ def extract_deployment_bundle(raw: bytes, destination: Path, verified: VerifiedD
 - [ ] **Step 4: Verify green and supply-chain integration**
 
   Run the Step 2 command plus
-  `scripts/verify-supply-chain --json >/tmp/dgx-supply-chain.json`.
+  `scripts/verify-supply-chain --json >/tmp/vonk-supply-chain.json`.
 
 ### Task 3: Root host state, identity projection, and one operation lock
 
 **Files:**
-- Create: `control/src/dgx_control/host_state.py`
+- Create: `control/src/vonk_control/host_state.py`
 - Create: `control/tests/test_host_state.py`
-- Modify: `control/src/dgx_control/upgrade.py`
+- Modify: `control/src/vonk_control/upgrade.py`
 - Modify: `control/tests/test_upgrade.py`
-- Modify: `control/src/dgx_control/offline.py`
+- Modify: `control/src/vonk_control/offline.py`
 - Modify: `control/tests/test_offline.py`
 
 **Interfaces:**
@@ -193,11 +193,11 @@ class PhaseJournal:
 ### Task 4: Bounded command runner and fixed backup boundary
 
 **Files:**
-- Create: `control/src/dgx_control/host_commands.py`
-- Create: `control/src/dgx_control/host_backup.py`
+- Create: `control/src/vonk_control/host_commands.py`
+- Create: `control/src/vonk_control/host_backup.py`
 - Create: `control/tests/test_host_commands.py`
 - Create: `control/tests/test_host_backup.py`
-- Modify: `control/src/dgx_control/offline.py`
+- Modify: `control/src/vonk_control/offline.py`
 - Modify: `control/tests/test_upgrade.py`
 - Modify: `deploy/compose/tests/test_backup_restore.py`
 
@@ -248,7 +248,7 @@ class HostBackupBoundary:
   Use `Popen` with concurrent bounded pipe draining, monotonic deadlines, and
   a terminate/kill grace period. Move the canonical archive code behind
   `HostBackupBoundary`; remove upgrade `--backup-script` and
-  `DGX_BACKUP_ENCRYPT_COMMAND` handling in favor of a root-owned recipients
+  `VONK_BACKUP_ENCRYPT_COMMAND` handling in favor of a root-owned recipients
   file setting.
 
 - [ ] **Step 4: Verify green**
@@ -258,11 +258,11 @@ class HostBackupBoundary:
 ### Task 5: OCI acquisition and exact generation planning
 
 **Files:**
-- Create: `control/src/dgx_control/oci_bundle.py`
+- Create: `control/src/vonk_control/oci_bundle.py`
 - Create: `control/tests/test_oci_bundle.py`
-- Modify: `control/src/dgx_control/upgrade.py`
+- Modify: `control/src/vonk_control/upgrade.py`
 - Modify: `control/tests/test_upgrade.py`
-- Modify: `control/src/dgx_control/offline.py`
+- Modify: `control/src/vonk_control/offline.py`
 
 **Interfaces:**
 
@@ -306,10 +306,10 @@ class ControlUpgrade:
 ### Task 6: Preselection API and generation-bound worker DB readiness
 
 **Files:**
-- Modify: `control/src/dgx_control/settings.py`
-- Modify: `control/src/dgx_control/api.py`
-- Modify: `control/src/dgx_control/worker.py`
-- Modify: `control/src/dgx_control/models.py`
+- Modify: `control/src/vonk_control/settings.py`
+- Modify: `control/src/vonk_control/api.py`
+- Modify: `control/src/vonk_control/worker.py`
+- Modify: `control/src/vonk_control/models.py`
 - Create: `control/migrations/versions/0012_control_process_heartbeats.py`
 - Create: `control/tests/test_control_process_heartbeat_migration.py`
 - Create: `control/tests/test_generation_readiness.py`
@@ -361,8 +361,8 @@ class GenerationReadinessService:
 ### Task 7: Journaled apply, crash recovery, and exact rollback
 
 **Files:**
-- Modify: `control/src/dgx_control/upgrade.py`
-- Modify: `control/src/dgx_control/offline.py`
+- Modify: `control/src/vonk_control/upgrade.py`
+- Modify: `control/src/vonk_control/offline.py`
 - Modify: `control/tests/test_upgrade.py`
 - Create: `control/tests/test_upgrade_recovery.py`
 
@@ -411,17 +411,17 @@ class ControlUpgrade:
 - Modify: `deploy/compose/.env.example`
 - Modify: `deploy/compose/tests/test.env`
 - Modify: `deploy/compose/tests/test_networking.py`
-- Modify: `control/src/dgx_control/update_signer.py`
-- Modify: `control/src/dgx_control/update_authority.py`
-- Modify: `control/src/dgx_control/agent_jobs.py`
-- Modify: `agent/src/dgx_agent/update.py`
+- Modify: `control/src/vonk_control/update_signer.py`
+- Modify: `control/src/vonk_control/update_authority.py`
+- Modify: `control/src/vonk_control/agent_jobs.py`
+- Modify: `agent/src/vonk_agent/update.py`
 - Modify: `control/tests/test_update_signer.py`
 - Modify: `control/tests/test_agent_jobs.py`
 - Modify: `agent/tests/test_update.py`
 
 **Interfaces:**
-- Every selected container consumes `/run/dgx-forge/control-identity/` as a read-only directory and reopens `active.json` by dirfd for each validation.
-- Spark update receipts carry the exact selected `platform_target_name`, `platform_target_sha256`, and `tuf_targets_version`.
+- Every selected container consumes `/run/vonk-forge/control-identity/` as a read-only directory and reopens `active.json` by dirfd for each validation.
+- GPU node update receipts carry the exact selected `platform_target_name`, `platform_target_sha256`, and `tuf_targets_version`.
 
 - [ ] **Step 1: Write failing Compose and receipt tests**
 
@@ -443,7 +443,7 @@ class ControlUpgrade:
 
   Keep application state mounts only where independently required, add the
   projection mount, and route signer/worker/agent target selection through the
-  exact versioned identity. Do not add TUF private material to API or Sparks.
+  exact versioned identity. Do not add TUF private material to API or GPU nodes.
 
 - [ ] **Step 4: Verify green**
 
@@ -507,8 +507,8 @@ class ControlUpgrade:
   Run:
 
   ```bash
-  uv run pytest -q tests/spark_profiles/test_platform_release.py \
-    tests/spark_profiles/test_deployment_bundle.py \
+  uv run pytest -q tests/cluster_profiles/test_platform_release.py \
+    tests/cluster_profiles/test_deployment_bundle.py \
     tests/e2e/test_control_host_generation.py
   uv run --project control --with-editable . pytest -q control/tests/test_host_state.py \
     control/tests/test_host_commands.py control/tests/test_host_backup.py \

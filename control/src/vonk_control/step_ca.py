@@ -1,4 +1,4 @@
-"""Strict Smallstep step-ca v0.30.2 provider for Spark agent certificates."""
+"""Strict Smallstep step-ca v0.30.2 provider for GPU node agent certificates."""
 
 from __future__ import annotations
 
@@ -127,7 +127,7 @@ class StepCertificateAuthority(CertificateAuthority):
             follow_redirects=False,
             trust_env=False,
             transport=transport,
-            headers={"accept": "application/json", "user-agent": "dgx-forge-control/1"},
+            headers={"accept": "application/json", "user-agent": "vonk-forge-control/1"},
         )
 
     def issue_node(self, node_id: str, csr_pem: bytes, now: datetime) -> IssuedCertificate:
@@ -145,7 +145,7 @@ class StepCertificateAuthority(CertificateAuthority):
         *,
         request_id: str,
     ) -> IssuedCertificate:
-        # DGX-Forge authorizes renewal with the currently active mTLS identity;
+        # Vonk Forge authorizes renewal with the currently active mTLS identity;
         # step-ca receives a fresh, fixed-policy sign authorization and CSR.
         _validate_provider_request_id(request_id)
         return self._sign(node_id, csr_pem, now, request_id=request_id)
@@ -158,7 +158,7 @@ class StepCertificateAuthority(CertificateAuthority):
             "serial": serial,
             "ott": self._token(serial, f"{self._ca_url}/1.0/revoke", timestamp, sans=None),
             "reasonCode": 4,
-            "reason": "superseded by DGX-Forge",
+            "reason": "superseded by Vonk Forge",
             "passive": True,
         }
         response = self._json_request("POST", "/1.0/revoke", body)
@@ -199,7 +199,7 @@ class StepCertificateAuthority(CertificateAuthority):
             "csr": normalized_csr.decode("ascii"),
             "ott": self._token(
                 node_id, endpoint, timestamp,
-                sans=[f"spiffe://dgx-forge.local/node/{node_id}"],
+                sans=[f"spiffe://vonk-forge.local/node/{node_id}"],
                 request_id=request_id,
             ),
             "notBefore": _rfc3339(timestamp),
@@ -279,7 +279,7 @@ class StepCertificateAuthority(CertificateAuthority):
         if leaf.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value != expected_eku:
             raise StepCAError("step-ca returned invalid extended key usage")
         expected_san = x509.SubjectAlternativeName([
-            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{node_id}")
+            x509.UniformResourceIdentifier(f"spiffe://vonk-forge.local/node/{node_id}")
         ])
         if leaf.extensions.get_extension_for_class(x509.SubjectAlternativeName).value != expected_san:
             raise StepCAError("step-ca returned a mismatched node URI SAN")

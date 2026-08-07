@@ -1,4 +1,4 @@
-"""Strict, immutable contracts for declarative Spark workload profiles."""
+"""Strict, immutable contracts for declarative GPU node workload profiles."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from jsonschema import ValidationError, validate
 
 from .placement import PlacementRequirement
 
-_NODES = frozenset(("spark1", "spark2"))
+_NODES = frozenset(("node1", "node2"))
 
 
 class ProfileValidationError(ValueError):
@@ -185,16 +185,16 @@ def _require_rank_orders(data: dict[str, Any]) -> None:
     start_order = tuple(data["start_order"])
     stop_order = tuple(data["stop_order"])
     if len(set(nodes)) != len(nodes) or set(nodes) - _NODES:
-        raise ProfileValidationError("nodes must contain unique Spark node IDs")
+        raise ProfileValidationError("nodes must contain unique GPU node IDs")
     if set(start_order) != set(nodes) or len(start_order) != len(nodes):
         raise ProfileValidationError("start_order must rank every declared node exactly once")
     if set(stop_order) != set(nodes) or len(stop_order) != len(nodes):
         raise ProfileValidationError("stop_order must rank every declared node exactly once")
     if data["topology"] == "distributed" and set(nodes) != _NODES:
-        raise ProfileValidationError("distributed workloads require spark1 and spark2")
-    if data["topology"] == "distributed" and start_order != ("spark2", "spark1"):
+        raise ProfileValidationError("distributed workloads require node1 and node2")
+    if data["topology"] == "distributed" and start_order != ("node2", "node1"):
         raise ProfileValidationError("distributed workloads require worker-first start order")
-    if data["topology"] == "distributed" and stop_order != ("spark1", "spark2"):
+    if data["topology"] == "distributed" and stop_order != ("node1", "node2"):
         raise ProfileValidationError("distributed workloads require head-first stop order")
     if data["topology"] == "single" and len(nodes) != 1:
         raise ProfileValidationError("single workloads require exactly one node")

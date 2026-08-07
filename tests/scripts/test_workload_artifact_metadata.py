@@ -40,7 +40,7 @@ def _request_document() -> dict[str, object]:
         "context_digest": SHA_B,
         "dockerfile": "adapters/deepseek/ds4/Dockerfile",
         "kind": "workload-artifact-build-request",
-        "output_repository": "ghcr.io/carstvaartjes/dgx-forge-workloads",
+        "output_repository": "ghcr.io/carstvaartjes/vonk-forge-workloads",
         "schema_version": 1,
         "source_commit": COMMIT,
         "target": "runtime",
@@ -65,7 +65,7 @@ def test_request_parser_accepts_only_a_bounded_exact_build_contract() -> None:
     request = module.WorkloadArtifactBuild.parse(_request_document())
 
     assert request.source_commit == COMMIT
-    assert request.output_repository == "ghcr.io/carstvaartjes/dgx-forge-workloads"
+    assert request.output_repository == "ghcr.io/carstvaartjes/vonk-forge-workloads"
     assert request.context == "adapters/deepseek/ds4"
     assert request.dockerfile == "adapters/deepseek/ds4/Dockerfile"
     assert request.digest == module.WorkloadArtifactBuild.parse(

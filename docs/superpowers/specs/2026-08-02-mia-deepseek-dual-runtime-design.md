@@ -1,4 +1,4 @@
-# Mia DeepSeek Flash 0731 Dual-Spark Runtime Design
+# Mia DeepSeek Flash 0731 Dual-GPU node Runtime Design
 
 **Date:** 2026-08-02
 
@@ -9,7 +9,7 @@
 ## Outcome
 
 Make the existing `deepseek-agent-dual` Model Definition runnable and
-qualifiable on the two DGX Sparks using the MiaAI-Lab dual-Spark approach. The
+qualifiable on the two Vonk Forge GPU nodes using the MiaAI-Lab dual-GPU node approach. The
 client-facing model name remains `deepseek`, and the existing
 `agent-full-dual` Cluster Profile remains the default profile.
 
@@ -26,11 +26,11 @@ Use the currently audited Mia recipe, not the older provisional source pin:
 
 | Artifact | Pin |
 |---|---|
-| Mia source | `MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark@b131b2a22164675890dd1465fd8862b5cfb6ff13` |
-| Runtime image | `ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8` |
+| Mia source | `MiaAI-Lab/DeepSeek-v4-Flash-draft-model-2x-Vonk Forge-GPU node@b131b2a22164675890dd1465fd8862b5cfb6ff13` |
+| Runtime image | `ghcr.io/anemll/draft-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8` |
 | Checkpoint | `deepseek-ai/DeepSeek-V4-Flash-0731@9e165c30e2704aec5d9d593cce3eebd58bbef1cb` |
 | Precision/runtime | model checkpoint's audited quantization with `nvfp4_ds_mla` KV cache |
-| Parallelism | TP=2, PP=1, `mp`, one rank per Spark |
+| Parallelism | TP=2, PP=1, `mp`, one rank per GPU node |
 
 The source pin supersedes `914c35bd...`: `b131b2a...` is the audited research
 snapshot and retains the Anemll `0.1.1` runtime after upstream reverted its
@@ -64,8 +64,8 @@ The snapshot is mounted inside the container at
 path rather than a Hugging Face model ID:
 
 ```text
-DSPARK_MODEL=/models/deepseek-ai/DeepSeek-V4-Flash-0731
-DSPARK_ENCODING_FILE=/models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py
+DVONK_MODEL=/models/deepseek-ai/DeepSeek-V4-Flash-0731
+DVONK_ENCODING_FILE=/models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py
 VLLM_CACHE_ROOT=/runtime-cache/vllm
 FLASHINFER_WORKSPACE_BASE=/runtime-cache/flashinfer
 ```
@@ -75,7 +75,7 @@ the runtime never attempts to write into the read-only model snapshot.
 
 ### Repository layout
 
-The generic controller remains in `src/spark_profiles`. The Mia-specific
+The generic controller remains in `src/cluster_profiles`. The Mia-specific
 implementation is isolated under:
 
 ```text
@@ -113,23 +113,23 @@ verifying its repository content is insufficient.
 
 ### Distributed ownership and ordering
 
-`sparkctl` is the only cross-node orchestrator:
+`vonkctl` is the only cross-node orchestrator:
 
 ```text
-start: spark2 worker/rank 1 -> spark1 head/rank 0
-stop:  spark1 head/rank 0   -> spark2 worker/rank 1
+start: node2 worker/rank 1 -> node1 head/rank 0
+stop:  node1 head/rank 0   -> node2 worker/rank 1
 ```
 
 Mia's upstream cross-node start and stop scripts are reference implementations
 only. They are not wrapped because their nested SSH, file synchronization, and
-two-rank ownership would conflict with `sparkctl`.
+two-rank ownership would conflict with `vonkctl`.
 
 Compose is evaluated independently on each node with `network_mode: host`,
 `ipc: host`, 64 GiB shared memory, all GPUs, `/dev/infiniband`, unlimited
 memlock, `restart: "no"`, and the exact role/rank. Both nodes receive the same
 immutable adapter release before preparation.
 
-Rank-specific `spark1.env` and `spark2.env` files are generated from
+Rank-specific `node1.env` and `node2.env` files are generated from
 `inventory/cluster.toml`, reviewed, and included in the immutable runtime
 manifest. They pin each node's role, fabric addresses, interfaces, HCAs, GID
 indices, rendezvous address, and API bind. The adapter refuses a role that does
@@ -157,8 +157,8 @@ constrained below:
 - `--gpu-memory-utilization 0.80`
 - `--block-size 256`
 - `--max-cudagraph-capture-size 36`
-- DSpark speculative decoding pinned exactly to
-  `{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}`
+- draft-model speculative decoding pinned exactly to
+  `{"method":"draft","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}`
 - prefix caching, chunked prefill, async scheduling
 - DeepSeek v4 tokenizer, reasoning parser, and tool-call parser
 - FlashInfer B12X MoE and autotuning
@@ -205,7 +205,7 @@ It verifies the repository manifest, transfers a release to both nodes, verifies
 the transferred hashes, and atomically installs it at:
 
 ```text
-/opt/spark/model-adapters/deepseek-agent-dual/releases/<manifest-sha256>/
+/opt/node/model-adapters/deepseek-agent-dual/releases/<manifest-sha256>/
 ```
 
 The Workload Definition invokes the absolute digest-qualified adapter path. No
@@ -215,7 +215,7 @@ model artifacts nor starts containers.
 After deployment, preparation is exposed as:
 
 ```text
-sparkctl prepare agent-full-dual
+vonkctl prepare agent-full-dual
 ```
 
 It acquires the controller's host lock, refuses any non-stopped or transitional
@@ -228,7 +228,7 @@ Preparation runs as a deterministic named one-shot Docker job on each node.
 The adapter starts or reattaches to that job and persists progress plus final
 status under the declared runtime-cache directory. Losing the developer-machine
 process or SSH connection does not terminate the node-local download. Re-running
-`sparkctl prepare` inspects the same job and resumes or reports its status; a
+`vonkctl prepare` inspects the same job and resumes or reports its status; a
 different release/checkpoint fingerprint is refused while that job exists.
 The controller's initial prepare deadline is 86,400 seconds. Reaching that
 client-side deadline stops polling but does not kill the preparation job.
@@ -246,7 +246,7 @@ planned -> prepared -> verified -> accepted
 ```
 
 The workload TOML is the controller-facing declaration while each immutable
-adapter release remains independently executable on a Spark. Consequently its
+adapter release remains independently executable on a GPU node. Consequently its
 offline shell entrypoint mirrors the image, checkpoint, and resource pins. A
 repository contract test requires those mirrored values to equal the parsed
 Model Definition and rejects duplicate literal checkpoint hashes; this is
@@ -387,10 +387,10 @@ An update never mutates an accepted Model Definition in place. Changed pins or
 adapter contents produce a different fingerprint and return that definition to
 the qualification path. The last accepted runtime remains the rollback target
 until the candidate has completed live acceptance. Model snapshots and images
-may coexist during qualification because both Sparks have sufficient storage.
+may coexist during qualification because both GPU nodes have sufficient storage.
 
 Routine maintenance should periodically check the Mia repository, runtime image,
-DeepSeek checkpoint, vLLM/FlashInfer support, and NVIDIA DGX Spark software
+DeepSeek checkpoint, vLLM/FlashInfer support, and NVIDIA Vonk Forge GPU node software
 releases. Discovery can be automated later; promotion always remains an explicit
 recorded operation.
 
@@ -414,8 +414,8 @@ Model Definition.
 
 ## Upstream authorities
 
-- [Mia pinned source](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/tree/b131b2a22164675890dd1465fd8862b5cfb6ff13)
-- [Mia executable Compose recipe](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docker-compose.dspark.yml)
-- [Mia DeepSeek 0731 runtime notes](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docs/DEEPSEEK_V4_FLASH_0731.md)
+- [Mia pinned source](https://github.com/ node/tree/b131b2a22164675890dd1465fd8862b5cfb6ff13)
+- [Mia executable Compose recipe](https://github.com/ node/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docker-compose.draft.yml)
+- [Mia DeepSeek 0731 runtime notes](https://github.com/ node/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docs/DEEPSEEK_V4_FLASH_0731.md)
 - [Pinned DeepSeek checkpoint](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731/tree/9e165c30e2704aec5d9d593cce3eebd58bbef1cb)
-- [NVIDIA DGX Spark hardware guide](https://docs.nvidia.com/dgx/dgx-spark/hardware.html)
+- [NVIDIA Vonk Forge GPU node hardware guide](https://docs.nvidia.com/)

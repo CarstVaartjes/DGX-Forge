@@ -10,11 +10,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "nodes" / "bin" / "install-ssh-hardening"
-DROP_IN = ROOT / "nodes" / "etc" / "ssh" / "sshd_config.d" / "90-dgx-admin.conf"
+DROP_IN = ROOT / "nodes" / "etc" / "ssh" / "sshd_config.d" / "90-vonk-admin.conf"
 FINGERPRINT = "SHA256:test-admin-key"
 LINUX_NODE_RUNTIME = pytest.mark.skipif(
     sys.platform != "linux",
-    reason="SSH hardening runtime is supported only on DGX OS/Linux nodes",
+    reason="SSH hardening runtime is supported only on Vonk Forge OS/Linux nodes",
 )
 
 
@@ -75,11 +75,11 @@ esac
     environment = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "DGX_SSHD_CONFIG_DIR": str(config_dir),
-        "DGX_SSHD_BIN": str(sshd),
-        "DGX_SYSTEMCTL_BIN": str(systemctl),
-        "DGX_GETENT_BIN": str(getent),
-        "DGX_SSH_KEYGEN_BIN": str(ssh_keygen),
+        "VONK_SSHD_CONFIG_DIR": str(config_dir),
+        "VONK_SSHD_BIN": str(sshd),
+        "VONK_SYSTEMCTL_BIN": str(systemctl),
+        "VONK_GETENT_BIN": str(getent),
+        "VONK_SSH_KEYGEN_BIN": str(ssh_keygen),
         "HARDENING_TEST_ACTIONS": str(actions),
     }
     return {
@@ -135,7 +135,7 @@ def test_check_apply_verify_and_second_apply_are_idempotent(
     assert json.loads(first.stdout)["status"] == "changed"
     assert json.loads(verified.stdout)["status"] == "verified"
     assert json.loads(second.stdout)["status"] == "unchanged"
-    target = hardening_host["config_dir"] / "90-dgx-admin.conf"
+    target = hardening_host["config_dir"] / "90-vonk-admin.conf"
     assert target.read_bytes() == DROP_IN.read_bytes()
     assert target.stat().st_mode & 0o777 == 0o644
     assert hardening_host["actions"].read_text() == "reload\n"
@@ -171,7 +171,7 @@ def test_foreign_target_is_refused_and_preserved(
 ) -> None:
     config_dir = hardening_host["config_dir"]
     config_dir.mkdir()
-    target = config_dir / "90-dgx-admin.conf"
+    target = config_dir / "90-vonk-admin.conf"
     target.write_text("PermitRootLogin yes\n")
 
     result = _run(hardening_host, "--apply")

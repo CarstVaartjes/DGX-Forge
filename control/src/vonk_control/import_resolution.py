@@ -1,4 +1,4 @@
-"""Resolve external identities and typed overlays for one SparkRun import."""
+"""Resolve external identities and typed overlays for one WorkloadRun import."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from .recipe_contract import RecipeContractError, validate_recipe
 from .registry_resolution import RegistryTransport, resolve_public_image
 from .source_bundles import GeneratedSourceBundle, generate_source_bundle
 from .source_policy import SourcePolicyError, enforce_build_source_policy
-from .sparkrun_importer import SparkRunImportResult
+from .workload_run_importer import WorkloadRunImportResult
 
 
 class ImportResolutionError(ValueError):
@@ -31,7 +31,7 @@ class ResolutionResult:
 
 
 def resolve_import(
-    imported: SparkRunImportResult,
+    imported: WorkloadRunImportResult,
     overlays: Mapping[str, object],
     *,
     registry: RegistryTransport,

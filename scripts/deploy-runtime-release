@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and atomically deploy an immutable runtime release to both Sparks."""
+"""Validate and atomically deploy an immutable runtime release to both GPU nodes."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ from cluster_profiles.fleet.loaders import FleetLoadError, load_fleet
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._/-]+$")
 _WORKLOAD_NAME = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$")
-_REMOTE_RELEASE_ROOT = "/opt/spark/model-adapters"
+_REMOTE_RELEASE_ROOT = "/opt/node/model-adapters"
 _SSH_OPTIONS = (
     "-o",
     "BatchMode=yes",
@@ -275,7 +275,7 @@ class Release:
 
     @property
     def destination(self) -> str:
-        return f"/opt/spark/model-adapters/{self.workload}/releases/{self.digest}"
+        return f"/opt/node/model-adapters/{self.workload}/releases/{self.digest}"
 
 
 def _sha256(path: Path) -> str:
@@ -379,9 +379,9 @@ def _load_release(root: Path, workload_name: str) -> Release:
             or not nodes
             or any(not isinstance(node, str) for node in nodes)
             or len(nodes) != len(set(nodes))
-            or not set(nodes).issubset({"spark1", "spark2"})
+            or not set(nodes).issubset({"node1", "node2"})
         ):
-            raise DeployError("workload nodes must be a non-empty unique Spark node subset")
+            raise DeployError("workload nodes must be a non-empty unique GPU node subset")
         try:
             inventory_path = _regular_file(
                 root, PurePosixPath("inventory/cluster.toml"), "inventory"

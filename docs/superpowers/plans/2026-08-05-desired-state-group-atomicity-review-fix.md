@@ -22,8 +22,8 @@
 
 **Files:**
 - Modify: `control/migrations/versions/0008_resolved_reconciliation_plan.py`
-- Modify: `control/src/dgx_control/models.py`
-- Modify: `control/src/dgx_control/orchestration.py`
+- Modify: `control/src/vonk_control/models.py`
+- Modify: `control/src/vonk_control/orchestration.py`
 - Test: `control/tests/test_agent_migrations.py`
 - Test: `control/tests/test_orchestration.py`
 - Test: `control/tests/test_reconcile_postgres.py`
@@ -40,8 +40,8 @@
 ### Task 2: Canonical group contract and atomic transitions
 
 **Files:**
-- Modify: `control/src/dgx_control/desired_state.py`
-- Modify: `control/src/dgx_control/reconcile.py`
+- Modify: `control/src/vonk_control/desired_state.py`
+- Modify: `control/src/vonk_control/reconcile.py`
 - Test: `control/tests/test_desired_state.py`
 - Test: `tests/e2e/test_platform_lifecycle.py`
 - Modify: `scripts/accept-platform-lifecycle`
@@ -59,7 +59,7 @@
 ### Task 3: Exclusive-only placement safety
 
 **Files:**
-- Modify: `control/src/dgx_control/desired_state.py`
+- Modify: `control/src/vonk_control/desired_state.py`
 - Test: `control/tests/test_desired_state.py`
 
 **Interfaces:**
@@ -74,7 +74,7 @@
 ### Task 4: Structurally validated route quotas
 
 **Files:**
-- Modify: `control/src/dgx_control/jobs.py`
+- Modify: `control/src/vonk_control/jobs.py`
 - Test: `control/tests/test_jobs.py`
 - Test: `control/tests/test_desired_state.py`
 

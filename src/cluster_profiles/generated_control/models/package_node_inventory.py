@@ -12,26 +12,26 @@ from typing import cast, Union
 from typing import Union
 
 if TYPE_CHECKING:
-  from ..models.package_spark_resources import PackageSparkResources
+  from ..models.package_node_storage import PackageNodeStorage
+  from ..models.package_node_resources import PackageNodeResources
   from ..models.package_inventory_item import PackageInventoryItem
-  from ..models.package_spark_storage import PackageSparkStorage
 
 
 
 
 
-T = TypeVar("T", bound="PackageSparkInventory")
+T = TypeVar("T", bound="PackageNodeInventory")
 
 
 
 @_attrs_define
-class PackageSparkInventory:
+class PackageNodeInventory:
     """
         Attributes:
             node_id (str):
             online (bool):
-            resources (PackageSparkResources):
-            storage (PackageSparkStorage):
+            resources (PackageNodeResources):
+            storage (PackageNodeStorage):
             current_generation (Union[None, Unset, str]):
             observed_at (Union[None, Unset, str]):
             packages (Union[Unset, list['PackageInventoryItem']]):
@@ -39,8 +39,8 @@ class PackageSparkInventory:
 
     node_id: str
     online: bool
-    resources: 'PackageSparkResources'
-    storage: 'PackageSparkStorage'
+    resources: 'PackageNodeResources'
+    storage: 'PackageNodeStorage'
     current_generation: Union[None, Unset, str] = UNSET
     observed_at: Union[None, Unset, str] = UNSET
     packages: Union[Unset, list['PackageInventoryItem']] = UNSET
@@ -50,9 +50,9 @@ class PackageSparkInventory:
 
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.package_spark_resources import PackageSparkResources
+        from ..models.package_node_storage import PackageNodeStorage
+        from ..models.package_node_resources import PackageNodeResources
         from ..models.package_inventory_item import PackageInventoryItem
-        from ..models.package_spark_storage import PackageSparkStorage
         node_id = self.node_id
 
         online = self.online
@@ -104,20 +104,20 @@ class PackageSparkInventory:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.package_spark_resources import PackageSparkResources
+        from ..models.package_node_storage import PackageNodeStorage
+        from ..models.package_node_resources import PackageNodeResources
         from ..models.package_inventory_item import PackageInventoryItem
-        from ..models.package_spark_storage import PackageSparkStorage
         d = dict(src_dict)
         node_id = d.pop("node_id")
 
         online = d.pop("online")
 
-        resources = PackageSparkResources.from_dict(d.pop("resources"))
+        resources = PackageNodeResources.from_dict(d.pop("resources"))
 
 
 
 
-        storage = PackageSparkStorage.from_dict(d.pop("storage"))
+        storage = PackageNodeStorage.from_dict(d.pop("storage"))
 
 
 
@@ -152,7 +152,7 @@ class PackageSparkInventory:
             packages.append(packages_item)
 
 
-        package_spark_inventory = cls(
+        package_node_inventory = cls(
             node_id=node_id,
             online=online,
             resources=resources,
@@ -162,4 +162,4 @@ class PackageSparkInventory:
             packages=packages,
         )
 
-        return package_spark_inventory
+        return package_node_inventory

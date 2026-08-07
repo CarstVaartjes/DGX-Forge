@@ -4,19 +4,19 @@
 
 **Goal:** Replace the SSH AI devbox with a hardened, persistent Hermes Agent that is reachable only through two exact Tailscale Services and uses only the best eligible, already-running local model through LiteLLM.
 
-**Architecture:** A digest-pinned official Hermes image is wrapped only to read its API key from a Compose secret before preserving the upstream s6 entrypoint. A strict repository policy derives an ordered `hermes-agent` LiteLLM group from accepted workloads already present in the active reconciliation, with endpoints constructed only from authenticated Spark presence. Hermes has separate edge, inference, and controlled-egress networks and no host or control-plane privileges.
+**Architecture:** A digest-pinned official Hermes image is wrapped only to read its API key from a Compose secret before preserving the upstream s6 entrypoint. A strict repository policy derives an ordered `hermes-agent` LiteLLM group from accepted workloads already present in the active reconciliation, with endpoints constructed only from authenticated GPU node presence. Hermes has separate edge, inference, and controlled-egress networks and no host or control-plane privileges.
 
 **Tech Stack:** Docker Compose, Nous Research Hermes Agent v2026.7.20, Tailscale Services, LiteLLM v1.82.3, Python 3.12, FastAPI control worker, TOML/JSON policy, pytest, POSIX shell.
 
 ## Global Constraints
 
 - Hermes is the only user-facing development agent; no standing SSH service remains.
-- Hermes uses `http://litellm:4000/v1` and model name `hermes-agent`; it never receives a Spark address.
+- Hermes uses `http://litellm:4000/v1` and model name `hermes-agent`; it never receives a GPU node address.
 - `local_only = true` is mandatory and no cloud model or arbitrary URL is accepted.
 - Candidate workloads must be present in the pinned repository, have current maturity `accepted`, be part of the active reconciliation, have fresh authenticated presence, pass a bounded probe, and have a repository-declared port.
-- Candidate priority is unique and ascending; the dual-Spark DeepSeek workload precedes the single-Spark DeepSeek workload.
-- Tailscale exposes exactly `svc:dgx-forge`, `svc:hermes-dashboard`, and `svc:hermes-api`; Docker publishes no Hermes port.
-- Hermes receives no Docker socket, devices, privileged mode, host networking, control-plane administrator token, Spark agent PKI, registry credential, or Tailscale OAuth credential.
+- Candidate priority is unique and ascending; the dual-GPU node DeepSeek workload precedes the single-GPU node DeepSeek workload.
+- Tailscale exposes exactly `svc:vonk-forge`, `svc:hermes-dashboard`, and `svc:hermes-api`; Docker publishes no Hermes port.
+- Hermes receives no Docker socket, devices, privileged mode, host networking, control-plane administrator token, GPU node agent PKI, registry credential, or Tailscale OAuth credential.
 - The Hermes root filesystem is read-only and writable storage is limited to `/opt/data`, `/workspace`, `/opt/data/home/.cache`, and bounded temporary filesystems.
 - The official image is `nousresearch/hermes-agent:v2026.7.20@sha256:f7b35053268f532f98955195c909f15a230470fbcbdacaa9fdecb95707dad04a`.
 - Runtime fallback is limited to connection failures and HTTP 429, 502, 503, or 504 before completion content begins; a partial stream is never replayed.
@@ -27,7 +27,7 @@
 
 **Files:**
 - Create: `config/hermes-agent-policy.toml`
-- Create: `control/src/dgx_control/hermes_policy.py`
+- Create: `control/src/vonk_control/hermes_policy.py`
 - Create: `control/tests/test_hermes_policy.py`
 
 **Interfaces:**
@@ -64,7 +64,7 @@ def test_policy_rejects_nonlocal_or_ambiguous_configuration(mutation: str) -> No
 
 Run: `uv run --project control pytest -q control/tests/test_hermes_policy.py`
 
-Expected: collection fails because `dgx_control.hermes_policy` does not exist.
+Expected: collection fails because `vonk_control.hermes_policy` does not exist.
 
 - [ ] **Step 3: Implement the immutable policy types and strict parser**
 
@@ -141,7 +141,7 @@ minimum_maturity = "accepted"
 Run: `uv run --project control pytest -q control/tests/test_hermes_policy.py`
 
 ```bash
-git add config/hermes-agent-policy.toml control/src/dgx_control/hermes_policy.py control/tests/test_hermes_policy.py
+git add config/hermes-agent-policy.toml control/src/vonk_control/hermes_policy.py control/tests/test_hermes_policy.py
 git commit -m "feat: define local-only Hermes model policy"
 ```
 
@@ -150,8 +150,8 @@ git commit -m "feat: define local-only Hermes model policy"
 ### Task 2: Ordered Hermes deployments in LiteLLM
 
 **Files:**
-- Modify: `control/src/dgx_control/litellm.py`
-- Modify: `control/src/dgx_control/route_runtime.py`
+- Modify: `control/src/vonk_control/litellm.py`
+- Modify: `control/src/vonk_control/route_runtime.py`
 - Modify: `control/tests/test_litellm.py`
 - Modify: `control/tests/test_route_runtime.py`
 
@@ -238,7 +238,7 @@ No-candidate output omits `hermes-agent`. A changed endpoint still publishes mai
 Run: `uv run --project control pytest -q control/tests/test_hermes_policy.py control/tests/test_litellm.py control/tests/test_route_runtime.py control/tests/test_runtime_handlers.py`
 
 ```bash
-git add control/src/dgx_control/litellm.py control/src/dgx_control/route_runtime.py control/tests/test_litellm.py control/tests/test_route_runtime.py
+git add control/src/vonk_control/litellm.py control/src/vonk_control/route_runtime.py control/tests/test_litellm.py control/tests/test_route_runtime.py
 git commit -m "feat: route Hermes through ordered local models"
 ```
 
@@ -292,8 +292,8 @@ Expected: failure because `hermes-agent` and its networks do not exist.
 ```dockerfile
 ARG HERMES_IMAGE=nousresearch/hermes-agent:v2026.7.20@sha256:f7b35053268f532f98955195c909f15a230470fbcbdacaa9fdecb95707dad04a
 FROM ${HERMES_IMAGE}
-COPY --chmod=0755 entrypoint.sh /usr/local/bin/dgx-hermes-entrypoint
-ENTRYPOINT ["/usr/local/bin/dgx-hermes-entrypoint"]
+COPY --chmod=0755 entrypoint.sh /usr/local/bin/vonk-hermes-entrypoint
+ENTRYPOINT ["/usr/local/bin/vonk-hermes-entrypoint"]
 CMD ["gateway", "run"]
 ```
 
@@ -332,14 +332,14 @@ git commit -m "feat: replace SSH devbox with Hermes Agent"
 
 **Interfaces:**
 - Consumes: healthy `caddy:8080`, `hermes-agent:9119`, and `hermes-agent:8642` on exact shared edge networks.
-- Produces: HTTPS Services `svc:dgx-forge`, `svc:hermes-dashboard`, and `svc:hermes-api`, with deterministic reset/recreation and `group:hermes-users` grants.
+- Produces: HTTPS Services `svc:vonk-forge`, `svc:hermes-dashboard`, and `svc:hermes-api`, with deterministic reset/recreation and `group:hermes-users` grants.
 
 - [ ] **Step 1: Write failing exact-map and least-privilege tests**
 
 Expected Service map:
 
 ```json
-{"version":"0.0.1","services":{"svc:dgx-forge":{"endpoints":{"tcp:443":"http://caddy:8080"}},"svc:hermes-api":{"endpoints":{"tcp:443":"http://hermes-agent:8642"}},"svc:hermes-dashboard":{"endpoints":{"tcp:443":"http://hermes-agent:9119"}}}}
+{"version":"0.0.1","services":{"svc:vonk-forge":{"endpoints":{"tcp:443":"http://caddy:8080"}},"svc:hermes-api":{"endpoints":{"tcp:443":"http://hermes-agent:8642"}},"svc:hermes-dashboard":{"endpoints":{"tcp:443":"http://hermes-agent:9119"}}}}
 ```
 
 Tests reject any `svc:ai-devbox`, TCP 22, extra Service, HTTP listener on 443, retargeted upstream, wildcard service grant, or missing dependency health gate.
@@ -357,7 +357,7 @@ ts serve --service=svc:hermes-dashboard --https=443 http://hermes-agent:9119
 ts serve --service=svc:hermes-api --https=443 http://hermes-agent:8642
 ```
 
-The grants file gives `group:hermes-users` access to only the two Hermes HTTPS Services. The API still requires `API_SERVER_KEY`. Auto-approval permits only `tag:dgx-gateway` to advertise the three named Services.
+The grants file gives `group:hermes-users` access to only the two Hermes HTTPS Services. The API still requires `API_SERVER_KEY`. Auto-approval permits only `tag:vonk-gateway` to advertise the three named Services.
 
 - [ ] **Step 4: Run the tests and commit**
 
@@ -502,7 +502,7 @@ Expected: the search returns no production or operator reference.
 
 Run: `bash deploy/compose/tests/hermes-agent-runtime.sh`
 
-Record separately that physical tailnet identity authorization, NAS firewall enforcement, and live Spark inference remain deployment acceptance checks.
+Record separately that physical tailnet identity authorization, NAS firewall enforcement, and live GPU node inference remain deployment acceptance checks.
 
 - [ ] **Step 5: Review branch diff and commit any evidence-only corrections**
 

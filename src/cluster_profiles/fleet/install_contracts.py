@@ -1,4 +1,4 @@
-"""Immutable state contracts for resumable per-Spark installation."""
+"""Immutable state contracts for resumable per-node installation."""
 
 from __future__ import annotations
 

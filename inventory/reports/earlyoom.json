@@ -3,8 +3,8 @@
   "status": "complete",
   "completed_at": "2026-08-01T21:42:44Z",
   "ordering": [
-    "spark2",
-    "spark1"
+    "node2",
+    "node1"
   ],
   "accepted_final_states": [
     "absent",
@@ -12,9 +12,9 @@
     "masked_and_inactive"
   ],
   "nodes": {
-    "spark2": {
+    "node2": {
       "role": "worker",
-      "ssh_alias": "dgx-spark-2",
+      "ssh_alias": "vonk-node-2",
       "before": {
         "captured_at": "2026-08-01T21:01:57Z",
         "ssh_exit_code": 0,
@@ -67,9 +67,9 @@
         "classification": "absent"
       }
     },
-    "spark1": {
+    "node1": {
       "role": "head",
-      "ssh_alias": "dgx-spark-1",
+      "ssh_alias": "vonk-node-1",
       "before": {
         "captured_at": "2026-08-01T21:01:58Z",
         "ssh_exit_code": 0,

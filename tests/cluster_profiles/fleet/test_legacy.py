@@ -23,13 +23,13 @@ def _write_legacy(
         f"""
 [hosts.first]
 role = "head"
-hostname = "spark-one"
+hostname = "node-one"
 ssh_alias = "{first_alias}"
 lan_ip = "{first_ip}"
 
 [hosts.second]
 role = "worker"
-hostname = "spark-two"
+hostname = "node-two"
 ssh_alias = "{second_alias}"
 lan_ip = "10.0.0.11"
 
@@ -49,8 +49,8 @@ def test_current_cluster_loads_without_rewrite(repository_root: Path) -> None:
 
     assert len(fleet.nodes) == 2
     assert {node.management.host for node in fleet.nodes.values()} == {
-        "dgx-spark-1",
-        "dgx-spark-2",
+        "vonk-node-1",
+        "vonk-node-2",
     }
     assert {node.labels["legacy_role"] for node in fleet.nodes.values()} == {
         "head",
@@ -67,7 +67,7 @@ def test_legacy_identity_does_not_change_with_address_or_hostname(
     path.write_text(
         path.read_text()
         .replace("10.0.0.10", "10.0.0.99")
-        .replace("spark-one", "renamed-host")
+        .replace("node-one", "renamed-host")
     )
 
     second = load_legacy_cluster(path)
@@ -109,7 +109,7 @@ def test_legacy_error_does_not_echo_unknown_values(tmp_path: Path) -> None:
         """
 [hosts.first]
 role = "head"
-hostname = "spark-one"
+hostname = "node-one"
 ssh_alias = ["sensitive-value"]
 """.lstrip()
     )

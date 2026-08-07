@@ -75,7 +75,7 @@ def policy_fixture(tmp_path: Path) -> tuple[Path, dict[str, object]]:
         directory.chmod(0o700)
     document = {
         "adapter": {
-            "adapter_id": "spark-runtime-v1",
+            "adapter_id": "node-runtime-v1",
             "executable_relative_path": "bin/runtime-adapter",
             "output_limit_bytes": 65536,
             "timeout_seconds": 60,
@@ -89,7 +89,7 @@ def policy_fixture(tmp_path: Path) -> tuple[Path, dict[str, object]]:
         },
         "registry_origin": "https://registry.example:8443",
         "release_root": str(releases),
-        "repository": "dgx-forge/releases",
+        "repository": "vonk-forge/releases",
         "schema_version": 1,
         "staging_root": str(staging),
         "tuf": {
@@ -125,9 +125,9 @@ def test_runtime_policy_loads_only_exact_installed_transport_and_roots(
 
     assert policy.architecture == document["architecture"]
     assert policy.registry_origin == "https://registry.example:8443"
-    assert policy.repository == "dgx-forge/releases"
+    assert policy.repository == "vonk-forge/releases"
     assert policy.oras.version == "1.3.3"
-    assert policy.adapter.adapter_id == "spark-runtime-v1"
+    assert policy.adapter.adapter_id == "node-runtime-v1"
     assert policy.adapter.executable_relative_path == "bin/runtime-adapter"
 
 
@@ -269,7 +269,7 @@ def test_build_agent_constructs_all_closed_handlers_with_one_credential_store(
     assert transport._policy.credential_provider is agent._credentials
     assert trust._fetcher._credential_provider is agent._credentials
     assert transport._policy.registry_origin == "https://registry.example:8443"
-    assert transport._policy.repository == "dgx-forge/releases"
+    assert transport._policy.repository == "vonk-forge/releases"
     assert agent._context.updates._transport._client is transport
     platform_fetcher = agent._context.updates._trust._trust._fetcher
     assert isinstance(platform_fetcher, PlatformTUFRouteFetcher)

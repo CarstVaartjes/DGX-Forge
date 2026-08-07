@@ -63,11 +63,11 @@ def probe_claim(*, deadline: datetime | None = None) -> AgentClaim:
 def release_claim(*, deadline: datetime) -> AgentClaim:
     payload: dict[str, object] = {
         "schema_version": 1,
-        "target_name": "spark-runtime-2026-08",
+        "target_name": "node-runtime-2026-08",
         "oci_manifest_digest": "sha256:" + "1" * 64,
         "target_digest": "2" * 64,
         "provenance_digest": "3" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
     }
     return AgentClaim(
         schema_version=1,
@@ -890,7 +890,7 @@ def _credential_material(tmp_path: Path):
             x509.SubjectAlternativeName(
                 [
                     x509.UniformResourceIdentifier(
-                        f"spiffe://dgx-forge.local/node/{NODE_ID}"
+                        f"spiffe://vonk-forge.local/node/{NODE_ID}"
                     )
                 ]
             ),

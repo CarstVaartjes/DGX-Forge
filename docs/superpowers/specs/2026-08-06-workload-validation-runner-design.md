@@ -12,7 +12,7 @@ The NAS/control API creates a validation preview by loading the candidate lock,
 family policy, and validation deployment from one eligible repository commit.
 The worker-owned validation runner then queues the existing typed
 `package.prepare` and `package.health` operations through the authenticated
-agent queue on the selected canary Spark. It never invokes package code in the
+agent queue on the selected canary GPU node. It never invokes package code in the
 API process, uses SSH, or activates desired state.
 
 ## Binding and lifecycle
@@ -47,7 +47,7 @@ Families without a validation deployment remain visible but cannot be
 promoted; the API returns the structured reason `validation-deployment-missing`.
 Existing read-only family/deployment projections remain compatible. New model,
 runtime, image, checkpoint, or adapter releases only change Git/TUF workload
-documents and never require a DGX-Forge agent release.
+documents and never require a Vonk Forge agent release.
 
 ## Acceptance
 

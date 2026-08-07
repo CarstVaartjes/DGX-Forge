@@ -1,4 +1,4 @@
-"""Translate parsed SparkRun sources into safe, explainable local drafts."""
+"""Translate parsed WorkloadRun sources into safe, explainable local drafts."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from .import_report import (
 )
 from .runtime_compilers import RuntimeCompileError, RuntimeProjection, compile_runtime
 from .source_bundles import GeneratedSourceBundle, generate_source_bundle
-from .sparkrun_source import SparkRunSource
+from .workload_run_source import WorkloadRunSource
 
 _SENSITIVE = re.compile(
     r"(?:^|_)(?:authorization|credential|password|secret|token|private_key|certificate)(?:$|_)",
@@ -26,7 +26,7 @@ _MUTABLE_REVISIONS = frozenset({"main", "master", "latest", "head"})
 
 
 @dataclass(frozen=True, slots=True)
-class SparkRunImportResult:
+class WorkloadRunImportResult:
     draft_document: dict[str, object]
     bundle: GeneratedSourceBundle
     report: tuple[ImportReportItem, ...]
@@ -36,7 +36,7 @@ class SparkRunImportResult:
     runnable: bool
 
 
-def import_sparkrun(source: SparkRunSource) -> SparkRunImportResult:
+def import_workload_run(source: WorkloadRunSource) -> WorkloadRunImportResult:
     builder = ImportReportBuilder(source.leaf_paths())
     projection: RuntimeProjection | None = None
     compiler_error: str | None = None
@@ -51,7 +51,7 @@ def import_sparkrun(source: SparkRunSource) -> SparkRunImportResult:
         ImportDisposition.OVERLAY_REQUIRED,
         None,
         "resources.overlay_required",
-        "SparkRun does not declare a complete download, install, staging, resident-memory, and activation-memory envelope. Enter measured or verified byte values.",
+        "WorkloadRun does not declare a complete download, install, staging, resident-memory, and activation-memory envelope. Enter measured or verified byte values.",
         True,
     )
     builder.record(
@@ -89,7 +89,7 @@ def import_sparkrun(source: SparkRunSource) -> SparkRunImportResult:
         for item in report
     )
     bundle = _bundle(source)
-    return SparkRunImportResult(
+    return WorkloadRunImportResult(
         draft_document=_draft(source, projection, bundle),
         bundle=bundle,
         report=report,
@@ -101,7 +101,7 @@ def import_sparkrun(source: SparkRunSource) -> SparkRunImportResult:
 
 
 def _classify(
-    source: SparkRunSource,
+    source: WorkloadRunSource,
     builder: ImportReportBuilder,
     path: str,
     *,
@@ -147,7 +147,7 @@ def _classify(
             ImportDisposition.TRANSFORMED,
             "/runtime/adapter",
             "runtime.adapter",
-            "The SparkRun runtime name is normalized to a typed Vonk runtime adapter.",
+            "The WorkloadRun runtime name is normalized to a typed Vonk runtime adapter.",
             False,
         )
     elif top == "container":
@@ -234,7 +234,7 @@ def _classify(
             ImportDisposition.INCORPORATED,
             f"/build/context/{top}/imported.json{suffix}",
             f"build.{top}_incorporated",
-            f"SparkRun {top} is preserved in the generated, reviewable build context.",
+            f"WorkloadRun {top} is preserved in the generated, reviewable build context.",
             False,
         )
     elif top == "benchmark":
@@ -247,15 +247,15 @@ def _classify(
     else:
         disposition, reason, detail, blocking = (
             ImportDisposition.UNSUPPORTED_BLOCKING,
-            "sparkrun.unknown_field",
-            f"Unknown SparkRun field {top!r} is preserved in the report but cannot authorize execution.",
+            "workload_run.unknown_field",
+            f"Unknown WorkloadRun field {top!r} is preserved in the report but cannot authorize execution.",
             True,
         )
     builder.record(path, disposition, destination, reason, detail, blocking)
 
 
 def _draft(
-    source: SparkRunSource,
+    source: WorkloadRunSource,
     projection: RuntimeProjection | None,
     bundle: GeneratedSourceBundle,
 ) -> dict[str, object]:
@@ -277,11 +277,11 @@ def _draft(
     }
     return {
         "schema_version": 1,
-        "identity": {"publisher": "sparkrun", "slug": slug},
+        "identity": {"publisher": "workload-run", "slug": slug},
         "metadata": {
             "title": source.metadata.title or source.model.rsplit("/", 1)[-1],
             "description": source.metadata.description
-            or f"Imported SparkRun profile for {source.model}.",
+            or f"Imported WorkloadRun profile for {source.model}.",
             "tags": list(source.metadata.tags),
         },
         "workload": {"family": slug, "capabilities": ["openai.chat"]},
@@ -358,10 +358,10 @@ def _draft(
             "benchmarks": [],
         },
         "provenance": {
-            "source_kind": "sparkrun",
+            "source_kind": "workload_run",
             "source_reference": None,
             "attribution": [
-                f"Imported from SparkRun profile sha256:{source.source_sha256}"
+                f"Imported from WorkloadRun profile sha256:{source.source_sha256}"
             ],
         },
     }
@@ -373,7 +373,7 @@ def _profile(node_count: int) -> dict[str, object]:
         roles.append(_role("worker", node_count - 1, False))
     return {
         "name": "solo" if node_count == 1 else f"nodes_{node_count}",
-        "description": f"Exact {node_count}-node profile imported from SparkRun.",
+        "description": f"Exact {node_count}-node profile imported from WorkloadRun.",
         "node_count": node_count,
         "strategy": "single" if node_count == 1 else "tensor_parallel",
         "parallelism": {
@@ -418,10 +418,10 @@ def _role(name: str, count: int, endpoint_owner: bool) -> dict[str, object]:
     }
 
 
-def _bundle(source: SparkRunSource) -> GeneratedSourceBundle:
+def _bundle(source: WorkloadRunSource) -> GeneratedSourceBundle:
     files: dict[str, bytes] = {
         "Dockerfile": _dockerfile(source).encode(),
-        "sparkrun/source.json": json.dumps(
+        "workload_run/source.json": json.dumps(
             _redact(source.document), sort_keys=True, separators=(",", ":")
         ).encode(),
     }
@@ -436,11 +436,11 @@ def _bundle(source: SparkRunSource) -> GeneratedSourceBundle:
     return generate_source_bundle(files)
 
 
-def _dockerfile(source: SparkRunSource) -> str:
+def _dockerfile(source: WorkloadRunSource) -> str:
     lines = [
         f"FROM {source.container or 'scratch'}",
         'LABEL ai.vonkforge.runtime-interface="v1"',
-        "COPY sparkrun/ /opt/vonk/sparkrun/",
+        "COPY workload_run/ /opt/vonk/workload_run/",
     ]
     if source.mods:
         lines.append("COPY mods/ /opt/vonk/mods/")

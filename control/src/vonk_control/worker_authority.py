@@ -198,7 +198,7 @@ def worker_document_signature(
         sort_keys=True,
         separators=(",", ":"),
     ).encode()
-    domain = f"dgx-forge-worker-authority/v1/{purpose}\0".encode()
+    domain = f"vonk-forge-worker-authority/v1/{purpose}\0".encode()
     return hmac.new(token, domain + encoded, hashlib.sha256).hexdigest()
 
 
@@ -214,7 +214,7 @@ def install_worker_authority_routes(
     if _TOKEN.fullmatch(token) is None:
         raise ValueError("worker authority token is invalid")
     def authenticate(request: Request, document: Mapping[str, object]) -> None:
-        supplied = request.headers.get("x-dgx-worker-signature", "")
+        supplied = request.headers.get("x-vonk-worker-signature", "")
         expected = worker_document_signature(token, document, purpose="request")
         if not secrets.compare_digest(supplied, expected):
             raise HTTPException(status_code=401, detail="authentication required")
@@ -340,7 +340,7 @@ class HttpWorkerAuthority:
                 separators=(",", ":"),
             ).encode()
             headers["Content-Type"] = "application/json"
-            headers["X-DGX-Worker-Signature"] = worker_document_signature(
+            headers["X-Vonk-Worker-Signature"] = worker_document_signature(
                 self._token,
                 document,
                 purpose="request",

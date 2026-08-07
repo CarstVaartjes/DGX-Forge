@@ -16,7 +16,7 @@ SCRIPT = ROOT / "scripts/verify-platform-release"
 ACCEPT_UPDATE = ROOT / "scripts/accept-platform-update"
 UPDATE_GATES = {
     "physical-control-host-update-recovery",
-    "physical-spark-canary-rollback",
+    "physical-node-canary-rollback",
     "signed-platform-update-manifest-evidence",
 }
 
@@ -89,7 +89,7 @@ def test_spark_physical_claim_binds_non_ssh_transport() -> None:
     assert (
         validate(
             claims,
-            evidence_type="spark-canary-and-rollback",
+            evidence_type="node-canary-and-rollback",
             candidate="1.0.0",
             release_digest="sha256:" + "b" * 64,
         )
@@ -104,7 +104,7 @@ def test_spark_physical_claim_binds_non_ssh_transport() -> None:
     assert (
         validate(
             claims,
-            evidence_type="spark-canary-and-rollback",
+            evidence_type="node-canary-and-rollback",
             candidate="1.0.0",
             release_digest="sha256:" + "b" * 64,
         )
@@ -122,7 +122,7 @@ def test_spark_physical_claim_binds_non_ssh_transport() -> None:
     assert (
         validate(
             claims,
-            evidence_type="spark-canary-and-rollback",
+            evidence_type="node-canary-and-rollback",
             candidate="1.0.0",
             release_digest="sha256:" + "b" * 64,
         )
@@ -163,21 +163,21 @@ def test_control_recovery_claim_binds_candidate_generation_to_release() -> None:
     )
 
 
-def test_spark_claim_must_match_the_signed_manifest_content() -> None:
-    compatible = runpy.run_path(str(SCRIPT))["_spark_claim_matches_manifest"]
+def test_node_claim_must_match_the_signed_manifest_content() -> None:
+    compatible = runpy.run_path(str(SCRIPT))["_node_claim_matches_manifest"]
     manifest = {
         "agent_payload_sha256": {"linux-arm64": "c" * 64},
         "build_digest": "sha256:" + "e" * 64,
     }
-    spark = {
+    node = {
         "architecture": "linux-arm64",
         "target_agent_sha256": "d" * 64,
         "target_build_digest": "sha256:" + "e" * 64,
     }
 
-    assert compatible(manifest, spark) is False
-    spark["target_agent_sha256"] = "c" * 64
-    assert compatible(manifest, spark) is True
+    assert compatible(manifest, node) is False
+    node["target_agent_sha256"] = "c" * 64
+    assert compatible(manifest, node) is True
 
 
 def test_release_verifier_lists_external_gates() -> None:
@@ -192,12 +192,12 @@ def test_release_verifier_lists_external_gates() -> None:
     assert report["status"] == "blocked"
     assert "protected-code-host" not in report["missing_gates"]
     assert "protected-code-host-pr-lifecycle" not in report["missing_gates"]
-    assert "approved-physical-spark-lifecycle" in report["missing_gates"]
+    assert "approved-physical-node-lifecycle" in report["missing_gates"]
     assert UPDATE_GATES <= set(report["missing_gates"])
     assert report["physical_update_gates"] == {
         "control_host_update_recovery": False,
         "signed_platform_update_manifest": False,
-        "spark_canary_and_rollback": False,
+        "node_canary_and_rollback": False,
     }
     assert report["physical_evidence_key_id"] is None
     assert report["evidence_kinds"]["platform-update"] in {"missing", "simulated"}
@@ -360,10 +360,10 @@ def _write_workload_evidence(repository: Path) -> None:
     reports = repository / "inventory/reports"
     acceptance: dict[str, object] = {
         "schema_version": 1,
-        "report_type": "dgx-forge-workload-package-acceptance",
+        "report_type": "vonk-forge-workload-package-acceptance",
         "status": "passed",
         "evidence_kind": "simulated",
-        "physical_sparks_exercised": False,
+        "physical_nodes_exercised": False,
         "unknown_family_without_agent_update": True,
         "agent_digest_unchanged": True,
         "release_two_activated": True,
@@ -375,11 +375,11 @@ def _write_workload_evidence(repository: Path) -> None:
     }
     failure: dict[str, object] = {
         "schema_version": 1,
-        "report_type": "dgx-forge-workload-package-failure-matrix",
+        "report_type": "vonk-forge-workload-package-failure-matrix",
         "status": "passed",
         "evidence_kind": "simulated",
         "failure_matrix": True,
-        "physical_sparks_exercised": False,
+        "physical_nodes_exercised": False,
         "ssh_calls": 0,
         "agent_update_calls": 0,
         "restart_recovery": "passed",
@@ -416,9 +416,9 @@ def _write_physical_evidence(repository: Path, report: dict[str, object]) -> Pat
             "platform-update-signed-manifest.json",
             "signed-platform-update-manifest",
         ),
-        "spark_canary_and_rollback": (
-            "platform-update-spark-canary-rollback.json",
-            "spark-canary-and-rollback",
+        "node_canary_and_rollback": (
+            "platform-update-node-canary-rollback.json",
+            "node-canary-and-rollback",
         ),
     }
     candidate = "1.0.0"
@@ -623,7 +623,7 @@ def test_unknown_workload_acceptance_helper_runs_real_e2e_and_emits_canonical_re
     assert namespace["_workload_acceptance_valid"](report)
     assert report["test_command"]
     assert "test_unknown_workload_package.py" in report["test_command"]
-    assert report["physical_sparks_exercised"] is False
+    assert report["physical_nodes_exercised"] is False
 
 
 def test_physical_update_evidence_must_be_complete_and_content_addressed(
@@ -675,16 +675,16 @@ def test_physical_update_evidence_must_be_complete_and_content_addressed(
     )
 
     spark_path = (
-        repository / "inventory/reports/platform-update-spark-canary-rollback.json"
+        repository / "inventory/reports/platform-update-node-canary-rollback.json"
     )
-    spark = json.loads(spark_path.read_text())
-    spark["evidence"]["claims"]["target_agent_sha256"] = "d" * 64
+    node = json.loads(spark_path.read_text())
+    node["evidence"]["claims"]["target_agent_sha256"] = "d" * 64
     private = ed25519.Ed25519PrivateKey.from_private_bytes(bytes.fromhex("22" * 32))
-    spark["signature"]["value"] = private.sign(_canonical(spark["evidence"])).hex()
-    spark_path.write_bytes(_canonical(spark))
+    node["signature"]["value"] = private.sign(_canonical(node["evidence"])).hex()
+    spark_path.write_bytes(_canonical(node))
     update_path = repository / "inventory/reports/platform-update.json"
     update = json.loads(update_path.read_text())
-    update["physical_evidence"]["spark_canary_and_rollback"]["evidence_sha256"] = (
+    update["physical_evidence"]["node_canary_and_rollback"]["evidence_sha256"] = (
         hashlib.sha256(spark_path.read_bytes()).hexdigest()
     )
     _write_update_report(repository, update)
@@ -695,7 +695,7 @@ def test_physical_update_evidence_must_be_complete_and_content_addressed(
     )
     assert code == 2
     assert aggregate["physical_update_gates"]["signed_platform_update_manifest"]
-    assert not aggregate["physical_update_gates"]["spark_canary_and_rollback"]
+    assert not aggregate["physical_update_gates"]["node_canary_and_rollback"]
 
     physical_key = _write_physical_evidence(repository, report)
     _write_update_report(repository, report)

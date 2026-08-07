@@ -52,8 +52,8 @@ def _intermediate_certificate(
 ) -> x509.Certificate:
     return (
         x509.CertificateBuilder()
-        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "DGX Forge Agent Intermediate")]))
-        .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "DGX Forge Offline Root")]))
+        .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Vonk Forge Agent Intermediate")]))
+        .issuer_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Vonk Forge Offline Root")]))
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
         .not_valid_before(NOW - timedelta(days=1))
@@ -101,7 +101,7 @@ def public_key() -> bytes:
         x509.CertificateSigningRequestBuilder()
         .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, NODE_ID)]))
         .add_extension(x509.SubjectAlternativeName([
-            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_ID}")
+            x509.UniformResourceIdentifier(f"spiffe://vonk-forge.local/node/{NODE_ID}")
         ]), critical=False)
         .sign(key, algorithm=None)
         .public_bytes(serialization.Encoding.PEM)
@@ -128,7 +128,7 @@ def test_issued_certificate_is_short_lived_and_node_bound(
     assert certificate.not_valid_after_utc - now == timedelta(hours=24)
     assert certificate.not_valid_before_utc == now
     assert certificate.extensions.get_extension_for_class(x509.SubjectAlternativeName).value == x509.SubjectAlternativeName(
-        [x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_ID}")]
+        [x509.UniformResourceIdentifier(f"spiffe://vonk-forge.local/node/{NODE_ID}")]
     )
     assert certificate.extensions.get_extension_for_class(x509.BasicConstraints).value == x509.BasicConstraints(
         ca=False, path_length=None
@@ -166,13 +166,13 @@ def test_caddy_serial_and_fingerprint_of_a_real_issued_certificate_reach_the_pro
     )
     scope = {
         "type": "http", "path": "/agent/v1/claim", "headers": (
-            (b"x-dgx-agent-node", NODE_ID.encode()),
+            (b"x-vonk-agent-node", NODE_ID.encode()),
             # Caddy 2.10.2's tls_client_serial is the certificate's decimal integer.
-            (b"x-dgx-agent-serial", str(certificate.serial_number).encode()),
-            (b"x-dgx-agent-fingerprint", certificate.fingerprint(hashes.SHA256()).hex().encode()),
-            (b"x-dgx-agent-verified", b"1"),
-            (b"x-dgx-agent-proxy-auth", b"p" * 32),
-            (b"x-dgx-agent-source", b"10.0.0.42"),
+            (b"x-vonk-agent-serial", str(certificate.serial_number).encode()),
+            (b"x-vonk-agent-fingerprint", certificate.fingerprint(hashes.SHA256()).hex().encode()),
+            (b"x-vonk-agent-verified", b"1"),
+            (b"x-vonk-agent-proxy-auth", b"p" * 32),
+            (b"x-vonk-agent-source", b"10.0.0.42"),
         ),
     }
 
@@ -182,7 +182,7 @@ def test_caddy_serial_and_fingerprint_of_a_real_issued_certificate_reach_the_pro
     assert identity is not None
     assert identity.certificate_serial == issued.serial
     assert identity.certificate_fingerprint == issued.fingerprint
-    assert all(not key.lower().startswith(b"x-dgx-agent-") for key, _ in received[0]["headers"])
+    assert all(not key.lower().startswith(b"x-vonk-agent-") for key, _ in received[0]["headers"])
 
 
 def test_issued_certificate_metadata_matches_second_precision_x509_validity(
@@ -230,7 +230,7 @@ def test_issued_certificate_has_exact_signed_client_auth_profile(
         [ExtendedKeyUsageOID.CLIENT_AUTH]
     )
     assert certificate.extensions.get_extension_for_oid(ExtensionOID.SUBJECT_ALTERNATIVE_NAME).value == x509.SubjectAlternativeName(
-        [x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_ID}")]
+        [x509.UniformResourceIdentifier(f"spiffe://vonk-forge.local/node/{NODE_ID}")]
     )
     intermediate.public_key().verify(certificate.signature, certificate.tbs_certificate_bytes)
 
@@ -271,7 +271,7 @@ def test_revocation_bundle_is_a_signed_empty_crl(
 
     crl = x509.load_pem_x509_crl(bundle)
     intermediate = x509.load_pem_x509_certificate(issued.chain_pem)
-    assert crl.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == "DGX Forge Agent Intermediate"
+    assert crl.issuer.get_attributes_for_oid(NameOID.COMMON_NAME)[0].value == "Vonk Forge Agent Intermediate"
     assert crl.issuer == intermediate.subject
     assert crl.last_update_utc == now
     assert crl.next_update_utc == now + timedelta(hours=24)
@@ -338,7 +338,7 @@ def test_authority_rejects_non_ed25519_node_keys(authority: CertificateAuthority
         x509.CertificateSigningRequestBuilder()
         .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, NODE_ID)]))
         .add_extension(x509.SubjectAlternativeName([
-            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_ID}")
+            x509.UniformResourceIdentifier(f"spiffe://vonk-forge.local/node/{NODE_ID}")
         ]), critical=False)
         .sign(rsa_key, hashes.SHA256())
         .public_bytes(serialization.Encoding.PEM)
@@ -348,7 +348,7 @@ def test_authority_rejects_non_ed25519_node_keys(authority: CertificateAuthority
         authority.issue_node(NODE_ID, request, now)
 
 
-@pytest.mark.parametrize("node_id", ("spark1", "", "spk_1", "spk_" + "g" * 32, NODE_ID.upper()))
+@pytest.mark.parametrize("node_id", ("node1", "", "spk_1", "spk_" + "g" * 32, NODE_ID.upper()))
 def test_authority_rejects_noncanonical_node_ids(
     authority: CertificateAuthority, public_key: bytes, now: datetime, node_id: str
 ) -> None:

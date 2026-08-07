@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..import_report import ImportReportBuilder
-from ..sparkrun_source import SparkRunSource
+from ..workload_run_source import WorkloadRunSource
 from .common import (
     FlagSpec,
     RuntimeCompileError,
@@ -34,7 +34,7 @@ _FLAGS = {
 }
 
 
-def compile_vllm(source: SparkRunSource, report: ImportReportBuilder) -> RuntimeProjection:
+def compile_vllm(source: WorkloadRunSource, report: ImportReportBuilder) -> RuntimeProjection:
     del report
     command = tokens(source)
     if len(command) < 3 or command[:2] != ["vllm", "serve"] or command[2] != source.model:

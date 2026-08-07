@@ -1,15 +1,15 @@
-# Mia DeepSeek Flash 0731 Dual-Spark Implementation Plan
+# Mia DeepSeek Flash 0731 Dual-GPU node Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use
 > `superpowers:subagent-driven-development` task by task. Work directly on
 > `main` by explicit user instruction; do not create branches or worktrees.
 > Only one implementation agent edits shared files at a time.
 
-**Goal:** Make `sparkctl prepare agent-full-dual` and
-`sparkctl switch default` safely prepare and run the pinned MiaAI-Lab
-DeepSeek-V4-Flash-0731 TP=2 runtime across both DGX Sparks.
+**Goal:** Make `vonkctl prepare agent-full-dual` and
+`vonkctl switch default` safely prepare and run the pinned MiaAI-Lab
+DeepSeek-V4-Flash-0731 TP=2 runtime across both Vonk Forge GPU nodes.
 
-**Architecture:** `sparkctl` remains the sole cross-node orchestrator. A small,
+**Architecture:** `vonkctl` remains the sole cross-node orchestrator. A small,
 content-addressed node-local adapter controls one pinned Compose service per
 node. Runtime dependencies live in Docker; checkpoints, caches, outputs, and
 logs live under `/srv/models` bind mounts.
@@ -20,11 +20,11 @@ logs live under `/srv/models` bind mounts.
 ## Immutable inputs
 
 - Mia source: `b131b2a22164675890dd1465fd8862b5cfb6ff13`
-- Image: `ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8`
+- Image: `ghcr.io/anemll/draft-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8`
 - Model revision: `9e165c30e2704aec5d9d593cce3eebd58bbef1cb`
 - API: `127.0.0.1:8888`
-- Start: Spark 2 worker, then Spark 1 head
-- Stop: Spark 1 head, then Spark 2 worker
+- Start: GPU node 2 worker, then GPU node 1 head
+- Stop: GPU node 1 head, then GPU node 2 worker
 - Container restart: `no`
 
 ## Task 1: Reconcile the planned definition and old DeepSeek plan
@@ -36,7 +36,7 @@ logs live under `/srv/models` bind mounts.
 - Modify: `locks/model-definitions.toml`
 - Modify: `inventory/reports/model-definitions.json`
 - Modify: `docs/model-profile-overview.md`
-- Modify: `tests/spark_profiles/test_contracts.py`
+- Modify: `tests/cluster_profiles/test_contracts.py`
 
 - [ ] Mark the old staged lane plan superseded while retaining its rationale.
 - [ ] Change the Mia source pin from `914c35bd...` to `b131b2a...`.
@@ -51,16 +51,16 @@ logs live under `/srv/models` bind mounts.
 
 **Files:**
 
-- Modify: `src/spark_profiles/contracts.py`
-- Modify: `src/spark_profiles/catalog.py`
-- Modify: `src/spark_profiles/switcher.py`
+- Modify: `src/cluster_profiles/contracts.py`
+- Modify: `src/cluster_profiles/catalog.py`
+- Modify: `src/cluster_profiles/switcher.py`
 - Modify: both `workload.schema.json` copies
 - Create: `schemas/model-definition-evidence.schema.json`
-- Create: `src/spark_profiles/schemas/model-definition-evidence.schema.json`
+- Create: `src/cluster_profiles/schemas/model-definition-evidence.schema.json`
 - Modify: `pyproject.toml`
-- Modify: `tests/spark_profiles/test_contracts.py`
-- Modify: `tests/spark_profiles/test_catalog.py`
-- Modify: `tests/spark_profiles/test_switcher.py`
+- Modify: `tests/cluster_profiles/test_contracts.py`
+- Modify: `tests/cluster_profiles/test_catalog.py`
+- Modify: `tests/cluster_profiles/test_switcher.py`
 
 - [ ] First write failing tests for missing/changed release artifacts, malformed
   deadlines, stage-specific evidence gates, mismatched fingerprints/pins, an
@@ -103,8 +103,8 @@ logs live under `/srv/models` bind mounts.
 - Create: `adapters/deepseek/mia-vllm/compose.yaml`
 - Create: `adapters/deepseek/mia-vllm/bin/mia-deepseek-dual`
 - Create: `adapters/deepseek/mia-vllm/config/common.env`
-- Create: `adapters/deepseek/mia-vllm/config/spark1.env`
-- Create: `adapters/deepseek/mia-vllm/config/spark2.env`
+- Create: `adapters/deepseek/mia-vllm/config/node1.env`
+- Create: `adapters/deepseek/mia-vllm/config/node2.env`
 - Create: `adapters/deepseek/mia-vllm/runtime-manifest.json`
 - Create: `tests/adapters/test_mia_deepseek_dual.py`
 - Modify: `config/workloads/deepseek-agent-dual.toml`
@@ -116,8 +116,8 @@ logs live under `/srv/models` bind mounts.
   utilization, `nvfp4_ds_mla`, probabilistic MTP=5, DeepSeek parsers,
   FlashInfer B12X, and default thinking `low`.
 - [ ] Explicitly render and test the read-only snapshot mount at
-  `/models/deepseek-ai/DeepSeek-V4-Flash-0731`, `DSPARK_MODEL` pointing to that
-  local path, `DSPARK_ENCODING_FILE` pointing to its pinned encoder, and
+  `/models/deepseek-ai/DeepSeek-V4-Flash-0731`, `DVONK_MODEL` pointing to that
+  local path, `DVONK_ENCODING_FILE` pointing to its pinned encoder, and
   writable `VLLM_CACHE_ROOT` plus `FLASHINFER_WORKSPACE_BASE` below the separate
   runtime-cache mount.
 - [ ] Generate hashed node env files from `inventory/cluster.toml`, including
@@ -142,23 +142,23 @@ logs live under `/srv/models` bind mounts.
   remote hash verification, atomic rename, identical idempotence, and refusal
   to replace different content.
 - [ ] Transfer only manifest-listed files and install them at the absolute
-  digest-qualified `/opt/spark/model-adapters/.../releases/<digest>/` path.
+  digest-qualified `/opt/node/model-adapters/.../releases/<digest>/` path.
 - [ ] Require `--apply`; never pull artifacts or start containers here.
 
-## Task 6: Add durable `sparkctl prepare`
+## Task 6: Add durable `vonkctl prepare`
 
 **Files:**
 
-- Modify: `src/spark_profiles/switcher.py`
-- Modify: `src/spark_profiles/cli.py`
-- Modify: `tests/spark_profiles/test_switcher.py`
-- Modify: `tests/spark_profiles/test_cli.py`
-- Modify: `docs/runbooks/sparkctl.md`
+- Modify: `src/cluster_profiles/switcher.py`
+- Modify: `src/cluster_profiles/cli.py`
+- Modify: `tests/cluster_profiles/test_switcher.py`
+- Modify: `tests/cluster_profiles/test_cli.py`
+- Modify: `docs/runbooks/vonkctl.md`
 
 - [ ] Test selector resolution, shared controller locking, refusal in non-stopped
   state, concurrent node preparation, deterministic reporting, resumability,
   absence/timeout failures, and no active-profile mutation.
-- [ ] Implement `sparkctl prepare <selector>` and the 86,400-second deadline.
+- [ ] Implement `vonkctl prepare <selector>` and the 86,400-second deadline.
 - [ ] Have the adapter start or reattach to a deterministic named preparation
   container with durable progress; SSH interruption must not kill the download.
 - [ ] Re-running resumes the same fingerprint and refuses a different one.
@@ -188,10 +188,10 @@ logs live under `/srv/models` bind mounts.
 - [ ] Run `git diff --check` and Python compilation/static shell checks.
 - [ ] Render and inspect both Compose roles.
 - [ ] Confirm the definition remains planned/admission-blocked and local tests
-  did not mutate either Spark.
+  did not mutate either GPU node.
 - [ ] Run an independent whole-tree review and resolve every blocker.
 
-## Task 9: Deploy and prepare both Sparks
+## Task 9: Deploy and prepare both GPU nodes
 
 **Evidence:**
 `inventory/reports/model-definitions/deepseek-agent-dual-prepared.json`
@@ -199,7 +199,7 @@ logs live under `/srv/models` bind mounts.
 - [ ] Recheck live node health, boot IDs, Docker/GPU, disk/RAM, `earlyoom`, both
   fabric rails, and absence of model containers.
 - [ ] Deploy the immutable adapter release to both nodes with `--apply`.
-- [ ] Run `sparkctl prepare agent-full-dual`; pull the pinned image and download
+- [ ] Run `vonkctl prepare agent-full-dual`; pull the pinned image and download
   approximately 155.4 GiB concurrently on both nodes with periodic progress
   updates.
 - [ ] Offline-verify both snapshots and image digests.

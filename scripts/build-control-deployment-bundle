@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build one canonical DGX-Forge control deployment bundle."""
+"""Build one canonical Vonk Forge control deployment bundle."""
 
 from __future__ import annotations
 

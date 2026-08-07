@@ -23,7 +23,7 @@
 ### Task 1: Implement safe immutable repository reads
 
 **Files:**
-- Create: `control/src/dgx_control/repository.py`
+- Create: `control/src/vonk_control/repository.py`
 - Create: `control/tests/test_repository.py`
 
 **Interfaces:**
@@ -60,15 +60,15 @@ Expected: PASS.
 - [ ] **Step 5: Commit repository reads**
 
 ```bash
-git add control/src/dgx_control/repository.py control/tests/test_repository.py
+git add control/src/vonk_control/repository.py control/tests/test_repository.py
 git commit -m "feat: inspect repository-backed cluster state"
 ```
 
 ### Task 2: Build canonical typed proposals
 
 **Files:**
-- Create: `control/src/dgx_control/proposals.py`
-- Create: `control/src/dgx_control/serializers.py`
+- Create: `control/src/vonk_control/proposals.py`
+- Create: `control/src/vonk_control/serializers.py`
 - Create: `control/tests/test_proposals.py`
 
 **Interfaces:**
@@ -106,15 +106,15 @@ Expected: PASS.
 - [ ] **Step 5: Commit proposals**
 
 ```bash
-git add control/src/dgx_control/proposals.py control/src/dgx_control/serializers.py control/tests/test_proposals.py
+git add control/src/vonk_control/proposals.py control/src/vonk_control/serializers.py control/tests/test_proposals.py
 git commit -m "feat: preview canonical repository proposals"
 ```
 
 ### Task 3: Add commit/PR policy and CI eligibility
 
 **Files:**
-- Create: `control/src/dgx_control/git_policy.py`
-- Create: `control/src/dgx_control/code_host.py`
+- Create: `control/src/vonk_control/git_policy.py`
+- Create: `control/src/vonk_control/code_host.py`
 - Create: `control/tests/test_git_policy.py`
 - Create: `control/tests/test_code_host.py`
 
@@ -144,7 +144,7 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement policy state, branch naming, PR abstraction, and check verification**
 
-Use branches `dgx-control/<proposal-id>`, commit trailers for actor/request/proposal digest, no force-push, GitHub App credentials through secret references, idempotent submission, and exact required-check names from trusted service configuration.
+Use branches `vonk-control/<proposal-id>`, commit trailers for actor/request/proposal digest, no force-push, GitHub App credentials through secret references, idempotent submission, and exact required-check names from trusted service configuration.
 
 - [ ] **Step 4: Run policy tests**
 
@@ -154,23 +154,23 @@ Expected: PASS.
 - [ ] **Step 5: Commit Git workflow**
 
 ```bash
-git add control/src/dgx_control/git_policy.py control/src/dgx_control/code_host.py control/tests/test_git_policy.py control/tests/test_code_host.py
+git add control/src/vonk_control/git_policy.py control/src/vonk_control/code_host.py control/tests/test_git_policy.py control/tests/test_code_host.py
 git commit -m "feat: enforce repository review workflow"
 ```
 
 ### Task 4: Expose repository, proposal, and reconciliation APIs and CLI
 
 **Files:**
-- Modify: `control/src/dgx_control/api.py`
-- Create: `control/src/dgx_control/reconcile.py`
-- Create: `src/spark_profiles/control_client.py`
-- Modify: `src/spark_profiles/cli.py`
+- Modify: `control/src/vonk_control/api.py`
+- Create: `control/src/vonk_control/reconcile.py`
+- Create: `src/cluster_profiles/control_client.py`
+- Modify: `src/cluster_profiles/cli.py`
 - Test: `control/tests/test_admin_api.py`
-- Test: `tests/spark_profiles/test_control_client.py`
+- Test: `tests/cluster_profiles/test_control_client.py`
 
 **Interfaces:**
 - API: `/api/v1/repository`, `/documents`, `/proposals`, `/changes`, `/reconciliations`.
-- CLI: `sparkctl admin fleet|models|profiles|proposal|deploy|jobs|audit` using the API.
+- CLI: `vonkctl admin fleet|models|profiles|proposal|deploy|jobs|audit` using the API.
 
 - [ ] **Step 1: Write failing API/CLI equivalence test**
 
@@ -183,7 +183,7 @@ def test_cli_and_api_create_same_proposal(api_client, run_cli, change):
 
 - [ ] **Step 2: Run and observe missing endpoints/commands**
 
-Run: `uv run --project control pytest control/tests/test_admin_api.py -v && uv run pytest tests/spark_profiles/test_control_client.py -v`
+Run: `uv run --project control pytest control/tests/test_admin_api.py -v && uv run pytest tests/cluster_profiles/test_control_client.py -v`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement thin API and CLI adapters over shared services**
@@ -192,13 +192,13 @@ Require base commit on every proposal, enqueue reconciliation as a durable job, 
 
 - [ ] **Step 4: Run API/CLI tests**
 
-Run: `uv run --project control pytest control/tests/test_admin_api.py -v && uv run pytest tests/spark_profiles/test_control_client.py -v`
+Run: `uv run --project control pytest control/tests/test_admin_api.py -v && uv run pytest tests/cluster_profiles/test_control_client.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit interfaces**
 
 ```bash
-git add control/src/dgx_control/api.py control/src/dgx_control/reconcile.py src/spark_profiles/control_client.py src/spark_profiles/cli.py control/tests/test_admin_api.py tests/spark_profiles/test_control_client.py
+git add control/src/vonk_control/api.py control/src/vonk_control/reconcile.py src/cluster_profiles/control_client.py src/cluster_profiles/cli.py control/tests/test_admin_api.py tests/cluster_profiles/test_control_client.py
 git commit -m "feat: administer repository state through API and CLI"
 ```
 
@@ -264,7 +264,7 @@ git commit -m "feat: add web cluster administration"
 ### Task 6: Verify reconciliation is merged-commit-only and fail-closed
 
 **Files:**
-- Modify: `control/src/dgx_control/reconcile.py`
+- Modify: `control/src/vonk_control/reconcile.py`
 - Create: `control/tests/test_reconcile.py`
 - Create: `docs/runbooks/repository-administration.md`
 
@@ -300,12 +300,12 @@ Verify commit and proposal digests immediately before mutation, withdraw only af
 
 - [ ] **Step 4: Run Phase 4 integration**
 
-Run: `uv run --project control pytest -v && uv run pytest tests/spark_profiles -v && npm --prefix control/web test -- --run && git diff --check`
+Run: `uv run --project control pytest -v && uv run pytest tests/cluster_profiles -v && npm --prefix control/web test -- --run && git diff --check`
 Expected: PASS.
 
 - [ ] **Step 5: Commit reconciliation**
 
 ```bash
-git add control/src/dgx_control/reconcile.py control/tests/test_reconcile.py docs/runbooks/repository-administration.md
+git add control/src/vonk_control/reconcile.py control/tests/test_reconcile.py docs/runbooks/repository-administration.md
 git commit -m "feat: reconcile eligible repository state"
 ```

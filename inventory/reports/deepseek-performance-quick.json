@@ -7,7 +7,7 @@
   "runtime": {
     "model": "deepseek",
     "endpoint": "http://127.0.0.1:8888/v1",
-    "execution_host": "spark-3542",
+    "execution_host": "node-3542",
     "release_id": "452cb5736f2a56061b827f211d539f113a23ce43938e769a3c6cee0bdf733c29",
     "image_reference": "ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8",
     "image_id": "sha256:3430d6614a8e2925f34d059af6caf05aff42387326db4d05639a60f10f2654d8",
@@ -15,16 +15,16 @@
     "health_http_status": 200
   },
   "nodes": {
-    "spark1": {
-      "hostname": "spark-3542",
+    "node1": {
+      "hostname": "node-3542",
       "boot_id": "276acc0c-2dc5-424d-9499-92dcd8452bcb",
       "container_id": "5a7a67ab4e78389872712eacacfbc7f9d75125efbf3b618e144e82399446f613",
       "temperature_c_before": 47,
       "temperature_c_after": 55,
       "temperature_source": "nvidia-smi"
     },
-    "spark2": {
-      "hostname": "spark-2297",
+    "node2": {
+      "hostname": "node-2297",
       "boot_id": "f9eae13d-4f8d-451c-9ab1-136eb82d516b",
       "container_id": "d51db24db0311b69a69639a5a0d390b21b9671a2995b43ebd034a31c4d654d3d",
       "temperature_c_before": 47,
@@ -33,7 +33,7 @@
     }
   },
   "benchmark": {
-    "source_repository": "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark",
+    "source_repository": "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-Vonk Forge-GPU node",
     "source_commit": "b131b2a22164675890dd1465fd8862b5cfb6ff13",
     "script_path": "scripts/benchmark-0731.py",
     "script_sha256": "ad0a4532fc1813feff9b41dff2ada14bfa97420c063e42e48f4b1cd849bc5dc9",

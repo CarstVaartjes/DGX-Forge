@@ -63,8 +63,8 @@ def test_install_transport_uses_shared_binary_selector(
     monkeypatch: pytest.MonkeyPatch,
     endpoint: ManagementEndpoint,
 ) -> None:
-    monkeypatch.setenv("SPARK_SSH_BIN", "/opt/shared/ssh")
-    monkeypatch.setenv("SPARK_SCP_BIN", "/opt/shared/scp")
+    monkeypatch.setenv("VONK_SSH_BIN", "/opt/shared/ssh")
+    monkeypatch.setenv("VONK_SCP_BIN", "/opt/shared/scp")
     execute = RecordingExec()
     transport = OpenSshInstallTransport(execute=execute)
 
@@ -129,16 +129,16 @@ def test_copy_uses_scp_without_forwarding_and_rejects_unsafe_destination(
     execute = RecordingExec()
     transport = OpenSshInstallTransport(execute=execute, scp_bin="/usr/bin/scp")
 
-    result = transport.copy(endpoint, source, "/tmp/dgx-installer", mode=0o755)
+    result = transport.copy(endpoint, source, "/tmp/vonk-installer", mode=0o755)
 
     argv = execute.calls[0]["argv"]
     assert argv[0] == "/usr/bin/scp"
     assert "ForwardAgent=no" in argv
     assert "StrictHostKeyChecking=yes" in argv
     assert argv[-2] == str(source)
-    assert argv[-1] == "operator@alpha.local:/tmp/dgx-installer"
+    assert argv[-1] == "operator@alpha.local:/tmp/vonk-installer"
     assert len(execute.calls) == 2
-    assert execute.calls[1]["argv"][-1] == "chmod 0755 -- /tmp/dgx-installer"
+    assert execute.calls[1]["argv"][-1] == "chmod 0755 -- /tmp/vonk-installer"
     assert result.returncode == 0
 
     with pytest.raises(UnsafeInstallArgument):

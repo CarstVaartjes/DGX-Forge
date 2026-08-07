@@ -94,7 +94,7 @@ def test_internal_worker_authority_requires_exact_service_token() -> None:
     assert client.post(
         "/internal/v1/repository/evaluate",
         headers={
-            "x-dgx-worker-signature": worker_document_signature(
+            "x-vonk-worker-signature": worker_document_signature(
                 b"x" * 32,
                 body,
                 purpose="request",
@@ -105,7 +105,7 @@ def test_internal_worker_authority_requires_exact_service_token() -> None:
     response = client.post(
         "/internal/v1/repository/evaluate",
         headers={
-            "x-dgx-worker-signature": worker_document_signature(
+            "x-vonk-worker-signature": worker_document_signature(
                 b"w" * 32,
                 body,
                 purpose="request",
@@ -141,7 +141,7 @@ def test_internal_worker_authority_returns_commit_bound_hermes_deployments() -> 
     response = client.post(
         "/internal/v1/repository/evaluate",
         headers={
-            "x-dgx-worker-signature": worker_document_signature(
+            "x-vonk-worker-signature": worker_document_signature(
                 b"w" * 32,
                 body,
                 purpose="request",
@@ -188,7 +188,7 @@ def test_internal_worker_authority_fails_closed_before_repository_policy_output(
     response = client.post(
         "/internal/v1/repository/evaluate",
         headers={
-            "x-dgx-worker-signature": worker_document_signature(
+            "x-vonk-worker-signature": worker_document_signature(
                 b"w" * 32,
                 body,
                 purpose="request",
@@ -578,7 +578,7 @@ def test_internal_worker_authority_rejects_scope_not_in_persisted_plan(
     response = client.post(
         "/internal/v1/repository/evaluate",
         headers={
-            "x-dgx-worker-signature": worker_document_signature(
+            "x-vonk-worker-signature": worker_document_signature(
                 b"w" * 32,
                 body,
                 purpose="request",

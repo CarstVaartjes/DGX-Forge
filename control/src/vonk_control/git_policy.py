@@ -88,13 +88,13 @@ class GitPolicy:
         if re.fullmatch(r"[0-9a-f]{64}", preview.digest) is None:
             raise ValueError("proposal digest is invalid")
         message = (
-            "DGX control proposal\n\n"
+            "Vonk Forge control proposal\n\n"
             f"Actor: {actor}\nRequest-ID: {request_id}\nProposal-Digest: {preview.digest}\n"
         )
         if self._store.mode == "release-pr-only":
-            branch = f"dgx-control/{preview.digest[:12]}"
+            branch = f"vonk-control/{preview.digest[:12]}"
             commit = self._host.create_change(branch, preview.base_commit, preview.patch, message, signed=True)
-            pull_request = self._host.open_pull_request(branch, commit, f"DGX control proposal {preview.digest[:12]}")
+            pull_request = self._host.open_pull_request(branch, commit, f"Vonk Forge control proposal {preview.digest[:12]}")
             mode = "pull-request"
         else:
             branch = self._branch

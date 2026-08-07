@@ -1,4 +1,4 @@
-"""Restart-safe worker scheduling for persisted Spark platform rollouts."""
+"""Restart-safe worker scheduling for persisted GPU node platform rollouts."""
 
 from __future__ import annotations
 
@@ -190,7 +190,7 @@ class UpdateRolloutWorker:
     @staticmethod
     def _advisory_key(rollout_id: str) -> int:
         value = int.from_bytes(
-            hashlib.sha256(f"dgx-forge:update:{rollout_id}".encode()).digest()[:8],
+            hashlib.sha256(f"vonk-forge:update:{rollout_id}".encode()).digest()[:8],
             "big",
         ) & (2**63 - 1)
         return value or 1

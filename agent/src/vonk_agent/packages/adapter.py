@@ -291,7 +291,7 @@ def _snapshot_adapter(
         ):
             raise AdapterValidationError("adapter metadata is unsafe")
         snapshot_fd = os.memfd_create(
-            "dgx-package-adapter", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
+            "vonk-package-adapter", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
         )
         os.fchmod(snapshot_fd, 0o500)
         digest = hashlib.sha256()

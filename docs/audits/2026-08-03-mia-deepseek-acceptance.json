@@ -17,7 +17,7 @@
     "max_gpu_utilization_pct": 96,
     "active_throttle_reasons": ["0x0000000000000000"]
   },
-  "lifecycle": {"successful_cycles": 3, "start_order": ["spark2", "spark1"], "stop_order": ["spark1", "spark2"]},
+  "lifecycle": {"successful_cycles": 3, "start_order": ["node2", "node1"], "stop_order": ["node1", "node2"]},
   "reboot": {"worker_first": true, "head_first": false, "containers_after_reboot": [], "explicit_restore": true},
   "notes": [
     "A transient Compose name race occurred during an initial third-cycle attempt; the cycle was rerun with stopped-container cleanup and passed.",

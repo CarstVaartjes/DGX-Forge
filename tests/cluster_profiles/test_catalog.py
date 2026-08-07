@@ -64,10 +64,10 @@ def test_each_model_definition_has_its_own_adapter_command_path() -> None:
     }
 
     assert len(set(prepare_paths.values())) == len(prepare_paths)
-    assert all("spark-model-adapter" not in path for path in prepare_paths.values())
+    assert all("node-model-adapter" not in path for path in prepare_paths.values())
 
 
-def test_ds4_single_definition_is_locked_planned_and_spark1_only(
+def test_ds4_single_definition_is_locked_planned_and_node1_only(
     catalog_root: Path,
 ) -> None:
     catalog = Catalog.load(catalog_root)
@@ -79,12 +79,12 @@ def test_ds4_single_definition_is_locked_planned_and_spark1_only(
     assert definition.topology == "single"
     assert definition.placement_class == "single-exclusive"
     assert definition.co_location == "exclusive"
-    assert definition.nodes == ("spark1",)
-    assert definition.start_order == ("spark1",)
-    assert definition.stop_order == ("spark1",)
+    assert definition.nodes == ("node1",)
+    assert definition.start_order == ("node1",)
+    assert definition.stop_order == ("node1",)
     assert profile.placements == {
-        "spark1": ("deepseek-agent-single",),
-        "spark2": (),
+        "node1": ("deepseek-agent-single",),
+        "node2": (),
     }
     assert profile.endpoints == {"deepseek": "deepseek-agent-single"}
     assert catalog.resolve_profile("default").id == "agent-full-dual"
@@ -298,7 +298,7 @@ def _stage_report(
 
 
 def _add_single_definition(catalog_root: Path) -> tuple[str, str, str]:
-    """Add an independently evidenced, Spark 1-only definition to the fixture."""
+    """Add an independently evidenced, GPU node 1-only definition to the fixture."""
     source = (catalog_root / "config/workloads/deepseek-agent-dual.toml").read_text(
         encoding="utf-8"
     )
@@ -306,9 +306,9 @@ def _add_single_definition(catalog_root: Path) -> tuple[str, str, str]:
         source.replace('id = "deepseek-agent-dual"', 'id = "single"')
         .replace('topology = "distributed"', 'topology = "single"')
         .replace('placement_class = "dual-exclusive"', 'placement_class = "single-exclusive"')
-        .replace('nodes = ["spark1", "spark2"]', 'nodes = ["spark1"]')
-        .replace('start_order = ["spark2", "spark1"]', 'start_order = ["spark1"]')
-        .replace('stop_order = ["spark1", "spark2"]', 'stop_order = ["spark1"]')
+        .replace('nodes = ["node1", "node2"]', 'nodes = ["node1"]')
+        .replace('start_order = ["node2", "node1"]', 'start_order = ["node1"]')
+        .replace('stop_order = ["node1", "node2"]', 'stop_order = ["node1"]')
         .replace('/srv/models/snapshots/deepseek-v4-flash-0731', '/srv/models/snapshots/single')
         .replace('/srv/models/runtime-cache/deepseek-agent-dual', '/srv/models/runtime-cache/single')
         .replace('/srv/models/outputs/deepseek-agent-dual', '/srv/models/outputs/single'),
@@ -371,16 +371,16 @@ def test_single_node_evidence_chain_loads_for_its_declared_node(
 @pytest.mark.parametrize(
     ("nodes", "error"),
     (
-        ([{"node": "spark2", "boot_id": "2" * 32}], "maturity evidence nodes"),
+        ([{"node": "node2", "boot_id": "2" * 32}], "maturity evidence nodes"),
         (
             [
-                {"node": "spark1", "boot_id": "1" * 32},
-                {"node": "spark2", "boot_id": "2" * 32},
+                {"node": "node1", "boot_id": "1" * 32},
+                {"node": "node2", "boot_id": "2" * 32},
             ], "maturity evidence nodes"),
         (
             [
-                {"node": "spark1", "boot_id": "1" * 32},
-                {"node": "spark1", "boot_id": "2" * 32},
+                {"node": "node1", "boot_id": "1" * 32},
+                {"node": "node1", "boot_id": "2" * 32},
             ], "maturity evidence nodes"),
     ),
 )
@@ -406,7 +406,7 @@ def test_single_node_report_is_rejected_for_the_dual_definition(
     report_path = "inventory/reports/model-definitions/deepseek-agent-dual-prepared.json"
     destination = catalog_root / report_path
     report = json.loads(destination.read_text(encoding="utf-8"))
-    report["nodes"] = [{"node": "spark1", "boot_id": "1" * 32}]
+    report["nodes"] = [{"node": "node1", "boot_id": "1" * 32}]
     destination.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
     with pytest.raises(CatalogError, match="maturity evidence nodes"):

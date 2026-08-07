@@ -153,9 +153,9 @@ class PackageFabric(StrictModel):
 
 
 class PackageResourceEnvelope(PackageResourceValues):
-    """Bounded per-Spark resource requirements from a promoted release."""
+    """Bounded per-node resource requirements from a promoted release."""
 
-    required_sparks: int = Field(ge=1, le=512)
+    required_nodes: int = Field(ge=1, le=512)
     topology: str = Field(min_length=1, max_length=128)
     world_size: int = Field(ge=1, le=512)
     ranks: list[PackageRank] = Field(max_length=512)
@@ -168,7 +168,7 @@ class PackageRolloutResourceEnvelope(StrictModel):
     schema_version: int = Field(ge=1)
     per_node: PackageResourceValues
     aggregate: PackageResourceValues
-    required_sparks: int = Field(ge=1, le=512)
+    required_nodes: int = Field(ge=1, le=512)
     topology: str = Field(min_length=1, max_length=128)
     world_size: int = Field(ge=1, le=512)
     ranks: list[PackageRank] = Field(max_length=512)
@@ -252,7 +252,7 @@ class PackageProgressResponse(StrictModel):
 
 
 class PackageInventoryItem(StrictModel):
-    """One release/content group as observed on one Spark."""
+    """One release/content group as observed on one GPU node."""
 
     deployment_id: str = Field(pattern=_IDENTIFIER)
     family_id: str | None = Field(default=None, pattern=_IDENTIFIER)
@@ -276,7 +276,7 @@ class PackageInventoryItem(StrictModel):
     resources: PackageResourceEnvelope
 
 
-class PackageSparkStorage(StrictModel):
+class PackageNodeStorage(StrictModel):
     total_bytes: int = Field(ge=0)
     used_bytes: int = Field(ge=0)
     free_bytes: int = Field(ge=0)
@@ -284,7 +284,7 @@ class PackageSparkStorage(StrictModel):
     reclaimable_bytes: int = Field(ge=0)
 
 
-class PackageSparkResources(StrictModel):
+class PackageNodeResources(StrictModel):
     host_memory_total_bytes: int = Field(ge=0)
     host_memory_free_bytes: int = Field(ge=0)
     gpu_memory_total_bytes: int = Field(ge=0)
@@ -292,18 +292,18 @@ class PackageSparkResources(StrictModel):
     gpu_count: int = Field(ge=0, le=512)
 
 
-class PackageSparkInventory(StrictModel):
+class PackageNodeInventory(StrictModel):
     node_id: str = Field(min_length=1, max_length=128)
     online: bool
     observed_at: str | None = Field(default=None, max_length=64)
-    storage: PackageSparkStorage
-    resources: PackageSparkResources
+    storage: PackageNodeStorage
+    resources: PackageNodeResources
     current_generation: str | None = Field(default=None, pattern=_DIGEST)
     packages: list[PackageInventoryItem] = Field(default_factory=list, max_length=2048)
 
 
 class PackageInventoryResponse(StrictModel):
-    nodes: list[PackageSparkInventory] = Field(max_length=512)
+    nodes: list[PackageNodeInventory] = Field(max_length=512)
     next_cursor: str | None = Field(default=None, max_length=512)
     total: int = Field(ge=0, le=10_000_000)
 

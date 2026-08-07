@@ -348,11 +348,11 @@ def _probe_evidence(
 ) -> None:
     if payload != {"require_active_nvidia_compute_processes": 0}:
         raise ValueError("node probe request is not an authenticated compute gate")
-    health = evidence.get("dgx_forge")
+    health = evidence.get("vonk_forge")
     nvidia = evidence.get("nvidia")
     accelerator = health.get("accelerator") if isinstance(health, Mapping) else None
     if (
-        set(evidence) != {"dgx_forge", "nvidia"}
+        set(evidence) != {"vonk_forge", "nvidia"}
         or not isinstance(health, Mapping)
         or health.get("schema_version") != 1
         or not isinstance(accelerator, Mapping)

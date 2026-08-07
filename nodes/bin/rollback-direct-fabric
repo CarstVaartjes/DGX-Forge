@@ -50,11 +50,11 @@ rollback_and_verify_management() {
     printf 'PASS: management reconnection verified on %s\n' "$host"
 }
 
-# Spark 2 is a hard gate. With errexit and pipefail, a transfer, checksum,
-# rollback, or management-reconnect failure exits before Spark 1 is staged.
-stage_and_verify dgx-spark-2
-rollback_and_verify_management dgx-spark-2 spark2
-stage_and_verify dgx-spark-1
-rollback_and_verify_management dgx-spark-1 spark1
+# GPU node 2 is a hard gate. With errexit and pipefail, a transfer, checksum,
+# rollback, or management-reconnect failure exits before GPU node 1 is staged.
+stage_and_verify vonk-node-2
+rollback_and_verify_management vonk-node-2 node2
+stage_and_verify vonk-node-1
+rollback_and_verify_management vonk-node-1 node1
 
 printf '%s\n' 'PASS: direct fabric rollback completed worker-first'

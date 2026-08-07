@@ -346,7 +346,7 @@ class CredentialStore:
                 x509.SubjectAlternativeName(
                     [
                         x509.UniformResourceIdentifier(
-                            f"spiffe://dgx-forge.local/node/{node_id}"
+                            f"spiffe://vonk-forge.local/node/{node_id}"
                         )
                     ]
                 ),
@@ -1074,7 +1074,7 @@ def _validate_issued_key(issued: IssuedCredential, private_key_pem: bytes) -> No
         expected_sans = x509.SubjectAlternativeName(
             [
                 x509.UniformResourceIdentifier(
-                    f"spiffe://dgx-forge.local/node/{issued.node_id}"
+                    f"spiffe://vonk-forge.local/node/{issued.node_id}"
                 )
             ]
         )

@@ -62,7 +62,7 @@ def _plan() -> ControlGenerationPlan:
         manifest_media_type="application/vnd.oci.image.manifest.v1+json",
         layer_digest=f"sha256:{SHA_D}",
         layer_size=200,
-        layer_media_type="application/vnd.dgx-forge.control-deployment.v1.tar",
+        layer_media_type="application/vnd.vonk-forge.control-deployment.v1.tar",
     )
     values = {
         "schema_version": 1,
@@ -200,13 +200,13 @@ class Runner:
             )
             output = json.dumps(
                 [
-                    f"DGX_CONTROL_GENERATION_ID={self.selected.generation_id}",
-                    f"DGX_CONTROL_PROCESS_IMAGE={image}",
-                    f"DGX_PLATFORM_BUILD_DIGEST={self.selected.build_digest}",
-                    f"DGX_PLATFORM_RELEASE_DIGEST={self.selected.release_digest}",
-                    f"DGX_PLATFORM_VERSION={self.selected.platform_version}",
-                    f"DGX_DATABASE_REVISION={self.selected.database_revision}",
-                    f"DGX_CONTROL_START_NONCE={SHA_E}",
+                    f"VONK_CONTROL_GENERATION_ID={self.selected.generation_id}",
+                    f"VONK_CONTROL_PROCESS_IMAGE={image}",
+                    f"VONK_PLATFORM_BUILD_DIGEST={self.selected.build_digest}",
+                    f"VONK_PLATFORM_RELEASE_DIGEST={self.selected.release_digest}",
+                    f"VONK_PLATFORM_VERSION={self.selected.platform_version}",
+                    f"VONK_DATABASE_REVISION={self.selected.database_revision}",
+                    f"VONK_CONTROL_START_NONCE={SHA_E}",
                 ],
                 separators=(",", ":"),
             ).encode()
@@ -412,7 +412,7 @@ def test_selected_service_start_uses_generation_directory_and_persists_fresh_non
     assert call["cwd"] == target
     assert str(target / "compose.yaml") in call["argv"]
     assert call["argv"][-3:] == ("up", "-d", "--remove-orphans")
-    nonce = call["env"]["DGX_CONTROL_START_NONCE"]
+    nonce = call["env"]["VONK_CONTROL_START_NONCE"]
     assert nonce != SHA_E
     assert len(nonce) == 64
     runtime = (
@@ -437,7 +437,7 @@ def test_selected_service_start_applies_full_generation_with_exact_ca_overlay(
 ) -> None:
     boundary, runner, site = _boundary(tmp_path)
     site.write_text(
-        "COMPOSE_PROJECT_NAME=forge-test\nDGX_CONTROL_CA_OVERLAY=step-ca\n",
+        "COMPOSE_PROJECT_NAME=forge-test\nVONK_CONTROL_CA_OVERLAY=step-ca\n",
         encoding="utf-8",
     )
     plan = _plan()
@@ -488,7 +488,7 @@ def test_first_install_boundary_does_not_require_repository_or_active_compose(
     state.mkdir(mode=0o700)
     site = tmp_path / "site.env"
     site.write_text(
-        "COMPOSE_PROJECT_NAME=forge-test\nDGX_CONTROL_CA_OVERLAY=step-ca\n",
+        "COMPOSE_PROJECT_NAME=forge-test\nVONK_CONTROL_CA_OVERLAY=step-ca\n",
         encoding="utf-8",
     )
     recipients = tmp_path / "recipients"
@@ -664,7 +664,7 @@ def test_migration_and_candidate_start_use_only_uncommitted_staging_compose(
     target_commands = [call for call in runner.calls if call["cwd"] == staging]
     assert any("alembic" in call["argv"] for call in target_commands)
     assert any(
-        "DGX_CONTROL_STARTUP_MODE=preselection" in call["argv"]
+        "VONK_CONTROL_STARTUP_MODE=preselection" in call["argv"]
         for call in target_commands
     )
     assert all(call["cwd"] != final for call in runner.calls)
@@ -731,7 +731,7 @@ def test_first_install_skips_backup_and_initializes_staged_database(
     assert any(
         call["cwd"] == staging
         and "--name" in call["argv"]
-        and "DGX_CONTROL_STARTUP_MODE=preselection" in call["argv"]
+        and "VONK_CONTROL_STARTUP_MODE=preselection" in call["argv"]
         for call in runner.calls
     )
 

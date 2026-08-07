@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://dgx-forge.local/schemas/workload-deployment.schema.json",
-  "title": "DGX-Forge workload deployment",
+  "$id": "https://vonk-forge.local/schemas/workload-deployment.schema.json",
+  "title": "Vonk Forge workload deployment",
   "type": "object",
   "additionalProperties": false,
   "required": [

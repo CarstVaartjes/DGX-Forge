@@ -12,7 +12,7 @@ def test_metrics_use_node_id_not_hostname_or_address() -> None:
     metrics.update_node("spk_00000000000000000000000000000001", ready=True, memory_available_bytes=1200, disk_available_bytes=3400, probe_age_seconds=5)
     text = metrics.render()
     assert 'node_id="spk_00000000000000000000000000000001"' in text
-    assert "192.168." not in text and "spark.local" not in text
+    assert "192.168." not in text and "node.local" not in text
 
 
 def test_metrics_do_not_contain_request_content_or_credentials() -> None:
@@ -26,7 +26,7 @@ def test_metrics_do_not_contain_request_content_or_credentials() -> None:
     assert "bearer" not in text.lower()
     assert "authorization" not in text.lower()
     assert 'method="POST",status_class="2xx"' in text
-    assert "dgx_control_backup_age_seconds 60" in text
+    assert "vonk_control_backup_age_seconds 60" in text
 
 
 def test_metric_labels_are_allowlisted_and_unknown_values_collapse() -> None:
@@ -39,7 +39,7 @@ def test_metric_labels_are_allowlisted_and_unknown_values_collapse() -> None:
 
 def test_invalid_node_id_is_rejected() -> None:
     try:
-        MetricsRegistry().update_node("spark.local", ready=True, memory_available_bytes=1, disk_available_bytes=1, probe_age_seconds=1)
+        MetricsRegistry().update_node("node.local", ready=True, memory_available_bytes=1, disk_available_bytes=1, probe_age_seconds=1)
     except ValueError as error:
         assert "node ID" in str(error)
     else:
@@ -111,7 +111,7 @@ def test_metrics_endpoint_omits_probe_age_for_unobserved_node() -> None:
     )
 
     assert response.status_code == 200
-    assert f'dgx_node_ready{{node_id="{node_id}"}} 0' in response.text
-    assert f'dgx_node_memory_available_bytes{{node_id="{node_id}"}} 1200' in response.text
-    assert f'dgx_node_disk_available_bytes{{node_id="{node_id}"}} 3400' in response.text
-    assert f'dgx_node_probe_age_seconds{{node_id="{node_id}"}}' not in response.text
+    assert f'vonk_node_ready{{node_id="{node_id}"}} 0' in response.text
+    assert f'vonk_node_memory_available_bytes{{node_id="{node_id}"}} 1200' in response.text
+    assert f'vonk_node_disk_available_bytes{{node_id="{node_id}"}} 3400' in response.text
+    assert f'vonk_node_probe_age_seconds{{node_id="{node_id}"}}' not in response.text

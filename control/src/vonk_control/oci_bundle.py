@@ -28,7 +28,7 @@ _REFERENCE = re.compile(
     r"@sha256:[0-9a-f]{64}\Z"
 )
 _MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
-_LAYER_MEDIA_TYPE = "application/vnd.dgx-forge.control-deployment.v1.tar"
+_LAYER_MEDIA_TYPE = "application/vnd.vonk-forge.control-deployment.v1.tar"
 _MAX_MANIFEST_BYTES = 16 * 1024 * 1024
 _MAX_LAYER_BYTES = 64 * 1024 * 1024
 _DEFAULT_COMMAND = CommandPolicy(15 * 60, 1024 * 1024, 1024 * 1024)
@@ -177,7 +177,7 @@ class OciBundleSource:
     def _scratch_file(self, purpose: str) -> Iterator[int]:
         directory_fd = -1
         descriptor = -1
-        name = f".dgx-oci-{purpose}-{uuid.uuid4().hex}.part"
+        name = f".vonk-oci-{purpose}-{uuid.uuid4().hex}.part"
         try:
             directory_fd = os.open(
                 self._work,

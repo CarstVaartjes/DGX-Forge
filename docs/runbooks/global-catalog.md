@@ -5,7 +5,7 @@ vonkforge.ai for startup, readiness, installation, running, or an already
 imported recipe.
 
 The global catalog is a future optional service. The initial release runs fully
-on the NAS/Sparks; when enabled later, its frontend belongs on Cloudflare Pages
+on the NAS/GPU nodes; when enabled later, its frontend belongs on Cloudflare Pages
 and its API/validation worker/PostgreSQL backend may run on Railway.
 
 ## Import an immutable public recipe
@@ -20,7 +20,7 @@ and its API/validation worker/PostgreSQL backend may run on Railway.
 
 The client uses a fixed HTTPS origin, no ambient proxy credentials, no
 redirects, strict timeouts, and a 512 KiB response limit. Set
-`DGX_GLOBAL_CATALOG_URL` only to an HTTPS origin; plain HTTP is accepted solely
+`VONK_GLOBAL_CATALOG_URL` only to an HTTPS origin; plain HTTP is accepted solely
 for an explicit loopback development server.
 
 ## Publish without storing global credentials

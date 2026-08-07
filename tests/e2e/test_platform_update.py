@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/accept-platform-update"
 PHYSICAL_GATES = {
     "physical-control-host-update-recovery",
-    "physical-spark-canary-rollback",
+    "physical-node-canary-rollback",
     "signed-platform-update-manifest-evidence",
 }
 
@@ -35,7 +35,7 @@ def test_fleet_simulation_executes_the_real_agent_update_contract(
         (
             "import json, os, runpy",
             "from pathlib import Path",
-            'os.environ["DGX_PLATFORM_UPDATE_LOCKED_ENV"] = "1"',
+            'os.environ["VONK_PLATFORM_UPDATE_LOCKED_ENV"] = "1"',
             f"module = runpy.run_path({str(SCRIPT)!r})",
             f"print(json.dumps(module['_fleet_scenario'](Path({str(tmp_path)!r}))))",
         )
@@ -77,7 +77,7 @@ def test_admin_simulation_confirms_the_exact_versioned_target() -> None:
     program = "\n".join(
         (
             "import json, os, runpy",
-            'os.environ["DGX_PLATFORM_UPDATE_LOCKED_ENV"] = "1"',
+            'os.environ["VONK_PLATFORM_UPDATE_LOCKED_ENV"] = "1"',
             f"module = runpy.run_path({str(SCRIPT)!r})",
             f"print(json.dumps(module['_admin_interface_scenario']({plan_digest!r}, {target_name!r})))",
         )
@@ -125,7 +125,7 @@ def test_host_simulation_recovers_an_exact_versioned_generation(
         (
             "import json, os, runpy",
             "from pathlib import Path",
-            'os.environ["DGX_PLATFORM_UPDATE_LOCKED_ENV"] = "1"',
+            'os.environ["VONK_PLATFORM_UPDATE_LOCKED_ENV"] = "1"',
             f"module = runpy.run_path({str(SCRIPT)!r})",
             f"print(json.dumps(module['_host_generation_scenario'](Path({str(tmp_path)!r}))))",
         )
@@ -165,7 +165,7 @@ def test_acceptance_exercises_the_staged_update_contract_without_ssh() -> None:
     assert result.returncode == 0, result.stderr
     report = json.loads(result.stdout)
     assert report["schema_version"] == 1
-    assert report["report_type"] == "dgx-forge-platform-update"
+    assert report["report_type"] == "vonk-forge-platform-update"
     assert report["status"] == "passed"
     assert report["evidence_kind"] == "simulated"
     assert report["standard_path"] == "outbound-mtls-agent-channel"
@@ -265,7 +265,7 @@ def test_simulator_evidence_is_content_addressed_and_cannot_claim_physical_gates
             "evidence_sha256": None,
             "exercised": False,
         },
-        "spark_canary_and_rollback": {
+        "node_canary_and_rollback": {
             "evidence_sha256": None,
             "exercised": False,
         },

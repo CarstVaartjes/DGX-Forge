@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Publish public, provenance-bearing DGX-Forge API, worker, and hardened Hermes images from GHCR only after a stable version tag passes the existing CI gates, then make production Compose consume their immutable digests.
+**Goal:** Publish public, provenance-bearing Vonk Forge API, worker, and hardened Hermes images from GHCR only after a stable version tag passes the existing CI gates, then make production Compose consume their immutable digests.
 
 **Architecture:** A small repository script owns strict tag-to-image metadata generation, while the existing CI workflow owns privileged GHCR publication after all read-only validation jobs pass. A separate least-privilege job turns the three resolved digests into a checksum-protected public GitHub Release asset, and weekly Dependabot pull requests propose reviewed upstream updates. Compose keeps its internal service names but replaces the local Hermes build with a required published image reference; supply-chain verification binds the release scripts, workflow, image manifest, updater configuration, and narrowed build contexts.
 
@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Publish only tags matching `^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`; do not publish branches, pull requests, prereleases, or build metadata.
-- Publish exactly `ghcr.io/carstvaartjes/dgx-forge-api`, `ghcr.io/carstvaartjes/dgx-forge-worker`, and `ghcr.io/carstvaartjes/dgx-forge-hermes`.
+- Publish exactly `ghcr.io/carstvaartjes/vonk-forge-api`, `ghcr.io/carstvaartjes/vonk-forge-worker`, and `ghcr.io/carstvaartjes/vonk-forge-hermes`.
 - Apply version `X.Y.Z`, full `sha-<40 lowercase hexadecimal characters>`, and `latest` tags only from a successful stable version-tag release.
 - Treat `latest` as evaluation-only; production always deploys the complete three-image digest set.
 - Build only `linux/amd64` in this implementation.
@@ -21,7 +21,7 @@
 - Keep ordinary CI permissions read-only and grant `packages: write` only to the publication job.
 - Grant `contents: write` only to the final release-manifest job; that job receives no package permission.
 - Generate OCI SBOM and maximum-mode provenance for all three images.
-- Attach `dgx-forge-images.env` and its SHA-256 checksum to the public GitHub Release only after every image digest is available.
+- Attach `vonk-forge-images.env` and its SHA-256 checksum to the public GitHub Release only after every image digest is available.
 - Configure weekly Dependabot pull requests for Dockerfiles, Docker Compose, and GitHub Actions without auto-merge or automatic publication.
 - Keep runtime addresses, credentials, private keys, state, and workspaces outside public image layers.
 - Pin every GitHub Action to a full commit SHA.
@@ -72,9 +72,9 @@ def test_stable_tag_emits_exact_public_package_metadata() -> None:
     assert result.stdout.splitlines() == [
         "version=1.2.3",
         f"commit_tag=sha-{SHA}",
-        "api_image=ghcr.io/carstvaartjes/dgx-forge-api",
-        "worker_image=ghcr.io/carstvaartjes/dgx-forge-worker",
-        "hermes_image=ghcr.io/carstvaartjes/dgx-forge-hermes",
+        "api_image=ghcr.io/carstvaartjes/vonk-forge-api",
+        "worker_image=ghcr.io/carstvaartjes/vonk-forge-worker",
+        "hermes_image=ghcr.io/carstvaartjes/vonk-forge-hermes",
     ]
 
 
@@ -126,9 +126,9 @@ from collections.abc import Sequence
 TAG = re.compile(r"^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 COMMIT = re.compile(r"^[0-9a-f]{40}$")
 PACKAGES = (
-    ("api_image", "ghcr.io/carstvaartjes/dgx-forge-api"),
-    ("worker_image", "ghcr.io/carstvaartjes/dgx-forge-worker"),
-    ("hermes_image", "ghcr.io/carstvaartjes/dgx-forge-hermes"),
+    ("api_image", "ghcr.io/carstvaartjes/vonk-forge-api"),
+    ("worker_image", "ghcr.io/carstvaartjes/vonk-forge-worker"),
+    ("hermes_image", "ghcr.io/carstvaartjes/vonk-forge-hermes"),
 )
 
 
@@ -228,7 +228,7 @@ def test_image_lock_declares_all_three_public_release_artifacts() -> None:
             "context": ".",
             "dockerfile": "control/Dockerfile",
             "environment": "CONTROL_API_IMAGE",
-            "package": "dgx-forge-api",
+            "package": "vonk-forge-api",
             "required": True,
             "target": "api",
         },
@@ -236,7 +236,7 @@ def test_image_lock_declares_all_three_public_release_artifacts() -> None:
             "context": ".",
             "dockerfile": "control/Dockerfile",
             "environment": "CONTROL_WORKER_IMAGE",
-            "package": "dgx-forge-worker",
+            "package": "vonk-forge-worker",
             "required": True,
             "target": "worker",
         },
@@ -244,7 +244,7 @@ def test_image_lock_declares_all_three_public_release_artifacts() -> None:
             "context": "deploy/compose/hermes-agent",
             "dockerfile": "deploy/compose/hermes-agent/Dockerfile",
             "environment": "HERMES_AGENT_IMAGE",
-            "package": "dgx-forge-hermes",
+            "package": "vonk-forge-hermes",
             "required": True,
             "target": "managed",
         },
@@ -275,7 +275,7 @@ FROM ${HERMES_IMAGE} AS managed
 Replace the `build:` block and local image in the `x-hermes-service` anchor with:
 
 ```yaml
-image: ${HERMES_AGENT_IMAGE:?set a digest-pinned DGX-Forge Hermes image}
+image: ${HERMES_AGENT_IMAGE:?set a digest-pinned Vonk Forge Hermes image}
 ```
 
 Do not change the internal service name, networks, capabilities, mounts, health checks, setup profile, or upstream-base `HERMES_IMAGE` Dockerfile argument.
@@ -393,13 +393,13 @@ def test_repository_public_image_inputs_are_clean() -> None:
 
 def test_live_token_pattern_is_rejected_without_echoing_value(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
-    source = repository / "control/src/dgx_control"
+    source = repository / "control/src/vonk_control"
     source.mkdir(parents=True)
     value = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
     (source / "leak.py").write_text(f'KEY = "{value}"\n')
     result = run(repository)
     assert result.returncode == 1
-    assert "control/src/dgx_control/leak.py: github-token" in result.stderr
+    assert "control/src/vonk_control/leak.py: github-token" in result.stderr
     assert value not in result.stderr
 ```
 
@@ -426,7 +426,7 @@ INPUTS = (
     "control/web/package.json",
     "control/web/package-lock.json",
     "control/web/src",
-    "inventory/wheels/dgx_agent_protocol-1.0.0-py3-none-any.whl",
+    "inventory/wheels/vonk_agent_protocol-1.0.0-py3-none-any.whl",
     "deploy/compose/hermes-agent/Dockerfile",
     "deploy/compose/hermes-agent/entrypoint.sh",
 )
@@ -481,7 +481,7 @@ git commit -m "feat: reject secrets from public image inputs"
 
 **Interfaces:**
 - Consumes: outputs from `scripts/container-release-metadata`, successful `lint`, `generated-clients`, and complete `test` matrix jobs, and separate job-scoped `GITHUB_TOKEN` permissions.
-- Produces: three `linux/amd64` GHCR images with version, full commit, and `latest` tags; each build emits SBOM and provenance; the successful workflow emits all three digest-pinned Compose assignments in its summary and a checksum-protected public `dgx-forge-images.env` release asset.
+- Produces: three `linux/amd64` GHCR images with version, full commit, and `latest` tags; each build emits SBOM and provenance; the successful workflow emits all three digest-pinned Compose assignments in its summary and a checksum-protected public `vonk-forge-images.env` release asset.
 
 - [ ] **Step 1: Write failing workflow-structure tests**
 
@@ -524,9 +524,9 @@ def test_publisher_uses_pinned_docker_actions_and_exact_artifacts() -> None:
         assert action in text
     assert text.count("docker/build-push-action@") == 3
     for package in (
-        "dgx-forge-api",
-        "dgx-forge-worker",
-        "dgx-forge-hermes",
+        "vonk-forge-api",
+        "vonk-forge-worker",
+        "vonk-forge-hermes",
     ):
         assert package in text
     assert text.count("platforms: linux/amd64") == 3
@@ -558,7 +558,7 @@ def test_final_job_creates_checksum_protected_public_release_asset() -> None:
     text = workflow()
     assert "release-manifest:" in text
     assert "needs: [release-metadata, publish-images]" in text
-    assert "dgx-forge-images.env" in text
+    assert "vonk-forge-images.env" in text
     assert "sha256sum" in text
     assert "gh release create" in text
     assert "GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}" in text
@@ -676,15 +676,15 @@ Add a separate job whose only write authority is repository release content:
             "CONTROL_API_IMAGE=${{ needs.release-metadata.outputs.api_image }}:${{ needs.release-metadata.outputs.version }}@${{ needs.publish-images.outputs.api_digest }}" \
             "CONTROL_WORKER_IMAGE=${{ needs.release-metadata.outputs.worker_image }}:${{ needs.release-metadata.outputs.version }}@${{ needs.publish-images.outputs.worker_digest }}" \
             "HERMES_AGENT_IMAGE=${{ needs.release-metadata.outputs.hermes_image }}:${{ needs.release-metadata.outputs.version }}@${{ needs.publish-images.outputs.hermes_digest }}" \
-            > dgx-forge-images.env
-          sha256sum dgx-forge-images.env > dgx-forge-images.env.sha256
+            > vonk-forge-images.env
+          sha256sum vonk-forge-images.env > vonk-forge-images.env.sha256
       - name: Create public GitHub Release
         run: >-
           gh release create "$GITHUB_REF_NAME"
-          dgx-forge-images.env dgx-forge-images.env.sha256
+          vonk-forge-images.env vonk-forge-images.env.sha256
           --repo "$GITHUB_REPOSITORY"
           --verify-tag
-          --title "DGX-Forge ${{ needs.release-metadata.outputs.version }}"
+          --title "Vonk Forge ${{ needs.release-metadata.outputs.version }}"
           --generate-notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -867,7 +867,7 @@ git commit -m "chore: propose weekly container updates"
 - Modify: `docs/runbooks/supply-chain.md`
 
 **Interfaces:**
-- Consumes: the checksum-protected public `dgx-forge-images.env` release asset and NAS-local environment/secret files.
+- Consumes: the checksum-protected public `vonk-forge-images.env` release asset and NAS-local environment/secret files.
 - Produces: one authoritative NAS Compose entry point covering configuration, secrets, first boot, pull/update, GHCR visibility, and rollback.
 
 - [ ] **Step 1: Write failing documentation contract tests**
@@ -885,15 +885,15 @@ ENVIRONMENT = ROOT / "deploy/compose/.env.example"
 def test_nas_compose_readme_is_the_complete_operator_entry_point() -> None:
     text = COMPOSE_README.read_text()
     for required in (
-        "ghcr.io/carstvaartjes/dgx-forge-api",
-        "ghcr.io/carstvaartjes/dgx-forge-worker",
-        "ghcr.io/carstvaartjes/dgx-forge-hermes",
+        "ghcr.io/carstvaartjes/vonk-forge-api",
+        "ghcr.io/carstvaartjes/vonk-forge-worker",
+        "ghcr.io/carstvaartjes/vonk-forge-hermes",
         "NAS_LAN_IP=10.0.0.2",
         "docker compose pull",
         "docker compose config --quiet",
         "compose.step-ca.yaml",
-        "dgx-forge-images.env",
-        "dgx-forge-images.env.sha256",
+        "vonk-forge-images.env",
+        "vonk-forge-images.env.sha256",
         "latest is evaluation-only",
         "Set package visibility to Public",
         "not the Docker bridge",
@@ -904,11 +904,11 @@ def test_nas_compose_readme_is_the_complete_operator_entry_point() -> None:
 
 def test_environment_requires_three_release_images_without_duplicate_networks() -> None:
     text = ENVIRONMENT.read_text()
-    assert "CONTROL_API_IMAGE=ghcr.io/carstvaartjes/dgx-forge-api:" in text
-    assert "CONTROL_WORKER_IMAGE=ghcr.io/carstvaartjes/dgx-forge-worker:" in text
-    assert "HERMES_AGENT_IMAGE=ghcr.io/carstvaartjes/dgx-forge-hermes:" in text
-    assert text.count("DGX_MANAGEMENT_CIDRS=") == 1
-    assert text.count("DGX_DIRECT_FABRIC_CIDRS=") == 1
+    assert "CONTROL_API_IMAGE=ghcr.io/carstvaartjes/vonk-forge-api:" in text
+    assert "CONTROL_WORKER_IMAGE=ghcr.io/carstvaartjes/vonk-forge-worker:" in text
+    assert "HERMES_AGENT_IMAGE=ghcr.io/carstvaartjes/vonk-forge-hermes:" in text
+    assert text.count("VONK_MANAGEMENT_CIDRS=") == 1
+    assert text.count("VONK_DIRECT_FABRIC_CIDRS=") == 1
 ```
 
 - [ ] **Step 2: Run the documentation tests and verify the entry point is absent**
@@ -928,8 +928,8 @@ Document these sections in `deploy/compose/README.md` with complete commands and
 
 1. `linux/amd64` NAS prerequisites and a reserved host LAN address such as `NAS_LAN_IP=10.0.0.2`.
 2. A direct statement that `NAS_LAN_IP` is the NAS host's physical management-LAN address, not Docker's bridge, Tailscale's `100.x` address, or the public WAN address.
-3. Local DNS records for `enroll.dgx-forge.lan`, `agents.dgx-forge.lan`, and `registry.dgx-forge.lan` resolving to `10.0.0.2`.
-4. How to download `dgx-forge-images.env` and `dgx-forge-images.env.sha256` from the public GitHub Release, run `sha256sum -c dgx-forge-images.env.sha256`, and copy the complete three-reference set into the host-local `.env`. State explicitly that this image-only fragment does not replace the host's site-specific `.env`.
+3. Local DNS records for `enroll.vonk-forge.lan`, `agents.vonk-forge.lan`, and `registry.vonk-forge.lan` resolving to `10.0.0.2`.
+4. How to download `vonk-forge-images.env` and `vonk-forge-images.env.sha256` from the public GitHub Release, run `sha256sum -c vonk-forge-images.env.sha256`, and copy the complete three-reference set into the host-local `.env`. State explicitly that this image-only fragment does not replace the host's site-specific `.env`.
 5. The one-time GitHub package settings path for each package and the instruction `Set package visibility to Public`; state that public pulls need no NAS GitHub token.
 6. All required `.env` variables grouped as images, NAS paths/networking, hostnames, PKI, Tailscale, and Hermes.
 7. All secret files grouped by consumer, with content-format and ownership requirements; state that no secret value belongs in `.env`.
@@ -937,7 +937,7 @@ Document these sections in `deploy/compose/README.md` with complete commands and
 9. Exact preflight/start commands:
 
 ```bash
-cd /srv/dgx-forge/repository/deploy/compose
+cd /srv/vonk-forge/repository/deploy/compose
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml pull
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml config --quiet
 docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml up -d
@@ -951,9 +951,9 @@ docker compose --env-file .env -f compose.yaml -f compose.step-ca.yaml ps
 
 In `deploy/compose/.env.example`:
 
-- replace the two old package paths with the approved `dgx-forge-*` paths;
+- replace the two old package paths with the approved `vonk-forge-*` paths;
 - add `HERMES_AGENT_IMAGE` with a version-and-digest example;
-- remove the duplicate `DGX_MANAGEMENT_CIDRS` and `DGX_DIRECT_FABRIC_CIDRS` assignments; and
+- remove the duplicate `VONK_MANAGEMENT_CIDRS` and `VONK_DIRECT_FABRIC_CIDRS` assignments; and
 - keep `NAS_LAN_IP=10.0.0.2` as the host LAN example; and
 - mark `HERMES_UID=1100` and `HERMES_GID=1100` as fixed values for official public images rather than freely selectable runtime settings.
 
@@ -985,13 +985,13 @@ Run:
 ```bash
 docker buildx build --platform linux/amd64 --load \
   --file control/Dockerfile --target api \
-  --tag dgx-forge-api:release-dry-run .
+  --tag vonk-forge-api:release-dry-run .
 docker buildx build --platform linux/amd64 --load \
   --file control/Dockerfile --target worker \
-  --tag dgx-forge-worker:release-dry-run .
+  --tag vonk-forge-worker:release-dry-run .
 docker buildx build --platform linux/amd64 --load \
   --file deploy/compose/hermes-agent/Dockerfile --target managed \
-  --tag dgx-forge-hermes:release-dry-run deploy/compose/hermes-agent
+  --tag vonk-forge-hermes:release-dry-run deploy/compose/hermes-agent
 ```
 
 Expected: all three builds exit `0`; no registry login or push occurs.

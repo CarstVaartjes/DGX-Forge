@@ -11,9 +11,9 @@ def test_every_alert_has_runbook_and_nonempty_summary() -> None:
     document = json.loads((ROOT / "deploy/compose/prometheus/alerts.yaml").read_text())
     alerts = [rule for group in document["groups"] for rule in group["rules"]]
     assert {alert["alert"] for alert in alerts} >= {
-        "InferenceRoutesStuckInMaintenance", "SparkProbeStale", "RepeatedReconciliationFailure",
+        "InferenceRoutesStuckInMaintenance", "NodeProbeStale", "RepeatedReconciliationFailure",
         "ControlBackupStale", "ControlDatabaseUnavailable", "WorkerLeaseStarvation",
-        "SparkAgentStale", "SparkAgentCertificateExpiring",
+        "NodeAgentStale", "NodeAgentCertificateExpiring",
         "RepeatedAgentOperationFailures", "AgentRolloutPaused",
     }
     for alert in alerts:
@@ -35,7 +35,7 @@ def test_grafana_is_only_reachable_via_caddy_and_has_no_anonymous_admin() -> Non
 def test_dashboards_are_versioned_and_query_stable_metrics() -> None:
     for name in ("fleet", "jobs"):
         dashboard = json.loads((ROOT / f"deploy/compose/grafana/dashboards/{name}.json").read_text())
-        assert dashboard["uid"] == f"dgx-{name}"
+        assert dashboard["uid"] == f"vonk-{name}"
         assert dashboard["title"] and dashboard["panels"]
         assert all(panel.get("targets") for panel in dashboard["panels"])
 
@@ -50,18 +50,18 @@ def test_fleet_dashboard_covers_agent_lifecycle_and_standard_host_exporters() ->
         for target in panel["targets"]
     }
     assert {
-        "dgx_agent_state",
-        "dgx_agent_version_compatibility",
-        "dgx_agent_certificate_expiry_seconds",
-        "dgx_agent_operations",
-        "dgx_agent_operation_lease_age_seconds",
-        "dgx_agent_rollouts",
-        "dgx_agent_last_seen_age_seconds",
+        "vonk_agent_state",
+        "vonk_agent_version_compatibility",
+        "vonk_agent_certificate_expiry_seconds",
+        "vonk_agent_operations",
+        "vonk_agent_operation_lease_age_seconds",
+        "vonk_agent_rollouts",
+        "vonk_agent_last_seen_age_seconds",
         "node_memory_MemAvailable_bytes",
         "DCGM_FI_DEV_GPU_UTIL",
     } <= expressions
     assert not any(
-        expression.startswith(("dgx_agent_host_", "dgx_agent_gpu_"))
+        expression.startswith(("vonk_agent_host_", "vonk_agent_gpu_"))
         for expression in expressions
     )
 
@@ -74,10 +74,10 @@ def test_agent_alerts_use_bounded_operational_metrics() -> None:
         for rule in group["rules"]
     }
     expected_metrics = {
-        "SparkAgentStale": "dgx_agent_last_seen_age_seconds",
-        "SparkAgentCertificateExpiring": "dgx_agent_certificate_expiry_seconds",
-        "RepeatedAgentOperationFailures": "dgx_agent_operations",
-        "AgentRolloutPaused": "dgx_agent_rollouts",
+        "NodeAgentStale": "vonk_agent_last_seen_age_seconds",
+        "NodeAgentCertificateExpiring": "vonk_agent_certificate_expiry_seconds",
+        "RepeatedAgentOperationFailures": "vonk_agent_operations",
+        "AgentRolloutPaused": "vonk_agent_rollouts",
     }
     for alert_name, metric in expected_metrics.items():
         assert metric in alerts[alert_name]["expr"]
@@ -90,22 +90,22 @@ def test_stale_agent_alert_semantics_exclude_inactive_nodes_from_every_branch() 
         rule
         for group in document["groups"]
         for rule in group["rules"]
-        if rule["alert"] == "SparkAgentStale"
+        if rule["alert"] == "NodeAgentStale"
     )
     expression = alert["expr"]
     outer = re.fullmatch(
         r'\((?P<candidates>.+)\) and on\(node_id\) '
-        r'dgx_agent_state\{state="(?P<outer_state>[^"]+)"\} == 1',
+        r'vonk_agent_state\{state="(?P<outer_state>[^"]+)"\} == 1',
         expression,
     )
     assert outer is not None
     candidates = outer.group("candidates")
     old_age = re.search(
-        r"dgx_agent_last_seen_age_seconds > (?P<threshold>[0-9]+)", candidates
+        r"vonk_agent_last_seen_age_seconds > (?P<threshold>[0-9]+)", candidates
     )
     missing = re.search(
-        r'dgx_agent_state\{state="(?P<missing_state>[^"]+)"\} '
-        r"unless on\(node_id\) dgx_agent_last_seen_age_seconds",
+        r'vonk_agent_state\{state="(?P<missing_state>[^"]+)"\} '
+        r"unless on\(node_id\) vonk_agent_last_seen_age_seconds",
         candidates,
     )
     assert old_age is not None and missing is not None

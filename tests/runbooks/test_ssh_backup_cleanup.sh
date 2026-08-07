@@ -46,36 +46,36 @@ expect_reject() {
 
 : > "$fixture_root/sentinel"
 
-dotdot="$fixture_root/dgx-identity-backup.Ab1234"
+dotdot="$fixture_root/vonk-identity-backup.Ab1234"
 make_backup "$dotdot"
 expect_reject '/..' "$dotdot/.."
 
-dotdot_twice="$fixture_root/dgx-identity-backup.Bc2345"
+dotdot_twice="$fixture_root/vonk-identity-backup.Bc2345"
 make_backup "$dotdot_twice"
 expect_reject '/../..' "$dotdot_twice/../.."
 
-nested_parent="$fixture_root/dgx-identity-backup.Cd3456"
+nested_parent="$fixture_root/vonk-identity-backup.Cd3456"
 make_backup "$nested_parent"
 mkdir "$nested_parent/nested"
 expect_reject 'nested path' "$nested_parent/nested"
 
-symlink_target="$fixture_root/dgx-identity-backup.De4567"
+symlink_target="$fixture_root/vonk-identity-backup.De4567"
 make_backup "$symlink_target"
-ln -s "$symlink_target" "$fixture_root/dgx-identity-backup.Ef5678"
-expect_reject 'symlink' "$fixture_root/dgx-identity-backup.Ef5678"
+ln -s "$symlink_target" "$fixture_root/vonk-identity-backup.Ef5678"
+expect_reject 'symlink' "$fixture_root/vonk-identity-backup.Ef5678"
 
-wrong_basename="$fixture_root/not-dgx-identity-backup.Fg6789"
+wrong_basename="$fixture_root/not-vonk-identity-backup.Fg6789"
 make_backup "$wrong_basename"
 expect_reject 'wrong basename' "$wrong_basename"
 
-unexpected="$fixture_root/dgx-identity-backup.Gh7890"
+unexpected="$fixture_root/vonk-identity-backup.Gh7890"
 make_backup "$unexpected"
 : > "$unexpected/unexpected"
 expect_reject 'unexpected contents' "$unexpected"
 test -f "$unexpected/machine-id"
 test -f "$unexpected/unexpected"
 
-valid="$fixture_root/dgx-identity-backup.Hi8901"
+valid="$fixture_root/vonk-identity-backup.Hi8901"
 make_backup "$valid"
 remove_identity_backup "$valid" "$fixture_root"
 test ! -e "$valid"

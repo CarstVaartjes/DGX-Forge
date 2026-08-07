@@ -1,9 +1,9 @@
 from pathlib import Path
 
 import pytest
-from vonk_control.sparkrun_source import SparkRunParseError, parse_sparkrun_yaml
+from vonk_control.workload_run_source import WorkloadRunParseError, parse_workload_run_yaml
 
-FIXTURES = Path(__file__).parent / "fixtures/sparkrun"
+FIXTURES = Path(__file__).parent / "fixtures/workload_run"
 
 
 def fixture_bytes(name: str) -> bytes:
@@ -11,7 +11,7 @@ def fixture_bytes(name: str) -> bytes:
 
 
 def test_minimal_recipe_parses_without_executing_command() -> None:
-    source = parse_sparkrun_yaml(fixture_bytes("minimal-vllm.yaml"))
+    source = parse_workload_run_yaml(fixture_bytes("minimal-vllm.yaml"))
 
     assert source.model == "Qwen/Qwen3-1.7B"
     assert source.runtime == "vllm"
@@ -21,7 +21,7 @@ def test_minimal_recipe_parses_without_executing_command() -> None:
 
 
 def test_unknown_fields_remain_visible_and_every_leaf_is_addressable() -> None:
-    source = parse_sparkrun_yaml(fixture_bytes("full-sglang.yaml"))
+    source = parse_workload_run_yaml(fixture_bytes("full-sglang.yaml"))
 
     assert [(item.path, item.value_type) for item in source.unknown_fields] == [
         ("/future_field", "mapping")
@@ -41,8 +41,8 @@ def test_unknown_fields_remain_visible_and_every_leaf_is_addressable() -> None:
     ],
 )
 def test_unsafe_yaml_is_rejected(body: bytes) -> None:
-    with pytest.raises(SparkRunParseError):
-        parse_sparkrun_yaml(body)
+    with pytest.raises(WorkloadRunParseError):
+        parse_workload_run_yaml(body)
 
 
 def test_size_depth_and_secret_environment_are_rejected() -> None:
@@ -52,5 +52,5 @@ def test_size_depth_and_secret_environment_are_rejected() -> None:
         fixture_bytes("malicious.yaml"),
     ]
     for body in bodies:
-        with pytest.raises(SparkRunParseError):
-            parse_sparkrun_yaml(body)
+        with pytest.raises(WorkloadRunParseError):
+            parse_workload_run_yaml(body)

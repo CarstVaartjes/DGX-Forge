@@ -7,14 +7,14 @@ agent process
 
 ## Purpose
 
-Define a generic package and release system for every Spark-hosted workload,
+Define a generic package and release system for every GPU node-hosted workload,
 including Mia, DS4, model servers, model weights, tokenizers, auxiliary models,
 source trees, containers, native executables, and private Python environments.
 
 New workload families and new upstream workload releases must not require a
-DGX-Forge platform release. The NAS control plane stores and serves definitions,
+Vonk Forge platform release. The NAS control plane stores and serves definitions,
 resolved release locks, desired state, trust metadata, and operational state.
-Each Spark downloads, verifies, installs, caches, validates, activates, and
+Each GPU node downloads, verifies, installs, caches, validates, activates, and
 removes the software and model data needed by its assigned workloads.
 
 This is a standalone design input for the existing agent process. It does not
@@ -28,24 +28,24 @@ This design covers:
 - discovery of releases from external projects and artifact services;
 - immutable resolution of source, software, environment, and model inputs;
 - composition of a workload from reusable package components;
-- Spark-local fetching, installation, validation, activation, rollback, and
+- GPU node-local fetching, installation, validation, activation, rollback, and
   garbage collection;
 - manual and policy-controlled promotion;
 - supply-chain validation and provenance;
 - compatibility reporting for newly discovered upstream versions; and
-- the boundary between workload releases and DGX-Forge platform releases.
+- the boundary between workload releases and Vonk Forge platform releases.
 
-It does not replace DGX-Forge platform updates, operating-system management,
+It does not replace Vonk Forge platform updates, operating-system management,
 driver and firmware updates, node enrollment, or host bootstrap. Those remain
 separate platform capabilities.
 
 ## Existing context
 
 The existing model-profile designs already describe immutable model
-definitions, runtime adapters, model preparation, and Spark-local NVMe caches.
-The outbound-agent design already limits the Spark agent to a versioned set of
+definitions, runtime adapters, model preparation, and GPU node-local NVMe caches.
+The outbound-agent design already limits the GPU node agent to a versioned set of
 typed operations and permits content-addressed runtime adapters. The
-platform-update orchestration design separately updates the DGX-Forge control
+platform-update orchestration design separately updates the Vonk Forge control
 plane, agent, supervisor, and host tooling.
 
 Those pieces do not yet define one generic release plane spanning application
@@ -60,10 +60,10 @@ platform release plane and its trust boundary.
 
 - The NAS contains workload definitions and control metadata, not workload
   software or model payloads.
-- Sparks fetch payloads directly from immutable upstream locations or approved
+- GPU nodes fetch payloads directly from immutable upstream locations or approved
   external mirrors.
 - Mia, DS4, and model names are data in package definitions. They are never a
-  compiled catalog in DGX-Forge.
+  compiled catalog in Vonk Forge.
 - A package family tracks an independently released upstream project or
   component.
 - A package release is an immutable, fully resolved lock. Human-readable
@@ -79,11 +79,11 @@ platform release plane and its trust boundary.
 - Definitions cannot request arbitrary privileged installation scripts.
 - Manual promotion is the default. Policy-controlled automatic promotion is
   optional and uses the same trust, validation, canary, and audit gates.
-- A new upstream version or a new package family does not require a DGX-Forge
+- A new upstream version or a new package family does not require a Vonk Forge
   release when the existing package schema, fetch protocols, execution
   backends, and unprivileged adapter ABI can express it.
 - A new privileged operation, host dependency, source protocol, execution
-  backend, or incompatible package-schema feature remains a DGX-Forge platform
+  backend, or incompatible package-schema feature remains a Vonk Forge platform
   change.
 
 ## Alternatives considered
@@ -103,9 +103,9 @@ execution model. This option is rejected.
 
 ### Composable workload packages
 
-The selected design uses a small DGX-Forge workload schema with OCI-like
+The selected design uses a small Vonk Forge workload schema with OCI-like
 content descriptors, TUF-inspired update trust, reproducible environment locks,
-and Spark-local generations. It borrows established package-system properties
+and GPU node-local generations. It borrows established package-system properties
 without replacing the host operating system or requiring every workload to be
 containerized.
 
@@ -123,7 +123,7 @@ The authority boundaries are:
 - External upstreams and approved mirrors transport source, images, wheels,
   weights, and other payloads. Their names and tags are not trusted identities.
 - Digests and verified source revisions identify payload content.
-- Each Spark's local content-addressed store is the installation and execution
+- Each GPU node's local content-addressed store is the installation and execution
   source of truth for materialized workload bytes.
 
 The control API may serve bounded definition documents, release locks, trust
@@ -131,7 +131,7 @@ metadata, and bootstrap material. It must not proxy multi-gigabyte model data,
 act as the routine wheel or container registry, or make the NAS a workload
 artifact hot path.
 
-The OCI registry and TUF mechanisms used for DGX-Forge platform releases remain
+The OCI registry and TUF mechanisms used for Vonk Forge platform releases remain
 valid for that separate release plane. This design does not require workload
 payloads to be copied into a NAS-hosted registry.
 
@@ -207,7 +207,7 @@ release is never edited in place.
 A `Deployment` is mutable desired state that selects one exact package-release
 digest and adds operational configuration, including:
 
-- Spark placement or selector;
+- GPU node placement or selector;
 - replicas and rollout strategy;
 - resource limits and accelerator requirements;
 - ports and routing;
@@ -224,17 +224,17 @@ part of a package release.
 Deployments use a typed topology projection independent of package family
 names:
 
-- `single` runs one workload instance on one Spark;
+- `single` runs one workload instance on one GPU node;
 - `replicated` runs independent replicas and may select any compatible set; and
 - `gang` runs one logical workload across a placement group.  A gang declares
   world size, release-defined roles/ranks, required fabric/topology, and a
-  group resource envelope.  The control plane assigns certificate-bound Spark
+  group resource envelope.  The control plane assigns certificate-bound GPU node
   node IDs and rank identities; deployments cannot provide arbitrary peer
   addresses.
 
 The existing selector remains the generic node filter, while topology adds the
 placement group, role/rank, world size, and fabric requirements.  Preparation
-is parallel and resumable on every selected Spark.  Activation is a fenced
+is parallel and resumable on every selected GPU node.  Activation is a fenced
 barrier: every rank must report the same release/deployment/group digest and
 healthy readiness before any route is published.  A failed rank causes the
 whole gang activation to stop and compensates to the recorded prior healthy
@@ -246,7 +246,7 @@ graph, and agent operation payloads.  The agent receives only typed rank,
 world-size, group-fence, and fabric projections; it never discovers peers via
 SSH or a workload-provided command.
 
-### Resource envelopes, co-residency, and Spark inventory
+### Resource envelopes, co-residency, and GPU node inventory
 
 Every promoted release publishes a bounded, signed `resource_envelope` that is
 generic package data rather than a compiled model catalog.  It includes
@@ -263,22 +263,22 @@ accounts for shared digests once for storage only when unleased; memory is not
 deduplicated without evidence.  Installation reserves the complete temporary
 and staged-generation peak while retaining the active generation.  A preview
 must explain aggregate resident/activation/KV/transient/storage shortfalls and
-show the exact fit for one, two, or larger Spark groups before activation.
+show the exact fit for one, two, or larger GPU node groups before activation.
 
-Each Spark reports a bounded inventory for every release/content group:
+Each GPU node reports a bounded inventory for every release/content group:
 `downloading`, `staged`, `available`, `active`, `retained`, `leased`, or
 `removable`, with bytes complete/remaining, installed/reserved/reclaimable
 space, memory observations, and the last operation result.  Preparation may
 download and validate a new generation while the current one serves traffic;
 it does not stop the process, withdraw routes, or mutate the active pointer.
-Fetch and materialization run in a Spark-local, bounded operation scope: they
+Fetch and materialization run in a GPU node-local, bounded operation scope: they
 reserve disk before transfer, cap staging memory and temporary CPU/IO/network
 use, and do not claim serving accelerators.  This prevents a large download
 from silently exhausting the resources of an active workload; admission may
 defer or throttle preparation when the signed headroom contract cannot be
 met.
 
-Removal is explicit and digest-bound.  A preview identifies affected Sparks,
+Removal is explicit and digest-bound.  A preview identifies affected GPU nodes,
 reclaimable bytes, shared dependencies, active/retained generations, and
 leases.  Apply refuses active, leased, retained, staged, or dependency-
 reachable objects unless an explicit stop/switch/rollback transition has
@@ -331,7 +331,7 @@ Supported component classes include:
 - native userspace archives; and
 - configuration and workload adapter artifacts.
 
-Source locations are transport hints. A Spark may use any policy-approved
+Source locations are transport hints. A GPU node may use any policy-approved
 mirror that returns the exact expected content. Redirects, authentication,
 domain allowlists, private-address restrictions, declared size, and unpacked
 size are validated before content enters the local store.
@@ -343,7 +343,7 @@ immutable identities and content metadata.
 ## External release discovery
 
 The control plane runs discovery on the NAS because package definitions and
-promotion policy live there. Sparks never independently choose which upstream
+promotion policy live there. GPU nodes never independently choose which upstream
 version to install.
 
 Generic discovery providers initially cover standard release mechanisms such
@@ -376,7 +376,7 @@ identity.
 For each discovered candidate, the resolver attempts to produce the complete
 immutable lock. Successful resolution means that all components and dependency
 constraints have immutable identities, the required evidence is available,
-and at least one permitted Spark class satisfies the compatibility constraints.
+and at least one permitted GPU node class satisfies the compatibility constraints.
 
 Resolution on the NAS is metadata-only. The resolver may inspect release
 indexes, manifests, checksums, signatures, and provenance, but it does not
@@ -392,7 +392,7 @@ family recipe can resolve it. If an upstream release changes file names,
 dependency metadata, launch arguments, or artifact topology, the candidate is
 reported as unsupported with a structured reason. An administrator may update
 the family definition on the NAS and resolve it again. That definition update
-does not require a DGX-Forge platform release.
+does not require a Vonk Forge platform release.
 
 If the changed release needs a capability that the current agent cannot safely
 express, it remains incompatible until the platform gains that capability.
@@ -416,7 +416,7 @@ discovered
 Promotion through the admin CLI or web application produces the same reviewed,
 audited Git desired-state change as other administrative mutations. The
 promoted release lock is published with the required trust metadata before any
-Spark is instructed to install it.
+GPU node is instructed to install it.
 
 A package family may opt into policy-controlled automatic promotion. Automatic
 promotion:
@@ -431,9 +431,9 @@ promotion:
 Automatic discovery is always enabled according to family policy. Automatic
 execution of newly discovered code is not.
 
-## Spark package store
+## GPU node package store
 
-Every Spark maintains a package store on local NVMe with separate logical
+Every GPU node maintains a package store on local NVMe with separate logical
 areas for:
 
 - immutable downloaded blobs;
@@ -465,7 +465,7 @@ Each package release references a private immutable Python environment. The
 environment identity is derived from its interpreter, platform, complete
 dependency lock, source inputs, and build recipe.
 
-The Spark:
+The GPU node:
 
 1. downloads the exact locked wheels and verifies their hashes;
 2. performs any permitted source-to-wheel derivation in an unprivileged,
@@ -476,7 +476,7 @@ The Spark:
 6. atomically publishes the immutable environment.
 
 Dependency resolution does not occur against the live Python index during
-installation. Lock input determines the chosen distributions before the Spark
+installation. Lock input determines the chosen distributions before the GPU node
 builds the environment.
 
 Two releases with the same environment identity may reuse the same immutable
@@ -499,7 +499,7 @@ behavior within those boundaries.
 
 The adapter is a content-addressed package component. It may change with any
 package release and therefore does not make Mia, DS4, or another solution part
-of the DGX-Forge agent binary. It runs as the unprivileged workload identity,
+of the Vonk Forge agent binary. It runs as the unprivileged workload identity,
 uses a versioned structured input/output contract, and receives only the paths
 and capabilities declared for its release.
 
@@ -517,9 +517,9 @@ driver changes, unrestricted host paths, or undeclared devices. A workload that
 needs those facilities declares a platform compatibility requirement instead
 of installing them itself.
 
-## Spark installation state machine
+## GPU node installation state machine
 
-For an exact desired package-release digest, a Spark performs:
+For an exact desired package-release digest, a GPU node performs:
 
 ```text
 preflight
@@ -551,8 +551,8 @@ reported state cannot diverge.
 
 ## Reconciliation and reporting
 
-The control plane sends the Spark an exact desired package-release digest. The
-Spark reports:
+The control plane sends the GPU node an exact desired package-release digest. The
+GPU node reports:
 
 - desired and actual release digests;
 - lifecycle phase and attempt;
@@ -578,13 +578,13 @@ Some upstream models and packages require authentication or license acceptance.
 Definitions contain credential references and required policy identifiers, not
 tokens or private credentials.
 
-The Spark obtains narrowly scoped download credentials through the existing
+The GPU node obtains narrowly scoped download credentials through the existing
 secret-delivery boundary. Credentials are never written into package locks,
 download URLs, process arguments, provenance, or shared cache metadata.
 
 Package policy may require recorded license acceptance before promotion or
 installation. A release that cannot be legally or technically fetched by an
-assigned Spark reports a policy or credential error; it does not fall back to
+assigned GPU node reports a policy or credential error; it does not fall back to
 an unpinned public alternative.
 
 ## Garbage collection and repair
@@ -627,14 +627,14 @@ At minimum, package operations distinguish:
 - rollback failure.
 
 Failures include the package family, upstream version, release digest when one
-exists, component identity, Spark identity, operation fence, and a redacted
+exists, component identity, GPU node identity, operation fence, and a redacted
 diagnostic summary.
 
 ## Platform release boundary
 
 The workload and platform release planes are independent:
 
-| Change | Workload definition/release | DGX-Forge platform release |
+| Change | Workload definition/release | Vonk Forge platform release |
 |---|---:|---:|
 | New Mia, DS4, model, or other package family using existing capabilities | Yes | No |
 | New upstream release resolved by an existing family | Yes | No |
@@ -670,13 +670,13 @@ package terms and reviewed against the platform release boundary.
 
 Automated and end-to-end verification must prove that:
 
-- a package family with a name unknown to the installed DGX-Forge version can
+- a package family with a name unknown to the installed Vonk Forge version can
   be added through NAS definitions;
 - a new upstream Mia or DS4 version unknown at platform build time is
   discovered, resolved, installed, validated, and activated;
 - discovery records unsupported versions and their reasons;
 - source, OCI images, wheels, models, tokenizers, and auxiliary assets are
-  fetched by the Spark rather than through the NAS;
+  fetched by the GPU node rather than through the NAS;
 - every deployed component and dependency is pinned to an immutable identity;
 - a private Python environment is built from a complete lock and never mutated
   in place;
@@ -688,13 +688,13 @@ Automated and end-to-end verification must prove that:
   activation with a structured result;
 - a new release can be downloaded, verified, and staged while the current
   generation continues serving traffic, with no route withdrawal or restart;
-- each Spark reports staged/available/active/retained/removable inventory,
+- each GPU node reports staged/available/active/retained/removable inventory,
   free/reserved/reclaimable storage, and resumable byte progress;
 - removal preview/apply refuses active, leased, retained, or dependency-
   reachable content and proves that a safe removal does not interrupt the
   running generation;
 - placement explains aggregate co-resident memory, GPU-memory, KV-cache,
-  transient-install, storage, and multi-Spark topology requirements for one,
+  transient-install, storage, and multi-GPU node topology requirements for one,
   two, and sixteen-node fixtures;
 - preparation and validation failure preserve the active generation;
 - activation is atomic across the complete dependency graph;
@@ -708,13 +708,13 @@ Automated and end-to-end verification must prove that:
 - garbage collection respects active, retained, staged, and leased content;
 - credentials and secrets do not appear in definitions, locks, logs, or store
   metadata; and
-- the complete flow requires neither SSH nor a DGX-Forge release for ordinary
+- the complete flow requires neither SSH nor a Vonk Forge release for ordinary
   new package families and upstream versions.
 
-The decisive acceptance test starts with a running DGX-Forge version, creates a
+The decisive acceptance test starts with a running Vonk Forge version, creates a
 new synthetic package family and upstream release after that version was built,
 and deploys it successfully using only NAS definition changes and the existing
-generic Spark package capabilities.
+generic GPU node package capabilities.
 
 ## Operational risks and mitigations
 
@@ -735,18 +735,18 @@ generic Spark package capabilities.
 - **Automatic upstream compromise:** default to manual promotion and require
   trust, policy, validation, and canary gates for automation.
 - **NAS bandwidth and capacity pressure:** serve definitions only and fetch
-  payloads directly on Sparks.
+  payloads directly on GPU nodes.
 
 ## Relationship to existing plans
 
 This specification is an input to the existing design and agent process. It
 does not replace or rewrite `2026-08-03-platform-update-orchestration.md`.
 
-That plan continues to own DGX-Forge control, agent, supervisor, tooling,
+That plan continues to own Vonk Forge control, agent, supervisor, tooling,
 protocol, and host-capability updates. Future planning should add or reference a
 separate workload-package implementation path based on this specification and
 should remove any assumption that Mia, DS4, or a fixed model catalog must be
-compiled into a DGX-Forge release.
+compiled into a Vonk Forge release.
 
 Existing reconciliation, agent runtime, model definition, and observability
 plans should consume the generic package identity and lifecycle rather than
@@ -755,13 +755,13 @@ invent parallel per-workload installation flows.
 Implementation is decomposed without renumbering the existing roadmap:
 
 - W1–W4: `2026-08-05-generalized-workload-contracts-and-trust.md`;
-- W5–W10: `2026-08-05-spark-workload-package-engine.md`;
+- W5–W10: `2026-08-05-node-workload-package-engine.md`;
 - W11–W16: `2026-08-05-workload-package-control-plane.md`;
 - W17–W20: `2026-08-05-workload-package-migration-acceptance.md`; and
 - ordering/conflict gates: `2026-08-05-generalized-workload-package-roadmap.md`.
 
 The GitHub container-release baseline landed in `e9f7695` and remains authoritative for building
-and publishing the three DGX-Forge NAS service images and for pull-only NAS
+and publishing the three Vonk Forge NAS service images and for pull-only NAS
 Compose deployment. The workload-artifact builder is a separate generic
 workflow for workload payloads; it produces digests, SBOMs, and provenance but
 has no workload TUF key and cannot promote desired state.

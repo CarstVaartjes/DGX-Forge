@@ -17,7 +17,7 @@ HTTPS, never plaintext HTTP, on port 443.
 Before use, define all three Services in the Tailscale admin console, apply a
 reviewed version of `grants.example.hujson`, and replace the GitHub-login
 placeholder with the exact identity shown by Tailscale. Create an OAuth client
-with only `auth_keys` write scope for `tag:dgx-gateway`. The OAuth client is for
+with only `auth_keys` write scope for `tag:vonk-gateway`. The OAuth client is for
 unattended gateway enrollment; it is not the operator's GitHub credential.
 
 See [the gateway runbook](../../../docs/runbooks/tailscale.md) for setup,

@@ -1,4 +1,4 @@
-"""Control-API command line adapter for routine Spark administration."""
+"""Control-API command line adapter for routine GPU node administration."""
 
 from __future__ import annotations
 

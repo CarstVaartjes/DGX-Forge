@@ -1,8 +1,8 @@
-# Vonk Rust Spark Agent and Debian Package Implementation Plan
+# Vonk Rust GPU node Agent and Debian Package Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace the production Python Spark service, privileged helper, and stable supervisor with memory-safe Rust binaries delivered as a signed ARM64 Debian package while retaining protocol and failure-behavior parity.
+**Goal:** Replace the production Python GPU node service, privileged helper, and stable supervisor with memory-safe Rust binaries delivered as a signed ARM64 Debian package while retaining protocol and failure-behavior parity.
 
 **Architecture:** A Rust workspace provides an unprivileged outbound agent, a narrowly privileged Unix-socket helper, and a stable A/B supervisor. Canonical JSON fixtures make the existing Python implementation the migration oracle until every controller operation and failure case passes against Rust. The agent initiates mTLS long polling to the controller, persists fences and operation receipts locally, and delegates only an allow-listed set of host mutations to the helper.
 
@@ -45,13 +45,13 @@
 - Create: `rust/crates/vonk-agent/src/pair.rs`
 - Create: `rust/crates/vonk-agent/tests/pairing.rs`
 - Create: `control/tests/test_rust_agent_pairing.py`
-- Modify: `control/src/dgx_control/enrollment.py`
-- Modify: `control/src/dgx_control/agent_api.py`
+- Modify: `control/src/vonk_control/enrollment.py`
+- Modify: `control/src/vonk_control/agent_api.py`
 
 - [x] Write `pairing.rs` first with a fake HTTPS controller. Assert an expired or reused pairing token fails closed, the CA is pinned before credentials are written, file modes are `0600`, and a successful response creates an agent key/certificate bound to the reported node identity.
 - [x] Run `cargo test -p vonk-agent pairing`; confirm failure because the crate is absent.
 - [x] Implement strict config loading from `/etc/vonk-forge/agent.toml` with controller URL, CA fingerprint, data directory, poll timings, and no secret values accepted from command-line flags.
-- [x] Implement `vonk-agent pair --controller ... --token-stdin --ca-sha256 ...`; generate the private key on the Spark, submit the CSR and hardware identity, verify the pinned CA, and atomically persist credentials.
+- [x] Implement `vonk-agent pair --controller ... --token-stdin --ca-sha256 ...`; generate the private key on the GPU node, submit the CSR and hardware identity, verify the pinned CA, and atomically persist credentials.
 - [x] Add controller compatibility tests that exercise both the existing Python client and the Rust pairing request against the same enrollment endpoint.
 - [x] Ensure audit entries record token identifier, node identifier, certificate serial, outcome, and reason without recording the token or private material.
 - [x] Run pairing tests in Rust and Python; confirm pass.
@@ -169,10 +169,10 @@
 
 **Files:**
 - Create: `tests/acceptance/test_rust_agent_parity.py`
-- Create: `docs/operations/install-spark-agent.md`
+- Create: `docs/operations/install-node-agent.md`
 - Create: `docs/operations/migrate-python-agent.md`
 - Modify: `compose.yaml`
-- Modify: `control/src/dgx_control/agent_jobs.py`
+- Modify: `control/src/vonk_control/agent_jobs.py`
 - Modify: `README.md`
 - Modify: `agent/pyproject.toml`
 
@@ -180,9 +180,9 @@
 - [x] Run capability negotiation with the Rust marker absent; confirm new enrollment and legacy-certificate cutover fail explicitly.
 - [x] Add controller capability negotiation so Rust is required for new pairings while enrolled Python agents receive a visible migration-required state and cannot be assigned unadvertised operation versions.
 - [x] Test the in-place migration boundaries: installable `.deb`, fresh migration certificate rather than private-key copying, terminal receipt-only import, atomic Rust identity verification/old-certificate retirement, and operator rollback before the first Rust claim.
-- [ ] Remove Python from production packaging and service instructions only after all parity fixtures and a 24-hour physical Spark soak pass. Preserve the Python implementation under test-only migration-oracle tooling for one release.
+- [ ] Remove Python from production packaging and service instructions only after all parity fixtures and a 24-hour physical GPU node soak pass. Preserve the Python implementation under test-only migration-oracle tooling for one release.
 - [ ] Run all Rust, agent protocol, controller, security, and physical acceptance suites. Attach exact versions and logs to the release evidence.
-- [ ] Commit: `feat(agent): make Rust the production Spark service`
+- [ ] Commit: `feat(agent): make Rust the production GPU node service`
 
 ## Verification
 
@@ -200,4 +200,4 @@ scripts/verify-agent-deb dist/vonk-forge-agent_*_arm64.deb
 git diff --check
 ```
 
-The plan is complete only after one single-node and one multi-node physical Spark deployment prove pairing, restart recovery, install, start, stop, agent upgrade, failed-upgrade rollback, and controller route withdrawal under the Rust service.
+The plan is complete only after one single-node and one multi-node physical GPU node deployment prove pairing, restart recovery, install, start, stop, agent upgrade, failed-upgrade rollback, and controller route withdrawal under the Rust service.

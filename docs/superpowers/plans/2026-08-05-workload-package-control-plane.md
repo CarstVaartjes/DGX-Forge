@@ -12,7 +12,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Discover, resolve, validate, promote, plan, and reconcile generic workload packages from the NAS through the outbound Spark agent, with equivalent API, CLI, and web administration.
+**Goal:** Discover, resolve, validate, promote, plan, and reconcile generic workload packages from the NAS through the outbound GPU node agent, with equivalent API, CLI, and web administration.
 
 **Architecture:** Git remains desired-state authority while PostgreSQL records candidates, resolver/validation results, rollout attempts, progress, and observations. The control plane resolves metadata into immutable locks, publishes authorized locks through workload TUF, and sends only exact package/deployment digests through the existing fenced agent queue. API, CLI, and web are thin views over the same services and canonical plan bytes.
 
@@ -27,14 +27,14 @@
 - Manual promotion is the default; automation uses the same Git, trust, validation, canary, audit, and rollback gates.
 - Reconciliation sends an exact promoted release digest and deployment digest and never an adapter name, command, path, floating version, or mutable tag.
 - No production workload operation falls back to SSH.
-- Existing platform `agent.update` remains exclusively for DGX-Forge agent/platform releases.
+- Existing platform `agent.update` remains exclusively for Vonk Forge agent/platform releases.
 
 ---
 
 ### Task W11: Operational package state and migration
 
 **Files:**
-- Modify: `control/src/dgx_control/models.py`
+- Modify: `control/src/vonk_control/models.py`
 - Create: `control/migrations/versions/0013_workload_packages.py`
 - Test: `control/tests/test_workload_package_migration.py`
 - Modify: `control/tests/test_migrations.py`
@@ -85,17 +85,17 @@ Expected: PASS on SQLite contract tests and configured PostgreSQL migration test
 - [ ] **Step 5: Commit W11**
 
 ```bash
-git add control/src/dgx_control/models.py control/migrations/versions/0013_workload_packages.py control/tests/test_workload_package_migration.py control/tests/test_migrations.py
+git add control/src/vonk_control/models.py control/migrations/versions/0013_workload_packages.py control/tests/test_workload_package_migration.py control/tests/test_migrations.py
 git commit -m "feat: persist workload package operations"
 ```
 
 ### Task W12: Generic discovery and deterministic resolution
 
 **Files:**
-- Create: `control/src/dgx_control/package_discovery.py`
-- Create: `control/src/dgx_control/package_resolution.py`
-- Create: `control/src/dgx_control/package_providers.py`
-- Modify: `control/src/dgx_control/worker.py`
+- Create: `control/src/vonk_control/package_discovery.py`
+- Create: `control/src/vonk_control/package_resolution.py`
+- Create: `control/src/vonk_control/package_providers.py`
+- Modify: `control/src/vonk_control/worker.py`
 - Test: `control/tests/test_package_discovery.py`
 - Test: `control/tests/test_package_resolution.py`
 - Test: `control/tests/test_package_providers.py`
@@ -143,25 +143,25 @@ Expected: PASS and tests assert no provider response body matching a declared pa
 - [ ] **Step 5: Commit W12**
 
 ```bash
-git add control/src/dgx_control/package_discovery.py control/src/dgx_control/package_resolution.py control/src/dgx_control/package_providers.py control/src/dgx_control/worker.py control/tests/test_package_discovery.py control/tests/test_package_resolution.py control/tests/test_package_providers.py
+git add control/src/vonk_control/package_discovery.py control/src/vonk_control/package_resolution.py control/src/vonk_control/package_providers.py control/src/vonk_control/worker.py control/tests/test_package_discovery.py control/tests/test_package_resolution.py control/tests/test_package_providers.py
 git commit -m "feat: discover and resolve workload packages"
 ```
 
 ### Task W13: Validation, compatibility, and promotion controller
 
 **Files:**
-- Create: `control/src/dgx_control/package_validation.py`
-- Create: `control/src/dgx_control/package_compatibility.py`
-- Create: `control/src/dgx_control/package_publication.py`
-- Modify: `control/src/dgx_control/proposals.py`
-- Modify: `control/src/dgx_control/jobs.py`
+- Create: `control/src/vonk_control/package_validation.py`
+- Create: `control/src/vonk_control/package_compatibility.py`
+- Create: `control/src/vonk_control/package_publication.py`
+- Modify: `control/src/vonk_control/proposals.py`
+- Modify: `control/src/vonk_control/jobs.py`
 - Test: `control/tests/test_package_publication.py`
 - Test: `control/tests/test_package_validation.py`
 - Test: `control/tests/test_package_compatibility.py`
 
 **Interfaces:**
 - Produces `CompatibilityEvaluator.evaluate(lock, fleet) -> CompatibilityReport`, `ValidationController.plan(candidate_id) -> ValidationPlan`, `advance(run_id) -> ValidationState`, `PackagePublicationService.preview(candidate_id, commit) -> PublicationPreview`, and `promote(preview_digest, actor) -> TrustedWorkloadTarget`.
-- Validation may schedule package prepare/verify on an explicit disposable or canary Spark but cannot activate fleet desired state.
+- Validation may schedule package prepare/verify on an explicit disposable or canary GPU node but cannot activate fleet desired state.
 
 - [ ] **Step 1: Write RED policy and validation tests**
 
@@ -225,17 +225,17 @@ Expected: PASS; promotion rejects stale or incomplete validation evidence.
 - [ ] **Step 5: Commit W13**
 
 ```bash
-git add control/src/dgx_control/package_validation.py control/src/dgx_control/package_compatibility.py control/src/dgx_control/package_publication.py control/src/dgx_control/proposals.py control/src/dgx_control/jobs.py control/tests/test_package_validation.py control/tests/test_package_compatibility.py control/tests/test_package_publication.py
+git add control/src/vonk_control/package_validation.py control/src/vonk_control/package_compatibility.py control/src/vonk_control/package_publication.py control/src/vonk_control/proposals.py control/src/vonk_control/jobs.py control/tests/test_package_validation.py control/tests/test_package_compatibility.py control/tests/test_package_publication.py
 git commit -m "feat: validate workload package candidates"
 ```
 
 ### Task W14: Package-aware desired-state reconciliation and rollout
 
 **Files:**
-- Modify: `control/src/dgx_control/desired_state.py`
-- Modify: `control/src/dgx_control/agent_reconciliation.py`
-- Create: `control/src/dgx_control/package_rollouts.py`
-- Modify: `control/src/dgx_control/orchestration.py`
+- Modify: `control/src/vonk_control/desired_state.py`
+- Modify: `control/src/vonk_control/agent_reconciliation.py`
+- Create: `control/src/vonk_control/package_rollouts.py`
+- Modify: `control/src/vonk_control/orchestration.py`
 - Test: `control/tests/test_package_desired_state.py`
 - Test: `control/tests/test_package_rollouts.py`
 - Modify: `control/tests/test_agent_reconciliation.py`
@@ -258,7 +258,7 @@ assert "agent.update" not in {node.kind for node in plan.operation_graph.nodes}
 
 Run: `uv run --project control --frozen pytest control/tests/test_package_desired_state.py control/tests/test_package_rollouts.py control/tests/test_agent_reconciliation.py -v`
 
-Expected: FAIL because desired state still requires `spark-runtime-v1` and fixed release/workload requests.
+Expected: FAIL because desired state still requires `node-runtime-v1` and fixed release/workload requests.
 
 - [ ] **Step 3: Implement digest-driven package graphs**
 
@@ -283,29 +283,29 @@ Expected: PASS; legacy fixed-plan behavior is available only through an explicit
 - [ ] **Step 5: Commit W14**
 
 ```bash
-git add control/src/dgx_control/desired_state.py control/src/dgx_control/agent_reconciliation.py control/src/dgx_control/package_rollouts.py control/src/dgx_control/orchestration.py control/tests/test_package_desired_state.py control/tests/test_package_rollouts.py control/tests/test_agent_reconciliation.py
+git add control/src/vonk_control/desired_state.py control/src/vonk_control/agent_reconciliation.py control/src/vonk_control/package_rollouts.py control/src/vonk_control/orchestration.py control/tests/test_package_desired_state.py control/tests/test_package_rollouts.py control/tests/test_agent_reconciliation.py
 git commit -m "feat: reconcile generic workload packages"
 ```
 
 ### Task W15: Package API and CLI equivalence
 
 **Files:**
-- Modify: `control/src/dgx_control/api.py`
-- Create: `control/src/dgx_control/package_api.py`
-- Modify: `src/spark_profiles/control_client.py`
-- Modify: `src/spark_profiles/cli.py`
+- Modify: `control/src/vonk_control/api.py`
+- Create: `control/src/vonk_control/package_api.py`
+- Modify: `src/cluster_profiles/control_client.py`
+- Modify: `src/cluster_profiles/cli.py`
 - Modify: `scripts/generate-control-clients`
 - Test: `control/tests/test_package_api.py`
-- Test: `tests/spark_profiles/test_package_cli.py`
+- Test: `tests/cluster_profiles/test_package_cli.py`
 - Modify: `tests/control/test_openapi_clients.py`
 
 **Interfaces:**
-- API resources cover families, candidates, resolutions, validation, promotion preview/apply, deployments, rollouts, rollback, repair, GC preview/apply, per-Spark package inventory/removal, and bounded progress.  Deployment projections expose the signed resource envelope and typed topology (`single`, `replicated`, or `gang`, including placement group, role/rank, world size, and fabric requirements).
-- CLI surface is `sparkctl admin packages ...` and `sparkctl admin deployments ...`; every apply command consumes an exact preview/plan digest.
+- API resources cover families, candidates, resolutions, validation, promotion preview/apply, deployments, rollouts, rollback, repair, GC preview/apply, per-node package inventory/removal, and bounded progress.  Deployment projections expose the signed resource envelope and typed topology (`single`, `replicated`, or `gang`, including placement group, role/rank, world size, and fabric requirements).
+- CLI surface is `vonkctl admin packages ...` and `vonkctl admin deployments ...`; every apply command consumes an exact preview/plan digest.
 
 - [ ] **Step 1: Write RED authorization, idempotency, and equivalence tests**
 
-Cover viewer/operator/admin roles, manual promotion admin-only, operator rollout of already approved state, stale preview/commit, duplicate request IDs, bounded pagination/errors, redaction, API/CLI canonical digest equality, and absence of payload proxy/upload endpoints.  Include resource-envelope admission (resident/auxiliary/activation/workspace/KV peak, staging/storage headroom, declared-vs-measured evidence), topology validation (gang rank/world-size/fabric and barrier fencing), and remove-vs-deactivate semantics.  A remove preview must show affected Sparks, active/leased blockers, shared-object reference counts, and reclaimable bytes; applying it cannot delete bytes still reachable from another deployment.
+Cover viewer/operator/admin roles, manual promotion admin-only, operator rollout of already approved state, stale preview/commit, duplicate request IDs, bounded pagination/errors, redaction, API/CLI canonical digest equality, and absence of payload proxy/upload endpoints.  Include resource-envelope admission (resident/auxiliary/activation/workspace/KV peak, staging/storage headroom, declared-vs-measured evidence), topology validation (gang rank/world-size/fabric and barrier fencing), and remove-vs-deactivate semantics.  A remove preview must show affected GPU nodes, active/leased blockers, shared-object reference counts, and reclaimable bytes; applying it cannot delete bytes still reachable from another deployment.
 
 ```python
 preview = client.preview_package_promotion(candidate_id)
@@ -315,7 +315,7 @@ assert result.release_digest == preview.release_digest
 
 - [ ] **Step 2: Run the RED tests**
 
-Run: `uv run --project control --frozen pytest control/tests/test_package_api.py -v && uv run --frozen pytest tests/spark_profiles/test_package_cli.py tests/control/test_openapi_clients.py -v`
+Run: `uv run --project control --frozen pytest control/tests/test_package_api.py -v && uv run --frozen pytest tests/cluster_profiles/test_package_cli.py tests/control/test_openapi_clients.py -v`
 
 Expected: FAIL because package routes, commands, and generated models are absent.
 
@@ -330,14 +330,14 @@ def promote_package(candidate_id: str, request: PackagePromotionRequest, princip
 
 - [ ] **Step 4: Verify generated drift and CLI/API parity**
 
-Run: `uv run --project control --frozen pytest control/tests/test_package_api.py -q && uv run --frozen pytest tests/spark_profiles/test_package_cli.py tests/control/test_openapi_clients.py -q && git add control/openapi.json src/spark_profiles/generated_control control/web/src/api/generated.d.ts && scripts/generate-control-clients && git diff --exit-code -- control/openapi.json src/spark_profiles/generated_control control/web/src/api/generated.d.ts`
+Run: `uv run --project control --frozen pytest control/tests/test_package_api.py -q && uv run --frozen pytest tests/cluster_profiles/test_package_cli.py tests/control/test_openapi_clients.py -q && git add control/openapi.json src/cluster_profiles/generated_control control/web/src/api/generated.d.ts && scripts/generate-control-clients && git diff --exit-code -- control/openapi.json src/cluster_profiles/generated_control control/web/src/api/generated.d.ts`
 
 Expected: PASS after committing the freshly generated artifacts; a second generator run produces no diff.
 
 - [ ] **Step 5: Commit W15**
 
 ```bash
-git add control/src/dgx_control/api.py control/src/dgx_control/package_api.py src/spark_profiles/control_client.py src/spark_profiles/cli.py scripts/generate-control-clients control/openapi.json src/spark_profiles/generated_control control/web/src/api/generated.d.ts control/tests/test_package_api.py tests/spark_profiles/test_package_cli.py tests/control/test_openapi_clients.py
+git add control/src/vonk_control/api.py control/src/vonk_control/package_api.py src/cluster_profiles/control_client.py src/cluster_profiles/cli.py scripts/generate-control-clients control/openapi.json src/cluster_profiles/generated_control control/web/src/api/generated.d.ts control/tests/test_package_api.py tests/cluster_profiles/test_package_cli.py tests/control/test_openapi_clients.py
 git commit -m "feat: administer workload packages by API and CLI"
 ```
 
@@ -349,8 +349,8 @@ git commit -m "feat: administer workload packages by API and CLI"
 - Create: `control/web/src/pages/deployments.tsx`
 - Modify: `control/web/src/app.tsx`
 - Modify: `control/web/src/api/client.ts`
-- Modify: `control/src/dgx_control/dashboard.py`
-- Modify: `control/src/dgx_control/metrics.py`
+- Modify: `control/src/vonk_control/dashboard.py`
+- Modify: `control/src/vonk_control/metrics.py`
 - Modify: `deploy/compose/grafana/dashboards/fleet.json`
 - Test: `control/web/src/pages/packages.test.tsx`
 - Test: `control/web/src/pages/deployments.test.tsx`
@@ -358,12 +358,12 @@ git commit -m "feat: administer workload packages by API and CLI"
 
 **Interfaces:**
 - Web shows family/channel, upstream candidate, structured unsupported reason, immutable lock/components/dependencies/provenance, compatibility, signed resource envelope, topology and co-residency fit, validation, promotion diff, rollout/canary/progress, retained rollback generation, and repair/GC previews.
-- Web exposes a per-Spark package inventory: downloaded/verified/staged/active/retained/deletable state, free/used/reserved storage and memory, installation headroom, leases, and a safe remove/deactivate flow.  Removing a deployment is distinct from deleting shared cache objects; cache deletion remains an explicit GC preview/apply operation.
+- Web exposes a per-node package inventory: downloaded/verified/staged/active/retained/deletable state, free/used/reserved storage and memory, installation headroom, leases, and a safe remove/deactivate flow.  Removing a deployment is distinct from deleting shared cache objects; cache deletion remains an explicit GC preview/apply operation.
 - Metrics use bounded labels only: state/reason/backend/provider/phase, never family/model/component/digest/source URL or credential.
 
 - [ ] **Step 1: Write RED UI and cardinality tests**
 
-Test manual promotion confirmation with exact digest, unsupported candidate visibility, aggregate download/storage plan, resource-envelope and co-residency fit, gang rank/barrier status, canary failure stop, rollback selection, offline pending node, safe progress rendering, per-Spark inventory and remove confirmation, role restrictions, secret/source redaction, keyboard/accessibility checks, and metric label bounds.
+Test manual promotion confirmation with exact digest, unsupported candidate visibility, aggregate download/storage plan, resource-envelope and co-residency fit, gang rank/barrier status, canary failure stop, rollback selection, offline pending node, safe progress rendering, per-node inventory and remove confirmation, role restrictions, secret/source redaction, keyboard/accessibility checks, and metric label bounds.
 
 ```tsx
 expect(screen.getByText("Awaiting administrator approval")).toBeVisible()
@@ -378,7 +378,7 @@ Expected: FAIL because package pages/projections/metrics are absent.
 
 - [ ] **Step 3: Implement the web workflow and bounded projections**
 
-Use only generated TypeScript API types and the shared client. Require preview digest confirmation for promote/rollout/rollback/repair/GC, poll bounded job progress, show exact affected Sparks and previous generation, and link audit/job evidence. Add fleet summary counts and alerts for stuck acquisition, trust failure, canary failure, capacity rejection, and rollback failure.
+Use only generated TypeScript API types and the shared client. Require preview digest confirmation for promote/rollout/rollback/repair/GC, poll bounded job progress, show exact affected GPU nodes and previous generation, and link audit/job evidence. Add fleet summary counts and alerts for stuck acquisition, trust failure, canary failure, capacity rejection, and rollback failure.
 
 ```tsx
 <PackagePromotionDialog candidate={candidate} preview={preview} onConfirm={(digest) => api.promote(candidate.id, digest)} />
@@ -393,6 +393,6 @@ Expected: PASS with no unbounded or secret-bearing metrics/log/UI fields.
 - [ ] **Step 5: Commit W16**
 
 ```bash
-git add control/web/src/pages/packages.tsx control/web/src/pages/package-candidate.tsx control/web/src/pages/deployments.tsx control/web/src/app.tsx control/web/src/api/client.ts control/src/dgx_control/dashboard.py control/src/dgx_control/metrics.py deploy/compose/grafana/dashboards/fleet.json control/web/src/pages/packages.test.tsx control/web/src/pages/deployments.test.tsx control/tests/test_package_metrics.py
+git add control/web/src/pages/packages.tsx control/web/src/pages/package-candidate.tsx control/web/src/pages/deployments.tsx control/web/src/app.tsx control/web/src/api/client.ts control/src/vonk_control/dashboard.py control/src/vonk_control/metrics.py deploy/compose/grafana/dashboards/fleet.json control/web/src/pages/packages.test.tsx control/web/src/pages/deployments.test.tsx control/tests/test_package_metrics.py
 git commit -m "feat: operate workload packages from the web"
 ```

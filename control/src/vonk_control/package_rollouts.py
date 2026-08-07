@@ -122,7 +122,7 @@ def package_operation_payload(
         "release_digest": _raw_digest(deployment.release_digest),
         "deployment_digest": _package_digest(deployment),
         # Carry the exact Git-authored deployment projection through the
-        # fenced operation.  The Spark validates the digest/identity again
+        # fenced operation.  The GPU node validates the digest/identity again
         # before constructing a backend invocation; it must not synthesize
         # execution policy from a compiled model catalog.
         "deployment": json.loads(deployment.canonical_bytes),
@@ -255,10 +255,10 @@ def _select_nodes(
     minimum_gpu_memory = 0
     if lock is not None:
         envelope = _mapping(lock.resource_envelope, "release resource envelope")
-        required_sparks = envelope.get("required_sparks")
-        if required_sparks != count:
+        required_nodes = envelope.get("required_nodes")
+        if required_nodes != count:
             raise PackageRolloutError(
-                "deployment Spark count does not match release resource envelope"
+                "deployment GPU node count does not match release resource envelope"
             )
         per_node = _mapping(envelope.get("per_node"), "release per-node resources")
         envelope_memory = per_node.get("host_memory_bytes")
@@ -481,7 +481,7 @@ class PackageDesiredStateResolver:
             operation_payloads=payloads,
             # Package operations are part of the v2 agent ABI.  Keep legacy
             # workload reconciliation on the v1 range, but never enqueue a
-            # package graph that a v1 Spark can claim: AgentJobService
+            # package graph that a v1 GPU node can claim: AgentJobService
             # rejects package claims below protocol v2.
             agent_protocol_range=(2, 2),
             fleet_evidence_digest=fleet_digest,
@@ -782,7 +782,7 @@ class PackageRolloutOrchestrator:
             for order, node_id in enumerate(
                 sorted({node.node_id for node in package_nodes})
             ):
-                # One projection per Spark advances through prepare/activate/
+                # One projection per GPU node advances through prepare/activate/
                 # health; operation_history records each exact graph node.
                 first = next(node for node in package_nodes if node.node_id == node_id)
                 payload = plan.operation_payloads[first.operation_id]

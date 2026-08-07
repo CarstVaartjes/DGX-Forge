@@ -56,8 +56,8 @@ def _read_regular(path: Path, limit: int) -> bytes:
 
 def _authority() -> DelegatedPlatformAuthority:
     names = (
-        "DGX_PLATFORM_AUTHORITY_URL",
-        "DGX_PLATFORM_AUTHORITY_AUDIENCE",
+        "VONK_PLATFORM_AUTHORITY_URL",
+        "VONK_PLATFORM_AUTHORITY_AUDIENCE",
         "ACTIONS_ID_TOKEN_REQUEST_URL",
         "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
     )
@@ -65,11 +65,11 @@ def _authority() -> DelegatedPlatformAuthority:
     if any(not value for value in values.values()):
         raise AuthorityError("delegated authority configuration is incomplete")
     return DelegatedPlatformAuthority(
-        values["DGX_PLATFORM_AUTHORITY_URL"] or "",
+        values["VONK_PLATFORM_AUTHORITY_URL"] or "",
         token=lambda: github_actions_oidc_token(
             values["ACTIONS_ID_TOKEN_REQUEST_URL"] or "",
             values["ACTIONS_ID_TOKEN_REQUEST_TOKEN"] or "",
-            values["DGX_PLATFORM_AUTHORITY_AUDIENCE"] or "",
+            values["VONK_PLATFORM_AUTHORITY_AUDIENCE"] or "",
         ),
     )
 

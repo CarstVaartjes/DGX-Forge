@@ -375,7 +375,7 @@ class PackageResolver:
             "materialization": "executable",
             "platforms": adapter_value.get("platforms", ["linux/arm64"]),
             "media_type": adapter_value.get(
-                "media_type", "application/vnd.dgx-forge.workload-adapter.v1"
+                "media_type", "application/vnd.vonk-forge.workload-adapter.v1"
             ),
         }
         adapter = _component(adapter_template, adapter_value)

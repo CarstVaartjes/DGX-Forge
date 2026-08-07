@@ -641,8 +641,8 @@ def _digest(value: Any, name: str) -> str:
 
 _PRODUCTION_POLICIES = MappingProxyType(
     {
-        "spark-runtime-v1": CompiledAdapterPolicy(
-            "spark-runtime-v1", "bin/runtime-adapter", 60, 64 * 1024
+        "node-runtime-v1": CompiledAdapterPolicy(
+            "node-runtime-v1", "bin/runtime-adapter", 60, 64 * 1024
         )
     }
 )

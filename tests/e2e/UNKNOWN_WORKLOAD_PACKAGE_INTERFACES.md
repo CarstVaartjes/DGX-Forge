@@ -3,7 +3,7 @@
 The deterministic simulator in `test_unknown_workload_package.py` can exercise
 the public control publisher, workload-TUF metadata, agent protocol registry,
 and `PackageEngine` with direct native and OCI provider bytes. It intentionally
-does not claim that the installed Spark agent currently has this path.
+does not claim that the installed GPU node agent currently has this path.
 
 The remaining production interfaces are:
 

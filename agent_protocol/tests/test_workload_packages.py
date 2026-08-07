@@ -66,7 +66,7 @@ def lock_document(
         "adapter": component("adapter")
         | {
             "kind": "adapter",
-            "media_type": "application/vnd.dgx-forge.workload-adapter.v1",
+            "media_type": "application/vnd.vonk-forge.workload-adapter.v1",
             "materialization": {"method": "executable"},
         },
         "adapter_abi": 1,
@@ -104,7 +104,7 @@ def resource_envelope() -> dict[str, object]:
         "schema_version": 1,
         "per_node": fields,
         "aggregate": {key: value * 2 for key, value in fields.items()},
-        "required_sparks": 2,
+        "required_nodes": 2,
         "topology": "gang",
         "world_size": 2,
         "ranks": [
@@ -144,7 +144,7 @@ def test_release_lock_parses_signed_resource_envelope() -> None:
     lock = PackageReleaseLock.parse(document)
 
     assert lock.resource_envelope is not None
-    assert lock.resource_envelope["required_sparks"] == 2
+    assert lock.resource_envelope["required_nodes"] == 2
     assert lock.resource_envelope["per_node"]["kv_cache_per_token_bytes"] == 4096
     assert lock.resource_envelope["per_node"]["resident_memory_bytes"] == 8 * 1024**3
     assert lock.resource_envelope["world_size"] == 2
@@ -456,6 +456,9 @@ def test_schema_is_packaged_and_validates_synthetic_lock() -> None:
 
     Draft202012Validator.check_schema(schema)
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
+    assert schema["$id"] == (
+        "https://vonk-forge.invalid/schemas/workload-release-lock.schema.json"
+    )
     assert schema["additionalProperties"] is False
     assert not tuple(Draft202012Validator(schema).iter_errors(lock_document()))
     assert PackageReleaseLock.parse(lock_document()).family_id == (

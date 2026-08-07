@@ -33,7 +33,7 @@ def test_release_submission_uses_stable_branch_and_is_idempotent(tmp_path: Path)
     second = policy.submit(_preview(), actor="admin", request_id="req-2")
     assert first == second
     assert first.mode == "pull-request"
-    assert first.branch == f"dgx-control/{'a' * 12}"
+    assert first.branch == f"vonk-control/{'a' * 12}"
     assert host.submission_count == 1
     assert "Proposal-Digest: " + "a" * 64 in host.last_message
     assert "Actor: admin" in host.last_message

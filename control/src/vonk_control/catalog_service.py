@@ -259,7 +259,7 @@ class CatalogService:
 
     def create_recipe(self, actor: str, draft: RecipeDraftInput) -> RecipeRevisionView:
         document = self._validated_document(draft.document, slug=draft.slug)
-        if draft.source_kind not in {"local", "sparkrun", "global"}:
+        if draft.source_kind not in {"local", "workload_run", "global"}:
             raise CatalogValidationError("catalog.source_kind", "unknown source kind")
         metadata = _mapping(document["metadata"])
         now = self._clock()
@@ -358,7 +358,7 @@ class CatalogService:
                 raise CatalogConflict(
                     "catalog.stale_revision", "recipe revision changed"
                 )
-            if recipe.source_kind == "sparkrun":
+            if recipe.source_kind == "workload_run":
                 unresolved = session.scalar(
                     select(RecipeImportItem.id)
                     .join(RecipeImport, RecipeImport.id == RecipeImportItem.import_id)

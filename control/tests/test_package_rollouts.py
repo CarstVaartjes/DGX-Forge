@@ -126,7 +126,7 @@ def _lock() -> PackageReleaseLock:
                     "kv_cache_base_bytes": 0,
                     "kv_cache_per_token_bytes": 0,
                 },
-                "required_sparks": 1,
+                "required_nodes": 1,
                 "topology": "single",
                 "world_size": 1,
                 "ranks": [{"rank": 0, "role": "primary"}],
@@ -208,7 +208,7 @@ def test_unknown_family_resolves_without_static_adapter_catalog() -> None:
             },
         ),
     )
-    # Package operations require the v2 generic package ABI.  A v1 Spark must
+    # Package operations require the v2 generic package ABI.  A v1 GPU node must
     # not be selected for a package graph and would otherwise be unable to
     # claim any of the queued package operations.
     assert plan.agent_protocol_range == (2, 2)
@@ -248,7 +248,7 @@ def test_release_without_resource_envelope_is_rejected_before_graph_creation() -
         )
 
 
-def test_resource_envelope_admission_rejects_insufficient_spark_headroom() -> None:
+def test_resource_envelope_admission_rejects_insufficient_node_headroom() -> None:
     lock = _lock()
     envelope = dict(lock.resource_envelope or {})
     per_node = dict(envelope["per_node"])

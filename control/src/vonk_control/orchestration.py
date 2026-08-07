@@ -520,7 +520,7 @@ def _validate_package_plan(
     Package identities are carried only as exact digests in the request.  The
     graph validator deliberately does not enumerate adapters, models, or
     releases; those are authorized by the workload trust plane and checked by
-    the Spark package engine.
+    the GPU node package engine.
     """
 
     from vonk_agent_protocol import PackageOperationRequest

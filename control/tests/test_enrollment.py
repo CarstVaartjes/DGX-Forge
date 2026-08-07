@@ -146,7 +146,7 @@ def csr(node_id: str = NODE_ID) -> bytes:
         x509.CertificateSigningRequestBuilder()
         .subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, node_id)]))
         .add_extension(x509.SubjectAlternativeName([
-            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{node_id}")
+            x509.UniformResourceIdentifier(f"spiffe://vonk-forge.local/node/{node_id}")
         ]), critical=False)
         .sign(key, algorithm=None)
         .public_bytes(serialization.Encoding.PEM)
@@ -169,7 +169,7 @@ def rsa_csr() -> bytes:
         x509.CertificateSigningRequestBuilder()
         .subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_ID)]))
         .add_extension(x509.SubjectAlternativeName([
-            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_ID}")
+            x509.UniformResourceIdentifier(f"spiffe://vonk-forge.local/node/{NODE_ID}")
         ]), critical=False)
         .sign(key, hashes.SHA256())
         .public_bytes(serialization.Encoding.PEM)

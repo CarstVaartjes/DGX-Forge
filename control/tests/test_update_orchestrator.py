@@ -385,7 +385,7 @@ def _target() -> updates.TargetPlatform:
             updates.PlatformAgentArtifact(
                 architecture="linux-arm64",
                 oci_manifest_digest="sha256:" + "1" * 64,
-                payload_name="dgx-agent",
+                payload_name="vonk-agent",
                 payload_sha256="2" * 64,
                 payload_size=4096,
             ),

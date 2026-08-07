@@ -46,7 +46,7 @@ SKEW = {
             "active_workloads": ["model-a"],
             "build_digest": f"sha256:{SHA_B}",
             "compatible": True,
-            "display_name": "Alpha Spark",
+            "display_name": "Alpha GPU node",
             "node_id": NODE,
             "platform_version": "1.0.0",
             "protocol_version": 1,

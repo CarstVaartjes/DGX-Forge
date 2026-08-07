@@ -1,8 +1,8 @@
-# Stable Spark Agent Supervisor and Local Installer Design
+# Stable GPU node Agent Supervisor and Local Installer Design
 
 ## Purpose and scope
 
-Task 5 installs one Spark node from already authorized local inputs, keeps the
+Task 5 installs one GPU node from already authorized local inputs, keeps the
 replaceable agent in stable A/B slots, and wires the accepted release runtime
 into the production agent. Routine operation remains outbound mutual TLS.
 This design does not add SSH orchestration, Ansible, cloud-init, a migration
@@ -19,19 +19,19 @@ SSH user, fleet count, or site default. It performs no network request.
 The stable supervisor is installed outside both replaceable slots:
 
 ```text
-/usr/libexec/dgx-agent-supervisor
-/opt/dgx-forge/agent-slots/A/dgx-forge-agent
-/opt/dgx-forge/agent-slots/B/dgx-forge-agent
-/var/lib/dgx-forge-agent-supervisor/state.json
-/var/lib/dgx-forge-agent-supervisor/supervisor.lock
-/run/dgx-forge-agent/readiness.json
+/usr/libexec/vonk-agent-supervisor
+/opt/vonk-forge/agent-slots/A/vonk-forge-agent
+/opt/vonk-forge/agent-slots/B/vonk-forge-agent
+/var/lib/vonk-forge-agent-supervisor/state.json
+/var/lib/vonk-forge-agent-supervisor/supervisor.lock
+/run/vonk-forge-agent/readiness.json
 ```
 
 Slot, supervisor, policy, configuration, CA, TUF bootstrap, ORAS, NVIDIA, and
 collector roots are root-owned and not group/world writable. Slot executables
 are root-owned regular single-link non-symlinks. Agent state, credential state,
 registry authentication, release staging, TUF caches, and the runtime directory
-are owned by the dedicated `dgx-agent` account. That account has no login
+are owned by the dedicated `vonk-agent` account. That account has no login
 shell, Docker group, Docker socket, ambient capabilities, or write access to
 executables or policy.
 
@@ -61,14 +61,14 @@ builder; x86_64 CI proves the closure behavior natively and separately parses
 an ARM64 ELF fixture/policy without execution.
 
 The target kernel, ELF dynamic loader, and glibc ABI remain the separately
-validated DGX OS platform contract. The slot digest binds the full
+validated Vonk Forge OS platform contract. The slot digest binds the full
 Python/application/native-module closure and the artifact may not resolve any
 Python package outside itself; it does not attempt to embed or replace that
 supported host ABI.
 
 ## Split supervisor model
 
-`dgx-forge-agent.service` is visibly and effectively `User=dgx-agent`. Its
+`vonk-forge-agent.service` is visibly and effectively `User=vonk-agent`. Its
 fixed `ExecStart` calls the stable supervisor in `run-agent` mode with no
 caller-selected path. That mode takes a shared process lock, strictly reads
 the root-owned state, descriptor-opens the selected slot with `O_NOFOLLOW`,
@@ -76,7 +76,7 @@ checks owner, exact mode, link count, type, architecture, size, and SHA-256,
 then executes the verified ELF descriptor. It closes the lock before execution
 and never writes supervisor state, slots, policy, or installed artifacts.
 
-`dgx-forge-agent-supervisor.service` runs the same stable artifact in
+`vonk-forge-agent-supervisor.service` runs the same stable artifact in
 `supervise` mode as root. It performs only selection, activation, readiness,
 rollback, and fixed `systemctl` coordination. It validates the current slot
 before starting the agent unit. During an activation it increments a bounded
@@ -89,7 +89,7 @@ does not choose a slot or loop.
 The fixed later-update interface is:
 
 ```text
-dgx-agent-supervisor activate --slot A|B --sha256 <64-lowercase-hex>
+vonk-agent-supervisor activate --slot A|B --sha256 <64-lowercase-hex>
 ```
 
 It accepts no executable path, command, shell, environment, deadline, or
@@ -134,11 +134,11 @@ but cannot roll back a second time or select another executable.
 to the replaceable process. The agent emits readiness only after a successful
 authenticated outbound control exchange. It writes canonical JSON containing
 exactly `schema_version`, `generation`, `slot`, and `sha256` to the
-agent-writable `/run/dgx-forge-agent` directory using a no-clobber temporary
+agent-writable `/run/vonk-forge-agent` directory using a no-clobber temporary
 file, file fsync, atomic rename, and directory fsync.
 
 The root coordinator descriptor-opens `readiness.json` and accepts only a
-bounded regular single-link file owned by the `dgx-agent` UID with exact
+bounded regular single-link file owned by the `vonk-agent` UID with exact
 `0600` mode and canonical duplicate-free JSON. All four values must equal the
 pending state. A marker from an old generation, other slot, or other digest is
 stale and is removed without satisfying readiness. File existence alone is
@@ -146,7 +146,7 @@ never success. Stable boots do not require a marker.
 
 ## Networkless installer
 
-`nodes/bin/install-dgx-agent` is a Python 3 standard-library installation-mode
+`nodes/bin/install-vonk-agent` is a Python 3 standard-library installation-mode
 primitive. Production mutation requires UID 0. Its CLI takes absolute paths
 for the self-contained agent ELF and digest, ORAS executable and digest, exact
 NVIDIA ZIP, health collector and digest, site configuration, CA, TUF bootstrap root
@@ -172,7 +172,7 @@ bootstrap material are durable. Cleanup is bounded to names and inode
 identities created by the current transaction. Re-running after a crash
 converges from every publication boundary.
 
-The installer creates or validates the `dgx-agent` account, fixed roots,
+The installer creates or validates the `vonk-agent` account, fixed roots,
 systemd units, stable supervisor, initial A slot, and initial state. It copies
 the public CA, TUF root, private registry auth, and one-time token with their
 exact destination ownership and modes. It does not copy an admin credential,
@@ -199,7 +199,7 @@ The installer never fetches that URL. It rejects an archive with any missing,
 extra, duplicated, traversing, absolute, device, FIFO, link, encrypted,
 oversized, or lock-disagreeing member. It extracts only the reviewed seven
 tools, four support modules, and license beneath
-`/opt/dgx-forge/third-party/nvidia/<archive-sha256>`, writes canonical
+`/opt/vonk-forge/third-party/nvidia/<archive-sha256>`, writes canonical
 `SOURCE.json`, and generates the exact installed policy consumed by
 `InstalledPolicy.load`. Fixed paths, versions, hashes, arguments, deadlines,
 output limits, CPU sampling, and site-supplied validated fabric pairs agree
@@ -209,7 +209,7 @@ A separate strict installed runtime policy contains the detected architecture,
 canonical registry SNI origin and repository, ORAS 1.3.3 path and digest,
 private registry auth path, TUF bootstrap path and digest, fixed metadata and
 target caches, fixed release and same-filesystem staging roots, and exactly
-the compiled `spark-runtime-v1` adapter contract. It is root-owned, canonical,
+the compiled `node-runtime-v1` adapter contract. It is root-owned, canonical,
 bounded, and descriptor-read. Missing or unsafe policy stops service startup
 before polling.
 
@@ -225,7 +225,7 @@ for runtime HTTPS, dynamic TUF HTTPS snapshots, and every ORAS pull.
 policy. The resulting `OperationContext` always has probe, release, and
 workload handlers in production.
 
-The compiled `spark-runtime-v1` mapping in this Task 5 design is the accepted
+The compiled `node-runtime-v1` mapping in this Task 5 design is the accepted
 legacy bootstrap policy, not the permanent catalog boundary for Mia, DS4, or
 future models. The approved generalized workload package design replaces that
 catalog role with a compiled generic package operation vocabulary, three typed
@@ -234,7 +234,7 @@ release lock selects the exact signed adapter digest; the privileged helper
 validates only backend/capability structs and never model, family, adapter, or
 release names.
 
-The stable supervisor remains responsible only for the DGX-Forge agent A/B
+The stable supervisor remains responsible only for the Vonk Forge agent A/B
 slots. Workload generations, adapters, environments, containers, and model
 artifacts are independently activated by the package engine and cannot replace
 the supervisor or agent executable.
@@ -249,8 +249,8 @@ for a subsequent authenticated runtime exchange.
 
 ## systemd confinement
 
-The agent unit uses a fixed executable/configuration, `User=dgx-agent`,
-`Group=dgx-agent`, `UMask=0077`, bounded restart/start limits, `NoNewPrivileges`,
+The agent unit uses a fixed executable/configuration, `User=vonk-agent`,
+`Group=vonk-agent`, `UMask=0077`, bounded restart/start limits, `NoNewPrivileges`,
 an empty capability and ambient-capability set, private temporary storage,
 strict home/system/kernel/control-group/clock/personality protections, closed
 write/execute memory, private devices with required read-only GPU device
@@ -263,7 +263,7 @@ where it does not prevent fixed systemd coordination, an empty capability set
 except the minimum DAC/identity operations actually required, no network
 families, `UMask=0077`, bounded starts, and explicit read/write state/runtime
 paths. `systemd-analyze verify` must accept both units. Security exposure and
-any directive unavailable on the supported DGX OS systemd version are recorded
+any directive unavailable on the supported Vonk Forge OS systemd version are recorded
 instead of silently removed.
 
 ## Failure and test strategy

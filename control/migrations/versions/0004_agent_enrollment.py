@@ -1,4 +1,4 @@
-"""Persist one-time Spark agent enrollment evidence and certificates."""
+"""Persist one-time GPU node agent enrollment evidence and certificates."""
 
 import sqlalchemy as sa
 from alembic import op

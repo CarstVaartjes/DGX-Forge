@@ -86,9 +86,9 @@ def _placement_policy(
 ]:
     errors: set[str] = set()
     placements = profile.placements
-    known_nodes = {"spark1", "spark2"}
+    known_nodes = {"node1", "node2"}
     if set(placements) != known_nodes:
-        errors.add("profile must specify placements for spark1 and spark2")
+        errors.add("profile must specify placements for node1 and node2")
 
     assigned: dict[str, set[str]] = {}
     per_node: dict[str, list[WorkloadDefinition]] = {node: [] for node in known_nodes}

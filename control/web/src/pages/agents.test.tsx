@@ -67,7 +67,7 @@ const fleet: Fleet = {
       certificate_expiry_seconds: 2_350_812,
       compatibility: "compatible",
       disk_available_bytes: 2_000_000,
-      display_name: "Alpha Spark",
+      display_name: "Alpha GPU node",
       healthy: true,
       hostname: "not-rendered.internal",
       id: nodeId,
@@ -201,8 +201,8 @@ it("keeps the current fleet page on the generated bounded node status contract",
   installApiFake();
   render(<FleetPage api={new ApiClient()}/>);
 
-  const table = await screen.findByRole("table", {name: "DGX Spark nodes"});
-  const row = within(table).getByRole("row", {name: /Alpha Spark/});
+  const table = await screen.findByRole("table", {name: "Vonk Forge GPU nodes"});
+  const row = within(table).getByRole("row", {name: /Alpha GPU node/});
   expect(row).toHaveTextContent(nodeId);
   expect(row).toHaveTextContent("active");
   expect(row).toHaveTextContent("2026-08-05T09:59:48Z");

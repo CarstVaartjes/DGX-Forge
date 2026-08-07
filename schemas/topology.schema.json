@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://dgx-forge.local/schemas/topology.schema.json",
-  "title": "DGX-Forge Topology v1",
+  "$id": "https://vonk-forge.local/schemas/topology.schema.json",
+  "title": "Vonk Forge Topology v1",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "nodes", "links"],

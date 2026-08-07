@@ -35,7 +35,7 @@ def test_registry_config_disables_delete_and_agent_sni_is_read_only_mtls() -> No
     assert "delete:\n    enabled: false" in config
     assert "debug:" not in config
     caddy = (ROOT / "deploy/compose/Caddyfile").read_text()
-    assert "{$DGX_REGISTRY_HOSTNAME" in caddy
+    assert "{$VONK_REGISTRY_HOSTNAME" in caddy
     assert "mode require_and_verify" in caddy
     assert "method GET HEAD" in caddy
     assert "path_regexp registry_digest" in caddy
@@ -46,11 +46,11 @@ def test_registry_config_disables_delete_and_agent_sni_is_read_only_mtls() -> No
 
 def test_registry_caddy_adapter_has_only_ping_and_digest_pull_proxies() -> None:
     environment = {
-        "DGX_CONTROL_HOSTNAME": "control.test.example",
-        "DGX_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
-        "DGX_AGENT_HOSTNAME": "agents.test.example",
-        "DGX_REGISTRY_HOSTNAME": "registry.test.example",
-        "DGX_AGENT_PROXY_AUTH": "test-proxy-secret",
+        "VONK_CONTROL_HOSTNAME": "control.test.example",
+        "VONK_AGENT_ENROLL_HOSTNAME": "enroll.test.example",
+        "VONK_AGENT_HOSTNAME": "agents.test.example",
+        "VONK_REGISTRY_HOSTNAME": "registry.test.example",
+        "VONK_AGENT_PROXY_AUTH": "test-proxy-secret",
     }
     command = ["docker", "run", "--rm", "-i"]
     for key, value in environment.items():
@@ -86,7 +86,7 @@ def test_operator_publisher_validates_project_and_digest_before_docker(tmp_path:
         "COMPOSE_PROJECT_NAME": "../unsafe",
         "ORAS_PUBLISHER_IMAGE": "oras:latest",
         "RELEASE_TAG": "release-1",
-        "REGISTRY_REPOSITORY": "dgx/releases",
+        "REGISTRY_REPOSITORY": "vonk/releases",
     }
     result = subprocess.run(
         [str(script), str(tmp_path)],
@@ -114,7 +114,7 @@ def test_operator_publisher_validates_project_and_digest_before_docker(tmp_path:
         "COMPOSE_PROJECT_NAME": "site_a",
         "ORAS_PUBLISHER_IMAGE": "example/oras:1.3.3@sha256:" + "a" * 64,
         "RELEASE_TAG": "release-1",
-        "REGISTRY_REPOSITORY": "site_a/spark.releases",
+        "REGISTRY_REPOSITORY": "site_a/node.releases",
     }
     valid = subprocess.run(
         [str(script), str(release)], capture_output=True, text=True,
@@ -127,7 +127,7 @@ def test_operator_publisher_validates_project_and_digest_before_docker(tmp_path:
         "run", "--rm", "--network", "site_a_registry-publisher",
         "-v", f"{release}:/release:ro", "-w", "/release",
         "example/oras:1.3.3@sha256:" + "a" * 64,
-        "push", "--plain-http", "registry:5000/site_a/spark.releases:release-1", ".",
+        "push", "--plain-http", "registry:5000/site_a/node.releases:release-1", ".",
     ]
 
     for changed in (

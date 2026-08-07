@@ -17,7 +17,7 @@
   },
   "recorded_at": "2026-08-03T14:32:00Z",
   "nodes": [
-    {"node": "spark2", "boot_id": "abeace49-049a-4c8c-b079-b4ce66793b67"}
+    {"node": "node2", "boot_id": "abeace49-049a-4c8c-b079-b4ce66793b67"}
   ],
   "predecessor": "inventory/reports/model-definitions/triposg-single-prepared.json",
   "gates": {

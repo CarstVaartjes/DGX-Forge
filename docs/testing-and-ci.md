@@ -15,7 +15,7 @@ The protected `main` ruleset requires exactly these checks:
 | `PR contract smoke` | Run the focused repository, control-package, and package-page contracts. |
 
 These checks are intentionally bounded. They do not start Docker Compose,
-Playwright, real model services, multi-Spark jobs, or the full Python/web test
+Playwright, real model services, multi-GPU node jobs, or the full Python/web test
 matrices.
 
 ## Local verification before requesting review

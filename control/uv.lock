@@ -216,55 +216,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dgx-control"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "alembic" },
-    { name = "cryptography" },
-    { name = "fastapi" },
-    { name = "httpx" },
-    { name = "jsonschema" },
-    { name = "psycopg", extra = ["binary"] },
-    { name = "pyjwt" },
-    { name = "pyyaml" },
-    { name = "sqlalchemy" },
-    { name = "tomli-w" },
-    { name = "uvicorn" },
-    { name = "vonk-agent-protocol" },
-    { name = "vonk-cluster-profiles" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "openapi-python-client" },
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "alembic", specifier = "==1.16.4" },
-    { name = "cryptography", specifier = "==46.0.7" },
-    { name = "fastapi", specifier = "==0.116.1" },
-    { name = "httpx", specifier = "==0.28.1" },
-    { name = "jsonschema", specifier = "==4.25.1" },
-    { name = "psycopg", extras = ["binary"], specifier = "==3.2.9" },
-    { name = "pyjwt", specifier = "==2.13.0" },
-    { name = "pyyaml", specifier = "==6.0.3" },
-    { name = "sqlalchemy", specifier = "==2.0.42" },
-    { name = "tomli-w", specifier = "==1.2.0" },
-    { name = "uvicorn", specifier = "==0.35.0" },
-    { name = "vonk-agent-protocol", path = "../inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl" },
-    { name = "vonk-cluster-profiles", directory = "../" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "openapi-python-client", specifier = "==0.26.2" },
-    { name = "pytest", specifier = "==9.1.1" },
-]
-
-[[package]]
 name = "fastapi"
 version = "0.116.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1171,7 +1122,7 @@ dependencies = [
     { name = "jsonschema" },
 ]
 wheels = [
-    { filename = "vonk_agent_protocol-2.1.0-py3-none-any.whl", hash = "sha256:1438fab0105485422e6e66d8d03d3452d2fcf7803d1fcc8a5693761dcd9cbd7a" },
+    { filename = "vonk_agent_protocol-2.1.0-py3-none-any.whl", hash = "sha256:4bd2ee6f1ed97f8bb9644dc0b20b84808792a9cf9b442c31f9d9f9bf39bd4db7" },
 ]
 
 [package.metadata]
@@ -1202,3 +1153,52 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [{ name = "pytest", specifier = "==9.1.1" }]
+
+[[package]]
+name = "vonk-control"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "alembic" },
+    { name = "cryptography" },
+    { name = "fastapi" },
+    { name = "httpx" },
+    { name = "jsonschema" },
+    { name = "psycopg", extra = ["binary"] },
+    { name = "pyjwt" },
+    { name = "pyyaml" },
+    { name = "sqlalchemy" },
+    { name = "tomli-w" },
+    { name = "uvicorn" },
+    { name = "vonk-agent-protocol" },
+    { name = "vonk-cluster-profiles" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "openapi-python-client" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "alembic", specifier = "==1.16.4" },
+    { name = "cryptography", specifier = "==46.0.7" },
+    { name = "fastapi", specifier = "==0.116.1" },
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "jsonschema", specifier = "==4.25.1" },
+    { name = "psycopg", extras = ["binary"], specifier = "==3.2.9" },
+    { name = "pyjwt", specifier = "==2.13.0" },
+    { name = "pyyaml", specifier = "==6.0.3" },
+    { name = "sqlalchemy", specifier = "==2.0.42" },
+    { name = "tomli-w", specifier = "==1.2.0" },
+    { name = "uvicorn", specifier = "==0.35.0" },
+    { name = "vonk-agent-protocol", path = "../inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl" },
+    { name = "vonk-cluster-profiles", directory = "../" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "openapi-python-client", specifier = "==0.26.2" },
+    { name = "pytest", specifier = "==9.1.1" },
+]

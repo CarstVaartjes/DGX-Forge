@@ -1,4 +1,4 @@
-"""Bind portable recipe profiles to exact local Spark identities and ranks."""
+"""Bind portable recipe profiles to exact local GPU node identities and ranks."""
 
 from __future__ import annotations
 
@@ -72,7 +72,7 @@ class ClusterMappingService:
         if expected_count != len(nodes):
             raise ClusterMappingError(
                 "mapping.node_count",
-                "selected Spark count does not match the exact deployment profile",
+                "selected GPU node count does not match the exact deployment profile",
             )
         effective = _effective_parameters(document, profile, parameters)
         roles = profile.get("roles")
@@ -199,7 +199,7 @@ def _active_nodes(
         statement = statement.with_for_update()
     rows = tuple(session.scalars(statement))
     if len(rows) != len(node_ids):
-        raise ClusterMappingError("mapping.node_unknown", "a selected Spark is unknown")
+        raise ClusterMappingError("mapping.node_unknown", "a selected GPU node is unknown")
     if any(
         row.state != "active"
         or row.revoked_at is not None
@@ -207,7 +207,7 @@ def _active_nodes(
         for row in rows
     ):
         raise ClusterMappingError(
-            "mapping.node_incompatible", "a selected Spark is inactive or incompatible"
+            "mapping.node_incompatible", "a selected GPU node is inactive or incompatible"
         )
     return tuple(row.node_id for row in rows)
 

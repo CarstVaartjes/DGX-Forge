@@ -24,7 +24,7 @@ def canonical(value: object) -> bytes:
 
 
 def accept(source_date_epoch: int) -> dict[str, object]:
-    with tempfile.TemporaryDirectory(prefix="dgx-recovery-") as raw:
+    with tempfile.TemporaryDirectory(prefix="vonk-recovery-") as raw:
         workspace = Path(raw)
         source = workspace / "source-host"
         target = workspace / "replacement-host"

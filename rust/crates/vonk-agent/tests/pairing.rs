@@ -164,7 +164,7 @@ fn issued_certificate_must_bind_the_generated_key_and_node_identity() {
     subject.push(DnType::CommonName, NODE_ID);
     parameters.distinguished_name = subject;
     parameters.subject_alt_names = vec![SanType::URI(
-        Ia5String::try_from(format!("spiffe://dgx-forge.local/node/{NODE_ID}")).unwrap(),
+        Ia5String::try_from(format!("spiffe://vonk-forge.local/node/{NODE_ID}")).unwrap(),
     )];
     let certificate = parameters.self_signed(&key).unwrap();
     let response = IssuedResponse {

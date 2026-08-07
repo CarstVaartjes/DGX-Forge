@@ -254,7 +254,7 @@ def test_upgrade_backup_uses_fixed_commands_and_canonical_allowlisted_archive(
             name: hashlib.sha256(content).hexdigest()
             for name, content in contents.items()
         },
-        "format": "dgx-control-backup-v2",
+        "format": "vonk-control-backup-v2",
         "generation_id": "gen-a",
         "operation_id": "upgrade-operation",
     }
@@ -318,7 +318,7 @@ def test_backup_compose_uses_selected_overlay_and_exact_generation_environment(
         runner=runner,
         command_policy=CommandPolicy(30, 0, 4096),
         artifact_policy=ArtifactPolicy(8 * 1024 * 1024, 0),
-        compose_environment={"COMPOSE_PROJECT_NAME": "dgx-forge-control"},
+        compose_environment={"COMPOSE_PROJECT_NAME": "vonk-forge-control"},
         compose_overlays=("compose.step-ca.yaml",),
         control_identity_root=tmp_path / "control-identity",
     )
@@ -335,12 +335,12 @@ def test_backup_compose_uses_selected_overlay_and_exact_generation_environment(
         str(generation / "compose.step-ca.yaml"),
         "exec",
     )
-    assert docker_call["env"]["COMPOSE_PROJECT_NAME"] == "dgx-forge-control"
+    assert docker_call["env"]["COMPOSE_PROJECT_NAME"] == "vonk-forge-control"
     assert docker_call["env"]["CONTROL_API_IMAGE"] == _selected(
         generation_json
     ).api_image
-    assert docker_call["env"]["DGX_CONTROL_GENERATION_ID"] == "gen-a"
-    assert docker_call["env"]["DGX_CONTROL_START_NONCE"] == "0" * 64
+    assert docker_call["env"]["VONK_CONTROL_GENERATION_ID"] == "gen-a"
+    assert docker_call["env"]["VONK_CONTROL_START_NONCE"] == "0" * 64
     assert docker_call["env"]["CONTROL_IDENTITY_PATH"] == str(
         tmp_path / "control-identity"
     )

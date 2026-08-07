@@ -3,10 +3,10 @@ set -Eeuo pipefail
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 compose_root="$(cd -- "${script_dir}/.." && pwd)"
-runtime_root="$(mktemp -d /tmp/dgx-hermes-agent.XXXXXX)"
+runtime_root="$(mktemp -d /tmp/vonk-hermes-agent.XXXXXX)"
 runtime_uid="$(id -u)"
 runtime_gid="$(id -g)"
-project="dgx-hermes-runtime-${RANDOM}-$$"
+project="vonk-hermes-runtime-${RANDOM}-$$"
 api_key_file="${runtime_root}/hermes-api-key"
 
 cleanup() {

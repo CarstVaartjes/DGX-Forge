@@ -245,25 +245,25 @@ def test_production_entrypoint_selects_inert_preselection_before_registration(
         "create_app",
         forbidden_constructor("admin application"),
     )
-    monkeypatch.setenv("DGX_DEPLOYMENT_MODE", "test")
-    monkeypatch.setenv("DGX_AGENT_RUNTIME", "disabled")
+    monkeypatch.setenv("VONK_DEPLOYMENT_MODE", "test")
+    monkeypatch.setenv("VONK_AGENT_RUNTIME", "disabled")
     monkeypatch.setenv(
-        "DGX_DATABASE_URL", "postgresql+psycopg://control:test@db/control"
+        "VONK_DATABASE_URL", "postgresql+psycopg://control:test@db/control"
     )
-    monkeypatch.delenv("DGX_DATABASE_URL_FILE", raising=False)
-    monkeypatch.setenv("DGX_CONTROL_STARTUP_MODE", "preselection")
-    monkeypatch.setenv("DGX_CONTROL_OPERATION_ID", "operation-1")
-    monkeypatch.setenv("DGX_CONTROL_GENERATION_ID", GEN_A)
-    monkeypatch.setenv("DGX_PLATFORM_RELEASE_DIGEST", f"sha256:{SHA_A}")
-    monkeypatch.setenv("DGX_PLATFORM_BUILD_DIGEST", f"sha256:{SHA_B}")
-    monkeypatch.setenv("DGX_PLATFORM_VERSION", "1.2.0")
+    monkeypatch.delenv("VONK_DATABASE_URL_FILE", raising=False)
+    monkeypatch.setenv("VONK_CONTROL_STARTUP_MODE", "preselection")
+    monkeypatch.setenv("VONK_CONTROL_OPERATION_ID", "operation-1")
+    monkeypatch.setenv("VONK_CONTROL_GENERATION_ID", GEN_A)
+    monkeypatch.setenv("VONK_PLATFORM_RELEASE_DIGEST", f"sha256:{SHA_A}")
+    monkeypatch.setenv("VONK_PLATFORM_BUILD_DIGEST", f"sha256:{SHA_B}")
+    monkeypatch.setenv("VONK_PLATFORM_VERSION", "1.2.0")
     monkeypatch.setenv(
-        "DGX_CONTROL_PROCESS_IMAGE",
+        "VONK_CONTROL_PROCESS_IMAGE",
         f"ghcr.io/example/control-api@sha256:{SHA_A}",
     )
-    monkeypatch.setenv("DGX_DATABASE_REVISION", "0012_control_process_heartbeats")
-    monkeypatch.setenv("DGX_CONTROL_START_NONCE", START_NONCE)
-    monkeypatch.setenv("DGX_CONTROL_IDENTITY_ROOT", str(tmp_path / "identity"))
+    monkeypatch.setenv("VONK_DATABASE_REVISION", "0012_control_process_heartbeats")
+    monkeypatch.setenv("VONK_CONTROL_START_NONCE", START_NONCE)
+    monkeypatch.setenv("VONK_CONTROL_IDENTITY_ROOT", str(tmp_path / "identity"))
     app = production_app()
 
     assert {route.path for route in app.routes} == {

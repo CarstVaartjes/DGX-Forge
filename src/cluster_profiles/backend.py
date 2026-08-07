@@ -1,4 +1,4 @@
-"""Strict, bounded SSH execution for Spark controller operations."""
+"""Strict, bounded SSH execution for GPU node controller operations."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from typing import Protocol
 from cluster_profiles.fleet import Fleet, ManagementEndpoint, NodeId
 from cluster_profiles.ssh_transport import select_transport_binary
 
-_DEFAULT_ALIASES = {"spark1": "dgx-spark-1", "spark2": "dgx-spark-2"}
+_DEFAULT_ALIASES = {"node1": "vonk-node-1", "node2": "vonk-node-2"}
 
 
 class _Completed(Protocol):
@@ -175,7 +175,7 @@ def _validate_remote_argv(argv: tuple[str, ...]) -> None:
 
 
 class SshBackend:
-    """Invoke configured Spark SSH aliases without a local shell."""
+    """Invoke configured GPU node SSH aliases without a local shell."""
 
     def __init__(
         self,

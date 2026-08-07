@@ -40,38 +40,30 @@ PRODUCTION_FILE_VARIABLES = (
 )
 
 
-def test_nas_compose_readme_is_the_complete_operator_entry_point() -> None:
+def test_nas_compose_readme_is_the_source_first_operator_entry_point() -> None:
     text = COMPOSE_README.read_text()
     for required in (
-        "ghcr.io/carstvaartjes/dgx-forge-api",
-        "ghcr.io/carstvaartjes/dgx-forge-worker",
-        "ghcr.io/carstvaartjes/dgx-forge-hermes",
+        "ghcr.io/carstvaartjes/vonk-forge-api",
+        "ghcr.io/carstvaartjes/vonk-forge-worker",
+        "ghcr.io/carstvaartjes/vonk-forge-hermes",
         "NAS_LAN_IP=10.0.0.2",
         "compose.step-ca.yaml",
-        "latest is evaluation-only",
-        "Set package visibility to Public",
         "not the Docker bridge",
         "not the public WAN address",
-        "DGX_CONTAINER_RELEASES_ENABLED",
-        "DGX_PLATFORM_RELEASES_ENABLED",
-        "No images are currently being published",
-        "Dependabot cannot publish",
         "operator_user=$(id -un)",
-        "/srv/dgx-forge/control-host",
-        "/srv/dgx-forge/control-identity",
-        "/srv/dgx-forge/site",
-        "upgrade --target-name",
-        "recover --apply",
-        "rollback --generation",
-        "verified OCI deployment bundle",
-        "never executes Compose from the repository checkout",
+        "git clone",
+        "docker build --target api",
+        "docker build --target worker",
+        "docker compose --env-file .env",
+        "--profile hermes",
+        "Hermes is optional and disabled by default",
+        "/srv/vonk-forge/control-identity",
         "At least 32 bytes.",
         "At least 16 non-whitespace characters.",
         "10001:10001",
         "10002:10001",
         "65534:65534",
         "1100:1100",
-        "control.dgx-forge.lan is not a LAN-accessible human endpoint",
         "setfacl -R -m u:\"$operator_user\":rwX,u:10001:rwX,m::rwX",
         "d:u:\"$operator_user\":rwx,d:u:10001:rwx,d:m::rwx",
         "CONTROL_API writes `.git`",
@@ -79,20 +71,17 @@ def test_nas_compose_readme_is_the_complete_operator_entry_point() -> None:
         assert required in text
     for variable in PRODUCTION_FILE_VARIABLES:
         assert variable in text
-    assert "\nsudo git clone " not in text
-    assert "cd /srv/dgx-forge/repository/deploy/compose" not in text
-    assert "docker compose --env-file" not in text
-    assert "deploy/compose/bin/backup-control-plane" not in text
-    assert "deploy/compose/bin/restore-control-plane" not in text
+    assert "pull-only" not in text.lower()
+    assert "never executes Compose from the repository checkout" not in text
 
 
-def test_environment_requires_three_release_images_without_duplicate_networks() -> None:
+def test_environment_uses_canonical_images_without_duplicate_networks() -> None:
     text = ENVIRONMENT.read_text()
-    assert "CONTROL_API_IMAGE=ghcr.io/carstvaartjes/dgx-forge-api:" in text
-    assert "CONTROL_WORKER_IMAGE=ghcr.io/carstvaartjes/dgx-forge-worker:" in text
-    assert "HERMES_AGENT_IMAGE=ghcr.io/carstvaartjes/dgx-forge-hermes:" in text
-    assert text.count("DGX_MANAGEMENT_CIDRS=") == 1
-    assert text.count("DGX_DIRECT_FABRIC_CIDRS=") == 1
+    assert "CONTROL_API_IMAGE=ghcr.io/carstvaartjes/vonk-forge-api:" in text
+    assert "CONTROL_WORKER_IMAGE=ghcr.io/carstvaartjes/vonk-forge-worker:" in text
+    assert "HERMES_AGENT_IMAGE=ghcr.io/carstvaartjes/vonk-forge-hermes:" in text
+    assert text.count("VONK_MANAGEMENT_CIDRS=") == 1
+    assert text.count("VONK_DIRECT_FABRIC_CIDRS=") == 1
 
 
 def test_supply_chain_describes_three_target_release_or_nonpublishing_diagnostics() -> None:
@@ -102,7 +91,7 @@ def test_supply_chain_describes_three_target_release_or_nonpublishing_diagnostic
         "CONTROL_WORKER_IMAGE",
         "HERMES_AGENT_IMAGE",
         "stable SemVer version-tag push",
-        "dgx-forge-hermes",
+        "vonk-forge-hermes",
         "local diagnostic only",
     ):
         assert required in text
@@ -124,7 +113,7 @@ def test_control_recovery_uses_only_the_journaled_host_boundary() -> None:
 
     for required in (
         "HostBackupBoundary",
-        "/srv/dgx-forge/control-host",
+        "/srv/vonk-forge/control-host",
         "recover --apply",
         "rollback --generation",
         "hash-chained journal",
@@ -143,7 +132,7 @@ def test_hermes_secret_mode_matches_the_authoritative_nas_guide() -> None:
     runbook = HERMES_RUNBOOK.read_text()
     guide = COMPOSE_README.read_text()
 
-    assert "chmod 0400 /srv/dgx-forge/secrets/hermes-api-key" in runbook
+    assert "chmod 0400 /srv/vonk-forge/secrets/hermes-api-key" in runbook
     assert "root-owned mode `0400`" in runbook
     assert "`root:root 0400`" in guide
     assert "root-owned mode `0600`" not in runbook
@@ -152,7 +141,7 @@ def test_hermes_secret_mode_matches_the_authoritative_nas_guide() -> None:
 def test_auxiliary_service_runbooks_use_the_installed_maintenance_boundary() -> None:
     for path in (HERMES_RUNBOOK, TAILSCALE_RUNBOOK, AGENT_PKI_RUNBOOK):
         text = path.read_text()
-        assert "dgx-control-offline maintenance" in text
+        assert "vonk-control-offline maintenance" in text
         assert "cd deploy/compose" not in text
         assert "docker compose --" not in text
 

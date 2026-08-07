@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://dgx-forge.local/schemas/workload-v2.schema.json",
+  "$id": "https://vonk-forge.local/schemas/workload-v2.schema.json",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "id", "adapter", "definition_hash", "conflicts", "distributed_supported"],

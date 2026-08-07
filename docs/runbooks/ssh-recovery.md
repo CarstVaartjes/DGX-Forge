@@ -1,8 +1,8 @@
 # SSH hardening and recovery
 
 This runbook disables password-based SSH after the dedicated 1Password-held
-`DGX Spark Admin` key has been installed and verified. Apply it to Spark 2
-(`dgx-spark-2`) first and Spark 1 (`dgx-spark-1`) only after Spark 2 passes every
+`Vonk Forge GPU node Admin` key has been installed and verified. Apply it to GPU node 2
+(`vonk-node-2`) first and GPU node 1 (`vonk-node-1`) only after GPU node 2 passes every
 check.
 
 The managed settings are:
@@ -30,17 +30,17 @@ ssh -o BatchMode=yes \
   -o PubkeyAuthentication=yes \
   -o KbdInteractiveAuthentication=no \
   -o PasswordAuthentication=no \
-  dgx-spark-1 true
+  vonk-node-1 true
 ssh -o BatchMode=yes \
   -o PubkeyAuthentication=yes \
   -o KbdInteractiveAuthentication=no \
   -o PasswordAuthentication=no \
-  dgx-spark-2 true
+  vonk-node-2 true
 ```
 
 Keep one already authenticated SSH session open to each node throughout the
 change. Also confirm that a keyboard and display can reach a local terminal on
-each Spark. DGX Dashboard by itself is not assumed to provide an emergency
+each GPU node. Vonk Forge Dashboard by itself is not assumed to provide an emergency
 shell; use it as a recovery route only if the installed Dashboard version
 explicitly exposes a local console. Do not close the retained session until a
 fresh key-only connection succeeds.
@@ -55,25 +55,25 @@ SSH, and removes a newly installed drop-in if validation fails. This effective
 check matters because OpenSSH uses the first obtained value for most settings;
 a syntactically valid drop-in can otherwise lose to an earlier file.
 
-## Harden Spark 2
+## Harden GPU node 2
 
 From the repository root on the Mac, upload only the audited installer to
-Spark 2's temporary directory and confirm that the remote copy matches:
+GPU node 2's temporary directory and confirm that the remote copy matches:
 
 ```bash
 set -euo pipefail
 installer='nodes/bin/install-ssh-hardening'
-drop_in='nodes/etc/ssh/sshd_config.d/90-dgx-admin.conf'
+drop_in='nodes/etc/ssh/sshd_config.d/90-vonk-admin.conf'
 expected_sha256="$(shasum -a 256 "$installer" | awk '{ print $1 }')"
-scp "$installer" dgx-spark-2:/tmp/install-ssh-hardening
-scp "$drop_in" dgx-spark-2:/tmp/90-dgx-admin.conf
-actual_sha256="$(ssh -o BatchMode=yes dgx-spark-2 \
+scp "$installer" vonk-node-2:/tmp/install-ssh-hardening
+scp "$drop_in" vonk-node-2:/tmp/90-vonk-admin.conf
+actual_sha256="$(ssh -o BatchMode=yes vonk-node-2 \
   'shasum -a 256 /tmp/install-ssh-hardening 2>/dev/null || sha256sum /tmp/install-ssh-hardening' \
   | awk '{ print $1 }')"
 test "$actual_sha256" = "$expected_sha256"
 ```
 
-In the retained Spark 2 session, set the values observed for this node and key,
+In the retained GPU node 2 session, set the values observed for this node and key,
 create the short-lived recovery proof, run the read-only plan, then apply. Enter
 the Linux password only at the terminal prompt:
 
@@ -81,17 +81,17 @@ the Linux password only at the terminal prompt:
 admin_user='REPLACE_WITH_NODE_ADMIN_USER'
 admin_fingerprint='SHA256:REPLACE_WITH_VERIFIED_PUBLIC_KEY_FINGERPRINT'
 printf '%s\n' 'recovery-channel-verified' |
-  sudo install -m 0600 /dev/stdin /run/dgx-ssh-recovery-verified
+  sudo install -m 0600 /dev/stdin /run/vonk-ssh-recovery-verified
 sudo bash /tmp/install-ssh-hardening \
   --admin-user "$admin_user" \
   --admin-key-fingerprint "$admin_fingerprint" \
-  --drop-in /tmp/90-dgx-admin.conf \
+  --drop-in /tmp/90-vonk-admin.conf \
   --check
 sudo bash /tmp/install-ssh-hardening \
   --admin-user "$admin_user" \
   --admin-key-fingerprint "$admin_fingerprint" \
-  --drop-in /tmp/90-dgx-admin.conf \
-  --recovery-marker /run/dgx-ssh-recovery-verified \
+  --drop-in /tmp/90-vonk-admin.conf \
+  --recovery-marker /run/vonk-ssh-recovery-verified \
   --apply
 ```
 
@@ -101,10 +101,10 @@ The check must return `change-required`; apply must return one JSON object with:
 "status":"changed"
 ```
 
-If it reports an error, do not proceed to Spark 1. Preserve the retained
+If it reports an error, do not proceed to GPU node 1. Preserve the retained
 session and follow the rollback section.
 
-### Verify Spark 2 from the Mac
+### Verify GPU node 2 from the Mac
 
 First prove that a new connection works using only the public key:
 
@@ -113,7 +113,7 @@ ssh -o BatchMode=yes \
   -o PubkeyAuthentication=yes \
   -o KbdInteractiveAuthentication=no \
   -o PasswordAuthentication=no \
-  dgx-spark-2 true
+  vonk-node-2 true
 ```
 
 Then inspect what authentication methods the server advertises when the client
@@ -133,7 +133,7 @@ if ssh -vv \
   -o PasswordAuthentication=yes \
   -o PreferredAuthentications=password \
   -o NumberOfPasswordPrompts=0 \
-  dgx-spark-2 true > /dev/null 2> "$negative_log"; then
+  vonk-node-2 true > /dev/null 2> "$negative_log"; then
   printf 'ERROR: password-only SSH unexpectedly succeeded\n' >&2
   exit 1
 fi
@@ -148,20 +148,20 @@ trap - EXIT
 ```
 
 Only after both checks pass, remove the temporary installer and close the old
-Spark 2 session:
+GPU node 2 session:
 
 ```bash
-ssh -o BatchMode=yes dgx-spark-2 \
-  'sudo rm -f /run/dgx-ssh-recovery-verified; rm -f /tmp/install-ssh-hardening /tmp/90-dgx-admin.conf'
+ssh -o BatchMode=yes vonk-node-2 \
+  'sudo rm -f /run/vonk-ssh-recovery-verified; rm -f /tmp/install-ssh-hardening /tmp/90-vonk-admin.conf'
 ```
 
-## Harden Spark 1
+## Harden GPU node 1
 
 Repeat the upload, checksum, one-command installation, positive test, and
-authentication-advertisement test above with `dgx-spark-1`. Do not reuse a
-temporary file hosted on Spark 2. Keep Spark 1's retained session open until
+authentication-advertisement test above with `vonk-node-1`. Do not reuse a
+temporary file hosted on GPU node 2. Keep GPU node 1's retained session open until
 its fresh key-only test passes, then remove only the staged installer, reviewed
-drop-in, and short-lived recovery marker from Spark 1.
+drop-in, and short-lived recovery marker from GPU node 1.
 
 ## Recovery and rollback
 
@@ -173,7 +173,7 @@ terminal. Do not try to bypass host-key checking.
 Inspect the exact managed file and current syntax first:
 
 ```bash
-sudo sed -n '1,20p' /etc/ssh/sshd_config.d/90-dgx-admin.conf
+sudo sed -n '1,20p' /etc/ssh/sshd_config.d/90-vonk-admin.conf
 sudo /usr/sbin/sshd -t
 ```
 
@@ -186,8 +186,8 @@ is invalid, and reloads SSH:
 sudo bash /tmp/install-ssh-hardening \
   --admin-user "$admin_user" \
   --admin-key-fingerprint "$admin_fingerprint" \
-  --drop-in /tmp/90-dgx-admin.conf \
-  --recovery-marker /run/dgx-ssh-recovery-verified \
+  --drop-in /tmp/90-vonk-admin.conf \
+  --recovery-marker /run/vonk-ssh-recovery-verified \
   --rollback
 ```
 

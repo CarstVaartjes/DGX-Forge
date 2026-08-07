@@ -21,8 +21,8 @@
 
 **Files:**
 - Modify: `agent/tests/test_releases.py`
-- Modify: `agent/src/dgx_agent/nvidia_tools.py`
-- Modify: `agent/src/dgx_agent/update_trust.py`
+- Modify: `agent/src/vonk_agent/nvidia_tools.py`
+- Modify: `agent/src/vonk_agent/update_trust.py`
 
 **Interfaces:**
 - Consumes: `Callable[[], None]` deadline callbacks and `MonotonicDeadline`.
@@ -37,7 +37,7 @@
 
 **Files:**
 - Modify: `agent/tests/test_releases.py`
-- Modify: `agent/src/dgx_agent/releases.py`
+- Modify: `agent/src/vonk_agent/releases.py`
 
 **Interfaces:**
 - Consumes: `_write_recovery_intent_fd`, `_complete_recovery_record_fd`, and the request deadline callback.
@@ -53,7 +53,7 @@
 
 **Files:**
 - Modify: `agent/tests/test_releases.py`
-- Modify: `agent/src/dgx_agent/releases.py`
+- Modify: `agent/src/vonk_agent/releases.py`
 
 **Interfaces:**
 - Consumes: captured intent/leaf `(st_dev, st_ino)` identities.
@@ -69,7 +69,7 @@
 
 **Files:**
 - Modify: `agent/tests/test_releases.py`
-- Modify: `agent/src/dgx_agent/releases.py`
+- Modify: `agent/src/vonk_agent/releases.py`
 
 **Interfaces:**
 - Consumes: canonical complete temp record bytes and exact temp inode metadata.
@@ -83,8 +83,8 @@
 ### Task 5: Evidence, gates, and commit
 
 **Files:**
-- Modify: `.superpowers/sdd/2026-08-03-spark-agent-runtime/task-3-report.md`
-- Modify: `.superpowers/sdd/2026-08-03-spark-agent-runtime/progress.md`
+- Modify: `.superpowers/sdd/2026-08-03-node-agent-runtime/task-3-report.md`
+- Modify: `.superpowers/sdd/2026-08-03-node-agent-runtime/progress.md`
 
 **Interfaces:**
 - Consumes: final command output.

@@ -422,7 +422,7 @@
       "additionalProperties": false,
       "required": ["source_kind", "source_reference", "attribution"],
       "properties": {
-        "source_kind": {"enum": ["local", "sparkrun", "global", "fork"]},
+        "source_kind": {"enum": ["local", "workload_run", "global", "fork"]},
         "source_reference": {"type": ["string", "null"], "maxLength": 2048},
         "attribution": {"type": "array", "maxItems": 32, "items": {"type": "string", "minLength": 1, "maxLength": 512}}
       }

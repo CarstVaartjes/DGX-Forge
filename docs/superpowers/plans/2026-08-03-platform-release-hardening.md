@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Prove the generic Spark platform and control plane can be securely installed, upgraded, recovered, and released with PR-only repository mutation.
+**Goal:** Prove the generic GPU node platform and control plane can be securely installed, upgraded, recovered, and released with PR-only repository mutation.
 
 **Architecture:** Hardening is evidence-driven: executable threat assertions, dependency/image provenance, restore and host-loss drills, scale/failure tests, and a release gate aggregate signed artifacts into a checked-in acceptance report. The release transition enables irreversible PR-only mode only after all gates pass.
 
@@ -216,7 +216,7 @@ git commit -m "test: accept fleet scale and service failures"
 - Create: `docs/runbooks/platform-operations.md`
 
 **Interfaces:**
-- Workflow: onboard fresh simulated/approved Spark, propose record, merge, create/update model/profile, merge, reconcile, serve, observe, withdraw, and audit.
+- Workflow: onboard fresh simulated/approved GPU node, propose record, merge, create/update model/profile, merge, reconcile, serve, observe, withdraw, and audit.
 
 - [ ] **Step 1: Write failing full workflow test**
 
@@ -263,7 +263,7 @@ an unknown family can activate release 2, roll back to release 1 while
 offline, and reject unsigned/unapproved releases without SSH or `agent.update`;
 the latter must prove the generic failure/recovery matrix with secret-free,
 typed dispositions. A workload artifact is never treated as a platform image
-or as evidence of physical Spark acceptance.
+or as evidence of physical GPU node acceptance.
 
 **Files:**
 - Create: `scripts/verify-platform-release`
@@ -316,5 +316,5 @@ Expected: all commands PASS and `inventory/reports/platform-release.json` valida
 
 ```bash
 git add scripts/verify-platform-release tests/scripts/test_verify_platform_release.py schemas/platform-release-evidence.schema.json inventory/reports/platform-release.json README.md
-git commit -m "release: accept DGX-Forge platform 1.0.0"
+git commit -m "release: accept Vonk Forge platform 1.0.0"
 ```

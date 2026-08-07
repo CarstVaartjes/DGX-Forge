@@ -6,8 +6,8 @@ if (( $# != 0 )); then
     exit 2
 fi
 
-serial_path="${DGX_IDENTITY_SERIAL_PATH:-/sys/class/dmi/id/product_serial}"
-machine_id_path="${DGX_IDENTITY_MACHINE_ID_PATH:-/etc/machine-id}"
+serial_path="${VONK_IDENTITY_SERIAL_PATH:-/sys/class/dmi/id/product_serial}"
+machine_id_path="${VONK_IDENTITY_MACHINE_ID_PATH:-/etc/machine-id}"
 
 if [[ ! -r "$serial_path" || ! -r "$machine_id_path" ]]; then
     printf '%s\n' 'required node identity source is unreadable' >&2

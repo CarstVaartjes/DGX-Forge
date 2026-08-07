@@ -1,4 +1,4 @@
-"""Durable fenced operation journal for the Spark-local package engine."""
+"""Durable fenced operation journal for the GPU node-local package engine."""
 
 from __future__ import annotations
 

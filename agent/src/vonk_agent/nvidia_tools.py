@@ -52,7 +52,7 @@ class ToolName(StrEnum):
     FIRMWARE_REPORTER = "firmware_reporter"
     OS_BUILD_IDENTITY = "os_build_identity"
     DRIVER_INVENTORY_REPORTER = "driver_inventory_reporter"
-    SPARK_DIAGCTL_HEALTH = "spark_diagctl_health"
+    VONK_DIAGCTL_HEALTH = "spark_diagctl_health"
     RESET_REASON_REPORTER = "reset_reason_reporter"
 
 
@@ -64,7 +64,7 @@ _EXACT_ARGUMENTS: Mapping[ToolName, tuple[str, ...]] = MappingProxyType(
         ToolName.FIRMWARE_REPORTER: ("--stdout-json", "--no-write-file", "--quiet"),
         ToolName.OS_BUILD_IDENTITY: ("--stdout-json", "--no-write-file", "--quiet"),
         ToolName.DRIVER_INVENTORY_REPORTER: ("--stdout-json", "--no-write-file", "--quiet"),
-        ToolName.SPARK_DIAGCTL_HEALTH: ("--stdout-json", "--no-write-file", "--quiet", "health"),
+        ToolName.VONK_DIAGCTL_HEALTH: ("--stdout-json", "--no-write-file", "--quiet", "health"),
         ToolName.RESET_REASON_REPORTER: ("--stdout-json", "--no-write-file", "--quiet"),
     }
 )
@@ -75,7 +75,7 @@ _TOOL_CONTRACT: Mapping[ToolName, tuple[str, str]] = MappingProxyType(
         ToolName.FIRMWARE_REPORTER: ("bin/firmware_reporter.py", "1.0.0"),
         ToolName.OS_BUILD_IDENTITY: ("bin/os_build_identity.py", "1.0.0"),
         ToolName.DRIVER_INVENTORY_REPORTER: ("bin/driver_inventory_reporter.py", "1.0.0"),
-        ToolName.SPARK_DIAGCTL_HEALTH: ("bin/spark_diagctl.py", "1.1.0"),
+        ToolName.VONK_DIAGCTL_HEALTH: ("bin/spark_diagctl.py", "1.1.0"),
         ToolName.RESET_REASON_REPORTER: ("bin/reset_reason_reporter.py", "1.1.0"),
     }
 )
@@ -86,7 +86,7 @@ REVIEWED_TOOL_SHA256: Mapping[ToolName, str] = MappingProxyType(
         ToolName.FIRMWARE_REPORTER: "c5887cb8b456295ea937a44cf05d8c1a3fa64b2ac8239f35be61e8deb358d387",
         ToolName.OS_BUILD_IDENTITY: "ee2f06d7ae25438ed0a7258eeeecdde76dba24c5c82f9dec510c361b9d75f6f9",
         ToolName.DRIVER_INVENTORY_REPORTER: "f5f90c05f077f1cd6fa387d1f6eac3b7f40b7d859c6e5886c73ec03629fdfc26",
-        ToolName.SPARK_DIAGCTL_HEALTH: "03de23664d3a24295ce605075be957328f47c24fa37afb7bbfe60988cbee42c2",
+        ToolName.VONK_DIAGCTL_HEALTH: "03de23664d3a24295ce605075be957328f47c24fa37afb7bbfe60988cbee42c2",
         ToolName.RESET_REASON_REPORTER: "212b49f894e4703cc85743217a0a9d9f2bb5891702266df84b907df960d83774",
     }
 )
@@ -973,12 +973,12 @@ def _os(data: Mapping[str, Any]) -> dict[str, Any]:
     kernel = _selected(_map(os_source.get("kernel")), strings=("uname_r",))
     if release or kernel:
         result["os"] = {**({"os_release": release} if release else {}), **({"kernel": kernel} if kernel else {})}
-    dgx_release = _selected(
-        _map(_map(data.get("dgx")).get("dgx_release")),
-        strings=("DGX_SWBUILD_VERSION", "DGX_SWBUILD_DATE", "DGX_COMMIT_ID"),
+    vonk_release = _selected(
+        _map(_map(data.get("vonk")).get("vonk_release")),
+        strings=("VONK_SWBUILD_VERSION", "VONK_SWBUILD_DATE", "VONK_COMMIT_ID"),
     )
-    if dgx_release:
-        result["dgx"] = {"dgx_release": dgx_release}
+    if vonk_release:
+        result["vonk"] = {"vonk_release": vonk_release}
     baseline_source = _map(data.get("baseline"))
     baseline: dict[str, Any] = {}
     fingerprint = baseline_source.get("fingerprint_sha256")
@@ -1159,7 +1159,7 @@ _NORMALIZERS = {
     ToolName.FIRMWARE_REPORTER: _firmware,
     ToolName.OS_BUILD_IDENTITY: _os,
     ToolName.DRIVER_INVENTORY_REPORTER: _drivers,
-    ToolName.SPARK_DIAGCTL_HEALTH: _diagnostics,
+    ToolName.VONK_DIAGCTL_HEALTH: _diagnostics,
     ToolName.RESET_REASON_REPORTER: _reset,
 }
 

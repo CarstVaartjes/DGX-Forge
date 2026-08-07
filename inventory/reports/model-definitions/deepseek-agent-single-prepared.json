@@ -13,12 +13,12 @@
     "manifest_sha256": "1f6f88d7f968e51e76a118af83f0f7cae7f5df5b915a6cf30db5265228f70c99"
   },
   "image": {
-    "reference": "ghcr.io/carstvaartjes/spark-ds4@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615"
+    "reference": "ghcr.io/carstvaartjes/node-ds4@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615"
   },
   "recorded_at": "2026-08-03T09:32:43Z",
   "nodes": [
     {
-      "node": "spark1",
+      "node": "node1",
       "boot_id": "276acc0c-2dc5-424d-9499-92dcd8452bcb"
     }
   ],

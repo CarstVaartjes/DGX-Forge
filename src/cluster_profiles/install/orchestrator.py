@@ -1,4 +1,4 @@
-"""Resumable, one-target-at-a-time Spark onboarding orchestration."""
+"""Resumable, one-target-at-a-time GPU node onboarding orchestration."""
 
 from __future__ import annotations
 

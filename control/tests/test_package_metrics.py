@@ -115,12 +115,12 @@ def test_package_metrics_aggregate_operational_state_without_unbounded_labels(tm
     OperationalMetricsCollector(metrics, sessions, clock=lambda: NOW).refresh()
     rendered = metrics.render()
 
-    assert 'dgx_package_candidates{provider="other",state="unsupported"} 1' in rendered
-    assert 'dgx_package_validations{backend="artifact",reason="trust-failure",state="failed"} 1' in rendered
-    assert 'dgx_package_rollouts{phase="canary",reason="canary-failure",state="rolling-back"} 1' in rendered
-    assert 'dgx_package_rollout_nodes{phase="offline-pending",state="offline-pending"} 1' in rendered
+    assert 'vonk_package_candidates{provider="other",state="unsupported"} 1' in rendered
+    assert 'vonk_package_validations{backend="artifact",reason="trust-failure",state="failed"} 1' in rendered
+    assert 'vonk_package_rollouts{phase="canary",reason="canary-failure",state="rolling-back"} 1' in rendered
+    assert 'vonk_package_rollout_nodes{phase="offline-pending",state="offline-pending"} 1' in rendered
     package_metrics = "\n".join(
-        line for line in rendered.splitlines() if line.startswith("dgx_package_")
+        line for line in rendered.splitlines() if line.startswith("vonk_package_")
     )
     for secret in (
         "customer-model-secret",

@@ -1,4 +1,4 @@
-"""Deterministic requirement-based placement over a generic Spark fleet."""
+"""Deterministic requirement-based placement over a generic GPU node fleet."""
 
 from __future__ import annotations
 

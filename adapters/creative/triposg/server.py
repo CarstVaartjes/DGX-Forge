@@ -100,7 +100,7 @@ class Handler(BaseHTTPRequestHandler):
             self._json(HTTPStatus.OK, {"model": "triposg", "output_path": str(output_path)})
         except InferRequestError as error:
             self._json(HTTPStatus.BAD_REQUEST, {"error": str(error)})
-        except (OSError, RuntimeError, TypeError, ValueError) as error:  # pragma: no cover - live Spark gate
+        except (OSError, RuntimeError, TypeError, ValueError) as error:  # pragma: no cover - live GPU node gate
             self._json(HTTPStatus.INTERNAL_SERVER_ERROR, {"error": str(error)})
 
     def log_message(self, format: str, *args: object) -> None:

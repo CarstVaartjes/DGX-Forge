@@ -1,4 +1,4 @@
-"""Production handlers for the per-Spark installation gates."""
+"""Production handlers for the per-node installation gates."""
 
 from __future__ import annotations
 
@@ -92,7 +92,7 @@ def build_production_handlers(
     policy_script = _artifact(root, "nodes/bin/apply-node-policy", expected)
     earlyoom_script = _artifact(root, "nodes/bin/disable-earlyoom", expected)
     ssh_drop_in = _artifact(
-        root, "nodes/etc/ssh/sshd_config.d/90-dgx-admin.conf", expected
+        root, "nodes/etc/ssh/sshd_config.d/90-vonk-admin.conf", expected
     )
     policy_document = _artifact(root, "nodes/policy/default.json", expected)
     observations: dict[str, object] = {}
@@ -160,11 +160,11 @@ fi
             raise WaitForOperator("verified SSH recovery access is required")
         if not options.admin_key_fingerprint:
             raise WaitForOperator("administrator public key fingerprint is required")
-        staged_script = "/tmp/dgx-install-ssh-hardening"
-        staged_drop_in = "/tmp/dgx-install-ssh-drop-in.conf"
+        staged_script = "/tmp/vonk-install-ssh-hardening"
+        staged_drop_in = "/tmp/vonk-install-ssh-drop-in.conf"
         _checked(transport.copy(request.endpoint, hardening_script, staged_script, 0o755), "stage SSH hardening")
         _checked(transport.copy(request.endpoint, ssh_drop_in, staged_drop_in, 0o600), "stage SSH drop-in")
-        marker = "/run/dgx-ssh-recovery-verified"
+        marker = "/run/vonk-ssh-recovery-verified"
         try:
             _checked(transport.run(request.endpoint, ("sudo", "install", "-m", "0600", "/dev/stdin", marker), b"verified\n", 30), "create recovery marker")
             base = ("sudo", "bash", staged_script, "--admin-user", request.endpoint.user, "--admin-key-fingerprint", options.admin_key_fingerprint, "--drop-in", staged_drop_in, "--recovery-marker", marker)
@@ -176,9 +176,9 @@ fi
             transport.run(request.endpoint, ("sudo", "rm", "-f", "--", marker, staged_script, staged_drop_in), b"", 30)
 
     def node_policy(request: InstallationRequest) -> StepResult:
-        staged_policy = "/tmp/dgx-apply-node-policy"
-        staged_earlyoom = "/tmp/dgx-disable-earlyoom"
-        staged_document = "/tmp/dgx-node-policy.json"
+        staged_policy = "/tmp/vonk-apply-node-policy"
+        staged_earlyoom = "/tmp/vonk-disable-earlyoom"
+        staged_document = "/tmp/vonk-node-policy.json"
         for source, destination, mode in (
             (policy_script, staged_policy, 0o755),
             (earlyoom_script, staged_earlyoom, 0o755),
@@ -186,7 +186,7 @@ fi
         ):
             _checked(transport.copy(request.endpoint, source, destination, mode), "stage node policy")
         try:
-            base = ("sudo", "env", f"DGX_DISABLE_EARLYOOM_BIN={staged_earlyoom}", "bash", staged_policy, "--policy", staged_document)
+            base = ("sudo", "env", f"VONK_DISABLE_EARLYOOM_BIN={staged_earlyoom}", "bash", staged_policy, "--policy", staged_document)
             _checked(transport.run(request.endpoint, (*base, "--check"), b"", 60), "check node policy", (0, 2))
             result = _checked(transport.run(request.endpoint, (*base, "--apply"), b"", 60), "apply node policy")
             _checked(transport.run(request.endpoint, (*base, "--verify"), b"", 60), "verify node policy")

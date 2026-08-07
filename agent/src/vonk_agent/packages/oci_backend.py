@@ -234,7 +234,7 @@ class OciBackendLauncher:
             os.close(generation_fd)
         self._runtime_root.mkdir(mode=0o700, parents=True, exist_ok=True)
         _ensure_private_directory(self._runtime_root)
-        container_id = f"dgx-oci-{request.request_id}"
+        container_id = f"vonk-oci-{request.request_id}"
         bundle = self._runtime_root / container_id
         if bundle.exists() or bundle.is_symlink():
             raise OciBackendError("OCI container bundle already exists")
@@ -416,7 +416,7 @@ def _runtime_config(
             "capabilities": {"bounding": [], "effective": [], "inheritable": [], "permitted": [], "ambient": []},
         },
         "root": {"path": str(component / metadata.rootfs), "readonly": True},
-        "hostname": "dgx-workload",
+        "hostname": "vonk-workload",
         "mounts": mounts,
         "linux": {
             "namespaces": [
@@ -540,7 +540,7 @@ def _open_entrypoint(component: Path, metadata: OciBundleMetadata) -> int:
 
 
 def _container_id(value: str) -> bool:
-    return isinstance(value, str) and value.startswith("dgx-oci-") and len(value) <= 128 and all(
+    return isinstance(value, str) and value.startswith("vonk-oci-") and len(value) <= 128 and all(
         character.isalnum() or character in "-" for character in value
     )
 

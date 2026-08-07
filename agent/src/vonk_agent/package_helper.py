@@ -639,7 +639,7 @@ def _open_backend_content(
         ):
             raise HelperProtocolError("backend entrypoint is unsafe")
         snapshot_fd = os.memfd_create(
-            "dgx-package-entrypoint", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
+            "vonk-package-entrypoint", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
         )
         os.fchmod(snapshot_fd, 0o500)
         digest = hashlib.sha256()
@@ -724,7 +724,7 @@ def _validate_python_environment(
     try:
         _helper_deadline(clock, absolute_deadline)
         receipt_fd = os.open(
-            ".dgx-generation.json",
+            ".vonk-generation.json",
             os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW,
             dir_fd=generation_fd,
         )
@@ -885,7 +885,7 @@ def _generation_tree_digest(
                 raise HelperProtocolError("Python generation contains a special file")
 
     walk(generation_fd, "")
-    return [item for item in result if item["path"] != ".dgx-generation.json"]
+    return [item for item in result if item["path"] != ".vonk-generation.json"]
 
 
 def _open_python_interpreter(
@@ -978,7 +978,7 @@ def _open_generation_file(
         ):
             raise HelperProtocolError(f"{label} is unsafe")
         snapshot_fd = os.memfd_create(
-            "dgx-package-interpreter",
+            "vonk-package-interpreter",
             os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING,
         )
         os.fchmod(snapshot_fd, 0o500)

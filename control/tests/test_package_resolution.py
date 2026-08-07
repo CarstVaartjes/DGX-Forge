@@ -97,7 +97,7 @@ def _candidate(
         "adapter": {
             "name": "adapter",
             "kind": "adapter",
-            "media_type": "application/vnd.dgx-forge.workload-adapter.v1",
+            "media_type": "application/vnd.vonk-forge.workload-adapter.v1",
             "sources": [
                 {"provider": "https", "url": "https://packages.example/adapter"}
             ],

@@ -219,7 +219,7 @@ def test_identity_is_read_from_explicit_fixture_roots(run_collector):
 
     assert result["captured_at"] == "2026-08-02T12:00:00Z"
     assert result["identity"] == {
-        "hostname": "spark-3542",
+        "hostname": "node-3542",
         "boot_id": "11111111-2222-3333-4444-555555555555",
         "uptime_seconds": 12345,
     }

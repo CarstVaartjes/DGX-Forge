@@ -56,7 +56,7 @@ def test_control_host_recovers_after_each_apply_phase_effect(tmp_path: Path) -> 
         (
             "import json, os, runpy",
             "from pathlib import Path",
-            'os.environ["DGX_PLATFORM_UPDATE_LOCKED_ENV"] = "1"',
+            'os.environ["VONK_PLATFORM_UPDATE_LOCKED_ENV"] = "1"',
             f"module = runpy.run_path({str(ACCEPTANCE)!r})",
             f"root = Path({str(tmp_path)!r})",
             f"phases = {phases!r}",

@@ -76,7 +76,7 @@ pub fn generate_pending(node_id: &str) -> Result<PendingIdentity, IdentityError>
     distinguished_name.push(DnType::CommonName, node_id);
     parameters.distinguished_name = distinguished_name;
     parameters.subject_alt_names = vec![SanType::URI(
-        Ia5String::try_from(format!("spiffe://dgx-forge.local/node/{node_id}"))
+        Ia5String::try_from(format!("spiffe://vonk-forge.local/node/{node_id}"))
             .map_err(|_| IdentityError::Node)?,
     )];
     let csr = parameters.serialize_request(&key)?.pem()?;

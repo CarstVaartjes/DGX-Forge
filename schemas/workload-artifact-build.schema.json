@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://dgx-forge.local/schemas/workload-artifact-build.schema.json",
-  "title": "DGX-Forge workload artifact build metadata",
+  "$id": "https://vonk-forge.local/schemas/workload-artifact-build.schema.json",
+  "title": "Vonk Forge workload artifact build metadata",
   "oneOf": [
     {"$ref": "#/$defs/request"},
     {"$ref": "#/$defs/result"}

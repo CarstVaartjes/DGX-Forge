@@ -1,14 +1,14 @@
-# Per-Spark Onboarding Implementation Plan
+# Per-GPU node Onboarding Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build a resumable, idempotent installation mode that safely onboards one newly added DGX Spark without source edits or predetermined names and addresses.
+**Goal:** Build a resumable, idempotent installation mode that safely onboards one newly added Vonk Forge GPU node without source edits or predetermined names and addresses.
 
-**Architecture:** `sparkctl install node` drives a local journal and a sequence of typed steps. Bootstrap SSH transfers and invokes a pinned Ansible Runner project locally on the one target; versioned roles apply idempotent host policy and emit JSON evidence without cluster identity constants. Git proposal output is canonical and separate from live mutation.
+**Architecture:** `vonkctl install node` drives a local journal and a sequence of typed steps. Bootstrap SSH transfers and invokes a pinned Ansible Runner project locally on the one target; versioned roles apply idempotent host policy and emit JSON evidence without cluster identity constants. Git proposal output is canonical and separate from live mutation.
 
-**Post-plan integration note (2026-08-04):** For a fresh or reimaged Spark,
+**Post-plan integration note (2026-08-04):** For a fresh or reimaged GPU node,
 the later outbound-agent migration phase adds a second bootstrap mode that
-generates a DGX-Forge seed overlay for NVIDIA's documented
+generates a Vonk Forge seed overlay for NVIDIA's documented
 BaseOS/FastOS/cloud-init/OEMDATA workflow. This completed SSH-based mode remains
 the path for an already-running node. Both converge on the same physical
 identity gate, journal, agent enrollment, and canonical Git proposal; neither
@@ -32,9 +32,9 @@ introduces fixed names, addresses, or a fleet-size limit.
 ### Task 1: Add install workspace and journal persistence
 
 **Files:**
-- Create: `src/spark_profiles/install/__init__.py`
-- Create: `src/spark_profiles/install/store.py`
-- Test: `tests/spark_profiles/install/test_store.py`
+- Create: `src/cluster_profiles/install/__init__.py`
+- Create: `src/cluster_profiles/install/store.py`
+- Test: `tests/cluster_profiles/install/test_store.py`
 
 **Interfaces:**
 - Produces: `InstallStore(root: Path)`, `create(request) -> InstallationJournal`, `load(node_id)`, and `save(journal, expected_revision) -> int`.
@@ -60,7 +60,7 @@ def test_store_rejects_stale_revision(tmp_path, request):
 
 - [ ] **Step 2: Run and verify missing store**
 
-Run: `uv run pytest tests/spark_profiles/install/test_store.py -v`
+Run: `uv run pytest tests/cluster_profiles/install/test_store.py -v`
 Expected: FAIL with missing package.
 
 - [ ] **Step 3: Implement atomic restrictive persistence**
@@ -69,21 +69,21 @@ Write canonical JSON to a same-directory temporary file with mode `0600`, `fsync
 
 - [ ] **Step 4: Run focused tests**
 
-Run: `uv run pytest tests/spark_profiles/install/test_store.py -v`
+Run: `uv run pytest tests/cluster_profiles/install/test_store.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit store**
 
 ```bash
-git add src/spark_profiles/install tests/spark_profiles/install/test_store.py
-git commit -m "feat: persist Spark installation journals"
+git add src/cluster_profiles/install tests/cluster_profiles/install/test_store.py
+git commit -m "feat: persist GPU node installation journals"
 ```
 
 ### Task 2: Define injectable remote installation boundary
 
 **Files:**
-- Create: `src/spark_profiles/install/remote.py`
-- Test: `tests/spark_profiles/install/test_remote.py`
+- Create: `src/cluster_profiles/install/remote.py`
+- Test: `tests/cluster_profiles/install/test_remote.py`
 
 **Interfaces:**
 - Produces: `InstallTransport` protocol with `run(endpoint, argv, stdin, timeout) -> RemoteResult` and `copy(endpoint, source, destination, mode) -> RemoteResult`.
@@ -108,7 +108,7 @@ def test_remote_boundary_rejects_password_and_private_key_arguments(endpoint):
 
 - [ ] **Step 2: Run and observe missing boundary**
 
-Run: `uv run pytest tests/spark_profiles/install/test_remote.py -v`
+Run: `uv run pytest tests/cluster_profiles/install/test_remote.py -v`
 Expected: FAIL because `InstallTransport` is absent.
 
 - [ ] **Step 3: Implement protocol and OpenSSH adapter**
@@ -117,13 +117,13 @@ Build argv arrays without a local shell, pin batch mode, no forwarding, strict k
 
 - [ ] **Step 4: Run focused safety tests**
 
-Run: `uv run pytest tests/spark_profiles/install/test_remote.py -v`
+Run: `uv run pytest tests/cluster_profiles/install/test_remote.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit boundary**
 
 ```bash
-git add src/spark_profiles/install/remote.py tests/spark_profiles/install/test_remote.py
+git add src/cluster_profiles/install/remote.py tests/cluster_profiles/install/test_remote.py
 git commit -m "feat: add safe onboarding transport boundary"
 ```
 
@@ -131,9 +131,9 @@ git commit -m "feat: add safe onboarding transport boundary"
 
 **Files:**
 - Create: `nodes/bin/inspect-node-identity`
-- Create: `src/spark_profiles/install/identity.py`
+- Create: `src/cluster_profiles/install/identity.py`
 - Test: `tests/nodes/test_inspect_node_identity.py`
-- Test: `tests/spark_profiles/install/test_identity.py`
+- Test: `tests/cluster_profiles/install/test_identity.py`
 
 **Interfaces:**
 - Remote script emits JSON fields `product_serial_sha256`, `machine_id_sha256`, `host_key_fingerprints`, and `requires_console_repair`.
@@ -155,7 +155,7 @@ def test_unanchored_first_contact_requires_console_repair(observation):
 
 - [ ] **Step 2: Run and verify failures**
 
-Run: `uv run pytest tests/nodes/test_inspect_node_identity.py tests/spark_profiles/install/test_identity.py -v`
+Run: `uv run pytest tests/nodes/test_inspect_node_identity.py tests/cluster_profiles/install/test_identity.py -v`
 Expected: FAIL because script/module is absent.
 
 - [ ] **Step 3: Implement read-only probe and decision policy**
@@ -164,21 +164,21 @@ The Bash probe reads DMI serial, machine ID, configured public host keys, and `s
 
 - [ ] **Step 4: Run tests and ShellCheck**
 
-Run: `uv run pytest tests/nodes/test_inspect_node_identity.py tests/spark_profiles/install/test_identity.py -v && shellcheck nodes/bin/inspect-node-identity`
+Run: `uv run pytest tests/nodes/test_inspect_node_identity.py tests/cluster_profiles/install/test_identity.py -v && shellcheck nodes/bin/inspect-node-identity`
 Expected: PASS. If ShellCheck is unavailable, record that fact and run `bash -n nodes/bin/inspect-node-identity`.
 
 - [ ] **Step 5: Commit identity gate**
 
 ```bash
-git add nodes/bin/inspect-node-identity src/spark_profiles/install/identity.py tests
-git commit -m "security: gate Spark onboarding on trusted identity"
+git add nodes/bin/inspect-node-identity src/cluster_profiles/install/identity.py tests
+git commit -m "security: gate GPU node onboarding on trusted identity"
 ```
 
 ### Task 4: Parameterize and version node policy installers
 
 **Files:**
 - Create: `deploy/ansible/project/`
-- Create: `deploy/ansible/roles/dgx_spark/`
+- Create: `deploy/ansible/roles/vonk_node/`
 - Create: `nodes/bin/apply-node-policy`
 - Create: `nodes/policy/default.json`
 - Modify: `nodes/bin/install-ssh-hardening`
@@ -231,14 +231,14 @@ Expected: PASS.
 
 ```bash
 git add deploy/ansible nodes/bin nodes/policy tests/nodes/test_apply_node_policy.py tests/runbooks/test_ssh_hardening.sh
-git commit -m "feat: parameterize idempotent Spark node policy"
+git commit -m "feat: parameterize idempotent GPU node policy"
 ```
 
 ### Task 5: Build the resumable onboarding orchestrator
 
 **Files:**
-- Create: `src/spark_profiles/install/orchestrator.py`
-- Test: `tests/spark_profiles/install/test_orchestrator.py`
+- Create: `src/cluster_profiles/install/orchestrator.py`
+- Test: `tests/cluster_profiles/install/test_orchestrator.py`
 
 **Interfaces:**
 - Produces: `NodeInstaller(store, transport, evidence_store, clock).run(node_id, *, until=None) -> InstallationJournal`.
@@ -272,7 +272,7 @@ def test_failure_never_touches_another_node(two_node_installer):
 
 - [ ] **Step 2: Run and verify orchestrator is absent**
 
-Run: `uv run pytest tests/spark_profiles/install/test_orchestrator.py -v`
+Run: `uv run pytest tests/cluster_profiles/install/test_orchestrator.py -v`
 Expected: FAIL with missing module.
 
 - [ ] **Step 3: Implement explicit step registry and evidence checks**
@@ -281,26 +281,26 @@ Each handler verifies the previous state, runs only its target, writes bounded s
 
 - [ ] **Step 4: Run install package tests**
 
-Run: `uv run pytest tests/spark_profiles/install -v`
+Run: `uv run pytest tests/cluster_profiles/install -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit orchestrator**
 
 ```bash
-git add src/spark_profiles/install/orchestrator.py tests/spark_profiles/install/test_orchestrator.py
-git commit -m "feat: orchestrate resumable Spark onboarding"
+git add src/cluster_profiles/install/orchestrator.py tests/cluster_profiles/install/test_orchestrator.py
+git commit -m "feat: orchestrate resumable GPU node onboarding"
 ```
 
 ### Task 6: Expose onboarding through the CLI
 
 **Files:**
-- Create: `src/spark_profiles/install/cli.py`
-- Create: `bin/spark-install`
-- Test: `tests/spark_profiles/install/test_cli.py`
+- Create: `src/cluster_profiles/install/cli.py`
+- Create: `bin/node-install`
+- Test: `tests/cluster_profiles/install/test_cli.py`
 - Modify: `README.md`
 
 **Interfaces:**
-- Commands: `spark-install node start`, `status`, `resume`, `verify`, and `emit-record`.
+- Commands: `node-install node start`, `status`, `resume`, `verify`, and `emit-record`.
 - `start` requires `--host`, `--user`, `--credential-ref`, `--display-name`; optional `--port` and repeated `--label KEY=VALUE`.
 - All commands support `--json`; mutating commands require `--apply`, otherwise they print a plan.
 
@@ -308,7 +308,7 @@ git commit -m "feat: orchestrate resumable Spark onboarding"
 
 ```python
 def test_start_defaults_to_non_mutating_plan(run_cli):
-    result = run_cli("node", "start", "--host", "spark.local", "--user", "admin",
+    result = run_cli("node", "start", "--host", "node.local", "--user", "admin",
                      "--credential-ref", "secret://ssh/admin", "--display-name", "alpha", "--json")
     assert result.returncode == 0
     assert json.loads(result.stdout)["mode"] == "plan"
@@ -323,8 +323,8 @@ def test_cli_has_no_name_or_address_defaults(run_cli):
 
 - [ ] **Step 2: Run and confirm launcher is absent**
 
-Run: `uv run pytest tests/spark_profiles/install/test_cli.py -v`
-Expected: FAIL because `bin/spark-install` is absent.
+Run: `uv run pytest tests/cluster_profiles/install/test_cli.py -v`
+Expected: FAIL because `bin/node-install` is absent.
 
 - [ ] **Step 3: Implement parser and dependency injection**
 
@@ -332,22 +332,22 @@ Keep parsing and production dependency construction separate. Generate node IDs 
 
 - [ ] **Step 4: Run CLI tests and help smoke test**
 
-Run: `uv run pytest tests/spark_profiles/install/test_cli.py -v && bin/spark-install --help`
+Run: `uv run pytest tests/cluster_profiles/install/test_cli.py -v && bin/node-install --help`
 Expected: PASS and help lists node commands.
 
 - [ ] **Step 5: Commit CLI**
 
 ```bash
-git add bin/spark-install src/spark_profiles/install/cli.py tests/spark_profiles/install/test_cli.py README.md
-git commit -m "feat: add per-Spark installation mode"
+git add bin/node-install src/cluster_profiles/install/cli.py tests/cluster_profiles/install/test_cli.py README.md
+git commit -m "feat: add per-node installation mode"
 ```
 
 ### Task 7: Emit canonical Git proposal and document operation
 
 **Files:**
-- Create: `src/spark_profiles/install/proposal.py`
+- Create: `src/cluster_profiles/install/proposal.py`
 - Create: `docs/runbooks/node-onboarding.md`
-- Test: `tests/spark_profiles/install/test_proposal.py`
+- Test: `tests/cluster_profiles/install/test_proposal.py`
 - Test: `tests/runbooks/test_node_onboarding.py`
 
 **Interfaces:**
@@ -373,7 +373,7 @@ def test_unaccepted_install_cannot_emit_proposal(failed_install):
 
 - [ ] **Step 2: Run and observe missing proposal module**
 
-Run: `uv run pytest tests/spark_profiles/install/test_proposal.py -v`
+Run: `uv run pytest tests/cluster_profiles/install/test_proposal.py -v`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement canonical serializer and runbook**
@@ -382,12 +382,12 @@ Sort nodes by ID and labels by key, normalize line endings, include schema and p
 
 - [ ] **Step 4: Run Phase 1 and full tests**
 
-Run: `uv run pytest tests/spark_profiles/install tests/nodes tests/runbooks/test_node_onboarding.py -v && uv run pytest -q && git diff --check`
+Run: `uv run pytest tests/cluster_profiles/install tests/nodes tests/runbooks/test_node_onboarding.py -v && uv run pytest -q && git diff --check`
 Expected: all tests PASS with the existing skip unchanged.
 
 - [ ] **Step 5: Commit proposal and runbook**
 
 ```bash
-git add src/spark_profiles/install/proposal.py tests/spark_profiles/install/test_proposal.py docs/runbooks/node-onboarding.md tests/runbooks/test_node_onboarding.py
-git commit -m "feat: propose repository-backed Spark records"
+git add src/cluster_profiles/install/proposal.py tests/cluster_profiles/install/test_proposal.py docs/runbooks/node-onboarding.md tests/runbooks/test_node_onboarding.py
+git commit -m "feat: propose repository-backed GPU node records"
 ```

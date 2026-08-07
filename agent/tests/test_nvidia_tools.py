@@ -140,7 +140,7 @@ def test_installed_policy_contract_is_strict_typed_and_immutable(tmp_path) -> No
     assert policy.bundle_sha256 == "0eb1c93dd839b6bd4136cc8b79ea04a1e44fd637ff6afa6ee9568951a4c179f3"
     assert policy.bundle_root == root
     assert tuple(item.name.value for item in policy.tools) == NVIDIA_TOOL_NAMES
-    assert policy.tools[-2].name is ToolName.SPARK_DIAGCTL_HEALTH
+    assert policy.tools[-2].name is ToolName.VONK_DIAGCTL_HEALTH
     assert policy.tools[-2].version == "1.1.0"
     assert policy.tools[-2].executable == root / "bin/spark_diagctl.py"
     assert policy.tools[-2].arguments == (
@@ -228,7 +228,7 @@ def test_policy_rejects_duplicate_json_fields_tools_and_fabric_pairs(tmp_path) -
     ("section", "field", "value"),
     [
         ("root", "bundle_root", "relative/root"),
-        ("root", "bundle_root", "/opt/dgx/../escape"),
+        ("root", "bundle_root", "/opt/vonk/../escape"),
         ("tool", "executable", "device_identity"),
         ("tool", "executable", "/tmp/not-inside-bundle"),
         ("tool", "sha256", "A" * 64),
@@ -422,7 +422,7 @@ def envelope(data, *, ok: bool = True) -> bytes:
                 "asset_id": "secret-asset",
                 "source": "secret-source",
                 "sys_vendor": "NVIDIA",
-                "product_name": "NVIDIA DGX Spark",
+                "product_name": "NVIDIA Vonk Forge GPU node",
                 "product_version": "1.0",
                 "product_serial": "SECRET-SERIAL",
                 "uuid": "11111111-2222-3333-4444-555555555555",
@@ -431,12 +431,12 @@ def envelope(data, *, ok: bool = True) -> bytes:
                 "os_machine_id": "secret",
                 "platform_dmi": {"product_uuid": "secret"},
             },
-            {"product_name": "NVIDIA DGX Spark", "product_version": "1.0", "sys_vendor": "NVIDIA"},
+            {"product_name": "NVIDIA Vonk Forge GPU node", "product_version": "1.0", "sys_vendor": "NVIDIA"},
         ),
         (
             ToolName.HARDWARE_CONFIG,
             {
-                "platform_dmi": {"sys_vendor": "NVIDIA", "product_name": "DGX Spark", "product_version": "1.0", "product_serial": "secret"},
+                "platform_dmi": {"sys_vendor": "NVIDIA", "product_name": "Vonk Forge GPU node", "product_version": "1.0", "product_serial": "secret"},
                 "cpu": {"architecture": "aarch64", "logical_cpus": 20, "sockets": 1, "cores_per_socket": 10, "threads_per_core": 2, "model_names": ["NVIDIA Grace"], "max_mhz": 4000, "min_mhz": 800},
                 "memory": {"mem_total_bytes": 128000000000, "mem_free_bytes": 8000000000, "mem_available_bytes": 120000000000},
                 "storage": [{"name": "secret-device", "type": "disk", "size_bytes": 4000000000000, "model": "NVMe", "tran": "nvme", "rota": False, "serial": "secret", "wwn": "secret"}],
@@ -445,7 +445,7 @@ def envelope(data, *, ok: bool = True) -> bytes:
                 "pci": [{"class_text": "VGA", "vendor_device_id": "10de:2b85", "description": "NVIDIA GPU", "pci_addr": "secret"}],
             },
             {
-                "platform": {"product_name": "DGX Spark", "product_version": "1.0", "sys_vendor": "NVIDIA"},
+                "platform": {"product_name": "Vonk Forge GPU node", "product_version": "1.0", "sys_vendor": "NVIDIA"},
                 "cpu": {"architecture": "aarch64", "cores_per_socket": 10, "logical_cpus": 20, "max_mhz": 4000, "min_mhz": 800, "model_names": ("NVIDIA Grace",), "sockets": 1, "threads_per_core": 2},
                 "memory": {"mem_available_bytes": 120000000000, "mem_free_bytes": 8000000000, "mem_total_bytes": 128000000000},
                 "storage": ({"model": "NVMe", "rota": False, "size_bytes": 4000000000000, "tran": "nvme", "type": "disk"},),
@@ -477,12 +477,12 @@ def envelope(data, *, ok: bool = True) -> bytes:
             ToolName.OS_BUILD_IDENTITY,
             {
                 "os": {"os_release": {"ID": "ubuntu", "VERSION_ID": "24.04", "VERSION": "24.04.3", "PRETTY_NAME": "Ubuntu 24.04", "UBUNTU_CODENAME": "noble", "HOME_URL": "https://secret"}, "kernel": {"uname_r": "6.11.0", "uname_a": "secret raw"}},
-                "dgx": {"dgx_release": {"DGX_SWBUILD_VERSION": "7.3.1", "DGX_SWBUILD_DATE": "2026-08-01", "DGX_COMMIT_ID": "abc123", "SOURCE_PATH": "/secret"}},
+                "vonk": {"vonk_release": {"VONK_SWBUILD_VERSION": "7.3.1", "VONK_SWBUILD_DATE": "2026-08-01", "VONK_COMMIT_ID": "abc123", "SOURCE_PATH": "/secret"}},
                 "baseline": {"fingerprint_sha256": "a" * 64, "fingerprint_material": "secret", "packages": {"nvidia-driver": "580.173.02"}, "snaps": [{"name": "lxd", "version": "5.0", "rev": "123", "tracking": "latest/stable"}]},
             },
             {
                 "os": {"kernel": {"uname_r": "6.11.0"}, "os_release": {"ID": "ubuntu", "PRETTY_NAME": "Ubuntu 24.04", "UBUNTU_CODENAME": "noble", "VERSION": "24.04.3", "VERSION_ID": "24.04"}},
-                "dgx": {"dgx_release": {"DGX_COMMIT_ID": "abc123", "DGX_SWBUILD_DATE": "2026-08-01", "DGX_SWBUILD_VERSION": "7.3.1"}},
+                "vonk": {"vonk_release": {"VONK_COMMIT_ID": "abc123", "VONK_SWBUILD_DATE": "2026-08-01", "VONK_SWBUILD_VERSION": "7.3.1"}},
                 "baseline": {"fingerprint_sha256": "a" * 64, "packages": ({"name": "nvidia-driver", "version": "580.173.02"},), "snaps": ({"name": "lxd", "revision": "123", "version": "5.0"},)},
             },
         ),
@@ -492,7 +492,7 @@ def envelope(data, *, ok: bool = True) -> bytes:
             {"kernel": {"uname_r": "6.11.0"}, "drivers_manifest": ({"firmware": "gsp.bin", "license": "MIT", "module": "nvidia", "version": "580.173.02"},), "gpu": ({"driver_version": "580.173.02", "name": "GB10"},), "nics": ({"driver": "mlx5_core", "driver_version": "1.2", "firmware_version": "3.4"},)},
         ),
         (
-            ToolName.SPARK_DIAGCTL_HEALTH,
+            ToolName.VONK_DIAGCTL_HEALTH,
             {
                 "cpu": {"load_average": {"1min": 1.0, "5min": 0.8, "15min": 0.5}, "cpu_count": 20, "top_processes": [{"command": "secret"}]},
                 "memory": {"mem_total_kb": 125000000, "mem_free_kb": 8000000, "mem_available_kb": 117000000, "mem_used_percent": 6.2},

@@ -22,15 +22,15 @@
 
 **Files:**
 - Create: `agent_protocol/pyproject.toml`
-- Create: `agent_protocol/src/dgx_agent_protocol/__init__.py`
-- Create: `agent_protocol/src/dgx_agent_protocol/contracts.py`
-- Create: `agent_protocol/src/dgx_agent_protocol/schemas/agent-job.schema.json`
-- Create: `agent_protocol/src/dgx_agent_protocol/schemas/agent-result.schema.json`
+- Create: `agent_protocol/src/vonk_agent_protocol/__init__.py`
+- Create: `agent_protocol/src/vonk_agent_protocol/contracts.py`
+- Create: `agent_protocol/src/vonk_agent_protocol/schemas/agent-job.schema.json`
+- Create: `agent_protocol/src/vonk_agent_protocol/schemas/agent-result.schema.json`
 - Test: `agent_protocol/tests/test_contracts.py`
 
 **Interfaces:**
 - Produces: `AgentOperation`, `AgentClaim`, `AgentProgress`, `AgentResult`, `canonical_message(value) -> bytes`.
-- Consumes later: control API serializers and the Spark agent client.
+- Consumes later: control API serializers and the GPU node agent client.
 
 - [ ] **Step 1: Write failing contract tests**
 
@@ -60,7 +60,7 @@ Expected: FAIL because the standalone protocol package is absent.
 
 - [ ] **Step 3: Implement frozen value objects and exact schemas**
 
-Create the independently versioned `dgx-agent-protocol` wheel. Use an enum containing only `node.probe`, `release.install`,
+Create the independently versioned `vonk-agent-protocol` wheel. Use an enum containing only `node.probe`, `release.install`,
 `workload.prepare`, `workload.start`, `workload.stop`, `workload.health`,
 `workload.verify`, `agent.update`, and `agent.rollback`. Recursively reject keys
 matching `password|secret|token|authorization|private.?key|command|shell|environment`,
@@ -79,13 +79,13 @@ Expected: PASS with byte-identical schema assertions.
 
 ```bash
 git add agent_protocol
-git commit -m "feat: define fenced Spark agent protocol"
+git commit -m "feat: define fenced GPU node agent protocol"
 ```
 
 ### Task 2: Durable agent and operation models
 
 **Files:**
-- Modify: `control/src/dgx_control/models.py`
+- Modify: `control/src/vonk_control/models.py`
 - Create: `control/migrations/versions/0002_agent_operations.py`
 - Test: `control/tests/test_agent_migrations.py`
 
@@ -138,14 +138,14 @@ Expected: PASS.
 - [ ] **Step 5: Commit persistence**
 
 ```bash
-git add control/src/dgx_control/models.py control/migrations/versions/0002_agent_operations.py control/tests/test_agent_migrations.py
-git commit -m "feat: persist Spark agent operations"
+git add control/src/vonk_control/models.py control/migrations/versions/0002_agent_operations.py control/tests/test_agent_migrations.py
+git commit -m "feat: persist GPU node agent operations"
 ```
 
 ### Task 3: Fenced node-operation service
 
 **Files:**
-- Create: `control/src/dgx_control/agent_jobs.py`
+- Create: `control/src/vonk_control/agent_jobs.py`
 - Test: `control/tests/test_agent_jobs.py`
 
 **Interfaces:**
@@ -173,7 +173,7 @@ def test_expired_attempt_cannot_publish_success(service, clock) -> None:
 - [ ] **Step 2: Run and verify service is absent**
 
 Run: `uv run --project control pytest control/tests/test_agent_jobs.py -v`
-Expected: FAIL importing `dgx_control.agent_jobs`.
+Expected: FAIL importing `vonk_control.agent_jobs`.
 
 - [ ] **Step 3: Implement transactional claims and terminal aggregation**
 
@@ -191,7 +191,7 @@ Expected: PASS with no regression to control-worker jobs.
 - [ ] **Step 5: Commit operation service**
 
 ```bash
-git add control/src/dgx_control/agent_jobs.py control/tests/test_agent_jobs.py
+git add control/src/vonk_control/agent_jobs.py control/tests/test_agent_jobs.py
 git commit -m "feat: queue fenced node agent operations"
 ```
 

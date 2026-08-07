@@ -7,7 +7,7 @@ x-tailscale-logging: &tailscale-logging
 services:
   tailscale-gateway:
     image: ${TAILSCALE_IMAGE:-tailscale/tailscale:v1.98.10@sha256:cdf5612ded5be1344f1a704b8c5e53496db97376bb533e5e15f141e48bf60cc0}
-    hostname: dgx-forge-gateway
+    hostname: vonk-forge-gateway
     restart: unless-stopped
     logging: *tailscale-logging
     read_only: true
@@ -15,8 +15,8 @@ services:
       TS_AUTH_ONCE: "true"
       TS_CLIENT_ID: file:/run/secrets/tailscale-oauth-client-id
       TS_CLIENT_SECRET: file:/run/secrets/tailscale-oauth-client-secret
-      TS_EXTRA_ARGS: --advertise-tags=tag:dgx-gateway
-      TS_HOSTNAME: dgx-forge-gateway
+      TS_EXTRA_ARGS: --advertise-tags=tag:vonk-gateway
+      TS_HOSTNAME: vonk-forge-gateway
       TS_SOCKET: /var/run/tailscale/tailscaled.sock
       TS_STATE_DIR: /var/lib/tailscale
       TS_USERSPACE: "true"
@@ -59,6 +59,7 @@ services:
       hermes-agent:
         condition: service_healthy
         restart: true
+        required: false
 
 secrets:
   tailscale-oauth-client-id:

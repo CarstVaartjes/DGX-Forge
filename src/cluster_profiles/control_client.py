@@ -356,7 +356,7 @@ class UpdatePlanResponse:
 
 @dataclass(frozen=True)
 class UpdateRolloutResponse:
-    """Typed projection of one durable Spark platform rollout."""
+    """Typed projection of one durable GPU node platform rollout."""
 
     id: str
     state: str
@@ -908,11 +908,11 @@ class ControlClient:
     def from_environment(cls) -> ControlClient:
         import os
 
-        url = os.environ.get("DGX_CONTROL_URL", "")
-        token = os.environ.get("DGX_CONTROL_TOKEN_FILE", "")
+        url = os.environ.get("VONK_CONTROL_URL", "")
+        token = os.environ.get("VONK_CONTROL_TOKEN_FILE", "")
         if not url or not token:
             raise ControlClientError(
-                "DGX_CONTROL_URL and DGX_CONTROL_TOKEN_FILE are required"
+                "VONK_CONTROL_URL and VONK_CONTROL_TOKEN_FILE are required"
             )
         return cls(url, Path(token))
 

@@ -2,15 +2,15 @@ from pathlib import Path
 
 from vonk_control.import_report import ImportDisposition
 from vonk_control.recipe_contract import validate_recipe
-from vonk_control.sparkrun_importer import import_sparkrun
-from vonk_control.sparkrun_source import parse_sparkrun_yaml
+from vonk_control.workload_run_importer import import_workload_run
+from vonk_control.workload_run_source import parse_workload_run_yaml
 
-FIXTURES = Path(__file__).parent / "fixtures/sparkrun"
+FIXTURES = Path(__file__).parent / "fixtures/workload_run"
 
 
 def test_every_source_leaf_has_exactly_one_report_item() -> None:
-    source = parse_sparkrun_yaml((FIXTURES / "full-sglang.yaml").read_bytes())
-    result = import_sparkrun(source)
+    source = parse_workload_run_yaml((FIXTURES / "full-sglang.yaml").read_bytes())
+    result = import_workload_run(source)
     source_paths = set(source.leaf_paths())
     reported_source_paths = [
         item.source_path
@@ -30,9 +30,9 @@ def test_every_source_leaf_has_exactly_one_report_item() -> None:
 
 
 def test_container_and_mods_become_a_source_bundle() -> None:
-    source = parse_sparkrun_yaml((FIXTURES / "full-sglang.yaml").read_bytes())
+    source = parse_workload_run_yaml((FIXTURES / "full-sglang.yaml").read_bytes())
 
-    result = import_sparkrun(source)
+    result = import_workload_run(source)
 
     dockerfile = result.bundle.files["Dockerfile"].decode()
     assert dockerfile.startswith("FROM ghcr.io/example/sglang@sha256:")
@@ -47,14 +47,14 @@ def test_container_and_mods_become_a_source_bundle() -> None:
 
 
 def test_import_is_deterministic_and_explains_missing_requirements() -> None:
-    source = parse_sparkrun_yaml((FIXTURES / "minimal-vllm.yaml").read_bytes())
-    first = import_sparkrun(source)
-    second = import_sparkrun(source)
+    source = parse_workload_run_yaml((FIXTURES / "minimal-vllm.yaml").read_bytes())
+    first = import_workload_run(source)
+    second = import_workload_run(source)
 
     assert first == second
     assert first.source_sha256 == source.source_sha256
     assert first.report_digest == second.report_digest
-    assert first.draft_document["provenance"]["source_kind"] == "sparkrun"
+    assert first.draft_document["provenance"]["source_kind"] == "workload_run"
     assert any(
         item.source_path == "/@missing/resources"
         and item.disposition is ImportDisposition.OVERLAY_REQUIRED
@@ -68,11 +68,11 @@ def test_import_is_deterministic_and_explains_missing_requirements() -> None:
 
 
 def test_redacted_source_never_contains_secret_values() -> None:
-    source = parse_sparkrun_yaml(
+    source = parse_workload_run_yaml(
         b"model: Example/Model\nruntime: vllm\ncommand: vllm serve Example/Model\ncredentials:\n  password: never-store-me\n"
     )
 
-    result = import_sparkrun(source)
+    result = import_workload_run(source)
 
     assert result.redacted_source["credentials"]["password"] == "<redacted>"
     assert "never-store-me" not in str(result.redacted_source)

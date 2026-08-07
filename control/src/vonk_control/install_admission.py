@@ -198,21 +198,21 @@ class InstallAdmissionService:
                 blockers.append(
                     AdmissionReason(
                         "install.inventory_missing",
-                        "No authenticated inventory is available for this Spark.",
+                        "No authenticated inventory is available for this GPU node.",
                     )
                 )
             if snapshot is not None and snapshot.stale:
                 blockers.append(
                     AdmissionReason(
                         "install.stale_inventory",
-                        "Spark disk inventory is stale; refresh it before installing.",
+                        "GPU node disk inventory is stale; refresh it before installing.",
                     )
                 )
             if snapshot is not None and snapshot.artifact_store_read_only:
                 blockers.append(
                     AdmissionReason(
                         "install.artifact_store_read_only",
-                        "The Spark artifact store is read-only.",
+                        "The GPU node artifact store is read-only.",
                     )
                 )
             with self._sessions() as session:
@@ -251,7 +251,7 @@ class InstallAdmissionService:
                 blockers.append(
                     AdmissionReason(
                         "install.image_not_distributed",
-                        "The exact built image must be imported on this Spark before installation.",
+                        "The exact built image must be imported on this GPU node before installation.",
                     )
                 )
             reused_artifacts = sum(

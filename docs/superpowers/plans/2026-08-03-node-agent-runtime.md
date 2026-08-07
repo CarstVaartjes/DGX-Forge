@@ -1,8 +1,8 @@
-# Spark Agent Runtime Implementation Plan
+# GPU node Agent Runtime Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the non-root Spark agent, persistent fenced executor, outbound mTLS client, and stable A/B supervisor.
+**Goal:** Build the non-root GPU node agent, persistent fenced executor, outbound mTLS client, and stable A/B supervisor.
 
 **Architecture:** A small Python package separates transport, persistent state, and a closed operation registry. A minimal supervisor owns slot selection and rollback; the replaceable agent never overwrites the active executable.
 
@@ -14,7 +14,7 @@
 - The network protocol cannot invoke shell, arbitrary commands, paths, environment variables, or uninstalled adapters.
 - Agent state and private keys use restrictive ownership, no symlink traversal, atomic writes, and bounded files.
 - Operations are idempotent or define explicit inspect/compensate behavior before retry.
-- Agent installation supports ARM64 DGX OS and does not depend on Docker membership or root during normal execution.
+- Agent installation supports ARM64 Vonk Forge OS and does not depend on Docker membership or root during normal execution.
 
 ---
 
@@ -22,14 +22,14 @@
 
 **Files:**
 - Create: `agent/pyproject.toml`
-- Create: `agent/src/dgx_agent/config.py`
-- Create: `agent/src/dgx_agent/state.py`
+- Create: `agent/src/vonk_agent/config.py`
+- Create: `agent/src/vonk_agent/state.py`
 - Test: `agent/tests/test_config.py`
 - Test: `agent/tests/test_state.py`
 
 **Interfaces:**
 - Produces `AgentConfig.load(path)`, `AgentStateStore.begin(claim)`, `heartbeat`, `finish`, `recover_active`.
-- State root defaults to `/var/lib/dgx-forge-agent`; configuration defaults to `/etc/dgx-forge-agent/config.json`.
+- State root defaults to `/var/lib/vonk-forge-agent`; configuration defaults to `/etc/vonk-forge-agent/config.json`.
 
 - [ ] **Step 1: Write failing path and restart tests**
 
@@ -63,16 +63,16 @@ Expected: PASS including reopen after an interrupted transaction.
 - [ ] **Step 5: Commit state foundation**
 
 ```bash
-git add agent/pyproject.toml agent/src/dgx_agent/config.py agent/src/dgx_agent/state.py agent/tests/test_config.py agent/tests/test_state.py
-git commit -m "feat: persist fenced Spark agent state"
+git add agent/pyproject.toml agent/src/vonk_agent/config.py agent/src/vonk_agent/state.py agent/tests/test_config.py agent/tests/test_state.py
+git commit -m "feat: persist fenced GPU node agent state"
 ```
 
 ### Task 2: Closed operation registry and node probes
 
 **Files:**
-- Create: `agent/src/dgx_agent/operations.py`
-- Create: `agent/src/dgx_agent/probe.py`
-- Create: `agent/src/dgx_agent/nvidia_tools.py`
+- Create: `agent/src/vonk_agent/operations.py`
+- Create: `agent/src/vonk_agent/probe.py`
+- Create: `agent/src/vonk_agent/nvidia_tools.py`
 - Modify: `nodes/bin/collect-health`
 - Test: `agent/tests/test_operations.py`
 - Test: `agent/tests/test_probe.py`
@@ -102,15 +102,15 @@ Expected: FAIL importing operations.
 Map enum members to concrete handler objects. `node.probe` collects existing
 health evidence through a fixed installed collector with no payload arguments,
 a 15-second deadline, 256-KiB output limit, fixed environment, and no shell.
-Add a fixed-path adapter for the pinned NVIDIA DGX Spark Enterprise
+Add a fixed-path adapter for the pinned NVIDIA Vonk Forge GPU node Enterprise
 Manageability bundle. The installed policy fixes bundle digest/version,
 executable paths, exact argument vectors, per-tool deadlines, and output
 limits; the claim cannot select a tool or arguments. Validate the NVIDIA JSON
 envelope as untrusted input and normalize safe output from device identity,
-hardware, firmware, OS, drivers, `spark_diagctl health`, and reset reason.
+hardware, firmware, OS, drivers, `vendor_diagctl health`, and reset reason.
 Drop process lists, raw serials, addresses, log lines, artifact paths, and
 unknown fields. Combine these platform fields with the existing
-DGX-Forge-specific fabric/runtime collector. Missing or incompatible pinned
+Vonk Forge-specific fabric/runtime collector. Missing or incompatible pinned
 tools is explicit degraded/unsupported evidence, never silent execution of a
 PATH-selected alternative. Normalize/redact before returning. Implement
 inspection so a completed probe can be replayed without rerunning collection.
@@ -123,17 +123,17 @@ Expected: PASS.
 - [ ] **Step 5: Commit registry**
 
 ```bash
-git add agent/src/dgx_agent/operations.py agent/src/dgx_agent/probe.py agent/src/dgx_agent/nvidia_tools.py agent/tests/test_operations.py agent/tests/test_probe.py agent/tests/test_nvidia_tools.py
-git commit -m "feat: execute typed Spark agent operations"
+git add agent/src/vonk_agent/operations.py agent/src/vonk_agent/probe.py agent/src/vonk_agent/nvidia_tools.py agent/tests/test_operations.py agent/tests/test_probe.py agent/tests/test_nvidia_tools.py
+git commit -m "feat: execute typed GPU node agent operations"
 ```
 
 ### Task 3: Content-addressed release and workload handlers
 
 **Files:**
-- Create: `agent/src/dgx_agent/releases.py`
-- Create: `agent/src/dgx_agent/workloads.py`
-- Create: `agent/src/dgx_agent/oci.py`
-- Create: `agent/src/dgx_agent/update_trust.py`
+- Create: `agent/src/vonk_agent/releases.py`
+- Create: `agent/src/vonk_agent/workloads.py`
+- Create: `agent/src/vonk_agent/oci.py`
+- Create: `agent/src/vonk_agent/update_trust.py`
 - Modify: `deploy/compose/compose.yaml`
 - Create: `deploy/compose/registry/config.yml`
 - Test: `agent/tests/test_releases.py`
@@ -167,7 +167,7 @@ Resolve no tags: invoke a pinned root-owned ORAS client through fixed argv to
 pull only the registry origin and `@sha256` manifest supplied by the control
 plane. Credentials come from an absolute restrictive file, never the payload.
 Verify the TUF-authorized target digest, complete member allowlist, modes, and ownership;
-install atomically beneath `/opt/dgx-forge/releases/<digest>`. Resolve workload
+install atomically beneath `/opt/vonk-forge/releases/<digest>`. Resolve workload
 operations only through the installed adapter manifest and compiled adapter
 runner. Never accept a repository command array over the network.
 Retain `/agent/v1/artifacts/<sha256>` only for explicitly size-bounded
@@ -181,15 +181,15 @@ Expected: PASS; identical release is a no-op and partial temp trees never become
 - [ ] **Step 5: Commit handlers**
 
 ```bash
-git add agent/src/dgx_agent/releases.py agent/src/dgx_agent/workloads.py agent/src/dgx_agent/oci.py agent/src/dgx_agent/update_trust.py agent/tests/test_releases.py agent/tests/test_workloads.py deploy/compose/compose.yaml deploy/compose/registry/config.yml
-git commit -m "feat: install and operate signed Spark releases"
+git add agent/src/vonk_agent/releases.py agent/src/vonk_agent/workloads.py agent/src/vonk_agent/oci.py agent/src/vonk_agent/update_trust.py agent/tests/test_releases.py agent/tests/test_workloads.py deploy/compose/compose.yaml deploy/compose/registry/config.yml
+git commit -m "feat: install and operate signed GPU node releases"
 ```
 
 ### Task 4: Outbound enrollment and long-poll client
 
 **Files:**
-- Create: `agent/src/dgx_agent/client.py`
-- Create: `agent/src/dgx_agent/main.py`
+- Create: `agent/src/vonk_agent/client.py`
+- Create: `agent/src/vonk_agent/main.py`
 - Test: `agent/tests/test_client.py`
 - Test: `agent/tests/test_lifecycle.py`
 
@@ -229,20 +229,20 @@ Expected: PASS including server restart, expired grant, revoked cert, and stale 
 - [ ] **Step 5: Commit client**
 
 ```bash
-git add agent/src/dgx_agent/client.py agent/src/dgx_agent/main.py agent/tests/test_client.py agent/tests/test_lifecycle.py
-git commit -m "feat: poll control plane from Spark agent"
+git add agent/src/vonk_agent/client.py agent/src/vonk_agent/main.py agent/tests/test_client.py agent/tests/test_lifecycle.py
+git commit -m "feat: poll control plane from GPU node agent"
 ```
 
 ### Task 5: Stable A/B supervisor and systemd packaging
 
 **Files:**
-- Create: `agent/supervisor/dgx-agent-supervisor`
-- Create: `agent/systemd/dgx-forge-agent.service`
-- Create: `agent/systemd/dgx-forge-agent-supervisor.service`
-- Create: `nodes/bin/install-dgx-agent`
+- Create: `agent/supervisor/vonk-agent-supervisor`
+- Create: `agent/systemd/vonk-forge-agent.service`
+- Create: `agent/systemd/vonk-forge-agent-supervisor.service`
+- Create: `nodes/bin/install-vonk-agent`
 - Create: `nodes/vendor/nvidia-manageability.lock.json`
 - Test: `agent/tests/test_supervisor.py`
-- Test: `tests/nodes/test_install_dgx_agent.py`
+- Test: `tests/nodes/test_install_vonk_agent.py`
 
 **Interfaces:**
 - Supervisor state contains `active_slot`, `previous_slot`, expected digest, activation deadline, and boot attempts.
@@ -258,14 +258,14 @@ installed tool paths as part of the same installer boundary.
 
 - [ ] **Step 2: Run and observe missing supervisor/installer**
 
-Run: `uv run --project agent pytest agent/tests/test_supervisor.py -v && uv run pytest tests/nodes/test_install_dgx_agent.py -v`
+Run: `uv run --project agent pytest agent/tests/test_supervisor.py -v && uv run pytest tests/nodes/test_install_vonk_agent.py -v`
 Expected: FAIL because artifacts are absent.
 
 - [ ] **Step 3: Implement slot state machine and restrictive units**
 
 Use atomic JSON state, SHA-256 verification, `renameat2`/no-replace semantics,
 and a fixed slot root. Supervisor runs as root only to select/launch slots; the
-agent service runs dedicated user `dgx-agent` with `NoNewPrivileges`, strict
+agent service runs dedicated user `vonk-agent` with `NoNewPrivileges`, strict
 filesystem protections, bounded restart, no Docker socket, and explicit
 writable state paths. Roll back when the new slot misses its readiness marker.
 Install the reviewed NVIDIA Enterprise Manageability bundle as an immutable
@@ -276,25 +276,25 @@ installation.
 
 - [ ] **Step 4: Run packaging and systemd security checks**
 
-Run: `uv run --project agent pytest agent/tests -q && uv run pytest tests/nodes/test_install_dgx_agent.py -q && systemd-analyze security agent/systemd/dgx-forge-agent.service`
-Expected: tests pass; review and record any unavailable sandbox directive on target DGX OS.
+Run: `uv run --project agent pytest agent/tests -q && uv run pytest tests/nodes/test_install_vonk_agent.py -q && systemd-analyze security agent/systemd/vonk-forge-agent.service`
+Expected: tests pass; review and record any unavailable sandbox directive on target Vonk Forge OS.
 
 - [ ] **Step 5: Commit supervisor/install**
 
 ```bash
-git add agent/supervisor agent/systemd nodes/bin/install-dgx-agent nodes/vendor/nvidia-manageability.lock.json agent/tests/test_supervisor.py tests/nodes/test_install_dgx_agent.py
-git commit -m "feat: supervise Spark agents with A/B rollback"
+git add agent/supervisor agent/systemd nodes/bin/install-vonk-agent nodes/vendor/nvidia-manageability.lock.json agent/tests/test_supervisor.py tests/nodes/test_install_vonk_agent.py
+git commit -m "feat: supervise GPU node agents with A/B rollback"
 ```
 
 ### Task 6: Agent simulator and phase acceptance
 
 **Files:**
-- Create: `agent/src/dgx_agent/simulator.py`
+- Create: `agent/src/vonk_agent/simulator.py`
 - Create: `tests/agent/test_failure_matrix.py`
 - Create: `scripts/accept-agent-lifecycle`
 
 **Interfaces:**
-- Simulator injects disconnect, crash, stale fence, bad artifact, bad certificate, and failed activation without shelling into a Spark.
+- Simulator injects disconnect, crash, stale fence, bad artifact, bad certificate, and failed activation without shelling into a GPU node.
 
 - [ ] **Step 1: Write parameterized failure test**
 
@@ -313,12 +313,12 @@ The script emits canonical JSON and labels all simulated evidence explicitly.
 
 - [ ] **Step 4: Run Phase 3 verification**
 
-Run: `uv run --project agent pytest agent/tests -q && uv run pytest tests/agent/test_failure_matrix.py tests/nodes/test_install_dgx_agent.py -q && scripts/accept-agent-lifecycle --nodes 16 --json && git diff --check`
+Run: `uv run --project agent pytest agent/tests -q && uv run pytest tests/agent/test_failure_matrix.py tests/nodes/test_install_vonk_agent.py -q && scripts/accept-agent-lifecycle --nodes 16 --json && git diff --check`
 Expected: all pass.
 
 - [ ] **Step 5: Commit acceptance**
 
 ```bash
-git add agent/src/dgx_agent/simulator.py tests/agent/test_failure_matrix.py scripts/accept-agent-lifecycle
-git commit -m "test: accept outbound Spark agent lifecycle"
+git add agent/src/vonk_agent/simulator.py tests/agent/test_failure_matrix.py scripts/accept-agent-lifecycle
+git commit -m "test: accept outbound GPU node agent lifecycle"
 ```

@@ -14,13 +14,13 @@ so their isolated adapters remain fail-closed and are not active LLM endpoints.
 
 ## Purpose
 
-Make every requested model runnable on the two-DGX-Spark platform without forcing incompatible model families through one inference engine. DeepSeek Flash 0731 remains the default agent model. Delivery priority controls implementation order, not delivery scope or runtime routing; every model in this document is required.
+Make every requested model runnable on the two-Vonk Forge-GPU node platform without forcing incompatible model families through one inference engine. DeepSeek Flash 0731 remains the default agent model. Delivery priority controls implementation order, not delivery scope or runtime routing; every model in this document is required.
 
-The developer machine owns the creative pipeline and decides which model to call. The Sparks expose model capabilities and generated artifacts; they do not own the end-to-end asset workflow.
+The developer machine owns the creative pipeline and decides which model to call. The GPU nodes expose model capabilities and generated artifacts; they do not own the end-to-end asset workflow.
 
 ## Required model set
 
-The concise [model capacity overview](../../model-capacity-overview.md) compares official releases, preferred Spark-optimized paths, published memory evidence, placement, and validation status.
+The concise [model capacity overview](../../model-capacity-overview.md) compares official releases, preferred GPU node-optimized paths, published memory evidence, placement, and validation status.
 
 Delivery priority is the ordered enum `default`, `essential`, `recommended`,
 or `secondary`. It determines implementation and qualification order only. It
@@ -30,7 +30,7 @@ does not make a model optional and is never used to route a live request.
 | --- | --- | --- |
 | DeepSeek-V4-Flash-0731 | Default agent, reasoning, tool use, and pipeline control | `default` |
 | Nemotron 3 Super 120B-A12B | Officially optimized alternative agent for reasoning, tools, and long-context work | `recommended` |
-| Nemotron 3 Nano Omni 30B-A3B | Lightweight multimodal agent that can remain available on one Spark while the other runs a creative model | `recommended` |
+| Nemotron 3 Nano Omni 30B-A3B | Lightweight multimodal agent that can remain available on one GPU node while the other runs a creative model | `recommended` |
 | Qwen-Image | Text-to-image concepts and clean reference images | `essential` |
 | Qwen-Image-Edit-2511 | Alternate views, corrections, material edits, and texture-projection images | `essential` |
 | Pixal3D | Primary high-fidelity image-to-3D geometry and PBR generation | `essential` |
@@ -49,16 +49,16 @@ The platform exposes two configuration concepts:
 | Concept | Responsibility |
 | --- | --- |
 | Model Definition | One atomic runnable variant: stable model identity, exact checkpoints and auxiliary artifacts, container or source build, optimized loader, loading and residency method, lifecycle commands, resource envelope, placement constraints, health and endpoint behavior, immutable pins, and qualification state. |
-| Cluster Profile | The complete desired active state of both Sparks: zero or more Model Definitions assigned to each node, their start and stop order, and the stable capability aliases exposed to clients. |
+| Cluster Profile | The complete desired active state of both GPU nodes: zero or more Model Definitions assigned to each node, their start and stop order, and the stable capability aliases exposed to clients. |
 
 The unit users activate is a **Cluster Profile**, not an individual model. A
 Cluster Profile declares the complete set of Model Definitions that are
-simultaneously active on Spark 1 and Spark 2. Individual model start and stop
+simultaneously active on GPU node 1 and GPU node 2. Individual model start and stop
 switches are not part of the public control model because they could create an
 unmeasured combination.
 
 One model may have several Model Definitions. DeepSeek, for example, has
-separate dual-Spark and single-Spark definitions, and may have official
+separate dual-GPU node and single-GPU node definitions, and may have official
 correctness, Mia/vLLM, DS4, quantized, or low-memory candidates. A Model
 Definition selects exactly one such runnable path. Its internal loader and
 provisioning details are not additional user-facing activation layers and are
@@ -71,7 +71,7 @@ Model Definitions explicitly describe these independent dimensions:
 | Artifact acquisition | Complete Hugging Face snapshot, GGUF, auxiliary checkpoints, pinned container image, or pinned source build. |
 | Loader/runtime | vLLM, DS4, SGLang Diffusion, Diffusers, or a model-specific native pipeline. |
 | Loading/residency | Fully resident, persistent service, memory-mapped, staged sequential phases, accepted offload, NCCL tensor parallel, or experimental cross-host pipeline. |
-| Placement | Either single Spark, an exact Spark, both Sparks exclusively, or an accepted shareable combination. |
+| Placement | Either single GPU node, an exact GPU node, both GPU nodes exclusively, or an accepted shareable combination. |
 | Maturity | `planned`, `prepared`, `verified`, `accepted`, or `rejected`. |
 
 Model Definition maturity is stored in
@@ -95,21 +95,21 @@ Use a common Model Definition contract with runtime-specific adapters. The
 controller treats lifecycle operations uniformly while each adapter preserves
 the best loader and provisioning behavior for its model family.
 
-Do not make ComfyUI, Diffusers, vLLM, or any other single runtime the platform-wide loader. ComfyUI may later run on the developer or external service host as a client, but it is not the source of truth for Spark process lifecycle or Cluster Profile state.
+Do not make ComfyUI, Diffusers, vLLM, or any other single runtime the platform-wide loader. ComfyUI may later run on the developer or external service host as a client, but it is not the source of truth for GPU node process lifecycle or Cluster Profile state.
 
 ## Initial cluster profiles and stable DeepSeek identity
 
 The canonical default profile ID is `agent-full-dual`. The convenience selector
 `default` resolves to that canonical ID but is not itself a profile ID. The
-profile dedicates both Sparks to the accepted dual-Spark DeepSeek Model
-Definition. Other profiles normally keep the accepted single-Spark DeepSeek
-Model Definition active on Spark 1 while Spark 2 hosts an accepted combination
+profile dedicates both GPU nodes to the accepted dual-GPU node DeepSeek Model
+Definition. Other profiles normally keep the accepted single-GPU node DeepSeek
+Model Definition active on GPU node 1 while GPU node 2 hosts an accepted combination
 of creative Model Definitions.
 
 The following are profile intents, not claims that every combination has
 already passed admission:
 
-| Cluster Profile | Spark 1 Model Definitions | Spark 2 Model Definitions | Stable aliases |
+| Cluster Profile | GPU node 1 Model Definitions | GPU node 2 Model Definitions | Stable aliases |
 | --- | --- | --- | --- |
 | `agent-full-dual` (canonical default) | DeepSeek dual rank 0 | DeepSeek dual rank 1 | `deepseek` → dual DeepSeek definition |
 | `agent-long-dual` | DeepSeek long-context dual rank 0 | DeepSeek long-context dual rank 1 | `deepseek` → long-context dual DeepSeek definition |
@@ -126,21 +126,21 @@ The canonical initial Model Definition IDs are:
 
 | Model Definition ID | Intended runnable variant |
 | --- | --- |
-| `deepseek-agent-dual` | Mia/vLLM DeepSeek service spanning both Sparks |
-| `deepseek-long-dual` | controlled million-token Mia/vLLM DeepSeek service spanning both Sparks |
-| `deepseek-agent-single` | audited DS4 DeepSeek GGUF service on one Spark |
-| `nemotron-super-single` | accepted NVIDIA Nemotron 3 Super service on one Spark |
-| `nemotron-nano-omni-single` | accepted NVIDIA Nemotron 3 Nano Omni service on one Spark |
-| `qwen-image-single` | accepted Qwen-Image optimized service on one Spark |
-| `qwen-image-edit-2511-single` | accepted Qwen-Image-Edit-2511 optimized service on one Spark |
-| `pixal3d-single` | accepted Pixal3D service on one Spark |
-| `trellis2-4b-single` | accepted TRELLIS.2 4B service on one Spark |
-| `qwen3-vl-8b-single` | accepted Qwen3-VL-8B-Instruct service on one Spark |
-| `laguna-s21-single` | accepted Laguna S 2.1 NVFP4 service on one Spark |
-| `tokenrig-single` | accepted SkinTokens/TokenRig service on one Spark |
-| `step1x-3d-single` | accepted Step1X-3D service on one Spark |
-| `triposg-single` | accepted TripoSG service on one Spark |
-| `hunyuan3d-omni-single` | accepted Hunyuan3D-Omni service on one Spark |
+| `deepseek-agent-dual` | Mia/vLLM DeepSeek service spanning both GPU nodes |
+| `deepseek-long-dual` | controlled million-token Mia/vLLM DeepSeek service spanning both GPU nodes |
+| `deepseek-agent-single` | audited DS4 DeepSeek GGUF service on one GPU node |
+| `nemotron-super-single` | accepted NVIDIA Nemotron 3 Super service on one GPU node |
+| `nemotron-nano-omni-single` | accepted NVIDIA Nemotron 3 Nano Omni service on one GPU node |
+| `qwen-image-single` | accepted Qwen-Image optimized service on one GPU node |
+| `qwen-image-edit-2511-single` | accepted Qwen-Image-Edit-2511 optimized service on one GPU node |
+| `pixal3d-single` | accepted Pixal3D service on one GPU node |
+| `trellis2-4b-single` | accepted TRELLIS.2 4B service on one GPU node |
+| `qwen3-vl-8b-single` | accepted Qwen3-VL-8B-Instruct service on one GPU node |
+| `laguna-s21-single` | accepted Laguna S 2.1 NVFP4 service on one GPU node |
+| `tokenrig-single` | accepted SkinTokens/TokenRig service on one GPU node |
+| `step1x-3d-single` | accepted Step1X-3D service on one GPU node |
+| `triposg-single` | accepted TripoSG service on one GPU node |
+| `hunyuan3d-omni-single` | accepted Hunyuan3D-Omni service on one GPU node |
 
 A logical ID identifies the intended runnable variant. Its immutable content
 fingerprint identifies one exact set of pins and behavior. Cluster Profiles
@@ -158,8 +158,8 @@ Both DeepSeek Model Definitions expose the client-facing OpenAI-compatible model
 `single`, `dual`, `full`, `lite`, DS4, or Mia as OpenAI model names.
 Descriptive Cluster Profile IDs such as `agent-full-dual` may contain those
 terms. The active Cluster Profile chooses the backing definition. The
-dual-Spark definition is the faster default; the single-Spark definition preserves DeepSeek availability while
-freeing Spark 2 for creative models. Status, diagnostic logs, and artifact
+dual-GPU node definition is the faster default; the single-GPU node definition preserves DeepSeek availability while
+freeing GPU node 2 for creative models. Status, diagnostic logs, and artifact
 provenance still record the exact Model Definition, loader, checkpoint, and
 Cluster Profile so the abstraction does not hide operational identity.
 
@@ -200,24 +200,24 @@ agent/package path and never fall back to SSH.
 
 | Model Definition candidate | Preferred loader and precision | Placement | Residency |
 | --- | --- | --- | --- |
-| DeepSeek 0731 Mia service | Audited MiaAI-Lab/Anemll vLLM; BF16 model dtype, block-scaled FP8 E4M3 weights with UE8M0 scales, and padded `nvfp4_ds_mla` KV cache | both Sparks, TP=2 over NCCL | exclusive, persistent |
-| DeepSeek 0731 DS4 GGUF | Audited DS4 v0.5.3 GB10/Spark CUDA build with the Q2-imatrix base and DSpark drafter pair | one Spark by default; optional two-Spark TCP layer pipeline | mapped/registered no-copy |
-| DeepSeek 0731 DS4 branch variant | The same DS4 model with `bleysg` DSpark work merged into the Entrpi branch; release and drafter pins change together | one Spark initially | model-owned mapped/registered no-copy |
-| Nemotron 3 Super 120B-A12B | NVIDIA DGX Spark vLLM NVFP4 playbook; TensorRT-LLM comparison definition | either single Spark | persistent, single-exclusive initially |
-| Nemotron 3 Nano Omni 30B-A3B | NVIDIA DGX Spark vLLM playbook with BF16 correctness and FP8/NVFP4 optimized definitions | either single Spark | persistent; shareable only after combined-load tests |
-| Qwen-Image | accepted ModelOpt NVFP4 SGLang Spark path; official Diffusers as non-serving correctness oracle | either single Spark | persistent, fully resident |
-| Qwen-Image-Edit-2511 | accepted Nunchaku NVFP4 or ModelOpt FP8 Spark path, selected by quality and performance; DiffSynth as oracle | either single Spark | persistent, fully resident |
-| Pixal3D | audited Spark-native Pixal3D/TRELLIS.2 build with official fully resident or staged mode | either single Spark | fully resident; official staged mode as fallback |
-| TRELLIS.2 4B | audited CUDA 13/ARM64 DGX Spark build of the official Microsoft pipeline | either single Spark | fully resident |
-| Qwen3-VL-8B-Instruct | accepted GB10-native vLLM or SGLang build with optimized vision attention | either single Spark | persistent server with paged KV cache |
-| Laguna S 2.1 | official Laguna S 2.1 NVFP4 vLLM path; FP8 and forked loaders are separate comparison definitions | either single Spark | persistent MoE service with bounded KV cache |
-| SkinTokens / TokenRig | audited FP16 Spark integration or GB10-native TokenRig build | either single Spark | persistent Qwen3-0.6B plus FSQ-CVAE |
-| Step1X-3D | GB10-native build of the official Step1X geometry and texture pipelines | either single Spark | sequential stage residency |
-| TripoSG | GB10-native build of the official TripoSG Diffusers pipeline | either single Spark | persistent lightweight worker |
-| Hunyuan3D-Omni | GB10-native official runtime with accepted FlashVDM acceleration | either single Spark | persistent lightweight worker |
+| DeepSeek 0731 Mia service | Audited MiaAI-Lab/Anemll vLLM; BF16 model dtype, block-scaled FP8 E4M3 weights with UE8M0 scales, and padded `nvfp4_ds_mla` KV cache | both GPU nodes, TP=2 over NCCL | exclusive, persistent |
+| DeepSeek 0731 DS4 GGUF | Audited DS4 v0.5.3 GB10/GPU node CUDA build with the Q2-imatrix base and draft-model drafter pair | one GPU node by default; optional two-GPU node TCP layer pipeline | mapped/registered no-copy |
+| DeepSeek 0731 DS4 branch variant | The same DS4 model with `bleysg` draft-model work merged into the Entrpi branch; release and drafter pins change together | one GPU node initially | model-owned mapped/registered no-copy |
+| Nemotron 3 Super 120B-A12B | NVIDIA Vonk Forge GPU node vLLM NVFP4 playbook; TensorRT-LLM comparison definition | either single GPU node | persistent, single-exclusive initially |
+| Nemotron 3 Nano Omni 30B-A3B | NVIDIA Vonk Forge GPU node vLLM playbook with BF16 correctness and FP8/NVFP4 optimized definitions | either single GPU node | persistent; shareable only after combined-load tests |
+| Qwen-Image | accepted ModelOpt NVFP4 SGLang GPU node path; official Diffusers as non-serving correctness oracle | either single GPU node | persistent, fully resident |
+| Qwen-Image-Edit-2511 | accepted Nunchaku NVFP4 or ModelOpt FP8 GPU node path, selected by quality and performance; DiffSynth as oracle | either single GPU node | persistent, fully resident |
+| Pixal3D | audited GPU node-native Pixal3D/TRELLIS.2 build with official fully resident or staged mode | either single GPU node | fully resident; official staged mode as fallback |
+| TRELLIS.2 4B | audited CUDA 13/ARM64 Vonk Forge GPU node build of the official Microsoft pipeline | either single GPU node | fully resident |
+| Qwen3-VL-8B-Instruct | accepted GB10-native vLLM or SGLang build with optimized vision attention | either single GPU node | persistent server with paged KV cache |
+| Laguna S 2.1 | official Laguna S 2.1 NVFP4 vLLM path; FP8 and forked loaders are separate comparison definitions | either single GPU node | persistent MoE service with bounded KV cache |
+| SkinTokens / TokenRig | audited FP16 GPU node integration or GB10-native TokenRig build | either single GPU node | persistent Qwen3-0.6B plus FSQ-CVAE |
+| Step1X-3D | GB10-native build of the official Step1X geometry and texture pipelines | either single GPU node | sequential stage residency |
+| TripoSG | GB10-native build of the official TripoSG Diffusers pipeline | either single GPU node | persistent lightweight worker |
+| Hunyuan3D-Omni | GB10-native official runtime with accepted FlashVDM acceleration | either single GPU node | persistent lightweight worker |
 
-`either single Spark` means the controller may place the Model Definition on Spark 1
-or Spark 2 only when its complete verified cache and compatible image exist on
+`either single GPU node` means the controller may place the Model Definition on GPU node 1
+or GPU node 2 only when its complete verified cache and compatible image exist on
 that node. It never migrates a live request.
 
 ## Loader-specific rules
@@ -226,40 +226,40 @@ that node. It never migrates a live request.
 
 - Both nodes keep the complete verified Hugging Face snapshot on local NVMe.
 - vLLM partitions runtime tensors across TP rank 0 and rank 1; the two nominal 128 GB unified-memory domains do not become one coherent 256 GB address space.
-- Start Spark 2's worker before Spark 1's head; stop the head before the worker.
+- Start GPU node 2's worker before GPU node 1's head; stop the head before the worker.
 - Use explicit fabric interfaces, HCAs, GID indexes, offline cache mode, capacity limits, and pinned sampling presets.
 - This is the default DeepSeek service because it uses the validated NCCL/RoCE fabric and supports concurrent API serving.
 
 ### DeepSeek with DS4
 
-- Store the checked Q2-imatrix base GGUF and DSpark drafter on local NVMe and use DS4's `mmap` path.
+- Store the checked Q2-imatrix base GGUF and draft-model drafter on local NVMe and use DS4's `mmap` path.
 - Production uses mapped/registered no-copy startup. Never set `DS4_CUDA_COPY_MODEL` or enable `DS4_MODEL_ANON_HUGE`; full-copy startup is prohibited. Set `DS4_NO_UPDATE_CHECK=1`.
-- MXFP4 remains deferred until both loader support and measured one-Spark admission exist. DS4 v0.5.3 rejects GGUF type 39, and the available 155,976,458,848-byte MXFP4 GGUF does not fit one Spark's visible memory.
-- Use one Spark for the single-Spark DeepSeek Model Definition. Treat DS4's documented two-host TCP layer pipeline as a separate experimental Model Definition: it divides layers and KV state but adds an inter-node hop to every decoded token and does not use NCCL tensor parallelism.
-- SSD streaming paths documented for other backends are not assumed valid for Spark CUDA.
+- MXFP4 remains deferred until both loader support and measured one-GPU node admission exist. DS4 v0.5.3 rejects GGUF type 39, and the available 155,976,458,848-byte MXFP4 GGUF does not fit one GPU node's visible memory.
+- Use one GPU node for the single-GPU node DeepSeek Model Definition. Treat DS4's documented two-host TCP layer pipeline as a separate experimental Model Definition: it divides layers and KV state but adds an inter-node hop to every decoded token and does not use NCCL tensor parallelism.
+- SSD streaming paths documented for other backends are not assumed valid for GPU node CUDA.
 
 ### Nemotron
 
 - Keep DeepSeek 0731 as the default agent; Nemotron Cluster Profiles are explicit alternatives rather than an automatic replacement.
-- Start Nemotron 3 Super from NVIDIA's DGX Spark NVFP4 vLLM recipe. Pin its Marlin/CUTLASS MoE backend, FP8 KV-cache setting, MTP setting, reasoning parser, tool-call parser, context, and concurrency limits. TensorRT-LLM is a measured comparison definition, not an assumed upgrade.
-- Start Nemotron 3 Nano Omni with the official NVIDIA Spark vLLM recipe. Preserve BF16 as the semantic reference and evaluate the official FP8 and NVFP4 artifacts separately.
-- Nano Omni is the first candidate for a lightweight resident agent beside a creative profile on the other Spark. It still begins as `single-exclusive`; only a recorded exact-set co-residency test can make it `single-shareable` in a named Cluster Profile.
+- Start Nemotron 3 Super from NVIDIA's Vonk Forge GPU node NVFP4 vLLM recipe. Pin its Marlin/CUTLASS MoE backend, FP8 KV-cache setting, MTP setting, reasoning parser, tool-call parser, context, and concurrency limits. TensorRT-LLM is a measured comparison definition, not an assumed upgrade.
+- Start Nemotron 3 Nano Omni with the official NVIDIA GPU node vLLM recipe. Preserve BF16 as the semantic reference and evaluate the official FP8 and NVFP4 artifacts separately.
+- Nano Omni is the first candidate for a lightweight resident agent beside a creative profile on the other GPU node. It still begins as `single-exclusive`; only a recorded exact-set co-residency test can make it `single-shareable` in a named Cluster Profile.
 - Super and Nano expose OpenAI-compatible endpoints and receive the same pinned sampling, reasoning, tool-use, concurrency, and long-context admission controls as DeepSeek.
 
 ### Qwen image generation and editing
 
 - Use official Diffusers output only as the correctness oracle.
-- Serve Qwen-Image through the accepted ModelOpt NVFP4 SGLang Spark path. Serve Qwen-Image-Edit through the accepted Nunchaku NVFP4 or ModelOpt FP8 path, selected by the cluster's quality, memory, and throughput results.
+- Serve Qwen-Image through the accepted ModelOpt NVFP4 SGLang GPU node path. Serve Qwen-Image-Edit through the accepted Nunchaku NVFP4 or ModelOpt FP8 path, selected by the cluster's quality, memory, and throughput results.
 - Keep DiffSynth as the Qwen-Image-Edit-2511 compatibility reference and as an offload fallback. Its staged and disk-offload modes are not enabled merely because they use less CUDA allocator space.
 - Cache-based denoising, quantization, Lightning/distilled checkpoints, or approximate step skipping require separate Model Definitions because they may change output quality.
-- SGLang's documented multi-GPU diffusion modes do not establish two-host Spark support. Cross-host execution remains disabled until a strict fabric-only acceptance test proves it; one Spark has sufficient capacity for the requested image models.
+- SGLang's documented multi-GPU diffusion modes do not establish two-host GPU node support. Cross-host execution remains disabled until a strict fabric-only acceptance test proves it; one GPU node has sufficient capacity for the requested image models.
 
 ### Pixal3D and TRELLIS.2
 
-- Use each official repository and checkpoint as the acceptance oracle, while the deployed Model Definition uses an audited CUDA 13, ARM64, GB10 Spark build.
+- Use each official repository and checkpoint as the acceptance oracle, while the deployed Model Definition uses an audited CUDA 13, ARM64, GB10 GPU node build.
 - Run the standard fully resident path first. Pixal3D's official `--low_vram` mode may stage components by pipeline phase when allocator headroom or co-residency requires it.
 - CPU offload does not create a second physical memory pool on GB10 unified memory. It may relieve CUDA allocator pressure, but total host memory remains the admission constraint.
-- Multi-node code in these repositories is training/data-tooling support, not evidence of distributed inference. Initial inference is single-Spark.
+- Multi-node code in these repositories is training/data-tooling support, not evidence of distributed inference. Initial inference is single-GPU node.
 - Community ComfyUI and low-memory forks are candidates only after source, license, checkpoint, kernel, output-quality, and maintenance audits. They cannot replace the official baseline before comparison.
 
 ### Qwen3-VL
@@ -272,11 +272,11 @@ that node. It never migrates a live request.
 
 - Preserve its two-stage geometry-then-texture flow and official model separation.
 - Release or offload a completed stage before the next stage only when the accepted wrapper proves identical artifacts and improved peak memory.
-- Published distributed features for training or rendering do not make inference a dual-Spark Model Definition.
+- Published distributed features for training or rendering do not make inference a dual-GPU node Model Definition.
 
 ### TripoSG, TokenRig, and Hunyuan3D-Omni
 
-- Use persistent single-Spark workers to avoid reloading weights for each asset.
+- Use persistent single-GPU node workers to avoid reloading weights for each asset.
 - TripoSG uses its official Diffusers pipeline and separately verified RMBG dependency.
 - TokenRig loads both the autoregressive rigging checkpoint and the SkinTokens FSQ-CVAE; its output test must validate skeleton hierarchy and normalized skin weights, not only GLB syntax.
 - Hunyuan3D-Omni serves through the accepted FlashVDM Model Definition. The official non-FlashVDM path remains its correctness oracle and diagnostic fallback.
@@ -285,35 +285,35 @@ that node. It never migrates a live request.
 
 Every model keeps a non-serving correctness Model Definition based on its
 official upstream checkpoint and runtime. A user-selectable Cluster Profile
-always uses the best accepted DGX Spark-optimized Model Definition available
+always uses the best accepted Vonk Forge GPU node-optimized Model Definition available
 for the exact model. An optimized checkpoint, quantization, kernel fork, or
-Spark-specific container remains quarantined only until it proves equivalent
+GPU node-specific container remains quarantined only until it proves equivalent
 enough for its declared use; after acceptance the applicable Cluster Profiles
 select it. Reduced memory use alone is not sufficient.
 
-If no exact Spark path is available, implementation produces and benchmarks an ARM64/CUDA 13/GB10-native build of the official runtime. The model is not considered complete merely because a generic upstream command happens to run. The generic Model Definition remains available only for qualification, regression comparison, and recovery diagnostics.
+If no exact GPU node path is available, implementation produces and benchmarks an ARM64/CUDA 13/GB10-native build of the official runtime. The model is not considered complete merely because a generic upstream command happens to run. The generic Model Definition remains available only for qualification, regression comparison, and recovery diagnostics.
 
 Candidate status has four meanings:
 
-1. **Official Spark path:** NVIDIA or the model owner publishes a DGX Spark recipe or artifact for the exact model.
-2. **Spark community path:** a Spark-specific integration exists, but source, image, checkpoint, licensing, and results require independent audit.
-3. **Upstream optimization:** the exact model has an optimized artifact or mode, but two-Spark or GB10 validation is not established.
-4. **No exact Spark path found:** the current primary-source survey found no maintained optimization for the exact requested model; this is not evidence that none can exist.
+1. **Official GPU node path:** NVIDIA or the model owner publishes a Vonk Forge GPU node recipe or artifact for the exact model.
+2. **GPU node community path:** a GPU node-specific integration exists, but source, image, checkpoint, licensing, and results require independent audit.
+3. **Upstream optimization:** the exact model has an optimized artifact or mode, but two-GPU node or GB10 validation is not established.
+4. **No exact GPU node path found:** the current primary-source survey found no maintained optimization for the exact requested model; this is not evidence that none can exist.
 
 | Model | Best optimized candidate found on 2026-08-02 | Status and adoption rule |
 | --- | --- | --- |
-| DeepSeek-V4-Flash-0731 | Mia's dual-Spark vLLM recipe with MTP and padded `nvfp4_ds_mla`; DS4 v0.5.3 Q2-imatrix plus DSpark pair; NVIDIA `DeepSeek-V4-Flash-NVFP4` | Mia remains the first dual-Spark service candidate. The audited DS4 pair is the single-Spark candidate, subject to runtime admission. MXFP4 remains deferred until DS4 has loader support and measured one-Spark admission. |
-| Nemotron 3 Super 120B-A12B | NVIDIA's exact NVFP4 checkpoint and DGX Spark vLLM/TensorRT-LLM playbook | Official Spark path and preferred initial profile. Validate the pinned Marlin/CUTLASS, FP8 KV, MTP, reasoning, and tool settings on this cluster. |
-| Nemotron 3 Nano Omni 30B-A3B | NVIDIA's DGX Spark vLLM BF16/FP8/NVFP4 recipes and exact FP8 artifact | Official Spark path. BF16 is the semantic reference; FP8 and NVFP4 compete on quality, memory, and throughput. |
-| Qwen-Image | `lmsys/qwen-image-modelopt-nvfp4-sglang` plus NVIDIA's published NVFP4-on-Spark path | Official/upstream Spark path. Compare against official BF16 Diffusers using fixed prompt, text-rendering, and identity fixtures before promotion. |
-| Qwen-Image-Edit-2511 | Nunchaku SVDQuant W4A4/NVFP4 build reporting DGX Spark measurements; ModelOpt FP8 transformer; community FP8 checkpoint | Exact Spark community and upstream optimized paths. Audit Nunchaku and compare edit fidelity and protected-region preservation against BF16 before promotion. |
-| Pixal3D | Official `--low_vram` staging; Super-Idol-Master Spark integration | Upstream optimization plus recent community Spark integration. The official fully resident path remains the reference; the community ARM64 patches are audited independently. |
-| TRELLIS.2 4B | `dgx-trellis2` and `Trellis2-DGX-Spark-Docker` | Spark community paths. Use them as CUDA 13/ARM64 build references, not as trusted deployment pins, until reproducibility and output parity pass. |
-| Qwen3-VL-8B-Instruct | vLLM/SGLang FlashAttention path; no exact official 8B NVFP4 Spark artifact found | Upstream optimization. Do not substitute NVIDIA's different-size Qwen3-VL NVFP4 artifacts for the required 8B model. Benchmark BF16, FP8, and an audited weight-quantized 8B candidate if available. |
-| SkinTokens / TokenRig | FP16 Spark integration in Super-Idol-Master | Spark community path. No dedicated exact-model optimized loader was found; audit the integration while retaining official TokenRig as the non-serving correctness oracle. |
-| Step1X-3D | Official sequential geometry/texture loading and offload controls | No exact Spark path found. Build the official runtime for ARM64/GB10 and measure phase release rather than assuming a community quantization. |
-| TripoSG | Official lightweight Diffusers pipeline | No exact Spark path found. Its published memory requirement already makes single-Spark serving practical; produce and measure the GB10-native build before declaring its Model Definition accepted. |
-| Hunyuan3D-Omni | Official FlashVDM mode | Upstream optimization. A Spark container for Hunyuan3D 2.1 is useful as an ARM64 build reference but is not the requested Omni model and cannot replace it. |
+| DeepSeek-V4-Flash-0731 | Mia's dual-GPU node vLLM recipe with MTP and padded `nvfp4_ds_mla`; DS4 v0.5.3 Q2-imatrix plus draft-model pair; NVIDIA `DeepSeek-V4-Flash-NVFP4` | Mia remains the first dual-GPU node service candidate. The audited DS4 pair is the single-GPU node candidate, subject to runtime admission. MXFP4 remains deferred until DS4 has loader support and measured one-GPU node admission. |
+| Nemotron 3 Super 120B-A12B | NVIDIA's exact NVFP4 checkpoint and Vonk Forge GPU node vLLM/TensorRT-LLM playbook | Official GPU node path and preferred initial profile. Validate the pinned Marlin/CUTLASS, FP8 KV, MTP, reasoning, and tool settings on this cluster. |
+| Nemotron 3 Nano Omni 30B-A3B | NVIDIA's Vonk Forge GPU node vLLM BF16/FP8/NVFP4 recipes and exact FP8 artifact | Official GPU node path. BF16 is the semantic reference; FP8 and NVFP4 compete on quality, memory, and throughput. |
+| Qwen-Image | `lmsys/qwen-image-modelopt-nvfp4-sglang` plus NVIDIA's published NVFP4-on-GPU node path | Official/upstream GPU node path. Compare against official BF16 Diffusers using fixed prompt, text-rendering, and identity fixtures before promotion. |
+| Qwen-Image-Edit-2511 | Nunchaku SVDQuant W4A4/NVFP4 build reporting Vonk Forge GPU node measurements; ModelOpt FP8 transformer; community FP8 checkpoint | Exact GPU node community and upstream optimized paths. Audit Nunchaku and compare edit fidelity and protected-region preservation against BF16 before promotion. |
+| Pixal3D | Official `--low_vram` staging; Super-Idol-Master GPU node integration | Upstream optimization plus recent community GPU node integration. The official fully resident path remains the reference; the community ARM64 patches are audited independently. |
+| TRELLIS.2 4B | `vonk-trellis2` and `Trellis2-Vonk Forge-GPU node-Docker` | GPU node community paths. Use them as CUDA 13/ARM64 build references, not as trusted deployment pins, until reproducibility and output parity pass. |
+| Qwen3-VL-8B-Instruct | vLLM/SGLang FlashAttention path; no exact official 8B NVFP4 GPU node artifact found | Upstream optimization. Do not substitute NVIDIA's different-size Qwen3-VL NVFP4 artifacts for the required 8B model. Benchmark BF16, FP8, and an audited weight-quantized 8B candidate if available. |
+| SkinTokens / TokenRig | FP16 GPU node integration in Super-Idol-Master | GPU node community path. No dedicated exact-model optimized loader was found; audit the integration while retaining official TokenRig as the non-serving correctness oracle. |
+| Step1X-3D | Official sequential geometry/texture loading and offload controls | No exact GPU node path found. Build the official runtime for ARM64/GB10 and measure phase release rather than assuming a community quantization. |
+| TripoSG | Official lightweight Diffusers pipeline | No exact GPU node path found. Its published memory requirement already makes single-GPU node serving practical; produce and measure the GB10-native build before declaring its Model Definition accepted. |
+| Hunyuan3D-Omni | Official FlashVDM mode | Upstream optimization. A GPU node container for Hunyuan3D 2.1 is useful as an ARM64 build reference but is not the requested Omni model and cannot replace it. |
 
 Before an optimized Model Definition becomes selectable, its checked-in
 evidence must include immutable source, container, checkpoint, and
@@ -322,7 +322,7 @@ offline startup; model-specific output comparison; memory and throughput
 measurements; license and provenance review; and three clean lifecycle cycles.
 A community claim or benchmark is discovery evidence, never an acceptance
 result for this cluster. Once a definition passes, applicable Cluster Profiles
-point to it by default; users do not have to opt into Spark optimization
+point to it by default; users do not have to opt into GPU node optimization
 manually.
 
 Production pins live in `locks/model-definitions.toml`. Each definition has a
@@ -342,18 +342,18 @@ evidence may advance its definition.
 
 ## Memory and residency policy
 
-Each Spark is marketed as a 128 GB unified-memory host, but the platform
+Each GPU node is marketed as a 128 GB unified-memory host, but the platform
 inventory records `130,663,231,488` visible bytes, or about `121.69 GiB`, on
 each node. Admission uses measured bytes from the inventory and never the
 nominal capacity. Initial clean available memory was `126,990,147,584` bytes on
-Spark 1 and `126,946,283,520` bytes on Spark 2. Reserving exactly `8 GiB`
+GPU node 1 and `126,946,283,520` bytes on GPU node 2. Reserving exactly `8 GiB`
 (`8,589,934,592` bytes) for the operating system establishes the initial
 per-node Model Definition budgets:
 
 | Node | Visible total | Clean available baseline | OS reserve | Initial Model Definition budget |
 | --- | ---: | ---: | ---: | ---: |
-| Spark 1 | 130,663,231,488 B | 126,990,147,584 B | 8,589,934,592 B | 118,400,212,992 B (110.27 GiB) |
-| Spark 2 | 130,663,231,488 B | 126,946,283,520 B | 8,589,934,592 B | 118,356,348,928 B (110.23 GiB) |
+| GPU node 1 | 130,663,231,488 B | 126,990,147,584 B | 8,589,934,592 B | 118,400,212,992 B (110.27 GiB) |
+| GPU node 2 | 130,663,231,488 B | 126,946,283,520 B | 8,589,934,592 B | 118,356,348,928 B (110.23 GiB) |
 
 The source of truth is `inventory/reports/capacity.json`, which records the
 boot ID, sample time, visible total, clean baseline, reserve, derived budget,
@@ -372,8 +372,8 @@ resident weights
 
 Model Definitions have one of these placement classes:
 
-1. `dual-exclusive`: reserves both Sparks, such as the Mia DeepSeek definition.
-2. `single-exclusive`: uses one Spark and forbids other GPU Model Definitions there until measured otherwise.
+1. `dual-exclusive`: reserves both GPU nodes, such as the Mia DeepSeek definition.
+2. `single-exclusive`: uses one GPU node and forbids other GPU Model Definitions there until measured otherwise.
 3. `single-shareable`: may coexist only in explicitly accepted exact Model Definition sets.
 4. `dual-pipeline-experimental`: uses both hosts through a non-NCCL model-specific pipeline, such as DS4 TCP.
 
@@ -392,7 +392,7 @@ remains exclusive and makes the target profile non-activatable.
 
 Every distributed Model Definition pins and verifies the accepted direct-fabric
 state before startup. One physical QSFP cable connects one `200000 Mb/s` port
-on each Spark. The port is exposed through two Linux Ethernet/RoCE functions
+on each GPU node. The port is exposed through two Linux Ethernet/RoCE functions
 because the NIC reaches the SoC over two PCIe Gen5 x4 links. The functions are
 not independent 200 Gb/s physical rails and their duplicated link-rate reports
 must not be added to claim 400 Gb/s.
@@ -438,7 +438,7 @@ overlap interval, counter snapshots, and command evidence are recorded in
 
 ## Storage layout
 
-Each Spark uses local NVMe:
+Each GPU node uses local NVMe:
 
 ```text
 /srv/models/
@@ -452,7 +452,7 @@ Each Spark uses local NVMe:
 - Writable runtime caches and generated outputs use separate mounts.
 - A Model Definition verifies every primary and auxiliary checkpoint before offline start.
 - The NAS may archive or distribute artifacts later, but it is never the live checkpoint, JIT, KV, temporary-latent, or output-work path.
-- A model needed on either Spark is synchronized and verified independently on both nodes before it is declared portable.
+- A model needed on either GPU node is synchronized and verified independently on both nodes before it is declared portable.
 
 ## API and pipeline boundary
 
@@ -464,19 +464,19 @@ The platform exposes two endpoint classes:
 - Typed job endpoints for image generation, image editing, 3D generation, texturing, and rigging. These return a job identifier, status, runtime/model identity, pinned parameters, and artifact references.
 
 DeepSeek clients always request the stable model name `deepseek`. Activating a
-different Cluster Profile may change its internal single- or dual-Spark Model
+different Cluster Profile may change its internal single- or dual-GPU node Model
 Definition, but does not change the client URL, authentication, request schema,
 or model name. A profile switch can still require a bounded maintenance window
 when the old and new definitions cannot coexist; stable naming prevents
 client reconfiguration but does not falsely promise spare-compute failover.
 
-Generated artifacts remain on Spark-local output storage during initial testing and are retrieved through SSH. The later gateway may provide an authenticated artifact route after size, timeout, and NAS-transfer behavior are measured.
+Generated artifacts remain on GPU node-local output storage during initial testing and are retrieved through SSH. The later gateway may provide an authenticated artifact route after size, timeout, and NAS-transfer behavior are measured.
 
 ## Switching and failure behavior
 
-Until the external control host exists, `sparkctl` runs on the developer
-machine. It stores atomic controller state at `.state/sparkctl/state.json` and
-serializes transitions with `.state/sparkctl/switch.lock`. The lock records the
+Until the external control host exists, `vonkctl` runs on the developer
+machine. It stores atomic controller state at `.state/vonkctl/state.json` and
+serializes transitions with `.state/vonkctl/switch.lock`. The lock records the
 PID, host identity, and timestamp. A stale-lock override is explicit and is
 refused when the PID is live or the lock is younger than the configured
 threshold. Moving this controller to the future control host preserves the same
@@ -490,7 +490,7 @@ test state and latency baseline.
 
 Profile activation is the only state-changing public operation. The controller
 may retain an unchanged Model Definition, such as the same accepted
-single-Spark DeepSeek definition on Spark 1, only when its definition hash,
+single-GPU node DeepSeek definition on GPU node 1, only when its definition hash,
 health, endpoint, and placement are identical in both profiles. Changed
 definitions follow their
 declared stop and start order. Convenience commands that mention a model must
@@ -505,7 +505,7 @@ restarted.
 Temporary use may request an explicit restoration target, for example:
 
 ```text
-sparkctl profile activate creative-3d --restore agent-full-dual
+vonkctl profile activate creative-3d --restore agent-full-dual
 ```
 
 `--restore` stores the canonical accepted Cluster Profile ID and is not a
@@ -559,7 +559,7 @@ The design was checked on 2026-08-02 against these upstream source snapshots. Th
 | Project | Reviewed commit |
 | --- | --- |
 | DS4 | v0.5.3, peeled commit `4ad370b4a338efe9723a386673c0e04f6e214108`; see the immutable DS4 audit |
-| MiaAI-Lab dual Spark | `b131b2a22164675890dd1465fd8862b5cfb6ff13` |
+| MiaAI-Lab dual GPU node | `b131b2a22164675890dd1465fd8862b5cfb6ff13` |
 | Qwen-Image | `6b5e1f5cec987d404be5ac6657db3b9aacb56a89` |
 | SGLang | `8d106c3d79ef885f2fc0684f1915ebc404acfbe8` |
 | DiffSynth-Studio | `6e2b14bc73ff317229b2a28487fe09250bbf463f` |
@@ -573,31 +573,31 @@ The design was checked on 2026-08-02 against these upstream source snapshots. Th
 ## References
 
 - [DS4 audited source](https://github.com/Entrpi/ds4)
-- [MiaAI-Lab DeepSeek dual-Spark recipe](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark)
+- [MiaAI-Lab DeepSeek dual-GPU node recipe](https://github.com/ node)
 - [NVIDIA DeepSeek-V4-Flash NVFP4](https://huggingface.co/nvidia/DeepSeek-V4-Flash-NVFP4)
-- [DS4 on Spark](https://github.com/Entrpi/ds4-on-spark)
-- [NVIDIA Nemotron DGX Spark playbook](https://build.nvidia.com/spark/nemotron)
-- [NVIDIA vLLM DGX Spark playbook](https://build.nvidia.com/spark/vllm/instructions)
+- [DS4 on GPU node](https://github.com/Entrpi/ds4-on-node)
+- [NVIDIA Nemotron Vonk Forge GPU node playbook](https://build.nvidia.com/node/nemotron)
+- [NVIDIA vLLM Vonk Forge GPU node playbook](https://build.nvidia.com/node/vllm/instructions)
 - [NVIDIA Nemotron 3 Super 120B-A12B NVFP4](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4)
 - [NVIDIA Nemotron 3 Nano Omni 30B-A3B Reasoning FP8](https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-FP8)
 - [Qwen-Image](https://github.com/QwenLM/Qwen-Image)
 - [Qwen-Image ModelOpt NVFP4 for SGLang](https://huggingface.co/lmsys/qwen-image-modelopt-nvfp4-sglang)
-- [NVIDIA: NVFP4 Qwen-Image on DGX Spark](https://blogs.nvidia.com/blog/dgx-spark-and-station-open-source-frontier-models/)
+- [NVIDIA: NVFP4 Qwen-Image on Vonk Forge GPU node](https://blogs.nvidia.com/blog/vonk-node-and-station-open-source-frontier-models/)
 - [Nunchaku Qwen-Image-Edit-2511](https://huggingface.co/stuqiu/nunchaku-qwen-image-edit-2511)
 - [SGLang Diffusion](https://docs.sglang.io/docs/sglang-diffusion)
 - [DiffSynth-Studio](https://github.com/modelscope/DiffSynth-Studio)
 - [Pixal3D](https://github.com/TencentARC/Pixal3D)
 - [TRELLIS.2](https://github.com/microsoft/TRELLIS.2)
-- [NVIDIA forum: TRELLIS.2 on DGX Spark](https://forums.developer.nvidia.com/t/trellis-2-on-dgx-spark/355816)
-- [dgx-trellis2](https://github.com/raziel2001au/dgx-trellis2)
-- [TRELLIS.2 DGX Spark Docker](https://github.com/dr-vij/Trellis2-DGX-Spark-Docker)
-- [Super-Idol-Master DGX Spark integration](https://github.com/SidneyArt/Super-Idol-Master)
+- [NVIDIA forum: TRELLIS.2 on Vonk Forge GPU node](https://forums.developer.nvidia.com/t/trellis-2-on-vonk-node/355816)
+- [vonk-trellis2](https://github.com/raziel2001au/vonk-trellis2)
+- [TRELLIS.2 Vonk Forge GPU node Docker](https://github.com/ node-Docker)
+- [Super-Idol-Master Vonk Forge GPU node integration](https://github.com/SidneyArt/Super-Idol-Master)
 - [Qwen3-VL-8B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct)
 - [SkinTokens / TokenRig](https://github.com/VAST-AI-Research/SkinTokens)
 - [Step1X-3D](https://github.com/stepfun-ai/Step1X-3D)
 - [TripoSG](https://github.com/VAST-AI-Research/TripoSG)
 - [Hunyuan3D-Omni](https://github.com/Tencent-Hunyuan/Hunyuan3D-Omni)
-- [Hunyuan3D 2.1 DGX Spark Docker build reference](https://github.com/dr-vij/Hunyuan3D-2.1-DGX-Spark-Docker)
-- [NVIDIA DGX Spark NGC best practices](https://docs.nvidia.com/dgx/dgx-spark/ngc.html)
-- [NVIDIA DGX Spark clustering](https://docs.nvidia.com/dgx/dgx-spark/spark-clustering.html)
-- [NVIDIA DGX Spark playbooks](https://github.com/NVIDIA/dgx-spark-playbooks)
+- [Hunyuan3D 2.1 Vonk Forge GPU node Docker build reference](https://github.com/ node-Docker)
+- [NVIDIA Vonk Forge GPU node NGC best practices](https://docs.nvidia.com/)
+- [NVIDIA Vonk Forge GPU node clustering](https://docs.nvidia.com/)
+- [NVIDIA Vonk Forge GPU node playbooks](https://github.com/NVIDIA/vonk-node-playbooks)

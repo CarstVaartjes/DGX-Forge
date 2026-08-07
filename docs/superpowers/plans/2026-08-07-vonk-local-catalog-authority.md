@@ -27,7 +27,7 @@
 - Create: `schemas/global/problem-v1.schema.json`
 - Create: `schemas/global/test-report-v1.schema.json`
 - Create: `schemas/global/contract.lock.json`
-- Create: `control/src/dgx_control/recipe_contract.py`
+- Create: `control/src/vonk_control/recipe_contract.py`
 - Create: `control/tests/test_recipe_contract.py`
 - Create: `scripts/update-global-contracts`
 
@@ -48,7 +48,7 @@ def test_recipe_hash_matches_global_fixture(global_recipe_fixture, global_contra
 
 Run: `uv run --project control pytest control/tests/test_recipe_contract.py -v`
 
-Expected: FAIL because `dgx_control.recipe_contract` is absent.
+Expected: FAIL because `vonk_control.recipe_contract` is absent.
 
 - [ ] **Step 3: Vendor the exact released global contract**
 
@@ -75,7 +75,7 @@ Expected: PASS for both global fixtures and rejection of a float, duplicate key,
 - [ ] **Step 6: Commit contract pin**
 
 ```bash
-git add schemas/global control/src/dgx_control/recipe_contract.py control/tests/test_recipe_contract.py scripts/update-global-contracts
+git add schemas/global control/src/vonk_control/recipe_contract.py control/tests/test_recipe_contract.py scripts/update-global-contracts
 git commit -m "feat: pin public recipe contract"
 ```
 
@@ -83,7 +83,7 @@ git commit -m "feat: pin public recipe contract"
 
 **Files:**
 - Create: `control/migrations/versions/0015_recipe_catalog.py`
-- Modify: `control/src/dgx_control/models.py`
+- Modify: `control/src/vonk_control/models.py`
 - Create: `control/tests/test_recipe_catalog_migration.py`
 
 **Interfaces:**
@@ -117,7 +117,7 @@ Create these exact identities:
 - `materialized_deployments(id UUID PK, recipe_revision_id FK, alias, state, placement_digest, config JSON, created_by, created_at, updated_at)`;
 - `materialized_deployment_nodes(id UUID PK, deployment_id FK, node_id FK, rank, role, state, reserved_disk_bytes, reserved_memory_bytes, observed_memory_bytes, endpoint JSON, updated_at)`.
 
-Use unique constraints on revision number/content per recipe, alias, `(deployment_id,node_id)`, and `(deployment_id,rank)`. Lifecycle accepts only `draft`, `blocked`, `resolved`, `deprecated`; source kind accepts `local`, `sparkrun`, `global`. Resolved revisions require a content hash and can never be updated through service code.
+Use unique constraints on revision number/content per recipe, alias, `(deployment_id,node_id)`, and `(deployment_id,rank)`. Lifecycle accepts only `draft`, `blocked`, `resolved`, `deprecated`; source kind accepts `local`, `workload_run`, `global`. Resolved revisions require a content hash and can never be updated through service code.
 
 - [ ] **Step 4: Implement SQLAlchemy parity**
 
@@ -132,16 +132,16 @@ Expected: PASS, including cascade rules, duplicate hash rejection, invalid lifec
 - [ ] **Step 6: Commit the migration**
 
 ```bash
-git add control/migrations/versions/0015_recipe_catalog.py control/src/dgx_control/models.py control/tests
+git add control/migrations/versions/0015_recipe_catalog.py control/src/vonk_control/models.py control/tests
 git commit -m "feat: add local recipe catalog tables"
 ```
 
 ### Task 3: Seed standard package families idempotently
 
 **Files:**
-- Create: `control/src/dgx_control/catalog_seeds.py`
+- Create: `control/src/vonk_control/catalog_seeds.py`
 - Create: `control/tests/test_catalog_seeds.py`
-- Modify: `control/src/dgx_control/api.py`
+- Modify: `control/src/vonk_control/api.py`
 
 **Interfaces:**
 - Produces: `seed_standard_families(session: Session, now: datetime) -> SeedResult`
@@ -183,15 +183,15 @@ Expected: PASS for empty, already-seeded, user-edited, interrupted-transaction, 
 - [ ] **Step 6: Commit seeds**
 
 ```bash
-git add control/src/dgx_control/catalog_seeds.py control/src/dgx_control/api.py control/tests
+git add control/src/vonk_control/catalog_seeds.py control/src/vonk_control/api.py control/tests
 git commit -m "feat: seed standard recipe families"
 ```
 
 ### Task 4: Implement recipe repository and immutable revision service
 
 **Files:**
-- Create: `control/src/dgx_control/catalog_repository.py`
-- Create: `control/src/dgx_control/catalog_service.py`
+- Create: `control/src/vonk_control/catalog_repository.py`
+- Create: `control/src/vonk_control/catalog_service.py`
 - Create: `control/tests/test_catalog_repository.py`
 - Create: `control/tests/test_catalog_service.py`
 
@@ -236,17 +236,17 @@ Expected: PASS for concurrent revision allocation, stale edit, duplicate slug, d
 - [ ] **Step 6: Commit catalog service**
 
 ```bash
-git add control/src/dgx_control/catalog_repository.py control/src/dgx_control/catalog_service.py control/tests
+git add control/src/vonk_control/catalog_repository.py control/src/vonk_control/catalog_service.py control/tests
 git commit -m "feat: add local recipe authoring service"
 ```
 
 ### Task 5: Expose local recipe API
 
 **Files:**
-- Create: `control/src/dgx_control/catalog_api.py`
+- Create: `control/src/vonk_control/catalog_api.py`
 - Create: `control/tests/test_catalog_api.py`
-- Modify: `control/src/dgx_control/api.py`
-- Modify: `control/src/dgx_control/operation_api.py`
+- Modify: `control/src/vonk_control/api.py`
+- Modify: `control/src/vonk_control/operation_api.py`
 
 **Interfaces:**
 - Produces: `GET /api/v1/catalog/recipes`
@@ -297,7 +297,7 @@ Expected: PASS for viewer reads, admin authoring, operator denial, stale conflic
 - [ ] **Step 7: Commit local API**
 
 ```bash
-git add control/src/dgx_control/catalog_api.py control/src/dgx_control/api.py control/src/dgx_control/operation_api.py control/tests control/web/src/api
+git add control/src/vonk_control/catalog_api.py control/src/vonk_control/api.py control/src/vonk_control/operation_api.py control/tests control/web/src/api
 git commit -m "feat: expose local recipe catalog API"
 ```
 
@@ -305,10 +305,10 @@ git commit -m "feat: expose local recipe catalog API"
 
 **Files:**
 - Create: `control/migrations/versions/0016_recipe_deployment_authority.py`
-- Modify: `control/src/dgx_control/models.py`
-- Modify: `control/src/dgx_control/package_rollouts.py`
-- Modify: `control/src/dgx_control/package_services.py`
-- Modify: `control/src/dgx_control/agent_reconciliation.py`
+- Modify: `control/src/vonk_control/models.py`
+- Modify: `control/src/vonk_control/package_rollouts.py`
+- Modify: `control/src/vonk_control/package_services.py`
+- Modify: `control/src/vonk_control/agent_reconciliation.py`
 - Create: `control/tests/test_recipe_deployment_authority.py`
 - Modify: `control/tests/test_workload_package_migration.py`
 
@@ -352,7 +352,7 @@ Expected: PASS for legacy migration, new DB authority, Git outage, stale recipe 
 - [ ] **Step 7: Commit authority migration**
 
 ```bash
-git add control/migrations/versions/0016_recipe_deployment_authority.py control/src/dgx_control control/tests
+git add control/migrations/versions/0016_recipe_deployment_authority.py control/src/vonk_control control/tests
 git commit -m "feat: make database recipes deployment authority"
 ```
 
@@ -374,11 +374,11 @@ git commit -m "feat: make database recipes deployment authority"
 - [ ] **Step 1: Write failing catalog rendering test**
 
 ```tsx
-test("separates local, SparkRun, and global recipe origins", async () => {
+test("separates local, WorkloadRun, and global recipe origins", async () => {
   render(<CatalogPage client={catalogClientFixture()} />);
   expect(await screen.findByRole("heading", { name: "Recipe catalog" })).toBeVisible();
   expect(screen.getByText("Local")).toBeVisible();
-  expect(screen.getByText("Imported from SparkRun")).toBeVisible();
+  expect(screen.getByText("Imported from WorkloadRun")).toBeVisible();
   expect(screen.getByText("Downloaded from vonkforge.ai")).toBeVisible();
 });
 ```

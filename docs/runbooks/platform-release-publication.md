@@ -1,7 +1,7 @@
 # Publish a platform release
 
 Platform publication is a protected CI operation. It publishes `vonk-forge`
-control services, host deployment assets, Spark agents, and their signed
+control services, host deployment assets, GPU node agents, and their signed
 platform metadata. Workload packages have an independent publication system;
 adding or updating a model stack must not require this workflow.
 
@@ -23,8 +23,8 @@ rejects a target that does not authorize the active generation.
 
 Both repository variables are default-off and must be `true`:
 
-- `DGX_CONTAINER_RELEASES_ENABLED`
-- `DGX_PLATFORM_RELEASES_ENABLED`
+- `VONK_CONTAINER_RELEASES_ENABLED`
+- `VONK_PLATFORM_RELEASES_ENABLED`
 
 The image/bundle build job has `contents: read` and `packages: write`, but no
 OIDC permission. A separate `publish-platform-target` job uses the protected
@@ -32,9 +32,9 @@ GitHub environment `platform-release`, downloads the immutable build evidence,
 and receives only `contents: read` plus `id-token: write`. Configure only these
 environment variables for that delegated-authority job:
 
-- `DGX_PLATFORM_AUTHORITY_URL`: HTTPS base URL of the online delegated
+- `VONK_PLATFORM_AUTHORITY_URL`: HTTPS base URL of the online delegated
   publication service;
-- `DGX_PLATFORM_AUTHORITY_AUDIENCE`: exact OIDC audience accepted by that
+- `VONK_PLATFORM_AUTHORITY_AUDIENCE`: exact OIDC audience accepted by that
   service.
 
 GitHub supplies `ACTIONS_ID_TOKEN_REQUEST_URL` and
@@ -54,7 +54,7 @@ scripts/build-control-deployment-bundle \
   --output control-deployment.tar
 scripts/publish-platform-target describe-bundle \
   --bundle control-deployment.tar \
-  --repository ghcr.io/carstvaartjes/dgx-forge-control-deployment \
+  --repository ghcr.io/carstvaartjes/vonk-forge-control-deployment \
   > control-deployment-descriptor.json
 scripts/build-platform-manifest \
   --input "release/platform/${RELEASE_VERSION}.input.json" \
@@ -78,7 +78,7 @@ The unprivileged build job pins ORAS setup, resolves its absolute executable,
 and publishes only the bundle:
 
 ```bash
-export DGX_PLATFORM_ORAS_BIN=/absolute/path/to/oras
+export VONK_PLATFORM_ORAS_BIN=/absolute/path/to/oras
 scripts/publish-platform-target publish-bundle \
   --manifest platform-release.json \
   --bundle control-deployment.tar > bundle-publication.json
@@ -87,8 +87,8 @@ scripts/publish-platform-target publish-bundle \
 Only after that artifact is uploaded does the OIDC job invoke the authority:
 
 ```bash
-export DGX_PLATFORM_TUF_PUBLISHER_BIN="$PWD/scripts/platform-release-authority"
-export DGX_PLATFORM_CHANNEL_PUBLISHER_BIN="$PWD/scripts/platform-release-authority"
+export VONK_PLATFORM_TUF_PUBLISHER_BIN="$PWD/scripts/platform-release-authority"
+export VONK_PLATFORM_CHANNEL_PUBLISHER_BIN="$PWD/scripts/platform-release-authority"
 scripts/publish-platform-target publish-authority \
   --manifest platform-release.json \
   --bundle control-deployment.tar \

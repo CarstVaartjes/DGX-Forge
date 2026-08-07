@@ -7,7 +7,7 @@ publication and NAS deployment evidence remain release-gated
 
 ## Purpose
 
-Publish the three DGX-Forge-owned runtime images from GitHub Actions so a NAS
+Publish the three Vonk Forge-owned runtime images from GitHub Actions so a NAS
 deploys immutable release artifacts instead of compiling application code.
 Publishing occurs only for explicit stable version tags. The images are public
 because the repository and its runtime code are public; deployment credentials
@@ -38,9 +38,9 @@ an image.
 The workflow publishes these public GHCR packages:
 
 ```text
-ghcr.io/carstvaartjes/dgx-forge-api
-ghcr.io/carstvaartjes/dgx-forge-worker
-ghcr.io/carstvaartjes/dgx-forge-hermes
+ghcr.io/carstvaartjes/vonk-forge-api
+ghcr.io/carstvaartjes/vonk-forge-worker
+ghcr.io/carstvaartjes/vonk-forge-hermes
 ```
 
 The package names are public artifact names. Compose retains the internal
@@ -50,14 +50,14 @@ those names describe runtime roles and are already part of internal routing.
 The API and worker are separate targets of `control/Dockerfile`, built from the
 same commit and dependency set:
 
-- `dgx-forge-api` serves the authenticated control API and compiled web UI;
-- `dgx-forge-worker` privately claims durable work and reconciles fleet and
+- `vonk-forge-api` serves the authenticated control API and compiled web UI;
+- `vonk-forge-worker` privately claims durable work and reconciles fleet and
   LiteLLM routing state; and
-- `dgx-forge-hermes` derives from the locked official Hermes image and adds only
-  DGX-Forge's read-only-root-compatible identity and secret-loading wrapper.
+- `vonk-forge-hermes` derives from the locked official Hermes image and adds only
+  Vonk Forge's read-only-root-compatible identity and secret-loading wrapper.
 
 All other Compose services continue to pull their digest-pinned upstream
-images. DGX-Forge does not republish PostgreSQL, Caddy, LiteLLM, Tailscale,
+images. Vonk Forge does not republish PostgreSQL, Caddy, LiteLLM, Tailscale,
 Prometheus, Grafana, Registry, or step-ca.
 
 ## Trigger and version contract
@@ -89,8 +89,8 @@ relies on `latest`; it uses the workflow-reported `image@sha256:...` reference.
 Tags are conveniences for discovery, while the three-image digest set is the
 deployment identity.
 
-The initial platform is `linux/amd64`, matching the current UGREEN NAS and DGX
-Spark deployment. Multi-architecture publication is out of scope until every
+The initial platform is `linux/amd64`, matching the current UGREEN NAS and Vonk Forge
+GPU node deployment. Multi-architecture publication is out of scope until every
 locked base, including the official Hermes base, is verified for the additional
 platform and its runtime harness passes there.
 
@@ -134,18 +134,18 @@ tag, as the definition of a complete release.
 
 The workflow builds and verifies all three targets before reporting a release.
 After every push succeeds, it resolves the registry digest for each package and
-writes one summary and a `dgx-forge-images.env` file containing exactly these
+writes one summary and a `vonk-forge-images.env` file containing exactly these
 three immutable references:
 
 ```text
-CONTROL_API_IMAGE=ghcr.io/carstvaartjes/dgx-forge-api:1.2.3@sha256:...
-CONTROL_WORKER_IMAGE=ghcr.io/carstvaartjes/dgx-forge-worker:1.2.3@sha256:...
-HERMES_AGENT_IMAGE=ghcr.io/carstvaartjes/dgx-forge-hermes:1.2.3@sha256:...
+CONTROL_API_IMAGE=ghcr.io/carstvaartjes/vonk-forge-api:1.2.3@sha256:...
+CONTROL_WORKER_IMAGE=ghcr.io/carstvaartjes/vonk-forge-worker:1.2.3@sha256:...
+HERMES_AGENT_IMAGE=ghcr.io/carstvaartjes/vonk-forge-hermes:1.2.3@sha256:...
 ```
 
 A final release-manifest job receives `contents: write` only after all three
 image pushes and digest resolutions succeed. It creates the GitHub Release for
-the existing version tag and attaches `dgx-forge-images.env` plus its SHA-256
+the existing version tag and attaches `vonk-forge-images.env` plus its SHA-256
 checksum. This job receives no package credential. The public release asset is
 the durable, machine-readable handoff to NAS operators; the workflow summary is
 the human-readable duplicate. No site path, hostname, address, or secret is in
@@ -176,7 +176,7 @@ The NAS deployment flow becomes:
 
 ```text
 successful version-tag workflow
-  -> download the public dgx-forge-images.env release asset
+  -> download the public vonk-forge-images.env release asset
   -> copy its three digest-pinned references into the NAS .env
   -> docker compose pull
   -> docker compose config --quiet
@@ -197,7 +197,7 @@ one-time administrative action.
 ## Upstream image maintenance
 
 Official infrastructure images and build bases remain version-and-digest
-pinned. DGX-Forge never republishes them merely to provide a floating alias,
+pinned. Vonk Forge never republishes them merely to provide a floating alias,
 and production never pulls their upstream `latest` tags. This prevents an
 unattended pull or host recovery from crossing a PostgreSQL, Grafana, LiteLLM,
 Hermes, or other compatibility boundary without review.
@@ -206,21 +206,21 @@ GitHub Dependabot checks Docker inputs and GitHub Actions weekly and opens
 ordinary pull requests for newer official versions or digests. It does not
 auto-merge, create a version tag, publish images, or modify a NAS. Normal CI and
 the Docker runtime harness validate each proposed update. After an update is
-accepted, a maintainer creates the next DGX-Forge version tag only when that
+accepted, a maintainer creates the next Vonk Forge version tag only when that
 change should become an official three-image release.
 
 This means maintainers do not continuously rebuild upstream services. The API
-and worker are rebuilt only for a DGX-Forge version tag because they contain
-DGX-Forge code. The small Hermes wrapper is rebuilt in the same release so its
+and worker are rebuilt only for a Vonk Forge version tag because they contain
+Vonk Forge code. The small Hermes wrapper is rebuilt in the same release so its
 official base update and hardening contract are tested together.
 
 ## Confidentiality and secret handling
 
-Public images intentionally disclose DGX-Forge application code, dependency
+Public images intentionally disclose Vonk Forge application code, dependency
 versions, static web assets, runtime entrypoints, and non-secret defaults. They
 must not contain:
 
-- NAS, Spark, LAN, or tailnet addresses;
+- NAS, GPU node, LAN, or tailnet addresses;
 - PostgreSQL, LiteLLM, Grafana, Hermes, or worker credentials;
 - Tailscale OAuth credentials;
 - CA, SSH, Git signing, or TLS private keys;
@@ -254,7 +254,7 @@ Automated tests must prove that:
 - `latest` is documented as evaluation-only and is never a production default;
 - builds target only `linux/amd64`;
 - SBOM and provenance generation are enabled;
-- a successful release attaches a checksum-protected `dgx-forge-images.env`
+- a successful release attaches a checksum-protected `vonk-forge-images.env`
   containing all three digest-pinned references;
 - only the final release-manifest job receives `contents: write`;
 - weekly dependency update configuration covers Docker and GitHub Actions
@@ -274,11 +274,11 @@ After implementation, creating and pushing an immutable tag is the only image
 release operation:
 
 ```bash
-git tag -s v1.2.3 -m "DGX-Forge v1.2.3"
+git tag -s v1.2.3 -m "Vonk Forge v1.2.3"
 git push origin v1.2.3
 ```
 
-Once CI succeeds, the maintainer downloads `dgx-forge-images.env`, verifies its
+Once CI succeeds, the maintainer downloads `vonk-forge-images.env`, verifies its
 published checksum, and copies the three digest-pinned references into the NAS
 `.env`. Evaluation users may select the public `latest` aliases and explicitly
 pull them, but Docker does not update a running container continuously and that

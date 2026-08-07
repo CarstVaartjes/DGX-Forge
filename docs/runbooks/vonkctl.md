@@ -1,24 +1,24 @@
-# `sparkctl` control API client
+# `vonkctl` control API client
 
-`sparkctl` is the routine operator interface to the authenticated control API.
+`vonkctl` is the routine operator interface to the authenticated control API.
 It does not read local controller state, construct SSH dependencies, contact a
-Spark directly, or fall back when the control plane is unavailable. Configure
+GPU node directly, or fall back when the control plane is unavailable. Configure
 the HTTPS origin and a restrictive bearer-token file before use:
 
 ```bash
-export DGX_CONTROL_URL=https://control.example.invalid
-export DGX_CONTROL_TOKEN_FILE=/run/secrets/dgx-control-token
+export VONK_CONTROL_URL=https://control.example.invalid
+export VONK_CONTROL_TOKEN_FILE=/run/secrets/vonk-control-token
 ```
 
 The routine command surface is:
 
 ```bash
-uv run --project /path/to/vonk-forge sparkctl nodes status --json
-uv run --project /path/to/vonk-forge sparkctl validate PROFILE --json
-uv run --project /path/to/vonk-forge sparkctl prepare PROFILE [--apply] [--wait|--no-wait] --json
-uv run --project /path/to/vonk-forge sparkctl switch PROFILE [--apply] [--wait|--no-wait] --json
-uv run --project /path/to/vonk-forge sparkctl restore-default [--apply] [--wait|--no-wait] --json
-uv run --project /path/to/vonk-forge sparkctl endpoint ALIAS --json
+uv run --project /path/to/vonk-forge vonkctl nodes status --json
+uv run --project /path/to/vonk-forge vonkctl validate PROFILE --json
+uv run --project /path/to/vonk-forge vonkctl prepare PROFILE [--apply] [--wait|--no-wait] --json
+uv run --project /path/to/vonk-forge vonkctl switch PROFILE [--apply] [--wait|--no-wait] --json
+uv run --project /path/to/vonk-forge vonkctl restore-default [--apply] [--wait|--no-wait] --json
+uv run --project /path/to/vonk-forge vonkctl endpoint ALIAS --json
 ```
 
 `nodes status` and `endpoint` return their typed server resources. `validate`
@@ -31,22 +31,22 @@ is available for explicit scripting. Control errors emit bounded, redacted
 
 ## Explicit legacy compatibility
 
-`bin/sparkctl-legacy` preserves the retired developer-machine controller for
+`bin/vonkctl-legacy` preserves the retired developer-machine controller for
 explicit migration and recovery compatibility only. It may use local state and
 SSH. It is not a production interface, must not be installed or configured as
-the ordinary `sparkctl`, and is never selected implicitly after an API error.
+the ordinary `vonkctl`, and is never selected implicitly after an API error.
 
 The remainder of this document records the compatibility controller's former
 behavior for recovery context. Commands in this archived section require the
-separately named `sparkctl-legacy` launcher; they are not supported by routine
-`sparkctl`.
+separately named `vonkctl-legacy` launcher; they are not supported by routine
+`vonkctl`.
 
 ## Archived local-controller behavior
 
 Developer-machine SSH selection is cross-platform. macOS and native Linux use
 `ssh` and `scp` from `PATH`. WSL uses `ssh.exe` and `scp.exe` only when WSL is
 detected and those Windows OpenSSH commands are available; otherwise it falls
-back to the POSIX commands. `SPARK_SSH_BIN` and `SPARK_SCP_BIN` explicitly
+back to the POSIX commands. `VONK_SSH_BIN` and `VONK_SCP_BIN` explicitly
 override those defaults, including for wrappers that integrate a credential
 agent. Runtime-release deployment reapplies the manifest-required POSIX modes
 after transfer and then performs its unchanged hash-and-mode final verification,
@@ -56,26 +56,26 @@ bits.
 ## Commands
 
 ```text
-sparkctl-legacy catalog [--json]
-sparkctl-legacy validate PROFILE_OR_SELECTOR [--json]
-sparkctl-legacy status [--json]
-sparkctl-legacy nodes status [--json]
-sparkctl-legacy prepare PROFILE_OR_SELECTOR [--json]
-sparkctl-legacy switch PROFILE_OR_SELECTOR [--restore PROFILE_OR_SELECTOR] [--dry-run] [--json]
-sparkctl-legacy restore-default [--dry-run] [--json]
-sparkctl-legacy endpoint ENDPOINT_ALIAS [--json]
-sparkctl-legacy break-stale-lock [--json]
+vonkctl-legacy catalog [--json]
+vonkctl-legacy validate PROFILE_OR_SELECTOR [--json]
+vonkctl-legacy status [--json]
+vonkctl-legacy nodes status [--json]
+vonkctl-legacy prepare PROFILE_OR_SELECTOR [--json]
+vonkctl-legacy switch PROFILE_OR_SELECTOR [--restore PROFILE_OR_SELECTOR] [--dry-run] [--json]
+vonkctl-legacy restore-default [--dry-run] [--json]
+vonkctl-legacy endpoint ENDPOINT_ALIAS [--json]
+vonkctl-legacy break-stale-lock [--json]
 ```
 
 - `catalog` lists profiles, workload definitions, content hashes, maturity, and
   selector mappings. Planned profiles remain visible.
 - `validate` resolves the selector, confirms the checked-in contracts loaded,
-  collects live health and capacity from both Sparks, and runs admission.
+  collects live health and capacity from both GPU nodes, and runs admission.
   `valid: true` does not imply `admitted: true`.
 - `status` reads only local controller state. It makes no SSH call. Endpoint
   availability is always fail-closed as `published_endpoints: {}` because a
-  persisted snapshot cannot establish that either Spark is still alive.
-- `nodes status` concurrently probes both configured Sparks and reports live
+  persisted snapshot cannot establish that either GPU node is still alive.
+- `nodes status` concurrently probes both configured GPU nodes and reports live
   host, NVIDIA, thermal, and direct-fabric health without retaining history or
   changing either node or the active profile. See
   [Live node health](node-health.md).
@@ -94,7 +94,7 @@ sparkctl-legacy break-stale-lock [--json]
 - `restore-default` is a later, explicit ordinary switch to selector `default`.
   Run it only after outputs and provenance from temporary work are recovered.
 - `endpoint` returns an address only for an alias published by an active,
-  currently accepted profile after a fresh health probe confirms both Sparks
+  currently accepted profile after a fresh health probe confirms both GPU nodes
   are reachable and their exact boot IDs still match the successful
   activation. It holds the transition lock and runs the workload adapter's
   read-only health check before returning the address. Stopped, stale,
@@ -112,8 +112,8 @@ it never falls back to stale local measurements. The checked-in
 `agent-full-dual` profile resolves correctly but remains unactivatable while
 `deepseek-agent-dual` has `verified` maturity. Its direct Mia runtime is
 operational, but profile admission remains fail-closed until the definition is
-`accepted`. The single-Spark `deepseek-agent-single` DS4 definition is also
-operational and `verified`, but has no accepted profile path: `sparkctl-legacy` must
+`accepted`. The single-GPU node `deepseek-agent-single` DS4 definition is also
+operational and `verified`, but has no accepted profile path: `vonkctl-legacy` must
 continue to reject it until performance, thermal, lifecycle, reboot, and exact
 co-residency evidence advances the definition and a complete profile to
 `accepted`.
@@ -121,26 +121,26 @@ co-residency evidence advances the definition and a complete profile to
 ## Durable preparation
 
 Run preparation only after deploying the exact digest-qualified runtime
-release and while `sparkctl-legacy status` reports a clean stopped state:
+release and while `vonkctl-legacy status` reports a clean stopped state:
 
 ```bash
 uv run --no-project --with jsonschema -- \
-  bin/sparkctl-legacy prepare default --json
+  bin/vonkctl-legacy prepare default --json
 ```
 
 The adapter owns the durable node-local preparation job. For each workload, the
 controller submits exactly the nodes declared by that definition, using the
-operation-specific deadline independently for each call. The dual-Spark Mia
-definition submits Spark 2 as `worker` and Spark 1 as `head` concurrently; the
-single-Spark DS4 definition submits only Spark 1 and has no role suffix. Results
+operation-specific deadline independently for each call. The dual-GPU node Mia
+definition submits GPU node 2 as `worker` and GPU node 1 as `head` concurrently; the
+single-GPU node DS4 definition submits only GPU node 1 and has no role suffix. Results
 report every declared node's role (when applicable), timeout, return code, and
 bounded diagnostic independently in deterministic definition order, even when
 calls finish in a different order. A timeout or failure on one node does not
 prevent another declared node from being collected.
 
 Worker-first and head-first ordering applies to distributed runtime startup and
-shutdown, not artifact preparation. The Mia definition prepares both Sparks in
-parallel; the DS4 definition prepares Spark 1 only.
+shutdown, not artifact preparation. The Mia definition prepares both GPU nodes in
+parallel; the DS4 definition prepares GPU node 1 only.
 
 A client-side timeout returns status `in-progress`, `resumable: true`, and exit
 code `8`. It does not issue `stop`, kill the remote job, write controller
@@ -154,7 +154,7 @@ The separate prepared, verified, and accepted evidence gates remain required.
 ## Remote container prerequisite
 
 Profile transitions must start and stop containers noninteractively. On each
-dedicated Spark, the trusted `carst` administrator therefore belongs to the
+dedicated GPU node, the trusted `carst` administrator therefore belongs to the
 `docker` group. This is root-equivalent access and must not be extended to
 untrusted accounts.
 
@@ -164,7 +164,7 @@ testing because an existing login retains its original supplementary groups:
 ```bash
 sudo usermod -aG docker carst
 exit
-ssh dgx-spark-1  # or dgx-spark-2
+ssh vonk-node-1  # or vonk-node-2
 id -nG
 docker version --format '{{.Server.Version}}'
 ```
@@ -194,15 +194,15 @@ whitespace-separated option value cannot be echoed by the parser.
 
 ## Safe bring-up checks
 
-These archived compatibility commands do not mutate either Spark node.
+These archived compatibility commands do not mutate either GPU node.
 `catalog` and `status` are local; `validate` and `nodes status` perform live
 read-only probes:
 
 ```bash
-uv run --no-project --with jsonschema -- bin/sparkctl-legacy catalog --json
-uv run --no-project --with jsonschema -- bin/sparkctl-legacy validate default --json
-uv run --no-project --with jsonschema -- bin/sparkctl-legacy status --json
-uv run --no-project --with jsonschema -- bin/sparkctl-legacy nodes status --json
+uv run --no-project --with jsonschema -- bin/vonkctl-legacy catalog --json
+uv run --no-project --with jsonschema -- bin/vonkctl-legacy validate default --json
+uv run --no-project --with jsonschema -- bin/vonkctl-legacy status --json
+uv run --no-project --with jsonschema -- bin/vonkctl-legacy nodes status --json
 ```
 
 At the current milestone, `catalog` succeeds, `validate default` exits `3` with

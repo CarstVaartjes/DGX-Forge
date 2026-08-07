@@ -35,7 +35,7 @@ def test_state_round_trip_and_atomic_replacement(tmp_path: Path) -> None:
             "visual-evaluator": DEFINITION_B_SHA,
             "deepseek-agent-dual": DEFINITION_A_SHA,
         },
-        boot_ids={"spark1": "boot-a", "spark2": "boot-b"},
+        boot_ids={"node1": "boot-a", "node2": "boot-b"},
     )
 
     store.save(state)

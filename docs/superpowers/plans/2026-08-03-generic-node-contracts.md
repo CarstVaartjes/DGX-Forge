@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add versioned, N-node identity, inventory, topology, installation, and job contracts while preserving read compatibility with the current two-Spark inventory.
+**Goal:** Add versioned, N-node identity, inventory, topology, installation, and job contracts while preserving read compatibility with the current two-GPU node inventory.
 
-**Architecture:** New immutable Python domain types live in `spark_profiles.fleet` and parse schema-versioned TOML/JSON through focused loaders. Current `inventory/cluster.toml` is adapted into the generic model by a compatibility reader; current runtime, backend, health, and adapter files remain untouched.
+**Architecture:** New immutable Python domain types live in `cluster_profiles.fleet` and parse schema-versioned TOML/JSON through focused loaders. Current `inventory/cluster.toml` is adapted into the generic model by a compatibility reader; current runtime, backend, health, and adapter files remain untouched.
 
 **Tech Stack:** Python 3.12, dataclasses, `tomllib`, JSON Schema 2020-12, jsonschema, pytest.
 
@@ -23,9 +23,9 @@
 ### Task 1: Define generic node and fleet domain types
 
 **Files:**
-- Create: `src/spark_profiles/fleet/__init__.py`
-- Create: `src/spark_profiles/fleet/types.py`
-- Test: `tests/spark_profiles/fleet/test_types.py`
+- Create: `src/cluster_profiles/fleet/__init__.py`
+- Create: `src/cluster_profiles/fleet/types.py`
+- Test: `tests/cluster_profiles/fleet/test_types.py`
 
 **Interfaces:**
 - Produces: `NodeId.parse(value: str) -> NodeId`, `ManagementEndpoint`, `NodeRecord`, `Fleet`.
@@ -36,14 +36,14 @@
 ```python
 from dataclasses import FrozenInstanceError
 import pytest
-from spark_profiles.fleet import Fleet, ManagementEndpoint, NodeId, NodeRecord
+from cluster_profiles.fleet import Fleet, ManagementEndpoint, NodeId, NodeRecord
 
 
 def node(index: int) -> NodeRecord:
     return NodeRecord(
         id=NodeId.parse(f"spk_{index:032x}"),
         display_name=f"lab-{index}",
-        hostname=f"spark-{index}",
+        hostname=f"node-{index}",
         management=ManagementEndpoint(host=f"10.0.0.{index + 1}", user="admin"),
         labels={"rack": "lab"},
         lifecycle="ready",
@@ -62,7 +62,7 @@ def test_node_identity_is_immutable():
         record.id = NodeId.parse("spk_ffffffffffffffffffffffffffffffff")
 
 
-@pytest.mark.parametrize("value", ["spark1", "", "spk_1", "spk_" + "g" * 32])
+@pytest.mark.parametrize("value", ["node1", "", "spk_1", "spk_" + "g" * 32])
 def test_node_id_rejects_names_and_malformed_ids(value):
     with pytest.raises(ValueError):
         NodeId.parse(value)
@@ -70,8 +70,8 @@ def test_node_id_rejects_names_and_malformed_ids(value):
 
 - [ ] **Step 2: Run the tests and verify the package is absent**
 
-Run: `uv run pytest tests/spark_profiles/fleet/test_types.py -v`
-Expected: FAIL with `ModuleNotFoundError: spark_profiles.fleet`.
+Run: `uv run pytest tests/cluster_profiles/fleet/test_types.py -v`
+Expected: FAIL with `ModuleNotFoundError: cluster_profiles.fleet`.
 
 - [ ] **Step 3: Implement frozen focused types**
 
@@ -115,14 +115,14 @@ Validate nonblank display name, hostname, host, and user; port range 1–65535; 
 
 - [ ] **Step 4: Run focused tests**
 
-Run: `uv run pytest tests/spark_profiles/fleet/test_types.py -v`
+Run: `uv run pytest tests/cluster_profiles/fleet/test_types.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit the domain types**
 
 ```bash
-git add src/spark_profiles/fleet tests/spark_profiles/fleet/test_types.py
-git commit -m "feat: define generic Spark fleet types"
+git add src/cluster_profiles/fleet tests/cluster_profiles/fleet/test_types.py
+git commit -m "feat: define generic GPU node fleet types"
 ```
 
 ### Task 2: Add generic fleet and topology schemas
@@ -130,14 +130,14 @@ git commit -m "feat: define generic Spark fleet types"
 **Files:**
 - Create: `schemas/fleet.schema.json`
 - Create: `schemas/topology.schema.json`
-- Create: `src/spark_profiles/schemas/fleet.schema.json`
-- Create: `src/spark_profiles/schemas/topology.schema.json`
+- Create: `src/cluster_profiles/schemas/fleet.schema.json`
+- Create: `src/cluster_profiles/schemas/topology.schema.json`
 - Modify: `pyproject.toml`
-- Test: `tests/spark_profiles/fleet/test_schemas.py`
+- Test: `tests/cluster_profiles/fleet/test_schemas.py`
 
 **Interfaces:**
 - Consumes: node ID syntax `^spk_[0-9a-f]{32}$` and lifecycle values from Task 1.
-- Produces: JSON Schema contracts `dgx-forge/fleet/v2` and `dgx-forge/topology/v1`.
+- Produces: JSON Schema contracts `vonk-forge/fleet/v2` and `vonk-forge/topology/v1`.
 
 - [ ] **Step 1: Write failing schema tests with one and sixteen nodes**
 
@@ -150,7 +150,7 @@ def test_fleet_schema_accepts_one_and_sixteen_nodes(fleet_validator, fleet_docum
 def test_fleet_schema_rejects_fixed_name_identity(fleet_validator, fleet_document):
     document = fleet_document(1)
     node = document["nodes"].pop(next(iter(document["nodes"])))
-    document["nodes"]["spark1"] = node
+    document["nodes"]["node1"] = node
     with pytest.raises(jsonschema.ValidationError):
         fleet_validator.validate(document)
 
@@ -164,7 +164,7 @@ def test_topology_rejects_unknown_node(topology_validator, topology_document):
 
 - [ ] **Step 2: Run tests and verify schema files are absent**
 
-Run: `uv run pytest tests/spark_profiles/fleet/test_schemas.py -v`
+Run: `uv run pytest tests/cluster_profiles/fleet/test_schemas.py -v`
 Expected: FAIL because `schemas/fleet.schema.json` is absent.
 
 - [ ] **Step 3: Implement schemas and reference validation**
@@ -173,21 +173,21 @@ Fleet documents contain `schema_version`, a nonempty `nodes` object keyed by nod
 
 - [ ] **Step 4: Verify package and repository schemas match**
 
-Run: `cmp schemas/fleet.schema.json src/spark_profiles/schemas/fleet.schema.json && cmp schemas/topology.schema.json src/spark_profiles/schemas/topology.schema.json && uv run pytest tests/spark_profiles/fleet/test_schemas.py -v`
+Run: `cmp schemas/fleet.schema.json src/cluster_profiles/schemas/fleet.schema.json && cmp schemas/topology.schema.json src/cluster_profiles/schemas/topology.schema.json && uv run pytest tests/cluster_profiles/fleet/test_schemas.py -v`
 Expected: both `cmp` commands and all tests PASS.
 
 - [ ] **Step 5: Commit schemas**
 
 ```bash
-git add schemas src/spark_profiles/schemas pyproject.toml src/spark_profiles/fleet/loaders.py tests/spark_profiles/fleet/test_schemas.py
+git add schemas src/cluster_profiles/schemas pyproject.toml src/cluster_profiles/fleet/loaders.py tests/cluster_profiles/fleet/test_schemas.py
 git commit -m "feat: add generic fleet and topology schemas"
 ```
 
 ### Task 3: Load generic fleet TOML
 
 **Files:**
-- Modify: `src/spark_profiles/fleet/loaders.py`
-- Test: `tests/spark_profiles/fleet/test_loaders.py`
+- Modify: `src/cluster_profiles/fleet/loaders.py`
+- Test: `tests/cluster_profiles/fleet/test_loaders.py`
 - Create: `tests/fixtures/fleet/generic.toml`
 
 **Interfaces:**
@@ -200,7 +200,7 @@ git commit -m "feat: add generic fleet and topology schemas"
 def test_load_fleet_uses_generated_ids_and_preserves_addresses(fixtures):
     fleet = load_fleet(fixtures / "generic.toml")
     assert tuple(node.display_name for node in fleet.ready_nodes()) == ("alpha", "beta")
-    assert fleet.ready_nodes()[1].management.host == "spark-beta.local"
+    assert fleet.ready_nodes()[1].management.host == "node-beta.local"
 
 
 def test_load_fleet_rejects_duplicate_display_names(tmp_path):
@@ -211,7 +211,7 @@ def test_load_fleet_rejects_duplicate_display_names(tmp_path):
 
 - [ ] **Step 2: Run tests and observe missing loader behavior**
 
-Run: `uv run pytest tests/spark_profiles/fleet/test_loaders.py -v`
+Run: `uv run pytest tests/cluster_profiles/fleet/test_loaders.py -v`
 Expected: FAIL because `load_fleet` is undefined.
 
 - [ ] **Step 3: Implement strict TOML mapping**
@@ -220,21 +220,21 @@ Use `tomllib.load`, require `schema_version = 2`, reject unknown top-level and n
 
 - [ ] **Step 4: Run focused tests**
 
-Run: `uv run pytest tests/spark_profiles/fleet/test_loaders.py -v`
+Run: `uv run pytest tests/cluster_profiles/fleet/test_loaders.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit loader**
 
 ```bash
-git add src/spark_profiles/fleet tests/spark_profiles/fleet/test_loaders.py tests/fixtures/fleet/generic.toml
+git add src/cluster_profiles/fleet tests/cluster_profiles/fleet/test_loaders.py tests/fixtures/fleet/generic.toml
 git commit -m "feat: load generic fleet configuration"
 ```
 
-### Task 4: Add legacy two-Spark compatibility reader
+### Task 4: Add legacy two-GPU node compatibility reader
 
 **Files:**
-- Create: `src/spark_profiles/fleet/legacy.py`
-- Test: `tests/spark_profiles/fleet/test_legacy.py`
+- Create: `src/cluster_profiles/fleet/legacy.py`
+- Test: `tests/cluster_profiles/fleet/test_legacy.py`
 
 **Interfaces:**
 - Produces: `load_legacy_cluster(path: Path) -> Fleet`.
@@ -248,7 +248,7 @@ def test_current_cluster_loads_without_rewrite(repository_root):
     fleet = load_legacy_cluster(repository_root / "inventory/cluster.toml")
     assert len(fleet.nodes) == 2
     assert {node.management.host for node in fleet.nodes.values()} == {
-        "dgx-spark-1", "dgx-spark-2"
+        "vonk-node-1", "vonk-node-2"
     }
     assert (repository_root / "inventory/cluster.toml").read_bytes() == before
 
@@ -261,8 +261,8 @@ def test_legacy_identity_does_not_change_with_address(tmp_path):
 
 - [ ] **Step 2: Run tests and verify reader is absent**
 
-Run: `uv run pytest tests/spark_profiles/fleet/test_legacy.py -v`
-Expected: FAIL with import error for `spark_profiles.fleet.legacy`.
+Run: `uv run pytest tests/cluster_profiles/fleet/test_legacy.py -v`
+Expected: FAIL with import error for `cluster_profiles.fleet.legacy`.
 
 - [ ] **Step 3: Implement deterministic read-only adaptation**
 
@@ -270,23 +270,23 @@ Parse `[hosts.<legacy-name>]`, map `ssh_alias` to management host, retain hostna
 
 - [ ] **Step 4: Run compatibility and full contract tests**
 
-Run: `uv run pytest tests/spark_profiles/fleet -v`
+Run: `uv run pytest tests/cluster_profiles/fleet -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit compatibility seam**
 
 ```bash
-git add src/spark_profiles/fleet/legacy.py tests/spark_profiles/fleet/test_legacy.py
-git commit -m "feat: adapt legacy two-Spark inventory"
+git add src/cluster_profiles/fleet/legacy.py tests/cluster_profiles/fleet/test_legacy.py
+git commit -m "feat: adapt legacy two-GPU node inventory"
 ```
 
 ### Task 5: Define installation and durable-job contracts
 
 **Files:**
-- Create: `src/spark_profiles/fleet/install_contracts.py`
-- Create: `src/spark_profiles/fleet/job_contracts.py`
-- Test: `tests/spark_profiles/fleet/test_install_contracts.py`
-- Test: `tests/spark_profiles/fleet/test_job_contracts.py`
+- Create: `src/cluster_profiles/fleet/install_contracts.py`
+- Create: `src/cluster_profiles/fleet/job_contracts.py`
+- Test: `tests/cluster_profiles/fleet/test_install_contracts.py`
+- Test: `tests/cluster_profiles/fleet/test_job_contracts.py`
 
 **Interfaces:**
 - Produces: `InstallationRequest`, `InstallationStep`, `InstallationJournal`, `JobId`, `JobAttempt`, and legal transition functions.
@@ -317,7 +317,7 @@ def test_serialized_request_uses_credential_reference_only(request):
 
 - [ ] **Step 2: Run tests and confirm contracts are missing**
 
-Run: `uv run pytest tests/spark_profiles/fleet/test_install_contracts.py tests/spark_profiles/fleet/test_job_contracts.py -v`
+Run: `uv run pytest tests/cluster_profiles/fleet/test_install_contracts.py tests/cluster_profiles/fleet/test_job_contracts.py -v`
 Expected: FAIL with missing modules.
 
 - [ ] **Step 3: Implement frozen state machines**
@@ -326,13 +326,13 @@ Use explicit transition maps, SHA-256 evidence digest validation, UTC timestamps
 
 - [ ] **Step 4: Run phase tests and full baseline**
 
-Run: `uv run pytest tests/spark_profiles/fleet -v && uv run pytest -q`
+Run: `uv run pytest tests/cluster_profiles/fleet -v && uv run pytest -q`
 Expected: all tests PASS with the existing single skip unchanged.
 
 - [ ] **Step 5: Commit contracts**
 
 ```bash
-git add src/spark_profiles/fleet tests/spark_profiles/fleet
+git add src/cluster_profiles/fleet tests/cluster_profiles/fleet
 git commit -m "feat: define installation and job contracts"
 ```
 

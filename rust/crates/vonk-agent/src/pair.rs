@@ -285,7 +285,7 @@ pub fn validate_issued(
         .subject()
         .iter_common_name()
         .any(|name| name.as_str().is_ok_and(|value| value == node_id));
-    let expected_uri = format!("spiffe://dgx-forge.local/node/{node_id}");
+    let expected_uri = format!("spiffe://vonk-forge.local/node/{node_id}");
     let san_matches = certificate
         .subject_alternative_name()
         .map_err(|_| PairingError::Certificate)?

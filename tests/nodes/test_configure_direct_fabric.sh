@@ -6,7 +6,7 @@ script="$repo_root/nodes/bin/configure-direct-fabric"
 fixture_dir="$(mktemp -d)"
 trap 'rm -rf -- "$fixture_dir"' EXIT
 
-cat > "$fixture_dir/spark2.expected" <<'EXPECTED'
+cat > "$fixture_dir/node2.expected" <<'EXPECTED'
 network:
   version: 2
   ethernets:
@@ -24,10 +24,10 @@ network:
       optional: true
 EXPECTED
 
-"$script" --node spark2 --emit-netplan > "$fixture_dir/spark2.actual"
-cmp "$fixture_dir/spark2.expected" "$fixture_dir/spark2.actual"
+"$script" --node node2 --emit-netplan > "$fixture_dir/node2.actual"
+cmp "$fixture_dir/node2.expected" "$fixture_dir/node2.actual"
 
-cat > "$fixture_dir/spark1.expected" <<'EXPECTED'
+cat > "$fixture_dir/node1.expected" <<'EXPECTED'
 network:
   version: 2
   ethernets:
@@ -45,14 +45,14 @@ network:
       optional: true
 EXPECTED
 
-"$script" --node spark1 --emit-netplan > "$fixture_dir/spark1.actual"
-cmp "$fixture_dir/spark1.expected" "$fixture_dir/spark1.actual"
+"$script" --node node1 --emit-netplan > "$fixture_dir/node1.actual"
+cmp "$fixture_dir/node1.expected" "$fixture_dir/node1.actual"
 
 if "$script" --node spark3 --emit-netplan > "$fixture_dir/invalid.out" 2>&1; then
   printf 'script accepted an unsupported node\n' >&2
   exit 1
 fi
-grep -Fq 'spark1 or spark2' "$fixture_dir/invalid.out"
+grep -Fq 'node1 or node2' "$fixture_dir/invalid.out"
 
 if grep -Eq 'id_ed25519_shared|Host \*|ssh-copy-id|scp .*id_ed25519' "$script"; then
   printf 'script contains prohibited shared-key or broad SSH configuration behavior\n' >&2

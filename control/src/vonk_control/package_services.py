@@ -1083,7 +1083,7 @@ class ProductionPackageProjectionService:
             "rollback_selector": "retained",
         }
 
-    # ---- Agent-observed per-Spark inventory ------------------------------------
+    # ---- Agent-observed per-node inventory ------------------------------------
 
     @staticmethod
     def _health_resources(payload: object) -> tuple[dict[str, int], dict[str, int]]:
@@ -1152,17 +1152,17 @@ class ProductionPackageProjectionService:
             if not isinstance(value, int) or isinstance(value, bool) or value < 0:
                 raise RuntimeError(f"package resource envelope is missing {field}")
             result[field] = value
-        required_sparks = raw.get("required_sparks")
+        required_nodes = raw.get("required_nodes")
         topology = raw.get("topology")
         if (
-            not isinstance(required_sparks, int)
-            or isinstance(required_sparks, bool)
-            or not 1 <= required_sparks <= 512
+            not isinstance(required_nodes, int)
+            or isinstance(required_nodes, bool)
+            or not 1 <= required_nodes <= 512
             or not isinstance(topology, str)
             or topology not in {"single", "replicated", "gang"}
         ):
             raise RuntimeError("package resource envelope topology is incomplete")
-        result["required_sparks"] = required_sparks
+        result["required_nodes"] = required_nodes
         result["topology"] = topology
         for field in ("world_size", "ranks", "fabric"):
             if field not in raw:
@@ -1200,7 +1200,7 @@ class ProductionPackageProjectionService:
             {
                 "resources": {
                     **dict(per_node),
-                    "required_sparks": lock.resource_envelope["required_sparks"],
+                    "required_nodes": lock.resource_envelope["required_nodes"],
                     "topology": lock.resource_envelope["topology"],
                     "world_size": lock.resource_envelope["world_size"],
                     "ranks": lock.resource_envelope["ranks"],

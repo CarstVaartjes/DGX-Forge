@@ -1,22 +1,22 @@
-# `sparkctl` Live Node Health Implementation Plan
+# `vonkctl` Live Node Health Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a fresh, concurrent, read-only health view for both DGX Spark nodes through `sparkctl nodes status`.
+**Goal:** Add a fresh, concurrent, read-only health view for both Vonk Forge GPU nodes through `vonkctl nodes status`.
 
-**Architecture:** A standalone Bash collector reads bounded raw telemetry from one Spark and is sent over strict SSH stdin without persistent installation. A developer-machine health service probes both nodes concurrently, validates raw output, compares fabric data with canonical inventory and accepted RDMA baselines, grades stable health states, and renders table or schema-version-1 JSON without persisting history.
+**Architecture:** A standalone Bash collector reads bounded raw telemetry from one GPU node and is sent over strict SSH stdin without persistent installation. A developer-machine health service probes both nodes concurrently, validates raw output, compares fabric data with canonical inventory and accepted RDMA baselines, grades stable health states, and renders table or schema-version-1 JSON without persisting history.
 
 **Tech Stack:** Python 3.12, Bash, pytest, JSON Schema, `concurrent.futures`, OpenSSH, `jq`, `/proc`, `/sys`, `nvidia-smi`, and `rdma`.
 
-**Prerequisite:** Tasks 1–5 of [Model Profile Framework](2026-08-02-model-profile-framework.md), including `SshBackend.run_script` and the base `sparkctl` CLI.
+**Prerequisite:** Tasks 1–5 of [Model Profile Framework](2026-08-02-model-profile-framework.md), including `SshBackend.run_script` and the base `vonkctl` CLI.
 
-**Approved design:** [`sparkctl` live node health](../specs/2026-08-02-sparkctl-node-health-design.md).
+**Approved design:** [`vonkctl` live node health](../specs/2026-08-02-vonkctl-node-health-design.md).
 
 ## Global Constraints
 
-- `sparkctl status` remains local persisted controller state; `sparkctl nodes status` always probes live.
+- `vonkctl status` remains local persisted controller state; `vonkctl nodes status` always probes live.
 - No database, retained sample, background agent, daemon, cron job, sudo, package install, or persistent remote script.
-- Probe `spark2` and `spark1` concurrently but render canonical `spark1`, `spark2` order.
+- Probe `node2` and `node1` concurrently but render canonical `node1`, `node2` order.
 - Each probe has a 10-second deadline, a 250 ms CPU sample, and a 262144-byte output cap.
 - Use the checked-in collector only; send it over SSH stdin with strict host checking, `BatchMode=yes`, `IdentitiesOnly=yes`, and `ForwardAgent=no`.
 - Unified memory comes from `/proc/meminfo`; never present `nvidia-smi` GPU memory as a second pool.
@@ -34,7 +34,7 @@
 **Files:**
 - Create: `nodes/bin/collect-health`
 - Create: `schemas/node-health-raw.schema.json`
-- Create: `src/spark_profiles/schemas/node-health-raw.schema.json`
+- Create: `src/cluster_profiles/schemas/node-health-raw.schema.json`
 - Modify: `pyproject.toml`
 - Create: `tests/nodes/test_collect_health.py`
 - Create: `tests/fixtures/node-health/healthy/`
@@ -128,28 +128,28 @@ Expected: all collector/schema tests pass and the script parses cleanly.
 
 ```bash
 git add nodes/bin/collect-health schemas/node-health-raw.schema.json \
-  src/spark_profiles/schemas/node-health-raw.schema.json pyproject.toml \
+  src/cluster_profiles/schemas/node-health-raw.schema.json pyproject.toml \
   tests/nodes/test_collect_health.py tests/fixtures/node-health
-git commit -m "feat: collect live Spark node telemetry"
+git commit -m "feat: collect live GPU node telemetry"
 ```
 
 ### Task 2: Implement concurrent health evaluation and CLI output
 
 **Files:**
-- Create: `src/spark_profiles/health.py`
+- Create: `src/cluster_profiles/health.py`
 - Create: `schemas/node-health.schema.json`
-- Create: `src/spark_profiles/schemas/node-health.schema.json`
+- Create: `src/cluster_profiles/schemas/node-health.schema.json`
 - Modify: `pyproject.toml`
-- Modify: `src/spark_profiles/cli.py`
+- Modify: `src/cluster_profiles/cli.py`
 - Modify: `config/controller.toml`
-- Create: `tests/spark_profiles/test_health.py`
-- Modify: `tests/spark_profiles/test_cli.py`
+- Create: `tests/cluster_profiles/test_health.py`
+- Modify: `tests/cluster_profiles/test_cli.py`
 - Create: `docs/runbooks/node-health.md`
 - Modify: `docs/model-profile-overview.md`
 
 **Interfaces:**
 - Produces: `NodeHealthService.collect() -> ClusterHealth`.
-- Adds: `sparkctl nodes status [--json]`.
+- Adds: `vonkctl nodes status [--json]`.
 - Emits the exact schema-version-1 envelope from the approved design.
 
 - [x] **Step 1: Write failing concurrency, grading, and CLI tests**
@@ -158,36 +158,36 @@ git commit -m "feat: collect live Spark node telemetry"
 def test_node_probes_overlap(service, probe_barrier):
     result = service.collect()
     assert probe_barrier.parties == 2
-    assert tuple(result.nodes) == ("spark1", "spark2")
+    assert tuple(result.nodes) == ("node1", "node2")
 
 
 def test_active_or_enabled_earlyoom_is_critical(service):
-    service.raw("spark2")["services"]["earlyoom_active"] = True
+    service.raw("node2")["services"]["earlyoom_active"] = True
     result = service.collect()
-    assert result.nodes["spark2"].status == "critical"
-    assert "earlyoom_active" in result.nodes["spark2"].errors
+    assert result.nodes["node2"].status == "critical"
+    assert "earlyoom_active" in result.nodes["node2"].errors
 
 
 def test_available_memory_is_not_a_generic_health_failure(service):
-    service.raw("spark1")["memory"]["available_bytes"] = 1
+    service.raw("node1")["memory"]["available_bytes"] = 1
     result = service.collect()
-    assert result.nodes["spark1"].memory.available_bytes == 1
-    assert "memory_low" not in result.nodes["spark1"].errors
+    assert result.nodes["node1"].memory.available_bytes == 1
+    assert "memory_low" not in result.nodes["node1"].errors
 
 
 def test_rdma_counter_is_compared_with_accepted_baseline(service):
-    service.rdma_baseline("spark1", "rocep1s0f1", "packet_seq_err", 2)
-    service.raw_counter("spark1", "rocep1s0f1", "packet_seq_err", 3)
+    service.rdma_baseline("node1", "rocep1s0f1", "packet_seq_err", 2)
+    service.raw_counter("node1", "rocep1s0f1", "packet_seq_err", 3)
     result = service.collect()
-    assert "rdma_counter_above_baseline" in result.nodes["spark1"].errors
+    assert "rdma_counter_above_baseline" in result.nodes["node1"].errors
 
 
 def test_unreachable_node_preserves_other_live_result(cli):
-    cli.fail_ssh("spark2")
+    cli.fail_ssh("node2")
     result = cli("nodes", "status", "--json")
     assert result.exit_code == 4
-    assert result.json["nodes"]["spark1"]["status"] == "healthy"
-    assert result.json["nodes"]["spark2"]["status"] == "unreachable"
+    assert result.json["nodes"]["node1"]["status"] == "healthy"
+    assert result.json["nodes"]["node2"]["status"] == "unreachable"
 ```
 
 Also cover malformed/truncated/timeout/nonzero remote output, root read-only,
@@ -199,11 +199,11 @@ validation, table columns, and exit codes 0/4/5.
 
 ```bash
 uv run --no-project --with pytest --with jsonschema \
-  pytest tests/spark_profiles/test_health.py \
-         tests/spark_profiles/test_cli.py -v
+  pytest tests/cluster_profiles/test_health.py \
+         tests/cluster_profiles/test_cli.py -v
 ```
 
-Expected: FAIL because `spark_profiles.health` and `nodes status` are absent.
+Expected: FAIL because `cluster_profiles.health` and `nodes status` are absent.
 
 - [x] **Step 3: Implement concurrent probing and fail-closed evaluation**
 
@@ -253,12 +253,12 @@ probing.
 After offline tests pass, run:
 
 ```bash
-uv run sparkctl nodes status --json > /tmp/spark-node-health.json
+uv run vonkctl nodes status --json > /tmp/node-node-health.json
 jq -e '
   .schema_version == 1 and
-  (.nodes | keys == ["spark1", "spark2"]) and
+  (.nodes | keys == ["node1", "node2"]) and
   all(.nodes[]; .status == "healthy" or .status == "warning")
-' /tmp/spark-node-health.json
+' /tmp/node-node-health.json
 ```
 
 Do not lower a rule when the live result is critical. Preserve the result and
@@ -282,11 +282,11 @@ git diff --check
 Verify every changed local Markdown link resolves, then:
 
 ```bash
-git add src/spark_profiles/health.py src/spark_profiles/cli.py \
-  src/spark_profiles/schemas schemas/node-health.schema.json pyproject.toml \
-  config/controller.toml tests/spark_profiles docs/runbooks/node-health.md \
+git add src/cluster_profiles/health.py src/cluster_profiles/cli.py \
+  src/cluster_profiles/schemas schemas/node-health.schema.json pyproject.toml \
+  config/controller.toml tests/cluster_profiles docs/runbooks/node-health.md \
   docs/model-profile-overview.md
-git commit -m "feat: report live Spark cluster health"
+git commit -m "feat: report live GPU node cluster health"
 ```
 
 ## Completion gate

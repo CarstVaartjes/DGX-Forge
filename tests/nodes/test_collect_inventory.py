@@ -95,7 +95,7 @@ def test_captured_inventories_satisfy_schema(inventory_dir):
 
     paths = sorted(inventory_dir.glob("*.json"))
     names = {path.name for path in paths}
-    assert {"spark1-pre.json", "spark2-pre.json"} <= names
+    assert {"node1-pre.json", "node2-pre.json"} <= names
 
     schema = json.loads(SCHEMA_PATH.read_text())
     for path in paths:

@@ -14,15 +14,15 @@
 - Control-plane unavailability is an explicit error; there is no SSH or local-controller fallback.
 - CLI and web produce the same plan digests, jobs, authorization decisions, audit records, and terminal results.
 - JSON output remains bounded, stable, and free of secrets/certificate material.
-- `spark-install`, `dgx-agent-repair`, and `dgx-control-offline` remain separately named bootstrap/recovery interfaces.
+- `node-install`, `vonk-agent-repair`, and `vonk-control-offline` remain separately named bootstrap/recovery interfaces.
 
 ---
 
 ### Task 1: Typed API resources for routine operations
 
 **Files:**
-- Modify: `control/src/dgx_control/api.py`
-- Create: `control/src/dgx_control/operation_api.py`
+- Modify: `control/src/vonk_control/api.py`
+- Create: `control/src/vonk_control/operation_api.py`
 - Create: `control/openapi.json`
 - Create: `scripts/generate-control-clients`
 - Create: `tests/control/test_openapi_clients.py`
@@ -65,16 +65,16 @@ Expected: PASS.
 - [ ] **Step 5: Commit API resources**
 
 ```bash
-git add control/src/dgx_control/api.py control/src/dgx_control/operation_api.py control/tests/test_operation_api.py
+git add control/src/vonk_control/api.py control/src/vonk_control/operation_api.py control/tests/test_operation_api.py
 git commit -m "feat: expose agent-backed operation APIs"
 ```
 
 ### Task 2: Control client polling and typed failures
 
 **Files:**
-- Create: `src/spark_profiles/generated_control/`
-- Modify: `src/spark_profiles/control_client.py`
-- Test: `tests/spark_profiles/test_control_client.py`
+- Create: `src/cluster_profiles/generated_control/`
+- Modify: `src/cluster_profiles/control_client.py`
+- Test: `tests/cluster_profiles/test_control_client.py`
 
 **Interfaces:**
 - Produces `nodes()`, `plan_profile(profile)`, `apply_plan(digest)`, `job(id)`, `wait_job(id, timeout, interval)`, `endpoint(alias)`, `agents()`.
@@ -88,7 +88,7 @@ failure; callers reuse request IDs explicitly.
 
 - [ ] **Step 2: Run and observe missing methods**
 
-Run: `uv run pytest tests/spark_profiles/test_control_client.py -v`
+Run: `uv run pytest tests/cluster_profiles/test_control_client.py -v`
 Expected: FAIL with missing attributes.
 
 - [ ] **Step 3: Implement typed methods over existing request boundary**
@@ -101,27 +101,27 @@ terminal result, and raises typed `JobFailed`, `JobWaitingForOperator`, or
 
 - [ ] **Step 4: Run client tests**
 
-Run: `uv run pytest tests/spark_profiles/test_control_client.py -v`
+Run: `uv run pytest tests/cluster_profiles/test_control_client.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit client**
 
 ```bash
-git add src/spark_profiles/control_client.py tests/spark_profiles/test_control_client.py
+git add src/cluster_profiles/control_client.py tests/cluster_profiles/test_control_client.py
 git commit -m "feat: control agent jobs through typed client"
 ```
 
-### Task 3: Cut routine `sparkctl` commands over to API
+### Task 3: Cut routine `vonkctl` commands over to API
 
 **Files:**
-- Modify: `src/spark_profiles/cli.py`
-- Create: `src/spark_profiles/legacy_cli.py`
-- Test: `tests/spark_profiles/test_agent_cli.py`
-- Modify: `tests/spark_profiles/test_cli.py`
+- Modify: `src/cluster_profiles/cli.py`
+- Create: `src/cluster_profiles/legacy_cli.py`
+- Test: `tests/cluster_profiles/test_agent_cli.py`
+- Modify: `tests/cluster_profiles/test_cli.py`
 
 **Interfaces:**
 - Routine commands: `nodes status`, `validate`, `prepare`, `switch`, `restore-default`, and `endpoint` call `ControlClient`.
-- Explicit compatibility launcher: `bin/sparkctl-legacy` or `sparkctl legacy ...`, rejected in production documentation/settings.
+- Explicit compatibility launcher: `bin/vonkctl-legacy` or `vonkctl legacy ...`, rejected in production documentation/settings.
 
 - [ ] **Step 1: Write failing no-SSH CLI equivalence tests**
 
@@ -132,7 +132,7 @@ request and hand-derived JSON output. Test unavailable API returns
 
 - [ ] **Step 2: Run and confirm current local controller path fails**
 
-Run: `uv run pytest tests/spark_profiles/test_agent_cli.py -v`
+Run: `uv run pytest tests/cluster_profiles/test_agent_cli.py -v`
 Expected: FAIL because commands build local SSH dependencies.
 
 - [ ] **Step 3: Implement API-first routine command dispatch**
@@ -146,14 +146,14 @@ select it based on an exception.
 
 - [ ] **Step 4: Run CLI, client, and transport-denial tests**
 
-Run: `uv run pytest tests/spark_profiles/test_agent_cli.py tests/spark_profiles/test_control_client.py tests/spark_profiles/test_cli.py -v`
+Run: `uv run pytest tests/cluster_profiles/test_agent_cli.py tests/cluster_profiles/test_control_client.py tests/cluster_profiles/test_cli.py -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit CLI cutover**
 
 ```bash
-git add src/spark_profiles/cli.py src/spark_profiles/legacy_cli.py bin/sparkctl-legacy tests/spark_profiles/test_agent_cli.py tests/spark_profiles/test_cli.py
-git commit -m "refactor: route sparkctl through control API"
+git add src/cluster_profiles/cli.py src/cluster_profiles/legacy_cli.py bin/vonkctl-legacy tests/cluster_profiles/test_agent_cli.py tests/cluster_profiles/test_cli.py
+git commit -m "refactor: route vonkctl through control API"
 ```
 
 ### Task 4: Agent enrollment and fleet pages
@@ -200,7 +200,7 @@ Expected: PASS.
 
 ```bash
 git add control/web/src/api control/web/src/pages/fleet.tsx control/web/src/pages/agents.tsx control/web/src/components/enrollment-review.tsx control/web/src/pages/agents.test.tsx
-git commit -m "feat: administer Spark agents in web UX"
+git commit -m "feat: administer GPU node agents in web UX"
 ```
 
 ### Task 5: Unified plan and job experience
@@ -236,7 +236,7 @@ HTML or unbounded result data.
 
 - [ ] **Step 4: Run Phase 5 verification**
 
-Run: `uv run pytest tests/spark_profiles/test_agent_cli.py tests/e2e/test_admin_equivalence.py -q && npm --prefix control/web test -- --run && npm --prefix control/web run build && git diff --check`
+Run: `uv run pytest tests/cluster_profiles/test_agent_cli.py tests/e2e/test_admin_equivalence.py -q && npm --prefix control/web test -- --run && npm --prefix control/web run build && git diff --check`
 Expected: all pass.
 
 - [ ] **Step 5: Commit unified experience**

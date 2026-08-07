@@ -60,7 +60,7 @@ def _release_lock(name: str):
     adapter = {
         "name": adapter_document["name"],
         "kind": "adapter",
-        "media_type": "application/vnd.dgx-forge.workload-adapter.v1",
+        "media_type": "application/vnd.vonk-forge.workload-adapter.v1",
         "sources": [adapter_document["source"]],
         "digest": "sha256:" + hashlib.sha256(adapter_content).hexdigest(),
         "size": len(adapter_content),
@@ -126,7 +126,7 @@ def _release_lock(name: str):
                     "kv_cache_base_bytes": 0,
                     "kv_cache_per_token_bytes": 0,
                 },
-                "required_sparks": 1,
+                "required_nodes": 1,
                 "topology": "single",
                 "world_size": 1,
                 "ranks": [{"rank": 0, "role": "primary"}],
@@ -390,7 +390,7 @@ def test_unknown_family_simulator_delivers_signed_releases_without_agent_update_
         publication.promote(publication.preview("unapproved", COMMIT).digest, "nas-admin@example")
     assert not (target_root / unapproved.digest).exists()
     # The NAS promotion boundary rejects the unapproved candidate before it
-    # can become a workload-TUF target; the Spark therefore has no authorized
+    # can become a workload-TUF target; the GPU node therefore has no authorized
     # target for either an unsigned or an unapproved release digest.
     assert unapproved.digest not in source.authorized
     releases = Metadata.from_bytes(delivery.metadata("releases"))
@@ -402,7 +402,7 @@ def test_unknown_family_simulator_delivers_signed_releases_without_agent_update_
     events: list[str] = []
     progress: list[dict[str, object]] = []
     contents = bytes_one | bytes_two
-    spark_root = tmp_path / "spark"
+    spark_root = tmp_path / "node"
     spark_root.mkdir(mode=0o700)
     state = PackageState(spark_root / "package-state")
     adapters: list[_Adapter] = []
@@ -417,8 +417,8 @@ def test_unknown_family_simulator_delivers_signed_releases_without_agent_update_
         trust=WorkloadTrust(source),
         acquisition=_DirectProvider(contents, events),
         materializer=_Materializer(),
-        generation_root=tmp_path / "spark/generations",
-        pointer_root=tmp_path / "spark/pointers",
+        generation_root=tmp_path / "node/generations",
+        pointer_root=tmp_path / "node/pointers",
         adapter_factory=adapter_factory,
         preflight=lambda lock, _request, _binding: events.append(f"preflight:{lock.family_id}"),
         progress=lambda _binding, value: progress.append(dict(value)),
@@ -427,7 +427,7 @@ def test_unknown_family_simulator_delivers_signed_releases_without_agent_update_
     update_guard = _UpdatesForbidden()
     context = OperationContext(
         node_id=NODE_ID,
-        state=AgentStateStore(tmp_path / "spark/agent-state"),
+        state=AgentStateStore(tmp_path / "node/agent-state"),
         probe=SimpleNamespace(collect=lambda _deadline: {}),
         updates=update_guard,
         packages=engine,
@@ -490,7 +490,7 @@ def test_unknown_family_simulator_delivers_signed_releases_without_agent_update_
     assert state.generation_for_release("unknown-after-build", unapproved.digest) is None
     assert unapproved.digest not in source.authorized
 
-    pointer = json.loads((tmp_path / "spark/pointers/unknown-after-build.json").read_text())
+    pointer = json.loads((tmp_path / "node/pointers/unknown-after-build.json").read_text())
     assert pointer["release_digest"] == release_one.digest
     assert progress and {"phase", "component"} <= set(progress[0])
     assert {"direct:https:native-runtime", "direct:oci:oci-runtime"} <= set(events)

@@ -18,7 +18,7 @@ canonical_report = _simulator.canonical_report
 simulate_agent_lifecycle = _simulator.simulate_agent_lifecycle
 LINUX_AGENT_STATE_RUNTIME = pytest.mark.skipif(
     sys.platform != "linux",
-    reason="secure DGX agent state runtime requires Linux descriptor traversal",
+    reason="secure Vonk Forge agent state runtime requires Linux descriptor traversal",
 )
 
 
@@ -30,7 +30,7 @@ def test_failure_matrix_preserves_agent_lifecycle_invariants(nodes: int) -> None
     assert report["schema_version"] == 1
     assert report["evidence_kind"] == "simulated"
     assert report["environment"] == "deterministic-in-memory-transport"
-    assert report["physical_sparks_exercised"] is False
+    assert report["physical_nodes_exercised"] is False
     assert report["node_count"] == nodes
     assert report["seed"] == 20260803
     assert report["faults"] == {
@@ -159,7 +159,7 @@ def test_acceptance_cli_emits_only_canonical_simulated_evidence() -> None:
     assert completed.stderr == b""
     assert completed.stdout == canonical_report(report)
     assert report["evidence_kind"] == "simulated"
-    assert report["physical_sparks_exercised"] is False
+    assert report["physical_nodes_exercised"] is False
     assert report["status"] == "passed"
 
 

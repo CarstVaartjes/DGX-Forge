@@ -46,7 +46,7 @@ def _b64(value: int) -> str:
 def _write_material(tmp_path: Path) -> dict[str, object]:
     tmp_path.mkdir(parents=True, exist_ok=True)
     root_key = ed25519.Ed25519PrivateKey.generate()
-    root_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "DGX Forge Offline Root")])
+    root_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Vonk Forge Offline Root")])
     root = (
         x509.CertificateBuilder().subject_name(root_name).issuer_name(root_name)
         .public_key(root_key.public_key()).serial_number(x509.random_serial_number())
@@ -56,7 +56,7 @@ def _write_material(tmp_path: Path) -> dict[str, object]:
         .sign(root_key, algorithm=None)
     )
     intermediate_key = ed25519.Ed25519PrivateKey.generate()
-    intermediate_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "DGX Forge Agent Intermediate")])
+    intermediate_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Vonk Forge Agent Intermediate")])
     intermediate = (
         x509.CertificateBuilder().subject_name(intermediate_name).issuer_name(root.subject)
         .public_key(intermediate_key.public_key()).serial_number(x509.random_serial_number())
@@ -97,7 +97,7 @@ def _csr(node_id: str = NODE_ID) -> bytes:
         x509.CertificateSigningRequestBuilder()
         .subject_name(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, node_id)]))
         .add_extension(x509.SubjectAlternativeName([
-            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{node_id}")
+            x509.UniformResourceIdentifier(f"spiffe://vonk-forge.local/node/{node_id}")
         ]), critical=False)
         .sign(key, algorithm=None)
         .public_bytes(serialization.Encoding.PEM)
@@ -123,7 +123,7 @@ def _provider(tmp_path: Path, handler, *, max_response_bytes: int = 64 * 1024) -
         ca_url=CA_URL,
         root_certificate_path=material["root_path"],
         intermediate_certificate_path=material["intermediate_path"],
-        provisioner_name="dgx-forge-agent",
+        provisioner_name="vonk-forge-agent",
         provisioner_kid=material["kid"],
         credential_path=material["credential_path"],
         provisioner_public_jwk_path=material["public_jwk_path"],
@@ -168,10 +168,10 @@ def test_sign_uses_fixed_policy_short_lived_one_use_authorization_and_node_signe
     header = jwt.get_unverified_header(token)
     claims = jwt.decode(token, options={"verify_signature": False})
     assert header == {"alg": "ES256", "kid": material["kid"], "typ": "JWT"}
-    assert claims["iss"] == "dgx-forge-agent"
+    assert claims["iss"] == "vonk-forge-agent"
     assert claims["sub"] == NODE_ID
     assert claims["aud"] == f"{CA_URL}/1.0/sign"
-    assert claims["sans"] == [f"spiffe://dgx-forge.local/node/{NODE_ID}"]
+    assert claims["sans"] == [f"spiffe://vonk-forge.local/node/{NODE_ID}"]
     assert claims["exp"] - claims["iat"] == 60
     assert claims["nbf"] == claims["iat"] - 30
     assert len(claims["jti"]) >= 43
@@ -217,7 +217,7 @@ def test_revocation_is_authenticated_passive_and_idempotent_in_effect(tmp_path: 
 
     assert len(seen) == 2
     assert all(set(body) == {"serial", "ott", "reasonCode", "reason", "passive"} for body in seen)
-    assert all(body | {"ott": "redacted"} == {"serial": "5678", "ott": "redacted", "reasonCode": 4, "reason": "superseded by DGX-Forge", "passive": True} for body in seen)
+    assert all(body | {"ott": "redacted"} == {"serial": "5678", "ott": "redacted", "reasonCode": 4, "reason": "superseded by Vonk Forge", "passive": True} for body in seen)
     for body in seen:
         claims = jwt.decode(body["ott"], options={"verify_signature": False})
         assert claims["aud"] == f"{CA_URL}/1.0/revoke"
@@ -299,7 +299,7 @@ def test_rejects_malformed_or_policy_mismatched_sign_responses(tmp_path: Path, m
                 .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
                 .add_extension(x509.KeyUsage(mutation != "usage", False, False, False, False, False, False, False, False), critical=True)
                 .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH if mutation == "eku" else ExtendedKeyUsageOID.CLIENT_AUTH]), critical=True)
-                .add_extension(x509.SubjectAlternativeName([x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{node}")]), critical=False)
+                .add_extension(x509.SubjectAlternativeName([x509.UniformResourceIdentifier(f"spiffe://vonk-forge.local/node/{node}")]), critical=False)
             )
             leaf = builder.sign(signer, algorithm=None)
         chain_ca = other_intermediate["intermediate"] if mutation == "chain" else material["intermediate"]
@@ -346,7 +346,7 @@ def test_rejects_nonfixed_or_non_https_ca_urls(tmp_path: Path, url: str) -> None
         StepCertificateAuthority(
             ca_url=url, root_certificate_path=material["root_path"],
             intermediate_certificate_path=material["intermediate_path"],
-            provisioner_name="dgx-forge-agent", provisioner_kid=material["kid"],
+            provisioner_name="vonk-forge-agent", provisioner_kid=material["kid"],
             credential_path=material["credential_path"],
             provisioner_public_jwk_path=material["public_jwk_path"],
         )
@@ -360,7 +360,7 @@ def test_rejects_symlinked_root_and_credential_files(tmp_path: Path) -> None:
         values = {
             "ca_url": CA_URL, "root_certificate_path": material["root_path"],
             "intermediate_certificate_path": material["intermediate_path"],
-            "provisioner_name": "dgx-forge-agent", "provisioner_kid": material["kid"],
+            "provisioner_name": "vonk-forge-agent", "provisioner_kid": material["kid"],
             "credential_path": material["credential_path"],
             "provisioner_public_jwk_path": material["public_jwk_path"],
         }
@@ -380,7 +380,7 @@ def test_rejects_public_provisioner_key_with_copied_configured_kid(tmp_path: Pat
         StepCertificateAuthority(
             ca_url=CA_URL, root_certificate_path=material["root_path"],
             intermediate_certificate_path=material["intermediate_path"],
-            provisioner_name="dgx-forge-agent", provisioner_kid=material["kid"],
+            provisioner_name="vonk-forge-agent", provisioner_kid=material["kid"],
             credential_path=material["credential_path"],
             provisioner_public_jwk_path=material["public_jwk_path"],
         )
@@ -421,7 +421,7 @@ def test_production_agent_service_builder_selects_step_ca_and_checks_reachabilit
         agent_intermediate_key_path=None, agent_ca_root_path=tmp_path / "root.pem",
         agent_ca_credential_path=tmp_path / "credential.pem", agent_ca_url=CA_URL,
         agent_ca_provisioner_public_jwk_path=tmp_path / "public.jwk",
-        agent_ca_provisioner_name="dgx-forge-agent", agent_ca_provisioner_kid="kid",
+        agent_ca_provisioner_name="vonk-forge-agent", agent_ca_provisioner_kid="kid",
         agent_ca_timeout_seconds=2.0, agent_ca_max_response_bytes=4096,
         agent_artifact_root=tmp_path / "artifacts",
             management_cidrs="10.0.0.0/24", direct_fabric_cidrs="192.168.100.0/24",
@@ -451,7 +451,7 @@ def test_production_agent_service_builder_fails_closed_on_unreachable_or_mixed_p
         agent_intermediate_key_path=None, agent_ca_root_path=tmp_path / "root.pem",
         agent_ca_credential_path=tmp_path / "credential.pem", agent_ca_url=CA_URL,
         agent_ca_provisioner_public_jwk_path=tmp_path / "public.jwk",
-        agent_ca_provisioner_name="dgx-forge-agent", agent_ca_provisioner_kid="kid",
+        agent_ca_provisioner_name="vonk-forge-agent", agent_ca_provisioner_kid="kid",
         agent_ca_timeout_seconds=2.0, agent_ca_max_response_bytes=4096,
         agent_artifact_root=tmp_path / "artifacts",
         management_cidrs="10.0.0.0/24", direct_fabric_cidrs="10.0.0.240/28",
@@ -469,7 +469,7 @@ def test_tracked_step_ca_template_is_public_only_and_matches_provider_validation
     config = json.loads(config_path.read_text())
     provisioner = config["authority"]["provisioners"][0]
 
-    assert provisioner["type"] == "JWK" and provisioner["name"] == "dgx-forge-agent"
+    assert provisioner["type"] == "JWK" and provisioner["name"] == "vonk-forge-agent"
     assert "encryptedKey" not in provisioner and "d" not in provisioner["key"]
     assert provisioner["claims"] == {
         "minTLSCertDuration": "24h", "maxTLSCertDuration": "24h",
@@ -509,12 +509,12 @@ def test_pinned_step_ca_issues_tracked_leaf_profile_and_serves_fresh_crl(tmp_pat
     public_jwk = tmp_path / "agent-ca-public.jwk"
     private_jwk = tmp_path / "agent-ca-credential"
     step(
-        "certificate", "create", "DGX Forge Test Root", "/work/root_ca.crt", "/work/root_ca.key",
+        "certificate", "create", "Vonk Forge Test Root", "/work/root_ca.crt", "/work/root_ca.key",
         "--profile", "root-ca", "--kty", "OKP", "--curve", "Ed25519", "--not-after", "87600h",
         "--password-file", "/work/root-password",
     )
     step(
-        "certificate", "create", "DGX Forge Test Intermediate", "/work/intermediate_ca.crt", "/work/intermediate_ca_key",
+        "certificate", "create", "Vonk Forge Test Intermediate", "/work/intermediate_ca.crt", "/work/intermediate_ca_key",
         "--profile", "intermediate-ca", "--kty", "OKP", "--curve", "Ed25519", "--not-after", "8760h",
         "--ca", "/work/root_ca.crt", "--ca-key", "/work/root_ca.key",
         "--ca-password-file", "/work/root-password", "--password-file", "/work/intermediate-password",
@@ -547,7 +547,7 @@ def test_pinned_step_ca_issues_tracked_leaf_profile_and_serves_fresh_crl(tmp_pat
     database = tmp_path / "db"
     database.mkdir(mode=0o777)
     database.chmod(0o777)
-    container = f"dgx-step-ca-test-{uuid.uuid4().hex}"
+    container = f"vonk-step-ca-test-{uuid.uuid4().hex}"
     subprocess.run([
         "docker", "run", "-d", "--name", container, "-p", "127.0.0.1::9000",
         "-v", f"{generated_config}:/home/step/config/ca.json:ro",
@@ -573,7 +573,7 @@ def test_pinned_step_ca_issues_tracked_leaf_profile_and_serves_fresh_crl(tmp_pat
         provider = StepCertificateAuthority(
             ca_url=f"https://step-ca:{port}", root_certificate_path=root,
             intermediate_certificate_path=intermediate,
-            provisioner_name="dgx-forge-agent", provisioner_kid=kid,
+            provisioner_name="vonk-forge-agent", provisioner_kid=kid,
             credential_path=private_jwk, provisioner_public_jwk_path=public_jwk,
             timeout_seconds=2.0,
         )

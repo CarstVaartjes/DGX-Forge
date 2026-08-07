@@ -2087,11 +2087,11 @@ class AgentJobService:
             raise ValueError("successful node probe result is invalid")
         evidence = result.get("evidence")
         if not isinstance(evidence, Mapping) or set(evidence) != {
-            "dgx_forge",
+            "vonk_forge",
             "nvidia",
         }:
             raise ValueError("successful node probe evidence is invalid")
-        health = evidence.get("dgx_forge")
+        health = evidence.get("vonk_forge")
         nvidia = evidence.get("nvidia")
         if (
             not isinstance(health, Mapping)

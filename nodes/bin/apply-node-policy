@@ -33,7 +33,7 @@ if ! jq -e '
     exit 64
 fi
 
-earlyoom_bin="${DGX_DISABLE_EARLYOOM_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/disable-earlyoom}"
+earlyoom_bin="${VONK_DISABLE_EARLYOOM_BIN:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/disable-earlyoom}"
 [[ -x "$earlyoom_bin" && ! -L "$earlyoom_bin" ]] || {
     printf '%s\n' 'ERROR: earlyoom policy helper is unavailable or unsafe' >&2
     exit 64

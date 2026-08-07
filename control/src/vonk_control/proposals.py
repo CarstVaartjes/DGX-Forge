@@ -81,7 +81,7 @@ class ProposalService:
                 raise ValueError(f"duplicate proposal path: {path}")
             normalized[path] = serialize_document(path, change.document)
         ordered_paths = tuple(sorted(normalized))
-        temporary_root = Path(tempfile.mkdtemp(prefix="dgx-proposal-"))
+        temporary_root = Path(tempfile.mkdtemp(prefix="vonk-proposal-"))
         worktree = temporary_root / "worktree"
         try:
             worktree.mkdir(mode=0o700)

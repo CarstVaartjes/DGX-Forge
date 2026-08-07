@@ -1,4 +1,4 @@
-"""Generic fleet contracts for DGX Spark clusters."""
+"""Generic fleet contracts for Vonk Forge GPU node clusters."""
 
 from .types import Fleet, ManagementEndpoint, NodeId, NodeLifecycle, NodeRecord
 

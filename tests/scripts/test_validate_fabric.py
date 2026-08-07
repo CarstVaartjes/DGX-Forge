@@ -41,7 +41,7 @@ def test_inventory_uses_two_fabric_functions_per_host(validate_module):
 def test_local_fabric_boundary_uses_explicit_ssh_override(
     validate_module, monkeypatch
 ):
-    monkeypatch.setenv("SPARK_SSH_BIN", "/opt/custom/ssh-wrapper")
+    monkeypatch.setenv("VONK_SSH_BIN", "/opt/custom/ssh-wrapper")
     rail = validate_module.Rail(
         "function100",
         "enp1s0f1np1",
@@ -50,8 +50,8 @@ def test_local_fabric_boundary_uses_explicit_ssh_override(
         "192.168.100.10",
         "192.168.100.11",
     )
-    head = validate_module.Host("spark1", "dgx-spark-1", {}, (rail, rail))
-    worker = validate_module.Host("spark2", "dgx-spark-2", {}, (rail, rail))
+    head = validate_module.Host("node1", "vonk-node-1", {}, (rail, rail))
+    worker = validate_module.Host("node2", "vonk-node-2", {}, (rail, rail))
     runner = validate_module.Runner(head, worker, [])
     commands = []
 
@@ -118,8 +118,8 @@ Avg bus bandwidth : 17.0
 def test_runs_head_rdma_client_through_the_head_alias(validate_module):
     """The bound remote method needs the head alias as its first argument."""
     rail = validate_module.Rail("rail100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
-    head = validate_module.Host("spark1", "dgx-spark-1", {}, (rail, rail))
-    worker = validate_module.Host("spark2", "dgx-spark-2", {}, (rail, rail))
+    head = validate_module.Host("node1", "vonk-node-1", {}, (rail, rail))
+    worker = validate_module.Host("node2", "vonk-node-2", {}, (rail, rail))
 
     class Runner:
         def __init__(self):
@@ -162,8 +162,8 @@ def test_runs_head_rdma_client_through_the_head_alias(validate_module):
 def test_rejects_nonzero_rdma_server_even_with_positive_output(validate_module):
     """The client metric cannot hide a failed perftest server process."""
     rail = validate_module.Rail("rail100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
-    head = validate_module.Host("spark1", "dgx-spark-1", {}, (rail, rail))
-    worker = validate_module.Host("spark2", "dgx-spark-2", {}, (rail, rail))
+    head = validate_module.Host("node1", "vonk-node-1", {}, (rail, rail))
+    worker = validate_module.Host("node2", "vonk-node-2", {}, (rail, rail))
     positive = "Transport type : IB\nLink type : Ethernet\n65536 5000 0.0 88.5 0.1\n"
 
     class Runner:
@@ -185,8 +185,8 @@ def test_rejects_nonzero_rdma_server_even_with_positive_output(validate_module):
 def test_rejects_rdma_component_below_declared_floor(validate_module):
     """A positive result is not enough when it misses the accepted floor."""
     rail = validate_module.Rail("rail100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
-    head = validate_module.Host("spark1", "dgx-spark-1", {}, (rail, rail))
-    worker = validate_module.Host("spark2", "dgx-spark-2", {}, (rail, rail))
+    head = validate_module.Host("node1", "vonk-node-1", {}, (rail, rail))
+    worker = validate_module.Host("node2", "vonk-node-2", {}, (rail, rail))
     positive_but_low = (
         "Transport type : IB\nLink type : Ethernet\nMtu : 1024[B]\n"
         "GID index : 3\n65536 5000 0.0 97.0 0.1\n"
@@ -231,8 +231,8 @@ def aggregate_hosts(validate_module):
         validate_module.Rail("function101", "enP2p1s0f1np1", "roceP2p1s0f1", 3, "192.168.101.11", "192.168.101.10"),
     )
     return (
-        validate_module.Host("spark1", "dgx-spark-1", {}, head_rails),
-        validate_module.Host("spark2", "dgx-spark-2", {}, worker_rails),
+        validate_module.Host("node1", "vonk-node-1", {}, head_rails),
+        validate_module.Host("node2", "vonk-node-2", {}, worker_rails),
     )
 
 
@@ -312,8 +312,8 @@ def test_nccl_rejects_bus_bandwidth_below_regression_floor(validate_module):
         "TP_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1",
         "GLOO_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1",
     }
-    head = validate_module.Host("spark1", "dgx-spark-1", fabric, (rail, rail))
-    worker = validate_module.Host("spark2", "dgx-spark-2", fabric, (rail, rail))
+    head = validate_module.Host("node1", "vonk-node-1", fabric, (rail, rail))
+    worker = validate_module.Host("node2", "vonk-node-2", fabric, (rail, rail))
 
     class Runner:
         def remote(self, host, command, *, check=True):
@@ -457,12 +457,12 @@ def test_rejects_missing_rdma_error_counter(validate_module):
 def test_rejects_growing_rdma_error_counter(validate_module):
     """Any new sequence, retry, or timeout error fails the live acceptance run."""
     before = {
-        "spark1/rocep1s0f1/packet_seq_err": 0,
-        "spark1/rocep1s0f1/local_ack_timeout_err": 2,
+        "node1/rocep1s0f1/packet_seq_err": 0,
+        "node1/rocep1s0f1/local_ack_timeout_err": 2,
     }
     after = {
-        "spark1/rocep1s0f1/packet_seq_err": 1,
-        "spark1/rocep1s0f1/local_ack_timeout_err": 2,
+        "node1/rocep1s0f1/packet_seq_err": 1,
+        "node1/rocep1s0f1/local_ack_timeout_err": 2,
     }
 
     with pytest.raises(validate_module.GateError, match="packet_seq_err grew from 0 to 1"):
@@ -471,11 +471,11 @@ def test_rejects_growing_rdma_error_counter(validate_module):
 
 def test_accepts_unchanged_rdma_error_counters(validate_module):
     """Pre-existing counters are recorded but only growth during the run is rejected."""
-    before = {"spark1/rocep1s0f1/packet_seq_err": 3}
-    after = {"spark1/rocep1s0f1/packet_seq_err": 3}
+    before = {"node1/rocep1s0f1/packet_seq_err": 3}
+    after = {"node1/rocep1s0f1/packet_seq_err": 3}
 
     assert validate_module.validate_counter_delta(before, after) == {
-        "spark1/rocep1s0f1/packet_seq_err": 0
+        "node1/rocep1s0f1/packet_seq_err": 0
     }
 
 
@@ -496,8 +496,8 @@ def test_latency_command_pins_baseline_parameters(validate_module):
 def test_runs_fixed_latency_and_records_distribution(validate_module):
     """The live latency wrapper checks both process exits and returns parsed metrics."""
     rail = validate_module.Rail("function100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
-    head = validate_module.Host("spark1", "dgx-spark-1", {}, (rail, rail))
-    worker = validate_module.Host("spark2", "dgx-spark-2", {}, (rail, rail))
+    head = validate_module.Host("node1", "vonk-node-1", {}, (rail, rail))
+    worker = validate_module.Host("node2", "vonk-node-2", {}, (rail, rail))
     latency = """
  Transport type : IB
  Mtu : 1024[B]
@@ -526,7 +526,7 @@ def test_runs_fixed_latency_and_records_distribution(validate_module):
         Runner(), worker, head, rail, rail, 14000
     )
 
-    assert result["name"] == "ib_write_lat:spark1->spark2:function100"
+    assert result["name"] == "ib_write_lat:node1->node2:function100"
     assert result["p99_usec"] == 2.05
     assert result["client_exit_code"] == 0
     assert result["server_exit_code"] == 0
@@ -555,7 +555,7 @@ def test_counter_capture_is_worker_first_and_scoped_to_active_hcas(validate_modu
 
     assert runner.calls == ["worker", "head"]
     assert len(snapshot) == 4 * len(validate_module.RDMA_ERROR_COUNTERS)
-    assert all(key.startswith(("spark1/", "spark2/")) for key in snapshot)
+    assert all(key.startswith(("node1/", "node2/")) for key in snapshot)
 
 
 def test_native_nccl_prerequisites_require_the_pinned_completed_build(validate_module):
@@ -583,12 +583,12 @@ def test_native_nccl_launch_uses_restricted_fabric_transport(validate_module):
         "TP_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1",
         "GLOO_SOCKET_IFNAME": "enp1s0f1np1,enP2p1s0f1np1",
     }
-    head = validate_module.Host("spark1", "dgx-spark-1", fabric, (head_rail, head_rail))
-    worker = validate_module.Host("spark2", "dgx-spark-2", fabric, (worker_rail, worker_rail))
+    head = validate_module.Host("node1", "vonk-node-1", fabric, (head_rail, head_rail))
+    worker = validate_module.Host("node2", "vonk-node-2", fabric, (worker_rail, worker_rail))
 
     command = validate_module.nccl_launch_command(head, worker)
 
-    assert "mpirun -np 2 -H localhost:1,dgx-spark-2-fabric:1" in command
+    assert "mpirun -np 2 -H localhost:1,vonk-node-2-fabric:1" in command
     assert "$HOME/nccl-tests/build/all_reduce_perf" in command
     assert "NCCL_DEBUG='INFO'" in command
     assert "NCCL_SOCKET_IFNAME='=enp1s0f1np1,enP2p1s0f1np1'" in command
@@ -610,10 +610,10 @@ def test_native_prerequisite_checks_each_openmpi_package(validate_module):
 
 
 def test_worker_preflight_precedes_head_preflight(validate_module):
-    """Every remote prerequisite gate starts with Spark 2 via the fabric alias."""
+    """Every remote prerequisite gate starts with GPU node 2 via the fabric alias."""
     rail = validate_module.Rail("rail100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
-    head = validate_module.Host("spark1", "dgx-spark-1", {}, (rail, rail))
-    worker = validate_module.Host("spark2", "dgx-spark-2", {}, (rail, rail))
+    head = validate_module.Host("node1", "vonk-node-1", {}, (rail, rail))
+    worker = validate_module.Host("node2", "vonk-node-2", {}, (rail, rail))
 
     class Runner:
         def __init__(self):
@@ -641,7 +641,7 @@ def test_remote_preflight_pins_physical_link_speed_and_interface_mtu(validate_mo
         "192.168.100.10",
         "192.168.100.11",
     )
-    host = validate_module.Host("spark1", "dgx-spark-1", {}, (rail,))
+    host = validate_module.Host("node1", "vonk-node-1", {}, (rail,))
 
     class Runner:
         def __init__(self):
@@ -661,8 +661,8 @@ def test_nccl_validation_is_worker_first_and_launch_only(validate_module):
     """Completed native artifacts are checked, not rebuilt, before the collective."""
     rail = validate_module.Rail("rail100", "enp1s0f1np1", "rocep1s0f1", 3, "192.168.100.10", "192.168.100.11")
     fabric = {"NCCL_SOCKET_IFNAME": "=enp1s0f1np1", "NCCL_IB_HCA": "=rocep1s0f1:1", "NCCL_IB_GID_INDEX": 3, "TP_SOCKET_IFNAME": "enp1s0f1np1", "GLOO_SOCKET_IFNAME": "enp1s0f1np1"}
-    head = validate_module.Host("spark1", "dgx-spark-1", fabric, (rail, rail))
-    worker = validate_module.Host("spark2", "dgx-spark-2", fabric, (rail, rail))
+    head = validate_module.Host("node1", "vonk-node-1", fabric, (rail, rail))
+    worker = validate_module.Host("node2", "vonk-node-2", fabric, (rail, rail))
 
     class Runner:
         def __init__(self):

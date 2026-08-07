@@ -1,1 +1,1 @@
-"""JSON Schema resources for Spark profile contracts."""
+"""JSON Schema resources for workload profile contracts."""

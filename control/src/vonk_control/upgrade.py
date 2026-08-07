@@ -1509,9 +1509,9 @@ class ControlUpgrade:
         environment = {
             "CONTROL_API_IMAGE": plan.api_image,
             "CONTROL_WORKER_IMAGE": plan.worker_image,
-            "DGX_PLATFORM_BUILD_DIGEST": plan.build_digest,
-            "DGX_PLATFORM_RELEASE_DIGEST": plan.release_digest,
-            "DGX_PLATFORM_VERSION": plan.platform_version,
+            "VONK_PLATFORM_BUILD_DIGEST": plan.build_digest,
+            "VONK_PLATFORM_RELEASE_DIGEST": plan.release_digest,
+            "VONK_PLATFORM_VERSION": plan.platform_version,
         }
         references = (plan.api_image, plan.worker_image)
         try:

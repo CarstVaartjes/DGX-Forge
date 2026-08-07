@@ -14,7 +14,7 @@ def test_repository_to_running_profile_and_safe_withdrawal(tmp_path: Path) -> No
             "--host",
             "dynamic.example",
             "--display-name",
-            "dynamic-spark",
+            "dynamic-node",
             "--output",
             output,
         ],
@@ -24,7 +24,7 @@ def test_repository_to_running_profile_and_safe_withdrawal(tmp_path: Path) -> No
     )
     assert result.returncode == 0, result.stderr
     report = json.loads(output.read_text())
-    assert report["dynamic_input"] == {"host": "dynamic.example", "display_name": "dynamic-spark"}
+    assert report["dynamic_input"] == {"host": "dynamic.example", "display_name": "dynamic-node"}
     assert report["installation_gate_count"] == 7
     assert report["profile_source"] == "model-repository/revision"
     assert report["planner"] == "DesiredStateResolver"

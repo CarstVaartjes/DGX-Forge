@@ -49,12 +49,12 @@ done
     exit 64
 }
 
-target_dir="${DGX_SSHD_CONFIG_DIR:-/etc/ssh/sshd_config.d}"
-target="$target_dir/90-dgx-admin.conf"
-sshd_bin="${DGX_SSHD_BIN:-/usr/sbin/sshd}"
-systemctl_bin="${DGX_SYSTEMCTL_BIN:-systemctl}"
-getent_bin="${DGX_GETENT_BIN:-getent}"
-ssh_keygen_bin="${DGX_SSH_KEYGEN_BIN:-ssh-keygen}"
+target_dir="${VONK_SSHD_CONFIG_DIR:-/etc/ssh/sshd_config.d}"
+target="$target_dir/90-vonk-admin.conf"
+sshd_bin="${VONK_SSHD_BIN:-/usr/sbin/sshd}"
+systemctl_bin="${VONK_SYSTEMCTL_BIN:-systemctl}"
+getent_bin="${VONK_GETENT_BIN:-getent}"
+ssh_keygen_bin="${VONK_SSH_KEYGEN_BIN:-ssh-keygen}"
 
 require_mutation_authority() {
     if [[ "$target_dir" == /etc/ssh/sshd_config.d && "$EUID" -ne 0 ]]; then
@@ -165,7 +165,7 @@ case "$action" in
                 ;;
         esac
         install -d -m 0755 "$target_dir"
-        stage="$(mktemp "$target_dir/.90-dgx-admin.conf.XXXXXX")"
+        stage="$(mktemp "$target_dir/.90-vonk-admin.conf.XXXXXX")"
         cleanup() { rm -f -- "$stage"; }
         rollback_on_error() {
             local result=$?

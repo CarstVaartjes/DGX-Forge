@@ -8,15 +8,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Define the immutable, application-neutral package contracts and a workload-only Git/TUF publication boundary that can authorize new workload families and releases without a DGX-Forge platform release.
+**Goal:** Define the immutable, application-neutral package contracts and a workload-only Git/TUF publication boundary that can authorize new workload families and releases without a Vonk Forge platform release.
 
-**Architecture:** Git remains authoring authority for package families, promoted release locks, deployments, and fleet intent. `dgx_agent_protocol` owns only the bounded release-lock wire contract shared by control and agent; `spark_profiles` owns repository authoring contracts; workload TUF roles authorize definition/lock bytes independently from platform TUF roles. Builders may publish digest-pinned OCI artifacts and provenance, but only the NAS promotion service may authorize an exact workload release lock.
+**Architecture:** Git remains authoring authority for package families, promoted release locks, deployments, and fleet intent. `vonk_agent_protocol` owns only the bounded release-lock wire contract shared by control and agent; `cluster_profiles` owns repository authoring contracts; workload TUF roles authorize definition/lock bytes independently from platform TUF roles. Builders may publish digest-pinned OCI artifacts and provenance, but only the NAS promotion service may authorize an exact workload release lock.
 
 **Tech Stack:** Python 3.12, attrs/dataclasses, JSON Schema Draft 2020-12, `python-tuf` 7.0.0, securesystemslib, OCI descriptors, pytest
 
 ## Global Constraints
 
-- Package, model, runtime, and adapter names are data and never members of a compiled DGX-Forge catalog.
+- Package, model, runtime, and adapter names are data and never members of a compiled Vonk Forge catalog.
 - Canonical release identity is the SHA-256 digest of deterministic complete lock bytes; display versions and source tags are never installation identities.
 - A release lock contains only immutable identities and exact dependency release digests; dependency graphs are acyclic, shallow, and bounded.
 - Workload trust keys cannot authorize platform, agent, supervisor, node-policy, protocol, or privileged-helper updates.
@@ -29,9 +29,9 @@
 ### Task W1: Shared immutable release-lock contract
 
 **Files:**
-- Create: `agent_protocol/src/dgx_agent_protocol/workload_packages.py`
-- Create: `agent_protocol/src/dgx_agent_protocol/schemas/workload-release-lock.schema.json`
-- Modify: `agent_protocol/src/dgx_agent_protocol/__init__.py`
+- Create: `agent_protocol/src/vonk_agent_protocol/workload_packages.py`
+- Create: `agent_protocol/src/vonk_agent_protocol/schemas/workload-release-lock.schema.json`
+- Modify: `agent_protocol/src/vonk_agent_protocol/__init__.py`
 - Test: `agent_protocol/tests/test_workload_packages.py`
 
 **Interfaces:**
@@ -54,7 +54,7 @@ assert tuple(item.family_id for item in graph.releases) == ("synthetic-root", "s
 
 Run: `uv run --project agent_protocol --frozen pytest agent_protocol/tests/test_workload_packages.py -v`
 
-Expected: FAIL because `dgx_agent_protocol.workload_packages` and its packaged schema do not exist.
+Expected: FAIL because `vonk_agent_protocol.workload_packages` and its packaged schema do not exist.
 
 - [ ] **Step 3: Implement deterministic typed parsing**
 
@@ -86,7 +86,7 @@ Expected: PASS with the schema included in the built wheel.
 - [ ] **Step 5: Commit W1**
 
 ```bash
-git add agent_protocol/src/dgx_agent_protocol agent_protocol/tests/test_workload_packages.py
+git add agent_protocol/src/vonk_agent_protocol agent_protocol/tests/test_workload_packages.py
 git commit -m "feat: define immutable workload release locks"
 ```
 
@@ -95,13 +95,13 @@ git commit -m "feat: define immutable workload release locks"
 **Files:**
 - Create: `schemas/package-family.schema.json`
 - Create: `schemas/workload-deployment.schema.json`
-- Create: `src/spark_profiles/workload_packages/__init__.py`
-- Create: `src/spark_profiles/workload_packages/contracts.py`
-- Create: `src/spark_profiles/schemas/package-family.schema.json`
-- Create: `src/spark_profiles/schemas/workload-deployment.schema.json`
+- Create: `src/cluster_profiles/workload_packages/__init__.py`
+- Create: `src/cluster_profiles/workload_packages/contracts.py`
+- Create: `src/cluster_profiles/schemas/package-family.schema.json`
+- Create: `src/cluster_profiles/schemas/workload-deployment.schema.json`
 - Modify: `pyproject.toml`
-- Test: `tests/spark_profiles/test_workload_package_contracts.py`
-- Test: `tests/spark_profiles/fleet/test_schemas.py`
+- Test: `tests/cluster_profiles/test_workload_package_contracts.py`
+- Test: `tests/cluster_profiles/fleet/test_schemas.py`
 
 **Interfaces:**
 - Produces `PackageFamily.load(document) -> PackageFamily`, `WorkloadDeployment.load(document) -> WorkloadDeployment`, and `PromotionPolicy.load(document) -> PromotionPolicy`.
@@ -121,13 +121,13 @@ assert deployment.release_digest == "a" * 64
 
 - [ ] **Step 2: Run the RED tests**
 
-Run: `uv run --frozen pytest tests/spark_profiles/test_workload_package_contracts.py tests/spark_profiles/fleet/test_schemas.py -v`
+Run: `uv run --frozen pytest tests/cluster_profiles/test_workload_package_contracts.py tests/cluster_profiles/fleet/test_schemas.py -v`
 
 Expected: FAIL because the schemas and typed loaders are absent.
 
 - [ ] **Step 3: Implement and package the repository contracts**
 
-Copy both schemas into `src/spark_profiles/schemas/` through Hatch's existing force-include convention. Implement exact-field immutable loaders, bounded recipes with typed field bindings rather than templated commands, canonical TOML/JSON serialization inputs, and cross-reference validation against a supplied mapping of lightweight release index entries. The root administration package does not import the agent protocol wheel; control joins the authoring and release-lock types after W5.
+Copy both schemas into `src/cluster_profiles/schemas/` through Hatch's existing force-include convention. Implement exact-field immutable loaders, bounded recipes with typed field bindings rather than templated commands, canonical TOML/JSON serialization inputs, and cross-reference validation against a supplied mapping of lightweight release index entries. The root administration package does not import the agent protocol wheel; control joins the authoring and release-lock types after W5.
 
 ```python
 def validate_deployment(
@@ -142,23 +142,23 @@ def validate_deployment(
 
 - [ ] **Step 4: Verify schema copies and one/two/sixteen-node fixtures**
 
-Run: `uv run --frozen pytest tests/spark_profiles/test_workload_package_contracts.py tests/spark_profiles/fleet/test_schemas.py tests/control/test_fleet_scale.py -q`
+Run: `uv run --frozen pytest tests/cluster_profiles/test_workload_package_contracts.py tests/cluster_profiles/fleet/test_schemas.py tests/control/test_fleet_scale.py -q`
 
 Expected: PASS without any fixed package, node, or administrator name.
 
 - [ ] **Step 5: Commit W2**
 
 ```bash
-git add schemas/package-family.schema.json schemas/workload-deployment.schema.json src/spark_profiles/workload_packages src/spark_profiles/schemas pyproject.toml tests/spark_profiles/test_workload_package_contracts.py tests/spark_profiles/fleet/test_schemas.py
+git add schemas/package-family.schema.json schemas/workload-deployment.schema.json src/cluster_profiles/workload_packages src/cluster_profiles/schemas pyproject.toml tests/cluster_profiles/test_workload_package_contracts.py tests/cluster_profiles/fleet/test_schemas.py
 git commit -m "feat: define repository workload package state"
 ```
 
 ### Task W3: Separate workload TUF roles and bounded delivery
 
 **Files:**
-- Create: `control/src/dgx_control/workload_trust.py`
-- Modify: `control/src/dgx_control/agent_api.py`
-- Modify: `control/src/dgx_control/settings.py`
+- Create: `control/src/vonk_control/workload_trust.py`
+- Modify: `control/src/vonk_control/agent_api.py`
+- Modify: `control/src/vonk_control/settings.py`
 - Modify: `deploy/compose/compose.yaml`
 - Test: `control/tests/test_workload_trust.py`
 - Test: `control/tests/security/test_boundaries.py`
@@ -212,7 +212,7 @@ Expected: PASS; platform fixtures fail under workload trust and workload fixture
 - [ ] **Step 5: Commit W3**
 
 ```bash
-git add control/src/dgx_control/workload_trust.py control/src/dgx_control/agent_api.py control/src/dgx_control/settings.py deploy/compose/compose.yaml control/tests/test_workload_trust.py control/tests/security/test_boundaries.py
+git add control/src/vonk_control/workload_trust.py control/src/vonk_control/agent_api.py control/src/vonk_control/settings.py deploy/compose/compose.yaml control/tests/test_workload_trust.py control/tests/security/test_boundaries.py
 git commit -m "feat: isolate workload release trust"
 ```
 
@@ -243,7 +243,7 @@ gates, and any workflow reference to workload TUF credentials.
 ```python
 request = WorkloadArtifactBuild.parse(document)
 assert request.source_commit == "0123456789abcdef0123456789abcdef01234567"
-assert request.output_repository == "ghcr.io/carstvaartjes/dgx-forge-workloads"
+assert request.output_repository == "ghcr.io/carstvaartjes/vonk-forge-workloads"
 ```
 
 - [ ] **Step 2: Run the RED tests**

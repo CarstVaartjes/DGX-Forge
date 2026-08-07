@@ -207,7 +207,7 @@ class RecipeOperationService:
             return existing
         if not plan.targets:
             raise RecipeOperationConflict(
-                "exact built image is already present on every mapped Spark"
+                "exact built image is already present on every mapped GPU node"
             )
         return self._queue(
             kind="recipe.image.import.v1",

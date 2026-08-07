@@ -107,7 +107,7 @@ def test_adapter_pins_official_source_and_model_owned_runtime() -> None:
     assert '"qwen-vl-utils==0.0.14"' in script
     assert 'scratch_root="$models_root/runtime-cache/qwen3-vl-8b-single"' in script
     assert 'venv="$scratch_root/venv"' in script
-    assert "spark-model-adapter" not in script
+    assert "node-model-adapter" not in script
     assert "--disable-log-requests" not in script
     assert "python3.12-dev" in script
     assert 'CPATH="$python_headers/usr/include:$python_headers/usr/include/python3.12"' in script

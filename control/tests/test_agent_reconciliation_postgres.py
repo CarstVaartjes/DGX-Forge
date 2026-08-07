@@ -210,7 +210,7 @@ def _system(
         "schema_version": 1,
         "workload_id": "model",
         "release_digest": "a" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
         "expected_digest": "e" * 64,
     }
     operation = {
@@ -1451,7 +1451,7 @@ def _compensation_system(
         "schema_version": 1,
         "workload_id": "model",
         "release_digest": "a" * 64,
-        "adapter_id": "spark-runtime-v1",
+        "adapter_id": "node-runtime-v1",
         "preparation_digest": "d" * 64,
     }
     graph = {

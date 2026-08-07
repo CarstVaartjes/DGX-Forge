@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Emit deterministic, explicitly simulated Spark-agent lifecycle evidence."""
+"""Emit deterministic, explicitly simulated GPU node-agent lifecycle evidence."""
 
 from __future__ import annotations
 

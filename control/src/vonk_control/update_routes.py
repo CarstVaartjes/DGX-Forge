@@ -1,4 +1,4 @@
-"""Production route fencing for topology-safe Spark update batches."""
+"""Production route fencing for topology-safe GPU node update batches."""
 
 from __future__ import annotations
 
@@ -338,7 +338,7 @@ def load_authoritative_route_request(
 
 
 class ProductionUpdateRouteBoundary:
-    """Fence and selectively withdraw routes around one Spark update batch."""
+    """Fence and selectively withdraw routes around one GPU node update batch."""
 
     def __init__(
         self,
@@ -688,7 +688,7 @@ class ProductionUpdateRouteBoundary:
                     reconciliation_id=request.reconciliation_id,
                     plan_digest=request.plan_digest,
                     targets=targets,
-                    reason="Spark platform update maintenance",
+                    reason="GPU node platform update maintenance",
                     update_boundary_key=record.key,
                     renew_update_boundary=renew,
                     expected_current_digest=expected_current_digest,

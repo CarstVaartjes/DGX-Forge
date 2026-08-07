@@ -1,4 +1,4 @@
-"""Preview and transactionally persist explainable SparkRun imports."""
+"""Preview and transactionally persist explainable WorkloadRun imports."""
 
 from __future__ import annotations
 
@@ -23,18 +23,18 @@ from .models import (
 from .recipe_contract import recipe_content_sha256
 from .registry_resolution import RegistryTransport
 from .source_bundles import GeneratedSourceBundle, SourceBundleStore
-from .sparkrun_importer import SparkRunImportResult, import_sparkrun
-from .sparkrun_source import parse_sparkrun_yaml
+from .workload_run_importer import WorkloadRunImportResult, import_workload_run
+from .workload_run_source import parse_workload_run_yaml
 
 
-class SparkRunWorkflowError(RuntimeError):
+class WorkloadRunWorkflowError(RuntimeError):
     def __init__(self, code: str, detail: str) -> None:
         self.code = code
         super().__init__(detail)
 
 
 @dataclass(frozen=True, slots=True)
-class AppliedSparkRunImport:
+class AppliedWorkloadRunImport:
     import_id: str
     recipe_id: str
     revision_id: str
@@ -45,14 +45,14 @@ class AppliedSparkRunImport:
 
 
 @dataclass(frozen=True, slots=True)
-class ResolvedSparkRunImport:
+class ResolvedWorkloadRunImport:
     recipe_id: str
     revision_id: str
     revision_number: int
     content_sha256: str
 
 
-class SparkRunWorkflow:
+class WorkloadRunWorkflow:
     def __init__(
         self,
         sessions: sessionmaker[Session],
@@ -68,8 +68,8 @@ class SparkRunWorkflow:
         self._registry = registry
         self._models = models
 
-    def preview(self, raw: bytes) -> SparkRunImportResult:
-        return import_sparkrun(parse_sparkrun_yaml(raw))
+    def preview(self, raw: bytes) -> WorkloadRunImportResult:
+        return import_workload_run(parse_workload_run_yaml(raw))
 
     def apply(
         self,
@@ -78,14 +78,14 @@ class SparkRunWorkflow:
         source_sha256: str,
         report_digest: str,
         actor: str,
-    ) -> AppliedSparkRunImport:
+    ) -> AppliedWorkloadRunImport:
         preview = self.preview(raw)
         if (
             preview.source_sha256 != source_sha256
             or preview.report_digest != report_digest
         ):
-            raise SparkRunWorkflowError(
-                "sparkrun.stale_preview", "SparkRun preview identity changed"
+            raise WorkloadRunWorkflowError(
+                "workload_run.stale_preview", "WorkloadRun preview identity changed"
             )
         stored_bundle = self._bundles.put(
             preview.bundle.sha256, io.BytesIO(preview.bundle.archive)
@@ -93,7 +93,7 @@ class SparkRunWorkflow:
         with self._sessions.begin() as session:
             existing = session.scalar(
                 select(RecipeImport).where(
-                    RecipeImport.source_kind == "sparkrun",
+                    RecipeImport.source_kind == "workload_run",
                     RecipeImport.source_sha256 == source_sha256,
                 )
             )
@@ -105,7 +105,7 @@ class SparkRunWorkflow:
                     .limit(1)
                 )
                 assert revision is not None
-                return AppliedSparkRunImport(
+                return AppliedWorkloadRunImport(
                     existing.id,
                     existing.recipe_id,
                     revision.id,
@@ -122,7 +122,7 @@ class SparkRunWorkflow:
                 slug=str(identity["slug"]),
                 title=str(metadata["title"]),
                 description=str(metadata["description"]),
-                source_kind="sparkrun",
+                source_kind="workload_run",
                 created_by=actor,
                 created_at=now,
                 updated_at=now,
@@ -143,8 +143,8 @@ class SparkRunWorkflow:
             _record_bundle(session, preview.bundle, stored_bundle.archive_bytes, now)
             imported = RecipeImport(
                 recipe_id=recipe.id,
-                source_kind="sparkrun",
-                source_reference=f"sparkrun:sha256:{source_sha256}",
+                source_kind="workload_run",
+                source_reference=f"workload_run:sha256:{source_sha256}",
                 source_sha256=source_sha256,
                 redacted_source=preview.redacted_source,
                 created_by=actor,
@@ -167,7 +167,7 @@ class SparkRunWorkflow:
                 ]
             )
             session.flush()
-            return AppliedSparkRunImport(
+            return AppliedWorkloadRunImport(
                 imported.id,
                 recipe.id,
                 revision.id,
@@ -184,10 +184,10 @@ class SparkRunWorkflow:
         expected_revision: int,
         overlays: dict[str, object],
         actor: str,
-    ) -> ResolvedSparkRunImport:
+    ) -> ResolvedWorkloadRunImport:
         if self._registry is None or self._models is None:
-            raise SparkRunWorkflowError(
-                "sparkrun.resolution_unavailable",
+            raise WorkloadRunWorkflowError(
+                "workload_run.resolution_unavailable",
                 "external metadata resolution is unavailable",
             )
         with self._sessions() as session:
@@ -204,12 +204,12 @@ class SparkRunWorkflow:
             if recipe is None or imported is None or revision is None:
                 raise KeyError(recipe_id)
             if (
-                recipe.source_kind != "sparkrun"
+                recipe.source_kind != "workload_run"
                 or revision.revision_number != expected_revision
                 or revision.lifecycle not in {"blocked", "draft"}
             ):
-                raise SparkRunWorkflowError(
-                    "catalog.stale_revision", "SparkRun draft revision changed"
+                raise WorkloadRunWorkflowError(
+                    "catalog.stale_revision", "WorkloadRun draft revision changed"
                 )
             rows = session.scalars(
                 select(RecipeImportItem).where(
@@ -232,12 +232,12 @@ class SparkRunWorkflow:
             context = build.get("context") if isinstance(build, dict) else None
             digest = context.get("sha256") if isinstance(context, dict) else None
             if not isinstance(digest, str):
-                raise SparkRunWorkflowError(
-                    "sparkrun.bundle_missing",
+                raise WorkloadRunWorkflowError(
+                    "workload_run.bundle_missing",
                     "import source bundle identity is missing",
                 )
             bundle = self._bundles.get(digest)
-            imported_result = SparkRunImportResult(
+            imported_result = WorkloadRunImportResult(
                 draft_document=snapshot_document,
                 bundle=bundle,
                 report=report,
@@ -251,8 +251,8 @@ class SparkRunWorkflow:
         )
         if not resolved.runnable:
             codes = ", ".join(item.reason_code for item in resolved.blockers[:5])
-            raise SparkRunWorkflowError(
-                "sparkrun.import_blocked", f"SparkRun import remains blocked: {codes}"
+            raise WorkloadRunWorkflowError(
+                "workload_run.import_blocked", f"WorkloadRun import remains blocked: {codes}"
             )
         stored_bundle = self._bundles.put(
             resolved.bundle.sha256, io.BytesIO(resolved.bundle.archive)
@@ -270,8 +270,8 @@ class SparkRunWorkflow:
                 .limit(1)
             )
             if current_recipe is None or current is None or current.id != snapshot_id:
-                raise SparkRunWorkflowError(
-                    "catalog.stale_revision", "SparkRun draft revision changed"
+                raise WorkloadRunWorkflowError(
+                    "catalog.stale_revision", "WorkloadRun draft revision changed"
                 )
             next_revision = LocalRecipeRevision(
                 recipe_id=recipe_id,
@@ -298,7 +298,7 @@ class SparkRunWorkflow:
                 row.blocking = item.blocking
                 row.destination_path = item.destination_path
             session.flush()
-            return ResolvedSparkRunImport(
+            return ResolvedWorkloadRunImport(
                 recipe_id, next_revision.id, next_revision.revision_number, digest
             )
 

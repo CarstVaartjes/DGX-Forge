@@ -113,7 +113,7 @@ def test_production_boundary_rejects_direct_probe_job_submission() -> None:
 def test_cookie_authenticated_mutation_requires_matching_csrf() -> None:
     client, headers, _, _ = _client("operator")
     token = headers["Authorization"].removeprefix("Bearer ")
-    client.cookies.set("dgx_session", token)
+    client.cookies.set("vonk_session", token)
     assert client.post("/api/v1/jobs", json={"kind": "probe", "base_commit": "abc", "targets": [], "payload": {}}).status_code == 403
-    client.cookies.set("dgx_csrf", "nonce")
+    client.cookies.set("vonk_csrf", "nonce")
     assert client.post("/api/v1/jobs", headers={"x-csrf-token": "nonce"}, json={"kind": "probe", "base_commit": "abc", "targets": [], "payload": {}}).status_code == 202

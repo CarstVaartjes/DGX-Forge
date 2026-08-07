@@ -50,7 +50,7 @@ def _run(
         ["bash", str(SCRIPT), "--policy", str(policy), action],
         env={
             **os.environ,
-            "DGX_DISABLE_EARLYOOM_BIN": str(helper),
+            "VONK_DISABLE_EARLYOOM_BIN": str(helper),
             "POLICY_TEST_STATE": str(state),
             "POLICY_TEST_ACTIONS": str(actions),
         },
@@ -127,6 +127,6 @@ def test_default_policy_has_no_node_names_addresses_or_users() -> None:
     encoded = json.dumps(document).lower()
 
     assert document == {"schema_version": 1, "earlyoom": "disabled"}
-    assert "spark1" not in encoded
+    assert "node1" not in encoded
     assert "192.168." not in encoded
     assert "carst" not in encoded

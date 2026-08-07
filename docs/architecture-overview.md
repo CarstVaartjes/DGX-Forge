@@ -1,11 +1,11 @@
 # Vonk Forge architecture overview
 
-Vonk Forge separates the Docker service host from the Spark compute plane. The
+Vonk Forge separates the Docker service host from the GPU node compute plane. The
 service host can be a NAS or any Docker Compose-capable Linux machine. A cluster
-can contain one, two, or more DGX Sparks; no product contract fixes the count or
-uses a Spark hostname or IP address as identity.
+can contain one, two, or more Vonk Forge GPU nodes; no product contract fixes the count or
+uses a GPU node hostname or IP address as identity.
 
-Each Spark is independently installed and enrolled. Its stable `spk_…` identity
+Each GPU node is independently installed and enrolled. Its stable `spk_…` identity
 comes from the node key and certificate, while its current management address is
 fresh authenticated presence evidence. DHCP reservations are useful operationally
 but are never control-plane authority.
@@ -26,13 +26,13 @@ flowchart LR
         worker[Repository-less control worker]
         db[(PostgreSQL)]
         litellm[LiteLLM]
-        hermes[Hermes Agent]
+        hermes[Hermes Agent optional profile]
         telemetry[Prometheus and Grafana]
     end
 
-    subgraph sparks[One or more DGX Sparks]
-        s1[Spark agent and model runtimes]
-        sn[Additional Spark agents and model runtimes]
+    subgraph nodes[One or more Vonk Forge GPU nodes]
+        s1[GPU node agent and model runtimes]
+        sn[Additional GPU node agents and model runtimes]
     end
 
     cli -->|authenticated API| caddy
@@ -57,7 +57,7 @@ flowchart LR
 
 Vonk Forge has an explicit authority split. PostgreSQL is authoritative for the
 local recipe catalog: package families, authored and imported revisions,
-SparkRun import reports, installations, placements, and runs. A recipe can be
+WorkloadRun import reports, installations, placements, and runs. A recipe can be
 created, imported, resolved, installed, and run while the operator is offline;
 the optional global catalog is a source of immutable revisions, never a remote
 dependency for local execution. Git/TUF remains authoritative for platform
@@ -72,16 +72,16 @@ protocol range, and plan digest. Catalog plans use a recipe revision digest
 instead of treating `base_commit` as authorization.
 
 The worker deliberately has no repository mount, Git key, Git/OpenSSH executable,
-or Spark-facing network. It advances durable reconciliations and publishes
+or GPU node-facing network. It advances durable reconciliations and publishes
 atomic, leased route bundles. It obtains current-head and policy decisions from
 the API over a dedicated two-party internal network. Those bounded exchanges are
 nonce-bound, short-lived, HMAC authenticated, and never exposed by Caddy.
 
-Routine Spark work is pull-based. Each Spark agent opens an outbound mTLS request,
+Routine GPU node work is pull-based. Each GPU node agent opens an outbound mTLS request,
 claims only operations for its certificate-bound node identity and compatible
 protocol/capabilities, heartbeats a fenced attempt, and returns digest-bound
 evidence. The control plane does not open SSH, SCP, or an agent connection to a
-Spark. SSH remains available to trusted administrators for initial onboarding,
+GPU node. SSH remains available to trusted administrators for initial onboarding,
 fabric recovery, and explicit break-glass inspection.
 
 ## Service placement
@@ -93,16 +93,22 @@ fabric recovery, and explicit break-glass inspection.
 | Control worker | Durable reconciliation, dependency waves, compensation, fail-closed withdrawal, and atomic route/LiteLLM publication. |
 | PostgreSQL | Jobs, immutable resolved plans, operation/attempt fences, agent identity/presence, reconciliation state, cancellation, and audit evidence. |
 | LiteLLM | OpenAI-compatible aliases and quotas generated only from an acknowledged, unexpired publication bundle. |
-| Hermes Agent | Persistent tools/UI service that reaches inference only through the fixed repository-policy `hermes-agent` alias. |
+| Hermes Agent | Optional, default-disabled tools/UI profile that reaches inference only through the fixed repository-policy `hermes-agent` alias. |
 | Prometheus/Grafana | Platform, agent, job, route, node-exporter, and DCGM observability. |
-| Tailscale | Named remote services without placing remote-access software on Sparks. |
-| Spark agent | Non-root outbound control client and the only routine executor of typed node/release/workload operations. |
-| Spark runtimes | Repository-declared model adapters and verified local artifacts; model weights and tensor traffic remain off the service host. |
+| Tailscale | Named remote services without placing remote-access software on GPU nodes. |
+| GPU node agent | Non-root outbound control client and the only routine executor of typed node/release/workload operations. |
+| GPU node runtimes | Repository-declared model adapters and verified local artifacts; model weights and tensor traffic remain off the service host. |
 
 The Compose project keeps PostgreSQL, agent ingress, repository authority,
 registry publication, inference, and Hermes networks separate. Only Caddy
-publishes a host port. LiteLLM alone joins Spark-facing cluster egress; the
+publishes a host port. LiteLLM alone joins GPU node-facing cluster egress; the
 worker and API do not.
+
+The initial service-host install is source-first: an operator checks out a
+reviewed commit, builds the API and worker images locally, and starts the
+checked-in Compose graph. This does not make the service host a workload-image
+registry or require hosted release images. The signed agent package and future
+platform release channel remain independent trust boundaries.
 
 ## External release and future global services
 
@@ -144,13 +150,13 @@ expired, or withdrawn state.
 
 ## Scaling and networking
 
-Adding a Spark repeats the same install/enroll operation and adds a stable node
+Adding a GPU node repeats the same install/enroll operation and adds a stable node
 record to the repository fleet definition. Placement and operation ordering are
 deterministic for one, two, sixteen, or more nodes; sixteen is a tested small-
 cluster shape, not a hard product limit.
 
 Tensor-parallel traffic follows the repository topology directly between the
-selected Sparks. It never traverses Caddy, LiteLLM, PostgreSQL, or the service
+selected GPU nodes. It never traverses Caddy, LiteLLM, PostgreSQL, or the service
 host. The [fleet migration runbook](runbooks/fleet-migration.md) covers stable
 identity and count-independent inventory. Model/profile contracts and capacity
 comparisons live in the [model/profile overview](model-profile-overview.md) and

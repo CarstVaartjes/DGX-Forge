@@ -4,7 +4,7 @@
 This command deliberately delegates execution to the checked-in hermetic E2E
 harness.  It does not manufacture a passing report from fixture metadata: a
 non-zero test result, an xfail, or an xpass blocks evidence publication.
-Physical Spark acceptance is a separate operator gate and is never inferred
+Physical GPU node acceptance is a separate operator gate and is never inferred
 from this simulated run.
 """
 
@@ -74,10 +74,10 @@ def build_report(*, mode: str) -> dict[str, object]:
     output_digest = hashlib.sha256(output.encode()).hexdigest()
     report: dict[str, object] = {
         "schema_version": 1,
-        "report_type": "dgx-forge-workload-package-acceptance",
+        "report_type": "vonk-forge-workload-package-acceptance",
         "status": "passed" if passed else "blocked",
         "evidence_kind": "simulated",
-        "physical_sparks_exercised": False,
+        "physical_nodes_exercised": False,
         "unknown_family_without_agent_update": passed,
         "agent_digest_unchanged": passed,
         "release_two_activated": passed,

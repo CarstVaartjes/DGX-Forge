@@ -29,7 +29,7 @@ def target() -> TargetPlatform:
             PlatformAgentArtifact(
                 architecture="linux-arm64",
                 oci_manifest_digest="sha256:" + "1" * 64,
-                payload_name="dgx-agent",
+                payload_name="vonk-agent",
                 payload_sha256="2" * 64,
                 payload_size=4096,
             ),
@@ -305,7 +305,7 @@ def test_plan_emits_only_the_signed_architecture_update_payload() -> None:
         "artifact": {
             "architecture": "linux-arm64",
             "oci_manifest_digest": "sha256:" + "1" * 64,
-            "payload_name": "dgx-agent",
+            "payload_name": "vonk-agent",
             "payload_sha256": "2" * 64,
             "payload_size": 4096,
         },
@@ -323,7 +323,7 @@ def test_platform_agent_artifact_obeys_the_supervisor_256_mib_limit() -> None:
         PlatformAgentArtifact(
             architecture="linux-arm64",
             oci_manifest_digest="sha256:" + "1" * 64,
-            payload_name="dgx-agent",
+            payload_name="vonk-agent",
             payload_sha256="2" * 64,
             payload_size=256 * 1024 * 1024 + 1,
         )

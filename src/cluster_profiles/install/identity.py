@@ -1,4 +1,4 @@
-"""Trusted-identity decisions for first-contact Spark onboarding."""
+"""Trusted-identity decisions for first-contact GPU node onboarding."""
 
 from __future__ import annotations
 

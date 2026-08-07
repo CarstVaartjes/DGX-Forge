@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PROBE = ROOT / "nodes" / "bin" / "inspect-node-identity"
 LINUX_NODE_RUNTIME = pytest.mark.skipif(
     sys.platform != "linux",
-    reason="identity probe runtime is supported only on DGX OS/Linux nodes",
+    reason="identity probe runtime is supported only on Vonk Forge OS/Linux nodes",
 )
 
 
@@ -43,8 +43,8 @@ def _identity_environment(tmp_path: Path) -> tuple[dict[str, str], str, str]:
     environment = {
         **os.environ,
         "PATH": f"{fake_bin}:{os.environ['PATH']}",
-        "DGX_IDENTITY_SERIAL_PATH": str(serial_path),
-        "DGX_IDENTITY_MACHINE_ID_PATH": str(machine_path),
+        "VONK_IDENTITY_SERIAL_PATH": str(serial_path),
+        "VONK_IDENTITY_MACHINE_ID_PATH": str(machine_path),
     }
     return environment, serial, machine_id
 
@@ -81,7 +81,7 @@ def test_identity_probe_marks_invalid_machine_id_for_console_repair(
     tmp_path: Path,
 ) -> None:
     environment, _, _ = _identity_environment(tmp_path)
-    Path(environment["DGX_IDENTITY_MACHINE_ID_PATH"]).write_text("not-a-machine-id\n")
+    Path(environment["VONK_IDENTITY_MACHINE_ID_PATH"]).write_text("not-a-machine-id\n")
 
     completed = subprocess.run(
         ["bash", str(PROBE)],
@@ -111,7 +111,7 @@ def test_identity_probe_rejects_arguments(tmp_path: Path) -> None:
 
 def test_identity_probe_requires_readable_identity_sources(tmp_path: Path) -> None:
     environment, _, _ = _identity_environment(tmp_path)
-    environment["DGX_IDENTITY_SERIAL_PATH"] = str(tmp_path / "missing")
+    environment["VONK_IDENTITY_SERIAL_PATH"] = str(tmp_path / "missing")
 
     completed = subprocess.run(
         ["bash", str(PROBE)],

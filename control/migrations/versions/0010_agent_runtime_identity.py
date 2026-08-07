@@ -1,4 +1,4 @@
-"""Persist the authenticated running Spark agent release identity."""
+"""Persist the authenticated running GPU node agent release identity."""
 
 import sqlalchemy as sa
 from alembic import op

@@ -23,4 +23,4 @@ def test_phase4_definitions_are_cataloged_as_planned() -> None:
     catalog = Catalog.load(root)
     definitions = catalog.definitions
     assert PHASE4_IDS <= definitions.keys()
-    assert all(definitions[identifier].nodes == ("spark2",) for identifier in PHASE4_IDS)
+    assert all(definitions[identifier].nodes == ("node2",) for identifier in PHASE4_IDS)

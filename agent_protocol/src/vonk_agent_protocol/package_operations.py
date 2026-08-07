@@ -1,4 +1,4 @@
-"""Generic workload package operations shared by control and Spark agents."""
+"""Generic workload package operations shared by control and GPU node agents."""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ def _parse_deployment(
     release_digest: str,
     deployment_config_digest: str,
 ) -> Mapping[str, object]:
-    """Validate the immutable deployment projection carried to a Spark.
+    """Validate the immutable deployment projection carried to a GPU node.
 
     The control plane sends the repository-authored deployment alongside its
     digest.  This keeps the package operation ABI generic while ensuring the

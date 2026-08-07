@@ -1,7 +1,7 @@
-# Spark agent PKI operations
+# GPU node agent PKI operations
 
 This runbook operates the recommended Smallstep `step-ca` provider for `vonk-forge`.
-It is written for a small cluster, but contains no Spark name, address, or count.
+It is written for a small cluster, but contains no GPU node name, address, or count.
 Certificates last exactly 24 hours. The offline root private key never enters the
 NAS, Docker, Compose, a job payload, or Git.
 
@@ -24,16 +24,16 @@ consumer-specific ownership, mode, and ACL table in the authoritative
 including root-owned shared files with ACLs for `10001` and `1000`.
 
 ```sh
-OFFLINE_PKI_DIR=/media/offline/dgx-forge-pki
-PKI_SECRET_DIR=/srv/dgx-forge/secrets
-STEP_CA_DATA_DIR=/srv/dgx-forge/step-ca
+OFFLINE_PKI_DIR=/media/offline/vonk-forge-pki
+PKI_SECRET_DIR=/srv/vonk-forge/secrets
+STEP_CA_DATA_DIR=/srv/vonk-forge/step-ca
 install -d -m 0700 "$OFFLINE_PKI_DIR" "$PKI_SECRET_DIR" "$STEP_CA_DATA_DIR"
 umask 077
 step version
 docker version
 ```
 
-Keep NTP healthy on the NAS and Sparks. Alert at 30 seconds of clock skew and
+Keep NTP healthy on the NAS and GPU nodes. Alert at 30 seconds of clock skew and
 stop issuance before one minute; authorization tokens deliberately allow only
 30 seconds and step-ca v0.30.2 allows at most one minute.
 
@@ -43,21 +43,21 @@ Reserve `10.0.0.2` for the NAS and resolve the enrollment, agent, and registry
 names below to that same address only on the management LAN:
 
 ```text
-enroll.dgx-forge.lan   10.0.0.2
-agents.dgx-forge.lan   10.0.0.2
-registry.dgx-forge.lan 10.0.0.2
+enroll.vonk-forge.lan   10.0.0.2
+agents.vonk-forge.lan   10.0.0.2
+registry.vonk-forge.lan 10.0.0.2
 ```
 
 Caddy binds backend TLS only to `10.0.0.2:8443`. The NAS firewall permits that
-port only from `10.0.0.0/24`, preferably narrowed to reserved Spark leases.
+port only from `10.0.0.0/24`, preferably narrowed to reserved GPU node leases.
 Enrollment exposes only `/agent/v1/enroll`; the agent and registry names require
 the issued mTLS identity. Human control, inference, Grafana, and Hermes routes
 are absent from this listener and remain tailnet-only.
 
 Install the Caddy backend trust anchor and stable DNS names during each manual
-Spark hardening/bootstrap. The installed agent initiates outbound long polling;
+GPU node hardening/bootstrap. The installed agent initiates outbound long polling;
 the manager does not scan the LAN. The certificate-bound `spk_` identity and a
-fresh proxy-observed address within `DGX_MANAGEMENT_CIDRS` drive availability.
+fresh proxy-observed address within `VONK_MANAGEMENT_CIDRS` drive availability.
 DHCP reservations improve operations but are not a correctness dependency.
 
 ## Create the offline root and online intermediate
@@ -69,11 +69,11 @@ with path length zero and a one-year lifetime; rotate it before expiry.
 ```sh
 openssl rand -base64 32 > "$OFFLINE_PKI_DIR/root-password"
 openssl rand -base64 32 > "$OFFLINE_PKI_DIR/intermediate-password"
-step certificate create "DGX Forge Offline Root" \
+step certificate create "Vonk Forge Offline Root" \
   "$OFFLINE_PKI_DIR/root_ca.crt" "$OFFLINE_PKI_DIR/root_ca.key" \
   --profile root-ca --kty OKP --curve Ed25519 --not-after 87600h \
   --password-file "$OFFLINE_PKI_DIR/root-password"
-step certificate create "DGX Forge Agent Intermediate" \
+step certificate create "Vonk Forge Agent Intermediate" \
   "$OFFLINE_PKI_DIR/intermediate_ca.crt" "$OFFLINE_PKI_DIR/intermediate_ca_key" \
   --profile intermediate-ca --kty OKP --curve Ed25519 --not-after 8760h \
   --ca "$OFFLINE_PKI_DIR/root_ca.crt" --ca-key "$OFFLINE_PKI_DIR/root_ca.key" \
@@ -133,12 +133,12 @@ updater owns start/stop and Compose rendering. Verify the active immutable
 generation through its fixed diagnostics:
 
 ```sh
-sudo dgx-control-offline maintenance status
-sudo dgx-control-offline maintenance step-ca-health
+sudo vonk-control-offline maintenance status
+sudo vonk-control-offline maintenance step-ca-health
 ```
 
 Only Caddy publishes a port. step-ca and control-api share the internal `ca`
-network. The worker has `DGX_AGENT_RUNTIME=disabled` and loads no CA, proxy, or
+network. The worker has `VONK_AGENT_RUNTIME=disabled` and loads no CA, proxy, or
 agent credential. Inspect the rendered mounts and confirm no root private key.
 
 ## Revocation and uncertain remote results
@@ -161,19 +161,19 @@ serial, then clear/reject the enrollment only through an audited operator
 procedure. Never automatically resubmit its authorization token.
 
 ```sh
-sudo dgx-control-offline maintenance logs --service step-ca --since-minutes 30
-sudo dgx-control-offline maintenance logs --service control-api --since-minutes 30
+sudo vonk-control-offline maintenance logs --service step-ca --since-minutes 30
+sudo vonk-control-offline maintenance logs --service control-api --since-minutes 30
 ```
 
 ## Expiry and identity-loss recovery
 
 An active node renews before expiry using its existing mTLS identity and a new
-node-signed CSR. After expiry, private-key loss, disk replacement, or full Spark
+node-signed CSR. After expiry, private-key loss, disk replacement, or full GPU node
 replacement, renewal is unavailable. Certificate loss is treated the same way.
 An administrator must verify fresh hardware evidence and create a fresh
-enrollment grant that is short-lived, explicit, and node-bound. The Spark
+enrollment grant that is short-lived, explicit, and node-bound. The GPU node
 generates a new key locally and goes through normal
-approval. You must not copy another Spark's certificate or private identity.
+approval. You must not copy another GPU node's certificate or private identity.
 
 ## Intermediate rotation with overlap
 
@@ -211,7 +211,7 @@ encrypted generation, and records the exact receipt. There is no supported
 operator-supplied `pg_dump`, tar, decrypt, or Compose restore command.
 
 Restore the step-ca data/config/secrets and PostgreSQL state only from that same
-verified backup generation through `dgx-control-offline recover --apply`.
+verified backup generation through `vonk-control-offline recover --apply`.
 Afterward run `maintenance step-ca-health`, compare intermediate and
 provisioner public-key fingerprints, and test one disposable enrollment before
 restoring ingress.

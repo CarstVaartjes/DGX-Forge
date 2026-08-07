@@ -1,6 +1,6 @@
 """Metadata-only workload release discovery.
 
-Discovery is deliberately kept independent from the database and the Spark
+Discovery is deliberately kept independent from the database and the GPU node
 agent.  Providers return bounded, immutable metadata records; the control
 plane can persist the records through the small ``CandidateStore`` protocol.
 No provider in this module fetches a workload payload.

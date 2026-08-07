@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ..import_report import ImportReportBuilder
-from ..sparkrun_source import SparkRunSource
+from ..workload_run_source import WorkloadRunSource
 from .common import (
     FlagSpec,
     RuntimeCompileError,
@@ -26,7 +26,7 @@ _FLAGS = {
 }
 
 
-def compile_llama_cpp(source: SparkRunSource, report: ImportReportBuilder) -> RuntimeProjection:
+def compile_llama_cpp(source: WorkloadRunSource, report: ImportReportBuilder) -> RuntimeProjection:
     del report
     command = tokens(source)
     if command[:1] not in (["llama-server"], ["server"]):

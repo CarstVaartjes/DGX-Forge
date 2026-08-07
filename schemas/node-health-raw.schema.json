@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://spark.local/schemas/node-health-raw.schema.json",
-  "title": "Spark raw node health telemetry",
+  "$id": "https://vonk-forge.local/schemas/node-health-raw.schema.json",
+  "title": "GPU node raw node health telemetry",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "captured_at", "identity", "cpu", "memory", "swap", "root_filesystem", "accelerator", "thermal_zones", "fabric", "services"],

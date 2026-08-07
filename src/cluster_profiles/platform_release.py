@@ -1,4 +1,4 @@
-"""Strict, content-addressed DGX-Forge platform release contracts."""
+"""Strict, content-addressed Vonk Forge platform release contracts."""
 
 from __future__ import annotations
 

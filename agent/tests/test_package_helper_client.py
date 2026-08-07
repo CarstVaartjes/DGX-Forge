@@ -524,7 +524,7 @@ def test_adapter_factory_is_package_engine_compatible_for_unknown_adapter_names(
             invocation=backend_invocation(
                 release_digest=invocation.release_digest,
                 generation=invocation.generation,
-                entrypoint="bin/a-new-adapter-never-compiled-into-dgx-forge",
+                entrypoint="bin/a-new-adapter-never-compiled-into-vonk-forge",
             ),
         )
 
@@ -544,7 +544,7 @@ def test_adapter_factory_is_package_engine_compatible_for_unknown_adapter_names(
     assert evidence.generation == GENERATION
     assert evidence.fence == FENCE
     assert client.requests[0].invocation.entrypoint.endswith(
-        "a-new-adapter-never-compiled-into-dgx-forge"
+        "a-new-adapter-never-compiled-into-vonk-forge"
     )
     assert client.deadlines == [deadline]
 

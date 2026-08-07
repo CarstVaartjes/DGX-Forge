@@ -214,7 +214,7 @@ def successful_runner(policy: InstalledPolicy) -> RecordingRunner:
             policy.health.executable.name: ProcessOutcome(0, health_document(), b""),
             "device_identity.py": ProcessOutcome(
                 0,
-                tool_document({"sys_vendor": "NVIDIA", "product_name": "DGX Spark", "product_serial": "secret"}),
+                tool_document({"sys_vendor": "NVIDIA", "product_name": "Vonk Forge GPU node", "product_serial": "secret"}),
                 b"",
             ),
         }
@@ -253,7 +253,7 @@ def test_probe_invocation_is_entirely_fixed_by_installed_policy(tmp_path) -> Non
         "status": "ok",
         "version": "1.1.0",
         "sha256": policy.tools[0].sha256,
-        "data": {"product_name": "DGX Spark", "sys_vendor": "NVIDIA"},
+        "data": {"product_name": "Vonk Forge GPU node", "sys_vendor": "NVIDIA"},
     }
     rendered = canonical_message(evidence).lower()
     assert b"secret" not in rendered
@@ -297,7 +297,7 @@ def test_probe_renewal_after_start_reaches_health_and_tool_processes(
         _monotonic=clock,
     ).collect(lease)
 
-    assert evidence["dgx_forge"]["identity"] == {"uptime_seconds": 123}
+    assert evidence["vonk_forge"]["identity"] == {"uptime_seconds": 123}
     assert clock.value > started + 0.1
     assert all(request.renewable_deadline is lease for request in runner.requests)
     tool_requests = [
@@ -353,7 +353,7 @@ def test_existing_collector_is_normalized_to_compatible_fabric_runtime_evidence(
     policy, _ = installed_policy(tmp_path)
     evidence = PinnedNodeProbe(policy, _runner=successful_runner(policy)).collect(
         datetime.now(UTC) + timedelta(seconds=30)
-    )["dgx_forge"]
+    )["vonk_forge"]
 
     assert evidence["identity"] == {"uptime_seconds": 123}
     assert b"boot_id" not in canonical_message(evidence)
@@ -377,7 +377,7 @@ def test_collector_normalizes_only_bounded_compute_process_count(
 
     evidence = PinnedNodeProbe(policy, _runner=runner).collect(
         datetime.now(UTC) + timedelta(seconds=30)
-    )["dgx_forge"]
+    )["vonk_forge"]
 
     assert evidence["accelerator"]["active_nvidia_compute_processes"] == count
 
@@ -398,7 +398,7 @@ def test_existing_collector_drops_sensitive_shapes_even_from_allowlisted_fields(
 
     evidence = PinnedNodeProbe(policy, _runner=runner).collect(
         datetime.now(UTC) + timedelta(seconds=30)
-    )["dgx_forge"]
+    )["vonk_forge"]
 
     rendered = canonical_message(evidence)
     assert b"192.0.2.1" not in rendered

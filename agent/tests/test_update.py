@@ -118,7 +118,7 @@ def _platform_manifest(payload_sha256: str, payload_size: int) -> bytes:
         return {
             "name": name,
             "provenance_sha256": "d" * 64,
-            "reference": f"registry.example/dgx-forge/releases@sha256:{digest}",
+            "reference": f"registry.example/vonk-forge/releases@sha256:{digest}",
             "sbom_sha256": "e" * 64,
             "sha256": digest,
             "size": 1024,
@@ -140,13 +140,13 @@ def _platform_manifest(payload_sha256: str, payload_size: int) -> bytes:
         "build_digest": "sha256:" + "c" * 64,
         "deployment_bundle": {
             "layer_digest": "sha256:" + "a" * 64,
-            "layer_media_type": "application/vnd.dgx-forge.control-deployment.v1.tar",
+            "layer_media_type": "application/vnd.vonk-forge.control-deployment.v1.tar",
             "layer_size": 4096,
             "manifest_digest": "sha256:" + "b" * 64,
             "manifest_media_type": "application/vnd.oci.image.manifest.v1+json",
             "manifest_size": 1024,
             "reference": (
-                "registry.example/dgx-forge/control-deployment@sha256:" + "b" * 64
+                "registry.example/vonk-forge/control-deployment@sha256:" + "b" * 64
             ),
         },
         "host_updater_abi": {"maximum": 2, "minimum": 1},
@@ -405,7 +405,7 @@ def test_oras_pull_uses_exact_digest_and_selects_only_signed_payload(
     ORASAgentTransport(
         client,
         registry_origin="https://registry.example",
-        repository="dgx-forge/releases",
+        repository="vonk-forge/releases",
         architecture="linux-arm64",
     ).fetch(artifact, destination, deadline)
 

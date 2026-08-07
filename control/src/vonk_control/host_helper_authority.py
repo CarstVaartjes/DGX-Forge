@@ -1,4 +1,4 @@
-"""Controller-only signer for the narrow Spark host-maintenance helper."""
+"""Controller-only signer for the narrow GPU node host-maintenance helper."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ class HostHelperAuthorityError(RuntimeError):
 
 
 class HostHelperGrantIssuer:
-    """Sign one short-lived, exact host operation for one Spark node."""
+    """Sign one short-lived, exact host operation for one GPU node."""
 
     def __init__(
         self,

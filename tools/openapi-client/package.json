@@ -1,5 +1,5 @@
 {
-  "name": "dgx-forge-openapi-client-toolchain",
+  "name": "vonk-forge-openapi-client-toolchain",
   "private": true,
   "version": "1.0.0",
   "dependencies": {

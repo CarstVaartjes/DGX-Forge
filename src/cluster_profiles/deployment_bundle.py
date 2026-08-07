@@ -17,7 +17,7 @@ from typing import Any
 
 from .platform_release import OciDeploymentBundle
 
-_FORMAT = "dgx-control-deployment-bundle-v1"
+_FORMAT = "vonk-control-deployment-bundle-v1"
 _MANIFEST = "deployment-bundle.json"
 _MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 _MAX_FILE_BYTES = 16 * 1024 * 1024
@@ -29,7 +29,7 @@ _OCI_REFERENCE = re.compile(
     r"@sha256:[0-9a-f]{64}\Z"
 )
 _OCI_MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
-_OCI_LAYER_MEDIA_TYPE = "application/vnd.dgx-forge.control-deployment.v1.tar"
+_OCI_LAYER_MEDIA_TYPE = "application/vnd.vonk-forge.control-deployment.v1.tar"
 _MAX_OCI_MANIFEST_BYTES = 16 * 1024 * 1024
 _MAX_MANIFEST_FILES = 256
 _MAX_SOURCE_DEPTH = 64

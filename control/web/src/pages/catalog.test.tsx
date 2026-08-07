@@ -4,16 +4,16 @@ import {CatalogPage} from "./catalog";
 
 const recipes = [
   {recipe_id: "10000000-0000-4000-8000-000000000001", slug: "local-qwen", title: "Local Qwen", origin: "local" as const, revision_number: 2, lifecycle: "resolved" as const, content_sha256: "a".repeat(64), source_bundle_sha256: "b".repeat(64), runtime_family: "vllm", artifact_count: 1, expected_download_bytes: 61_000_000_000, maximum_installed_bytes_per_node: 66_000_000_000, maximum_runtime_memory_bytes_per_node: 80_000_000_000, profile_node_counts: [1]},
-  {recipe_id: "10000000-0000-4000-8000-000000000002", slug: "deepseek", title: "DeepSeek", origin: "sparkrun" as const, revision_number: 1, lifecycle: "draft" as const, content_sha256: null, source_bundle_sha256: "c".repeat(64), runtime_family: "sglang", artifact_count: 2, expected_download_bytes: 120_000_000_000, maximum_installed_bytes_per_node: 130_000_000_000, maximum_runtime_memory_bytes_per_node: 100_000_000_000, profile_node_counts: [2, 3, 4]},
+  {recipe_id: "10000000-0000-4000-8000-000000000002", slug: "deepseek", title: "DeepSeek", origin: "workload_run" as const, revision_number: 1, lifecycle: "draft" as const, content_sha256: null, source_bundle_sha256: "c".repeat(64), runtime_family: "sglang", artifact_count: 2, expected_download_bytes: 120_000_000_000, maximum_installed_bytes_per_node: 130_000_000_000, maximum_runtime_memory_bytes_per_node: 100_000_000_000, profile_node_counts: [2, 3, 4]},
   {recipe_id: "10000000-0000-4000-8000-000000000003", slug: "global-model", title: "Global model", origin: "global" as const, revision_number: 4, lifecycle: "resolved" as const, content_sha256: "d".repeat(64), source_bundle_sha256: "e".repeat(64), runtime_family: "llama.cpp", artifact_count: 1, expected_download_bytes: 10_000_000_000, maximum_installed_bytes_per_node: 12_000_000_000, maximum_runtime_memory_bytes_per_node: 18_000_000_000, profile_node_counts: [1]},
 ];
 
-test("separates local, SparkRun, and global recipe origins", async () => {
+test("separates local, WorkloadRun, and global recipe origins", async () => {
   render(<CatalogPage api={{catalogRecipes: async () => ({recipes, next_cursor: null})}}/>);
 
   expect(await screen.findByRole("heading", {name: "Recipe catalog"})).toBeVisible();
   expect(screen.getByText("Local")).toBeVisible();
-  expect(screen.getByText("Imported from SparkRun")).toBeVisible();
+  expect(screen.getByText("Imported from WorkloadRun")).toBeVisible();
   expect(screen.getByText("Downloaded from vonkforge.ai")).toBeVisible();
   expect(screen.getByText("up to 66.0 GB disk / node")).toBeVisible();
   expect(screen.getByText("up to 80.0 GB RAM / node")).toBeVisible();

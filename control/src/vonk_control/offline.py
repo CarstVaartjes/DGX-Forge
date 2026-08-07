@@ -164,7 +164,7 @@ def create_backup(
     entries = sorted(_portable_backup_files((Path(database_dump), *config_paths)))
     hashes = {name: hashlib.sha256(content).hexdigest() for name, content in entries}
     manifest = json.dumps(
-        {"format": "dgx-control-backup-v1", "files": hashes},
+        {"format": "vonk-control-backup-v1", "files": hashes},
         sort_keys=True,
         separators=(",", ":"),
     ).encode("ascii") + b"\n"
@@ -217,7 +217,7 @@ def _portable_verified_files(
         manifest_raw = files.pop("manifest.json")
         manifest = json.loads(manifest_raw)
         expected = manifest.get("files") if isinstance(manifest, dict) else None
-        if manifest.get("format") != "dgx-control-backup-v1" or not isinstance(expected, dict):
+        if manifest.get("format") != "vonk-control-backup-v1" or not isinstance(expected, dict):
             raise BackupError("backup manifest is invalid")
         if set(expected) != set(files) or any(
             not isinstance(name, str)
@@ -385,13 +385,13 @@ def _parse_container_environment(raw: bytes) -> dict[str, str]:
     if not isinstance(values, list) or len(values) > 512:
         raise UpgradeConflict("container identity probe is invalid")
     allowed = {
-        "DGX_CONTROL_GENERATION_ID",
-        "DGX_CONTROL_PROCESS_IMAGE",
-        "DGX_CONTROL_START_NONCE",
-        "DGX_DATABASE_REVISION",
-        "DGX_PLATFORM_BUILD_DIGEST",
-        "DGX_PLATFORM_RELEASE_DIGEST",
-        "DGX_PLATFORM_VERSION",
+        "VONK_CONTROL_GENERATION_ID",
+        "VONK_CONTROL_PROCESS_IMAGE",
+        "VONK_CONTROL_START_NONCE",
+        "VONK_DATABASE_REVISION",
+        "VONK_PLATFORM_BUILD_DIGEST",
+        "VONK_PLATFORM_RELEASE_DIGEST",
+        "VONK_PLATFORM_VERSION",
     }
     result: dict[str, str] = {}
     for item in values:
@@ -665,13 +665,13 @@ class HostUpgradeBoundary:
                 else selected.worker_image
             )
             identity = {
-                "build_digest": environment.get("DGX_PLATFORM_BUILD_DIGEST"),
-                "database_revision": environment.get("DGX_DATABASE_REVISION"),
-                "generation_id": environment.get("DGX_CONTROL_GENERATION_ID"),
-                "image": environment.get("DGX_CONTROL_PROCESS_IMAGE"),
-                "platform_version": environment.get("DGX_PLATFORM_VERSION"),
-                "release_digest": environment.get("DGX_PLATFORM_RELEASE_DIGEST"),
-                "start_nonce": environment.get("DGX_CONTROL_START_NONCE"),
+                "build_digest": environment.get("VONK_PLATFORM_BUILD_DIGEST"),
+                "database_revision": environment.get("VONK_DATABASE_REVISION"),
+                "generation_id": environment.get("VONK_CONTROL_GENERATION_ID"),
+                "image": environment.get("VONK_CONTROL_PROCESS_IMAGE"),
+                "platform_version": environment.get("VONK_PLATFORM_VERSION"),
+                "release_digest": environment.get("VONK_PLATFORM_RELEASE_DIGEST"),
+                "start_nonce": environment.get("VONK_CONTROL_START_NONCE"),
                 "status": item["status"],
             }
             if (
@@ -1135,13 +1135,13 @@ class HostUpgradeBoundary:
                     "--name",
                     name,
                     "--env",
-                    "DGX_CONTROL_STARTUP_MODE=preselection",
+                    "VONK_CONTROL_STARTUP_MODE=preselection",
                     "--env",
-                    f"DGX_CONTROL_OPERATION_ID={plan.operation_id}",
+                    f"VONK_CONTROL_OPERATION_ID={plan.operation_id}",
                     "--env",
-                    f"DGX_CONTROL_START_NONCE={plan.start_nonce}",
+                    f"VONK_CONTROL_START_NONCE={plan.start_nonce}",
                     "--env",
-                    f"DGX_CONTROL_PROCESS_IMAGE={plan.api_image}",
+                    f"VONK_CONTROL_PROCESS_IMAGE={plan.api_image}",
                     "control-api",
                 ),
                 environment=environment,
@@ -1544,7 +1544,7 @@ class HostUpgradeBoundary:
 
     def _compose_overlay_names_if_available(self) -> tuple[str, ...]:
         environment = self._site_environment_if_available()
-        selector = environment.get("DGX_CONTROL_CA_OVERLAY")
+        selector = environment.get("VONK_CONTROL_CA_OVERLAY")
         if selector is None:
             return ()
         overlays = {
@@ -1563,7 +1563,7 @@ class HostUpgradeBoundary:
         environment: Mapping[str, str],
     ) -> tuple[str, ...]:
         paths = [compose]
-        selector = environment.get("DGX_CONTROL_CA_OVERLAY")
+        selector = environment.get("VONK_CONTROL_CA_OVERLAY")
         if selector is not None:
             overlays = {
                 "step-ca": "compose.step-ca.yaml",
@@ -1790,8 +1790,8 @@ class HostUpgradeBoundary:
         if mode == "preselection":
             if operation_id is None:
                 raise UpgradeConflict("candidate operation ID is unavailable")
-            environment["DGX_CONTROL_STARTUP_MODE"] = "preselection"
-            environment["DGX_CONTROL_OPERATION_ID"] = operation_id
+            environment["VONK_CONTROL_STARTUP_MODE"] = "preselection"
+            environment["VONK_CONTROL_OPERATION_ID"] = operation_id
         return environment
 
     def _run_at_generation_with_environment(
@@ -1848,7 +1848,7 @@ class HostUpgradeBoundary:
     def _candidate_container_name(operation_id: str) -> str:
         if _IDENTIFIER.fullmatch(operation_id) is None:
             raise UpgradeConflict("candidate operation ID is invalid")
-        return "dgx-forge-candidate-" + operation_id
+        return "vonk-forge-candidate-" + operation_id
 
     def _remove_container(self, name: str) -> None:
         try:
@@ -2186,9 +2186,9 @@ def _read_generation_environment(generation_path: Path) -> dict[str, str]:
     expected = {
         "CONTROL_API_IMAGE",
         "CONTROL_WORKER_IMAGE",
-        "DGX_PLATFORM_BUILD_DIGEST",
-        "DGX_PLATFORM_RELEASE_DIGEST",
-        "DGX_PLATFORM_VERSION",
+        "VONK_PLATFORM_BUILD_DIGEST",
+        "VONK_PLATFORM_RELEASE_DIGEST",
+        "VONK_PLATFORM_VERSION",
     }
     values: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -2202,10 +2202,10 @@ def _read_generation_environment(generation_path: Path) -> dict[str, str]:
 
 
 def _load_trusted_release(path: Path, state_root: Path) -> PlatformRelease:
-    bootstrap_name = "DGX_PLATFORM_TUF_ROOT"
+    bootstrap_name = "VONK_PLATFORM_TUF_ROOT"
     bootstrap_value = os.environ.get(bootstrap_name, "")
-    metadata_url = os.environ.get("DGX_PLATFORM_TUF_METADATA_URL", "")
-    target_url = os.environ.get("DGX_PLATFORM_TUF_TARGET_URL", "")
+    metadata_url = os.environ.get("VONK_PLATFORM_TUF_METADATA_URL", "")
+    target_url = os.environ.get("VONK_PLATFORM_TUF_TARGET_URL", "")
     if not bootstrap_value:
         raise BackupError(f"{bootstrap_name} is required for upgrade --apply")
     bootstrap = Path(bootstrap_value)
@@ -2213,10 +2213,10 @@ def _load_trusted_release(path: Path, state_root: Path) -> PlatformRelease:
         raise BackupError(f"{bootstrap_name} must name a regular non-symlink file")
     if not metadata_url:
         raise BackupError(
-            "DGX_PLATFORM_TUF_METADATA_URL is required for upgrade --apply"
+            "VONK_PLATFORM_TUF_METADATA_URL is required for upgrade --apply"
         )
     if not target_url:
-        raise BackupError("DGX_PLATFORM_TUF_TARGET_URL is required for upgrade --apply")
+        raise BackupError("VONK_PLATFORM_TUF_TARGET_URL is required for upgrade --apply")
     if path.is_symlink() or not path.is_file():
         raise BackupError("platform release target is unsafe or missing")
     trust_root = state_root / "platform-tuf"
@@ -2245,19 +2245,19 @@ class _TrustedReleaseSource:
 
 
 def _load_release_source(state_root: Path) -> _TrustedReleaseSource:
-    bootstrap_name = "DGX_PLATFORM_TUF_ROOT"
+    bootstrap_name = "VONK_PLATFORM_TUF_ROOT"
     bootstrap_value = os.environ.get(bootstrap_name, "")
-    metadata_url = os.environ.get("DGX_PLATFORM_TUF_METADATA_URL", "")
-    target_url = os.environ.get("DGX_PLATFORM_TUF_TARGET_URL", "")
+    metadata_url = os.environ.get("VONK_PLATFORM_TUF_METADATA_URL", "")
+    target_url = os.environ.get("VONK_PLATFORM_TUF_TARGET_URL", "")
     if not bootstrap_value:
         raise BackupError(f"{bootstrap_name} is required")
     bootstrap = Path(bootstrap_value)
     if bootstrap.is_symlink() or not bootstrap.is_file():
         raise BackupError(f"{bootstrap_name} must name a regular non-symlink file")
     if not metadata_url:
-        raise BackupError("DGX_PLATFORM_TUF_METADATA_URL is required")
+        raise BackupError("VONK_PLATFORM_TUF_METADATA_URL is required")
     if not target_url:
-        raise BackupError("DGX_PLATFORM_TUF_TARGET_URL is required")
+        raise BackupError("VONK_PLATFORM_TUF_TARGET_URL is required")
     trust_root = state_root / "tuf"
     return _TrustedReleaseSource(
         UpdateTrust(
@@ -2272,14 +2272,14 @@ def _load_release_source(state_root: Path) -> _TrustedReleaseSource:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="dgx-control-offline")
+    parser = argparse.ArgumentParser(prog="vonk-control-offline")
     parser.add_argument(
-        "--state-path", type=Path, default=Path("/srv/dgx-forge/control-host")
+        "--state-path", type=Path, default=Path("/srv/vonk-forge/control-host")
     )
     parser.add_argument(
         "--identity-path",
         type=Path,
-        default=Path("/srv/dgx-forge/control-identity"),
+        default=Path("/srv/vonk-forge/control-identity"),
     )
     parser.add_argument("--health-url", default="https://127.0.0.1/api/v1/healthz")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -2310,14 +2310,14 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 0
         if args.command in {"upgrade", "recover", "rollback", "maintenance"}:
             site_environment = os.environ.get(
-                "DGX_CONTROL_SITE_ENV_FILE", str(args.state_path / "site.env")
+                "VONK_CONTROL_SITE_ENV_FILE", str(args.state_path / "site.env")
             )
             if not Path(site_environment).is_absolute():
                 raise BackupError(
-                    "DGX_CONTROL_SITE_ENV_FILE must name an absolute root-owned file"
+                    "VONK_CONTROL_SITE_ENV_FILE must name an absolute root-owned file"
                 )
-            recipients = os.environ.get("DGX_BACKUP_RECIPIENTS_FILE", "")
-            identity = os.environ.get("DGX_BACKUP_IDENTITY_FILE", "")
+            recipients = os.environ.get("VONK_BACKUP_RECIPIENTS_FILE", "")
+            identity = os.environ.get("VONK_BACKUP_IDENTITY_FILE", "")
             needs_backup_credentials = bool(
                 args.apply and args.command in {"upgrade", "recover", "rollback"}
             )
@@ -2325,13 +2325,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                 not recipients or not Path(recipients).is_absolute()
             ):
                 raise BackupError(
-                    "DGX_BACKUP_RECIPIENTS_FILE must name an absolute root-owned file"
+                    "VONK_BACKUP_RECIPIENTS_FILE must name an absolute root-owned file"
                 )
             if needs_backup_credentials and (
                 not identity or not Path(identity).is_absolute()
             ):
                 raise BackupError(
-                    "DGX_BACKUP_IDENTITY_FILE must name an absolute root-owned file"
+                    "VONK_BACKUP_IDENTITY_FILE must name an absolute root-owned file"
                 )
             active = HostGenerationStore(
                 args.state_path, args.identity_path
@@ -2431,10 +2431,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                 return 0
             raise BackupError(f"unsupported offline command: {args.command}")
     except OfflineConflict as error:
-        print(f"dgx-control-offline: {error}", file=__import__("sys").stderr)
+        print(f"vonk-control-offline: {error}", file=__import__("sys").stderr)
         return 3
     except UpgradeRecoveryRequired as error:
-        print(f"dgx-control-offline: {error}", file=__import__("sys").stderr)
+        print(f"vonk-control-offline: {error}", file=__import__("sys").stderr)
         return 4
     except (
         BackupError,
@@ -2443,7 +2443,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         UpdateTrustError,
         UpgradeError,
     ) as error:
-        print(f"dgx-control-offline: {error}", file=__import__("sys").stderr)
+        print(f"vonk-control-offline: {error}", file=__import__("sys").stderr)
         return 2
     return 2
 

@@ -1,4 +1,4 @@
-"""Release-gate map for the Python-to-Rust Spark-agent cutover.
+"""Release-gate map for the Python-to-Rust GPU node-agent cutover.
 
 The old agent and the recipe-native Rust agent intentionally do not advertise
 the same operation set. This guard prevents "parity" from being implemented by

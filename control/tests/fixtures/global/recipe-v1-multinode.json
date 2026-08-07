@@ -2,7 +2,7 @@
   "schema_version": 1,
   "identity": {"publisher": "vonk", "slug": "glm-5-2-triple"},
   "metadata": {
-    "title": "GLM 5.2 on three Sparks",
+    "title": "GLM 5.2 on three GPU nodes",
     "description": "A three-node tensor-parallel OpenAI-compatible runtime.",
     "tags": ["text", "glm", "multinode"]
   },
@@ -66,7 +66,7 @@
   "deployment_profiles": [
     {
       "name": "triple-tp3",
-      "description": "Three Sparks with tensor parallelism three.",
+      "description": "Three GPU nodes with tensor parallelism three.",
       "node_count": 3,
       "strategy": "tensor_parallel",
       "parallelism": {"tensor": 3, "pipeline": 1, "data": 1, "backend": "native"},
@@ -128,8 +128,8 @@
     "benchmarks": []
   },
   "provenance": {
-    "source_kind": "sparkrun",
-    "source_reference": "sparkrun:glm-5.2-triple",
-    "attribution": ["Imported from a SparkRun profile"]
+    "source_kind": "workload_run",
+    "source_reference": "workload_run:glm-5.2-triple",
+    "attribution": ["Imported from a WorkloadRun profile"]
   }
 }

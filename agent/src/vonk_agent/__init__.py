@@ -1,1 +1,1 @@
-"""Outbound DGX Forge agent runtime primitives."""
+"""Outbound Vonk Forge agent runtime primitives."""

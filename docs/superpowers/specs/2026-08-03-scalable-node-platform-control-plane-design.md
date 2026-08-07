@@ -1,18 +1,18 @@
-# Scalable Spark Platform and Control Plane Design
+# Scalable GPU node Platform and Control Plane Design
 
 **Status:** approved for implementation planning on 2026-08-03.
 
 ## Purpose
 
-DGX-Forge will support a small, administrator-owned fleet of DGX Sparks without
+Vonk Forge will support a small, administrator-owned fleet of Vonk Forge GPU nodes without
 encoding a fixed node count, node names, user names, LAN addresses, or fabric
-addresses in application logic. Adding a Spark is a repeatable installation
+addresses in application logic. Adding a GPU node is a repeatable installation
 operation. Models, model revisions, profiles, and desired cluster state remain
 repository-backed. A Docker-capable Linux machine runs the surrounding control
 plane; the first deployment target is a UGREEN DXP480T, but the design does not
 depend on UGREEN software or hardware.
 
-The system is optimized for a small number of administrators and Sparks. It has
+The system is optimized for a small number of administrators and GPU nodes. It has
 no product-level node limit. Capacity and topology constraints come from
 validated workload definitions and the physical cluster, not constants such as
 two or sixteen.
@@ -29,12 +29,12 @@ The existing roadmap retains ownership of:
 - the current DS4 and Mia work;
 - model-definition and profile semantics until a planned schema migration
   changes them;
-- AI-only operation on every Spark; and
+- AI-only operation on every GPU node; and
 - the developer-machine SSH transport work already in progress.
 
 This design owns:
 
-- generic per-Spark onboarding and installation;
+- generic per-node onboarding and installation;
 - N-node inventory, topology, and placement contracts;
 - the service-host Compose platform;
 - the control API, worker, CLI, and browser administration interface;
@@ -42,10 +42,10 @@ This design owns:
 - gateway, API routing, observability, backup, and recovery services.
 
 The historical `2026-08-01-external-control-plane.md` plan is superseded. It
-assumed exactly two named Sparks and did not cover generic onboarding,
+assumed exactly two named GPU nodes and did not cover generic onboarding,
 repository maintenance, a complete admin interface, or operational services.
 Its useful safety properties are incorporated here: no support containers on a
-Spark, restricted SSH, serialized mutations, fail-closed routing, and durable
+GPU node, restricted SSH, serialized mutations, fail-closed routing, and durable
 state.
 
 During implementation, changes to files being modified by the runtime-roadmap
@@ -59,7 +59,7 @@ The deployment is one Docker Compose application made of separate containers.
 It is not one container containing every dependency, and it is not a network of
 custom microservices.
 
-DGX-Forge itself is a modular application with typed internal boundaries. Its
+Vonk Forge itself is a modular application with typed internal boundaries. Its
 API and worker run as separate processes from the same image and codebase:
 
 - `control-api` serves the control API and, initially, the compiled admin UI;
@@ -126,7 +126,7 @@ service credentials, API keys, and SSH key references.
 
 ## Generic node identity and inventory
 
-Every Spark receives a generated immutable node ID, separate from mutable
+Every GPU node receives a generated immutable node ID, separate from mutable
 display names, hostnames, roles, SSH aliases, and addresses. Node collections
 are maps keyed by node ID. Schemas use `minItems` and uniqueness constraints
 where necessary but no fixed property names or maximum fleet size.
@@ -148,9 +148,9 @@ Addresses and interface names are discovered or supplied as installation
 inputs and then validated. They are data, not application constants. Changing a
 management address does not change node identity.
 
-## Per-Spark installation mode
+## Per-GPU node installation mode
 
-Installation is an explicit, resumable operation invoked once for every Spark
+Installation is an explicit, resumable operation invoked once for every GPU node
 addition and again only for upgrade, repair, or policy reconciliation. Both the
 bootstrap CLI and admin UI drive the same installation state machine.
 
@@ -195,7 +195,7 @@ accepted evidence without assuming `head` and `worker` roles.
 Model definitions declare requirements rather than specific fleet names, for
 example:
 
-- one healthy Spark with a minimum measured memory budget;
+- one healthy GPU node with a minimum measured memory budget;
 - two nodes connected by an accepted RDMA link;
 - N homogeneous nodes with a runtime-validated topology; or
 - an explicit pinned node set when evidence is hardware-instance-specific.
@@ -203,10 +203,10 @@ example:
 Profiles contain desired workloads and placement constraints. A deterministic
 planner produces a concrete placement. The exact placement and definition
 hashes are accepted evidence inputs. The planner never infers that code capable
-of N processes is valid across N physical Sparks; distributed placement remains
+of N processes is valid across N physical GPU nodes; distributed placement remains
 disabled until that model definition and topology pass acceptance.
 
-The existing two-node schemas and `spark1`/`spark2` definitions migrate through
+The existing two-node schemas and `node1`/`node2` definitions migrate through
 versioned compatibility readers. Current accepted evidence remains readable.
 New schemas are written only in the generic form. Migration is explicit,
 testable, and does not rewrite runtime-roadmap files while they are in flight.
@@ -261,7 +261,7 @@ reconciliation gates.
 
 Model artifacts and container images are referenced by immutable digests. They
 are not stored in PostgreSQL or proxied through the service host during
-inference. Sparks retain verified local caches, preserving the existing rule
+inference. GPU nodes retain verified local caches, preserving the existing rule
 that the NAS is not in the model-data or tensor-traffic path.
 
 ## Deployment and reconciliation flow
@@ -298,12 +298,12 @@ admin endpoint, and worker interfaces remain on private Compose networks.
 LiteLLM accepts inference traffic from Caddy and routes only to endpoints
 published by the control plane.
 
-The service host reaches Sparks over restricted SSH identities. Node-side
+The service host reaches GPU nodes over restricted SSH identities. Node-side
 forced commands or narrowly scoped command dispatchers validate operation names
 and arguments; the control plane does not receive unrestricted root shells for
 routine operation. Administrator bootstrap credentials are separate from
 service credentials. Agent forwarding and copying private administration keys
-to Sparks remain forbidden.
+to GPU nodes remain forbidden.
 
 TLS, session security, CSRF protection, request limits, and security headers are
 enforced at the appropriate Caddy and application layers. Every mutation has an
@@ -312,7 +312,7 @@ audit record.
 
 ## Observability, evidence, and backups
 
-Prometheus collects control-plane, job, route, and sanitized Spark health
+Prometheus collects control-plane, job, route, and sanitized GPU node health
 metrics. It does not replace checked-in acceptance evidence. Grafana provides
 fleet, node, profile, model endpoint, job, and capacity dashboards. Alerts are
 introduced only with actionable destinations and runbooks.
@@ -350,7 +350,7 @@ from a developer machine before the service host is ready.
 ### Phase 2: N-node controller core
 
 Generalize inventory, health, placement, and backend iteration over configured
-node IDs. Migrate existing two-Spark configurations without changing their
+node IDs. Migrate existing two-GPU node configurations without changing their
 accepted runtime behavior. Begin only after the roadmap agent's transport work
 lands; consume its interface.
 
@@ -392,7 +392,7 @@ The program requires:
 
 - schema fixtures for one, two, and at least sixteen nodes, plus an unbounded
   generated fleet test that detects accidental fixed-name assumptions;
-- migration tests preserving current two-Spark definitions and evidence;
+- migration tests preserving current two-GPU node definitions and evidence;
 - installer tests for clean install, resume, retry, already-applied policy,
   changed address, access-check failure, and recovery-channel loss;
 - property and contract tests ensuring CLI and web requests produce identical
@@ -407,7 +407,7 @@ The program requires:
   restore on generic Linux;
 - failure injection for PostgreSQL, worker, Caddy, LiteLLM, Git remote, network,
   and service-host restart; and
-- end-to-end acceptance from onboarding a fresh Spark through proposing,
+- end-to-end acceptance from onboarding a fresh GPU node through proposing,
   merging, reconciling, serving, observing, and safely withdrawing a profile.
 
 No phase is complete based only on unit tests. Mutating installation and
@@ -416,7 +416,7 @@ with preserved recovery access.
 
 ## Explicit non-goals
 
-- Running Caddy, LiteLLM, databases, monitoring, or the admin UI on a Spark.
+- Running Caddy, LiteLLM, databases, monitoring, or the admin UI on a GPU node.
 - Kubernetes, a service mesh, an event bus, or custom microservices for the
   expected fleet size.
 - Automatically trusting discovered hosts or configuring fabric without a
@@ -429,10 +429,10 @@ with preserved recovery access.
 
 ## Success criteria
 
-The design is delivered when an administrator can install DGX-Forge on a
-generic Docker-capable Linux host, onboard any additional Spark without source
+The design is delivered when an administrator can install Vonk Forge on a
+generic Docker-capable Linux host, onboard any additional GPU node without source
 edits or predetermined names/addresses, observe the fleet through CLI and web,
 propose repository-backed model and profile changes, deploy only eligible
 merged state after the first release, route healthy inference through Caddy and
 LiteLLM, recover safely from failed jobs and service-host loss, and demonstrate
-that no non-AI service or unreviewed model authority exists on the Sparks.
+that no non-AI service or unreviewed model authority exists on the GPU nodes.

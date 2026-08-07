@@ -1,7 +1,7 @@
 # Model cache preparation and verification
 
 This runbook prepares the immutable DeepSeek-V4-Flash-0731 snapshot used by
-the Mia dual-Spark runtime. Each Spark keeps its own complete copy under
+the Mia dual-GPU node runtime. Each GPU node keeps its own complete copy under
 `/srv/models`; the NAS and Hugging Face are not serving-time dependencies.
 
 ## Immutable inputs
@@ -73,7 +73,7 @@ Expected output begins with:
 
 ## Verify offline
 
-Run the standard-library-only verifier on each Spark after download, after any
+Run the standard-library-only verifier on each GPU node after download, after any
 transfer, and before runtime activation:
 
 ```bash

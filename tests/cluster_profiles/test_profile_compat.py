@@ -25,7 +25,7 @@ def legacy_fleet() -> Fleet:
 def test_current_dual_profile_adapts_to_same_lifecycle_order() -> None:
     profile = ClusterProfile(
         "agent-full-dual", Path("evidence.json"),
-        {"spark1": ("deepseek",), "spark2": ("deepseek",)},
+        {"node1": ("deepseek",), "node2": ("deepseek",)},
         {"agent": "deepseek"},
     )
     generic = adapt_legacy_profile(profile, legacy_fleet())
@@ -36,7 +36,7 @@ def test_current_dual_profile_adapts_to_same_lifecycle_order() -> None:
 
 
 def test_single_legacy_placement_pins_one_generated_node() -> None:
-    profile = ClusterProfile("creative", Path("evidence.json"), {"spark1": ("trellis",), "spark2": ()}, {"creative": "trellis"})
+    profile = ClusterProfile("creative", Path("evidence.json"), {"node1": ("trellis",), "node2": ()}, {"creative": "trellis"})
     generic = adapt_legacy_profile(profile, legacy_fleet())
     assert generic.requirements[0].node_count == 1
     assert generic.requirements[0].preferred_node_ids == ("spk_00000000000000000000000000000000",)
@@ -45,7 +45,7 @@ def test_single_legacy_placement_pins_one_generated_node() -> None:
 def test_v2_schemas_have_no_spark_named_properties() -> None:
     for name in ("cluster-profile-v2.schema.json", "workload-v2.schema.json"):
         encoded = json.dumps(json.loads((ROOT / "schemas" / name).read_text()))
-        assert '"spark1"' not in encoded and '"spark2"' not in encoded
+        assert '"node1"' not in encoded and '"node2"' not in encoded
 
 
 def test_generic_admission_reserves_exclusive_nodes_across_requirements() -> None:

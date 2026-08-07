@@ -50,7 +50,7 @@ def test_backend_never_uses_shell_and_pins_strict_ssh_options() -> None:
     fake_exec = FakeExec()
 
     result = SshBackend(fake_exec).run(
-        "spark1", ("profile-status", "--json"), 10
+        "node1", ("profile-status", "--json"), 10
     )
 
     assert fake_exec.shell is False
@@ -59,17 +59,17 @@ def test_backend_never_uses_shell_and_pins_strict_ssh_options() -> None:
     assert "IdentitiesOnly=yes" in fake_exec.argv
     assert "StrictHostKeyChecking=yes" in fake_exec.argv
     assert "ConnectTimeout=10" in fake_exec.argv
-    assert fake_exec.argv[-2:] == ("dgx-spark-1", "profile-status --json")
+    assert fake_exec.argv[-2:] == ("vonk-node-1", "profile-status --json")
     assert fake_exec.input_bytes is None
     assert result.returncode == 0
     assert result.stdout == b"ok\n"
 
 
 def test_backend_uses_explicit_developer_transport_override(monkeypatch) -> None:
-    monkeypatch.setenv("SPARK_SSH_BIN", "/opt/custom/ssh-wrapper")
+    monkeypatch.setenv("VONK_SSH_BIN", "/opt/custom/ssh-wrapper")
     fake_exec = FakeExec()
 
-    SshBackend(fake_exec).run("spark1", ("true",), 10)
+    SshBackend(fake_exec).run("node1", ("true",), 10)
 
     assert fake_exec.argv[0] == "/opt/custom/ssh-wrapper"
 
@@ -107,18 +107,18 @@ def test_fleet_backend_rejects_unknown_legacy_alias() -> None:
     backend = SshBackend.from_fleet(_fleet(1), executor=FakeExec())
 
     with pytest.raises(ValueError, match="unknown node"):
-        backend.run("spark1", ("true",), 10)
+        backend.run("node1", ("true",), 10)
 
 
 def test_run_script_delivers_fixed_bytes_on_stdin() -> None:
     fake_exec = FakeExec()
     script = b"printf '{}\\n'\n"
 
-    SshBackend(fake_exec).run_script("spark2", script, ("--json",), 10)
+    SshBackend(fake_exec).run_script("node2", script, ("--json",), 10)
 
     assert fake_exec.input_bytes == script
     assert fake_exec.shell is False
-    assert fake_exec.argv[-2:] == ("dgx-spark-2", "bash -s -- --json")
+    assert fake_exec.argv[-2:] == ("vonk-node-2", "bash -s -- --json")
 
 
 @pytest.mark.parametrize("script_mode", [False, True])
@@ -138,7 +138,7 @@ def test_remote_argv_is_one_posix_quoted_command_and_cannot_be_evaluated(
     backend = SshBackend(fake_exec)
     if script_mode:
         script = b'printf "%s\\0" "$@"\n'
-        backend.run_script("spark1", script, arguments, 10)
+        backend.run_script("node1", script, arguments, 10)
         expected = ("bash", "-s", "--", *arguments)
     else:
         probe = (
@@ -147,10 +147,10 @@ def test_remote_argv_is_one_posix_quoted_command_and_cannot_be_evaluated(
             "import json,sys; print(json.dumps(sys.argv[1:]))",
             *arguments,
         )
-        backend.run("spark1", probe, 10)
+        backend.run("node1", probe, 10)
         expected = probe
 
-    alias_index = fake_exec.argv.index("dgx-spark-1")
+    alias_index = fake_exec.argv.index("vonk-node-1")
     assert len(fake_exec.argv[alias_index + 1 :]) == 1
     remote_command = fake_exec.argv[alias_index + 1]
     assert shlex.split(remote_command) == list(expected)
@@ -181,9 +181,9 @@ def test_remote_argv_rejects_nul_and_newlines(bad: str) -> None:
     backend = SshBackend(FakeExec())
 
     with pytest.raises(ValueError, match="remote argv"):
-        backend.run("spark1", ("command", bad), 10)
+        backend.run("node1", ("command", bad), 10)
     with pytest.raises(ValueError, match="remote argv"):
-        backend.run_script("spark1", b"true\n", (bad,), 10)
+        backend.run_script("node1", b"true\n", (bad,), 10)
 
 
 def test_unknown_node_is_rejected_before_execution() -> None:
@@ -201,7 +201,7 @@ def test_timeout_is_a_bounded_command_result() -> None:
     )
 
     result = SshBackend(FakeExec(timeout), output_limit_bytes=7).run(
-        "spark1", ("slow",), 3
+        "node1", ("slow",), 3
     )
 
     assert result.returncode is None
@@ -215,7 +215,7 @@ def test_timeout_is_a_bounded_command_result() -> None:
 def test_nonzero_remote_exit_is_returned_without_raising() -> None:
     result = SshBackend(
         FakeExec(FakeCompleted(returncode=23, stdout=b"", stderr=b"failed\n"))
-    ).run("spark2", ("profile-health",), 10)
+    ).run("node2", ("profile-health",), 10)
 
     assert result.returncode == 23
     assert result.stderr == b"failed\n"
@@ -227,7 +227,7 @@ def test_oversized_output_is_truncated_and_marked() -> None:
     result = SshBackend(
         FakeExec(FakeCompleted(stdout=b"a" * 20, stderr=b"b" * 21)),
         output_limit_bytes=8,
-    ).run("spark1", ("noisy",), 10)
+    ).run("node1", ("noisy",), 10)
 
     assert result.stdout == b"a" * 8
     assert result.stderr == b"b" * 8
@@ -238,4 +238,4 @@ def test_oversized_output_is_truncated_and_marked() -> None:
 @pytest.mark.parametrize("timeout", [0, -1])
 def test_timeout_must_be_positive(timeout: float) -> None:
     with pytest.raises(ValueError, match="timeout"):
-        SshBackend(FakeExec()).run("spark1", ("true",), timeout)
+        SshBackend(FakeExec()).run("node1", ("true",), timeout)
