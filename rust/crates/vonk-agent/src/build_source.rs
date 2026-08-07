@@ -166,7 +166,7 @@ fn safe_path(path: &Path) -> Result<String, BuildSourceError> {
         }
     }
     let value = normalized.to_str().ok_or(BuildSourceError::Path)?;
-    if value.is_empty() || value.as_bytes().len() > 512 || value.contains('\0') {
+    if value.is_empty() || value.len() > 512 || value.contains('\0') {
         return Err(BuildSourceError::Path);
     }
     Ok(value.replace(std::path::MAIN_SEPARATOR, "/"))
