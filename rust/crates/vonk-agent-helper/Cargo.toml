@@ -1,0 +1,30 @@
+[package]
+name = "vonk-agent-helper"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+hex.workspace = true
+ring.workspace = true
+rustix.workspace = true
+sd-listen-fds.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+vonk-agent-protocol = { path = "../vonk-agent-protocol" }
+wait-timeout.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+
+[lib]
+name = "vonk_agent_helper"
+path = "src/lib.rs"
+
+[[bin]]
+name = "vonk-agent-helper"
+path = "src/main.rs"

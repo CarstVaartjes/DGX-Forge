@@ -227,7 +227,7 @@ dependencies = [
     { name = "jsonschema" },
 ]
 wheels = [
-    { filename = "dgx_agent_protocol-2.1.0-py3-none-any.whl", hash = "sha256:915b68ea19182846936b8c6b7635092ccd8144681e82f23d38d905aa4dce6278" },
+    { filename = "dgx_agent_protocol-2.1.0-py3-none-any.whl", hash = "sha256:55e54dffe3c24a5010569a04dde00a05526b0b8e130179bade78d48323287024" },
 ]
 
 [package.metadata]

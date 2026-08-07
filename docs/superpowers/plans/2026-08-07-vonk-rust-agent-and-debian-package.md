@@ -110,13 +110,13 @@
 - Create: `packaging/systemd/vonk-agent-helper.service`
 - Modify: `agent_protocol/tests/test_package_helper_authority.py`
 
-- [ ] Write failing authority tests that enumerate every permitted operation and reject unknown fields, traversal, symlink escape, arbitrary executable paths, environment injection, raw package-manager arguments, and calls from users outside the `vonk-agent` group.
-- [ ] Run `cargo test -p vonk-agent-helper authority`; confirm failure.
-- [ ] Implement a length-prefixed JSON protocol on `/run/vonk-forge/helper.sock`, authenticate peer credentials, and allow only exact typed operations: create managed directories, atomically activate an approved agent slot, install a verified Vonk `.deb`, restart named Vonk units, and perform bounded reboot scheduling.
-- [ ] Validate all artifact digests and signatures before privileged mutation; open managed paths defensively and require canonical descendants of configured roots.
-- [ ] Configure systemd socket activation, a read-only filesystem, private temporary directory, minimal capabilities, syscall filtering, and explicit writable paths.
-- [ ] Run Rust authority tests, Python protocol parity tests, and `systemd-analyze security` in an Ubuntu 24.04 VM/container fixture. Record the exposure score in CI artifacts.
-- [ ] Commit: `feat(agent): replace privileged helper with Rust service`
+- [x] Write failing authority tests that enumerate every permitted operation and reject unknown fields, traversal, symlink escape, arbitrary executable paths, environment injection, raw package-manager arguments, and calls from users outside the `vonk-agent` group.
+- [x] Run `cargo test -p vonk-agent-helper authority`; confirm failure.
+- [x] Implement a length-prefixed JSON protocol on `/run/vonk-forge/helper.sock`, authenticate peer credentials, and allow only exact typed operations: create managed directories, atomically activate an approved agent slot, install a verified Vonk `.deb`, restart named Vonk units, and perform bounded reboot scheduling.
+- [x] Validate all artifact digests and signatures before privileged mutation; open managed paths defensively and require canonical descendants of configured roots.
+- [x] Configure systemd socket activation, a read-only filesystem, private temporary directory, minimal capabilities, syscall filtering, and explicit writable paths.
+- [x] Run Rust authority tests, Python protocol parity tests, and `systemd-analyze security` in an Ubuntu 24.04 VM/container fixture. Record the exposure score in CI artifacts.
+- [x] Commit: `feat(agent): replace privileged helper with Rust service`
 
 ## Task 6: Replace the stable supervisor and preserve A/B rollback
 

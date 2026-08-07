@@ -1,0 +1,15 @@
+[Unit]
+Description=Vonk Forge privileged agent-helper socket
+
+[Socket]
+ListenStream=/run/vonk-forge/helper.sock
+FileDescriptorName=helper
+SocketMode=0660
+SocketUser=root
+SocketGroup=vonk-agent
+DirectoryMode=0750
+RemoveOnStop=yes
+Service=vonk-agent-helper.service
+
+[Install]
+WantedBy=sockets.target

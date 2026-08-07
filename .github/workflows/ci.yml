@@ -54,7 +54,7 @@ jobs:
 
   rust:
     name: Rust agent contracts
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Check out repository
@@ -78,7 +78,32 @@ jobs:
       - name: Test Rust workspace
         run: cargo test --workspace --locked
       - name: Verify Python protocol parity
-        run: uv run --project agent_protocol --frozen pytest -q agent_protocol/tests/test_rust_fixtures.py
+        run: >-
+          uv run --project agent_protocol --frozen pytest -q
+          agent_protocol/tests/test_rust_fixtures.py
+          agent_protocol/tests/test_package_helper_authority.py
+      - name: Verify controller host-helper authority
+        run: >-
+          uv run --project control --frozen pytest -q
+          control/tests/test_host_helper_authority.py
+      - name: Record privileged helper exposure
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0755 artifacts
+          systemd-analyze security --offline=yes \
+            packaging/systemd/vonk-agent-helper.service \
+            | tee artifacts/vonk-agent-helper-systemd-security.txt
+          grep -Eq 'Overall exposure level.*: [0-2]\.[0-9]+ (OK|SAFE)' \
+            artifacts/vonk-agent-helper-systemd-security.txt
+      - name: Upload privileged helper exposure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: vonk-agent-helper-systemd-security-${{ github.run_id }}
+          if-no-files-found: error
+          retention-days: 30
+          path: artifacts/vonk-agent-helper-systemd-security.txt
 
   generated-clients:
     name: Generated control clients
