@@ -9,5 +9,6 @@ pub mod inventory;
 pub mod oci;
 pub mod pair;
 pub mod process;
+pub mod rotation;
 pub mod state;
 pub mod workloads;

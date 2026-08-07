@@ -5,12 +5,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use chrono::{DateTime, TimeZone, Utc};
 use rcgen::{
     CertificateParams, DistinguishedName, DnType, Ia5String, KeyPair, PKCS_ED25519, SanType,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use x509_parser::{parse_x509_certificate, pem::parse_x509_pem};
 
 #[derive(Debug, Error)]
 pub enum IdentityError {
@@ -40,6 +42,19 @@ pub struct IdentityMaterial {
     pub serial: String,
     pub fingerprint: String,
     pub generation: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentityPaths {
+    pub private_key: PathBuf,
+    pub certificate: PathBuf,
+    pub chain: PathBuf,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct GenerationPointer {
+    generation: u64,
 }
 
 #[derive(Serialize)]
@@ -137,6 +152,132 @@ pub fn clear_pending(root: &Path) -> Result<(), IdentityError> {
     }
     File::open(root)?.sync_all()?;
     Ok(())
+}
+
+pub fn active_identity_paths(root: &Path) -> Result<IdentityPaths, IdentityError> {
+    match load_pointer(root, "active.json")? {
+        Some(generation) => generation_paths(root, generation),
+        None => flat_paths(root),
+    }
+}
+
+pub fn staged_identity_paths(root: &Path) -> Result<Option<(u64, IdentityPaths)>, IdentityError> {
+    load_pointer(root, "staged.json")?
+        .map(|generation| Ok((generation, generation_paths(root, generation)?)))
+        .transpose()
+}
+
+pub fn stage_identity(root: &Path, material: &IdentityMaterial) -> Result<(), IdentityError> {
+    ensure_private_directory(root)?;
+    if material.generation == 0 {
+        return Err(IdentityError::Node);
+    }
+    let destination = root.join(generation_name(material.generation));
+    if !destination.try_exists()? {
+        let temporary = root.join(format!(
+            ".{}.{}.tmp",
+            generation_name(material.generation),
+            std::process::id()
+        ));
+        if temporary.try_exists()? {
+            fs::remove_dir_all(&temporary)?;
+        }
+        persist_identity(&temporary, material)?;
+        fs::rename(&temporary, &destination)?;
+        File::open(root)?.sync_all()?;
+    }
+    atomic_private_write(
+        root,
+        "staged.json",
+        &serde_json::to_vec(&GenerationPointer {
+            generation: material.generation,
+        })?,
+    )?;
+    Ok(())
+}
+
+pub fn publish_staged(root: &Path, generation: u64) -> Result<(), IdentityError> {
+    if load_pointer(root, "staged.json")? != Some(generation) {
+        return Err(std::io::Error::other("staged identity generation changed").into());
+    }
+    generation_paths(root, generation)?;
+    atomic_private_write(
+        root,
+        "active.json",
+        &serde_json::to_vec(&GenerationPointer { generation })?,
+    )?;
+    match fs::remove_file(root.join("staged.json")) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    clear_pending(root)?;
+    File::open(root)?.sync_all()?;
+    Ok(())
+}
+
+pub fn renewal_due(root: &Path, now: DateTime<Utc>) -> Result<bool, IdentityError> {
+    let paths = active_identity_paths(root)?;
+    let certificate_pem = read_private(&paths.certificate)?;
+    let (_, pem) = parse_x509_pem(&certificate_pem)
+        .map_err(|_| std::io::Error::other("active certificate PEM is invalid"))?;
+    let (_, certificate) = parse_x509_certificate(&pem.contents)
+        .map_err(|_| std::io::Error::other("active certificate is invalid"))?;
+    let not_before = Utc
+        .timestamp_opt(certificate.validity().not_before.timestamp(), 0)
+        .single()
+        .ok_or_else(|| std::io::Error::other("active certificate validity is invalid"))?;
+    let not_after = Utc
+        .timestamp_opt(certificate.validity().not_after.timestamp(), 0)
+        .single()
+        .ok_or_else(|| std::io::Error::other("active certificate validity is invalid"))?;
+    let lifetime = not_after - not_before;
+    if lifetime <= chrono::Duration::zero() {
+        return Err(std::io::Error::other("active certificate validity is invalid").into());
+    }
+    Ok(now >= not_after - lifetime / 3)
+}
+
+fn load_pointer(root: &Path, name: &str) -> Result<Option<u64>, IdentityError> {
+    let path = root.join(name);
+    if !path.try_exists()? {
+        return Ok(None);
+    }
+    let raw = read_private(&path)?;
+    let pointer: GenerationPointer = serde_json::from_slice(&raw)?;
+    if pointer.generation == 0 {
+        return Err(std::io::Error::other("identity generation pointer is invalid").into());
+    }
+    Ok(Some(pointer.generation))
+}
+
+fn generation_paths(root: &Path, generation: u64) -> Result<IdentityPaths, IdentityError> {
+    let directory = root.join(generation_name(generation));
+    let metadata = fs::symlink_metadata(&directory)?;
+    if !metadata.file_type().is_dir() || metadata.file_type().is_symlink() {
+        return Err(std::io::Error::other("identity generation is unsafe").into());
+    }
+    let paths = flat_paths(&directory)?;
+    for path in [&paths.private_key, &paths.certificate, &paths.chain] {
+        read_private(path)?;
+    }
+    Ok(paths)
+}
+
+fn flat_paths(root: &Path) -> Result<IdentityPaths, IdentityError> {
+    let paths = IdentityPaths {
+        private_key: root.join("private-key.pem"),
+        certificate: root.join("certificate.pem"),
+        chain: root.join("chain.pem"),
+    };
+    for path in [&paths.private_key, &paths.certificate, &paths.chain] {
+        read_private(path)?;
+    }
+    Ok(paths)
+}
+
+fn generation_name(generation: u64) -> String {
+    format!("generation-{generation:020}")
 }
 
 fn ensure_private_directory(root: &Path) -> Result<(), std::io::Error> {

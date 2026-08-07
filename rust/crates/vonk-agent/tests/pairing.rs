@@ -2,6 +2,7 @@
 
 use std::{fs, os::unix::fs::PermissionsExt};
 
+use chrono::{TimeZone, Utc};
 use rcgen::{CertificateParams, DistinguishedName, DnType, Ia5String, KeyPair, SanType};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
@@ -9,7 +10,8 @@ use url::Url;
 use vonk_agent::{
     config::AgentConfig,
     identity::{
-        IdentityMaterial, generate_pending, load_pending, persist_identity, persist_pending,
+        IdentityMaterial, active_identity_paths, generate_pending, load_pending, persist_identity,
+        persist_pending, publish_staged, renewal_due, stage_identity, staged_identity_paths,
     },
     pair::{
         EnrollmentEvidence, EnrollmentOutcome, EnrollmentResponse, IssuedResponse, pair,
@@ -177,4 +179,78 @@ fn issued_certificate_must_bind_the_generated_key_and_node_identity() {
 
     validate_issued(&response, &pending, NODE_ID).unwrap();
     assert!(validate_issued(&response, &pending, "spk_ffffffffffffffffffffffffffffffff").is_err());
+}
+
+#[test]
+fn staged_generation_survives_restart_and_publishes_with_one_pointer_write() {
+    let directory = tempdir().unwrap();
+    let active = IdentityMaterial {
+        node_id: NODE_ID.to_owned(),
+        private_key_pem: b"ACTIVE-PRIVATE".to_vec(),
+        certificate_pem: b"ACTIVE-CERTIFICATE".to_vec(),
+        chain_pem: b"ACTIVE-CHAIN".to_vec(),
+        serial: "1".to_owned(),
+        fingerprint: "a".repeat(64),
+        generation: 1,
+    };
+    persist_identity(directory.path(), &active).unwrap();
+    let staged = IdentityMaterial {
+        node_id: NODE_ID.to_owned(),
+        private_key_pem: b"STAGED-PRIVATE".to_vec(),
+        certificate_pem: b"STAGED-CERTIFICATE".to_vec(),
+        chain_pem: b"STAGED-CHAIN".to_vec(),
+        serial: "2".to_owned(),
+        fingerprint: "b".repeat(64),
+        generation: 2,
+    };
+
+    stage_identity(directory.path(), &staged).unwrap();
+    let (generation, staged_paths) = staged_identity_paths(directory.path()).unwrap().unwrap();
+    assert_eq!(generation, 2);
+    assert_eq!(
+        fs::read(&staged_paths.private_key).unwrap(),
+        b"STAGED-PRIVATE"
+    );
+    assert_eq!(
+        fs::read(active_identity_paths(directory.path()).unwrap().private_key).unwrap(),
+        b"ACTIVE-PRIVATE"
+    );
+
+    publish_staged(directory.path(), generation).unwrap();
+    assert!(staged_identity_paths(directory.path()).unwrap().is_none());
+    assert_eq!(
+        fs::read(active_identity_paths(directory.path()).unwrap().private_key).unwrap(),
+        b"STAGED-PRIVATE"
+    );
+}
+
+#[test]
+fn renewal_due_is_derived_from_active_certificate_validity() {
+    let directory = tempdir().unwrap();
+    let key = KeyPair::generate().unwrap();
+    let certificate = CertificateParams::new(vec!["agent.vonkforge.test".to_owned()])
+        .unwrap()
+        .self_signed(&key)
+        .unwrap();
+    persist_identity(
+        directory.path(),
+        &IdentityMaterial {
+            node_id: NODE_ID.to_owned(),
+            private_key_pem: key.serialize_pem().into_bytes(),
+            certificate_pem: certificate.pem().into_bytes(),
+            chain_pem: certificate.pem().into_bytes(),
+            serial: "1".to_owned(),
+            fingerprint: hex::encode(Sha256::digest(certificate.der())),
+            generation: 1,
+        },
+    )
+    .unwrap();
+
+    assert!(
+        renewal_due(
+            directory.path(),
+            Utc.with_ymd_and_hms(4095, 1, 1, 0, 0, 0).unwrap()
+        )
+        .unwrap()
+    );
 }

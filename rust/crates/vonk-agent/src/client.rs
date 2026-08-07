@@ -7,7 +7,11 @@ use url::Url;
 use vonk_agent_protocol::{AgentClaim, AgentResult, canonical_json, parse_strict};
 
 use crate::{
-    config::AgentConfig, inventory::Inventory, pair::verify_ca_pin, workloads::WorkloadSpec,
+    config::AgentConfig,
+    identity::{IdentityPaths, active_identity_paths},
+    inventory::Inventory,
+    pair::{IssuedResponse, verify_ca_pin},
+    workloads::WorkloadSpec,
 };
 
 const MAX_BODY_BYTES: usize = 64 * 1024;
@@ -55,6 +59,20 @@ struct InventoryRequest<'a> {
     inventory: &'a Inventory,
 }
 
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct RenewRequest<'a> {
+    csr: &'a str,
+    node_id: &'a str,
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct ActivateRequest<'a> {
+    generation: u64,
+    node_id: &'a str,
+}
+
 pub struct AgentHttpClient {
     client: Client,
     controller: Url,
@@ -63,12 +81,20 @@ pub struct AgentHttpClient {
 
 impl AgentHttpClient {
     pub fn from_config(config: &AgentConfig) -> Result<Self, ClientError> {
+        let paths = active_identity_paths(&config.data_dir.join("credentials"))
+            .map_err(|_| ClientError::Identity)?;
+        Self::from_identity_paths(config, &paths)
+    }
+
+    pub fn from_identity_paths(
+        config: &AgentConfig,
+        paths: &IdentityPaths,
+    ) -> Result<Self, ClientError> {
         let ca_pem = fs::read(&config.ca_path)?;
         verify_ca_pin(&ca_pem, &config.ca_sha256).map_err(|_| ClientError::Pin)?;
-        let credentials = config.data_dir.join("credentials");
-        let mut identity_pem = fs::read(credentials.join("certificate.pem"))?;
-        identity_pem.extend_from_slice(&fs::read(credentials.join("chain.pem"))?);
-        identity_pem.extend_from_slice(&fs::read(credentials.join("private-key.pem"))?);
+        let mut identity_pem = fs::read(&paths.certificate)?;
+        identity_pem.extend_from_slice(&fs::read(&paths.chain)?);
+        identity_pem.extend_from_slice(&fs::read(&paths.private_key)?);
         let identity = Identity::from_pem(&identity_pem).map_err(|_| ClientError::Identity)?;
         let ca = Certificate::from_pem(&ca_pem).map_err(|_| ClientError::Identity)?;
         let client = Client::builder()
@@ -171,6 +197,50 @@ impl AgentHttpClient {
             classify_status(response.status())?;
             Err(ClientError::Protocol)
         }
+    }
+
+    pub async fn renew(&self, csr: &[u8]) -> Result<IssuedResponse, ClientError> {
+        let csr = std::str::from_utf8(csr).map_err(|_| ClientError::Protocol)?;
+        if csr.is_empty() || csr.len() > 16 * 1024 {
+            return Err(ClientError::Protocol);
+        }
+        let response = self
+            .client
+            .post(self.endpoint("/agent/v1/renew")?)
+            .json(&RenewRequest {
+                csr,
+                node_id: &self.node_id,
+            })
+            .send()
+            .await?;
+        classify_status(response.status())?;
+        let body = bounded_body(response).await?;
+        let issued: IssuedResponse =
+            serde_json::from_slice(&body).map_err(|_| ClientError::Protocol)?;
+        if issued.node_id != self.node_id || issued.generation == 0 {
+            return Err(ClientError::Protocol);
+        }
+        Ok(issued)
+    }
+
+    pub async fn activate(&self, generation: u64) -> Result<(), ClientError> {
+        if generation == 0 {
+            return Err(ClientError::Protocol);
+        }
+        let response = self
+            .client
+            .post(self.endpoint("/agent/v1/renew/activate")?)
+            .json(&ActivateRequest {
+                generation,
+                node_id: &self.node_id,
+            })
+            .send()
+            .await?;
+        if response.status() != StatusCode::NO_CONTENT {
+            classify_status(response.status())?;
+            return Err(ClientError::Protocol);
+        }
+        Ok(())
     }
 
     fn endpoint(&self, path: &str) -> Result<Url, ClientError> {

@@ -25,15 +25,15 @@
 - Create: `agent_protocol/tests/test_rust_fixtures.py`
 - Modify: `.github/workflows/ci.yml`
 
-- [ ] Write `test_rust_fixtures.py` first. It must require each fixture to round-trip through the Python dataclasses and assert canonical JSON bytes and SHA-256 values from `agent_protocol/fixtures/manifest.json`.
-- [ ] Run `uv run --project agent_protocol pytest agent_protocol/tests/test_rust_fixtures.py -q`; confirm failure because the fixtures and manifest do not exist.
-- [ ] Add the four canonical fixtures and manifest by serializing existing Python protocol objects with sorted keys and compact separators.
-- [ ] Add a Rust workspace pinned to `channel = "1.97.1"`, edition 2024, `resolver = "3"`, and first-party `#![forbid(unsafe_code)]`.
-- [ ] Define matching serde structs in `vonk-agent-protocol`; reject unknown fields on signed or privileged messages.
-- [ ] Add Rust tests that parse, serialize canonically, and hash the same fixtures.
-- [ ] Add CI jobs for `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` on x86_64; cache only the Cargo registry/build directory, never credentials.
-- [ ] Run the Python fixture test and `cargo test -p vonk-agent-protocol`; confirm both pass.
-- [ ] Commit: `feat(agent): establish Rust protocol parity fixtures`
+- [x] Write `test_rust_fixtures.py` first. It must require each fixture to round-trip through the Python dataclasses and assert canonical JSON bytes and SHA-256 values from `agent_protocol/fixtures/manifest.json`.
+- [x] Run `uv run --project agent_protocol pytest agent_protocol/tests/test_rust_fixtures.py -q`; confirm failure because the fixtures and manifest do not exist.
+- [x] Add the four canonical fixtures and manifest by serializing existing Python protocol objects with sorted keys and compact separators.
+- [x] Add a Rust workspace pinned to `channel = "1.97.1"`, edition 2024, `resolver = "3"`, and first-party `#![forbid(unsafe_code)]`.
+- [x] Define matching serde structs in `vonk-agent-protocol`; reject unknown fields on signed or privileged messages.
+- [x] Add Rust tests that parse, serialize canonically, and hash the same fixtures.
+- [x] Add CI jobs for `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings`, and `cargo test --workspace` on x86_64; cache only the Cargo registry/build directory, never credentials.
+- [x] Run the Python fixture test and `cargo test -p vonk-agent-protocol`; confirm both pass.
+- [x] Commit: `feat(agent): establish Rust protocol parity fixtures`
 
 ## Task 2: Build configuration, identity storage, and one-time pairing
 
@@ -48,14 +48,14 @@
 - Modify: `control/src/dgx_control/enrollment.py`
 - Modify: `control/src/dgx_control/agent_api.py`
 
-- [ ] Write `pairing.rs` first with a fake HTTPS controller. Assert an expired or reused pairing token fails closed, the CA is pinned before credentials are written, file modes are `0600`, and a successful response creates an agent key/certificate bound to the reported node identity.
-- [ ] Run `cargo test -p vonk-agent pairing`; confirm failure because the crate is absent.
-- [ ] Implement strict config loading from `/etc/vonk-forge/agent.toml` with controller URL, CA fingerprint, data directory, poll timings, and no secret values accepted from command-line flags.
-- [ ] Implement `vonk-agent pair --controller ... --token-stdin --ca-sha256 ...`; generate the private key on the Spark, submit the CSR and hardware identity, verify the pinned CA, and atomically persist credentials.
-- [ ] Add controller compatibility tests that exercise both the existing Python client and the Rust pairing request against the same enrollment endpoint.
-- [ ] Ensure audit entries record token identifier, node identifier, certificate serial, outcome, and reason without recording the token or private material.
-- [ ] Run pairing tests in Rust and Python; confirm pass.
-- [ ] Commit: `feat(agent): add pinned mTLS pairing`
+- [x] Write `pairing.rs` first with a fake HTTPS controller. Assert an expired or reused pairing token fails closed, the CA is pinned before credentials are written, file modes are `0600`, and a successful response creates an agent key/certificate bound to the reported node identity.
+- [x] Run `cargo test -p vonk-agent pairing`; confirm failure because the crate is absent.
+- [x] Implement strict config loading from `/etc/vonk-forge/agent.toml` with controller URL, CA fingerprint, data directory, poll timings, and no secret values accepted from command-line flags.
+- [x] Implement `vonk-agent pair --controller ... --token-stdin --ca-sha256 ...`; generate the private key on the Spark, submit the CSR and hardware identity, verify the pinned CA, and atomically persist credentials.
+- [x] Add controller compatibility tests that exercise both the existing Python client and the Rust pairing request against the same enrollment endpoint.
+- [x] Ensure audit entries record token identifier, node identifier, certificate serial, outcome, and reason without recording the token or private material.
+- [x] Run pairing tests in Rust and Python; confirm pass.
+- [x] Commit: `feat(agent): add pinned mTLS pairing`
 
 ## Task 3: Implement outbound long polling, leases, fences, and durable receipts
 
@@ -68,14 +68,14 @@
 - Modify: `agent/tests/test_client.py`
 - Modify: `control/tests/test_agent_api.py`
 
-- [ ] Write failing Rust tests for poll timeout, controller restart, certificate rotation, operation deadline, monotonic fence rejection, duplicate operation replay, persisted result redelivery, and bounded jittered backoff.
-- [ ] Run `cargo test -p vonk-agent polling restart_receipts`; confirm failure at missing modules.
-- [ ] Implement a rustls-only HTTPS client that opens outbound long polls, sends protocol/capability versions, applies request deadlines, and never disables certificate verification.
-- [ ] Persist node identity, last accepted fence, operation status, and result body in SQLite under `/var/lib/vonk-forge`; use transactions so a restart cannot execute an acknowledged operation twice.
-- [ ] Require every mutating operation to carry operation ID, group ID, deadline, desired generation, and monotonic fence. Reject stale, expired, or identity-mismatched work before calling an executor.
-- [ ] Deliver results idempotently until the controller acknowledges their receipt; distinguish retryable transport failures from terminal operation failures.
-- [ ] Run the Rust tests plus the existing Python client tests. Compare captured wire payloads byte-for-byte after canonicalization.
-- [ ] Commit: `feat(agent): add durable outbound operation loop`
+- [x] Write failing Rust tests for poll timeout, controller restart, certificate rotation, operation deadline, monotonic fence rejection, duplicate operation replay, persisted result redelivery, and bounded jittered backoff.
+- [x] Run `cargo test -p vonk-agent polling restart_receipts`; confirm failure at missing modules.
+- [x] Implement a rustls-only HTTPS client that opens outbound long polls, sends protocol/capability versions, applies request deadlines, and never disables certificate verification.
+- [x] Persist node identity, last accepted fence, operation status, and result body in SQLite under `/var/lib/vonk-forge`; use transactions so a restart cannot execute an acknowledged operation twice.
+- [x] Require every mutating operation to carry operation ID, group ID, deadline, desired generation, and monotonic fence. Reject stale, expired, or identity-mismatched work before calling an executor.
+- [x] Deliver results idempotently until the controller acknowledges their receipt; distinguish retryable transport failures from terminal operation failures.
+- [x] Run the Rust tests plus the existing Python client tests. Compare captured wire payloads byte-for-byte after canonicalization.
+- [x] Commit: `feat(agent): add durable outbound operation loop`
 
 ## Task 4: Implement inventory and the typed unprivileged workload executor
 
@@ -89,14 +89,14 @@
 - Modify: `agent_protocol/fixtures/operation-poll.json`
 - Modify: `agent/tests/test_operations.py`
 
-- [ ] Write failing tests for disk/RAM/GPU inventory, image digest verification, weight manifest verification, typed container arguments, read-only root filesystem, dropped capabilities, device assignment, health evidence, stop-before-withdraw semantics, and rejection of shell/privileged/host-path inputs.
-- [ ] Run `cargo test -p vonk-agent inventory workloads`; confirm failure.
-- [ ] Implement inventory collection through `/proc`, `/sys`, and explicit NVIDIA CLI JSON/CSV calls with bounded execution and strict parsing. Report physical and available RAM, disk by managed store, GPU memory, driver/runtime versions, container runtime, and active allocations.
-- [ ] Implement OCI pull/inspect/start/stop through an argument-vector process wrapper; accept only digest-pinned images and controller-compiled typed runtime fields. Do not invoke a shell.
-- [ ] Materialize model artifacts only into `/var/lib/vonk-forge/models/sha256/<digest>` and containers only receive declared read-only model mounts plus a managed writable state directory.
-- [ ] Emit health evidence containing recipe revision, image digest, weight digest, model identity, rank/world size, listening endpoint, memory reservation, and observed readiness.
-- [ ] Run Rust workload tests and the matching Python oracle tests; resolve every behavior difference explicitly in fixtures.
-- [ ] Commit: `feat(agent): execute typed digest-pinned workloads`
+- [x] Write failing tests for disk/RAM/GPU inventory, image digest verification, weight manifest verification, typed container arguments, read-only root filesystem, dropped capabilities, device assignment, health evidence, stop-before-withdraw semantics, and rejection of shell/privileged/host-path inputs.
+- [x] Run `cargo test -p vonk-agent inventory workloads`; confirm failure.
+- [x] Implement inventory collection through `/proc`, `/sys`, and explicit NVIDIA CLI JSON/CSV calls with bounded execution and strict parsing. Report physical and available RAM, disk by managed store, GPU memory, driver/runtime versions, container runtime, and active allocations.
+- [x] Implement OCI pull/inspect/start/stop through an argument-vector process wrapper; accept only digest-pinned images and controller-compiled typed runtime fields. Do not invoke a shell.
+- [x] Materialize model artifacts only into `/var/lib/vonk-forge/models/sha256/<digest>` and containers only receive declared read-only model mounts plus a managed writable state directory.
+- [x] Emit health evidence containing recipe revision, image digest, weight digest, model identity, rank/world size, listening endpoint, memory reservation, and observed readiness.
+- [x] Run Rust workload tests and the matching Python oracle tests; resolve every behavior difference explicitly in fixtures.
+- [x] Commit: `feat(agent): execute typed digest-pinned workloads`
 
 ## Task 5: Replace the privileged package helper
 

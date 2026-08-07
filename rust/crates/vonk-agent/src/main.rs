@@ -16,6 +16,7 @@ use vonk_agent::{
     oci::OciRuntime,
     pair::{EnrollmentOutcome, collect_evidence, pair},
     process::SystemProcessRunner,
+    rotation::rotate_if_due,
     state::{StateStore, backoff_delay},
 };
 
@@ -75,18 +76,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run_agent(config: &AgentConfig) -> Result<(), Box<dyn std::error::Error>> {
-    let client = AgentHttpClient::from_config(config)?;
+    rotate_if_due(config).await?;
+    let mut client = AgentHttpClient::from_config(config)?;
     let mut state = StateStore::open(&config.data_dir.join("state.sqlite"), &config.node_id)?;
     state.recover_interrupted()?;
     let runner = SystemProcessRunner;
-    let executor = RecipeExecutor {
-        client: &client,
-        runtime: OciRuntime {
-            runner: &runner,
-            data_root: &config.data_dir,
-            huggingface_curl_config: config.huggingface_curl_config.as_deref(),
-        },
-    };
     let capabilities = [
         "recipe.install",
         "recipe.start",
@@ -97,6 +91,9 @@ async fn run_agent(config: &AgentConfig) -> Result<(), Box<dyn std::error::Error
     let mut next_inventory = tokio::time::Instant::now();
     loop {
         if tokio::time::Instant::now() >= next_inventory {
+            if rotate_if_due(config).await? {
+                client = AgentHttpClient::from_config(config)?;
+            }
             let inventory = InventoryCollector {
                 runner: &runner,
                 meminfo_path: Path::new("/proc/meminfo"),
@@ -127,6 +124,14 @@ async fn run_agent(config: &AgentConfig) -> Result<(), Box<dyn std::error::Error
                 Err(error) => return Err(error.into()),
             }
         }
+        let executor = RecipeExecutor {
+            client: &client,
+            runtime: OciRuntime {
+                runner: &runner,
+                data_root: &config.data_dir,
+                huggingface_curl_config: config.huggingface_curl_config.as_deref(),
+            },
+        };
         let operation = run_once(
             &client,
             &mut state,
