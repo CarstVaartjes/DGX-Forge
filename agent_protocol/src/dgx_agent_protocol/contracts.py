@@ -75,6 +75,10 @@ class AgentOperation(StrEnum):
     PACKAGE_REMOVE = "package.remove"
     PACKAGE_REPAIR = "package.repair"
     PACKAGE_GC = "package.gc"
+    RECIPE_INSTALL = "recipe.install"
+    RECIPE_START = "recipe.start"
+    RECIPE_STOP = "recipe.stop"
+    RECIPE_UNINSTALL = "recipe.uninstall"
 
 
 PROTOCOL_FORMAT_CHECKER = FormatChecker()

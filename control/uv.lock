@@ -217,13 +217,13 @@ wheels = [
 
 [[package]]
 name = "dgx-agent-protocol"
-version = "2.0.0"
-source = { path = "../inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl" }
+version = "2.1.0"
+source = { path = "../inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl" }
 dependencies = [
     { name = "jsonschema" },
 ]
 wheels = [
-    { filename = "dgx_agent_protocol-2.0.0-py3-none-any.whl", hash = "sha256:e2951039fc3be9c7b2d14284b99390530b4ef3392cbdcdf6091efc64e32090c4" },
+    { filename = "dgx_agent_protocol-2.1.0-py3-none-any.whl", hash = "sha256:66f793e066700fa8698f84e969341c63dd68ba138104791c9ca49bbb736fd023" },
 ]
 
 [package.metadata]
@@ -259,7 +259,7 @@ dev = [
 requires-dist = [
     { name = "alembic", specifier = "==1.16.4" },
     { name = "cryptography", specifier = "==46.0.7" },
-    { name = "dgx-agent-protocol", path = "../inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl" },
+    { name = "dgx-agent-protocol", path = "../inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl" },
     { name = "fastapi", specifier = "==0.116.1" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "jsonschema", specifier = "==4.25.1" },

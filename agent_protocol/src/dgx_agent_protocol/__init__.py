@@ -14,6 +14,7 @@ from .package_operations import (
     AgentDirective,
     PackageOperationRequest,
 )
+from .recipe_operations import RECIPE_OPERATIONS, RecipeOperationRequest
 from .workload_packages import (
     ComponentDescriptor,
     OciBundleMetadata,
@@ -32,6 +33,7 @@ from .workload_packages import (
 __all__ = [
     "PACKAGE_OPERATIONS",
     "RELEASE_BOUND_PACKAGE_OPERATIONS",
+    "RECIPE_OPERATIONS",
     "AgentClaim",
     "AgentDirective",
     "AgentOperation",
@@ -45,6 +47,7 @@ __all__ = [
     "PackageHelperSignature",
     "PackageObjectReceiptClaims",
     "PackageOperationRequest",
+    "RecipeOperationRequest",
     "PackageReleaseGraph",
     "PackageReleaseLock",
     "SignedPackageHelperGrant",

@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 IMAGE = re.compile(r"^[^\s@]+(?::[^\s@]+)?@sha256:[0-9a-f]{64}$")
-PROTOCOL_WHEEL = "inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl"
+PROTOCOL_WHEEL = "inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
 
 
 def canonical(value: object) -> bytes:
@@ -164,7 +164,7 @@ def protocol_version(lock: bytes) -> str:
         package for package in raw.get("package", [])
         if package.get("name") == "dgx-agent-protocol"
     ]
-    if len(packages) != 1 or packages[0].get("source") != {"path": "../inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl"}:
+    if len(packages) != 1 or packages[0].get("source") != {"path": "../inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"}:
         raise ValueError("control and agent must resolve the verified protocol wheel")
     version = packages[0].get("version")
     if not isinstance(version, str):

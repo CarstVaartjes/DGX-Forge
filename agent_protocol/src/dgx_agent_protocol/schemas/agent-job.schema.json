@@ -11,7 +11,7 @@
     "attempt": {"type": "integer", "minimum": 1},
     "fence": {"type": "string", "format": "uuid"},
     "node_id": {"type": "string", "pattern": "^spk_[0-9a-f]{32}$"},
-    "operation": {"enum": ["node.probe", "release.install", "workload.prepare", "workload.start", "workload.stop", "workload.health", "workload.verify", "agent.update", "agent.rollback", "package.prepare", "package.activate", "package.health", "package.stop", "package.rollback", "package.remove", "package.repair", "package.gc"]},
+    "operation": {"enum": ["node.probe", "release.install", "workload.prepare", "workload.start", "workload.stop", "workload.health", "workload.verify", "agent.update", "agent.rollback", "package.prepare", "package.activate", "package.health", "package.stop", "package.rollback", "package.remove", "package.repair", "package.gc", "recipe.install", "recipe.start", "recipe.stop", "recipe.uninstall"]},
     "base_commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
     "payload_digest": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
     "payload": {

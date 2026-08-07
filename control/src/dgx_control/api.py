@@ -60,6 +60,8 @@ from .auth import (
 from .catalog_api import install_catalog_routes
 from .catalog_service import CatalogService
 from .sparkrun_api import install_sparkrun_routes
+from .recipe_api import install_recipe_operation_routes
+from .recipe_operations import RecipeOperationService
 from .sparkrun_workflow import SparkRunWorkflow
 from .metrics import MetricsRegistry
 from .operation_api import (
@@ -852,6 +854,7 @@ def create_app(
     packages: PackageApiServices | None = None,
     catalog: CatalogService | None = None,
     sparkrun: SparkRunWorkflow | None = None,
+    recipe_operations: RecipeOperationService | None = None,
 ) -> FastAPI:
     app = FastAPI(title="DGX Forge Control", version="1.0", docs_url=None, redoc_url=None)
     cursor_codec = tokens.cursor_codec()
@@ -986,6 +989,12 @@ def create_app(
         service=catalog,
     )
     install_sparkrun_routes(app, actor_dependency=authenticated_actor, audits=audits, workflow=sparkrun)
+    install_recipe_operation_routes(
+        app,
+        actor_dependency=authenticated_actor,
+        audits=audits,
+        service=recipe_operations,
+    )
 
     @app.get("/api/v1/healthz")
     def healthz() -> dict[str, str]:

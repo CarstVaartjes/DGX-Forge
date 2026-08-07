@@ -110,6 +110,17 @@ MUTATION_ROLES = {
     ("POST", "/api/v1/catalog/recipes/{recipe_id}/resolve-import"): frozenset(
         {"administrator"}
     ),
+    ("POST", "/api/v1/recipes/install-plans/preview"): frozenset({"administrator"}),
+    ("POST", "/api/v1/recipes/installations"): frozenset({"administrator"}),
+    ("POST", "/api/v1/recipes/run-plans/preview"): frozenset({"administrator"}),
+    ("POST", "/api/v1/recipes/runs"): frozenset({"administrator"}),
+    ("POST", "/api/v1/recipes/operations/{operation_id}/retry"): frozenset(
+        {"administrator"}
+    ),
+    ("POST", "/api/v1/recipes/runs/{run_id}/stop"): frozenset({"administrator"}),
+    ("POST", "/api/v1/recipes/installations/{installation_id}/uninstall"): frozenset(
+        {"administrator"}
+    ),
 }
 
 

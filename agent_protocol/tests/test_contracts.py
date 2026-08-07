@@ -324,6 +324,10 @@ def test_operation_enum_contains_only_supported_operations() -> None:
         "package.remove",
         "package.repair",
         "package.gc",
+        "recipe.install",
+        "recipe.start",
+        "recipe.stop",
+        "recipe.uninstall",
     }
 
 

@@ -129,6 +129,14 @@ _PACKAGE_CAPABILITIES = frozenset(
         AgentOperation.PACKAGE_GC.value,
     }
 )
+_RECIPE_CAPABILITIES = frozenset(
+    {
+        AgentOperation.RECIPE_INSTALL.value,
+        AgentOperation.RECIPE_START.value,
+        AgentOperation.RECIPE_STOP.value,
+        AgentOperation.RECIPE_UNINSTALL.value,
+    }
+)
 _MUTATING_OPERATIONS = frozenset(
     {
         AgentOperation.AGENT_ROLLBACK.value,
@@ -144,6 +152,10 @@ _MUTATING_OPERATIONS = frozenset(
         AgentOperation.WORKLOAD_PREPARE.value,
         AgentOperation.WORKLOAD_START.value,
         AgentOperation.WORKLOAD_STOP.value,
+        AgentOperation.RECIPE_INSTALL.value,
+        AgentOperation.RECIPE_START.value,
+        AgentOperation.RECIPE_STOP.value,
+        AgentOperation.RECIPE_UNINSTALL.value,
     }
 )
 _TERMINAL_PARENT_STATES = frozenset({"succeeded", "failed", "waiting-for-operator", "expired"})
@@ -162,7 +174,7 @@ _REQUIRED_CAPABILITIES = frozenset(
 )
 _NEXT_CAPABILITIES = _REQUIRED_CAPABILITIES | frozenset(
     {AgentOperation.AGENT_ROLLBACK.value, AgentOperation.AGENT_UPDATE.value}
-) | _PACKAGE_CAPABILITIES
+) | _PACKAGE_CAPABILITIES | _RECIPE_CAPABILITIES
 
 
 class StaleAgentAttempt(RuntimeError):
@@ -1033,7 +1045,7 @@ class AgentJobService:
                 operation.retry_disposition_attempt = None
                 operation.updated_at = now
                 excluded.append(operation.id)
-            if operation.kind in _PACKAGE_CAPABILITIES and (
+            if operation.kind in (_PACKAGE_CAPABILITIES | _RECIPE_CAPABILITIES) and (
                 protocol_version is None
                 or protocol_version < 2
                 or capabilities is None
