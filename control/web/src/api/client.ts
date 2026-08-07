@@ -229,7 +229,7 @@ export class ApiClient implements ControlApi {
 
   async uploadSourceBundle(sha256: string, archive: Uint8Array): Promise<SourceBundleReceipt> {
     if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error("Invalid source bundle digest");
-    const headers = new Headers({Accept: "application/json", "Content-Type": "application/vnd.vonk.source-bundle.v1+tar"});
+    const headers = new Headers({Accept: "application/json", "Content-Type": "application/vnd.vonk-forge.source-bundle.v1+tar"});
     const csrf = csrfToken();
     if (csrf) headers.set("X-CSRF-Token", csrf);
     const response = await fetch(`/api/v1/catalog/source-bundles/${sha256}`, {

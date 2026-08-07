@@ -282,7 +282,7 @@ def test_home_workload_uses_an_immutable_image_and_declarative_adapter_commands(
         "@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8"
     )
     assert workload.endpoint.host == "127.0.0.1"
-    release_sha256 = "92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e"
+    release_sha256 = "11fa4d36945ed6530daf29f8b4342feaab90ad9cd47fa505cfd9858a358ebf37"
     adapter = (
         "/opt/node/model-adapters/deepseek-agent-dual/releases/"
         f"{release_sha256}/bin/mia-deepseek-dual"
@@ -389,7 +389,7 @@ def test_workload_exposes_complete_optional_runtime_contracts() -> None:
         "adapters/deepseek/mia-vllm/runtime-manifest.json"
     )
     assert workload.runtime_release.sha256 == (
-        "92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e"
+        "11fa4d36945ed6530daf29f8b4342feaab90ad9cd47fa505cfd9858a358ebf37"
     )
     assert workload.deadlines is not None
     assert workload.deadlines.start == 1800
@@ -400,7 +400,7 @@ def test_workload_exposes_complete_optional_runtime_contracts() -> None:
     ("old", "new", "error"),
     (
         (
-            'sha256 = "92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e"',
+            'sha256 = "11fa4d36945ed6530daf29f8b4342feaab90ad9cd47fa505cfd9858a358ebf37"',
             "",
             "sha256",
         ),

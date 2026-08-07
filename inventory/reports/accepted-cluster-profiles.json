@@ -1,9 +1,9 @@
 {
   "profiles": [
     {
-      "profile_sha256": "2de414663bbe909b2a437632978d3aa42a06c82249cf9d1b6564b225aac8627c",
+      "profile_sha256": "a7e860e31a18fa2b56857499eb7d09936106726d5386a7f8b6ae0ae75791ecc6",
       "definition_sha256": [
-        "de79fa38af556356008f8e3bfa46222d1a1aabebf47653e2e14e03abb6c971bb"
+        "a231a87815e144caa6fe9947babe3c8cdf5fa8ffe14092be4aa47982ddc20f47"
       ],
       "accepted_at": "2026-08-03T12:50:10Z",
       "evidence_refs": [

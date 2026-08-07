@@ -46,7 +46,6 @@ x-hermes-service: &hermes-service
 services:
   hermes-agent:
     <<: *hermes-service
-    profiles: [hermes]
     hostname: hermes-agent
     restart: unless-stopped
     networks:
@@ -72,7 +71,7 @@ services:
 
   hermes-setup:
     <<: *hermes-service
-    profiles: [hermes, setup]
+    profiles: [setup]
     restart: "no"
     stdin_open: true
     tty: true

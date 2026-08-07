@@ -2,8 +2,8 @@
 
 Vonk Forge is a local-first control plane for one or more NVIDIA GB10 GPU systems.
 Each GPU node is onboarded independently; the Docker-capable service host runs
-separate Caddy, API/worker, PostgreSQL, LiteLLM, Prometheus, and Grafana
-services; Hermes Agent is an optional Compose profile disabled by default.
+separate Caddy, API/worker, PostgreSQL, LiteLLM, Hermes Agent, Prometheus, and
+Grafana services.
 Administration is available through both `vonkctl admin` and the
 web UX. The target recipe workflow is local-first: PostgreSQL is authoritative
 for recipe families, authored/imported revisions, installations, placements,
@@ -137,7 +137,7 @@ reconciled by the repository-less worker.
 - [Documentation index](docs/README.md)
 - [Architecture overview](docs/architecture-overview.md)
 - [Recipe catalog and WorkloadRun operations](docs/runbooks/workload-packages.md)
-- [Source-first local Compose deployment](deploy/compose/README.md)
+- [NAS pull-only Compose deployment](deploy/compose/README.md)
 - [Control-plane bootstrap](docs/runbooks/control-plane-bootstrap.md)
 - [`vonkctl` runbook](docs/runbooks/vonkctl.md)
 - [Inventory runbook](docs/runbooks/inventory.md)

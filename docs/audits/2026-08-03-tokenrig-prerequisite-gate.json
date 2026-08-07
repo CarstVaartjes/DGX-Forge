@@ -10,7 +10,7 @@
     "blender": ">=4.2",
     "bpy_server": true
   },
-  "observed_node2": {
+  "observed_spark2": {
     "python": "3.12.3",
     "python311": false,
     "blender": false,

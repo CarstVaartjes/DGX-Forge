@@ -107,7 +107,7 @@
           "properties": {
             "sha256": {"$ref": "#/$defs/sha256"},
             "expected_bytes": {"type": "integer", "minimum": 1},
-            "media_type": {"const": "application/vnd.vonk.source-bundle.v1+tar"}
+            "media_type": {"const": "application/vnd.vonk-forge.source-bundle.v1+tar"}
           }
         },
         "dockerfile": {"$ref": "#/$defs/bundlePath"},

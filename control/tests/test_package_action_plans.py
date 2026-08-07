@@ -283,7 +283,7 @@ def test_inventory_projects_resource_envelope_from_signed_release_not_agent_summ
             PackageObservation(
                 node_id=node_id,
                 deployment_id="ds4-deepseek-single",
-                release_digest="5298dc3e36e4c1d210c28ec661268414e2f39177b619f3441e6cb03a01c5fd83",
+                release_digest="c11e4bce2c20e8047666d5d1c4c87dac164d01f7a5ffcf92452321cb53d65a45",
                 observation_digest="f" * 64,
                 state="active",
                 summary={
@@ -382,7 +382,7 @@ def test_publication_candidate_reads_lock_from_git_and_validation_from_sql(tmp_p
     Base.metadata.create_all(engine)
     sessions = session_factory(engine)
     root = RepositoryService(Path(__file__).resolve().parents[2])
-    release_digest = "5298dc3e36e4c1d210c28ec661268414e2f39177b619f3441e6cb03a01c5fd83"
+    release_digest = "c11e4bce2c20e8047666d5d1c4c87dac164d01f7a5ffcf92452321cb53d65a45"
     candidate_id = "00000000-0000-4000-8000-000000000007"
     now = datetime.now(UTC)
     with sessions.begin() as session:
@@ -454,7 +454,7 @@ def test_validation_preview_persists_a_digest_bound_run(tmp_path) -> None:
     Base.metadata.create_all(engine)
     sessions = session_factory(engine)
     candidate_id = "00000000-0000-4000-8000-000000000010"
-    release_digest = "5298dc3e36e4c1d210c28ec661268414e2f39177b619f3441e6cb03a01c5fd83"
+    release_digest = "c11e4bce2c20e8047666d5d1c4c87dac164d01f7a5ffcf92452321cb53d65a45"
     now = datetime.now(UTC)
     with sessions.begin() as session:
         session.add(

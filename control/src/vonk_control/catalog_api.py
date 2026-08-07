@@ -257,7 +257,7 @@ def install_catalog_routes(
         responses={
             200: {
                 "content": {
-                    "application/vnd.vonk.source-bundle.v1+tar": {
+                    "application/vnd.vonk-forge.source-bundle.v1+tar": {
                         "schema": {"type": "string", "format": "binary"}
                     }
                 }
@@ -283,7 +283,7 @@ def install_catalog_routes(
             return _problem(request, error)
         return Response(
             archive,
-            media_type="application/vnd.vonk.source-bundle.v1+tar",
+            media_type="application/vnd.vonk-forge.source-bundle.v1+tar",
             headers={
                 "Cache-Control": "private, max-age=31536000, immutable",
                 "Content-Disposition": f'attachment; filename="vonk-source-{sha256}.tar"',

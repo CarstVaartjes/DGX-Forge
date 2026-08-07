@@ -99,7 +99,7 @@ def setup(tmp_path: Path):
         session.add(
             RecipeSourceBundle(
                 sha256=bundle.sha256,
-                media_type="application/vnd.vonk.source-bundle.v1+tar",
+                media_type="application/vnd.vonk-forge.source-bundle.v1+tar",
                 archive_bytes=stored.archive_bytes,
                 total_bytes=bundle.manifest.total_bytes,
                 file_count=len(bundle.manifest.files),

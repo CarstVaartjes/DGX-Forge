@@ -116,8 +116,8 @@ logs live under `/srv/models` bind mounts.
   utilization, `nvfp4_ds_mla`, probabilistic MTP=5, DeepSeek parsers,
   FlashInfer B12X, and default thinking `low`.
 - [ ] Explicitly render and test the read-only snapshot mount at
-  `/models/deepseek-ai/DeepSeek-V4-Flash-0731`, `DVONK_MODEL` pointing to that
-  local path, `DVONK_ENCODING_FILE` pointing to its pinned encoder, and
+  `/models/deepseek-ai/DeepSeek-V4-Flash-0731`, `DSPARK_MODEL` pointing to that
+  local path, `DSPARK_ENCODING_FILE` pointing to its pinned encoder, and
   writable `VLLM_CACHE_ROOT` plus `FLASHINFER_WORKSPACE_BASE` below the separate
   runtime-cache mount.
 - [ ] Generate hashed node env files from `inventory/cluster.toml`, including

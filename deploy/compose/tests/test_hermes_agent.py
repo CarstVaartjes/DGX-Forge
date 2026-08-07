@@ -31,8 +31,6 @@ def _rendered() -> dict[str, object]:
             "-f",
             str(COMPOSE / "compose.step-ca.yaml"),
             "--profile",
-            "hermes",
-            "--profile",
             "setup",
             "config",
             "--format",
@@ -44,28 +42,6 @@ def _rendered() -> dict[str, object]:
         env=_environment(),
     )
     return json.loads(result.stdout)
-
-
-def test_hermes_is_disabled_in_the_default_compose_profile() -> None:
-    result = subprocess.run(
-        [
-            "docker",
-            "compose",
-            "-f",
-            str(COMPOSE / "compose.yaml"),
-            "-f",
-            str(COMPOSE / "compose.step-ca.yaml"),
-            "config",
-            "--format",
-            "json",
-        ],
-        check=True,
-        capture_output=True,
-        text=True,
-        env=_environment(),
-    )
-
-    assert "hermes-agent" not in json.loads(result.stdout)["services"]
 
 
 def test_wrapper_image_is_digest_pinned_and_contains_no_ssh_stack() -> None:
@@ -155,7 +131,7 @@ def test_hermes_uses_only_local_litellm_and_authenticated_gateway() -> None:
 def test_setup_profile_shares_state_without_exposing_an_ingress() -> None:
     service = _rendered()["services"]["hermes-setup"]
 
-    assert service["profiles"] == ["hermes", "setup"]
+    assert service["profiles"] == ["setup"]
     assert set(service["networks"]) == {"hermes-egress", "hermes-inference"}
     assert not service.get("ports")
     assert service["stdin_open"] is True

@@ -23,7 +23,7 @@ CHECKPOINT_MANIFEST = (
 WORKLOAD = ROOT / "config/workloads/deepseek-agent-single.toml"
 
 IMAGE = (
-    "ghcr.io/carstvaartjes/node-ds4"
+    "ghcr.io/carstvaartjes/spark-ds4"
     "@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615"
 )
 CHECKPOINT_MANIFEST_SHA256 = (
@@ -330,8 +330,8 @@ def test_runtime_recipe_uses_the_pinned_cuda_sources_and_safe_runtime_contract()
     assert dockerfile.index('echo "${DS4_PATCH_SHA256}  /tmp/served-model-name.patch"') < dockerfile.index(
         "patch -p1 --input /tmp/served-model-name.patch"
     )
-    assert "make cuda-node" in dockerfile
-    assert "DS4_CUDA_VONK_HBM_CACHE=1" in dockerfile
+    assert "make cuda-spark" in dockerfile
+    assert "DS4_CUDA_SPARK_HBM_CACHE=1" in dockerfile
     assert "compute_121a" in dockerfile
     assert "sm_121a" in dockerfile
     assert "DS4_NO_UPDATE_CHECK=1" in dockerfile
@@ -350,7 +350,7 @@ def test_runtime_recipe_uses_the_pinned_cuda_sources_and_safe_runtime_contract()
     assert "network_mode: host" in compose
     assert "read_only: true" in compose
     assert "ports:" not in compose
-    assert "DS4_IMAGE=ghcr.io/carstvaartjes/node-ds4:ds4-v0.5.3-q2-0731-health" in runtime_env
+    assert "DS4_IMAGE=ghcr.io/carstvaartjes/spark-ds4:ds4-v0.5.3-q2-0731-health" in runtime_env
 
 
 def test_compose_renders_a_loopback_only_nonrestarting_service() -> None:

@@ -334,7 +334,7 @@ def test_builder_can_download_only_its_authorized_canonical_source_bundle(
         session.add(
             RecipeSourceBundle(
                 sha256=bundle.sha256,
-                media_type="application/vnd.vonk.source-bundle.v1+tar",
+                media_type="application/vnd.vonk-forge.source-bundle.v1+tar",
                 archive_bytes=len(bundle.archive),
                 total_bytes=bundle.manifest.total_bytes,
                 file_count=len(bundle.manifest.files),

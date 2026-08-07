@@ -23,8 +23,8 @@ services:
       - /srv/models/outputs/deepseek-agent-dual:/outputs:rw
       - /srv/models/logs/deepseek-agent-dual:/logs:rw
     environment:
-      DVONK_MODEL: ${DVONK_MODEL}
-      DVONK_ENCODING_FILE: ${DVONK_ENCODING_FILE}
+      DSPARK_MODEL: ${DSPARK_MODEL}
+      DSPARK_ENCODING_FILE: ${DSPARK_ENCODING_FILE}
       VLLM_CACHE_ROOT: ${VLLM_CACHE_ROOT}
       FLASHINFER_WORKSPACE_BASE: ${FLASHINFER_WORKSPACE_BASE}
       VLLM_HOST_IP: ${VLLM_HOST_IP}
@@ -79,9 +79,9 @@ services:
         export CUDA_PATH="/usr/local/cuda"
         export CUDAToolkit_ROOT="/usr/local/cuda"
         export LD_LIBRARY_PATH="/usr/local/cuda/lib64:$${LD_LIBRARY_PATH:-}"
-        cp "$${DVONK_ENCODING_FILE}" /usr/local/lib/python3.12/dist-packages/vllm/tokenizers/deepseek_v4_encoding.py
+        cp "$${DSPARK_ENCODING_FILE}" /usr/local/lib/python3.12/dist-packages/vllm/tokenizers/deepseek_v4_encoding.py
         python3 -c 'from pathlib import Path; p=Path("/usr/local/lib/python3.12/dist-packages/vllm/tokenizers/deepseek_v4.py"); s=p.read_text(); old="elif reasoning_effort in (\"max\", \"xhigh\"):\n                reasoning_effort = \"max\"\n            else:\n                reasoning_effort = \"high\""; new="elif reasoning_effort in (\"max\", \"xhigh\"):\n                reasoning_effort = \"max\"\n            elif reasoning_effort == \"high\":\n                reasoning_effort = \"high\"\n            else:\n                reasoning_effort = \"low\""; updated=s.replace(old,new); assert new in updated; p.write_text(updated)'
-        exec /usr/local/bin/vllm serve "$${DVONK_MODEL}" \
+        exec /usr/local/bin/vllm serve "$${DSPARK_MODEL}" \
           --served-model-name deepseek \
           --host 127.0.0.1 \
           --port 8888 \

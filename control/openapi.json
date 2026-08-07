@@ -6632,7 +6632,7 @@
               "application/json": {
                 "schema": {}
               },
-              "application/vnd.vonk.source-bundle.v1+tar": {
+              "application/vnd.vonk-forge.source-bundle.v1+tar": {
                 "schema": {
                   "format": "binary",
                   "type": "string"

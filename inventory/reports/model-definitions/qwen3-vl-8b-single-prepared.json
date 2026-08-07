@@ -1,7 +1,7 @@
 {
   "stage": "prepared",
   "definition_id": "qwen3-vl-8b-single",
-  "definition_sha256": "aea18c822589c2acbce8a5b5f12d8b58b504a7eec2f554c1a45a1641d6bcfe94",
+  "definition_sha256": "8da7f157c1c9f1d64e5677678f80c714de790c7c232503b61c934f13014b2d6e",
   "runtime_manifest_sha256": "8022bd60dd108dce87adf1aae411b727af2cb037bc053fcfdaeaf151155d528b",
   "source": {
     "repository": "https://github.com/QwenLM/Qwen3-VL",

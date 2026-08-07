@@ -1,7 +1,7 @@
 {
   "files": {
-    "adapters/deepseek/ds4/Dockerfile": "d681a76fc9b036fead8734c142b4f4e86702500349a29d6c0293fc0eb0fac62d",
-    "adapters/deepseek/ds4/bin/ds4-deepseek-single": "3461849240537860aa5d90f3b0085aed44ae1c971d1bea17cc6f58e068f7c5dc",
+    "adapters/deepseek/ds4/Dockerfile": "c13f81cee64573d5963e2e5bb49f9631d71342d865c9f65e5018b0677173dc4c",
+    "adapters/deepseek/ds4/bin/ds4-deepseek-single": "0bc875714514b3205eef58c0341afea7967e8c5c14fb0090f60ed7f6807c2ef9",
     "adapters/deepseek/ds4/compose.yaml": "977c35c2f0292c6e2eb8cc90fda63412bb21f93525d19aa672bb03f710ab2f28",
     "adapters/deepseek/ds4/config/runtime.env": "f3e153fddc6c9e9e31658f922316f1cba43880fa6cd7d8ab7eec64ff633559fa",
     "adapters/deepseek/ds4/manifests/deepseek-v4-flash-0731-ds4.json": "1f6f88d7f968e51e76a118af83f0f7cae7f5df5b915a6cf30db5265228f70c99",

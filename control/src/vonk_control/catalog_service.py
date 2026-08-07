@@ -141,7 +141,7 @@ class CatalogService:
         manifest = stored.manifest
         row = RecipeSourceBundle(
             sha256=manifest.sha256,
-            media_type="application/vnd.vonk.source-bundle.v1+tar",
+            media_type="application/vnd.vonk-forge.source-bundle.v1+tar",
             archive_bytes=stored.archive_bytes,
             total_bytes=manifest.total_bytes,
             file_count=len(manifest.files),

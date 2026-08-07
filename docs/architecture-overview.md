@@ -26,7 +26,7 @@ flowchart LR
         worker[Repository-less control worker]
         db[(PostgreSQL)]
         litellm[LiteLLM]
-        hermes[Hermes Agent optional profile]
+        hermes[Hermes Agent]
         telemetry[Prometheus and Grafana]
     end
 
@@ -93,7 +93,7 @@ fabric recovery, and explicit break-glass inspection.
 | Control worker | Durable reconciliation, dependency waves, compensation, fail-closed withdrawal, and atomic route/LiteLLM publication. |
 | PostgreSQL | Jobs, immutable resolved plans, operation/attempt fences, agent identity/presence, reconciliation state, cancellation, and audit evidence. |
 | LiteLLM | OpenAI-compatible aliases and quotas generated only from an acknowledged, unexpired publication bundle. |
-| Hermes Agent | Optional, default-disabled tools/UI profile that reaches inference only through the fixed repository-policy `hermes-agent` alias. |
+| Hermes Agent | Persistent tools/UI service that reaches inference only through the fixed repository-policy `hermes-agent` alias. |
 | Prometheus/Grafana | Platform, agent, job, route, node-exporter, and DCGM observability. |
 | Tailscale | Named remote services without placing remote-access software on GPU nodes. |
 | GPU node agent | Non-root outbound control client and the only routine executor of typed node/release/workload operations. |
@@ -103,12 +103,6 @@ The Compose project keeps PostgreSQL, agent ingress, repository authority,
 registry publication, inference, and Hermes networks separate. Only Caddy
 publishes a host port. LiteLLM alone joins GPU node-facing cluster egress; the
 worker and API do not.
-
-The initial service-host install is source-first: an operator checks out a
-reviewed commit, builds the API and worker images locally, and starts the
-checked-in Compose graph. This does not make the service host a workload-image
-registry or require hosted release images. The signed agent package and future
-platform release channel remain independent trust boundaries.
 
 ## External release and future global services
 

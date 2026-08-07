@@ -15,11 +15,11 @@ new model/runtime release.
 
 The authoritative NVIDIA references checked on 2026-08-01 are:
 
-- [Vonk Forge GPU node release notes](https://docs.nvidia.com/)
-- [OS and component update guide](https://docs.nvidia.com/)
-- [Vonk Forge Dashboard access](https://docs.nvidia.com/)
-- [NVIDIA container runtime validation](https://docs.nvidia.com/)
-- [Vonk Forge GPU node system recovery](https://docs.nvidia.com/)
+- [Vonk Forge GPU node release notes](https://docs.nvidia.com/dgx/dgx-spark/release-notes.html)
+- [OS and component update guide](https://docs.nvidia.com/dgx/dgx-spark/os-and-component-update.html)
+- [Vonk Forge Dashboard access](https://docs.nvidia.com/dgx/dgx-spark/dgx-dashboard.html)
+- [NVIDIA container runtime validation](https://docs.nvidia.com/dgx/dgx-spark/nvidia-container-runtime-for-docker.html)
+- [Vonk Forge GPU node system recovery](https://docs.nvidia.com/dgx/dgx-spark/system-recovery.html)
 - [May 2026 Vonk Forge GPU node security bulletin](https://nvidia.custhelp.com/app/answers/detail/a_id/5835)
 
 ## Target and observed preparation state

@@ -348,7 +348,15 @@ def test_tailnet_backends_have_readiness_checks() -> None:
         "CMD-SHELL",
         "wget -q -O /dev/null http://127.0.0.1:8080/healthz",
     ]
-    assert "hermes-agent" not in services
+    assert set(services["hermes-agent"]["networks"]) == {
+        "hermes-egress",
+        "hermes-inference",
+        "tailnet-hermes-edge",
+    }
+    assert "8642" in json.dumps(services["hermes-agent"]["healthcheck"]["test"])
+    assert "9119" in json.dumps(services["hermes-agent"]["healthcheck"]["test"])
+    assert services["hermes-agent"]["environment"]["HERMES_UID"] == "1100"
+    assert services["hermes-agent"]["environment"]["HERMES_GID"] == "1100"
 
 
 def test_litellm_routes_use_a_dedicated_atomic_config_volume() -> None:

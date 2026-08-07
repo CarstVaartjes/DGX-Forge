@@ -466,13 +466,13 @@ The source results came from specific upstream hardware state and profile settin
 
 ## References
 
-- [NVIDIA Vonk Forge GPU node user guide](https://docs.nvidia.com/)
+- [NVIDIA Vonk Forge GPU node user guide](https://docs.nvidia.com/dgx/dgx-spark/)
 - [NVIDIA ConnectX-7 Cluster Assistant](https://docs.nvidia.com/sync/latest/cluster-assistant.html)
-- [NVIDIA two-GPU node networking guide](https://build.nvidia.com/node/connect-two-nodes/stacked-nodes)
-- [NVIDIA Vonk Forge GPU node update guide](https://docs.nvidia.com/)
+- [NVIDIA two-GPU node networking guide](https://build.nvidia.com/spark/connect-two-sparks/stacked-sparks)
+- [NVIDIA Vonk Forge GPU node update guide](https://docs.nvidia.com/dgx/dgx-spark/os-and-component-update.html)
 - [DeepSeek-V4-Flash-0731 model card](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731)
-- [MiaAI-Lab dual-GPU node 0731 recipe](https://github.com/ node/tree/b131b2a22164675890dd1465fd8862b5cfb6ff13)
-- [MiaAI-Lab 0731 measurements](https://github.com/ node/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docs/DEEPSEEK_V4_FLASH_0731.md)
+- [MiaAI-Lab dual-GPU node 0731 recipe](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/tree/b131b2a22164675890dd1465fd8862b5cfb6ff13)
+- [MiaAI-Lab 0731 measurements](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docs/DEEPSEEK_V4_FLASH_0731.md)
 - [Microsoft TRELLIS.2](https://github.com/microsoft/TRELLIS.2)
 - [Docker Compose production guidance](https://docs.docker.com/compose/how-tos/production/)
 - [Caddy configuration API](https://caddyserver.com/docs/api)

@@ -26,7 +26,7 @@ pytest, Ruff, and `vonkctl`.
 - Pin runtime source `https://github.com/Entrpi/ds4.git` at tag `v0.5.3`,
   peeled commit `4ad370b4a338efe9723a386673c0e04f6e214108`.
 - Record the audited GPU node recipe
-  `https://github.com/Entrpi/ds4-on-node.git` at commit
+  `https://github.com/Entrpi/ds4-on-spark.git` at commit
   `185487ba5749a3c24a71ca81d1bc514c45f10dca`; do not execute its installer.
 - Verify the source archive SHA-256
   `7db338d0a441fed36c5e4e7af44ff670e8bfe567e88d482f00ff6a3dc0e5dbe3`.
@@ -34,8 +34,8 @@ pytest, Ruff, and `vonkctl`.
   `nvcr.io/nvidia/cuda:13.0.1-devel-ubuntu24.04@sha256:7d2f6a8c2071d911524f95061a0db363e24d27aa51ec831fcccf9e76eb72bc92`
   and runtime image
   `nvcr.io/nvidia/cuda:13.0.1-runtime-ubuntu24.04@sha256:c3fde347d52d578c84fd644bc177bc7ec333feaf11550d990da4084d7612e4c7`.
-- Build with `make cuda-node`; the resulting binary must contain native
-  `compute_121a`/`sm_121a` code and `DS4_CUDA_VONK_HBM_CACHE=1`.
+- Build with `make cuda-spark`; the resulting binary must contain native
+  `compute_121a`/`sm_121a` code and `DS4_CUDA_SPARK_HBM_CACHE=1`.
 - Pin base repository `antirez/deepseek-v4-gguf` at revision
   `1cd7b564460821938add0475a60b942c409295e0` and file
   `DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix-0731.gguf`,
@@ -243,7 +243,7 @@ git push origin main
 - Create: `tests/adapters/test_ds4_runtime.py`
 
 **Interfaces:**
-- Produces: ARM64 image `ghcr.io/carstvaartjes/node-ds4` with
+- Produces: ARM64 image `ghcr.io/carstvaartjes/spark-ds4` with
   `/opt/ds4/ds4-server` and OCI labels for source commit, source-archive
   SHA-256, patch SHA-256, CUDA build target, and served model ID.
 - Produces: Compose service `ds4-deepseek-single`, using host networking,
@@ -254,7 +254,7 @@ git push origin main
 
 Assert both `FROM` lines use the exact digests from Global Constraints, the
 source URL contains the exact commit, the archive digest is verified before
-extraction, `make cuda-node` is used, the update check is disabled,
+extraction, `make cuda-spark` is used, the update check is disabled,
 `DS4_CUDA_COPY_MODEL` and `DS4_MODEL_ANON_HUGE=1` are absent, the command uses
 32,768 context and port 8888, and Compose renders `restart: "no"` with no
 published LAN port.
@@ -278,7 +278,7 @@ Expected: FAIL because the image, patch, and Compose files are absent.
 
 Install only the compiler/build dependencies in the build stage. Download the
 exact source archive, verify its SHA-256, apply the checked patch, and run
-`make cuda-node`. Copy the DS4 binaries, license, and required runtime files
+`make cuda-spark`. Copy the DS4 binaries, license, and required runtime files
 into the pinned CUDA runtime stage. Run as a numeric non-root user, disable the
 update check, and leave tracing off.
 
@@ -319,7 +319,7 @@ must still run in CI and cannot be skipped.
 Create an SSH Docker context for `vonk-node-1`, create a Buildx remote builder,
 authenticate the local client to GHCR without printing the token, then run an
 ARM64 build with `--push` and `--metadata-file`. Tag the immutable build
-`ghcr.io/carstvaartjes/node-ds4:ds4-v0.5.3-q2-0731-health`; record the returned
+`ghcr.io/carstvaartjes/spark-ds4:ds4-v0.5.3-q2-0731-health`; record the returned
 manifest digest and verify its ARM64 platform and OCI labels with
 `docker buildx imagetools inspect`.
 

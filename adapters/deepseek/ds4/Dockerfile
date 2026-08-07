@@ -18,10 +18,10 @@ RUN curl --fail --location --silent --show-error --output /tmp/ds4.tar.gz \
     && mv ds4-${DS4_SOURCE_COMMIT} ds4 \
     && cd ds4 \
     && patch -p1 --input /tmp/served-model-name.patch \
-    && make cuda-node \
+    && make cuda-spark \
     && test -x ds4-server \
     && grep --fixed-strings 'CUDA_ARCH := sm_121' .ds4-cuda-config.mk \
-    && grep --fixed-strings 'DS4_CUDA_VONK_HBM_CACHE=1' .ds4-cuda-config.mk
+    && grep --fixed-strings 'DS4_CUDA_SPARK_HBM_CACHE=1' .ds4-cuda-config.mk
 
 FROM nvcr.io/nvidia/cuda:13.0.1-runtime-ubuntu24.04@sha256:c3fde347d52d578c84fd644bc177bc7ec333feaf11550d990da4084d7612e4c7
 
@@ -33,7 +33,7 @@ LABEL org.opencontainers.image.source="https://github.com/Entrpi/ds4.git" \
       org.opencontainers.image.revision="${DS4_SOURCE_COMMIT}" \
       io.node.ds4.source-archive-sha256="${DS4_SOURCE_ARCHIVE_SHA256}" \
       io.node.ds4.patch-sha256="${DS4_PATCH_SHA256}" \
-      io.node.ds4.cuda-build-target="compute_121a/sm_121a;DS4_CUDA_VONK_HBM_CACHE=1" \
+      io.node.ds4.cuda-build-target="compute_121a/sm_121a;DS4_CUDA_SPARK_HBM_CACHE=1" \
       io.node.ds4.served-model-id="deepseek"
 
 RUN groupadd --gid 10001 ds4 \

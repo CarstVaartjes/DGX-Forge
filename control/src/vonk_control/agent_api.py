@@ -1354,7 +1354,7 @@ def install_agent_routes(
             ) from None
         return Response(
             content=bundle.archive,
-            media_type="application/vnd.vonk.source-bundle.v1+tar",
+            media_type="application/vnd.vonk-forge.source-bundle.v1+tar",
             headers={
                 "etag": f'"sha256:{source_sha256}"',
                 "cache-control": "private, immutable, max-age=31536000",

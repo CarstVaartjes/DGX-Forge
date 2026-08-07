@@ -143,7 +143,7 @@ class GlobalCatalogClient:
                         "global.unavailable", "global catalog source request failed"
                     )
                 media_type = response.headers.get("content-type", "").split(";", 1)[0]
-                if media_type != "application/vnd.vonk.source-bundle.v1+tar":
+                if media_type != "application/vnd.vonk-forge.source-bundle.v1+tar":
                     raise GlobalCatalogError(
                         "global.response_invalid",
                         "catalog source response is not a Vonk bundle",

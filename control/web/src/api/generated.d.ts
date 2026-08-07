@@ -4045,7 +4045,7 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
-                    "application/vnd.vonk.source-bundle.v1+tar": string;
+                    "application/vnd.vonk-forge.source-bundle.v1+tar": string;
                 };
             };
             /** @description Unauthorized */

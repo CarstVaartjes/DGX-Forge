@@ -23,7 +23,7 @@ services:
       - DS4_NO_UPDATE_CHECK=1
       - DS4_CONT_MTP_MODE=2
       - DS4_CONT_DSPARK=1
-      - DS4_DVONK_MODEL=/models/DSpark-drafter-Q2K-Q8-0731.gguf
+      - DS4_DSPARK_MODEL=/models/DSpark-drafter-Q2K-Q8-0731.gguf
     command:
       - --cuda
       - -m

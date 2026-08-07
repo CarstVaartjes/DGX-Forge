@@ -152,10 +152,10 @@ that already owns each boundary:
 - [The Update Framework specification](https://theupdateframework.github.io/specification/latest/)
 - [Ansible Runner](https://docs.ansible.com/projects/runner/en/stable/index.html)
   and [ansible-pull](https://docs.ansible.com/projects/ansible-core/devel/cli/ansible-pull.html)
-- [NVIDIA Vonk Forge GPU node Enterprise Manageability](https://docs.nvidia.com/),
-  [Enterprise Lifecycle Integration](https://docs.nvidia.com/),
-  and [custom installation with cloud-init](https://docs.nvidia.com/)
-- [Vonk Forge GPU node clustering and Cluster Assistant boundaries](https://docs.nvidia.com/)
+- [NVIDIA Vonk Forge GPU node Enterprise Manageability](https://docs.nvidia.com/dgx/dgx-spark/enterprise-manageability.html),
+  [Enterprise Lifecycle Integration](https://docs.nvidia.com/dgx/dgx-spark/enterprise-fleet-lifecycle.html),
+  and [custom installation with cloud-init](https://docs.nvidia.com/dgx/dgx-spark/enterprise-custom-install.html)
+- [Vonk Forge GPU node clustering and Cluster Assistant boundaries](https://docs.nvidia.com/dgx/dgx-spark/spark-clustering.html)
 - [Canonical Landscape self-hosted deployment](https://documentation.ubuntu.com/landscape/explanation/landscape/self-hosted-landscape/)
 - [PostgreSQL `SKIP LOCKED`](https://www.postgresql.org/docs/current/sql-select.html),
   [NATS JetStream consumers](https://docs.nats.io/nats-concepts/jetstream/consumers),

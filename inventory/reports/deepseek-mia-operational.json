@@ -5,13 +5,13 @@
   "recorded_at": "2026-08-03T12:50:10Z",
   "definition": {
     "id": "deepseek-agent-dual",
-    "sha256": "de79fa38af556356008f8e3bfa46222d1a1aabebf47653e2e14e03abb6c971bb",
+    "sha256": "a231a87815e144caa6fe9947babe3c8cdf5fa8ffe14092be4aa47982ddc20f47",
     "maturity": "accepted"
   },
   "runtime": {
-    "release_sha256": "92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e",
+    "release_sha256": "11fa4d36945ed6530daf29f8b4342feaab90ad9cd47fa505cfd9858a358ebf37",
     "image_reference": "ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8",
-    "source_repository": "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-Vonk Forge-GPU node",
+    "source_repository": "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark",
     "source_commit": "b131b2a22164675890dd1465fd8862b5cfb6ff13",
     "checkpoint_revision": "9e165c30e2704aec5d9d593cce3eebd58bbef1cb",
     "served_model": "deepseek",
@@ -25,14 +25,14 @@
     "speculative_tokens": 5
   },
   "nodes": {
-    "node1": {
-      "hostname": "node-3542",
+    "spark1": {
+      "hostname": "spark-3542",
       "boot_id": "a0de8588-3d5d-44aa-8d1d-dd25dbcf6fc2",
       "role": "head",
       "container_id": "07645dc6147324a3dedd726e585da56b30eb61c075965816621cc0fe94ed3e49"
     },
-    "node2": {
-      "hostname": "node-2297",
+    "spark2": {
+      "hostname": "spark-2297",
       "boot_id": "abeace49-049a-4c8c-b079-b4ce66793b67",
       "role": "worker",
       "container_id": "c8d5d5132f7483a5c85f857422b196557572fe2550a4918c6d7e22428ec3f257"
@@ -69,7 +69,7 @@
   "performance_baseline": {
     "status": "accepted",
     "tuning_phase": "canonical-acceptance-gate",
-    "benchmark_repository": "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-Vonk Forge-GPU node",
+    "benchmark_repository": "https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark",
     "benchmark_commit": "b131b2a22164675890dd1465fd8862b5cfb6ff13",
     "benchmark_script": "scripts/benchmark-0731.py",
     "benchmark_script_sha256": "ad0a4532fc1813feff9b41dff2ada14bfa97420c063e42e48f4b1cd849bc5dc9",

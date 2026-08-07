@@ -91,7 +91,7 @@ def test_client_downloads_a_bounded_exact_source_bundle() -> None:
         assert request.url.path == f"/v1/source-bundles/{bundle.sha256}"
         return httpx.Response(
             200,
-            headers={"content-type": "application/vnd.vonk.source-bundle.v1+tar"},
+            headers={"content-type": "application/vnd.vonk-forge.source-bundle.v1+tar"},
             content=bundle.archive,
         )
 

@@ -17,7 +17,7 @@ meminfo_path=${DS4_MEMINFO_PATH:-/proc/meminfo}
 boot_id_path=${DS4_BOOT_ID_PATH:-/proc/sys/kernel/random/boot_id}
 
 expected_hostname=node-3542
-image_reference=ghcr.io/carstvaartjes/node-ds4@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615
+image_reference=ghcr.io/carstvaartjes/spark-ds4@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615
 checkpoint_manifest_sha256=1f6f88d7f968e51e76a118af83f0f7cae7f5df5b915a6cf30db5265228f70c99
 minimum_free_memory_bytes=120000000000
 minimum_free_disk_bytes=120000000000

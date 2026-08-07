@@ -289,7 +289,7 @@ def _draft(
             "context": {
                 "sha256": bundle.sha256,
                 "expected_bytes": len(bundle.archive),
-                "media_type": "application/vnd.vonk.source-bundle.v1+tar",
+                "media_type": "application/vnd.vonk-forge.source-bundle.v1+tar",
             },
             "dockerfile": "Dockerfile",
             "platform": "linux/arm64",

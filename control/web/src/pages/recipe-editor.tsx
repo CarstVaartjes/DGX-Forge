@@ -41,7 +41,7 @@ function recipeDocument(fields: Fields, sourceSha256: string, archiveBytes: numb
     metadata: {title: fields.title, description: fields.description, tags: list(fields.tags)},
     workload: {family: fields.family, capabilities: list(fields.capabilities)},
     build: {
-      context: {sha256: sourceSha256, expected_bytes: archiveBytes, media_type: "application/vnd.vonk.source-bundle.v1+tar"},
+      context: {sha256: sourceSha256, expected_bytes: archiveBytes, media_type: "application/vnd.vonk-forge.source-bundle.v1+tar"},
       dockerfile: "Dockerfile", platform: "linux/arm64", arguments: [], network: {mode: "none", hosts: []},
       resources: {download_bytes: positive(fields.buildDownloadBytes, "Build download"), temporary_bytes: positive(fields.buildTemporaryBytes, "Build temporary size"), memory_bytes: positive(fields.buildMemoryBytes, "Build memory"), timeout_seconds: 3600},
     },

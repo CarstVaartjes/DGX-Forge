@@ -133,8 +133,8 @@ def _valid_compose_config(role: str) -> dict[str, object]:
                     "TRANSFORMERS_OFFLINE": "1",
                     "HF_HUB_DISABLE_XET": "1",
                     "NODE_RANK": "0" if role == "head" else "1",
-                    "DVONK_MODEL": "/models/deepseek-ai/DeepSeek-V4-Flash-0731",
-                    "DVONK_ENCODING_FILE": "/models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py",
+                    "DSPARK_MODEL": "/models/deepseek-ai/DeepSeek-V4-Flash-0731",
+                    "DSPARK_ENCODING_FILE": "/models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py",
                     "VLLM_HOST_IP": (
                         "192.168.100.10" if role == "head" else "192.168.100.11"
                     ),
@@ -390,8 +390,8 @@ def test_render_pins_model_mounts_fabric_and_vllm_arguments() -> None:
         "read_only: true",
         "source: /srv/models/runtime-cache/deepseek-agent-dual",
         "target: /runtime-cache",
-        "DVONK_MODEL: /models/deepseek-ai/DeepSeek-V4-Flash-0731",
-        "DVONK_ENCODING_FILE: /models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py",
+        "DSPARK_MODEL: /models/deepseek-ai/DeepSeek-V4-Flash-0731",
+        "DSPARK_ENCODING_FILE: /models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py",
         "VLLM_CACHE_ROOT: /runtime-cache/vllm",
         "FLASHINFER_WORKSPACE_BASE: /runtime-cache/flashinfer",
         "HF_HOME: /runtime-cache/huggingface",

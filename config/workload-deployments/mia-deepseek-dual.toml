@@ -1,7 +1,7 @@
 schema_version = 1
 deployment_id = "mia-deepseek-dual"
 family_id = "mia-deepseek"
-release_digest = "51ee63c5a8bcc40ed26acdcc6ab2cce13e85bb4dee409b1705c55b6febf9411f"
+release_digest = "372ac4707f006a7bbba7c49db7577687151cd00ac3f1ad93a5b67addb72bcd5a"
 arguments = []
 
 [selector]

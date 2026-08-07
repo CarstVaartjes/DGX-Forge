@@ -223,7 +223,7 @@ def _enable_runtime_release(catalog_root: Path) -> str:
     workload = catalog_root / "config/workloads/deepseek-agent-dual.toml"
     old_release = '''[runtime_release]
 manifest = "adapters/deepseek/mia-vllm/runtime-manifest.json"
-sha256 = "92f5ae51cc5410cae7b19541e433acba4b38a11ec89bca45c91b4da2a9b0575e"'''
+sha256 = "11fa4d36945ed6530daf29f8b4342feaab90ad9cd47fa505cfd9858a358ebf37"'''
     new_release = f'''[runtime_release]
 manifest = "adapters/example/runtime-manifest.json"
 sha256 = "{_sha256(manifest)}"'''

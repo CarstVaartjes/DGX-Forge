@@ -23,7 +23,7 @@ reference = "nvcr.io/nvidia/pytorch:25.11-py3@sha256:4a85d8cf6fb3a943280960b8948
 
 [runtime_release]
 manifest = "adapters/creative/triposg/runtime-manifest.json"
-sha256 = "0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2"
+sha256 = "2dc2d588366975dfe97c46093444e9a1faa0ecc210e1bb4c0a248ba39d795b07"
 
 [paths]
 cache = "/srv/models/snapshots/triposg"
@@ -35,13 +35,13 @@ host = "127.0.0.1"
 port = 9109
 
 [commands]
-prepare = ["/opt/node/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "prepare"]
-verify = ["/opt/node/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "verify"]
-start = ["/opt/node/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "start"]
-health = ["/opt/node/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "health"]
-infer = ["/opt/node/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "infer"]
-stop = ["/opt/node/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "stop"]
-verify-release = ["/opt/node/model-adapters/triposg/releases/0dfa6929fbf9dd6b28a8edf44b801e7392586519a2181abc2178264eb158d1e2/bin/triposg", "verify-release"]
+prepare = ["/opt/node/model-adapters/triposg/releases/2dc2d588366975dfe97c46093444e9a1faa0ecc210e1bb4c0a248ba39d795b07/bin/triposg", "prepare"]
+verify = ["/opt/node/model-adapters/triposg/releases/2dc2d588366975dfe97c46093444e9a1faa0ecc210e1bb4c0a248ba39d795b07/bin/triposg", "verify"]
+start = ["/opt/node/model-adapters/triposg/releases/2dc2d588366975dfe97c46093444e9a1faa0ecc210e1bb4c0a248ba39d795b07/bin/triposg", "start"]
+health = ["/opt/node/model-adapters/triposg/releases/2dc2d588366975dfe97c46093444e9a1faa0ecc210e1bb4c0a248ba39d795b07/bin/triposg", "health"]
+infer = ["/opt/node/model-adapters/triposg/releases/2dc2d588366975dfe97c46093444e9a1faa0ecc210e1bb4c0a248ba39d795b07/bin/triposg", "infer"]
+stop = ["/opt/node/model-adapters/triposg/releases/2dc2d588366975dfe97c46093444e9a1faa0ecc210e1bb4c0a248ba39d795b07/bin/triposg", "stop"]
+verify-release = ["/opt/node/model-adapters/triposg/releases/2dc2d588366975dfe97c46093444e9a1faa0ecc210e1bb4c0a248ba39d795b07/bin/triposg", "verify-release"]
 
 [deadlines]
 prepare = 86400

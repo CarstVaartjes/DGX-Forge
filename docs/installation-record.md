@@ -236,7 +236,7 @@ the Q2-imatrix base from `antirez/deepseek-v4-gguf` revision
 `1cd7b564460821938add0475a60b942c409295e0`, the draft-model drafter from
 `bleysg/DeepSeek-V4-Flash-draft-model-drafter-GGUF` revision
 `81c6fdd38f9582da45ba27f0ed7b63bcd3ea3b62`, and the ARM64 image
-`ghcr.io/carstvaartjes/node-ds4@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615`.
+`ghcr.io/carstvaartjes/spark-ds4@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615`.
 Both GGUFs were rehashed inside a read-only, network-disabled container before
 the live runtime was started.
 

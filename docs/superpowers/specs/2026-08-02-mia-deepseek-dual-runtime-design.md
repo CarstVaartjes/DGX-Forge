@@ -64,8 +64,8 @@ The snapshot is mounted inside the container at
 path rather than a Hugging Face model ID:
 
 ```text
-DVONK_MODEL=/models/deepseek-ai/DeepSeek-V4-Flash-0731
-DVONK_ENCODING_FILE=/models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py
+DSPARK_MODEL=/models/deepseek-ai/DeepSeek-V4-Flash-0731
+DSPARK_ENCODING_FILE=/models/deepseek-ai/DeepSeek-V4-Flash-0731/encoding/encoding_dsv4.py
 VLLM_CACHE_ROOT=/runtime-cache/vllm
 FLASHINFER_WORKSPACE_BASE=/runtime-cache/flashinfer
 ```
@@ -414,8 +414,8 @@ Model Definition.
 
 ## Upstream authorities
 
-- [Mia pinned source](https://github.com/ node/tree/b131b2a22164675890dd1465fd8862b5cfb6ff13)
-- [Mia executable Compose recipe](https://github.com/ node/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docker-compose.draft.yml)
-- [Mia DeepSeek 0731 runtime notes](https://github.com/ node/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docs/DEEPSEEK_V4_FLASH_0731.md)
+- [Mia pinned source](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/tree/b131b2a22164675890dd1465fd8862b5cfb6ff13)
+- [Mia executable Compose recipe](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docker-compose.dspark.yml)
+- [Mia DeepSeek 0731 runtime notes](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docs/DEEPSEEK_V4_FLASH_0731.md)
 - [Pinned DeepSeek checkpoint](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731/tree/9e165c30e2704aec5d9d593cce3eebd58bbef1cb)
-- [NVIDIA Vonk Forge GPU node hardware guide](https://docs.nvidia.com/)
+- [NVIDIA Vonk Forge GPU node hardware guide](https://docs.nvidia.com/dgx/dgx-spark/hardware.html)
