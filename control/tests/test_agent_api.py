@@ -8,6 +8,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from cryptography import x509
@@ -938,6 +939,26 @@ def test_enrollment_routes_are_admin_only_and_pending_exact_replay_is_idempotent
     replay = client.post("/agent/v1/enroll", json=body)
     assert first.status_code == replay.status_code == 202
     assert first.content == replay.content == canonical_message(first.json())
+
+
+def test_rust_agent_enrollment_shape_remains_controller_compatible(agent_system) -> None:
+    client, services, _, _ = agent_system
+    audits = client.app.state.test_audits
+    fixture = json.loads(
+        (Path(__file__).parents[2] / "agent_protocol/fixtures/enrollment-request.json").read_text()
+    )
+    body = json.loads(valid_enrollment_body(enrollment_grant(services)))
+
+    assert set(body) == set(fixture) == {"csr", "evidence", "grant_token"}
+    assert set(body["evidence"]) == set(fixture["evidence"])
+    response = client.post("/agent/v1/enroll", json=body)
+
+    assert response.status_code == 202
+    assert response.json()["node_id"] == NODE_A
+    event = audits.for_request(response.headers["x-request-id"])
+    assert event.action == "agent.enrollment.submit.pending-approval"
+    assert event.targets[1:] == (response.json()["id"], NODE_A)
+    assert body["grant_token"] not in repr(event)
 
 
 def test_approved_exact_enrollment_replay_picks_up_certificate_and_mismatch_is_denied(

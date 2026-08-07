@@ -26,8 +26,6 @@ from dgx_agent_protocol import (
 )
 from dgx_agent_protocol.workload_packages import (
     PackageHelperOperation,
-    SignedPackageHelperGrant,
-    SignedPackageObjectReceipt,
 )
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -52,8 +50,11 @@ from .enrollment import (
     RenewalInProgress,
 )
 from .models import AgentCertificate, AgentEnrollment, AgentNode, AgentOperation
-from .package_helper_authority import PackageHelperAuthorityError, PackageHelperAuthorityService
 from .operation_api import bounded_error_responses
+from .package_helper_authority import (
+    PackageHelperAuthorityError,
+    PackageHelperAuthorityService,
+)
 from .pki import IssuedCertificate
 from .presence import AgentPresenceService, PresenceError
 
@@ -993,11 +994,45 @@ def install_agent_routes(
         try:
             outcome = required.enrollment.submit(body["grant_token"], csr_bytes, service_evidence)
         except EnrollmentDenied as error:
+            token_identifier = hashlib.sha256(body["grant_token"].encode("utf-8")).hexdigest()
+            audits.append(
+                AuditRecord(
+                    request.state.request_id,
+                    "agent-enrollment",
+                    "agent.enrollment.submit.rejected",
+                    None,
+                    (f"token-sha256:{token_identifier}", f"reason:{error}"),
+                )
+            )
             _consume_enrollment_denial(required, scan.tokens)
             raise HTTPException(status_code=403, detail=str(error)) from None
         if isinstance(outcome, IssuedCertificate):
+            token_identifier = hashlib.sha256(body["grant_token"].encode("utf-8")).hexdigest()
+            audits.append(
+                AuditRecord(
+                    request.state.request_id,
+                    "agent-enrollment",
+                    "agent.enrollment.submit.approved",
+                    None,
+                    (
+                        f"token-sha256:{token_identifier}",
+                        outcome.node_id,
+                        f"certificate-serial:{outcome.serial}",
+                    ),
+                )
+            )
             return _json_response(_issued_response(outcome))
         assert isinstance(outcome, PendingEnrollment)
+        token_identifier = hashlib.sha256(body["grant_token"].encode("utf-8")).hexdigest()
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                "agent-enrollment",
+                f"agent.enrollment.submit.{outcome.state}",
+                None,
+                (f"token-sha256:{token_identifier}", outcome.id, outcome.node_id),
+            )
+        )
         return _json_response(
             {"id": outcome.id, "node_id": outcome.node_id, "state": outcome.state},
             status_code=status.HTTP_202_ACCEPTED,
