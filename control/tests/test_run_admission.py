@@ -2,13 +2,21 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
+from dgx_control.inventory_repository import InventoryRepository, InventorySnapshotInput
+from dgx_control.models import (
+    AgentNode,
+    Base,
+    InstallationNode,
+    LocalRecipe,
+    LocalRecipeRevision,
+    RecipeInstallation,
+    ResourceReservation,
+)
+from dgx_control.run_admission import RunAdmissionService, RunPlanConflict
+from dgx_control.topology import Placement
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-
-from dgx_control.inventory_repository import InventoryRepository, InventorySnapshotInput
-from dgx_control.models import AgentNode, Base, InstallationNode, LocalRecipe, LocalRecipeRevision, RecipeInstallation, ResourceReservation
-from dgx_control.run_admission import RunAdmissionService
-from dgx_control.topology import Placement
 
 
 def setup(tmp_path, *, free_memory=300, capabilities=("runtime.vonk.v1",), port_reserved=False):
@@ -39,3 +47,34 @@ def test_memory_capability_and_port_conflicts_are_explained(tmp_path) -> None:
     plan=RunAdmissionService(sessions,inventory_max_age=300,memory_floor_bytes=50).plan_run(installation,(Placement(node,0,"entrypoint"),),now=now)
     codes={reason.code for reason in plan.nodes[0].blockers}
     assert {"run.insufficient_memory","topology.runtime_capability_missing","run.port_occupied"} <= codes
+
+
+def test_accept_rechecks_memory_reservations_while_holding_node_lock(tmp_path) -> None:
+    sessions, now, node, installation = setup(tmp_path, free_memory=300)
+    service = RunAdmissionService(
+        sessions, inventory_max_age=300, memory_floor_bytes=50
+    )
+    plan = service.plan_run(
+        installation, (Placement(node, 0, "entrypoint"),), now=now
+    )
+    with sessions.begin() as session:
+        session.add_all(
+            [
+                ResourceReservation(
+                    node_id=node,
+                    kind=kind,
+                    resource_key="concurrent",
+                    amount_bytes=50,
+                    owner_kind="run",
+                    owner_id="2" * 36,
+                    state="active",
+                    plan_digest="d" * 64,
+                    created_at=now,
+                )
+                for kind in ("host-memory", "gpu-memory")
+            ]
+        )
+    service.plan_run = lambda *args, **kwargs: plan
+
+    with pytest.raises(RunPlanConflict, match="memory capacity changed"):
+        service.accept_run(plan, alias="qwen", actor="admin", now=now)

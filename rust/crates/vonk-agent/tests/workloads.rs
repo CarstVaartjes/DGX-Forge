@@ -1,6 +1,6 @@
 #![forbid(unsafe_code)]
 
-use std::{cell::RefCell, collections::VecDeque, fs, net::IpAddr, time::Duration};
+use std::{cell::RefCell, collections::VecDeque, fs, net::IpAddr, path::Path, time::Duration};
 
 use tempfile::tempdir;
 use vonk_agent::{
@@ -43,6 +43,35 @@ impl ProcessRunner for FakeRunner {
             }
         }
         Ok(self.outputs.borrow_mut().pop_front().unwrap())
+    }
+}
+
+struct BudgetRunner {
+    inner: FakeRunner,
+    budgets: RefCell<Vec<u64>>,
+}
+
+impl ProcessRunner for BudgetRunner {
+    fn run(
+        &self,
+        program: Program,
+        arguments: &[String],
+        timeout: Duration,
+    ) -> Result<ProcessOutput, ProcessError> {
+        self.inner.run(program, arguments, timeout)
+    }
+
+    fn run_bounded_directory(
+        &self,
+        program: Program,
+        arguments: &[String],
+        timeout: Duration,
+        directory: &Path,
+        maximum_bytes: u64,
+    ) -> Result<ProcessOutput, ProcessError> {
+        self.budgets.borrow_mut().push(maximum_bytes);
+        fs::write(directory.join("artifact"), b"weights")?;
+        self.inner.run(program, arguments, timeout)
     }
 }
 
@@ -281,12 +310,12 @@ fn installation_records_and_rechecks_a_content_manifest() {
             },
             ProcessOutput {
                 success: true,
-                stdout: vec![],
+                stdout: b"200\t\n".to_vec(),
                 stderr: vec![],
             },
             ProcessOutput {
                 success: true,
-                stdout: vec![],
+                stdout: b"200\t\n".to_vec(),
                 stderr: vec![],
             },
         ])),
@@ -311,6 +340,206 @@ fn installation_records_and_rechecks_a_content_manifest() {
     fs::write(weights, b"tampered").unwrap();
 
     assert!(runtime.verify_installation(installation_id).is_err());
+}
+
+#[test]
+fn http_artifacts_reject_private_hosts_before_curl_runs() {
+    let runner = FakeRunner {
+        calls: RefCell::new(vec![]),
+        outputs: RefCell::new(VecDeque::from([
+            ProcessOutput {
+                success: true,
+                stdout: vec![],
+                stderr: vec![],
+            },
+            ProcessOutput {
+                success: true,
+                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
+                stderr: vec![],
+            },
+            ProcessOutput {
+                success: true,
+                stdout: b"200\t\n".to_vec(),
+                stderr: vec![],
+            },
+        ])),
+    };
+    let directory = tempdir().unwrap();
+    let mut workload = spec();
+    workload.artifacts[0] = ArtifactSpec {
+        kind: "http.file".to_owned(),
+        repository: "https://127.0.0.1/private".to_owned(),
+        revision: "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c"
+            .to_owned(),
+        expected_bytes: 7,
+    };
+
+    assert!(
+        OciRuntime {
+            runner: &runner,
+            data_root: directory.path(),
+            huggingface_curl_config: None,
+        }
+        .install(&workload, "cb555393-764b-4eb6-8f15-b416d289428f", DIGEST)
+        .is_err()
+    );
+    assert!(
+        !runner
+            .calls
+            .borrow()
+            .iter()
+            .any(|call| call.0 == Program::Curl)
+    );
+}
+
+#[test]
+fn http_artifacts_are_https_only_and_byte_limited_without_implicit_redirects() {
+    let runner = FakeRunner {
+        calls: RefCell::new(vec![]),
+        outputs: RefCell::new(VecDeque::from([
+            ProcessOutput {
+                success: true,
+                stdout: vec![],
+                stderr: vec![],
+            },
+            ProcessOutput {
+                success: true,
+                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
+                stderr: vec![],
+            },
+            ProcessOutput {
+                success: true,
+                stdout: b"200\t\n".to_vec(),
+                stderr: vec![],
+            },
+        ])),
+    };
+    let directory = tempdir().unwrap();
+    let mut workload = spec();
+    workload.artifacts[0] = ArtifactSpec {
+        kind: "http.file".to_owned(),
+        repository: "https://93.184.216.34/artifact".to_owned(),
+        revision: "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c"
+            .to_owned(),
+        expected_bytes: 7,
+    };
+
+    OciRuntime {
+        runner: &runner,
+        data_root: directory.path(),
+        huggingface_curl_config: None,
+    }
+    .install(&workload, "cb555393-764b-4eb6-8f15-b416d289428f", DIGEST)
+    .unwrap();
+
+    let calls = runner.calls.borrow();
+    let arguments = &calls.iter().find(|call| call.0 == Program::Curl).unwrap().1;
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| pair == ["--max-filesize", "7"])
+    );
+    assert!(
+        arguments
+            .windows(2)
+            .any(|pair| pair == ["--max-redirs", "0"])
+    );
+    assert!(!arguments.iter().any(|argument| argument == "--location"));
+}
+
+#[test]
+fn oci_artifacts_reject_private_registry_hosts_before_oras_runs() {
+    let runner = FakeRunner {
+        calls: RefCell::new(vec![]),
+        outputs: RefCell::new(VecDeque::from([
+            ProcessOutput {
+                success: true,
+                stdout: vec![],
+                stderr: vec![],
+            },
+            ProcessOutput {
+                success: true,
+                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
+                stderr: vec![],
+            },
+            ProcessOutput {
+                success: true,
+                stdout: vec![],
+                stderr: vec![],
+            },
+        ])),
+    };
+    let directory = tempdir().unwrap();
+    let mut workload = spec();
+    workload.artifacts[0] = ArtifactSpec {
+        kind: "oci.artifact".to_owned(),
+        repository: "127.0.0.1/private/artifact".to_owned(),
+        revision: format!("sha256:{DIGEST}"),
+        expected_bytes: 7,
+    };
+
+    assert!(
+        OciRuntime {
+            runner: &runner,
+            data_root: directory.path(),
+            huggingface_curl_config: None,
+        }
+        .install(&workload, "cb555393-764b-4eb6-8f15-b416d289428f", DIGEST)
+        .is_err()
+    );
+    assert!(
+        !runner
+            .calls
+            .borrow()
+            .iter()
+            .any(|call| call.0 == Program::Oras)
+    );
+}
+
+#[test]
+fn oci_artifacts_run_under_the_declared_staging_budget() {
+    let runner = BudgetRunner {
+        inner: FakeRunner {
+            calls: RefCell::new(vec![]),
+            outputs: RefCell::new(VecDeque::from([
+                ProcessOutput {
+                    success: true,
+                    stdout: vec![],
+                    stderr: vec![],
+                },
+                ProcessOutput {
+                    success: true,
+                    stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
+                    stderr: vec![],
+                },
+                ProcessOutput {
+                    success: true,
+                    stdout: vec![],
+                    stderr: vec![],
+                },
+            ])),
+        },
+        budgets: RefCell::new(vec![]),
+    };
+    let directory = tempdir().unwrap();
+    let mut workload = spec();
+    workload.artifacts[0] = ArtifactSpec {
+        kind: "oci.artifact".to_owned(),
+        repository: "93.184.216.34/public/artifact".to_owned(),
+        revision: "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c"
+            .to_owned(),
+        expected_bytes: 7,
+    };
+
+    OciRuntime {
+        runner: &runner,
+        data_root: directory.path(),
+        huggingface_curl_config: None,
+    }
+    .install(&workload, "cb555393-764b-4eb6-8f15-b416d289428f", DIGEST)
+    .unwrap();
+
+    assert_eq!(*runner.budgets.borrow(), [7]);
 }
 
 #[test]
@@ -369,4 +598,40 @@ fn start_writes_a_bounded_standard_runtime_contract() {
     );
     assert_eq!(contract["endpoint"]["listen_port"], 8000);
     assert_eq!(contract["placement"]["rank"], 0);
+}
+
+#[test]
+fn stop_is_idempotent_when_a_gang_rank_never_started() {
+    let runner = FakeRunner {
+        calls: RefCell::new(vec![]),
+        outputs: RefCell::new(VecDeque::from([ProcessOutput {
+            success: true,
+            stdout: vec![],
+            stderr: vec![],
+        }])),
+    };
+    let directory = tempdir().unwrap();
+    let run_id = "45ea6921-50c9-4971-be2a-4cd04ce05069";
+
+    OciRuntime {
+        runner: &runner,
+        data_root: directory.path(),
+        huggingface_curl_config: None,
+    }
+    .stop(run_id)
+    .unwrap();
+
+    let calls = runner.calls.borrow();
+    assert_eq!(calls[0].0, Program::Podman);
+    assert_eq!(
+        calls[0].1,
+        vec![
+            "rm".to_owned(),
+            "--force".to_owned(),
+            "--ignore".to_owned(),
+            "--time".to_owned(),
+            "30".to_owned(),
+            format!("vonk-{run_id}"),
+        ]
+    );
 }

@@ -17,6 +17,7 @@ from dgx_control.models import (
     AgentOperation,
     AgentPresence,
     Base,
+    InstallationNode,
     Job,
     RecipeInstallation,
     RecipeRun,
@@ -65,6 +66,11 @@ class RecordingQueue:
 
     def notify_available(self) -> None:
         self.available += 1
+
+
+class FailingQueue(RecordingQueue):
+    def enqueue_in_session(self, *args, **kwargs):
+        raise RuntimeError("queue write failed")
 
 
 NOW = datetime(2026, 8, 7, 12, tzinfo=UTC)
@@ -226,6 +232,105 @@ def test_install_is_digest_bound_idempotent_and_gang_complete(tmp_path: Path) ->
         assert session.get(RecipeInstallation, operation.owner_id).state == "installed"
 
 
+def test_install_admission_and_queue_creation_roll_back_together(tmp_path: Path) -> None:
+    sessions, service, _queue, revision_id, nodes = setup_services(tmp_path)
+    service._agent_jobs = FailingQueue()
+    plan = service.preview_install(revision_id, nodes)
+
+    with pytest.raises(RuntimeError, match="queue write failed"):
+        service.install(
+            plan,
+            plan_digest=plan.plan_digest,
+            actor="admin",
+            request_id="0" * 36,
+        )
+
+    with sessions() as session:
+        assert list(session.scalars(select(RecipeInstallation))) == []
+        assert list(session.scalars(select(ResourceReservation))) == []
+        assert list(session.scalars(select(Job))) == []
+
+
+def test_run_admission_and_start_queue_roll_back_together(tmp_path: Path) -> None:
+    sessions, service, _queue, revision_id, nodes = setup_services(tmp_path)
+    install_plan = service.preview_install(revision_id, nodes)
+    install = service.install(
+        install_plan,
+        plan_digest=install_plan.plan_digest,
+        actor="admin",
+        request_id="b" * 36,
+    )
+    service.record_node_result(
+        install.id, nodes[0], succeeded=True, evidence={"installed_bytes": 120}
+    )
+    run_plan = service.preview_run(
+        install.owner_id, (Placement(nodes[0], 0, "entrypoint"),)
+    )
+    service._agent_jobs = FailingQueue()
+
+    with pytest.raises(RuntimeError, match="queue write failed"):
+        service.start(
+            run_plan,
+            plan_digest=run_plan.plan_digest,
+            alias="qwen",
+            actor="admin",
+            request_id="c" * 36,
+        )
+
+    with sessions() as session:
+        assert list(session.scalars(select(RecipeRun))) == []
+        assert list(
+            session.scalars(
+                select(ResourceReservation).where(
+                    ResourceReservation.owner_kind == "run"
+                )
+            )
+        ) == []
+        assert session.scalar(select(Job).where(Job.request_id == "c" * 36)) is None
+
+
+def test_stop_state_and_queue_creation_roll_back_together(tmp_path: Path) -> None:
+    sessions, service, _queue, revision_id, nodes = setup_services(tmp_path)
+    install_plan = service.preview_install(revision_id, nodes)
+    install = service.install(
+        install_plan,
+        plan_digest=install_plan.plan_digest,
+        actor="admin",
+        request_id="1" * 35 + "a",
+    )
+    service.record_node_result(
+        install.id, nodes[0], succeeded=True, evidence={"installed_bytes": 120}
+    )
+    run_plan = service.preview_run(
+        install.owner_id, (Placement(nodes[0], 0, "entrypoint"),)
+    )
+    start = service.start(
+        run_plan,
+        plan_digest=run_plan.plan_digest,
+        alias="qwen",
+        actor="admin",
+        request_id="1" * 35 + "b",
+    )
+    with sessions() as session:
+        child = session.scalar(
+            select(AgentOperation).where(AgentOperation.parent_job_id == start.id)
+        )
+        evidence = start_evidence(child.payload)
+    service.record_node_result(
+        start.id, nodes[0], succeeded=True, evidence=evidence
+    )
+    service._agent_jobs = FailingQueue()
+
+    with pytest.raises(RuntimeError, match="queue write failed"):
+        service.stop(start.owner_id, actor="admin", request_id="1" * 35 + "c")
+
+    with sessions() as session:
+        assert session.get(RecipeRun, start.owner_id).state == "running"
+        assert session.scalar(
+            select(Job).where(Job.request_id == "1" * 35 + "c")
+        ) is None
+
+
 def test_partial_install_fails_as_a_group_and_can_retry(tmp_path: Path) -> None:
     _sessions, service, _queue, revision_id, nodes = setup_services(tmp_path, nodes=2)
     plan = service.preview_install(revision_id, nodes)
@@ -238,6 +343,47 @@ def test_partial_install_fails_as_a_group_and_can_retry(tmp_path: Path) -> None:
     retry = service.retry(first.id, actor="admin", request_id="3" * 36)
     assert retry.id != first.id
     assert retry.owner_id == first.owner_id
+
+
+def test_failed_install_retry_state_rolls_back_when_queue_write_fails(
+    tmp_path: Path,
+) -> None:
+    sessions, service, _queue, revision_id, nodes = setup_services(tmp_path, nodes=2)
+    plan = service.preview_install(revision_id, nodes)
+    first = service.install(
+        plan, plan_digest=plan.plan_digest, actor="admin", request_id="2" * 35 + "a"
+    )
+    service.record_node_result(
+        first.id, nodes[0], succeeded=True, evidence={"installed_bytes": 120}
+    )
+    service.record_node_result(
+        first.id, nodes[1], succeeded=False, evidence={"code": "pull.failed"}
+    )
+    with sessions() as session:
+        before = {
+            node.node_id: node.state
+            for node in session.scalars(
+                select(InstallationNode).where(
+                    InstallationNode.installation_id == first.owner_id
+                )
+            )
+        }
+    service._agent_jobs = FailingQueue()
+
+    with pytest.raises(RuntimeError, match="queue write failed"):
+        service.retry(first.id, actor="admin", request_id="2" * 35 + "b")
+
+    with sessions() as session:
+        assert session.get(RecipeInstallation, first.owner_id).state == "partial"
+        after = {
+            node.node_id: node.state
+            for node in session.scalars(
+                select(InstallationNode).where(
+                    InstallationNode.installation_id == first.owner_id
+                )
+            )
+        }
+        assert after == before
 
 
 def test_start_stop_and_uninstall_preserve_capacity_safely(tmp_path: Path) -> None:
@@ -344,6 +490,69 @@ def test_multinode_start_is_bound_to_authenticated_fabric_rendezvous(tmp_path: P
         }
         assert {child.payload["master_port"] for child in children} == {29500}
         assert {child.payload["world_size"] for child in children} == {2}
+
+
+def test_failed_multinode_start_queues_idempotent_stop_for_every_rank(
+    tmp_path: Path,
+) -> None:
+    sessions, service, _queue, revision_id, nodes = setup_services(tmp_path, nodes=2)
+    install_plan = service.preview_install(revision_id, nodes)
+    install = service.install(
+        install_plan,
+        plan_digest=install_plan.plan_digest,
+        actor="admin",
+        request_id="f" * 35 + "0",
+    )
+    for node in nodes:
+        service.record_node_result(
+            install.id, node, succeeded=True, evidence={"installed_bytes": 120}
+        )
+    run_plan = service.preview_run(
+        install.owner_id,
+        (
+            Placement(nodes[0], 0, "entrypoint"),
+            Placement(nodes[1], 1, "worker"),
+        ),
+    )
+    start = service.start(
+        run_plan,
+        plan_digest=run_plan.plan_digest,
+        alias="qwen-gang",
+        actor="admin",
+        request_id="f" * 35 + "1",
+    )
+    with sessions() as session:
+        children = {
+            child.node_id: child
+            for child in session.scalars(
+                select(AgentOperation).where(AgentOperation.parent_job_id == start.id)
+            )
+        }
+        successful_evidence = start_evidence(children[nodes[0]].payload)
+    service.record_node_result(
+        start.id, nodes[0], succeeded=True, evidence=successful_evidence
+    )
+    service.record_node_result(
+        start.id, nodes[1], succeeded=False, evidence={"code": "start.failed"}
+    )
+
+    with sessions() as session:
+        cleanup = session.scalar(
+            select(Job).where(
+                Job.kind == "recipe.stop",
+                Job.payload["owner_id"].as_string() == start.owner_id,
+            )
+        )
+        assert cleanup is not None
+        cleanup_nodes = set(
+            session.scalars(
+                select(AgentOperation.node_id).where(
+                    AgentOperation.parent_job_id == cleanup.id
+                )
+            )
+        )
+        assert cleanup_nodes == set(nodes)
+        assert session.get(RecipeRun, start.owner_id).state == "stopping"
 
 
 def test_changed_plan_or_reused_request_key_is_rejected(tmp_path: Path) -> None:

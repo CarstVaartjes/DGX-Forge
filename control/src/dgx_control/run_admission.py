@@ -16,6 +16,7 @@ from .models import (
     AgentNode,
     InstallationNode,
     LocalRecipeRevision,
+    NodeInventorySnapshot,
     RecipeInstallation,
     RecipeRun,
     ResourceReservation,
@@ -87,18 +88,32 @@ class RunAdmissionService:
         return RunPlan(installation_id,revision.id,all(node.allowed for node in plans),tuple(plans),digest)
 
     def accept_run(self,plan:RunPlan,*,alias:str,actor:str,now:datetime)->str:
+        with self._sessions.begin() as session:
+            return self.accept_run_in_session(
+                session, plan, alias=alias, actor=actor, now=now
+            )
+
+    def accept_run_in_session(self,session:Session,plan:RunPlan,*,alias:str,actor:str,now:datetime)->str:
         fresh=self.plan_run(plan.installation_id,tuple(Placement(node.node_id,node.rank,node.role) for node in plan.nodes),now=now)
         if not fresh.allowed or fresh.plan_digest!=plan.plan_digest: raise RunPlanConflict("run plan is stale or blocked")
         document={"schema_version":1,"installation_id":plan.installation_id,"recipe_revision_id":plan.recipe_revision_id,"plan_digest":plan.plan_digest,"nodes":[{**asdict(node),"inventory_observed_at":node.inventory_observed_at.isoformat() if node.inventory_observed_at else None} for node in plan.nodes]}
         run=RecipeRun(installation_id=plan.installation_id,alias=alias,plan_digest=plan.plan_digest,plan=document,state="planned",route_state="withdrawn",actor=actor,created_at=now,updated_at=now)
-        with self._sessions.begin() as session:
-            for node in plan.nodes:
-                if session.scalar(select(AgentNode).where(AgentNode.node_id==node.node_id).with_for_update()) is None: raise RunPlanConflict("run node disappeared")
-                if session.scalar(select(ResourceReservation.id).where(ResourceReservation.node_id==node.node_id,ResourceReservation.kind=="port",ResourceReservation.resource_key==str(node.port),ResourceReservation.state=="active")) is not None: raise RunPlanConflict("run port changed while reserving")
-            session.add(run);session.flush()
-            for node in plan.nodes:
-                session.add(RunNode(run_id=run.id,node_id=node.node_id,rank=node.rank,role=node.role,state="planned",port=node.port,reserved_memory_bytes=node.required_memory_bytes,updated_at=now))
-                reservations=[("host-memory",node.required_memory_bytes,plan.plan_digest),("gpu-memory",node.required_memory_bytes,plan.plan_digest),("port",0,str(node.port))]
-                if node.rendezvous_port is not None: reservations.append(("port",0,str(node.rendezvous_port)))
-                for kind,amount,key in reservations: session.add(ResourceReservation(node_id=node.node_id,kind=kind,resource_key=key,amount_bytes=amount,owner_kind="run",owner_id=run.id,state="active",plan_digest=plan.plan_digest,created_at=now))
+        ordered=tuple(sorted(plan.nodes,key=lambda node:node.node_id))
+        for node in ordered:
+            if session.scalar(select(AgentNode).where(AgentNode.node_id==node.node_id).with_for_update()) is None: raise RunPlanConflict("run node disappeared")
+        for node in ordered:
+            snapshot=session.scalar(select(NodeInventorySnapshot).where(NodeInventorySnapshot.node_id==node.node_id).order_by(NodeInventorySnapshot.observed_at.desc()).limit(1).with_for_update())
+            if snapshot is None: raise RunPlanConflict("run inventory disappeared")
+            host_reserved=int(session.scalar(select(func.coalesce(func.sum(ResourceReservation.amount_bytes),0)).where(ResourceReservation.node_id==node.node_id,ResourceReservation.kind=="host-memory",ResourceReservation.state=="active")) or 0)
+            gpu_reserved=int(session.scalar(select(func.coalesce(func.sum(ResourceReservation.amount_bytes),0)).where(ResourceReservation.node_id==node.node_id,ResourceReservation.kind=="gpu-memory",ResourceReservation.state=="active")) or 0)
+            if min(snapshot.host_memory_free_bytes-host_reserved-node.required_memory_bytes,snapshot.gpu_memory_free_bytes-gpu_reserved-node.required_memory_bytes)<self._floor: raise RunPlanConflict("memory capacity changed while reserving")
+            ports=(node.port,) if node.rendezvous_port is None else (node.port,node.rendezvous_port)
+            for port in ports:
+                if session.scalar(select(ResourceReservation.id).where(ResourceReservation.node_id==node.node_id,ResourceReservation.kind=="port",ResourceReservation.resource_key==str(port),ResourceReservation.state=="active")) is not None: raise RunPlanConflict("run port changed while reserving")
+        session.add(run);session.flush()
+        for node in plan.nodes:
+            session.add(RunNode(run_id=run.id,node_id=node.node_id,rank=node.rank,role=node.role,state="planned",port=node.port,reserved_memory_bytes=node.required_memory_bytes,updated_at=now))
+            reservations=[("host-memory",node.required_memory_bytes,plan.plan_digest),("gpu-memory",node.required_memory_bytes,plan.plan_digest),("port",0,str(node.port))]
+            if node.rendezvous_port is not None: reservations.append(("port",0,str(node.rendezvous_port)))
+            for kind,amount,key in reservations: session.add(ResourceReservation(node_id=node.node_id,kind=kind,resource_key=key,amount_bytes=amount,owner_kind="run",owner_id=run.id,state="active",plan_digest=plan.plan_digest,created_at=now))
         return run.id

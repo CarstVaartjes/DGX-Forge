@@ -1747,7 +1747,6 @@ dependencies = [
  "url",
  "uuid",
  "vonk-agent-protocol",
- "wait-timeout",
  "x509-parser",
 ]
 

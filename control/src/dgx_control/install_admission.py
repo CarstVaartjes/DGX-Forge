@@ -12,7 +12,14 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .artifact_sizes import ArtifactSizeError, ArtifactSizeResolver
 from .inventory_repository import InventoryRepository
-from .models import AgentNode, InstallationNode, LocalRecipeRevision, NodeArtifact, RecipeInstallation, ResourceReservation
+from .models import (
+    AgentNode,
+    InstallationNode,
+    LocalRecipeRevision,
+    NodeArtifact,
+    RecipeInstallation,
+    ResourceReservation,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +56,7 @@ class InstallAdmissionService:
             document = revision.document
         topology = document.get("topology"); resources = document.get("resources")
         if not isinstance(topology, dict) or not int(topology["min_nodes"]) <= len(node_ids) <= int(topology["max_nodes"]): raise ValueError("installation placement violates recipe topology")
-        if not isinstance(resources, dict) or not isinstance(resources.get("per_node"), dict): raise ValueError("recipe resources are invalid")
+        if not isinstance(resources, dict) or not isinstance(resources.get("per_node"), dict): raise TypeError("recipe resources are invalid")
         per_node = resources["per_node"]; installed = int(per_node["installed_bytes"]); staging = int(per_node["staging_bytes"]); download = int(per_node["download_bytes"])
         try: artifacts = self._sizes.resolve(document)
         except ArtifactSizeError:
@@ -76,18 +83,30 @@ class InstallAdmissionService:
         return InstallPlan(recipe_revision_id, revision.content_sha256, all(plan.allowed for plan in plans), tuple(plans), digest)
 
     def accept_install(self, plan: InstallPlan, *, actor: str, now: datetime) -> str:
+        with self._sessions.begin() as session:
+            return self.accept_install_in_session(
+                session, plan, actor=actor, now=now
+            )
+
+    def accept_install_in_session(
+        self,
+        session: Session,
+        plan: InstallPlan,
+        *,
+        actor: str,
+        now: datetime,
+    ) -> str:
         fresh = self.plan_install(plan.recipe_revision_id, tuple(node.node_id for node in plan.nodes), now=now)
         if not fresh.allowed or fresh.plan_digest != plan.plan_digest:
             raise InstallPlanConflict("installation plan is stale or blocked")
         plan_document = {"schema_version": 1, "recipe_revision_id": plan.recipe_revision_id, "recipe_content_sha256": plan.recipe_content_sha256, "plan_digest": plan.plan_digest, "nodes": [{**asdict(node), "inventory_observed_at": node.inventory_observed_at.isoformat() if node.inventory_observed_at else None} for node in plan.nodes]}
         installation = RecipeInstallation(recipe_revision_id=plan.recipe_revision_id, plan_digest=plan.plan_digest, plan=plan_document, state="planned", actor=actor, created_at=now, updated_at=now)
-        with self._sessions.begin() as session:
-            for node in plan.nodes:
-                if session.scalar(select(AgentNode).where(AgentNode.node_id == node.node_id).with_for_update()) is None: raise InstallPlanConflict("installation node disappeared")
-                active = int(session.scalar(select(func.coalesce(func.sum(ResourceReservation.amount_bytes), 0)).where(ResourceReservation.node_id == node.node_id, ResourceReservation.kind == "disk", ResourceReservation.state == "active")) or 0)
-                if node.free_bytes is None or node.free_bytes - active - node.required_bytes < self._disk_floor: raise InstallPlanConflict("disk capacity changed while reserving")
-            session.add(installation); session.flush()
-            for node in plan.nodes:
-                session.add(InstallationNode(installation_id=installation.id, node_id=node.node_id, state="planned", required_bytes=node.required_bytes, installed_bytes=0, updated_at=now))
-                session.add(ResourceReservation(node_id=node.node_id, kind="disk", resource_key=plan.plan_digest, amount_bytes=node.required_bytes, owner_kind="installation", owner_id=installation.id, state="active", plan_digest=plan.plan_digest, created_at=now))
+        for node in sorted(plan.nodes, key=lambda item: item.node_id):
+            if session.scalar(select(AgentNode).where(AgentNode.node_id == node.node_id).with_for_update()) is None: raise InstallPlanConflict("installation node disappeared")
+            active = int(session.scalar(select(func.coalesce(func.sum(ResourceReservation.amount_bytes), 0)).where(ResourceReservation.node_id == node.node_id, ResourceReservation.kind == "disk", ResourceReservation.state == "active")) or 0)
+            if node.free_bytes is None or node.free_bytes - active - node.required_bytes < self._disk_floor: raise InstallPlanConflict("disk capacity changed while reserving")
+        session.add(installation); session.flush()
+        for node in plan.nodes:
+            session.add(InstallationNode(installation_id=installation.id, node_id=node.node_id, state="planned", required_bytes=node.required_bytes, installed_bytes=0, updated_at=now))
+            session.add(ResourceReservation(node_id=node.node_id, kind="disk", resource_key=plan.plan_digest, amount_bytes=node.required_bytes, owner_kind="installation", owner_id=installation.id, state="active", plan_digest=plan.plan_digest, created_at=now))
         return installation.id

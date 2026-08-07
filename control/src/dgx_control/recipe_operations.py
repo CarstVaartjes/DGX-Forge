@@ -111,40 +111,45 @@ class RecipeOperationService:
             return existing
         if plan_digest != plan.plan_digest:
             raise RecipeOperationConflict("submitted plan digest does not match preview")
-        try:
-            installation_id = self._install_admission.accept_install(
-                plan, actor=actor, now=self._clock()
-            )
-        except (RuntimeError, ValueError) as error:
-            raise RecipeOperationConflict(str(error)) from error
+        now = self._clock()
         with self._sessions.begin() as session:
+            try:
+                installation_id = self._install_admission.accept_install_in_session(
+                    session, plan, actor=actor, now=now
+                )
+            except (RuntimeError, ValueError) as error:
+                raise RecipeOperationConflict(str(error)) from error
             installation = session.get(RecipeInstallation, installation_id)
             assert installation is not None
             installation.state = "installing"
-            installation.updated_at = self._clock()
-        return self._queue(
-            kind="recipe.install",
-            owner_kind="installation",
-            owner_id=installation_id,
-            plan_digest=plan.plan_digest,
-            actor=actor,
-            request_id=request_id,
-            node_payloads=tuple(
-                (
-                    node.node_id,
-                    {
-                        "schema_version": 1,
-                        "installation_id": installation_id,
-                        "recipe_revision_id": plan.recipe_revision_id,
-                        "recipe_content_sha256": plan.recipe_content_sha256,
-                        "plan_digest": plan.plan_digest,
-                        "expected_bytes": node.required_bytes,
-                    },
-                )
-                for node in plan.nodes
-            ),
-            authority_digest=plan.recipe_content_sha256,
-        )
+            installation.updated_at = now
+            job = self._queue_in_session(
+                session,
+                kind="recipe.install",
+                owner_kind="installation",
+                owner_id=installation_id,
+                plan_digest=plan.plan_digest,
+                actor=actor,
+                request_id=request_id,
+                node_payloads=tuple(
+                    (
+                        node.node_id,
+                        {
+                            "schema_version": 1,
+                            "installation_id": installation_id,
+                            "recipe_revision_id": plan.recipe_revision_id,
+                            "recipe_content_sha256": plan.recipe_content_sha256,
+                            "plan_digest": plan.plan_digest,
+                            "expected_bytes": node.required_bytes,
+                        },
+                    )
+                    for node in plan.nodes
+                ),
+                authority_digest=plan.recipe_content_sha256,
+                now=now,
+            )
+        self._agent_jobs.notify_available()
+        return self.get(job.id)
 
     def start(
         self,
@@ -160,7 +165,8 @@ class RecipeOperationService:
             return existing
         if plan_digest != plan.plan_digest:
             raise RecipeOperationConflict("submitted plan digest does not match preview")
-        with self._sessions() as session:
+        now = self._clock()
+        with self._sessions.begin() as session:
             presences = {
                 node_id: address
                 for node_id, address in session.execute(
@@ -173,67 +179,70 @@ class RecipeOperationService:
                     )
                 )
             }
-        if set(presences) != {node.node_id for node in plan.nodes}:
-            raise RecipeOperationConflict(
-                "recipe node endpoint evidence is unavailable"
-            )
-        master = next((node for node in plan.nodes if node.rank == 0), None)
-        if master is None:
-            raise RecipeOperationConflict("recipe run has no rank-zero entrypoint")
-        world_size = len(plan.nodes)
-        master_address = master.fabric_address if world_size > 1 else None
-        master_port = master.rendezvous_port if world_size > 1 else None
-        if world_size > 1 and (master_address is None or master_port is None):
-            raise RecipeOperationConflict(
-                "recipe direct-fabric rendezvous is unavailable"
-            )
-        try:
-            run_id = self._run_admission.accept_run(
-                plan, alias=alias, actor=actor, now=self._clock()
-            )
-        except (RuntimeError, ValueError) as error:
-            raise RecipeOperationConflict(str(error)) from error
-        with self._sessions.begin() as session:
+            if set(presences) != {node.node_id for node in plan.nodes}:
+                raise RecipeOperationConflict(
+                    "recipe node endpoint evidence is unavailable"
+                )
+            master = next((node for node in plan.nodes if node.rank == 0), None)
+            if master is None:
+                raise RecipeOperationConflict("recipe run has no rank-zero entrypoint")
+            world_size = len(plan.nodes)
+            master_address = master.fabric_address if world_size > 1 else None
+            master_port = master.rendezvous_port if world_size > 1 else None
+            if world_size > 1 and (master_address is None or master_port is None):
+                raise RecipeOperationConflict(
+                    "recipe direct-fabric rendezvous is unavailable"
+                )
+            try:
+                run_id = self._run_admission.accept_run_in_session(
+                    session, plan, alias=alias, actor=actor, now=now
+                )
+            except (RuntimeError, ValueError) as error:
+                raise RecipeOperationConflict(str(error)) from error
             run = session.get(RecipeRun, run_id)
             revision = session.get(LocalRecipeRevision, plan.recipe_revision_id)
             assert run is not None and revision is not None
             run.state = "starting"
-            run.updated_at = self._clock()
+            run.updated_at = now
             recipe_digest = revision.content_sha256
-        assert recipe_digest is not None
-        return self._queue(
-            kind="recipe.start",
-            owner_kind="run",
-            owner_id=run_id,
-            plan_digest=plan.plan_digest,
-            actor=actor,
-            request_id=request_id,
-            node_payloads=tuple(
-                (
-                    node.node_id,
-                    {
-                        "schema_version": 1,
-                        "run_id": run_id,
-                        "installation_id": plan.installation_id,
-                        "recipe_revision_id": plan.recipe_revision_id,
-                        "recipe_content_sha256": recipe_digest,
-                        "plan_digest": plan.plan_digest,
-                        "alias": alias,
-                        "rank": node.rank,
-                        "role": node.role,
-                        "port": node.port,
-                        "reserved_memory_bytes": node.required_memory_bytes,
-                        "endpoint_address": presences[node.node_id],
-                        "world_size": world_size,
-                        "local_address": node.fabric_address if world_size > 1 else None,
-                        "master_address": master_address,
-                        "master_port": master_port,
-                    },
-                )
-                for node in plan.nodes
-            ),
-            authority_digest=recipe_digest,
-        )
+            assert recipe_digest is not None
+            job = self._queue_in_session(
+                session,
+                kind="recipe.start",
+                owner_kind="run",
+                owner_id=run_id,
+                plan_digest=plan.plan_digest,
+                actor=actor,
+                request_id=request_id,
+                node_payloads=tuple(
+                    (
+                        node.node_id,
+                        {
+                            "schema_version": 1,
+                            "run_id": run_id,
+                            "installation_id": plan.installation_id,
+                            "recipe_revision_id": plan.recipe_revision_id,
+                            "recipe_content_sha256": recipe_digest,
+                            "plan_digest": plan.plan_digest,
+                            "alias": alias,
+                            "rank": node.rank,
+                            "role": node.role,
+                            "port": node.port,
+                            "reserved_memory_bytes": node.required_memory_bytes,
+                            "endpoint_address": presences[node.node_id],
+                            "world_size": world_size,
+                            "local_address": node.fabric_address if world_size > 1 else None,
+                            "master_address": master_address,
+                            "master_port": master_port,
+                        },
+                    )
+                    for node in plan.nodes
+                ),
+                authority_digest=recipe_digest,
+                now=now,
+            )
+        self._agent_jobs.notify_available()
+        return self.get(job.id)
 
     def stop(
         self, run_id: str, *, actor: str, request_id: str
@@ -247,42 +256,49 @@ class RecipeOperationService:
                 raise RecipeOperationConflict("recipe run does not exist")
             if run.state not in {"starting", "running", "failed", "lost"}:
                 raise RecipeOperationConflict("recipe run is not stoppable")
-            nodes = tuple(
-                session.scalars(
-                    select(RunNode).where(RunNode.run_id == run_id).order_by(RunNode.rank)
-                )
-            )
             plan_digest = run.plan_digest
         # Route removal is deliberately synchronous and precedes creation of
         # stop work. If withdrawal fails, no stop command can race a live route.
         self._route_withdrawer(run_id)
+        now = self._clock()
         with self._sessions.begin() as session:
             run = session.get(RecipeRun, run_id)
             assert run is not None
+            nodes = tuple(
+                session.scalars(
+                    select(RunNode)
+                    .where(RunNode.run_id == run_id)
+                    .order_by(RunNode.rank)
+                )
+            )
             run.state = "stopping"
             run.route_state = "withdrawn"
             run.route_error = None
-            run.updated_at = self._clock()
-        return self._queue(
-            kind="recipe.stop",
-            owner_kind="run",
-            owner_id=run_id,
-            plan_digest=plan_digest,
-            actor=actor,
-            request_id=request_id,
-            node_payloads=tuple(
-                (
-                    node.node_id,
-                    {
-                        "schema_version": 1,
-                        "run_id": run_id,
-                        "plan_digest": plan_digest,
-                    },
-                )
-                for node in nodes
-            ),
-            authority_digest=plan_digest,
-        )
+            run.updated_at = now
+            job = self._queue_in_session(
+                session,
+                kind="recipe.stop",
+                owner_kind="run",
+                owner_id=run_id,
+                plan_digest=plan_digest,
+                actor=actor,
+                request_id=request_id,
+                node_payloads=tuple(
+                    (
+                        node.node_id,
+                        {
+                            "schema_version": 1,
+                            "run_id": run_id,
+                            "plan_digest": plan_digest,
+                        },
+                    )
+                    for node in nodes
+                ),
+                authority_digest=plan_digest,
+                now=now,
+            )
+        self._agent_jobs.notify_available()
+        return self.get(job.id)
 
     def uninstall(
         self, installation_id: str, *, actor: str, request_id: str
@@ -349,6 +365,7 @@ class RecipeOperationService:
         with self._sessions() as session:
             installation = session.get(RecipeInstallation, previous.owner_id)
             assert installation is not None
+            recipe_revision_id = installation.recipe_revision_id
             nodes = tuple(
                 session.scalars(
                     select(InstallationNode)
@@ -359,40 +376,45 @@ class RecipeOperationService:
             revision = session.get(LocalRecipeRevision, installation.recipe_revision_id)
             assert revision is not None and revision.content_sha256 is not None
             recipe_digest = revision.content_sha256
+        now = self._clock()
         with self._sessions.begin() as session:
             installation = session.get(RecipeInstallation, previous.owner_id)
             assert installation is not None
             installation.state = "installing"
-            installation.updated_at = self._clock()
+            installation.updated_at = now
             for node in session.scalars(
                 select(InstallationNode).where(
                     InstallationNode.installation_id == installation.id
                 )
             ):
                 node.state = "planned"
-        return self._queue(
-            kind="recipe.install",
-            owner_kind="installation",
-            owner_id=previous.owner_id,
-            plan_digest=previous.plan_digest,
-            actor=actor,
-            request_id=request_id,
-            node_payloads=tuple(
-                (
-                    node.node_id,
-                    {
-                        "schema_version": 1,
-                        "installation_id": previous.owner_id,
-                        "recipe_revision_id": installation.recipe_revision_id,
-                        "recipe_content_sha256": recipe_digest,
-                        "plan_digest": previous.plan_digest,
-                        "expected_bytes": node.required_bytes,
-                    },
-                )
-                for node in nodes
-            ),
-            authority_digest=recipe_digest,
-        )
+            job = self._queue_in_session(
+                session,
+                kind="recipe.install",
+                owner_kind="installation",
+                owner_id=previous.owner_id,
+                plan_digest=previous.plan_digest,
+                actor=actor,
+                request_id=request_id,
+                node_payloads=tuple(
+                    (
+                        node.node_id,
+                        {
+                            "schema_version": 1,
+                            "installation_id": previous.owner_id,
+                            "recipe_revision_id": recipe_revision_id,
+                            "recipe_content_sha256": recipe_digest,
+                            "plan_digest": previous.plan_digest,
+                            "expected_bytes": node.required_bytes,
+                        },
+                    )
+                    for node in nodes
+                ),
+                authority_digest=recipe_digest,
+                now=now,
+            )
+        self._agent_jobs.notify_available()
+        return self.get(job.id)
 
     def record_node_result(
         self,
@@ -535,9 +557,53 @@ class RecipeOperationService:
             elif job.kind == "recipe.start":
                 run = session.get(RecipeRun, owner_id)
                 assert run is not None
-                run.state = "failed" if failed else "running"
-                run.route_state = "failed" if failed else "pending"
-                run.route_error = "one or more ranks failed to start" if failed else None
+                if failed:
+                    run.state = "stopping"
+                    run.route_state = "withdrawn"
+                    run.route_error = "one or more ranks failed to start; cleanup queued"
+                    cleanup_request_id = str(
+                        uuid.uuid5(
+                            uuid.NAMESPACE_URL,
+                            f"vonk:recipe-start-cleanup:{job.id}",
+                        )
+                    )
+                    if not session.scalar(
+                        select(Job.id).where(Job.request_id == cleanup_request_id)
+                    ):
+                        run_nodes = tuple(
+                            session.scalars(
+                                select(RunNode)
+                                .where(RunNode.run_id == owner_id)
+                                .order_by(RunNode.rank)
+                            )
+                        )
+                        self._queue_in_session(
+                            session,
+                            kind="recipe.stop",
+                            owner_kind="run",
+                            owner_id=owner_id,
+                            plan_digest=run.plan_digest,
+                            actor=job.actor,
+                            request_id=cleanup_request_id,
+                            node_payloads=tuple(
+                                (
+                                    run_node.node_id,
+                                    {
+                                        "schema_version": 1,
+                                        "run_id": owner_id,
+                                        "plan_digest": run.plan_digest,
+                                    },
+                                )
+                                for run_node in run_nodes
+                            ),
+                            authority_digest=run.plan_digest,
+                            now=now,
+                        )
+                        self._agent_jobs.notify_available()
+                else:
+                    run.state = "running"
+                    run.route_state = "pending"
+                    run.route_error = None
                 run.updated_at = now
             elif job.kind == "recipe.stop":
                 run = session.get(RecipeRun, owner_id)
@@ -592,8 +658,41 @@ class RecipeOperationService:
         node_payloads: Sequence[tuple[str, Mapping[str, object]]],
         authority_digest: str,
     ) -> RecipeOperationView:
+        now = self._clock()
+        with self._sessions.begin() as session:
+            job = self._queue_in_session(
+                session,
+                kind=kind,
+                owner_kind=owner_kind,
+                owner_id=owner_id,
+                plan_digest=plan_digest,
+                actor=actor,
+                request_id=request_id,
+                node_payloads=node_payloads,
+                authority_digest=authority_digest,
+                now=now,
+            )
+        self._agent_jobs.notify_available()
+        return self.get(job.id)
+
+    def _queue_in_session(
+        self,
+        session: Session,
+        *,
+        kind: str,
+        owner_kind: str,
+        owner_id: str,
+        plan_digest: str,
+        actor: str,
+        request_id: str,
+        node_payloads: Sequence[tuple[str, Mapping[str, object]]],
+        authority_digest: str,
+        now: datetime,
+    ) -> Job:
         if not node_payloads:
             raise RecipeOperationConflict("operation group has no target nodes")
+        if session.scalar(select(Job.id).where(Job.request_id == request_id)):
+            raise RecipeOperationConflict("request key was already used differently")
         job_id = str(uuid.uuid4())
         targets = sorted(node_id for node_id, _payload in node_payloads)
         job_payload: dict[str, object] = {
@@ -602,39 +701,32 @@ class RecipeOperationService:
             "owner_id": owner_id,
             "plan_digest": plan_digest,
         }
-        now = self._clock()
-        with self._sessions.begin() as session:
-            if session.scalar(select(Job.id).where(Job.request_id == request_id)):
-                raise RecipeOperationConflict("request key was already used differently")
-            job = Job(
-                id=job_id,
-                request_id=request_id,
-                kind=kind,
-                state="running",
-                actor=actor,
-                # The transport's legacy authority slot is still 40 hex chars.
-                # Full recipe authority remains in the immutable typed payload.
-                base_commit=authority_digest[:40],
-                targets=targets,
-                payload_digest=hashlib.sha256(canonical_message(job_payload)).hexdigest(),
-                payload=job_payload,
-                created_at=now,
-                updated_at=now,
+        job = Job(
+            id=job_id,
+            request_id=request_id,
+            kind=kind,
+            state="running",
+            actor=actor,
+            base_commit=authority_digest[:40],
+            targets=targets,
+            payload_digest=hashlib.sha256(canonical_message(job_payload)).hexdigest(),
+            payload=job_payload,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(job)
+        session.flush()
+        for node_id, payload in node_payloads:
+            self._agent_jobs.enqueue_in_session(
+                session,
+                job_id,
+                node_id,
+                kind,
+                authority_digest[:40],
+                payload,
+                operation_id=str(uuid.uuid4()),
             )
-            session.add(job)
-            session.flush()
-            for node_id, payload in node_payloads:
-                self._agent_jobs.enqueue_in_session(
-                    session,
-                    job_id,
-                    node_id,
-                    kind,
-                    authority_digest[:40],
-                    payload,
-                    operation_id=str(uuid.uuid4()),
-                )
-        self._agent_jobs.notify_available()
-        return self.get(job_id)
+        return job
 
     def _view(self, job: Job) -> RecipeOperationView:
         return RecipeOperationView(

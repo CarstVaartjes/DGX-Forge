@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::{Read, Write},
+    net::{IpAddr, ToSocketAddrs},
     os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
     time::Duration,
@@ -319,7 +320,9 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
         let output = self.runner.run(
             Program::Podman,
             &[
-                "stop".to_owned(),
+                "rm".to_owned(),
+                "--force".to_owned(),
+                "--ignore".to_owned(),
                 "--time".to_owned(),
                 "30".to_owned(),
                 format!("vonk-{run_id}"),
@@ -481,30 +484,36 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
         fs::create_dir(&staging)?;
         let download = match artifact.kind.as_str() {
             "huggingface.snapshot" => self.download_huggingface(&staging, artifact),
-            "http.file" => self.run_download(
-                Program::Curl,
-                vec![
-                    "--fail".to_owned(),
-                    "--location".to_owned(),
-                    "--proto-redir".to_owned(),
-                    "=https".to_owned(),
-                    "--proto".to_owned(),
-                    "=https".to_owned(),
-                    "--tlsv1.3".to_owned(),
-                    "--output".to_owned(),
-                    staging.join("artifact").display().to_string(),
-                    artifact.repository.clone(),
-                ],
-            ),
-            "oci.artifact" => self.run_download(
-                Program::Oras,
-                vec![
+            "http.file" => Url::parse(&artifact.repository)
+                .map_err(|_| OciError::Artifact)
+                .and_then(|url| {
+                    self.download_https(
+                        &url,
+                        &staging.join("artifact"),
+                        artifact.expected_bytes,
+                        false,
+                    )
+                }),
+            "oci.artifact" => validate_oci_repository(&artifact.repository).and_then(|()| {
+                let arguments = vec![
                     "pull".to_owned(),
                     format!("{}@{}", artifact.repository, artifact.revision),
                     "--output".to_owned(),
                     staging.display().to_string(),
-                ],
-            ),
+                ];
+                let output = self.runner.run_bounded_directory(
+                    Program::Oras,
+                    &arguments,
+                    Duration::from_secs(3600),
+                    &staging,
+                    artifact.expected_bytes,
+                )?;
+                if output.success {
+                    Ok(())
+                } else {
+                    Err(OciError::Artifact)
+                }
+            }),
             _ => Err(OciError::Artifact),
         };
         if download.is_err() {
@@ -530,17 +539,6 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
         Ok(())
     }
 
-    fn run_download(&self, program: Program, arguments: Vec<String>) -> Result<(), OciError> {
-        let output = self
-            .runner
-            .run(program, &arguments, Duration::from_secs(3600))?;
-        if output.success {
-            Ok(())
-        } else {
-            Err(OciError::Artifact)
-        }
-    }
-
     fn download_huggingface(
         &self,
         staging: &Path,
@@ -556,10 +554,7 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
             .push("revision")
             .push(&artifact.revision);
         let metadata_path = staging.join(".huggingface-model.json");
-        self.run_download(
-            Program::Curl,
-            self.huggingface_curl_arguments(&metadata_url, &metadata_path)?,
-        )?;
+        self.download_https(&metadata_url, &metadata_path, 8 * 1024 * 1024, true)?;
         let metadata = fs::read(&metadata_path)?;
         fs::remove_file(&metadata_path)?;
         if metadata.len() > 8 * 1024 * 1024 {
@@ -569,6 +564,7 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
         if model.siblings.is_empty() || model.siblings.len() > 20_000 {
             return Err(OciError::Artifact);
         }
+        let mut remaining = artifact.expected_bytes;
         for file in model.siblings {
             let relative = safe_relative_path(&file.rfilename)?;
             let destination = staging.join(&relative);
@@ -590,10 +586,11 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
                         }),
                 );
             url.query_pairs_mut().append_pair("download", "true");
-            self.run_download(
-                Program::Curl,
-                self.huggingface_curl_arguments(&url, &destination)?,
-            )?;
+            self.download_https(&url, &destination, remaining, true)?;
+            let downloaded = fs::metadata(&destination)?.len();
+            remaining = remaining
+                .checked_sub(downloaded)
+                .ok_or(OciError::Artifact)?;
             if let Some(lfs) = file.lfs
                 && (!lower_hex(&lfs.sha256, 64) || sha256_file(&destination)? != lfs.sha256)
             {
@@ -603,26 +600,50 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
         Ok(())
     }
 
-    fn huggingface_curl_arguments(
+    fn download_https(
         &self,
         url: &Url,
         destination: &Path,
-    ) -> Result<Vec<String>, OciError> {
-        let mut arguments = curl_arguments(url, destination);
-        if let Some(path) = self.huggingface_curl_config {
-            let metadata = fs::symlink_metadata(path)?;
-            let effective_uid = rustix::process::geteuid().as_raw();
-            if !metadata.file_type().is_file()
-                || metadata.file_type().is_symlink()
-                || metadata.len() > 4096
-                || !matches!(metadata.uid(), 0) && metadata.uid() != effective_uid
-                || metadata.permissions().mode() & 0o077 != 0
+        maximum_bytes: u64,
+        allow_huggingface_auth: bool,
+    ) -> Result<(), OciError> {
+        if maximum_bytes == 0 {
+            return Err(OciError::Artifact);
+        }
+        let mut current = url.clone();
+        for _ in 0..=5 {
+            let endpoint = public_https_endpoint(&current)?;
+            let mut arguments = curl_arguments(&current, destination, maximum_bytes, &endpoint);
+            if allow_huggingface_auth
+                && current.host_str() == Some("huggingface.co")
+                && let Some(path) = self.huggingface_curl_config
             {
+                validate_curl_config(path)?;
+                arguments.splice(0..0, ["--config".to_owned(), path.display().to_string()]);
+            }
+            let output = self
+                .runner
+                .run(Program::Curl, &arguments, Duration::from_secs(3600))?;
+            if !output.success {
                 return Err(OciError::Artifact);
             }
-            arguments.splice(0..0, ["--config".to_owned(), path.display().to_string()]);
+            let status = std::str::from_utf8(&output.stdout)
+                .map_err(|_| OciError::Artifact)?
+                .trim_end_matches(['\r', '\n']);
+            let (code, redirect) = status.split_once('\t').ok_or(OciError::Artifact)?;
+            let code = code.parse::<u16>().map_err(|_| OciError::Artifact)?;
+            if (200..300).contains(&code) {
+                if fs::metadata(destination)?.len() > maximum_bytes {
+                    return Err(OciError::Artifact);
+                }
+                return Ok(());
+            }
+            if !(300..400).contains(&code) || redirect.is_empty() {
+                return Err(OciError::Artifact);
+            }
+            current = current.join(redirect).map_err(|_| OciError::Artifact)?;
         }
-        Ok(arguments)
+        Err(OciError::Artifact)
     }
 }
 
@@ -685,24 +706,134 @@ fn safe_relative_path(value: &str) -> Result<PathBuf, OciError> {
     Ok(path)
 }
 
-fn curl_arguments(url: &Url, destination: &Path) -> Vec<String> {
+struct PublicEndpoint {
+    hostname: String,
+    port: u16,
+    address: IpAddr,
+}
+
+fn public_https_endpoint(url: &Url) -> Result<PublicEndpoint, OciError> {
+    if url.scheme() != "https"
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(OciError::Artifact);
+    }
+    let hostname = url.host_str().ok_or(OciError::Artifact)?.to_owned();
+    let port = url.port_or_known_default().ok_or(OciError::Artifact)?;
+    let addresses = (hostname.as_str(), port)
+        .to_socket_addrs()
+        .map_err(|_| OciError::Artifact)?
+        .map(|address| address.ip())
+        .collect::<Vec<_>>();
+    if addresses.is_empty() || addresses.iter().any(|address| !is_public_ip(*address)) {
+        return Err(OciError::Artifact);
+    }
+    Ok(PublicEndpoint {
+        hostname,
+        port,
+        address: addresses[0],
+    })
+}
+
+fn validate_oci_repository(repository: &str) -> Result<(), OciError> {
+    if repository.contains("://")
+        || repository.contains('@')
+        || repository.contains('?')
+        || repository.contains('#')
+    {
+        return Err(OciError::Artifact);
+    }
+    let url = Url::parse(&format!("https://{repository}")).map_err(|_| OciError::Artifact)?;
+    if url.path() == "/" || url.path().contains("//") || url.path().contains("..") {
+        return Err(OciError::Artifact);
+    }
+    public_https_endpoint(&url)?;
+    Ok(())
+}
+
+fn is_public_ip(address: IpAddr) -> bool {
+    match address {
+        IpAddr::V4(address) => {
+            let octets = address.octets();
+            !address.is_private()
+                && !address.is_loopback()
+                && !address.is_link_local()
+                && !address.is_broadcast()
+                && !address.is_documentation()
+                && !address.is_multicast()
+                && !address.is_unspecified()
+                && octets[0] != 0
+                && !(octets[0] == 100 && (64..=127).contains(&octets[1]))
+                && !(octets[0] == 192 && octets[1] == 0 && octets[2] == 0)
+                && !(octets[0] == 198 && matches!(octets[1], 18 | 19))
+                && octets[0] < 240
+        }
+        IpAddr::V6(address) => {
+            if let Some(mapped) = address.to_ipv4_mapped() {
+                return is_public_ip(IpAddr::V4(mapped));
+            }
+            let segments = address.segments();
+            !address.is_loopback()
+                && !address.is_unspecified()
+                && !address.is_multicast()
+                && !(segments[0] & 0xfe00 == 0xfc00)
+                && !(segments[0] & 0xffc0 == 0xfe80)
+                && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
+        }
+    }
+}
+
+fn curl_arguments(
+    url: &Url,
+    destination: &Path,
+    maximum_bytes: u64,
+    endpoint: &PublicEndpoint,
+) -> Vec<String> {
+    let resolve_address = match endpoint.address {
+        IpAddr::V4(address) => address.to_string(),
+        IpAddr::V6(address) => format!("[{address}]"),
+    };
     vec![
         "--fail".to_owned(),
-        "--location".to_owned(),
         "--proto".to_owned(),
         "=https".to_owned(),
-        "--proto-redir".to_owned(),
-        "=https".to_owned(),
         "--tlsv1.3".to_owned(),
+        "--max-redirs".to_owned(),
+        "0".to_owned(),
+        "--max-filesize".to_owned(),
+        maximum_bytes.to_string(),
+        "--resolve".to_owned(),
+        format!(
+            "{}:{}:{}",
+            endpoint.hostname, endpoint.port, resolve_address
+        ),
         "--connect-timeout".to_owned(),
         "15".to_owned(),
         "--retry".to_owned(),
         "3".to_owned(),
         "--retry-all-errors".to_owned(),
+        "--write-out".to_owned(),
+        "%{http_code}\t%{redirect_url}\n".to_owned(),
         "--output".to_owned(),
         destination.display().to_string(),
         url.as_str().to_owned(),
     ]
+}
+
+fn validate_curl_config(path: &Path) -> Result<(), OciError> {
+    let metadata = fs::symlink_metadata(path)?;
+    let effective_uid = rustix::process::geteuid().as_raw();
+    if !metadata.file_type().is_file()
+        || metadata.file_type().is_symlink()
+        || metadata.len() > 4096
+        || !matches!(metadata.uid(), 0) && metadata.uid() != effective_uid
+        || metadata.permissions().mode() & 0o077 != 0
+    {
+        return Err(OciError::Artifact);
+    }
+    Ok(())
 }
 
 fn sha256_file(path: &Path) -> Result<String, OciError> {

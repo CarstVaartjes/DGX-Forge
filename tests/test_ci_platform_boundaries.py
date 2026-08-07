@@ -70,6 +70,17 @@ def test_pr_smoke_does_not_reintroduce_a_second_os_matrix() -> None:
     assert workflow.count("runs-on: ubuntu-latest") >= 4
 
 
+def test_catalog_runtime_job_runs_complete_local_service_suites() -> None:
+    workflow = (ROOT / ".github/workflows/ci.yml").read_text()
+    job = "\n".join(_workflow_job_lines(workflow, "catalog-runtime"))
+
+    assert "pytest control/tests -q" in job
+    assert "pytest agent/tests -q" in job
+    assert "npm test --prefix control/web -- --run" in job
+    assert "npm run build --prefix control/web" in job
+    assert "scripts/update-global-contracts" not in job
+
+
 def test_agent_simulator_preserves_exact_non_linux_boundaries() -> None:
     command = (
         "import sys, types; "

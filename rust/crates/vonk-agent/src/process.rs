@@ -1,13 +1,14 @@
 use std::{
-    fs::File,
+    fs::{self, File},
     io::{Read, Seek, SeekFrom},
+    path::Path,
     process::{Command, Stdio},
-    time::Duration,
+    thread,
+    time::{Duration, Instant},
 };
 
 use tempfile::tempfile;
 use thiserror::Error;
-use wait_timeout::ChildExt;
 
 const OUTPUT_LIMIT: u64 = 64 * 1024;
 
@@ -45,6 +46,8 @@ pub enum ProcessError {
     Timeout,
     #[error("approved subprocess output exceeded its limit")]
     OutputLimit,
+    #[error("approved subprocess exceeded its storage limit")]
+    StorageLimit,
 }
 
 pub trait ProcessRunner {
@@ -54,6 +57,21 @@ pub trait ProcessRunner {
         arguments: &[String],
         timeout: Duration,
     ) -> Result<ProcessOutput, ProcessError>;
+
+    fn run_bounded_directory(
+        &self,
+        program: Program,
+        arguments: &[String],
+        timeout: Duration,
+        directory: &Path,
+        maximum_bytes: u64,
+    ) -> Result<ProcessOutput, ProcessError> {
+        let output = self.run(program, arguments, timeout)?;
+        if directory_bytes(directory)? > maximum_bytes {
+            return Err(ProcessError::StorageLimit);
+        }
+        Ok(output)
+    }
 }
 
 pub struct SystemProcessRunner;
@@ -65,39 +83,111 @@ impl ProcessRunner for SystemProcessRunner {
         arguments: &[String],
         timeout: Duration,
     ) -> Result<ProcessOutput, ProcessError> {
-        let mut stdout = tempfile()?;
-        let mut stderr = tempfile()?;
-        let mut child = Command::new(program.path())
-            .args(arguments)
-            .stdin(Stdio::null())
-            .stdout(Stdio::from(stdout.try_clone()?))
-            .stderr(Stdio::from(stderr.try_clone()?))
-            .env_clear()
-            .env("LANG", "C.UTF-8")
-            .env("LC_ALL", "C.UTF-8")
-            .env("PATH", "/usr/bin:/bin")
-            .env("HOME", "/var/lib/vonk-forge/agent")
-            .env("XDG_DATA_HOME", "/var/lib/vonk-forge/agent")
-            .env("XDG_RUNTIME_DIR", "/run/vonk-forge-agent")
-            .env(
-                "CONTAINERS_STORAGE_CONF",
-                "/etc/vonk-forge/containers-storage.conf",
-            )
-            .spawn()?;
-        let status = match child.wait_timeout(timeout)? {
-            Some(status) => status,
-            None => {
-                child.kill()?;
-                child.wait()?;
-                return Err(ProcessError::Timeout);
-            }
-        };
-        Ok(ProcessOutput {
-            success: status.success(),
-            stdout: bounded_read(&mut stdout)?,
-            stderr: bounded_read(&mut stderr)?,
-        })
+        run_process(program, arguments, timeout, None)
     }
+
+    fn run_bounded_directory(
+        &self,
+        program: Program,
+        arguments: &[String],
+        timeout: Duration,
+        directory: &Path,
+        maximum_bytes: u64,
+    ) -> Result<ProcessOutput, ProcessError> {
+        run_process(
+            program,
+            arguments,
+            timeout,
+            Some((directory, maximum_bytes)),
+        )
+    }
+}
+
+fn run_process(
+    program: Program,
+    arguments: &[String],
+    timeout: Duration,
+    storage_limit: Option<(&Path, u64)>,
+) -> Result<ProcessOutput, ProcessError> {
+    let mut stdout = tempfile()?;
+    let mut stderr = tempfile()?;
+    let mut child = Command::new(program.path())
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout.try_clone()?))
+        .stderr(Stdio::from(stderr.try_clone()?))
+        .env_clear()
+        .env("LANG", "C.UTF-8")
+        .env("LC_ALL", "C.UTF-8")
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", "/var/lib/vonk-forge/agent")
+        .env("XDG_DATA_HOME", "/var/lib/vonk-forge/agent")
+        .env("XDG_RUNTIME_DIR", "/run/vonk-forge-agent")
+        .env(
+            "CONTAINERS_STORAGE_CONF",
+            "/etc/vonk-forge/containers-storage.conf",
+        )
+        .spawn()?;
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() >= timeout {
+            child.kill()?;
+            child.wait()?;
+            return Err(ProcessError::Timeout);
+        }
+        if let Some((directory, maximum_bytes)) = storage_limit {
+            match directory_bytes(directory) {
+                Ok(bytes) if bytes > maximum_bytes => {
+                    child.kill()?;
+                    child.wait()?;
+                    return Err(ProcessError::StorageLimit);
+                }
+                Err(error) => {
+                    child.kill()?;
+                    child.wait()?;
+                    return Err(ProcessError::Io(error));
+                }
+                Ok(_) => {}
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+    Ok(ProcessOutput {
+        success: status.success(),
+        stdout: bounded_read(&mut stdout)?,
+        stderr: bounded_read(&mut stderr)?,
+    })
+}
+
+fn directory_bytes(path: &Path) -> Result<u64, std::io::Error> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let mut total = 0_u64;
+    let mut pending = vec![path.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let metadata = entry.file_type()?;
+            if metadata.is_symlink() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "bounded subprocess created a symlink",
+                ));
+            }
+            if metadata.is_dir() {
+                pending.push(entry.path());
+            } else if metadata.is_file() {
+                total = total
+                    .checked_add(entry.metadata()?.len())
+                    .ok_or_else(|| std::io::Error::other("directory size overflow"))?;
+            }
+        }
+    }
+    Ok(total)
 }
 
 fn bounded_read(file: &mut File) -> Result<Vec<u8>, ProcessError> {
