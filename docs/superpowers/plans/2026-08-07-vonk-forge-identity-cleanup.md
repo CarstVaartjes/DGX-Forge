@@ -22,11 +22,13 @@
 ### Task 1: Add the identity regression guard
 
 **Files:**
+- Create: scripts/vonk_identity.py
 - Create: scripts/verify-vonk-identity
 - Create: tests/scripts/test_verify_vonk_identity.py
 
 **Interfaces:**
-- verify(root: Path) -> dict[str, object] returns status, owned_matches, and external_matches.
+- scripts/vonk_identity.py exports verify(root: Path) -> dict[str, object] with status, owned_matches, and external_matches.
+- scripts/verify-vonk-identity is the executable CLI wrapper around verify.
 - The verifier skips .git, caches, binaries, and explicit external evidence roots manifests/, inventory/raw/, and tests/fixtures/external/.
 
 - [ ] Step 1: Write a failing test.
@@ -48,7 +50,7 @@
 
 - [ ] Step 5: Commit.
 
-    git add scripts/verify-vonk-identity tests/scripts/test_verify_vonk_identity.py
+    git add scripts/vonk_identity.py scripts/verify-vonk-identity tests/scripts/test_verify_vonk_identity.py
     git commit -m "test: add Vonk identity regression guard"
 
 ### Task 2: Rename Python namespaces and commands
@@ -189,4 +191,3 @@
 - [ ] Step 2: Run rg -n -i 'spark|dgx' README.md docs deploy scripts src control agent agent_protocol rust schemas .github. Expected: no Vonk-owned matches; only explicitly allowed external evidence.
 
 - [ ] Step 3: Record the verification commands and allowed external matches, then begin the separate source-first NAS design. Do not publish an agent package or start NAS implementation until the identity cleanup commit is the repository base.
-
