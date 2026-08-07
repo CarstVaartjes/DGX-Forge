@@ -1,6 +1,6 @@
 # Generic fleet migration
 
-DGX-Forge supports two inventory formats during the N-node migration:
+`vonk-forge` supports two inventory formats during the N-node migration:
 
 - `inventory/cluster.toml` is the original as-built, two-Spark record. It
   remains read-only and continues to support the accepted runtime definitions.
@@ -18,7 +18,7 @@ hexadecimal characters. A node's ID does not change when its display name,
 hostname, management address, SSH alias, role, or topology changes.
 
 The compatibility reader assigns deterministic UUIDv5-based IDs to legacy host
-keys. The namespace is scoped to the canonical DGX-Forge repository identity,
+keys. The namespace is scoped to the canonical `vonk-forge` repository identity,
 and the legacy table key is the only per-node input. Consequently, an address
 or hostname correction does not change compatibility identity.
 

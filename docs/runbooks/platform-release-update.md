@@ -1,7 +1,7 @@
-# DGX-Forge platform release update
+# `vonk-forge` platform release update
 
-This runbook updates DGX-Forge itself: the Docker control services on a
-Docker-capable control host and the DGX-Forge agents on any number of enrolled
+This runbook updates `vonk-forge` itself: the Docker control services on a
+Docker-capable control host and the `vonk-forge` agents on any number of enrolled
 DGX Sparks. It does not update model packages, DGX OS, firmware, the kernel,
 NVIDIA drivers, or CUDA. Workload packages have an independent release cadence;
 see [Runtime releases](runtime-release.md).

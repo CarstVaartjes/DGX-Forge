@@ -1,6 +1,6 @@
-# Vonk Forge architecture overview
+# vonk-forge architecture overview
 
-Vonk Forge separates the Docker service host from the Spark compute plane. The
+`vonk-forge` separates the Docker service host from the Spark compute plane. The
 service host can be a NAS or any Docker Compose-capable Linux machine. A cluster
 can contain one, two, or more DGX Sparks; no product contract fixes the count or
 uses a Spark hostname or IP address as identity.

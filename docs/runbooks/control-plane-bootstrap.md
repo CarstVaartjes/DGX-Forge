@@ -64,7 +64,7 @@ mounts no repository or Git key, and has no Spark-facing network.
 PostgreSQL, Caddy, LiteLLM, Prometheus, Grafana, Tailscale, and Hermes Agent are
 independent containers in this one project. Only Caddy publishes a host port,
 and that is the `10.0.0.2:8443` Spark backend. The Tailscale gateway publishes
-no Docker port and advertises separate DGX Forge, Hermes dashboard, and Hermes
+no Docker port and advertises separate `vonk-forge`, Hermes dashboard, and Hermes
 API Services.
 
 Caddy receives tailnet web traffic on the private `tailnet-web-edge` network.

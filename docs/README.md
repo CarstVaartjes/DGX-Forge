@@ -1,4 +1,4 @@
-# Vonk Forge operator documentation
+# vonk-forge operator documentation
 
 Vonk Forge runs a Docker-capable control host (normally a NAS) and one or more
 DGX Spark agents. Caddy is the only published ingress; Tailscale is the

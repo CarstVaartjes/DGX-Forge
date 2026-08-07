@@ -1,4 +1,4 @@
-# Observe DGX Forge
+# Observe `vonk-forge`
 
 Grafana is available only through Caddy at `/grafana/`. Prometheus has no
 published port. Platform metrics use stable generated node IDs and bounded enum

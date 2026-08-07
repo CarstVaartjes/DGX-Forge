@@ -3,7 +3,7 @@
 This included Compose model exposes three named tailnet Services from one tagged,
 userspace Tailscale node:
 
-- `svc:dgx-forge` forwards tailnet TCP 443 to Caddy's private port 8080.
+- The `vonk-forge` service forwards tailnet TCP 443 to Caddy's private port 8080.
 - `svc:hermes-dashboard` terminates tailnet HTTPS 443 and forwards to Hermes port 9119.
 - `svc:hermes-api` terminates tailnet HTTPS 443 and forwards to Hermes port 8642.
 

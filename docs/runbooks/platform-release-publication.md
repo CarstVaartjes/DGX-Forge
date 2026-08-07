@@ -1,6 +1,6 @@
 # Publish a platform release
 
-Platform publication is a protected CI operation. It publishes DGX-Forge
+Platform publication is a protected CI operation. It publishes `vonk-forge`
 control services, host deployment assets, Spark agents, and their signed
 platform metadata. Workload packages have an independent publication system;
 adding or updating a model stack must not require this workflow.

@@ -137,7 +137,7 @@ definitions resolve to the generic package family, immutable release lock, and
 deployment documents under `config/package-families/`,
 `manifests/workload-releases/`, and `config/workload-deployments/`. Package
 operations do not contain family or model-name branches; another family can be
-added through the same documents without a DGX-Forge update.
+added through the same documents without a `vonk-forge` platform update.
 
 The DS4 generic release lock uses the SHA-256 of the checked-in DS4 checkpoint
 manifest (`…df5b…`), while the legacy profile/evidence retains its historical

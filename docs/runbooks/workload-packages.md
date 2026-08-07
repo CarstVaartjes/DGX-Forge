@@ -13,7 +13,7 @@ workload package is a signed, content-addressed description of a complete
 stack: source or OCI inputs, model/checkpoint files, adapters, Python
 environments, configuration, and the validation evidence needed to run it.
 The package path is generic. Adding a model, a new Mia/DS4/vLLM release, or a
-new auxiliary component does not require a DGX-Forge release.
+new auxiliary component does not require a `vonk-forge` platform release.
 
 The NAS is the administration and authority host. Its Docker services (the
 API/worker, PostgreSQL, Caddy, LiteLLM, Hermes, Prometheus, and Grafana) are
@@ -162,7 +162,7 @@ outbound route; the NAS control worker does not proxy arbitrary URLs.
 ## NAS platform updates and Spark skew
 
 NAS Docker services and Spark worker code have separate update actions. When
-the NAS reports a newer compatible DGX-Forge platform release than one or more
+the NAS reports a newer compatible `vonk-forge` platform release than one or more
 Sparks, the web Admin → Updates page and `sparkctl admin updates skew --json`
 show the exact versions, affected nodes, signed target digest, and a
 topology-aware fan-out preview. The operator must explicitly confirm the

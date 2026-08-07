@@ -22,7 +22,7 @@ only tag. Define these exact Services in the admin console:
 
 Merge the reviewed sections of `deploy/compose/tailscale/grants.example.hujson`
 into tailnet policy after replacing the GitHub-login placeholder. Administrators
-reach only the DGX Forge Service through its grant. `group:hermes-users` reaches
+reach only the `vonk-forge` Service through its grant. `group:hermes-users` reaches
 only the two Hermes Services. Auto-approval permits only `tag:dgx-gateway` to
 advertise the three named Services. Never use `svc:*` or an allow-all ACL.
 

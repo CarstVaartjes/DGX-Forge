@@ -1,6 +1,6 @@
 # Spark agent PKI operations
 
-This runbook operates the recommended Smallstep `step-ca` provider for DGX-Forge.
+This runbook operates the recommended Smallstep `step-ca` provider for `vonk-forge`.
 It is written for a small cluster, but contains no Spark name, address, or count.
 Certificates last exactly 24 hours. The offline root private key never enters the
 NAS, Docker, Compose, a job payload, or Git.
@@ -119,7 +119,7 @@ test "$(jq -r '.authority.provisioners[0].key.kid' "$STEP_CA_DATA_DIR/ca.json")"
 
 The tracked template fixes the JWK provisioner to 24 hours, disables direct CA
 renewal and Smallstep extensions, and uses a client-auth-only template. Normal
-renewal is a new `/1.0/sign` request: DGX-Forge first authenticates the existing
+renewal is a new `/1.0/sign` request: `vonk-forge` first authenticates the existing
 mTLS identity, then submits the new node-signed CSR under fixed policy.
 CRL generation is enabled with `generateOnRevoke`, a one-hour cache duration,
 and a 30-minute renewal period. The control provider accepts only a correctly
@@ -143,7 +143,7 @@ agent credential. Inspect the rendered mounts and confirm no root private key.
 
 ## Revocation and uncertain remote results
 
-Use the administrator API/CLI node-revoke operation. DGX-Forge commits local
+Use the administrator API/CLI node-revoke operation. `vonk-forge` commits local
 node retirement and certificate revocation first, so Caddy-forwarded identities
 are rejected immediately. It then requests passive step-ca revocation, which
 prevents provider renewal. Confirmed serials receive `ca_revoked_at`; retries

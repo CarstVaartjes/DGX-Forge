@@ -4,7 +4,7 @@ Standard service images are fixed by version and OCI index digest in
 `deploy/compose/images.lock.json`; Compose uses those exact references as its
 defaults. The custom control image is a release artifact and must be supplied
 through `CONTROL_API_IMAGE`, `CONTROL_WORKER_IMAGE`, and `HERMES_AGENT_IMAGE`
-with one complete set of registry digests. The three DGX-Forge packages are
+with one complete set of registry digests. The three `vonk-forge` packages are
 `ghcr.io/carstvaartjes/dgx-forge-api`,
 `ghcr.io/carstvaartjes/dgx-forge-worker`, and
 `ghcr.io/carstvaartjes/dgx-forge-hermes`. Build the `api` and `worker`
@@ -83,7 +83,7 @@ mutable tag. Store scan/signature attestations with the release evidence.
 
 ## Workload artifact build and promotion boundary
 
-Workload artifacts have an independent release cadence from DGX-Forge. A new
+Workload artifacts have an independent release cadence from `vonk-forge`. A new
 model, adapter, runtime, wheel, environment, checkpoint, or auxiliary component
 does not require a platform release when it fits the installed workload ABI.
 The authorities are deliberately separate:
@@ -102,7 +102,7 @@ The authorities are deliberately separate:
    authorized workload release.
 4. Workload TUF authorizes the exact immutable workload release lock after
    promotion. Its roots, roles, target prefixes, and signing credentials are
-   separate from platform TUF, so a workload key cannot update DGX-Forge, its
+   separate from platform TUF, so a workload key cannot update `vonk-forge`, its
    agents, supervisors, protocol, or node policy.
 5. Sparks obtain authorized lock metadata from the NAS and fetch large
    content-addressed payloads from their declared upstream or approved mirror.
