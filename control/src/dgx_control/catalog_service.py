@@ -3,18 +3,31 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
+from functools import lru_cache
+from pathlib import Path
 from typing import Any
 
+from jsonschema import Draft202012Validator, FormatChecker
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from .catalog_repository import CatalogRepository, sensitive_document_path
-from .models import LocalRecipe, LocalRecipeRevision, RecipeImport, RecipeImportItem
+from .global_catalog import GlobalRecipeRevision
+from .models import (
+    LocalRecipe,
+    LocalRecipeRevision,
+    RecipeGlobalLink,
+    RecipeImport,
+    RecipeImportItem,
+    RecipeTestReport,
+)
 from .recipe_contract import (
     RecipeContractError,
     recipe_content_sha256,
@@ -24,6 +37,9 @@ from .recipe_contract import (
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 _MUTABLE_REVISIONS = frozenset(
     {"main", "master", "latest", "head", "main-latest", "master-latest"}
+)
+_REQUIRED_TEST_CHECKS = frozenset(
+    {"container.started", "endpoint.healthy", "inference.completed"}
 )
 
 
@@ -305,6 +321,267 @@ class CatalogService:
             actor, RecipeDraftInput(slug=slug, document=document, source_kind="local")
         )
 
+    def import_global(
+        self, actor: str, remote: GlobalRecipeRevision
+    ) -> RecipeRevisionView:
+        """Materialize one verified global revision in authoritative local rows."""
+
+        actor = _actor(actor)
+        clean = self._validated_document(remote.document, slug=remote.slug)
+        if recipe_content_sha256(clean) != remote.content_sha256:
+            raise CatalogValidationError(
+                "global.hash_mismatch", "global recipe content hash is invalid"
+            )
+        identity = _mapping(clean["identity"])
+        if identity != {"publisher": remote.publisher, "slug": remote.slug}:
+            raise CatalogValidationError(
+                "global.identity_mismatch", "global recipe identity is inconsistent"
+            )
+        with self._sessions.begin() as session:
+            imported = session.scalar(
+                select(RecipeImport).where(
+                    RecipeImport.source_kind == "global",
+                    RecipeImport.source_sha256 == remote.content_sha256,
+                )
+            )
+            if imported is not None:
+                recipe = self._require_recipe(session, imported.recipe_id)
+                revision = session.scalar(
+                    select(LocalRecipeRevision).where(
+                        LocalRecipeRevision.recipe_id == recipe.id,
+                        LocalRecipeRevision.content_sha256 == remote.content_sha256,
+                    )
+                )
+                if revision is None:
+                    raise CatalogConflict(
+                        "global.history_inconsistent", "local import history is inconsistent"
+                    )
+                return _view(recipe, revision)
+
+            link = session.scalar(
+                select(RecipeGlobalLink).where(
+                    RecipeGlobalLink.global_publisher == remote.publisher,
+                    RecipeGlobalLink.global_slug == remote.slug,
+                )
+            )
+            metadata = _mapping(clean["metadata"])
+            now = self._clock()
+            if link is None:
+                if self._repository.recipe_by_slug(session, remote.slug) is not None:
+                    raise CatalogConflict(
+                        "global.slug_conflict",
+                        "a different local recipe already uses this slug; fork or rename it",
+                    )
+                recipe = LocalRecipe(
+                    slug=remote.slug,
+                    title=str(metadata["title"]),
+                    description=str(metadata["description"]),
+                    source_kind="global",
+                    created_by=actor,
+                    created_at=now,
+                    updated_at=now,
+                )
+                session.add(recipe)
+                session.flush()
+                local_number = 1
+            else:
+                recipe = self._require_recipe(session, link.recipe_id, for_update=True)
+                if remote.revision_number <= link.global_revision:
+                    raise CatalogConflict(
+                        "global.revision_stale",
+                        "requested global revision is older than the local imported revision",
+                    )
+                local_number = self._repository.next_revision_number(session, recipe.id)
+                recipe.title = str(metadata["title"])
+                recipe.description = str(metadata["description"])
+                recipe.updated_at = now
+
+            revision = LocalRecipeRevision(
+                recipe_id=recipe.id,
+                revision_number=local_number,
+                lifecycle="resolved",
+                schema_version=1,
+                document=clean,
+                content_sha256=remote.content_sha256,
+                created_by=actor,
+                created_at=now,
+            )
+            session.add(revision)
+            session.flush()
+            session.add(
+                RecipeImport(
+                    recipe_id=recipe.id,
+                    source_kind="global",
+                    source_reference=remote.uri,
+                    source_sha256=remote.content_sha256,
+                    redacted_source={
+                        "publisher": remote.publisher,
+                        "slug": remote.slug,
+                        "recipe_id": remote.recipe_id,
+                        "revision_number": remote.revision_number,
+                        "revision_id": remote.revision_id,
+                        "published_at": remote.published_at,
+                    },
+                    created_by=actor,
+                    created_at=now,
+                )
+            )
+            if link is None:
+                link = RecipeGlobalLink(
+                    recipe_id=recipe.id,
+                    global_recipe_id=remote.recipe_id,
+                    global_publisher=remote.publisher,
+                    global_slug=remote.slug,
+                    global_revision=remote.revision_number,
+                    global_content_sha256=remote.content_sha256,
+                    sync_state="current",
+                    synced_at=now,
+                )
+                session.add(link)
+            else:
+                link.global_recipe_id = remote.recipe_id
+                link.global_revision = remote.revision_number
+                link.global_content_sha256 = remote.content_sha256
+                link.sync_state = "current"
+                link.synced_at = now
+            session.flush()
+            return _view(recipe, revision)
+
+    def attach_test_report(
+        self, recipe_id: str, report: Mapping[str, object], actor: str
+    ) -> dict[str, object]:
+        """Validate publisher evidence without claiming Vonk certification."""
+
+        actor = _actor(actor)
+        sensitive = sensitive_document_path(report)
+        if sensitive is not None:
+            raise CatalogValidationError(
+                "catalog.sensitive_field", f"sensitive field is forbidden at {sensitive}"
+            )
+        clean: dict[str, object] = copy.deepcopy(dict(report))
+        errors = sorted(
+            _test_report_validator().iter_errors(clean),
+            key=lambda error: tuple(str(part) for part in error.absolute_path),
+        )
+        if errors:
+            path = ".".join(map(str, errors[0].absolute_path)) or "$"
+            raise CatalogValidationError(
+                "catalog.test_report_invalid", f"test report is invalid at {path}"
+            )
+        with self._sessions.begin() as session:
+            recipe = self._require_recipe(session, recipe_id)
+            revision = self._repository.latest_revision(session, recipe.id)
+            if revision is None or revision.lifecycle != "resolved" or revision.content_sha256 is None:
+                raise CatalogConflict(
+                    "catalog.recipe_unresolved", "resolve the recipe before attaching a test report"
+                )
+            runtime = _mapping(revision.document["runtime"])
+            image = str(runtime["image"])
+            image_digest = "sha256:" + image.rsplit("@sha256:", 1)[-1]
+            topology = _mapping(revision.document["topology"])
+            tested = topology.get("tested_node_counts")
+            by_name = {
+                str(item.get("name")): item.get("passed")
+                for item in clean["checks"]
+                if isinstance(item, Mapping)
+            }
+            if clean.get("recipe_sha256") != revision.content_sha256:
+                raise CatalogValidationError(
+                    "catalog.test_report_recipe_mismatch",
+                    "test report does not match this recipe revision",
+                )
+            if clean.get("image_digest") != image_digest:
+                raise CatalogValidationError(
+                    "catalog.test_report_image_mismatch",
+                    "test report does not match this runtime image",
+                )
+            if not isinstance(tested, list) or clean.get("node_count") not in tested:
+                raise CatalogValidationError(
+                    "catalog.test_report_topology_mismatch",
+                    "test report node count is not declared as tested",
+                )
+            if any(by_name.get(name) is not True for name in _REQUIRED_TEST_CHECKS):
+                raise CatalogValidationError(
+                    "catalog.test_report_failed",
+                    "test report must show all required lifecycle and inference checks passed",
+                )
+            try:
+                started = datetime.fromisoformat(str(clean["started_at"])).astimezone(UTC)
+                finished = datetime.fromisoformat(str(clean["finished_at"])).astimezone(UTC)
+            except ValueError as error:
+                raise CatalogValidationError(
+                    "catalog.test_report_timestamps",
+                    "test report timestamps are invalid",
+                ) from error
+            now = self._clock()
+            if now.tzinfo is None:
+                now = now.replace(tzinfo=UTC)
+            else:
+                now = now.astimezone(UTC)
+            if not (
+                started <= finished
+                and finished - started <= timedelta(hours=24)
+                and now - timedelta(days=90) <= finished <= now + timedelta(minutes=5)
+            ):
+                raise CatalogValidationError(
+                    "catalog.test_report_timestamps",
+                    "test report timestamps must be ordered, recent, and within 24 hours",
+                )
+            encoded = json.dumps(
+                clean, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
+            ).encode()
+            digest = hashlib.sha256(encoded).hexdigest()
+            existing = session.scalar(
+                select(RecipeTestReport).where(
+                    RecipeTestReport.recipe_revision_id == revision.id,
+                    RecipeTestReport.report_sha256 == digest,
+                )
+            )
+            if existing is None:
+                session.add(
+                    RecipeTestReport(
+                        recipe_revision_id=revision.id,
+                        report_sha256=digest,
+                        report=clean,
+                        created_by=actor,
+                        created_at=self._clock(),
+                    )
+                )
+            return copy.deepcopy(clean)
+
+    def publication_export(
+        self, recipe_id: str, target_publisher: str
+    ) -> dict[str, object]:
+        if not _SLUG.fullmatch(target_publisher):
+            raise CatalogValidationError(
+                "catalog.publisher", "target publisher namespace is invalid"
+            )
+        with self._sessions() as session:
+            recipe = self._require_recipe(session, recipe_id)
+            revision = self._repository.latest_revision(session, recipe.id)
+            if revision is None or revision.lifecycle != "resolved" or revision.content_sha256 is None:
+                raise CatalogConflict(
+                    "catalog.recipe_unresolved", "resolve the recipe before exporting it"
+                )
+            evidence = session.scalar(
+                select(RecipeTestReport)
+                .where(RecipeTestReport.recipe_revision_id == revision.id)
+                .order_by(RecipeTestReport.created_at.desc(), RecipeTestReport.id.desc())
+                .limit(1)
+            )
+            if evidence is None:
+                raise CatalogConflict(
+                    "catalog.test_report_required",
+                    "attach a passing local test report before publication export",
+                )
+            document = copy.deepcopy(revision.document)
+            report = copy.deepcopy(evidence.report)
+        identity = _mapping(document["identity"])
+        identity["publisher"] = target_publisher
+        validate_recipe(document)
+        report["recipe_sha256"] = recipe_content_sha256(document)
+        return {"recipe": document, "test_report": report}
+
     def _require_recipe(
         self, session: Session, recipe_id: str, *, for_update: bool = False
     ) -> LocalRecipe:
@@ -350,6 +627,16 @@ def _mapping(value: object) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise CatalogValidationError("catalog.document", "recipe object is invalid")
     return value
+
+
+@lru_cache(maxsize=1)
+def _test_report_validator() -> Draft202012Validator:
+    root = Path(__file__).resolve().parents[3]
+    schema = json.loads(
+        (root / "schemas/global/test-report-v1.schema.json").read_text(encoding="utf-8")
+    )
+    Draft202012Validator.check_schema(schema)
+    return Draft202012Validator(schema, format_checker=FormatChecker())
 
 
 def _actor(value: str) -> str:

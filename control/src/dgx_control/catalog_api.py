@@ -6,7 +6,7 @@ import json
 from collections.abc import Mapping
 from typing import Any, Literal, Protocol
 
-from fastapi import Depends, FastAPI, HTTPException, Path, Query, Request, status
+from fastapi import FastAPI, HTTPException, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import JSONResponse
 
@@ -20,6 +20,7 @@ from .catalog_service import (
     RecipeRevisionView,
     RecipeSummary,
 )
+from .global_catalog import GlobalCatalogError, GlobalRecipeRevision
 
 _UUID = r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 _SLUG = r"^[a-z0-9][a-z0-9-]{1,62}$"
@@ -32,11 +33,19 @@ CATALOG_OPERATION_IDS = {
     ("put", "/api/v1/catalog/recipes/{recipe_id}/draft"): "updateLocalRecipeDraft",
     ("post", "/api/v1/catalog/recipes/{recipe_id}/resolve"): "resolveLocalRecipe",
     ("post", "/api/v1/catalog/recipes/{recipe_id}/fork"): "forkLocalRecipe",
+    ("post", "/api/v1/catalog/imports/global/preview"): "previewGlobalRecipeImport",
+    ("post", "/api/v1/catalog/imports/global"): "importGlobalRecipe",
+    ("put", "/api/v1/catalog/recipes/{recipe_id}/publication-report"): "attachRecipePublicationReport",
+    ("post", "/api/v1/catalog/recipes/{recipe_id}/publication-export"): "exportRecipeForPublication",
 }
 
 
 class AuditSink(Protocol):
     def append(self, record: AuditRecord) -> None: ...
+
+
+class GlobalCatalogReader(Protocol):
+    def fetch(self, uri: str) -> GlobalRecipeRevision: ...
 
 
 class StrictModel(BaseModel):
@@ -66,6 +75,33 @@ class ResolveRecipeRequest(StrictModel):
 class ForkRecipeRequest(StrictModel):
     revision: int = Field(ge=1, strict=True)
     slug: str = Field(pattern=_SLUG)
+
+
+class GlobalImportPreviewRequest(StrictModel):
+    uri: str = Field(min_length=100, max_length=256)
+
+
+class GlobalImportRequest(GlobalImportPreviewRequest):
+    expected_content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class TestReportRequest(StrictModel):
+    report: dict[str, object]
+
+
+class PublicationExportRequest(StrictModel):
+    publisher: str = Field(pattern=_SLUG)
+
+
+class GlobalRevisionResponse(StrictModel):
+    publisher: str = Field(pattern=_SLUG)
+    slug: str = Field(pattern=_SLUG)
+    recipe_id: str = Field(min_length=32, max_length=36)
+    revision_number: int = Field(ge=1)
+    revision_id: str = Field(min_length=32, max_length=36)
+    content_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    published_at: str
+    document: dict[str, object]
 
 
 class RecipeSummaryResponse(StrictModel):
@@ -178,6 +214,7 @@ def install_catalog_routes(
     actor_dependency: Any,
     audits: AuditSink,
     service: CatalogService | None,
+    global_catalog: GlobalCatalogReader | None = None,
 ) -> None:
     from .operation_api import _ADMIN_OPERATION_IDS
 
@@ -192,6 +229,45 @@ def install_catalog_routes(
     def administrator(actor: Actor) -> None:
         if actor.role != "administrator":
             raise HTTPException(status_code=403, detail="insufficient role")
+
+    def remote(uri: str) -> GlobalRecipeRevision:
+        if global_catalog is None:
+            raise GlobalCatalogError(
+                "global.unavailable", "global catalog is not configured"
+            )
+        return global_catalog.fetch(uri)
+
+    def global_problem(request: Request, error: GlobalCatalogError) -> JSONResponse:
+        status_code = (
+            404 if error.code == "global.not_found"
+            else 409 if error.code == "global.revision_changed"
+            else 422 if error.code in {
+                "global.uri_invalid", "global.identity_mismatch",
+                "global.schema_incompatible",
+            }
+            else 503 if error.code in {"global.unavailable", "global.url_insecure"}
+            else 502
+        )
+        return JSONResponse(
+            status_code=status_code,
+            content={
+                "code": error.code[:128],
+                "detail": error.detail[:256],
+                "request_id": request.state.request_id,
+            },
+        )
+
+    def global_revision(value: GlobalRecipeRevision) -> dict[str, object]:
+        return {
+            "publisher": value.publisher,
+            "slug": value.slug,
+            "recipe_id": value.recipe_id,
+            "revision_number": value.revision_number,
+            "revision_id": value.revision_id,
+            "content_sha256": value.content_sha256,
+            "published_at": value.published_at,
+            "document": value.document,
+        }
 
     def read(call, request: Request):
         try:
@@ -300,6 +376,121 @@ def install_catalog_routes(
             return _problem(request, error)
         audits.append(AuditRecord(request.state.request_id, actor.subject, "catalog.recipe.fork", None, (recipe_id, result.recipe_id)))
         return _revision(result)
+
+    @app.post(
+        "/api/v1/catalog/imports/global/preview",
+        response_model=GlobalRevisionResponse,
+        operation_id="previewGlobalRecipeImport",
+    )
+    def preview_global_import(body: GlobalImportPreviewRequest, request: Request, actor: Actor = authenticated):
+        administrator(actor)
+        try:
+            return global_revision(remote(body.uri))
+        except GlobalCatalogError as error:
+            return global_problem(request, error)
+
+    @app.post(
+        "/api/v1/catalog/imports/global",
+        response_model=RecipeRevisionResponse,
+        status_code=status.HTTP_201_CREATED,
+        operation_id="importGlobalRecipe",
+    )
+    def import_global_recipe(body: GlobalImportRequest, request: Request, actor: Actor = authenticated):
+        administrator(actor)
+        try:
+            fetched = remote(body.uri)
+        except GlobalCatalogError as error:
+            return global_problem(request, error)
+        if fetched.content_sha256 != body.expected_content_sha256:
+            return _problem(
+                request,
+                CatalogConflict(
+                    "global.preview_changed",
+                    "global recipe changed since preview; review it again",
+                ),
+            )
+        try:
+            result = catalog().import_global(actor.subject, fetched)
+        except CatalogError as error:
+            return _problem(request, error)
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                actor.subject,
+                "catalog.global.import",
+                None,
+                (result.recipe_id, fetched.revision_id, fetched.content_sha256),
+            )
+        )
+        return _revision(result)
+
+    @app.put(
+        "/api/v1/catalog/recipes/{recipe_id}/publication-report",
+        operation_id="attachRecipePublicationReport",
+    )
+    def attach_publication_report(
+        body: TestReportRequest,
+        request: Request,
+        recipe_id: str = Path(pattern=_UUID),
+        actor: Actor = authenticated,
+    ):
+        administrator(actor)
+        try:
+            _bounded(body.report)
+            report = catalog().attach_test_report(recipe_id, body.report, actor.subject)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="recipe not found") from None
+        except CatalogError as error:
+            return _problem(request, error)
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                actor.subject,
+                "catalog.test_report.attach",
+                None,
+                (recipe_id,),
+            )
+        )
+        return {"report": report}
+
+    @app.post(
+        "/api/v1/catalog/recipes/{recipe_id}/publication-export",
+        operation_id="exportRecipeForPublication",
+    )
+    def export_for_publication(
+        body: PublicationExportRequest,
+        request: Request,
+        recipe_id: str = Path(pattern=_UUID),
+        actor: Actor = authenticated,
+    ):
+        administrator(actor)
+        try:
+            envelope = catalog().publication_export(recipe_id, body.publisher)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="recipe not found") from None
+        except CatalogError as error:
+            return _problem(request, error)
+        recipe = envelope["recipe"]
+        assert isinstance(recipe, dict)
+        identity = recipe["identity"]
+        assert isinstance(identity, dict)
+        filename = f"{body.publisher}-{identity['slug']}.json"
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                actor.subject,
+                "catalog.publication.export",
+                None,
+                (recipe_id, body.publisher),
+            )
+        )
+        return JSONResponse(
+            content=envelope,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store",
+            },
+        )
 
 
 __all__ = ["CATALOG_OPERATION_IDS", "CatalogProblem", "install_catalog_routes"]

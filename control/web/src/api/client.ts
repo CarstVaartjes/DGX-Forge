@@ -27,6 +27,7 @@ import type {
   CatalogRecipeDocument,
   CatalogRecipeList,
   CatalogRecipeRevision,
+  GlobalRecipeRevision,
   SparkRunApplied,
   SparkRunPreview,
 } from "./types";
@@ -167,7 +168,17 @@ export class ApiClient implements ControlApi {
     const csrf = csrfToken();
     if (csrf && init.method && !["GET", "HEAD"].includes(init.method)) headers.set("X-CSRF-Token", csrf);
     const response = await fetch(path, {...init, headers, credentials: "same-origin"});
-    if (!response.ok) throw new Error(`Control API returned ${response.status}`);
+    if (!response.ok) {
+      let problem: unknown;
+      try { problem = await response.json(); } catch { problem = null; }
+      if (typeof problem === "object" && problem !== null) {
+        const body = problem as {code?: unknown; detail?: unknown};
+        const code = typeof body.code === "string" ? body.code.slice(0, 128) : `HTTP ${response.status}`;
+        const detail = typeof body.detail === "string" ? body.detail.slice(0, 256) : "request failed";
+        throw new Error(`${code}: ${detail}`);
+      }
+      throw new Error(`Control API returned ${response.status}`);
+    }
     return response.json() as Promise<T>;
   }
 
@@ -193,6 +204,22 @@ export class ApiClient implements ControlApi {
 
   async forkCatalogRecipe(recipeId: string, revision: number, slug: string): Promise<CatalogRecipeRevision> {
     return resultData(await this.generated.POST("/api/v1/catalog/recipes/{recipe_id}/fork", {params: {path: {recipe_id: recipeId}}, body: {revision, slug}}));
+  }
+
+  previewGlobalRecipe(uri: string): Promise<GlobalRecipeRevision> {
+    return this.request("/api/v1/catalog/imports/global/preview", {method: "POST", body: JSON.stringify({uri})});
+  }
+
+  importGlobalRecipe(uri: string, expectedContentSha256: string): Promise<CatalogRecipeRevision> {
+    return this.request("/api/v1/catalog/imports/global", {method: "POST", body: JSON.stringify({uri, expected_content_sha256: expectedContentSha256})});
+  }
+
+  async attachPublicationReport(recipeId: string, report: Record<string, unknown>): Promise<void> {
+    await this.request(`/api/v1/catalog/recipes/${encodeURIComponent(recipeId)}/publication-report`, {method: "PUT", body: JSON.stringify({report})});
+  }
+
+  publicationExport(recipeId: string, publisher: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/v1/catalog/recipes/${encodeURIComponent(recipeId)}/publication-export`, {method: "POST", body: JSON.stringify({publisher})});
   }
 
   previewSparkRun(sourceYaml: string): Promise<SparkRunPreview> {

@@ -5,15 +5,16 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from dgx_control.api import create_app
 from dgx_control.audit import MemoryAuditStore
 from dgx_control.auth import Actor, TokenCodec
 from dgx_control.catalog_service import CatalogService
+from dgx_control.global_catalog import GlobalRecipeRevision
 from dgx_control.models import Base
+from dgx_control.recipe_contract import recipe_content_sha256
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 class Jobs:
@@ -55,6 +56,46 @@ def api(tmp_path: Path):
         return {"Authorization": f"Bearer {token}"}
 
     return TestClient(app), headers, audits
+
+
+@pytest.fixture
+def bridge_api(tmp_path: Path, recipe_document):
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'bridge.sqlite'}",
+        connect_args={"check_same_thread": False},
+    )
+    Base.metadata.create_all(engine)
+    sessions = sessionmaker(engine, expire_on_commit=False)
+    service = CatalogService(sessions, clock=lambda: datetime(2026, 8, 7, 12, 0, tzinfo=UTC))
+    digest = recipe_content_sha256(recipe_document)
+    remote = GlobalRecipeRevision(
+        publisher="vonk",
+        slug="qwen3-vllm",
+        recipe_id="00000000-0000-4000-8000-000000000001",
+        revision_number=1,
+        revision_id="10000000-0000-4000-8000-000000000001",
+        content_sha256=digest,
+        published_at="2026-08-07T10:00:00+00:00",
+        document=recipe_document,
+    )
+
+    class Global:
+        def fetch(self, uri: str):
+            assert uri == remote.uri
+            return remote
+
+    codec = TokenCodec(b"b" * 32)
+    audits = MemoryAuditStore()
+    app = create_app(
+        jobs=Jobs(), tokens=codec, audits=audits, fleet=lambda: {"nodes": []},
+        now=lambda: 10, catalog=service, global_catalog=Global(),
+    )
+
+    def headers(role: str) -> dict[str, str]:
+        token = codec.issue(Actor(role, role), ttl_seconds=100, now=0)
+        return {"Authorization": f"Bearer {token}"}
+
+    return TestClient(app), headers, audits, service, remote
 
 
 def test_operator_cannot_author_recipe(api, recipe_document) -> None:
@@ -154,3 +195,79 @@ def test_catalog_operation_ids_are_stable(api) -> None:
     assert paths["/api/v1/catalog/recipes/{recipe_id}/draft"]["put"]["operationId"] == "updateLocalRecipeDraft"
     assert paths["/api/v1/catalog/recipes/{recipe_id}/resolve"]["post"]["operationId"] == "resolveLocalRecipe"
     assert paths["/api/v1/catalog/recipes/{recipe_id}/fork"]["post"]["operationId"] == "forkLocalRecipe"
+
+
+def test_preview_and_explicit_global_import_are_separate(bridge_api) -> None:
+    client, headers, audits, _service, remote = bridge_api
+    preview = client.post(
+        "/api/v1/catalog/imports/global/preview",
+        headers=headers("administrator"),
+        json={"uri": remote.uri},
+    )
+    assert preview.status_code == 200
+    assert preview.json()["content_sha256"] == remote.content_sha256
+
+    denied = client.post(
+        "/api/v1/catalog/imports/global",
+        headers=headers("viewer"),
+        json={"uri": remote.uri, "expected_content_sha256": remote.content_sha256},
+    )
+    assert denied.status_code == 403
+
+    imported = client.post(
+        "/api/v1/catalog/imports/global",
+        headers=headers("administrator"),
+        json={"uri": remote.uri, "expected_content_sha256": remote.content_sha256},
+    )
+    assert imported.status_code == 201
+    assert imported.json()["origin"] == "global"
+    assert imported.json()["lifecycle"] == "resolved"
+    assert any(event.action == "catalog.global.import" for event in audits.list())
+
+
+def test_publication_report_and_export_are_local_json_only(bridge_api, recipe_document) -> None:
+    client, headers, _audits, _service, _remote = bridge_api
+    created = client.post(
+        "/api/v1/catalog/recipes",
+        headers=headers("administrator"),
+        json={"slug": "local-copy", "document": {
+            **recipe_document,
+            "identity": {"publisher": "local", "slug": "local-copy"},
+        }},
+    ).json()
+    resolved = client.post(
+        f"/api/v1/catalog/recipes/{created['recipe_id']}/resolve",
+        headers=headers("administrator"),
+        json={"expected_revision": 1},
+    ).json()
+    image = recipe_document["runtime"]["image"]
+    report = {
+        "schema_version": 1,
+        "recipe_sha256": resolved["content_sha256"],
+        "image_digest": "sha256:" + image.rsplit("@sha256:", 1)[1],
+        "node_count": 1,
+        "runtime": {"agent_version": "1.0.0", "container_runtime": "podman", "architecture": "linux/arm64"},
+        "checks": [
+            {"name": "container.started", "passed": True},
+            {"name": "endpoint.healthy", "passed": True},
+            {"name": "inference.completed", "passed": True},
+        ],
+        "started_at": "2026-08-07T10:00:00+00:00",
+        "finished_at": "2026-08-07T10:05:00+00:00",
+    }
+    attached = client.put(
+        f"/api/v1/catalog/recipes/{created['recipe_id']}/publication-report",
+        headers=headers("administrator"),
+        json={"report": report},
+    )
+    assert attached.status_code == 200
+
+    exported = client.post(
+        f"/api/v1/catalog/recipes/{created['recipe_id']}/publication-export",
+        headers=headers("administrator"),
+        json={"publisher": "ada-lab"},
+    )
+    assert exported.status_code == 200
+    assert exported.headers["content-disposition"].endswith('filename="ada-lab-local-copy.json"')
+    assert exported.json()["recipe"]["identity"]["publisher"] == "ada-lab"
+    assert set(exported.json()) == {"recipe", "test_report"}

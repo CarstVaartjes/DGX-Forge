@@ -4,9 +4,21 @@
 
 **Goal:** Connect the local Vonk Forge product to the public catalog for explicit download and publishing, preserve offline local authority, expose administration/inference only through Tailscale, and prove the entire single- and multi-node lifecycle in staging.
 
-**Architecture:** The local controller uses a generated HTTPS client pinned to a released global OpenAPI/schema bundle. Anonymous catalog reads and explicit imports need no account; publishing uses OAuth 2 device authorization with a revocable least-privilege token stored encrypted locally. Sync always creates or updates a local source record and immutable local revision; no remote deletion or outage can erase an accepted local recipe. Tailscale terminates the supported remote-access boundary before static Caddy, which proxies UI/API and `/v1/*` to LiteLLM.
+**Architecture:** The local controller uses a bounded anonymous HTTPS client pinned to a released global schema bundle. Explicit imports need no account and always create an independent immutable local revision; no remote deletion or outage can erase it. Publishing is browser-mediated: the NAS exports only recipe JSON plus publisher-submitted test evidence, and OAuth/session credentials exist only on vonkforge.ai. Tailscale terminates the supported remote-access boundary before static Caddy, which proxies UI/API and `/v1/*` to LiteLLM.
 
-**Tech Stack:** FastAPI, PostgreSQL, httpx, OAuth 2 Device Authorization Grant, JSON Schema/OpenAPI, Docker Compose, Tailscale, Caddy, LiteLLM, Playwright, pytest.
+**Tech Stack:** FastAPI, PostgreSQL, httpx, browser OAuth, JSON Schema/OpenAPI, Docker Compose, Tailscale, Caddy, LiteLLM, Playwright, pytest.
+
+## Implemented status and superseding decision
+
+- [x] Pin and verify the global recipe/problem/test-report schema bundle.
+- [x] Fetch immutable `vonk://...@sha256:` revisions through a fixed HTTPS origin with no redirects, ambient credentials, or unbounded bodies.
+- [x] Review and explicitly import global revisions into authoritative local PostgreSQL, preserving offline operation and provenance.
+- [x] Attach hash/image/topology-bound publisher test evidence and export a target-namespace-normalized metadata-only envelope.
+- [x] Keep OAuth entirely in the vonkforge.ai browser workspace; store no global access or refresh token on the NAS.
+- [x] Enforce Tailscale ingress and static-Caddy/dynamic-LiteLLM responsibility boundaries.
+- [ ] Complete hosted Railway OAuth acceptance and physical single-/multi-Spark soak evidence; these require external provider credentials and hardware.
+
+Tasks 4 and the token-bearing parts of Task 5 below are retained as historical design notes and are superseded by the browser-mediated export implemented above. They must not be implemented.
 
 ---
 
@@ -73,7 +85,7 @@
 - [ ] Run with the global test server disabled after import and prove install/run planning still works.
 - [ ] Commit: `feat(catalog): import immutable global recipes locally`
 
-## Task 4: Add OAuth device authorization for publishing
+## Task 4: SUPERSEDED — do not add OAuth device authorization locally
 
 **Files (`vonk-forge-web`):**
 - Create: `api/src/vonk_catalog/device_authorization.py`
@@ -95,7 +107,7 @@
 - [ ] Require a separate explicit local action to publish; login itself causes no upload or external mutation.
 - [ ] Commit separately: `feat(auth): authorize local publishing devices` and `feat(catalog): add global publisher login`.
 
-## Task 5: Upload tested local recipes as private drafts and publish explicitly
+## Task 5: SUPERSEDED — browser upload replaces token-bearing local publishing
 
 **Files (`vonk-forge`):**
 - Create: `control/src/dgx_control/global_publishing.py`

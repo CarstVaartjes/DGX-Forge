@@ -21,7 +21,7 @@ def config(database_url: str) -> Config:
 
 def test_recipe_catalog_is_the_linear_head() -> None:
     script = ScriptDirectory.from_config(config("sqlite://"))
-    assert script.get_heads() == ["0019_rust_agent_migration"]
+    assert script.get_heads() == ["0020_recipe_catalog_bridge"]
     assert script.get_revision("0015_recipe_catalog").down_revision == (
         "0014_package_action_plans"
     )
@@ -38,6 +38,7 @@ def test_recipe_catalog_tables_upgrade_and_downgrade(tmp_path: Path) -> None:
         "recipe_imports",
         "recipe_import_items",
         "recipe_global_links",
+        "recipe_test_reports",
         "materialized_deployments",
         "materialized_deployment_nodes",
     }
@@ -131,6 +132,7 @@ def test_sqlalchemy_metadata_matches_catalog_and_resolved_rows_are_immutable() -
         "recipe_imports",
         "recipe_import_items",
         "recipe_global_links",
+        "recipe_test_reports",
         "materialized_deployments",
         "materialized_deployment_nodes",
     } <= set(Base.metadata.tables)

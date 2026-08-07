@@ -661,6 +661,102 @@
         "title": "ForkRecipeRequest",
         "type": "object"
       },
+      "GlobalImportPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "uri": {
+            "maxLength": 256,
+            "minLength": 100,
+            "title": "Uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uri"
+        ],
+        "title": "GlobalImportPreviewRequest",
+        "type": "object"
+      },
+      "GlobalImportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_content_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Content Sha256",
+            "type": "string"
+          },
+          "uri": {
+            "maxLength": 256,
+            "minLength": 100,
+            "title": "Uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uri",
+          "expected_content_sha256"
+        ],
+        "title": "GlobalImportRequest",
+        "type": "object"
+      },
+      "GlobalRevisionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "content_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "document": {
+            "additionalProperties": true,
+            "title": "Document",
+            "type": "object"
+          },
+          "published_at": {
+            "title": "Published At",
+            "type": "string"
+          },
+          "publisher": {
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+            "title": "Publisher",
+            "type": "string"
+          },
+          "recipe_id": {
+            "maxLength": 36,
+            "minLength": 32,
+            "title": "Recipe Id",
+            "type": "string"
+          },
+          "revision_id": {
+            "maxLength": 36,
+            "minLength": 32,
+            "title": "Revision Id",
+            "type": "string"
+          },
+          "revision_number": {
+            "minimum": 1.0,
+            "title": "Revision Number",
+            "type": "integer"
+          },
+          "slug": {
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "publisher",
+          "slug",
+          "recipe_id",
+          "revision_number",
+          "revision_id",
+          "content_sha256",
+          "published_at",
+          "document"
+        ],
+        "title": "GlobalRevisionResponse",
+        "type": "object"
+      },
       "GrantRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3750,6 +3846,21 @@
         "title": "ProposalRequest",
         "type": "object"
       },
+      "PublicationExportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "publisher": {
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+            "title": "Publisher",
+            "type": "string"
+          }
+        },
+        "required": [
+          "publisher"
+        ],
+        "title": "PublicationExportRequest",
+        "type": "object"
+      },
       "RecipeListResponse": {
         "additionalProperties": false,
         "properties": {
@@ -4564,6 +4675,21 @@
         "title": "RunRequest",
         "type": "object"
       },
+      "TestReportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "report": {
+            "additionalProperties": true,
+            "title": "Report",
+            "type": "object"
+          }
+        },
+        "required": [
+          "report"
+        ],
+        "title": "TestReportRequest",
+        "type": "object"
+      },
       "UpdateApplyRequest": {
         "additionalProperties": false,
         "properties": {
@@ -5274,6 +5400,92 @@
         "summary": "Audit View"
       }
     },
+    "/api/v1/catalog/imports/global": {
+      "post": {
+        "operationId": "importGlobalRecipe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GlobalImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Import Global Recipe"
+      }
+    },
+    "/api/v1/catalog/imports/global/preview": {
+      "post": {
+        "operationId": "previewGlobalRecipeImport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GlobalImportPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GlobalRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview Global Import"
+      }
+    },
     "/api/v1/catalog/imports/sparkrun": {
       "post": {
         "operationId": "applySparkRunImport",
@@ -5754,6 +5966,112 @@
           }
         ],
         "summary": "Fork Recipe"
+      }
+    },
+    "/api/v1/catalog/recipes/{recipe_id}/publication-export": {
+      "post": {
+        "operationId": "exportRecipeForPublication",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recipe_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Recipe Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicationExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Export For Publication"
+      }
+    },
+    "/api/v1/catalog/recipes/{recipe_id}/publication-report": {
+      "put": {
+        "operationId": "attachRecipePublicationReport",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recipe_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Recipe Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Attach Publication Report"
       }
     },
     "/api/v1/catalog/recipes/{recipe_id}/resolve": {

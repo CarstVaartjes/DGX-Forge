@@ -1664,6 +1664,9 @@ class RecipeImportItem(Base):
 class RecipeGlobalLink(Base):
     __tablename__ = "recipe_global_links"
     __table_args__ = (
+        UniqueConstraint(
+            "global_publisher", "global_slug", name="uq_recipe_global_link_identity"
+        ),
         CheckConstraint("global_revision >= 1", name="ck_recipe_global_links_revision"),
         CheckConstraint(_lower_hex("global_content_sha256", 64), name="ck_recipe_global_links_digest"),
         CheckConstraint("sync_state IN ('current','local-ahead','remote-ahead','unavailable')", name="ck_recipe_global_links_state"),
@@ -1676,6 +1679,32 @@ class RecipeGlobalLink(Base):
     global_content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     sync_state: Mapped[str] = mapped_column(String(24), nullable=False)
     synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RecipeTestReport(Base):
+    """Publisher-submitted local test evidence bound to one immutable revision."""
+
+    __tablename__ = "recipe_test_reports"
+    __table_args__ = (
+        UniqueConstraint(
+            "recipe_revision_id", "report_sha256", name="uq_recipe_test_report_digest"
+        ),
+        CheckConstraint(
+            _lower_hex("report_sha256", 64), name="ck_recipe_test_reports_digest"
+        ),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    recipe_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("local_recipe_revisions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    report_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    report: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class MaterializedDeployment(Base):

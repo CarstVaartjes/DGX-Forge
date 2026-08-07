@@ -1,4 +1,5 @@
 import {render, screen} from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import {CatalogPage} from "./catalog";
 
 const recipes = [
@@ -18,4 +19,35 @@ test("separates local, SparkRun, and global recipe origins", async () => {
   expect(screen.getByText("72.0 GB + 8.0 GB activation / node")).toBeVisible();
   expect(screen.getByText("2–4 nodes")).toBeVisible();
   expect(screen.getByRole("link", {name: "Create local recipe"})).toHaveAttribute("href", "/catalog/new");
+});
+
+test("reviews an exact public revision before importing it locally", async () => {
+  const imported: string[] = [];
+  const uri = `vonk://catalog/vonk/qwen3-vllm@sha256:${"a".repeat(64)}`;
+  const api = {
+    catalogRecipes: async () => ({recipes: [], next_cursor: null}),
+    previewGlobalRecipe: async (value: string) => ({
+      publisher: "vonk", slug: "qwen3-vllm", revision_number: 2,
+      recipe_id: "00000000-0000-4000-8000-000000000002",
+      revision_id: "10000000-0000-4000-8000-000000000002",
+      content_sha256: "a".repeat(64), published_at: "2026-08-07T10:00:00Z",
+      document: {metadata: {title: "Qwen3"}, resources: {per_node: {installed_bytes: 66_000_000_000, resident_memory_bytes: 72_000_000_000}}, topology: {kind: "single", min_nodes: 1, max_nodes: 1}},
+    }),
+    importGlobalRecipe: async (value: string, digest: string) => {
+      imported.push(`${value}:${digest}`);
+      return {...recipes[2], id: "20000000-0000-4000-8000-000000000001", description: "Imported", schema_version: 1 as const, document: {}, created_by: "admin", created_at: "2026-08-07T10:00:00Z"};
+    },
+  };
+  render(<CatalogPage api={api}/>);
+  const user = userEvent.setup();
+
+  await user.type(screen.getByLabelText("Immutable vonkforge.ai URI"), uri);
+  await user.click(screen.getByRole("button", {name: "Review global recipe"}));
+
+  expect(await screen.findByRole("heading", {name: "Review Qwen3"})).toBeVisible();
+  expect(screen.getByText("66.0 GB disk / node")).toBeVisible();
+  expect(screen.getByText("72.0 GB RAM / node")).toBeVisible();
+  await user.click(screen.getByRole("button", {name: "Import exact revision"}));
+  expect(imported).toEqual([`${uri}:${"a".repeat(64)}`]);
+  expect(await screen.findByRole("status")).toHaveTextContent("available offline");
 });

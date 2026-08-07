@@ -13,7 +13,9 @@ Each Spark is onboarded independently; the Docker-capable service host runs
 separate Caddy, API/worker, PostgreSQL, LiteLLM, Hermes Agent, Prometheus, and Grafana
 services. Administration is available through both `sparkctl admin` and the
 web UX. PostgreSQL—not Git—is authoritative for the local recipe/catalog and
-is prefilled with standard entries during installation.
+is prefilled with standard entries during installation. Public vonkforge.ai
+recipes are explicitly reviewed and copied into that database; publishing is
+browser-mediated, so the NAS stores no global OAuth token.
 
 Before a real release, run `scripts/verify-platform-release --candidate X.Y.Z
 --json`. A blocked result is expected until external hardware, recovery, and
@@ -29,7 +31,8 @@ not treated as production-ready until its evidence gates are accepted.
 ## Capabilities
 
 - Create recipes locally, import SparkRun recipes with an explicit ignored-field
-  report, and later sync selected entries with the global Vonk Forge catalog.
+  report, import immutable vonkforge.ai revisions for offline use, and export
+  tested local recipes as metadata-only browser uploads.
 - Execute routine lifecycle and probe operations through outbound, fenced,
   mutually authenticated Spark agents; the control worker never SSHes to a
   Spark.

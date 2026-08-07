@@ -140,6 +140,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/catalog/imports/global": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Import Global Recipe */
+        post: operations["importGlobalRecipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/imports/global/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Global Import */
+        post: operations["previewGlobalRecipeImport"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/catalog/imports/sparkrun": {
         parameters: {
             query?: never;
@@ -237,6 +271,40 @@ export interface paths {
         put?: never;
         /** Fork Recipe */
         post: operations["forkLocalRecipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/recipes/{recipe_id}/publication-export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Export For Publication */
+        post: operations["exportRecipeForPublication"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/catalog/recipes/{recipe_id}/publication-report": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /** Attach Publication Report */
+        put: operations["attachRecipePublicationReport"];
+        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -1372,6 +1440,39 @@ export interface components {
             /** Slug */
             slug: string;
         };
+        /** GlobalImportPreviewRequest */
+        GlobalImportPreviewRequest: {
+            /** Uri */
+            uri: string;
+        };
+        /** GlobalImportRequest */
+        GlobalImportRequest: {
+            /** Expected Content Sha256 */
+            expected_content_sha256: string;
+            /** Uri */
+            uri: string;
+        };
+        /** GlobalRevisionResponse */
+        GlobalRevisionResponse: {
+            /** Content Sha256 */
+            content_sha256: string;
+            /** Document */
+            document: {
+                [key: string]: unknown;
+            };
+            /** Published At */
+            published_at: string;
+            /** Publisher */
+            publisher: string;
+            /** Recipe Id */
+            recipe_id: string;
+            /** Revision Id */
+            revision_id: string;
+            /** Revision Number */
+            revision_number: number;
+            /** Slug */
+            slug: string;
+        };
         /** GrantRequest */
         GrantRequest: {
             /** Node Id */
@@ -2298,6 +2399,11 @@ export interface components {
             /** Changes */
             changes: components["schemas"]["ProposalChangeRequest"][];
         };
+        /** PublicationExportRequest */
+        PublicationExportRequest: {
+            /** Publisher */
+            publisher: string;
+        };
         /** RecipeListResponse */
         RecipeListResponse: {
             /** Next Cursor */
@@ -2549,6 +2655,13 @@ export interface components {
             plan_digest: string;
             /** Request Key */
             request_key: string;
+        };
+        /** TestReportRequest */
+        TestReportRequest: {
+            /** Report */
+            report: {
+                [key: string]: unknown;
+            };
         };
         /** UpdateApplyRequest */
         UpdateApplyRequest: {
@@ -3049,6 +3162,72 @@ export interface operations {
             };
         };
     };
+    importGlobalRecipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GlobalImportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RecipeRevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    previewGlobalRecipeImport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["GlobalImportPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["GlobalRevisionResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     applySparkRunImport: {
         parameters: {
             query?: never;
@@ -3403,6 +3582,76 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+        };
+    };
+    exportRecipeForPublication: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recipe_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PublicationExportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    attachRecipePublicationReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                recipe_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["TestReportRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

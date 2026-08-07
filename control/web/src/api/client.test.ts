@@ -45,6 +45,18 @@ it("adds the session CSRF token to generated enrollment mutations", async () => 
   expect(captured!.credentials).toBe("same-origin");
 });
 
+it("surfaces bounded stable API guidance for local catalog workflows", async () => {
+  vi.stubGlobal("fetch", async () => new Response(JSON.stringify({
+    code: "global.revision_changed",
+    detail: "The immutable revision no longer matches; review it again.",
+    request_id: "10000000-0000-4000-8000-000000000001",
+  }), {headers: {"Content-Type": "application/problem+json"}, status: 409}));
+
+  await expect(new ApiClient().previewGlobalRecipe(
+    `vonk://catalog/vonk/qwen@sha256:${"a".repeat(64)}`,
+  )).rejects.toThrow("global.revision_changed: The immutable revision no longer matches; review it again.");
+});
+
 it.each(["nonce=", "nonce==", "nonce=middle=="]) (
   "preserves the complete padded CSRF cookie value %s among multiple cookies",
   async csrfValue => {

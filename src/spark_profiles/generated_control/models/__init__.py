@@ -25,6 +25,10 @@ from .fork_recipe_request import ForkRecipeRequest
 from .get_platform_update_response_update_status_api_v1_updates_rollout_id_get import GetPlatformUpdateResponseUpdateStatusApiV1UpdatesRolloutIdGet
 from .get_platform_update_skew_response_update_skew_api_v1_updates_skew_get import GetPlatformUpdateSkewResponseUpdateSkewApiV1UpdatesSkewGet
 from .get_repository_response_repository_view_api_v1_repository_get import GetRepositoryResponseRepositoryViewApiV1RepositoryGet
+from .global_import_preview_request import GlobalImportPreviewRequest
+from .global_import_request import GlobalImportRequest
+from .global_revision_response import GlobalRevisionResponse
+from .global_revision_response_document import GlobalRevisionResponseDocument
 from .grant_request import GrantRequest
 from .http_validation_error import HTTPValidationError
 from .install_node_plan_response import InstallNodePlanResponse
@@ -104,6 +108,7 @@ from .preview_request import PreviewRequest
 from .proposal_change_request import ProposalChangeRequest
 from .proposal_change_request_document import ProposalChangeRequestDocument
 from .proposal_request import ProposalRequest
+from .publication_export_request import PublicationExportRequest
 from .recipe_list_response import RecipeListResponse
 from .recipe_revision_response import RecipeRevisionResponse
 from .recipe_revision_response_document import RecipeRevisionResponseDocument
@@ -127,6 +132,8 @@ from .run_plan_response import RunPlanResponse
 from .run_preview_request import RunPreviewRequest
 from .run_request import RunRequest
 from .submit_change_response_submit_change_api_v1_changes_post import SubmitChangeResponseSubmitChangeApiV1ChangesPost
+from .test_report_request import TestReportRequest
+from .test_report_request_report import TestReportRequestReport
 from .update_apply_request import UpdateApplyRequest
 from .update_approve_resume_request import UpdateApproveResumeRequest
 from .update_plan_request import UpdatePlanRequest
@@ -160,6 +167,10 @@ __all__ = (
     "GetPlatformUpdateResponseUpdateStatusApiV1UpdatesRolloutIdGet",
     "GetPlatformUpdateSkewResponseUpdateSkewApiV1UpdatesSkewGet",
     "GetRepositoryResponseRepositoryViewApiV1RepositoryGet",
+    "GlobalImportPreviewRequest",
+    "GlobalImportRequest",
+    "GlobalRevisionResponse",
+    "GlobalRevisionResponseDocument",
     "GrantRequest",
     "HTTPValidationError",
     "InstallNodePlanResponse",
@@ -239,6 +250,7 @@ __all__ = (
     "ProposalChangeRequest",
     "ProposalChangeRequestDocument",
     "ProposalRequest",
+    "PublicationExportRequest",
     "RecipeListResponse",
     "RecipeRevisionResponse",
     "RecipeRevisionResponseDocument",
@@ -262,6 +274,8 @@ __all__ = (
     "RunPreviewRequest",
     "RunRequest",
     "SubmitChangeResponseSubmitChangeApiV1ChangesPost",
+    "TestReportRequest",
+    "TestReportRequestReport",
     "UpdateApplyRequest",
     "UpdateApproveResumeRequest",
     "UpdatePlanRequest",

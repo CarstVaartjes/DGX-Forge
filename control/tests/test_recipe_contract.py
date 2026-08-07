@@ -61,7 +61,7 @@ def test_recipe_validation_rejects_unsafe_values(path, value, message) -> None:
 
 def test_global_contract_lock_matches_vendored_bytes() -> None:
     lock = contract_lock()
-    assert lock["source_commit"] == "5b9304d19ebd581270bf4f848ed177d9bcd9982d"
+    assert lock["source_commit"] == "b046dc33e428868dec635ec63616a568b225561c"
     for relative_path, metadata in lock["files"].items():
         payload = (ROOT / relative_path).read_bytes()
         assert __import__("hashlib").sha256(payload).hexdigest() == metadata["sha256"]

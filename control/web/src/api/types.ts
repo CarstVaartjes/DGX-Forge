@@ -90,6 +90,10 @@ export type CatalogRecipeSummary = components["schemas"]["RecipeSummaryResponse"
 export type CatalogRecipeRevision = components["schemas"]["RecipeRevisionResponse"];
 export type CatalogRecipeList = components["schemas"]["RecipeListResponse"];
 export type CatalogRecipeDocument = Record<string, unknown>;
+export type GlobalRecipeRevision = {
+  publisher: string; slug: string; recipe_id: string; revision_number: number; revision_id: string;
+  content_sha256: string; published_at: string; document: Record<string, unknown>;
+};
 export interface CatalogApi {
   catalogRecipes(cursor?: string): Promise<CatalogRecipeList>;
   catalogRecipe(recipeId: string): Promise<CatalogRecipeRevision>;
@@ -97,6 +101,10 @@ export interface CatalogApi {
   updateCatalogRecipe(recipeId: string, expectedRevision: number, document: CatalogRecipeDocument): Promise<CatalogRecipeRevision>;
   resolveCatalogRecipe(recipeId: string, expectedRevision: number): Promise<CatalogRecipeRevision>;
   forkCatalogRecipe(recipeId: string, revision: number, slug: string): Promise<CatalogRecipeRevision>;
+  previewGlobalRecipe(uri: string): Promise<GlobalRecipeRevision>;
+  importGlobalRecipe(uri: string, expectedContentSha256: string): Promise<CatalogRecipeRevision>;
+  attachPublicationReport(recipeId: string, report: Record<string, unknown>): Promise<void>;
+  publicationExport(recipeId: string, publisher: string): Promise<Record<string, unknown>>;
 }
 export type ImportDisposition = "imported" | "transformed" | "resolution_required" | "overlay_required" | "unsupported_blocking" | "dropped_redundant";
 export type ImportReportItem = {source_path: string; disposition: ImportDisposition; destination_path: string | null; reason_code: string; detail: string; blocking: boolean};

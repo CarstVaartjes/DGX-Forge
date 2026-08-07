@@ -59,6 +59,7 @@ from .auth import (
 )
 from .catalog_api import install_catalog_routes
 from .catalog_service import CatalogService
+from .global_catalog import GlobalCatalogClient
 from .metrics import MetricsRegistry
 from .operation_api import (
     AgentsResponse,
@@ -861,6 +862,7 @@ def create_app(
     updates: Any | None = None,
     packages: PackageApiServices | None = None,
     catalog: CatalogService | None = None,
+    global_catalog: Any | None = None,
     sparkrun: SparkRunWorkflow | None = None,
     recipe_operations: RecipeOperationService | None = None,
 ) -> FastAPI:
@@ -995,6 +997,7 @@ def create_app(
         actor_dependency=authenticated_actor,
         audits=audits,
         service=catalog,
+        global_catalog=global_catalog,
     )
     install_sparkrun_routes(app, actor_dependency=authenticated_actor, audits=audits, workflow=sparkrun)
     install_recipe_operation_routes(
@@ -1930,6 +1933,7 @@ def production_app() -> FastAPI:
                 metrics.set_backup_age(max(0, int(time.time()) - completed_at))
             except (OSError, ValueError):
                 pass
+    global_catalog = GlobalCatalogClient(settings.global_catalog_url)
     app = create_app(
         jobs=job_service,
         tokens=token_codec,
@@ -1959,6 +1963,7 @@ def production_app() -> FastAPI:
         updates=update_admin,
         packages=PackageApiServices.from_object(package_services),
         catalog=CatalogService(sessions, clock=clock),
+        global_catalog=global_catalog,
         sparkrun=SparkRunWorkflow(sessions, clock=clock),
         recipe_operations=recipe_operations,
     )
@@ -1968,6 +1973,7 @@ def production_app() -> FastAPI:
         app.mount("/", SpaFiles(directory=web_root, html=True), name="admin-web")
     @app.on_event("shutdown")
     def release_online_lock() -> None:
+        global_catalog.close()
         online_lock.__exit__()
     return app
 
