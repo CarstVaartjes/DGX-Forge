@@ -12,6 +12,14 @@ TAILSCALE_IMAGE = (
     "tailscale/tailscale:v1.98.8@sha256:"
     "d54b2e6a9c09f0e5ec52e82b9ad4af3d446b54a7c08075e92f11c39dd410105f"
 )
+
+
+def test_default_tailscale_image_matches_the_audited_lock() -> None:
+    lock = json.loads((COMPOSE / "images.lock.json").read_text())
+    source = (COMPOSE / "tailscale/compose.yaml").read_text()
+
+    assert lock["images"]["tailscale"] == TAILSCALE_IMAGE
+    assert source.count(TAILSCALE_IMAGE) == 2
 EXPECTED_MAP = {
     "version": "0.0.1",
     "services": {

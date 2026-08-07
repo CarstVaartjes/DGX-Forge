@@ -7,9 +7,9 @@ override. This applies only to local-to-GPU node commands. The pinned
 GPU node-1-to-GPU node-2 fabric SSH command remains a nested remote command and is
 not replaced by the developer-machine selector.
 
-This runbook configures a two-Vonk Forge-GPU node, directly cabled ConnectX-7 fabric.
-The selected path is the official GPU node-side CLI/manual fallback from
-`vonk-node-playbooks` commit `1fb66f059ee427c5a3678b3117ef73aab042b458`.
+This runbook configures a two-Vonk Forge GPU node, directly cabled ConnectX-7 fabric.
+The selected path is the official NVIDIA DGX Spark CLI/manual fallback from
+NVIDIA `dgx-spark-playbooks` commit `1fb66f059ee427c5a3678b3117ef73aab042b458`.
 It deliberately does not use the Mac administration key for node-to-node
 access and does not enable SSH agent forwarding. The direct fabric must never
 receive a default route.
@@ -71,7 +71,7 @@ change, or failed postcheck is a hard stop. Do not apply a manual workaround.
 ## Out-of-scope helpers
 
 NVIDIA Sync/Cluster Assistant is out of scope for this selected GPU node-side CLI
-rollout. Do not use its generated Netplan, nor run `discover-nodes`: the
+rollout. Do not use its generated Netplan, nor run `discover-sparks`: the
 current discovery helper copies `~/.ssh/id_ed25519_shared` private material to
 every node and appends a `Host * IdentityFile` rule. Both actions violate this
 rollout's key separation and password-SSH constraints.
@@ -337,7 +337,7 @@ operation. It stops on a failed command, wrong transport/path, a result below
 its floor, any monitored counter growth, NCCL `NET/Socket`, or NCCL selecting
 only one active HCA. It never enables agent forwarding.
 
-The documented source installation follows NVIDIA `vonk-node-playbooks` commit
+The documented source installation follows NVIDIA `dgx-spark-playbooks` commit
 `1fb66f059ee427c5a3678b3117ef73aab042b458`. Each GPU node has OpenMPI packages
 `libopenmpi-dev` and `openmpi-bin` at `4.1.6-7ubuntu2`, CUDA 13 nvcc, NCCL
 `v2.30.7-1` commit `73cf112295c33aee2b895f329f592f2a9b4b0f97`, and nccl-tests

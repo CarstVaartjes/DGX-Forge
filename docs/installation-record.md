@@ -21,7 +21,7 @@ accepted yet.
 | Role | head | worker |
 | Memory | 130,663,231,488 B | 130,663,231,488 B |
 | Root filesystem | 4,031,871,553,536 B | 4,031,871,553,536 B |
-| Vonk Forge OS OTA | `7.5.0` | `7.5.0` |
+| NVIDIA DGX OS OTA | `7.5.0` | `7.5.0` |
 | Kernel | `6.17.0-1029-nvidia` | `6.17.0-1029-nvidia` |
 | NVIDIA driver | `580.173.02` | `580.173.02` |
 | CUDA Toolkit package | `13.0.3-1` | `13.0.3-1` |
@@ -94,8 +94,8 @@ The checksum gate, installer, verification, and rollback are in
 
 ### 4. Confirm the platform version and reboot sequentially
 
-After identity rotation and SSH hardening, Vonk Forge Dashboard confirmed both
-Founders Edition systems were on Vonk Forge OS OTA `7.5.0` and reported
+After identity rotation and SSH hardening, NVIDIA DGX Dashboard confirmed both
+Founders Edition systems were on NVIDIA DGX OS OTA `7.5.0` and reported
 `No Available Updates`. The worker was validated and rebooted before the head.
 This reboot also moved journald onto the newly generated machine-ID directory.
 Later host changes continued to use worker-first ordering wherever possible so
@@ -150,7 +150,7 @@ functions of one QSFP link, not two independent 200 Gb/s links.
 The NVIDIA Sync UI was not used for the final configuration. It expected to
 bootstrap SSH using a password and did not import the already-hardened
 1Password SSH configuration. We instead used the audited manual procedure based
-on NVIDIA `vonk-node-playbooks` commit
+on NVIDIA `dgx-spark-playbooks` commit
 `1fb66f059ee427c5a3678b3117ef73aab042b458`, applying GPU node 2 first with
 `netplan try`, validating management access, and only then applying GPU node 1.
 

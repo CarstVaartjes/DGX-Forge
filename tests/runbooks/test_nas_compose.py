@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 COMPOSE_README = ROOT / "deploy/compose/README.md"
+COMPOSE = ROOT / "deploy/compose/compose.yaml"
+IMAGE_LOCK = ROOT / "deploy/compose/images.lock.json"
 ENVIRONMENT = ROOT / "deploy/compose/.env.example"
 SUPPLY_CHAIN = ROOT / "docs/runbooks/supply-chain.md"
 CONTROL_BOOTSTRAP = ROOT / "docs/runbooks/control-plane-bootstrap.md"
@@ -93,6 +96,17 @@ def test_environment_requires_three_release_images_without_duplicate_networks() 
     assert "HERMES_AGENT_IMAGE=ghcr.io/carstvaartjes/vonk-forge-hermes:" in text
     assert text.count("VONK_MANAGEMENT_CIDRS=") == 1
     assert text.count("VONK_DIRECT_FABRIC_CIDRS=") == 1
+
+
+def test_default_grafana_image_matches_the_audited_lock() -> None:
+    expected = (
+        "grafana/grafana:13.0.2@sha256:"
+        "5dad0df181cb644a14e13617b913b261a54f7d4fd4510721dba420929f35bea2"
+    )
+    lock = json.loads(IMAGE_LOCK.read_text())
+
+    assert lock["images"]["grafana"] == expected
+    assert expected in COMPOSE.read_text()
 
 
 def test_supply_chain_describes_three_target_release_or_nonpublishing_diagnostics() -> None:

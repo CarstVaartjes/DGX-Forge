@@ -2,7 +2,8 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox ( - [ ] ) syntax for tracking.
 
-**Goal:** Remove GPU node/Vonk Forge terminology from Vonk-owned identifiers and migrate the unreleased repository to one consistent Vonk Forge identity.
+**Goal:** Remove legacy Spark/DGX terminology from Vonk-owned identifiers and
+migrate the unreleased repository to one consistent Vonk Forge identity.
 
 **Architecture:** Rename package/module, command, service, filesystem, Compose, API-contract, and release namespaces in one pre-release change. Preserve only explicitly external upstream/vendor evidence at integration boundaries. No compatibility aliases or migrations are added.
 
@@ -10,12 +11,39 @@
 
 ## Global Constraints
 
-- Vonk-owned names use Vonk Forge, vonk-forge, VONK_*, node, GPU host, cluster, and workload.
-- Vonk-owned code, configuration, paths, commands, API schemas, fixtures, and docs contain no node or vonk tokens.
-- Opaque upstream URLs, model names, vendor API values, and raw hardware evidence may retain those tokens only in explicitly external evidence roots.
+- Vonk-owned names use Vonk Forge, `vonk-forge`, `VONK_*`, `node`, GPU host,
+  cluster, and workload.
+- Vonk-owned code, configuration, paths, commands, API schemas, fixtures, and
+  docs contain no legacy `spark` or `dgx` tokens.
+- External evidence is not renamed. It may retain legacy tokens only where the
+  text is clearly a vendor/upstream identifier, command, URL, model name, or
+  raw hardware record. This includes NVIDIA `dgx-spark-playbooks`, its
+  `discover-sparks` command, NVIDIA documentation URLs, and the explicit
+  evidence roots `manifests/`, `inventory/raw/`, and
+  `tests/fixtures/external/`. Such text records provenance; it is never a
+  Vonk-owned service, path, command, or configuration name.
 - No compatibility aliases, dual settings, legacy services, or migration readers are introduced.
 - svc:vonk-forge is the canonical Tailscale service identifier.
 - Hermes is outside this cleanup plan; the later NAS plan will make Hermes an opt-in Compose profile disabled by default.
+
+## Authoritative mapping
+
+| Legacy Vonk-owned identifier | Canonical identifier |
+| --- | --- |
+| `spark_profiles` | `cluster_profiles` |
+| `sparkctl` | `vonkctl` |
+| `dgx_control` | `vonk_control` |
+| `dgx_agent` | `vonk_agent` |
+| `dgx_agent_protocol` | `vonk_agent_protocol` |
+| `dgx-forge-*` services, packages, and images | `vonk-forge-*` |
+| `DGX_*` Compose/application settings | `VONK_*` |
+| `dgx-forge-control` | `vonk-forge-control` |
+| `SparkRun` and spark profiles | `WorkloadRun` and workload profiles |
+
+The mapping applies only to Vonk-owned namespace material. NVIDIA DGX Spark
+names in cited upstream documentation, pinned repository names, and recorded
+operator evidence remain exact so that operators can locate and execute the
+vendor procedure.
 
 ---
 
@@ -33,11 +61,11 @@
 
 - [ ] Step 1: Write a failing test.
 
-    def test_identity_verifier_rejects_owned_legacy_token(tmp_path):
-        (tmp_path / "README.md").write_text("vonk vonkctl\n", encoding="utf-8")
+    def test_identity_verifier_rejects_owned_spark_token(tmp_path):
+        (tmp_path / "README.md").write_text("vonk sparkctl\n", encoding="utf-8")
         result = verify(tmp_path)
         assert result["status"] == "failed"
-        assert "vonkctl" in result["owned_matches"][0]["text"]
+        assert "sparkctl" in result["owned_matches"][0]["text"]
 
 - [ ] Step 2: Run the focused test.
 
@@ -56,10 +84,10 @@
 ### Task 2: Rename Python namespaces and commands
 
 **Files:**
-- Rename: src/cluster_profiles/ to src/cluster_profiles/
-- Rename: control/src/vonk_control/ to control/src/vonk_control/
-- Rename: agent/src/vonk_agent/ to agent/src/vonk_agent/
-- Rename: agent_protocol/src/vonk_agent_protocol/ to agent_protocol/src/vonk_agent_protocol/
+- Rename: src/spark_profiles/ to src/cluster_profiles/
+- Rename: control/src/dgx_control/ to control/src/vonk_control/
+- Rename: agent/src/dgx_agent/ to agent/src/vonk_agent/
+- Rename: agent_protocol/src/dgx_agent_protocol/ to agent_protocol/src/vonk_agent_protocol/
 - Modify: pyproject.toml, control/pyproject.toml, agent/pyproject.toml, agent_protocol/pyproject.toml, all Python imports, scripts, tests, and lockfiles.
 
 **Interfaces:**
@@ -70,12 +98,12 @@
 
 - [ ] Step 1: Rename package trees.
 
-    git mv src/cluster_profiles src/cluster_profiles
-    git mv control/src/vonk_control control/src/vonk_control
-    git mv agent/src/vonk_agent agent/src/vonk_agent
-    git mv agent_protocol/src/vonk_agent_protocol agent_protocol/src/vonk_agent_protocol
+    git mv src/spark_profiles src/cluster_profiles
+    git mv control/src/dgx_control control/src/vonk_control
+    git mv agent/src/dgx_agent agent/src/vonk_agent
+    git mv agent_protocol/src/dgx_agent_protocol agent_protocol/src/vonk_agent_protocol
 
-- [ ] Step 2: Change vonk-cluster-profiles to vonk-cluster-profiles, vonkctl to vonkctl, vonk-agent to vonk-forge-agent, and vonk-agent-protocol to vonk-agent-protocol in project metadata and entry points.
+- [ ] Step 2: Change `spark-profiles` to `vonk-cluster-profiles`, `sparkctl` to `vonkctl`, `dgx-agent` to `vonk-forge-agent`, and `dgx-agent-protocol` to `vonk-agent-protocol` in project metadata and entry points.
 
 - [ ] Step 3: Replace imports, force-include paths, uv.sources, generated output paths, and test references.
 
@@ -98,9 +126,9 @@
 ### Task 3: Rename native agent, systemd, installer, and filesystem identities
 
 **Files:**
-- Rename: agent/systemd/vonk-forge-* to agent/systemd/vonk-forge-*.
-- Rename: agent/supervisor/vonk-agent-supervisor to agent/supervisor/vonk-agent-supervisor.
-- Rename: nodes/bin/install-vonk-agent to nodes/bin/install-vonk-agent.
+- Rename: agent/systemd/dgx-forge-* to agent/systemd/vonk-forge-*.
+- Rename: agent/supervisor/dgx-agent-supervisor to agent/supervisor/vonk-agent-supervisor.
+- Rename: nodes/bin/install-dgx-agent to nodes/bin/install-vonk-agent.
 - Modify: Rust crates, agent/tools/build-slot-artifact, packaging scripts, supervisor tests, and release metadata.
 
 **Interfaces:**
@@ -134,7 +162,7 @@
 - Media types use application/vnd.vonk-forge.*.
 - Schema and SPIFFE namespaces use vonk-forge.
 - Compose uses VONK_*, vonk-forge-control, svc:vonk-forge, /srv/vonk-forge, and ghcr.io/carstvaartjes/vonk-forge-*.
-- User-facing WorkloadRun/workload profiles become WorkloadRun/workload profiles.
+- User-facing SparkRun/spark profiles become WorkloadRun/workload profiles.
 
 - [ ] Step 1: Replace owned schema IDs, OpenAPI titles, evidence keys, media types, SPIFFE URIs, Compose variables, image references, Tailscale names, Caddy hostnames, registry paths, and docs. Preserve only external evidence strings in the allowlisted roots.
 
@@ -148,7 +176,8 @@
 
     docker compose --env-file deploy/compose/tests/test.env -f deploy/compose/compose.yaml config --quiet
 
-    Expected: no VONK_ or legacy path/image/hostname requirement.
+    Expected: no `DGX_` or legacy path/image/hostname requirement; required
+    canonical `VONK_*` settings remain present.
 
 - [ ] Step 4: Commit.
 
@@ -188,6 +217,6 @@
 
 - [ ] Step 1: Run git status --short and git diff --check. Expected: no output.
 
-- [ ] Step 2: Run rg -n -i 'node|vonk' README.md docs deploy scripts src control agent agent_protocol rust schemas .github. Expected: no Vonk-owned matches; only explicitly allowed external evidence.
+- [ ] Step 2: Run `rg -n -i 'spark|dgx' README.md docs deploy scripts src control agent agent_protocol rust schemas .github`. Expected: no Vonk-owned matches; only explicitly allowed external evidence.
 
 - [ ] Step 3: Record the verification commands and allowed external matches, then begin the separate source-first NAS design. Do not publish an agent package or start NAS implementation until the identity cleanup commit is the repository base.

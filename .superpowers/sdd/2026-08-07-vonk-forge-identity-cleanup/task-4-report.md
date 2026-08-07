@@ -129,3 +129,49 @@ The repository-wide identity guard remains a later cleanup gate. It reports
 835 owned and 10 allowlisted external matches after restoring the historical
 evidence required by this review; no claim is made that this task closes that
 repository-wide backlog.
+
+## Round 2 review remediation — 2026-08-08
+
+Restored the NVIDIA-owned provenance at the documentation evidence boundary:
+the operator fabric runbook, installation record, and historical 2026-08-01
+plan/spec now identify the pinned `dgx-spark-playbooks` source. The fabric
+runbook also names the upstream `discover-sparks` helper exactly. Vonk-owned
+service names, paths, aliases, and commands remain canonical elsewhere.
+
+Repaired the authoritative identity-cleanup plan with its actual legacy to
+canonical mapping (`spark_profiles` to `cluster_profiles`, `sparkctl` to
+`vonkctl`, `dgx_*` to `vonk_*`, and the corresponding service/settings and
+user-facing contract mappings). The plan now distinguishes forbidden
+Vonk-owned legacy tokens from preserved, explicitly labeled NVIDIA/upstream
+and raw-evidence identifiers.
+
+Reverted unrelated Grafana and Tailscale default image upgrades to their
+audited versions and digests in both Compose declarations and the image lock.
+The supply-chain manifest was regenerated because it cryptographically binds
+the image lock. Focused tests now assert the restored upstream names and that
+the default Grafana and Tailscale declarations match the audited lock.
+
+Fresh verification:
+
+```text
+bash tests/runbooks/test_fabric_safety.sh
+fabric runbook safety invariants: PASS
+
+uv run --isolated --frozen --with pytest --with pyyaml pytest -q \
+  deploy/compose/tests/test_tailscale.py tests/runbooks/test_nas_compose.py
+14 passed
+
+scripts/verify-supply-chain --generate --json
+ok=true; 7 images; 4 SBOMs
+
+uv run --isolated --frozen --with pytest pytest -q \
+  tests/scripts/test_verify_supply_chain.py
+38 passed
+
+docker compose --env-file deploy/compose/tests/test.env \
+  -f deploy/compose/compose.yaml config --quiet
+exit 0
+
+git diff --check
+exit 0
+```

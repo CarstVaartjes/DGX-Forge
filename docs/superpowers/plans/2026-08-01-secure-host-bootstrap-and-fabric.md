@@ -12,7 +12,7 @@
 
 **Architecture:** The Mac administers both nodes with the dedicated 1Password SSH key. Read-only inventory is captured before mutations; GPU node 2 is updated and validated before GPU node 1. The point-to-point fabric is configured through an audited NVIDIA-supported path, and model work remains blocked until raw RDMA and NCCL tests pass.
 
-**Tech Stack:** macOS OpenSSH, 1Password SSH agent and CLI, Bash, Python 3.12/pytest for script tests, JSON/TOML inventory, Vonk Forge Dashboard, pinned NVIDIA `vonk-node-playbooks`, `ib_write_bw`, NCCL tests.
+**Tech Stack:** macOS OpenSSH, 1Password SSH agent and CLI, Bash, Python 3.12/pytest for script tests, JSON/TOML inventory, NVIDIA DGX Dashboard, pinned NVIDIA `dgx-spark-playbooks`, `ib_write_bw`, NCCL tests.
 
 ## Global Constraints
 
@@ -220,7 +220,7 @@ git commit -m "docs: record pre-change GPU node inventory"
 - Create: `docs/runbooks/ssh-recovery.md`
 
 **Interfaces:**
-- Produces: key-only SSH with local Vonk Forge Dashboard/console recovery documented.
+- Produces: key-only SSH with local NVIDIA DGX Dashboard/console recovery documented.
 
 - [ ] **Step 1: Add the managed drop-in**
 
@@ -264,14 +264,14 @@ git commit -m "security: define key-only GPU node SSH"
 - Create: `docs/runbooks/platform-update.md`
 
 **Interfaces:**
-- Consumes: NVIDIA Vonk Forge Dashboard and the current official Vonk Forge GPU node update/release notes.
+- Consumes: NVIDIA DGX Dashboard and the current official NVIDIA DGX Spark update/release notes.
 - Produces: two matched post-update inventories and an update record with timestamps and release versions.
 
 - [ ] **Step 1: Record release notes and recovery constraints**
 
-Add the target Vonk Forge OS, driver, CUDA, firmware, and container-runtime versions plus the official release-note URLs to the runbook. Mark firmware rollback as unavailable unless NVIDIA documents a recovery procedure for the installed version.
+Add the target NVIDIA DGX OS, driver, CUDA, firmware, and container-runtime versions plus the official release-note URLs to the runbook. Mark firmware rollback as unavailable unless NVIDIA documents a recovery procedure for the installed version.
 
-- [ ] **Step 2: Update GPU node 2 through Vonk Forge Dashboard**
+- [ ] **Step 2: Update GPU node 2 through NVIDIA DGX Dashboard**
 
 Put the platform in maintenance, update only GPU node 2, reboot it, and wait for key SSH and Dashboard access to return.
 
@@ -285,7 +285,7 @@ Repeat the Dashboard update, reboot, collector, GPU-container, storage, and inte
 
 - [ ] **Step 5: Compare versions exactly**
 
-Use `jq` to compare Vonk Forge OS, kernel, driver, CUDA, Docker, and Compose values. Expected: no differences in the matched platform fields.
+Use `jq` to compare NVIDIA DGX OS, kernel, driver, CUDA, Docker, and Compose values. Expected: no differences in the matched platform fields.
 
 - [ ] **Step 6: Commit the update record**
 
@@ -336,11 +336,11 @@ git commit -m "ops: record earlyoom disablement"
 
 - [ ] **Step 1: Verify cable identity and physical link**
 
-Record the cable part number and supported rate. Use `ethtool`, `ibstat`, and the Vonk Forge Dashboard to confirm both ends see the link. Stop if the cable cannot support the intended configuration.
+Record the cable part number and supported rate. Use `ethtool`, `ibstat`, and the NVIDIA DGX Dashboard to confirm both ends see the link. Stop if the cable cannot support the intended configuration.
 
 - [ ] **Step 2: Run NVIDIA Sync Cluster Assistant**
 
-Generate a separate GPU node 1-to-GPU node 2 cluster key on GPU node 1; never reuse the Mac administration key and never forward the Mac agent. Restrict the worker-side public key to the fabric source where Cluster Assistant supports it. Use GPU node 1 as head and GPU node 2 as worker, select the directly connected CX-7 ports, accept only a no-default-route point-to-point fabric, and save the assistant's report. If Cluster Assistant cannot complete, stop it and follow NVIDIA's official manual two-GPU node playbook while preserving the same key separation and inventory outputs.
+Generate a separate GPU node 1-to-GPU node 2 cluster key on GPU node 1; never reuse the Mac administration key and never forward the Mac agent. Restrict the worker-side public key to the fabric source where Cluster Assistant supports it. Use GPU node 1 as head and GPU node 2 as worker, select the directly connected CX-7 ports, accept only a no-default-route point-to-point fabric, and save the assistant's report. If Cluster Assistant cannot complete, stop it and follow the pinned NVIDIA `dgx-spark-playbooks` two-DGX-Spark procedure while preserving the same key separation and inventory outputs.
 
 - [ ] **Step 3: Record resolved fabric consumers**
 
