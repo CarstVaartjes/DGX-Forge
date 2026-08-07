@@ -7,8 +7,10 @@ use crate::supervisor_readiness::AgentRuntimeIdentity;
 use crate::{
     client::{AgentHttpClient, ClientError},
     health::{HealthEvidence, wait_ready},
+    image_importer::ImageImporter,
     oci::OciRuntime,
     process::ProcessRunner,
+    recipe_builder::RecipeBuilder,
     state::{BeginDecision, StateError, StateStore},
     workloads::{Placement, image_digest},
 };
@@ -49,15 +51,101 @@ impl<R: ProcessRunner> Executor for RecipeExecutor<'_, R> {
             Err(_) => return failed("recipe operation payload is invalid"),
         };
         match request {
+            RecipeOperationRequest::Build(request) => {
+                let archive = match self
+                    .client
+                    .source_bundle(&request.source_bundle_sha256, request.source_bundle_bytes)
+                    .await
+                {
+                    Ok(archive) => archive,
+                    Err(_) => return failed("authorized source bundle is unavailable"),
+                };
+                let builder = RecipeBuilder {
+                    runner: self.runtime.runner,
+                    data_root: self.runtime.data_root,
+                };
+                match builder.build(&request, claim.operation_id, &archive) {
+                    Ok(evidence) => {
+                        if self
+                            .client
+                            .upload_recipe_image(
+                                request.build_id,
+                                &evidence.image_digest,
+                                &evidence.oci_layout_sha256,
+                                evidence.image_bytes,
+                                &builder.layout_path(claim.operation_id),
+                            )
+                            .await
+                            .is_err()
+                        {
+                            return failed("built OCI image could not be stored by the controller");
+                        }
+                        ExecutionResult {
+                            state: "succeeded",
+                            body: serde_json::to_value(evidence).unwrap_or_else(
+                                |_| json!({"reason": "build evidence serialization failed"}),
+                            ),
+                        }
+                    }
+                    Err(error) => ExecutionResult {
+                        state: "failed",
+                        body: json!({"reason": error.to_string()}),
+                    },
+                }
+            }
+            RecipeOperationRequest::ImageImport(request) => {
+                if self
+                    .runtime
+                    .ensure_disk_available(request.image_bytes)
+                    .is_err()
+                {
+                    return failed("local disk capacity changed before image import");
+                }
+                let importer = ImageImporter {
+                    runner: self.runtime.runner,
+                    data_root: self.runtime.data_root,
+                };
+                let archive = match importer.staging_path(claim.operation_id) {
+                    Ok(path) => path,
+                    Err(_) => return failed("image import staging is unavailable"),
+                };
+                if self
+                    .client
+                    .download_artifact(&request.oci_layout_sha256, request.image_bytes, &archive)
+                    .await
+                    .is_err()
+                {
+                    return failed("exact OCI image archive is unavailable");
+                }
+                match importer.import(&request, &archive) {
+                    Ok(evidence) => ExecutionResult {
+                        state: "succeeded",
+                        body: serde_json::to_value(evidence).unwrap_or_else(
+                            |_| json!({"reason": "image import evidence serialization failed"}),
+                        ),
+                    },
+                    Err(error) => ExecutionResult {
+                        state: "failed",
+                        body: json!({"reason": error.to_string()}),
+                    },
+                }
+            }
             RecipeOperationRequest::Install(request) => {
                 let spec = match self
                     .client
-                    .recipe_spec(&request.recipe_content_sha256)
+                    .recipe_spec(&request.installation_id.to_string())
                     .await
                 {
                     Ok(spec) => spec,
                     Err(_) => return failed("digest-bound recipe specification is unavailable"),
                 };
+                if image_digest(&spec.runtime.image)
+                    .map(|value| format!("sha256:{value}"))
+                    .as_deref()
+                    != Some(request.image_digest.as_str())
+                {
+                    return failed("installed image digest does not match the accepted build");
+                }
                 if self
                     .runtime
                     .ensure_disk_available(request.expected_bytes)

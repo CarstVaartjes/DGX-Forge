@@ -16,6 +16,7 @@ import pytest
 from dgx_agent_protocol import canonical_message
 from dgx_control.artifact_sizes import ArtifactSize, StaticArtifactSizeResolver
 from dgx_control.catalog_service import CatalogService, RecipeDraftInput
+from dgx_control.cluster_mappings import ClusterMappingService
 from dgx_control.install_admission import InstallAdmissionService
 from dgx_control.inventory_repository import InventoryRepository, InventorySnapshotInput
 from dgx_control.models import (
@@ -26,6 +27,8 @@ from dgx_control.models import (
     Base,
     InstallationNode,
     Job,
+    NodeArtifact,
+    RecipeBuild,
     RecipeInstallation,
     RecipeRun,
     ResourceReservation,
@@ -35,7 +38,6 @@ from dgx_control.recipe_operations import (
     RecipeOperationService,
 )
 from dgx_control.run_admission import RunAdmissionService
-from dgx_control.topology import Placement
 from sqlalchemy import create_engine, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
@@ -88,7 +90,7 @@ def start_evidence(payload: dict[str, object]) -> dict[str, object]:
     identity = {
         "recipe_revision_id": payload["recipe_revision_id"],
         "recipe_content_sha256": payload["recipe_content_sha256"],
-        "image_digest": "a" * 64,
+        "image_digest": str(payload["image_digest"]).removeprefix("sha256:"),
         "artifact_set_digest": "b" * 64,
         "model_identity": "Qwen/Qwen3-30B-A3B-Instruct-2507@0123456789abcdef0123456789abcdef01234567",
         "rank": payload["rank"],
@@ -114,30 +116,36 @@ def setup_services(tmp_path: Path, *, nodes: int = 1, engine=None):
     with sessions.begin() as session:
         for index, node_id in enumerate(node_ids):
             serial = f"serial-{index}"
-            session.add(AgentNode(
-                node_id=node_id,
-                state="active",
-                architecture="linux-arm64",
-                capabilities=["runtime.vonk.v1", "recipe.operations.v1"],
-            ))
+            session.add(
+                AgentNode(
+                    node_id=node_id,
+                    state="active",
+                    architecture="linux-arm64",
+                    capabilities=["runtime.vonk.v1", "recipe.operations.v1"],
+                )
+            )
             session.flush()
-            session.add(AgentCertificate(
-                serial=serial,
-                node_id=node_id,
-                fingerprint=f"fingerprint-{index}",
-                not_before=NOW,
-                not_after=datetime(2027, 8, 7, 12, tzinfo=UTC),
-            ))
-            session.add(AgentPresence(
-                node_id=node_id,
-                certificate_serial=serial,
-                certificate_fingerprint=f"fingerprint-{index}",
-                management_address=f"192.168.1.{211 + index}",
-                observed_at=NOW,
-            ))
+            session.add(
+                AgentCertificate(
+                    serial=serial,
+                    node_id=node_id,
+                    fingerprint=f"fingerprint-{index}",
+                    not_before=NOW,
+                    not_after=datetime(2027, 8, 7, 12, tzinfo=UTC),
+                )
+            )
+            session.add(
+                AgentPresence(
+                    node_id=node_id,
+                    certificate_serial=serial,
+                    certificate_fingerprint=f"fingerprint-{index}",
+                    management_address=f"192.168.1.{211 + index}",
+                    observed_at=NOW,
+                )
+            )
     inventory = InventoryRepository(sessions, clock=lambda: NOW)
     capabilities = ("runtime.vonk.v1", "recipe.operations.v1") + (
-        ("fabric.tcp.mbps.1000",) if nodes > 1 else ()
+        ("fabric.connected.mbps.1000",) if nodes > 1 else ()
     )
     for index, node_id in enumerate(node_ids):
         inventory.record(
@@ -160,33 +168,85 @@ def setup_services(tmp_path: Path, *, nodes: int = 1, engine=None):
     document = json.loads(
         (Path(__file__).parent / "fixtures/global/recipe-v1-minimal.json").read_text()
     )
-    document["resources"]["per_node"].update(
-        {
-            "download_bytes": 100,
-            "installed_bytes": 120,
+    role = document["deployment_profiles"][0]["roles"][0]
+    role["resources"] = {
+        "disk": {
+            "image_bytes": 30,
+            "artifact_bytes": 70,
             "staging_bytes": 20,
-            "resident_memory_bytes": 200,
-            "activation_memory_bytes": 25,
-        }
-    )
+            "cache_bytes": 0,
+            "rollback_bytes": 0,
+            "safety_margin_bytes": 10,
+        },
+        "memory": {
+            "kind": "unified",
+            "startup_peak_bytes": 225,
+            "steady_state_bytes": 200,
+            "runtime_growth_bytes": 25,
+            "system_reserve_bytes": 0,
+        },
+    }
     if nodes > 1:
-        document["topology"] = {
-            "kind": "gang",
-            "min_nodes": nodes,
-            "max_nodes": nodes,
-            "tested_node_counts": [nodes],
-            "fabric": {"transport": "tcp", "minimum_bandwidth_mbps": 1},
-            "ranks": [
-                {"rank": rank, "role": "entrypoint" if rank == 0 else "worker"}
-                for rank in range(nodes)
-            ],
-        }
+        worker = json.loads(json.dumps(role))
+        worker.update({"name": "worker", "count": nodes - 1, "endpoint_owner": False})
+        document["deployment_profiles"] = [
+            {
+                **document["deployment_profiles"][0],
+                "name": f"nodes_{nodes}",
+                "node_count": nodes,
+                "strategy": "tensor_parallel",
+                "parallelism": {
+                    "tensor": nodes,
+                    "pipeline": 1,
+                    "data": 1,
+                    "backend": "tcp",
+                },
+                "roles": [role, worker],
+                "fabric": {"connectivity": "connected", "minimum_bandwidth_mbps": 1},
+            }
+        ]
+        document["artifacts"][0]["roles"] = ["entrypoint", "worker"]
     catalog = CatalogService(sessions, clock=lambda: NOW)
     draft = catalog.create_recipe("admin", RecipeDraftInput("qwen3-vllm", document))
     revision = catalog.resolve(draft.recipe_id, 1, "admin")
+    profile_name = "solo" if nodes == 1 else f"nodes_{nodes}"
+    mappings = ClusterMappingService(sessions)
+    mapping_plan = mappings.plan(revision.id, profile_name, node_ids, parameters={})
+    mapping_id = mappings.materialize(mapping_plan, actor="admin", now=NOW)
+    with sessions.begin() as session:
+        build = RecipeBuild(
+            recipe_revision_id=revision.id,
+            builder_node_id=node_ids[0],
+            source_bundle_sha256=document["build"]["context"]["sha256"],
+            build_input_sha256="e" * 64,
+            state="succeeded",
+            policy_report={"passed": True},
+            plan={},
+            image_digest="sha256:" + "1" * 64,
+            oci_layout_sha256="3" * 64,
+            image_bytes=30,
+            created_at=NOW,
+            updated_at=NOW,
+        )
+        session.add(build)
+        session.flush()
+        build_id = build.id
+        session.add_all(
+            NodeArtifact(
+                node_id=node_id,
+                kind="image",
+                digest="1" * 64,
+                source="oci-layout:" + "3" * 64,
+                size_bytes=30,
+                state="verified",
+                ref_count=0,
+                verified_at=NOW,
+                updated_at=NOW,
+            )
+            for node_id in node_ids
+        )
     sizes = StaticArtifactSizeResolver(
         (
-            ArtifactSize(document["runtime"]["image"], "1" * 64, 30),
             ArtifactSize(
                 "Qwen/Qwen3-30B-A3B-Instruct-2507@"
                 "0123456789abcdef0123456789abcdef01234567",
@@ -198,9 +258,7 @@ def setup_services(tmp_path: Path, *, nodes: int = 1, engine=None):
     install = InstallAdmissionService(
         sessions, sizes=sizes, inventory_max_age=300, disk_floor_bytes=10
     )
-    run = RunAdmissionService(
-        sessions, inventory_max_age=300, memory_floor_bytes=50
-    )
+    run = RunAdmissionService(sessions, inventory_max_age=300, memory_floor_bytes=50)
     queue = RecordingQueue()
     service = RecipeOperationService(
         sessions,
@@ -209,7 +267,7 @@ def setup_services(tmp_path: Path, *, nodes: int = 1, engine=None):
         agent_jobs=queue,
         clock=lambda: NOW,
     )
-    return sessions, service, queue, revision.id, node_ids
+    return sessions, service, queue, mapping_id, build_id, node_ids
 
 
 @pytest.fixture(scope="module")
@@ -223,8 +281,16 @@ def postgres_engine():
     try:
         subprocess.run(
             [
-                "docker", "run", "--rm", "-d", "--name", name,
-                "-e", "POSTGRES_PASSWORD=postgres", "-p", f"127.0.0.1:{port}:5432",
+                "docker",
+                "run",
+                "--rm",
+                "-d",
+                "--name",
+                name,
+                "-e",
+                "POSTGRES_PASSWORD=postgres",
+                "-p",
+                f"127.0.0.1:{port}:5432",
                 "postgres:18.0-bookworm",
             ],
             check=True,
@@ -251,8 +317,10 @@ def postgres_engine():
 
 
 def test_install_is_digest_bound_idempotent_and_gang_complete(tmp_path: Path) -> None:
-    sessions, service, queue, revision_id, nodes = setup_services(tmp_path, nodes=2)
-    plan = service.preview_install(revision_id, nodes)
+    sessions, service, queue, mapping_id, build_id, nodes = setup_services(
+        tmp_path, nodes=2
+    )
+    plan = service.preview_install(mapping_id, build_id)
     operation = service.install(
         plan, plan_digest=plan.plan_digest, actor="admin", request_id="1" * 36
     )
@@ -269,20 +337,28 @@ def test_install_is_digest_bound_idempotent_and_gang_complete(tmp_path: Path) ->
         child_operations = list(session.scalars(select(AgentOperation)))
         assert len(jobs) == 1
         assert {item.kind for item in child_operations} == {"recipe.install"}
-        assert all("shell" not in json.dumps(item.payload).lower() for item in child_operations)
+        assert all(
+            "shell" not in json.dumps(item.payload).lower() for item in child_operations
+        )
 
-    service.record_node_result(operation.id, nodes[0], succeeded=True, evidence={"installed_bytes": 120})
+    service.record_node_result(
+        operation.id, nodes[0], succeeded=True, evidence={"installed_bytes": 120}
+    )
     assert service.get(operation.id).state == "running"
-    service.record_node_result(operation.id, nodes[1], succeeded=True, evidence={"installed_bytes": 120})
+    service.record_node_result(
+        operation.id, nodes[1], succeeded=True, evidence={"installed_bytes": 120}
+    )
     assert service.get(operation.id).state == "succeeded"
     with sessions() as session:
         assert session.get(RecipeInstallation, operation.owner_id).state == "installed"
 
 
-def test_install_admission_and_queue_creation_roll_back_together(tmp_path: Path) -> None:
-    sessions, service, _queue, revision_id, nodes = setup_services(tmp_path)
+def test_install_admission_and_queue_creation_roll_back_together(
+    tmp_path: Path,
+) -> None:
+    sessions, service, _queue, mapping_id, build_id, _nodes = setup_services(tmp_path)
     service._agent_jobs = FailingQueue()
-    plan = service.preview_install(revision_id, nodes)
+    plan = service.preview_install(mapping_id, build_id)
 
     with pytest.raises(RuntimeError, match="queue write failed"):
         service.install(
@@ -299,8 +375,8 @@ def test_install_admission_and_queue_creation_roll_back_together(tmp_path: Path)
 
 
 def test_run_admission_and_start_queue_roll_back_together(tmp_path: Path) -> None:
-    sessions, service, _queue, revision_id, nodes = setup_services(tmp_path)
-    install_plan = service.preview_install(revision_id, nodes)
+    sessions, service, _queue, mapping_id, build_id, nodes = setup_services(tmp_path)
+    install_plan = service.preview_install(mapping_id, build_id)
     install = service.install(
         install_plan,
         plan_digest=install_plan.plan_digest,
@@ -310,9 +386,7 @@ def test_run_admission_and_start_queue_roll_back_together(tmp_path: Path) -> Non
     service.record_node_result(
         install.id, nodes[0], succeeded=True, evidence={"installed_bytes": 120}
     )
-    run_plan = service.preview_run(
-        install.owner_id, (Placement(nodes[0], 0, "entrypoint"),)
-    )
+    run_plan = service.preview_run(install.owner_id)
     service._agent_jobs = FailingQueue()
 
     with pytest.raises(RuntimeError, match="queue write failed"):
@@ -326,19 +400,22 @@ def test_run_admission_and_start_queue_roll_back_together(tmp_path: Path) -> Non
 
     with sessions() as session:
         assert list(session.scalars(select(RecipeRun))) == []
-        assert list(
-            session.scalars(
-                select(ResourceReservation).where(
-                    ResourceReservation.owner_kind == "run"
+        assert (
+            list(
+                session.scalars(
+                    select(ResourceReservation).where(
+                        ResourceReservation.owner_kind == "run"
+                    )
                 )
             )
-        ) == []
+            == []
+        )
         assert session.scalar(select(Job).where(Job.request_id == "c" * 36)) is None
 
 
 def test_stop_state_and_queue_creation_roll_back_together(tmp_path: Path) -> None:
-    sessions, service, _queue, revision_id, nodes = setup_services(tmp_path)
-    install_plan = service.preview_install(revision_id, nodes)
+    sessions, service, _queue, mapping_id, build_id, nodes = setup_services(tmp_path)
+    install_plan = service.preview_install(mapping_id, build_id)
     install = service.install(
         install_plan,
         plan_digest=install_plan.plan_digest,
@@ -348,9 +425,7 @@ def test_stop_state_and_queue_creation_roll_back_together(tmp_path: Path) -> Non
     service.record_node_result(
         install.id, nodes[0], succeeded=True, evidence={"installed_bytes": 120}
     )
-    run_plan = service.preview_run(
-        install.owner_id, (Placement(nodes[0], 0, "entrypoint"),)
-    )
+    run_plan = service.preview_run(install.owner_id)
     start = service.start(
         run_plan,
         plan_digest=run_plan.plan_digest,
@@ -363,9 +438,7 @@ def test_stop_state_and_queue_creation_roll_back_together(tmp_path: Path) -> Non
             select(AgentOperation).where(AgentOperation.parent_job_id == start.id)
         )
         evidence = start_evidence(child.payload)
-    service.record_node_result(
-        start.id, nodes[0], succeeded=True, evidence=evidence
-    )
+    service.record_node_result(start.id, nodes[0], succeeded=True, evidence=evidence)
     service._agent_jobs = FailingQueue()
 
     with pytest.raises(RuntimeError, match="queue write failed"):
@@ -373,17 +446,25 @@ def test_stop_state_and_queue_creation_roll_back_together(tmp_path: Path) -> Non
 
     with sessions() as session:
         assert session.get(RecipeRun, start.owner_id).state == "running"
-        assert session.scalar(
-            select(Job).where(Job.request_id == "1" * 35 + "c")
-        ) is None
+        assert (
+            session.scalar(select(Job).where(Job.request_id == "1" * 35 + "c")) is None
+        )
 
 
 def test_partial_install_fails_as_a_group_and_can_retry(tmp_path: Path) -> None:
-    _sessions, service, _queue, revision_id, nodes = setup_services(tmp_path, nodes=2)
-    plan = service.preview_install(revision_id, nodes)
-    first = service.install(plan, plan_digest=plan.plan_digest, actor="admin", request_id="2" * 36)
-    service.record_node_result(first.id, nodes[0], succeeded=True, evidence={"installed_bytes": 120})
-    service.record_node_result(first.id, nodes[1], succeeded=False, evidence={"code": "pull.failed"})
+    _sessions, service, _queue, mapping_id, build_id, nodes = setup_services(
+        tmp_path, nodes=2
+    )
+    plan = service.preview_install(mapping_id, build_id)
+    first = service.install(
+        plan, plan_digest=plan.plan_digest, actor="admin", request_id="2" * 36
+    )
+    service.record_node_result(
+        first.id, nodes[0], succeeded=True, evidence={"installed_bytes": 120}
+    )
+    service.record_node_result(
+        first.id, nodes[1], succeeded=False, evidence={"code": "pull.failed"}
+    )
 
     assert service.get(first.id).state == "failed"
     assert service.get(first.id).result["successful_nodes"] == [nodes[0]]
@@ -397,8 +478,10 @@ def test_partial_install_fails_as_a_group_and_can_retry(tmp_path: Path) -> None:
 def test_failed_install_retry_state_rolls_back_when_queue_write_fails(
     tmp_path: Path,
 ) -> None:
-    sessions, service, _queue, revision_id, nodes = setup_services(tmp_path, nodes=2)
-    plan = service.preview_install(revision_id, nodes)
+    sessions, service, _queue, mapping_id, build_id, nodes = setup_services(
+        tmp_path, nodes=2
+    )
+    plan = service.preview_install(mapping_id, build_id)
     first = service.install(
         plan, plan_digest=plan.plan_digest, actor="admin", request_id="2" * 35 + "a"
     )
@@ -436,14 +519,19 @@ def test_failed_install_retry_state_rolls_back_when_queue_write_fails(
 
 
 def test_start_stop_and_uninstall_preserve_capacity_safely(tmp_path: Path) -> None:
-    sessions, service, _queue, revision_id, nodes = setup_services(tmp_path)
-    install_plan = service.preview_install(revision_id, nodes)
-    install = service.install(install_plan, plan_digest=install_plan.plan_digest, actor="admin", request_id="4" * 36)
-    service.record_node_result(install.id, nodes[0], succeeded=True, evidence={"installed_bytes": 120})
-
-    run_plan = service.preview_run(
-        install.owner_id, (Placement(nodes[0], 0, "entrypoint"),)
+    sessions, service, _queue, mapping_id, build_id, nodes = setup_services(tmp_path)
+    install_plan = service.preview_install(mapping_id, build_id)
+    install = service.install(
+        install_plan,
+        plan_digest=install_plan.plan_digest,
+        actor="admin",
+        request_id="4" * 36,
     )
+    service.record_node_result(
+        install.id, nodes[0], succeeded=True, evidence={"installed_bytes": 120}
+    )
+
+    run_plan = service.preview_run(install.owner_id)
     start = service.start(
         run_plan,
         plan_digest=run_plan.plan_digest,
@@ -474,7 +562,9 @@ def test_start_stop_and_uninstall_preserve_capacity_safely(tmp_path: Path) -> No
     assert service.get(stop.id).state == "running"
     with pytest.raises(RecipeOperationConflict, match="not stoppable"):
         service.stop(start.owner_id, actor="admin", request_id="7" * 35 + "a")
-    service.record_node_result(stop.id, nodes[0], succeeded=True, evidence={"stopped": True})
+    service.record_node_result(
+        stop.id, nodes[0], succeeded=True, evidence={"stopped": True}
+    )
     with sessions() as session:
         run = session.get(RecipeRun, start.owner_id)
         reservations = list(
@@ -489,15 +579,21 @@ def test_start_stop_and_uninstall_preserve_capacity_safely(tmp_path: Path) -> No
         assert reservations == []
 
     uninstall = service.uninstall(install.owner_id, actor="admin", request_id="8" * 36)
-    service.record_node_result(uninstall.id, nodes[0], succeeded=True, evidence={"removed": True})
+    service.record_node_result(
+        uninstall.id, nodes[0], succeeded=True, evidence={"removed": True}
+    )
     with sessions() as session:
         installation = session.get(RecipeInstallation, install.owner_id)
         assert installation.state == "uninstalled"
 
 
-def test_multinode_start_is_bound_to_authenticated_fabric_rendezvous(tmp_path: Path) -> None:
-    sessions, service, _queue, revision_id, nodes = setup_services(tmp_path, nodes=2)
-    install_plan = service.preview_install(revision_id, nodes)
+def test_multinode_start_is_bound_to_authenticated_fabric_rendezvous(
+    tmp_path: Path,
+) -> None:
+    sessions, service, _queue, mapping_id, build_id, nodes = setup_services(
+        tmp_path, nodes=2
+    )
+    install_plan = service.preview_install(mapping_id, build_id)
     install = service.install(
         install_plan,
         plan_digest=install_plan.plan_digest,
@@ -508,13 +604,7 @@ def test_multinode_start_is_bound_to_authenticated_fabric_rendezvous(tmp_path: P
         service.record_node_result(
             install.id, node, succeeded=True, evidence={"installed_bytes": 120}
         )
-    run_plan = service.preview_run(
-        install.owner_id,
-        (
-            Placement(nodes[0], 0, "entrypoint"),
-            Placement(nodes[1], 1, "worker"),
-        ),
-    )
+    run_plan = service.preview_run(install.owner_id)
     assert run_plan.allowed is True
     start = service.start(
         run_plan,
@@ -546,8 +636,10 @@ def test_multinode_start_is_bound_to_authenticated_fabric_rendezvous(tmp_path: P
 def test_failed_multinode_start_queues_idempotent_stop_for_every_rank(
     tmp_path: Path,
 ) -> None:
-    sessions, service, _queue, revision_id, nodes = setup_services(tmp_path, nodes=2)
-    install_plan = service.preview_install(revision_id, nodes)
+    sessions, service, _queue, mapping_id, build_id, nodes = setup_services(
+        tmp_path, nodes=2
+    )
+    install_plan = service.preview_install(mapping_id, build_id)
     install = service.install(
         install_plan,
         plan_digest=install_plan.plan_digest,
@@ -558,13 +650,7 @@ def test_failed_multinode_start_queues_idempotent_stop_for_every_rank(
         service.record_node_result(
             install.id, node, succeeded=True, evidence={"installed_bytes": 120}
         )
-    run_plan = service.preview_run(
-        install.owner_id,
-        (
-            Placement(nodes[0], 0, "entrypoint"),
-            Placement(nodes[1], 1, "worker"),
-        ),
-    )
+    run_plan = service.preview_run(install.owner_id)
     start = service.start(
         run_plan,
         plan_digest=run_plan.plan_digest,
@@ -610,10 +696,10 @@ def test_concurrent_final_rank_results_serialize_gang_cleanup(
     tmp_path: Path, postgres_engine
 ) -> None:
     Base.metadata.drop_all(postgres_engine)
-    sessions, service, _queue, revision_id, nodes = setup_services(
+    sessions, service, _queue, mapping_id, build_id, nodes = setup_services(
         tmp_path, nodes=2, engine=postgres_engine
     )
-    install_plan = service.preview_install(revision_id, nodes)
+    install_plan = service.preview_install(mapping_id, build_id)
     install = service.install(
         install_plan,
         plan_digest=install_plan.plan_digest,
@@ -624,13 +710,7 @@ def test_concurrent_final_rank_results_serialize_gang_cleanup(
         service.record_node_result(
             install.id, node, succeeded=True, evidence={"installed_bytes": 120}
         )
-    run_plan = service.preview_run(
-        install.owner_id,
-        (
-            Placement(nodes[0], 0, "entrypoint"),
-            Placement(nodes[1], 1, "worker"),
-        ),
-    )
+    run_plan = service.preview_run(install.owner_id)
     start = service.start(
         run_plan,
         plan_digest=run_plan.plan_digest,
@@ -685,10 +765,12 @@ def test_concurrent_final_rank_results_serialize_gang_cleanup(
 
 
 def test_changed_plan_or_reused_request_key_is_rejected(tmp_path: Path) -> None:
-    _sessions, service, _queue, revision_id, nodes = setup_services(tmp_path)
-    plan = service.preview_install(revision_id, nodes)
+    _sessions, service, _queue, mapping_id, build_id, _nodes = setup_services(tmp_path)
+    plan = service.preview_install(mapping_id, build_id)
     with pytest.raises(RecipeOperationConflict, match="plan digest"):
         service.install(plan, plan_digest="0" * 64, actor="admin", request_id="9" * 36)
-    service.install(plan, plan_digest=plan.plan_digest, actor="admin", request_id="a" * 36)
+    service.install(
+        plan, plan_digest=plan.plan_digest, actor="admin", request_id="a" * 36
+    )
     with pytest.raises(RecipeOperationConflict, match="request key"):
         service.stop("f" * 36, actor="admin", request_id="a" * 36)

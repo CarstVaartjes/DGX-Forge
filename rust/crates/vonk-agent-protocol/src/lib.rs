@@ -43,7 +43,12 @@ impl AgentClaim {
         }
         if !matches!(
             self.operation.as_str(),
-            "recipe.install" | "recipe.start" | "recipe.stop" | "recipe.uninstall"
+            "recipe.build.v1"
+                | "recipe.image.import.v1"
+                | "recipe.install"
+                | "recipe.start"
+                | "recipe.stop"
+                | "recipe.uninstall"
         ) {
             return Err(ProtocolError::Identity("claim operation"));
         }
@@ -115,6 +120,8 @@ pub struct PackageOperationRequest {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RecipeOperationRequest {
+    Build(RecipeBuildRequest),
+    ImageImport(RecipeImageImportRequest),
     Install(RecipeInstallRequest),
     Start(RecipeStartRequest),
     Stop(RecipeStopRequest),
@@ -123,12 +130,79 @@ pub enum RecipeOperationRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
-pub struct RecipeInstallRequest {
-    pub expected_bytes: u64,
-    pub installation_id: Uuid,
-    pub plan_digest: String,
+pub struct RecipeBuildRequest {
+    pub arguments: Vec<RecipeBuildArgument>,
+    pub build_id: Uuid,
+    pub build_input_sha256: String,
+    pub dockerfile: String,
+    pub kind: String,
+    pub limits: RecipeBuildLimits,
+    pub network: RecipeBuildNetwork,
+    pub platform: String,
     pub recipe_content_sha256: String,
     pub recipe_revision_id: Uuid,
+    pub schema_version: u8,
+    pub source_bundle_bytes: u64,
+    pub source_bundle_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RecipeBuildArgument {
+    pub name: String,
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RecipeBuildNetwork {
+    pub hosts: Vec<String>,
+    pub mode: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RecipeBuildLimits {
+    pub container_socket: bool,
+    pub cpu_cores: u16,
+    pub gpu: u8,
+    pub host_mounts: bool,
+    pub memory_bytes: u64,
+    pub output_bytes: u64,
+    pub privileged: bool,
+    pub processes: u32,
+    pub temporary_bytes: u64,
+    pub timeout_seconds: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RecipeImageImportRequest {
+    pub build_id: Uuid,
+    pub image_bytes: u64,
+    pub image_digest: String,
+    pub kind: String,
+    pub mapping_generation: u64,
+    pub mapping_id: Uuid,
+    pub oci_layout_sha256: String,
+    pub schema_version: u8,
+    pub source_node_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RecipeInstallRequest {
+    pub expected_bytes: u64,
+    pub image_digest: String,
+    pub installation_id: Uuid,
+    pub mapping_generation: u64,
+    pub mapping_id: Uuid,
+    pub plan_digest: String,
+    pub rank: u32,
+    pub recipe_build_id: Uuid,
+    pub recipe_content_sha256: String,
+    pub recipe_revision_id: Uuid,
+    pub role: String,
     pub schema_version: u8,
 }
 
@@ -137,20 +211,23 @@ pub struct RecipeInstallRequest {
 pub struct RecipeStartRequest {
     pub alias: String,
     pub endpoint_address: std::net::IpAddr,
+    pub image_digest: String,
     pub installation_id: Uuid,
     pub local_address: Option<std::net::IpAddr>,
     pub master_address: Option<std::net::IpAddr>,
     pub master_port: Option<u16>,
+    pub mapping_generation: u64,
+    pub mapping_id: Uuid,
     pub plan_digest: String,
     pub port: u16,
-    pub rank: u16,
+    pub rank: u32,
     pub recipe_content_sha256: String,
     pub recipe_revision_id: Uuid,
     pub reserved_memory_bytes: u64,
     pub role: String,
     pub run_id: Uuid,
     pub schema_version: u8,
-    pub world_size: u16,
+    pub world_size: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -174,6 +251,10 @@ impl RecipeOperationRequest {
     pub fn parse(claim: &AgentClaim) -> Result<Self, ProtocolError> {
         claim.validate()?;
         let request = match claim.operation.as_str() {
+            "recipe.build.v1" => Self::Build(serde_json::from_value(claim.payload.clone())?),
+            "recipe.image.import.v1" => {
+                Self::ImageImport(serde_json::from_value(claim.payload.clone())?)
+            }
             "recipe.install" => Self::Install(serde_json::from_value(claim.payload.clone())?),
             "recipe.start" => Self::Start(serde_json::from_value(claim.payload.clone())?),
             "recipe.stop" => Self::Stop(serde_json::from_value(claim.payload.clone())?),
@@ -187,18 +268,32 @@ impl RecipeOperationRequest {
     fn validate(&self) -> Result<(), ProtocolError> {
         let valid_common = |version: u8, plan: &str| version == 1 && lower_hex(plan, 64);
         let valid = match self {
+            Self::Build(value) => validate_build(value),
+            Self::ImageImport(value) => {
+                value.schema_version == 1
+                    && value.kind == "recipe.image.import.v1"
+                    && value.mapping_generation >= 1
+                    && valid_node_id(&value.source_node_id)
+                    && valid_oci_digest(&value.image_digest)
+                    && lower_hex(&value.oci_layout_sha256, 64)
+                    && (1..=16 * 1024_u64.pow(4)).contains(&value.image_bytes)
+            }
             Self::Install(value) => {
                 valid_common(value.schema_version, &value.plan_digest)
                     && value.expected_bytes <= 16 * 1024_u64.pow(4)
                     && lower_hex(&value.recipe_content_sha256, 64)
+                    && valid_oci_digest(&value.image_digest)
+                    && value.mapping_generation >= 1
+                    && valid_role(&value.role)
             }
             Self::Start(value) => {
                 valid_common(value.schema_version, &value.plan_digest)
                     && lower_hex(&value.recipe_content_sha256, 64)
-                    && value.rank <= 1023
-                    && (1..=16).contains(&value.world_size)
+                    && valid_oci_digest(&value.image_digest)
+                    && value.mapping_generation >= 1
+                    && value.world_size >= 1
                     && value.rank < value.world_size
-                    && matches!(value.role.as_str(), "entrypoint" | "worker")
+                    && valid_role(&value.role)
                     && value.port >= 1024
                     && value.reserved_memory_bytes > 0
                     && value.reserved_memory_bytes <= 16 * 1024_u64.pow(4)
@@ -208,7 +303,6 @@ impl RecipeOperationRequest {
                     && !link_local(value.endpoint_address)
                     && if value.world_size == 1 {
                         value.rank == 0
-                            && value.role == "entrypoint"
                             && value.local_address.is_none()
                             && value.master_address.is_none()
                             && value.master_port.is_none()
@@ -231,6 +325,45 @@ impl RecipeOperationRequest {
             Err(ProtocolError::Identity("recipe payload"))
         }
     }
+}
+
+fn validate_build(value: &RecipeBuildRequest) -> bool {
+    value.schema_version == 1
+        && value.kind == "recipe.build.v1"
+        && lower_hex(&value.recipe_content_sha256, 64)
+        && lower_hex(&value.source_bundle_sha256, 64)
+        && lower_hex(&value.build_input_sha256, 64)
+        && (1..=64 * 1024 * 1024).contains(&value.source_bundle_bytes)
+        && value.platform == "linux/arm64"
+        && valid_bundle_path(&value.dockerfile)
+        && value.arguments.len() <= 64
+        && value
+            .arguments
+            .iter()
+            .all(|argument| valid_name(&argument.name) && valid_scalar(&argument.value))
+        && matches!(value.network.mode.as_str(), "none" | "public")
+        && value.network.hosts.len() <= 64
+        && value
+            .network
+            .hosts
+            .iter()
+            .all(|host| valid_public_host(host))
+        && value.limits.cpu_cores >= 1
+        && value.limits.cpu_cores <= 256
+        && value.limits.memory_bytes > 0
+        && value.limits.memory_bytes <= 16 * 1024_u64.pow(4)
+        && value.limits.temporary_bytes > 0
+        && value.limits.temporary_bytes <= 16 * 1024_u64.pow(4)
+        && value.limits.processes >= 1
+        && value.limits.processes <= 65_536
+        && value.limits.timeout_seconds >= 1
+        && value.limits.timeout_seconds <= 86_400
+        && value.limits.output_bytes >= 1
+        && value.limits.output_bytes <= 64 * 1024 * 1024
+        && value.limits.gpu == 0
+        && !value.limits.privileged
+        && !value.limits.host_mounts
+        && !value.limits.container_socket
 }
 
 pub fn parse_strict<T: DeserializeOwned>(input: &[u8]) -> Result<T, ProtocolError> {
@@ -285,6 +418,67 @@ fn valid_alias(value: &str) -> bool {
                 || byte.is_ascii_digit()
                 || !edge && matches!(byte, b'.' | b'_' | b'-')
         })
+}
+
+fn valid_oci_digest(value: &str) -> bool {
+    value
+        .strip_prefix("sha256:")
+        .is_some_and(|digest| lower_hex(digest, 64))
+}
+
+fn valid_role(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if index == 0 {
+                byte.is_ascii_lowercase()
+            } else {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+            }
+        })
+}
+
+fn valid_scalar(value: &Value) -> bool {
+    match value {
+        Value::Bool(_) => true,
+        Value::Number(number) => number.as_i64().is_some(),
+        Value::String(value) => value.len() <= 1024 && !value.contains('\0'),
+        _ => false,
+    }
+}
+
+fn valid_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if index == 0 {
+                byte.is_ascii_lowercase()
+            } else {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'_' | b'-')
+            }
+        })
+}
+
+fn valid_bundle_path(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 512
+        && !value.starts_with('/')
+        && !value.contains('\0')
+        && value
+            .split('/')
+            .all(|part| !part.is_empty() && !matches!(part, "." | ".."))
+}
+
+fn valid_public_host(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && !value.starts_with('.')
+        && !value.ends_with('.')
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
 }
 
 fn link_local(value: std::net::IpAddr) -> bool {

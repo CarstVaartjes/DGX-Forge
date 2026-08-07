@@ -77,9 +77,9 @@ struct RuntimeEndpoint<'a> {
 
 #[derive(Debug, Serialize)]
 struct RuntimePlacement<'a> {
-    rank: u16,
+    rank: u32,
     role: &'a str,
-    world_size: u16,
+    world_size: u32,
     local_address: Option<std::net::IpAddr>,
     master_address: Option<std::net::IpAddr>,
     master_port: Option<u16>,
@@ -90,13 +90,19 @@ struct RuntimePolicy {
     runtime_interface: String,
     architecture: String,
     required_image_label: RuntimePolicyLabel,
-    accepted_config_users: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
 struct RuntimePolicyLabel {
     name: String,
     value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RunLifecycle {
+    installation_id: String,
+    placement: Placement,
 }
 
 fn runtime_policy() -> Result<RuntimePolicy, OciError> {
@@ -171,16 +177,22 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
         if spec.runtime.interface != policy.runtime_interface {
             return Err(OciError::Runtime);
         }
-        let pull = self.runner.run(
-            Program::Podman,
-            &["pull".to_owned(), spec.runtime.image.clone()],
-            Duration::from_secs(3600),
-        )?;
-        if !pull.success {
-            return Err(OciError::Runtime);
+        if !spec
+            .runtime
+            .image
+            .starts_with("localhost/vonk/recipe-build-")
+        {
+            let pull = self.runner.run(
+                Program::Podman,
+                &["pull".to_owned(), spec.runtime.image.clone()],
+                Duration::from_secs(3600),
+            )?;
+            if !pull.success {
+                return Err(OciError::Runtime);
+            }
         }
         let label_template = format!(
-            "{{{{.Id}}}}\\t{{{{.Os}}}}\\t{{{{.Architecture}}}}\\t{{{{index .Config.Labels {:?}}}}}\\t{{{{.Config.User}}}}",
+            "{{{{.Digest}}}}\\t{{{{.Os}}}}\\t{{{{.Architecture}}}}\\t{{{{index .Config.Labels {:?}}}}}\\t{{{{.Config.User}}}}",
             policy.required_image_label.name
         );
         let inspect = self.runner.run(
@@ -207,12 +219,6 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
             .architecture
             .split_once('/')
             .ok_or(OciError::ImageDigest)?;
-        let root_user = fields.get(4).is_some_and(|value| {
-            policy
-                .accepted_config_users
-                .iter()
-                .any(|accepted| accepted == value)
-        });
         if !inspect.success
             || fields.get(..4)
                 != Some(&[
@@ -222,7 +228,7 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
                     policy.required_image_label.value.as_str(),
                 ])
             || fields.len() != 5
-            || !root_user
+            || fields.get(4) != Some(&spec.security.user.as_str())
         {
             return Err(OciError::ImageDigest);
         }
@@ -257,6 +263,8 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
             "4096".to_owned(),
             "--memory".to_owned(),
             placement.reserved_memory_bytes.to_string(),
+            "--user".to_owned(),
+            spec.security.user.clone(),
             "--publish".to_owned(),
             format!("{}:{}", placement.port, spec.endpoint.port),
             "--env".to_owned(),
@@ -297,6 +305,17 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
                 arguments.extend(["--device".to_owned(), device.clone()]);
             }
         }
+        for environment in &spec.runtime.environment {
+            let Some(value) = &environment.value else {
+                return Err(OciError::Runtime);
+            };
+            let value = match value {
+                ArgumentValue::Boolean(value) => value.to_string(),
+                ArgumentValue::Integer(value) => value.to_string(),
+                ArgumentValue::String(value) => value.clone(),
+            };
+            arguments.extend(["--env".to_owned(), format!("{}={value}", environment.name)]);
+        }
         for mount in &spec.security.mounts {
             let source = if mount.source == "model" {
                 &models
@@ -317,6 +336,7 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
             ),
         ]);
         arguments.push(spec.runtime.image.clone());
+        arguments.extend(spec.runtime.entrypoint.iter().cloned());
         for argument in &spec.runtime.arguments {
             arguments.push(format!("--{}", argument.name.replace('_', "-")));
             match &argument.value {
@@ -341,6 +361,21 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
         fs::set_permissions(&state, fs::Permissions::from_mode(0o700))?;
         self.write_runtime_contract(spec, installation_id, run_id, placement)?;
         let arguments = self.start_arguments(spec, installation_id, run_id, placement)?;
+        let pre_start = spec
+            .lifecycle
+            .pre_start
+            .iter()
+            .map(|hook| hook_arguments(&arguments, &spec.runtime.image, hook))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.run_lifecycle_hooks(&pre_start, spec.lifecycle.stop_timeout_seconds)?;
+        atomic_write(
+            &state,
+            "lifecycle.json",
+            &serde_json::to_vec(&RunLifecycle {
+                installation_id: installation_id.to_owned(),
+                placement: placement.clone(),
+            })?,
+        )?;
         let output = self
             .runner
             .run(Program::Podman, &arguments, Duration::from_secs(300))?;
@@ -352,13 +387,24 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
             || identifier.len() != 64
             || !identifier.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
+            let post_stop = spec
+                .lifecycle
+                .post_stop
+                .iter()
+                .filter_map(|hook| hook_arguments(&arguments, &spec.runtime.image, hook).ok())
+                .collect::<Vec<_>>();
+            let _ = self.run_lifecycle_hooks(&post_stop, spec.lifecycle.stop_timeout_seconds);
             return Err(OciError::Runtime);
         }
         Ok(identifier.to_owned())
     }
 
     pub fn stop(&self, run_id: &str) -> Result<(), OciError> {
-        managed_path(self.data_root, "runs", run_id)?;
+        let lifecycle = self.load_run_lifecycle(run_id)?;
+        let stop_timeout = lifecycle
+            .as_ref()
+            .map(|(spec, _, _)| spec.lifecycle.stop_timeout_seconds)
+            .unwrap_or(30);
         let output = self.runner.run(
             Program::Podman,
             &[
@@ -366,13 +412,65 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
                 "--force".to_owned(),
                 "--ignore".to_owned(),
                 "--time".to_owned(),
-                "30".to_owned(),
+                stop_timeout.to_string(),
                 format!("vonk-{run_id}"),
             ],
-            Duration::from_secs(45),
+            Duration::from_secs(u64::from(stop_timeout) + 15),
         )?;
         if !output.success {
             return Err(OciError::Runtime);
+        }
+        if let Some((spec, installation_id, placement)) = lifecycle {
+            let main = self.start_arguments(&spec, &installation_id, run_id, &placement)?;
+            let hooks = spec
+                .lifecycle
+                .post_stop
+                .iter()
+                .map(|hook| hook_arguments(&main, &spec.runtime.image, hook))
+                .collect::<Result<Vec<_>, _>>()?;
+            self.run_lifecycle_hooks(&hooks, spec.lifecycle.stop_timeout_seconds)?;
+        }
+        Ok(())
+    }
+
+    fn load_run_lifecycle(
+        &self,
+        run_id: &str,
+    ) -> Result<Option<(WorkloadSpec, String, Placement)>, OciError> {
+        let run = managed_path(self.data_root, "runs", run_id)?;
+        let path = run.join("lifecycle.json");
+        let metadata = match fs::symlink_metadata(&path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => return Err(error.into()),
+        };
+        if !metadata.file_type().is_file()
+            || metadata.file_type().is_symlink()
+            || metadata.len() > 16 * 1024
+        {
+            return Err(OciError::Artifact);
+        }
+        let record: RunLifecycle = serde_json::from_slice(&fs::read(path)?)?;
+        record.placement.validate()?;
+        managed_path(self.data_root, "installations", &record.installation_id)?;
+        let spec = self.load_spec(&record.installation_id)?;
+        Ok(Some((spec, record.installation_id, record.placement)))
+    }
+
+    fn run_lifecycle_hooks(
+        &self,
+        hooks: &[Vec<String>],
+        timeout_seconds: u16,
+    ) -> Result<(), OciError> {
+        for arguments in hooks {
+            let output = self.runner.run(
+                Program::Podman,
+                arguments,
+                Duration::from_secs(u64::from(timeout_seconds)),
+            )?;
+            if !output.success {
+                return Err(OciError::Runtime);
+            }
         }
         Ok(())
     }
@@ -532,7 +630,7 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
                     self.download_https(
                         &url,
                         &staging.join("artifact"),
-                        artifact.expected_bytes,
+                        artifact.download_bytes,
                         false,
                     )
                 }),
@@ -554,7 +652,7 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
                     &arguments,
                     Duration::from_secs(3600),
                     &staging,
-                    artifact.expected_bytes,
+                    artifact.download_bytes,
                 )?;
                 if output.success {
                     Ok(())
@@ -569,7 +667,7 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
             return Err(OciError::Artifact);
         }
         let manifest = create_manifest(&staging)?;
-        if manifest.total_bytes != artifact.expected_bytes
+        if manifest.total_bytes != artifact.download_bytes
             || artifact.kind == "http.file"
                 && manifest.files.get("artifact").map(String::as_str)
                     != artifact.revision.strip_prefix("sha256:")
@@ -612,7 +710,7 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
         if model.siblings.is_empty() || model.siblings.len() > 20_000 {
             return Err(OciError::Artifact);
         }
-        let mut remaining = artifact.expected_bytes;
+        let mut remaining = artifact.download_bytes;
         for file in model.siblings {
             let relative = safe_relative_path(&file.rfilename)?;
             let destination = staging.join(&relative);
@@ -910,6 +1008,31 @@ fn sha256_file(path: &Path) -> Result<String, OciError> {
         hasher.update(&buffer[..read]);
     }
     Ok(hex::encode(hasher.finalize()))
+}
+
+fn hook_arguments(main: &[String], image: &str, hook: &[String]) -> Result<Vec<String>, OciError> {
+    if hook.is_empty() || main.first().map(String::as_str) != Some("run") {
+        return Err(OciError::Runtime);
+    }
+    let image_index = main
+        .iter()
+        .position(|value| value == image)
+        .ok_or(OciError::Runtime)?;
+    let mut arguments = vec!["run".to_owned(), "--rm".to_owned()];
+    let mut index = 1;
+    while index < image_index {
+        match main[index].as_str() {
+            "--detach" => index += 1,
+            "--name" | "--restart" | "--publish" => index += 2,
+            _ => {
+                arguments.push(main[index].clone());
+                index += 1;
+            }
+        }
+    }
+    arguments.push(image.to_owned());
+    arguments.extend(hook.iter().cloned());
+    Ok(arguments)
 }
 
 fn lower_hex(value: &str, length: usize) -> bool {

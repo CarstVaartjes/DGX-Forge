@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import io
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,7 +13,8 @@ from dgx_control.catalog_service import (
     CatalogValidationError,
     RecipeDraftInput,
 )
-from dgx_control.models import Base
+from dgx_control.models import Base, RecipeSourceBundle
+from dgx_control.source_bundles import SourceBundleStore, generate_source_bundle
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -28,7 +30,33 @@ def service(tmp_path: Path) -> CatalogService:
     engine = create_engine(f"sqlite:///{tmp_path / 'catalog.sqlite'}")
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
-    return CatalogService(sessions, clock=lambda: datetime(2026, 8, 7, tzinfo=UTC))
+    return CatalogService(
+        sessions,
+        clock=lambda: datetime(2026, 8, 7, tzinfo=UTC),
+        source_bundles=SourceBundleStore(tmp_path / "source-bundles"),
+    )
+
+
+def test_uploaded_source_bundle_is_verified_and_recorded(
+    service: CatalogService,
+) -> None:
+    bundle = generate_source_bundle(
+        {
+            "Dockerfile": b"FROM scratch\nUSER 65532:65532\n",
+            "compose.yaml": b"services: {}\n",
+        }
+    )
+
+    stored = service.store_source_bundle(
+        bundle.sha256, io.BytesIO(bundle.archive), "administrator"
+    )
+
+    assert stored.sha256 == bundle.sha256
+    assert stored.file_count == 2
+    with service._sessions() as session:
+        row = session.get(RecipeSourceBundle, bundle.sha256)
+        assert row is not None
+        assert row.manifest["sha256"] == bundle.sha256
 
 
 def test_resolve_creates_immutable_revision_and_repeated_resolve_is_idempotent(

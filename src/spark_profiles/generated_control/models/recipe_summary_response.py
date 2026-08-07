@@ -28,38 +28,34 @@ T = TypeVar("T", bound="RecipeSummaryResponse")
 class RecipeSummaryResponse:
     """
         Attributes:
-            activation_memory_bytes_per_node (int):
             artifact_count (int):
             expected_download_bytes (int):
-            installed_bytes_per_node (int):
             lifecycle (RecipeSummaryResponseLifecycle):
-            max_nodes (int):
-            min_nodes (int):
+            maximum_installed_bytes_per_node (int):
+            maximum_runtime_memory_bytes_per_node (int):
             origin (RecipeSummaryResponseOrigin):
+            profile_node_counts (list[int]):
             recipe_id (str):
-            resident_memory_bytes_per_node (int):
             revision_number (int):
             runtime_family (str):
-            runtime_image (str):
             slug (str):
+            source_bundle_sha256 (str):
             title (str):
             content_sha256 (Union[None, Unset, str]):
      """
 
-    activation_memory_bytes_per_node: int
     artifact_count: int
     expected_download_bytes: int
-    installed_bytes_per_node: int
     lifecycle: RecipeSummaryResponseLifecycle
-    max_nodes: int
-    min_nodes: int
+    maximum_installed_bytes_per_node: int
+    maximum_runtime_memory_bytes_per_node: int
     origin: RecipeSummaryResponseOrigin
+    profile_node_counts: list[int]
     recipe_id: str
-    resident_memory_bytes_per_node: int
     revision_number: int
     runtime_family: str
-    runtime_image: str
     slug: str
+    source_bundle_sha256: str
     title: str
     content_sha256: Union[None, Unset, str] = UNSET
 
@@ -68,33 +64,31 @@ class RecipeSummaryResponse:
 
 
     def to_dict(self) -> dict[str, Any]:
-        activation_memory_bytes_per_node = self.activation_memory_bytes_per_node
-
         artifact_count = self.artifact_count
 
         expected_download_bytes = self.expected_download_bytes
 
-        installed_bytes_per_node = self.installed_bytes_per_node
-
         lifecycle: str = self.lifecycle
 
-        max_nodes = self.max_nodes
+        maximum_installed_bytes_per_node = self.maximum_installed_bytes_per_node
 
-        min_nodes = self.min_nodes
+        maximum_runtime_memory_bytes_per_node = self.maximum_runtime_memory_bytes_per_node
 
         origin: str = self.origin
 
-        recipe_id = self.recipe_id
+        profile_node_counts = self.profile_node_counts
 
-        resident_memory_bytes_per_node = self.resident_memory_bytes_per_node
+
+
+        recipe_id = self.recipe_id
 
         revision_number = self.revision_number
 
         runtime_family = self.runtime_family
 
-        runtime_image = self.runtime_image
-
         slug = self.slug
+
+        source_bundle_sha256 = self.source_bundle_sha256
 
         title = self.title
 
@@ -108,20 +102,18 @@ class RecipeSummaryResponse:
         field_dict: dict[str, Any] = {}
 
         field_dict.update({
-            "activation_memory_bytes_per_node": activation_memory_bytes_per_node,
             "artifact_count": artifact_count,
             "expected_download_bytes": expected_download_bytes,
-            "installed_bytes_per_node": installed_bytes_per_node,
             "lifecycle": lifecycle,
-            "max_nodes": max_nodes,
-            "min_nodes": min_nodes,
+            "maximum_installed_bytes_per_node": maximum_installed_bytes_per_node,
+            "maximum_runtime_memory_bytes_per_node": maximum_runtime_memory_bytes_per_node,
             "origin": origin,
+            "profile_node_counts": profile_node_counts,
             "recipe_id": recipe_id,
-            "resident_memory_bytes_per_node": resident_memory_bytes_per_node,
             "revision_number": revision_number,
             "runtime_family": runtime_family,
-            "runtime_image": runtime_image,
             "slug": slug,
+            "source_bundle_sha256": source_bundle_sha256,
             "title": title,
         })
         if content_sha256 is not UNSET:
@@ -134,39 +126,36 @@ class RecipeSummaryResponse:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        activation_memory_bytes_per_node = d.pop("activation_memory_bytes_per_node")
-
         artifact_count = d.pop("artifact_count")
 
         expected_download_bytes = d.pop("expected_download_bytes")
-
-        installed_bytes_per_node = d.pop("installed_bytes_per_node")
 
         lifecycle = check_recipe_summary_response_lifecycle(d.pop("lifecycle"))
 
 
 
 
-        max_nodes = d.pop("max_nodes")
+        maximum_installed_bytes_per_node = d.pop("maximum_installed_bytes_per_node")
 
-        min_nodes = d.pop("min_nodes")
+        maximum_runtime_memory_bytes_per_node = d.pop("maximum_runtime_memory_bytes_per_node")
 
         origin = check_recipe_summary_response_origin(d.pop("origin"))
 
 
 
 
-        recipe_id = d.pop("recipe_id")
+        profile_node_counts = cast(list[int], d.pop("profile_node_counts"))
 
-        resident_memory_bytes_per_node = d.pop("resident_memory_bytes_per_node")
+
+        recipe_id = d.pop("recipe_id")
 
         revision_number = d.pop("revision_number")
 
         runtime_family = d.pop("runtime_family")
 
-        runtime_image = d.pop("runtime_image")
-
         slug = d.pop("slug")
+
+        source_bundle_sha256 = d.pop("source_bundle_sha256")
 
         title = d.pop("title")
 
@@ -181,20 +170,18 @@ class RecipeSummaryResponse:
 
 
         recipe_summary_response = cls(
-            activation_memory_bytes_per_node=activation_memory_bytes_per_node,
             artifact_count=artifact_count,
             expected_download_bytes=expected_download_bytes,
-            installed_bytes_per_node=installed_bytes_per_node,
             lifecycle=lifecycle,
-            max_nodes=max_nodes,
-            min_nodes=min_nodes,
+            maximum_installed_bytes_per_node=maximum_installed_bytes_per_node,
+            maximum_runtime_memory_bytes_per_node=maximum_runtime_memory_bytes_per_node,
             origin=origin,
+            profile_node_counts=profile_node_counts,
             recipe_id=recipe_id,
-            resident_memory_bytes_per_node=resident_memory_bytes_per_node,
             revision_number=revision_number,
             runtime_family=runtime_family,
-            runtime_image=runtime_image,
             slug=slug,
+            source_bundle_sha256=source_bundle_sha256,
             title=title,
             content_sha256=content_sha256,
         )

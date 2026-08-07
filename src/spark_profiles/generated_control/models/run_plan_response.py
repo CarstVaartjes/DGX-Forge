@@ -25,6 +25,8 @@ class RunPlanResponse:
         Attributes:
             allowed (bool):
             installation_id (str):
+            mapping_generation (int):
+            mapping_id (str):
             nodes (list['RunNodePlanResponse']):
             plan_digest (str):
             recipe_revision_id (str):
@@ -32,6 +34,8 @@ class RunPlanResponse:
 
     allowed: bool
     installation_id: str
+    mapping_generation: int
+    mapping_id: str
     nodes: list['RunNodePlanResponse']
     plan_digest: str
     recipe_revision_id: str
@@ -45,6 +49,10 @@ class RunPlanResponse:
         allowed = self.allowed
 
         installation_id = self.installation_id
+
+        mapping_generation = self.mapping_generation
+
+        mapping_id = self.mapping_id
 
         nodes = []
         for nodes_item_data in self.nodes:
@@ -63,6 +71,8 @@ class RunPlanResponse:
         field_dict.update({
             "allowed": allowed,
             "installation_id": installation_id,
+            "mapping_generation": mapping_generation,
+            "mapping_id": mapping_id,
             "nodes": nodes,
             "plan_digest": plan_digest,
             "recipe_revision_id": recipe_revision_id,
@@ -79,6 +89,10 @@ class RunPlanResponse:
         allowed = d.pop("allowed")
 
         installation_id = d.pop("installation_id")
+
+        mapping_generation = d.pop("mapping_generation")
+
+        mapping_id = d.pop("mapping_id")
 
         nodes = []
         _nodes = d.pop("nodes")
@@ -97,6 +111,8 @@ class RunPlanResponse:
         run_plan_response = cls(
             allowed=allowed,
             installation_id=installation_id,
+            mapping_generation=mapping_generation,
+            mapping_id=mapping_id,
             nodes=nodes,
             plan_digest=plan_digest,
             recipe_revision_id=recipe_revision_id,

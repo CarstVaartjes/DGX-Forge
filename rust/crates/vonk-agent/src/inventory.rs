@@ -84,6 +84,8 @@ impl<R: ProcessRunner> InventoryCollector<'_, R> {
         let mut capabilities = vec![
             "recipe.operations.v1".to_owned(),
             "runtime.rootless-podman.v1".to_owned(),
+            "recipe.build.v1".to_owned(),
+            "recipe.image.import.v1".to_owned(),
             "runtime.vonk.v1".to_owned(),
         ];
         if let Some(speed) = self.fabric_bandwidth_mbps {

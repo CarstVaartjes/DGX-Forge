@@ -6,7 +6,7 @@ This design closes the security, consistency, failure-recovery, and delivery gap
 
 ## Shared runtime contract
 
-Version 1 images are Linux/ARM64, digest-pinned OCI images with the exact label `ai.vonkforge.runtime-interface=v1`. Their configured user is root (`""`, `0`, `root`, `0:0`, or `root:root`) because the agent deliberately runs them under a rootless, single-UID Podman user namespace. Root in the container therefore maps to the unprivileged `vonk` host account; a non-root image user is incompatible with the single-UID mapping. Both repositories consume the same vendored policy document and test their validators against it.
+Version 1 images are Linux/ARM64, digest-pinned OCI images with the exact label `ai.vonkforge.runtime-interface=v1`. Their configured user is an explicit numeric non-root identity, and the agent adds rootless Podman with a subordinate-UID mapping as a second isolation boundary. Both repositories consume the same vendored policy document and test their validators against it.
 
 ## Artifact acquisition
 

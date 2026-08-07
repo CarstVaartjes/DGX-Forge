@@ -21,6 +21,7 @@ from dgx_control.models import (
     RecipeTestReport,
 )
 from dgx_control.recipe_contract import recipe_content_sha256
+from dgx_control.source_bundles import generate_source_bundle
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
@@ -83,6 +84,24 @@ def test_client_fetches_only_the_exact_immutable_revision(recipe) -> None:
     assert seen == [f"/v1/recipes/vonk/qwen3-vllm/revisions/sha256/{digest}"]
 
 
+def test_client_downloads_a_bounded_exact_source_bundle() -> None:
+    bundle = generate_source_bundle({"Dockerfile": b"FROM scratch\nUSER 65532:65532\n"})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == f"/v1/source-bundles/{bundle.sha256}"
+        return httpx.Response(
+            200,
+            headers={"content-type": "application/vnd.vonk.source-bundle.v1+tar"},
+            content=bundle.archive,
+        )
+
+    client = GlobalCatalogClient(
+        "https://vonkforge.ai", transport=httpx.MockTransport(handler)
+    )
+
+    assert client.fetch_source_bundle(bundle.sha256) == bundle.archive
+
+
 @pytest.mark.parametrize(
     ("base_url", "revision_hash", "status", "code"),
     [
@@ -102,11 +121,15 @@ def test_client_fails_closed_on_insecure_changed_or_redirected_content(
         return httpx.Response(
             200,
             json={
-                "publisher": "vonk", "slug": "qwen3-vllm", "revision_number": 1,
+                "publisher": "vonk",
+                "slug": "qwen3-vllm",
+                "revision_number": 1,
                 "recipe_id": "00000000-0000-4000-8000-000000000001",
                 "revision_id": "10000000-0000-4000-8000-000000000001",
-                "content_sha256": revision_hash, "schema_version": 1,
-                "published_at": "2026-08-07T10:00:00+00:00", "document": recipe,
+                "content_sha256": revision_hash,
+                "schema_version": 1,
+                "published_at": "2026-08-07T10:00:00+00:00",
+                "document": recipe,
             },
         )
 
@@ -145,22 +168,38 @@ def test_global_import_is_idempotent_and_remains_local_after_remote_disappears(
         link = database.get(RecipeGlobalLink, first.recipe_id)
         assert link is not None
         assert link.global_revision == 4
-        assert database.scalar(select(LocalRecipe).where(LocalRecipe.id == first.recipe_id))
+        assert database.scalar(
+            select(LocalRecipe).where(LocalRecipe.id == first.recipe_id)
+        )
 
 
-def test_new_remote_revision_becomes_a_new_immutable_local_revision(catalog, recipe) -> None:
+def test_new_remote_revision_becomes_a_new_immutable_local_revision(
+    catalog, recipe
+) -> None:
     service, sessions = catalog
     first_document = copy.deepcopy(recipe)
     first = GlobalRecipeRevision(
-        "vonk", "qwen3-vllm", "00000000-0000-4000-8000-000000000004", 1, "10000000-0000-4000-8000-000000000001",
-        recipe_content_sha256(first_document), "2026-08-07T10:00:00+00:00", first_document,
+        "vonk",
+        "qwen3-vllm",
+        "00000000-0000-4000-8000-000000000004",
+        1,
+        "10000000-0000-4000-8000-000000000001",
+        recipe_content_sha256(first_document),
+        "2026-08-07T10:00:00+00:00",
+        first_document,
     )
     service.import_global("admin", first)
     second_document = copy.deepcopy(recipe)
     second_document["metadata"]["title"] = "Qwen3 revised"
     second = GlobalRecipeRevision(
-        "vonk", "qwen3-vllm", "00000000-0000-4000-8000-000000000004", 2, "10000000-0000-4000-8000-000000000002",
-        recipe_content_sha256(second_document), "2026-08-07T11:00:00+00:00", second_document,
+        "vonk",
+        "qwen3-vllm",
+        "00000000-0000-4000-8000-000000000004",
+        2,
+        "10000000-0000-4000-8000-000000000002",
+        recipe_content_sha256(second_document),
+        "2026-08-07T11:00:00+00:00",
+        second_document,
     )
 
     imported = service.import_global("admin", second)
@@ -175,7 +214,10 @@ def _test_report(recipe_hash: str, image_digest: str) -> dict[str, object]:
     return {
         "schema_version": 1,
         "recipe_sha256": recipe_hash,
+        "source_bundle_sha256": "a" * 64,
+        "build_input_sha256": "b" * 64,
         "image_digest": image_digest,
+        "deployment_profile": "solo",
         "node_count": 1,
         "runtime": {
             "agent_version": "1.0.0",
@@ -196,10 +238,16 @@ def test_publication_export_requires_bound_evidence_and_target_namespace(
     catalog, recipe
 ) -> None:
     service, sessions = catalog
-    draft = service.create_recipe("admin", type("Draft", (), {"slug": "qwen3-vllm", "document": recipe, "source_kind": "local"})())
+    draft = service.create_recipe(
+        "admin",
+        type(
+            "Draft",
+            (),
+            {"slug": "qwen3-vllm", "document": recipe, "source_kind": "local"},
+        )(),
+    )
     resolved = service.resolve(draft.recipe_id, draft.revision_number, "admin")
-    image = str(recipe["runtime"]["image"])
-    image_digest = "sha256:" + image.rsplit("@sha256:", 1)[1]
+    image_digest = "sha256:" + "c" * 64
 
     with pytest.raises(Exception, match="test report"):
         service.publication_export(resolved.recipe_id, "ada-lab")
@@ -222,10 +270,16 @@ def test_publication_export_requires_bound_evidence_and_target_namespace(
 
 def test_test_report_rejects_failed_or_mismatched_claims(catalog, recipe) -> None:
     service, _sessions = catalog
-    draft = service.create_recipe("admin", type("Draft", (), {"slug": "qwen3-vllm", "document": recipe, "source_kind": "local"})())
+    draft = service.create_recipe(
+        "admin",
+        type(
+            "Draft",
+            (),
+            {"slug": "qwen3-vllm", "document": recipe, "source_kind": "local"},
+        )(),
+    )
     resolved = service.resolve(draft.recipe_id, 1, "admin")
-    image = str(recipe["runtime"]["image"])
-    report = _test_report(resolved.content_sha256 or "", "sha256:" + image.rsplit("@sha256:", 1)[1])
+    report = _test_report(resolved.content_sha256 or "", "sha256:" + "c" * 64)
     report["checks"][2]["passed"] = False
 
     with pytest.raises(Exception, match="required lifecycle"):

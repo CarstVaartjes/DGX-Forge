@@ -111,12 +111,14 @@ class StaleUpdateAuthorization(ValueError):
     """A signer response lost its rollout authority before publication."""
 
 
-_SAFE_AUTOMATIC_RECLAIM = frozenset({
-    AgentOperation.NODE_PROBE.value,
-    AgentOperation.PACKAGE_HEALTH.value,
-    AgentOperation.WORKLOAD_HEALTH.value,
-    AgentOperation.WORKLOAD_VERIFY.value,
-})
+_SAFE_AUTOMATIC_RECLAIM = frozenset(
+    {
+        AgentOperation.NODE_PROBE.value,
+        AgentOperation.PACKAGE_HEALTH.value,
+        AgentOperation.WORKLOAD_HEALTH.value,
+        AgentOperation.WORKLOAD_VERIFY.value,
+    }
+)
 _PACKAGE_CAPABILITIES = frozenset(
     {
         "package-abi-v1",
@@ -133,6 +135,8 @@ _PACKAGE_CAPABILITIES = frozenset(
 )
 _RECIPE_CAPABILITIES = frozenset(
     {
+        AgentOperation.RECIPE_BUILD.value,
+        AgentOperation.RECIPE_IMAGE_IMPORT.value,
         AgentOperation.RECIPE_INSTALL.value,
         AgentOperation.RECIPE_START.value,
         AgentOperation.RECIPE_STOP.value,
@@ -154,13 +158,17 @@ _MUTATING_OPERATIONS = frozenset(
         AgentOperation.WORKLOAD_PREPARE.value,
         AgentOperation.WORKLOAD_START.value,
         AgentOperation.WORKLOAD_STOP.value,
+        AgentOperation.RECIPE_BUILD.value,
+        AgentOperation.RECIPE_IMAGE_IMPORT.value,
         AgentOperation.RECIPE_INSTALL.value,
         AgentOperation.RECIPE_START.value,
         AgentOperation.RECIPE_STOP.value,
         AgentOperation.RECIPE_UNINSTALL.value,
     }
 )
-_TERMINAL_PARENT_STATES = frozenset({"succeeded", "failed", "waiting-for-operator", "expired"})
+_TERMINAL_PARENT_STATES = frozenset(
+    {"succeeded", "failed", "waiting-for-operator", "expired"}
+)
 _RETRY_DISPOSITION = "retry"
 _DATABASE_REPOLL_SECONDS = 0.25
 _REQUIRED_CAPABILITIES = frozenset(
@@ -174,13 +182,18 @@ _REQUIRED_CAPABILITIES = frozenset(
         AgentOperation.WORKLOAD_VERIFY.value,
     }
 )
-_NEXT_CAPABILITIES = _REQUIRED_CAPABILITIES | frozenset(
-    {
-        AgentOperation.AGENT_ROLLBACK.value,
-        AgentOperation.AGENT_UPDATE.value,
-        "agent.runtime.rust.v1",
-    }
-) | _PACKAGE_CAPABILITIES | _RECIPE_CAPABILITIES
+_NEXT_CAPABILITIES = (
+    _REQUIRED_CAPABILITIES
+    | frozenset(
+        {
+            AgentOperation.AGENT_ROLLBACK.value,
+            AgentOperation.AGENT_UPDATE.value,
+            "agent.runtime.rust.v1",
+        }
+    )
+    | _PACKAGE_CAPABILITIES
+    | _RECIPE_CAPABILITIES
+)
 
 
 class StaleAgentAttempt(RuntimeError):
@@ -311,11 +324,11 @@ class AgentJobService:
             protocol_operation is AgentOperation.AGENT_ROLLBACK
             and not authorized_platform_rollback
         ):
-            raise ValueError(
-                "agent rollback requires a waiting platform update parent"
-            )
+            raise ValueError("agent rollback requires a waiting platform update parent")
         if parent.state in _TERMINAL_PARENT_STATES and not authorized_platform_rollback:
-            raise ValueError("cannot enqueue an agent operation beneath a terminal parent")
+            raise ValueError(
+                "cannot enqueue an agent operation beneath a terminal parent"
+            )
         if parent.base_commit != base_commit:
             raise ValueError("agent operation base commit must match its parent")
         if node_id not in parent.targets:
@@ -385,9 +398,7 @@ class AgentJobService:
             node_id=node_id,
             operation=protocol_operation,
             base_commit=base_commit,
-            payload_digest=hashlib.sha256(
-                canonical_message(final_payload)
-            ).hexdigest(),
+            payload_digest=hashlib.sha256(canonical_message(final_payload)).hexdigest(),
             payload=final_payload,
             deadline=now,
         )
@@ -484,9 +495,7 @@ class AgentJobService:
             raise ValueError("agent update source identity is unavailable")
         observations = rollout.plan.get("source_observations")
         planned_source = (
-            observations.get(node.node_id)
-            if isinstance(observations, dict)
-            else None
+            observations.get(node.node_id) if isinstance(observations, dict) else None
         )
         source_fields = (
             "platform_version",
@@ -560,7 +569,9 @@ class AgentJobService:
                     .with_for_update(of=StoredOperation)
                 )
                 if operation is not None and operation.state in {"queued", "running"}:
-                    return ReservedUpdateAuthorization(existing.id, dict(existing.request))
+                    return ReservedUpdateAuthorization(
+                        existing.id, dict(existing.request)
+                    )
                 existing.state = "stale"
                 existing.updated_at = now
             elif _aware(existing.expires_at) <= now:
@@ -615,7 +626,9 @@ class AgentJobService:
             action=protocol_operation.value,
             state="reserved",
             unsigned_payload=unsigned_payload,
-            payload_digest=hashlib.sha256(canonical_message(unsigned_payload)).hexdigest(),
+            payload_digest=hashlib.sha256(
+                canonical_message(unsigned_payload)
+            ).hexdigest(),
             source_slot=node.active_slot,
             source_sha256=node.agent_sha256,
             source_generation=node.supervisor_generation,
@@ -721,7 +734,8 @@ class AgentJobService:
         signed = dict(response)
         response_digest = hashlib.sha256(_signer_message(signed)).hexdigest()
         valid_response = (
-            set(signed) == {"intent_id", "request_digest", "schema_version", "signed_payload"}
+            set(signed)
+            == {"intent_id", "request_digest", "schema_version", "signed_payload"}
             and signed.get("schema_version") == 1
             and signed.get("intent_id") == intent.id
             and signed.get("request_digest") == intent.request_digest
@@ -729,9 +743,7 @@ class AgentJobService:
         )
         final_payload = signed.get("signed_payload")
         receipt = (
-            final_payload.get("receipt")
-            if isinstance(final_payload, dict)
-            else None
+            final_payload.get("receipt") if isinstance(final_payload, dict) else None
         )
         exact_receipt = (
             isinstance(receipt, dict)
@@ -741,8 +753,7 @@ class AgentJobService:
             and receipt.get("attempt") == 1
             and receipt.get("claim_deadline")
             == int(_aware(intent.expires_at).timestamp())
-            and receipt.get("expires_at")
-            == int(_aware(intent.expires_at).timestamp())
+            and receipt.get("expires_at") == int(_aware(intent.expires_at).timestamp())
         )
         if intent.action == AgentOperation.AGENT_UPDATE.value:
             exact_receipt = bool(
@@ -1021,12 +1032,16 @@ class AgentJobService:
                 capabilities,
                 runtime_identity,
             )
-            expired_attempt = select(AgentOperationAttempt.id).where(
-                AgentOperationAttempt.operation_id == StoredOperation.id,
-                AgentOperationAttempt.attempt == StoredOperation.current_attempt,
-                AgentOperationAttempt.state == "running",
-                AgentOperationAttempt.lease_deadline <= now,
-            ).exists()
+            expired_attempt = (
+                select(AgentOperationAttempt.id)
+                .where(
+                    AgentOperationAttempt.operation_id == StoredOperation.id,
+                    AgentOperationAttempt.attempt == StoredOperation.current_attempt,
+                    AgentOperationAttempt.state == "running",
+                    AgentOperationAttempt.lease_deadline <= now,
+                )
+                .exists()
+            )
             excluded: list[str] = []
             while True:
                 statement = (
@@ -1092,14 +1107,19 @@ class AgentJobService:
                     return None
             if operation.current_attempt:
                 previous = session.scalar(
-                    select(AgentOperationAttempt).where(
+                    select(AgentOperationAttempt)
+                    .where(
                         AgentOperationAttempt.operation_id == operation.id,
                         AgentOperationAttempt.attempt == operation.current_attempt,
-                    ).with_for_update(of=AgentOperationAttempt)
+                    )
+                    .with_for_update(of=AgentOperationAttempt)
                 )
                 if previous is not None:
                     previous.state = "expired"
-            if operation.state == "running" and operation.kind not in _SAFE_AUTOMATIC_RECLAIM:
+            if (
+                operation.state == "running"
+                and operation.kind not in _SAFE_AUTOMATIC_RECLAIM
+            ):
                 operation.state = "waiting-for-operator"
                 operation.retry_disposition = None
                 operation.retry_disposition_attempt = None
@@ -1258,9 +1278,7 @@ class AgentJobService:
         now: datetime,
     ) -> bool:
         job = session.scalar(
-            select(Job)
-            .where(Job.id == operation.parent_job_id)
-            .with_for_update(of=Job)
+            select(Job).where(Job.id == operation.parent_job_id).with_for_update(of=Job)
         )
         if job is None:
             raise ValueError("agent operation lacks its parent job")
@@ -1276,10 +1294,7 @@ class AgentJobService:
                 AgentOperation.AGENT_UPDATE.value,
                 AgentOperation.AGENT_ROLLBACK.value,
             }:
-                if (
-                    job.kind != "platform.update"
-                    or operation.current_attempt != 0
-                ):
+                if job.kind != "platform.update" or operation.current_attempt != 0:
                     return False
                 rollout = session.scalar(
                     select(UpdateRollout)
@@ -1344,8 +1359,7 @@ class AgentJobService:
         projection = session.scalar(
             select(ReconciliationOperation)
             .where(
-                ReconciliationOperation.reconciliation_id
-                == job.reconciliation_id,
+                ReconciliationOperation.reconciliation_id == job.reconciliation_id,
                 ReconciliationOperation.agent_operation_id == operation.id,
             )
             .with_for_update(of=ReconciliationOperation)
@@ -1430,7 +1444,9 @@ class AgentJobService:
             or isinstance(node.protocol_version, bool)
             or not protocol[0] <= node.protocol_version <= protocol[1]
             or not isinstance(node.capabilities, list)
-            or not _REQUIRED_CAPABILITIES <= set(node.capabilities) <= _NEXT_CAPABILITIES
+            or not _REQUIRED_CAPABILITIES
+            <= set(node.capabilities)
+            <= _NEXT_CAPABILITIES
             for node in nodes
         ):
             return "reconciliation target agent is incompatible"
@@ -1445,9 +1461,7 @@ class AgentJobService:
         projections = list(
             session.scalars(
                 select(ReconciliationOperation)
-                .where(
-                    ReconciliationOperation.reconciliation_id == reconciliation_id
-                )
+                .where(ReconciliationOperation.reconciliation_id == reconciliation_id)
                 .order_by(
                     ReconciliationOperation.graph_operation_id,
                     ReconciliationOperation.role,
@@ -1592,16 +1606,13 @@ class AgentJobService:
             now = self._clock()
             if isinstance(fence, AgentResult):
                 if fence.state != state or (
-                    result is not None
-                    and _document(fence.result) != _document(result)
+                    result is not None and _document(fence.result) != _document(result)
                 ):
                     raise ValueError("agent result does not match requested completion")
                 message = fence
             else:
                 canonical_result = (
-                    result
-                    if result is not None
-                    else {"reason": self._reason(reason)}
+                    result if result is not None else {"reason": self._reason(reason)}
                 )
                 message = AgentResult(
                     schema_version=1,
@@ -1622,8 +1633,7 @@ class AgentJobService:
             ):
                 health = self._probe_health(message.result)
                 if (
-                    operation.payload
-                    == {"require_active_nvidia_compute_processes": 0}
+                    operation.payload == {"require_active_nvidia_compute_processes": 0}
                     and health["active_nvidia_compute_processes"] != 0
                 ):
                     raise ValueError("node probe compute gate is unsatisfied")
@@ -1671,13 +1681,17 @@ class AgentJobService:
             .where(AgentOperationAttempt.fence == token)
         ).one_or_none()
         if identity_hint is None:
-            raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
+            raise StaleAgentAttempt(
+                "agent operation lease, certificate, or fence is stale"
+            )
         operation_id, node_id, certificate_serial = identity_hint
         self._lock_reconciliation_targets(session, operation_id)
         identity = self._lock_identity(session, node_id, certificate_serial)
         now = self._clock()
         if identity is None or not self._identity_is_active(*identity, now):
-            raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
+            raise StaleAgentAttempt(
+                "agent operation lease, certificate, or fence is stale"
+            )
         node, certificate = identity
         self._consume_contact(session, source, node, certificate)
         self._require_active_reconciliation_authority(
@@ -1690,7 +1704,9 @@ class AgentJobService:
             .with_for_update(of=StoredOperation)
         )
         if operation is None:
-            raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
+            raise StaleAgentAttempt(
+                "agent operation lease, certificate, or fence is stale"
+            )
         attempt = session.scalar(
             select(AgentOperationAttempt)
             .where(
@@ -1704,12 +1720,17 @@ class AgentJobService:
             or (not isinstance(fence, str) and operation.parent_job_id != fence.job_id)
             or (not isinstance(fence, str) and operation.id != fence.operation_id)
             or (not isinstance(fence, str) and operation.node_id != fence.node_id)
-            or (not isinstance(fence, str) and operation.current_attempt != fence.attempt)
+            or (
+                not isinstance(fence, str)
+                and operation.current_attempt != fence.attempt
+            )
             or attempt.operation_id != operation.id
             or attempt.state != "running"
             or _aware(attempt.lease_deadline) <= _aware(now)
         ):
-            raise StaleAgentAttempt("agent operation lease, certificate, or fence is stale")
+            raise StaleAgentAttempt(
+                "agent operation lease, certificate, or fence is stale"
+            )
         self._record_contact(node, certificate, now, None, None, None)
         return operation, attempt
 
@@ -1754,7 +1775,9 @@ class AgentJobService:
         expected_phase = (
             None
             if projection is None
-            else "compensating" if projection.role == "compensation" else "dispatching"
+            else "compensating"
+            if projection.role == "compensation"
+            else "dispatching"
         )
         if (
             reconciliation is None
@@ -1885,9 +1908,7 @@ class AgentJobService:
             node.build_digest = str(runtime_identity["build_digest"])
             node.active_slot = str(runtime_identity["active_slot"])
             node.agent_sha256 = str(runtime_identity["agent_sha256"])
-            node.supervisor_generation = int(
-                runtime_identity["supervisor_generation"]
-            )
+            node.supervisor_generation = int(runtime_identity["supervisor_generation"])
             ready_generation = runtime_identity["supervisor_ready_generation"]
             node.supervisor_ready_generation = (
                 None if ready_generation is None else int(ready_generation)
@@ -1933,8 +1954,7 @@ class AgentJobService:
             or not isinstance(document["agent_sha256"], str)
             or re.fullmatch(r"[0-9a-f]{64}", document["agent_sha256"]) is None
             or not isinstance(document["build_digest"], str)
-            or re.fullmatch(r"sha256:[0-9a-f]{64}", document["build_digest"])
-            is None
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", document["build_digest"]) is None
             or not isinstance(document["platform_version"], str)
             or re.fullmatch(
                 r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",
@@ -1984,9 +2004,7 @@ class AgentJobService:
         self._contact_consumer(session, source)
 
     @staticmethod
-    def _lock_reconciliation_targets(
-        session: Session, operation_id: str
-    ) -> None:
+    def _lock_reconciliation_targets(session: Session, operation_id: str) -> None:
         authority = session.execute(
             select(Job.reconciliation_id, Job.targets)
             .join(StoredOperation, StoredOperation.parent_job_id == Job.id)
@@ -2090,12 +2108,14 @@ class AgentJobService:
         disk_available = (
             storage.get("available_bytes") if isinstance(storage, Mapping) else None
         )
-        memory_total = memory.get("total_bytes") if isinstance(memory, Mapping) else None
-        disk_total = storage.get("total_bytes") if isinstance(storage, Mapping) else None
+        memory_total = (
+            memory.get("total_bytes") if isinstance(memory, Mapping) else None
+        )
+        disk_total = (
+            storage.get("total_bytes") if isinstance(storage, Mapping) else None
+        )
         accelerator_available = (
-            accelerator.get("available")
-            if isinstance(accelerator, Mapping)
-            else False
+            accelerator.get("available") if isinstance(accelerator, Mapping) else False
         )
         raw_compute_processes = (
             accelerator.get("active_nvidia_compute_processes")
@@ -2138,7 +2158,9 @@ class AgentJobService:
         status = (
             "critical"
             if accelerator_available is False
-            else "warning" if warning else "healthy"
+            else "warning"
+            if warning
+            else "healthy"
         )
         observation: dict[str, object] = {
             "status": status,
@@ -2159,7 +2181,9 @@ class AgentJobService:
         observation["compute_occupancy"] = (
             "unknown"
             if compute_processes is None
-            else "clean" if compute_processes == 0 else "active"
+            else "clean"
+            if compute_processes == 0
+            else "active"
         )
         if memory_total is not None:
             observation["memory_total_bytes"] = memory_total
@@ -2231,13 +2255,17 @@ class AgentJobService:
             return
         if job.reconciliation_id is not None:
             return
-        operations = list(session.scalars(
-            select(StoredOperation)
-            .where(StoredOperation.parent_job_id == parent_job_id)
-            .order_by(StoredOperation.created_at, StoredOperation.id)
-        ))
+        operations = list(
+            session.scalars(
+                select(StoredOperation)
+                .where(StoredOperation.parent_job_id == parent_job_id)
+                .order_by(StoredOperation.created_at, StoredOperation.id)
+            )
+        )
         terminal = {"compensated", "succeeded", "failed", "waiting-for-operator"}
-        if not operations or any(operation.state not in terminal for operation in operations):
+        if not operations or any(
+            operation.state not in terminal for operation in operations
+        ):
             return
         states = {operation.state for operation in operations}
         if "failed" in states:

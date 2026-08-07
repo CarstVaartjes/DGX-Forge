@@ -140,48 +140,76 @@ def upgrade() -> None:
     )
     op.create_index("ix_recipe_global_links_global_recipe_id", "recipe_global_links", ["global_recipe_id"])
     op.create_table(
-        "materialized_deployments",
+        "recipe_builds",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("recipe_revision_id", sa.String(36), sa.ForeignKey("local_recipe_revisions.id", ondelete="RESTRICT"), nullable=False),
-        sa.Column("alias", sa.String(128), nullable=False, unique=True),
+        sa.Column("builder_node_id", sa.String(36), sa.ForeignKey("agent_nodes.node_id", ondelete="RESTRICT"), nullable=False),
+        sa.Column("source_bundle_sha256", sa.String(64), nullable=False),
+        sa.Column("build_input_sha256", sa.String(64), nullable=False),
         sa.Column("state", sa.String(24), nullable=False),
-        sa.Column("placement_digest", sa.String(64), nullable=False),
-        sa.Column("config", sa.JSON, nullable=False),
+        sa.Column("policy_report", sa.JSON, nullable=False),
+        sa.Column("plan", sa.JSON, nullable=False),
+        sa.Column("image_digest", sa.String(71)),
+        sa.Column("oci_layout_sha256", sa.String(64)),
+        sa.Column("image_bytes", sa.BigInteger),
+        sa.Column("error", sa.String(512)),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.UniqueConstraint("recipe_revision_id", "builder_node_id", "build_input_sha256", name="uq_recipe_build_input_builder"),
+        sa.CheckConstraint("state IN ('planned','building','succeeded','failed')", name="ck_recipe_builds_state"),
+        sa.CheckConstraint(_lower_hex("source_bundle_sha256", 64), name="ck_recipe_builds_source_digest"),
+        sa.CheckConstraint(_lower_hex("build_input_sha256", 64), name="ck_recipe_builds_input_digest"),
+        sa.CheckConstraint("image_digest IS NULL OR (length(image_digest) = 71 AND substr(image_digest, 1, 7) = 'sha256:')", name="ck_recipe_builds_image_digest"),
+        sa.CheckConstraint("oci_layout_sha256 IS NULL OR length(oci_layout_sha256) = 64", name="ck_recipe_builds_layout_digest"),
+        sa.CheckConstraint("image_bytes IS NULL OR image_bytes > 0", name="ck_recipe_builds_image_size"),
+    )
+    op.create_index("ix_recipe_builds_recipe_revision_id", "recipe_builds", ["recipe_revision_id"])
+    op.create_index("ix_recipe_builds_builder_node_id", "recipe_builds", ["builder_node_id"])
+    op.create_index("ix_recipe_builds_state", "recipe_builds", ["state"])
+    op.create_table(
+        "cluster_mappings",
+        sa.Column("id", sa.String(36), primary_key=True),
+        sa.Column("recipe_revision_id", sa.String(36), sa.ForeignKey("local_recipe_revisions.id", ondelete="RESTRICT"), nullable=False),
+        sa.Column("profile_name", sa.String(64), nullable=False),
+        sa.Column("generation", sa.Integer, nullable=False),
+        sa.Column("node_count", sa.Integer, nullable=False),
+        sa.Column("state", sa.String(24), nullable=False),
+        sa.Column("parameters", sa.JSON, nullable=False),
+        sa.Column("placement_digest", sa.String(64), nullable=False, unique=True),
+        sa.Column("endpoint_owner_node_id", sa.String(36), sa.ForeignKey("agent_nodes.node_id", ondelete="RESTRICT"), nullable=False),
         sa.Column("created_by", sa.String(200), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.CheckConstraint("state IN ('planned','installing','installed','starting','running','stopping','stopped','failed')", name="ck_materialized_deployments_state"),
-        sa.CheckConstraint(_lower_hex("placement_digest", 64), name="ck_materialized_deployments_placement_digest"),
+        sa.CheckConstraint("generation >= 1", name="ck_cluster_mappings_generation"),
+        sa.CheckConstraint("node_count >= 1", name="ck_cluster_mappings_node_count"),
+        sa.CheckConstraint("state IN ('planned','ready','stale')", name="ck_cluster_mappings_state"),
+        sa.CheckConstraint(_lower_hex("placement_digest", 64), name="ck_cluster_mappings_placement_digest"),
     )
-    op.create_index("ix_materialized_deployments_recipe_revision_id", "materialized_deployments", ["recipe_revision_id"])
-    op.create_index("ix_materialized_deployments_state", "materialized_deployments", ["state"])
+    op.create_index("ix_cluster_mappings_recipe_revision_id", "cluster_mappings", ["recipe_revision_id"])
+    op.create_index("ix_cluster_mappings_state", "cluster_mappings", ["state"])
     op.create_table(
-        "materialized_deployment_nodes",
+        "cluster_mapping_nodes",
         sa.Column("id", sa.String(36), primary_key=True),
-        sa.Column("deployment_id", sa.String(36), sa.ForeignKey("materialized_deployments.id", ondelete="CASCADE"), nullable=False),
+        sa.Column("mapping_id", sa.String(36), sa.ForeignKey("cluster_mappings.id", ondelete="CASCADE"), nullable=False),
         sa.Column("node_id", sa.String(36), sa.ForeignKey("agent_nodes.node_id", ondelete="RESTRICT"), nullable=False),
         sa.Column("rank", sa.Integer, nullable=False),
-        sa.Column("role", sa.String(16), nullable=False),
-        sa.Column("state", sa.String(24), nullable=False),
-        sa.Column("reserved_disk_bytes", sa.BigInteger, nullable=False, server_default="0"),
-        sa.Column("reserved_memory_bytes", sa.BigInteger, nullable=False, server_default="0"),
-        sa.Column("observed_memory_bytes", sa.BigInteger),
-        sa.Column("endpoint", sa.JSON),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
-        sa.UniqueConstraint("deployment_id", "node_id", name="uq_materialized_deployment_node"),
-        sa.UniqueConstraint("deployment_id", "rank", name="uq_materialized_deployment_rank"),
-        sa.CheckConstraint("rank >= 0", name="ck_materialized_deployment_nodes_rank"),
-        sa.CheckConstraint("role IN ('entrypoint','worker')", name="ck_materialized_deployment_nodes_role"),
-        sa.CheckConstraint("reserved_disk_bytes >= 0 AND reserved_memory_bytes >= 0", name="ck_materialized_deployment_nodes_reservations"),
+        sa.Column("role", sa.String(64), nullable=False),
+        sa.Column("endpoint_owner", sa.Boolean, nullable=False),
+        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
+        sa.UniqueConstraint("mapping_id", "node_id", name="uq_cluster_mapping_node"),
+        sa.UniqueConstraint("mapping_id", "rank", name="uq_cluster_mapping_rank"),
+        sa.CheckConstraint("rank >= 0", name="ck_cluster_mapping_nodes_rank"),
+        sa.CheckConstraint("length(role) BETWEEN 1 AND 64", name="ck_cluster_mapping_nodes_role"),
     )
-    op.create_index("ix_materialized_deployment_nodes_deployment_id", "materialized_deployment_nodes", ["deployment_id"])
-    op.create_index("ix_materialized_deployment_nodes_node_id", "materialized_deployment_nodes", ["node_id"])
+    op.create_index("ix_cluster_mapping_nodes_mapping_id", "cluster_mapping_nodes", ["mapping_id"])
+    op.create_index("ix_cluster_mapping_nodes_node_id", "cluster_mapping_nodes", ["node_id"])
 
 
 def downgrade() -> None:
     for table in (
-        "materialized_deployment_nodes",
-        "materialized_deployments",
+        "cluster_mapping_nodes",
+        "cluster_mappings",
+        "recipe_builds",
         "recipe_global_links",
         "recipe_import_items",
         "recipe_imports",

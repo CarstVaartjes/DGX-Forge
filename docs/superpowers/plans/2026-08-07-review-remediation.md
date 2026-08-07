@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Runtime v1 is Linux/ARM64, digest-pinned, labeled `ai.vonkforge.runtime-interface=v1`, and configured to run as root inside rootless single-UID Podman.
+- Runtime v1 is Linux/ARM64, digest-pinned, labeled `ai.vonkforge.runtime-interface=v1`, and configured with an explicit numeric non-root user inside rootless Podman.
 - Generic network artifacts use credential-free public HTTPS, pinned validated addresses, bounded redirects, and hard byte ceilings.
 - A lifecycle state change, its reservations, parent job, and child operations commit in one database transaction.
 - Node locks are acquired in sorted node-ID order.

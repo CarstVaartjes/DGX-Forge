@@ -24,15 +24,23 @@ class InstallPlanResponse:
     """
         Attributes:
             allowed (bool):
+            image_digest (str):
+            mapping_generation (int):
+            mapping_id (str):
             nodes (list['InstallNodePlanResponse']):
             plan_digest (str):
+            recipe_build_id (str):
             recipe_content_sha256 (str):
             recipe_revision_id (str):
      """
 
     allowed: bool
+    image_digest: str
+    mapping_generation: int
+    mapping_id: str
     nodes: list['InstallNodePlanResponse']
     plan_digest: str
+    recipe_build_id: str
     recipe_content_sha256: str
     recipe_revision_id: str
 
@@ -44,6 +52,12 @@ class InstallPlanResponse:
         from ..models.install_node_plan_response import InstallNodePlanResponse
         allowed = self.allowed
 
+        image_digest = self.image_digest
+
+        mapping_generation = self.mapping_generation
+
+        mapping_id = self.mapping_id
+
         nodes = []
         for nodes_item_data in self.nodes:
             nodes_item = nodes_item_data.to_dict()
@@ -52,6 +66,8 @@ class InstallPlanResponse:
 
 
         plan_digest = self.plan_digest
+
+        recipe_build_id = self.recipe_build_id
 
         recipe_content_sha256 = self.recipe_content_sha256
 
@@ -62,8 +78,12 @@ class InstallPlanResponse:
 
         field_dict.update({
             "allowed": allowed,
+            "image_digest": image_digest,
+            "mapping_generation": mapping_generation,
+            "mapping_id": mapping_id,
             "nodes": nodes,
             "plan_digest": plan_digest,
+            "recipe_build_id": recipe_build_id,
             "recipe_content_sha256": recipe_content_sha256,
             "recipe_revision_id": recipe_revision_id,
         })
@@ -78,6 +98,12 @@ class InstallPlanResponse:
         d = dict(src_dict)
         allowed = d.pop("allowed")
 
+        image_digest = d.pop("image_digest")
+
+        mapping_generation = d.pop("mapping_generation")
+
+        mapping_id = d.pop("mapping_id")
+
         nodes = []
         _nodes = d.pop("nodes")
         for nodes_item_data in (_nodes):
@@ -90,14 +116,20 @@ class InstallPlanResponse:
 
         plan_digest = d.pop("plan_digest")
 
+        recipe_build_id = d.pop("recipe_build_id")
+
         recipe_content_sha256 = d.pop("recipe_content_sha256")
 
         recipe_revision_id = d.pop("recipe_revision_id")
 
         install_plan_response = cls(
             allowed=allowed,
+            image_digest=image_digest,
+            mapping_generation=mapping_generation,
+            mapping_id=mapping_id,
             nodes=nodes,
             plan_digest=plan_digest,
+            recipe_build_id=recipe_build_id,
             recipe_content_sha256=recipe_content_sha256,
             recipe_revision_id=recipe_revision_id,
         )

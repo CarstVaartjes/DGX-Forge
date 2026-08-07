@@ -294,7 +294,7 @@ def _draft(
             "dockerfile": "Dockerfile",
             "platform": "linux/arm64",
             "arguments": [],
-            "network": {"mode": "public", "hosts": []},
+            "network": {"mode": "none", "hosts": []},
             "resources": {
                 "download_bytes": 0,
                 "temporary_bytes": 1,
@@ -439,7 +439,7 @@ def _bundle(source: SparkRunSource) -> GeneratedSourceBundle:
 def _dockerfile(source: SparkRunSource) -> str:
     lines = [
         f"FROM {source.container or 'scratch'}",
-        'LABEL ai.vonkforge.runtime-interface="vonk.runtime.v1"',
+        'LABEL ai.vonkforge.runtime-interface="v1"',
         "COPY sparkrun/ /opt/vonk/sparkrun/",
     ]
     if source.mods:

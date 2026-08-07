@@ -25,7 +25,9 @@ RECIPE_OPERATIONS = frozenset(
     }
 )
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
+_OCI_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _ALIAS = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,61}[a-z0-9])?\Z")
+_ROLE = re.compile(r"[a-z][a-z0-9_-]{0,63}\Z")
 
 
 def _digest(value: object, name: str) -> str:
@@ -53,6 +55,10 @@ class RecipeOperationRequest:
     installation_id: str | None = None
     recipe_revision_id: str | None = None
     recipe_content_sha256: str | None = None
+    mapping_id: str | None = None
+    mapping_generation: int | None = None
+    recipe_build_id: str | None = None
+    image_digest: str | None = None
     expected_bytes: int | None = None
     run_id: str | None = None
     alias: str | None = None
@@ -77,6 +83,12 @@ class RecipeOperationRequest:
                 "installation_id",
                 "recipe_revision_id",
                 "recipe_content_sha256",
+                "mapping_id",
+                "mapping_generation",
+                "recipe_build_id",
+                "image_digest",
+                "rank",
+                "role",
                 "expected_bytes",
             }
         elif operation is AgentOperation.RECIPE_START:
@@ -85,6 +97,9 @@ class RecipeOperationRequest:
                 "installation_id",
                 "recipe_revision_id",
                 "recipe_content_sha256",
+                "mapping_id",
+                "mapping_generation",
+                "image_digest",
                 "alias",
                 "rank",
                 "role",
@@ -123,9 +138,30 @@ class RecipeOperationRequest:
             if "expected_bytes" in value
             else None
         )
-        run_id = (
-            _uuid(value["run_id"], name="run_id") if "run_id" in value else None
+        mapping_id = (
+            _uuid(value["mapping_id"], name="mapping_id")
+            if "mapping_id" in value
+            else None
         )
+        mapping_generation = value.get("mapping_generation")
+        if "mapping_generation" in value and (
+            not isinstance(mapping_generation, int)
+            or isinstance(mapping_generation, bool)
+            or mapping_generation < 1
+        ):
+            raise AgentProtocolError("mapping generation is invalid")
+        recipe_build_id = (
+            _uuid(value["recipe_build_id"], name="recipe_build_id")
+            if "recipe_build_id" in value
+            else None
+        )
+        image_digest = value.get("image_digest")
+        if "image_digest" in value and (
+            not isinstance(image_digest, str)
+            or _OCI_DIGEST.fullmatch(image_digest) is None
+        ):
+            raise AgentProtocolError("image digest is invalid")
+        run_id = _uuid(value["run_id"], name="run_id") if "run_id" in value else None
         alias = value.get("alias")
         rank = value.get("rank")
         role = value.get("role")
@@ -136,14 +172,23 @@ class RecipeOperationRequest:
         local_address = value.get("local_address")
         master_address = value.get("master_address")
         master_port = value.get("master_port")
+        if operation is AgentOperation.RECIPE_INSTALL and (
+            not isinstance(rank, int)
+            or isinstance(rank, bool)
+            or rank < 0
+            or not isinstance(role, str)
+            or _ROLE.fullmatch(role) is None
+        ):
+            raise AgentProtocolError("recipe install placement is invalid")
         if operation is AgentOperation.RECIPE_START:
             if not isinstance(alias, str) or _ALIAS.fullmatch(alias) is None:
                 raise AgentProtocolError("recipe alias is invalid")
             if (
                 not isinstance(rank, int)
                 or isinstance(rank, bool)
-                or not 0 <= rank <= 1023
-                or role not in {"entrypoint", "worker"}
+                or rank < 0
+                or not isinstance(role, str)
+                or _ROLE.fullmatch(role) is None
                 or not isinstance(port, int)
                 or isinstance(port, bool)
                 or not 1024 <= port <= 65535
@@ -152,14 +197,16 @@ class RecipeOperationRequest:
             if (
                 not isinstance(world_size, int)
                 or isinstance(world_size, bool)
-                or not 1 <= world_size <= 16
+                or not 1 <= world_size <= 2**32 - 1
                 or rank >= world_size
             ):
                 raise AgentProtocolError("recipe start world size is invalid")
             try:
                 address = ipaddress.ip_address(endpoint_address)
             except (TypeError, ValueError) as error:
-                raise AgentProtocolError("recipe endpoint address is invalid") from error
+                raise AgentProtocolError(
+                    "recipe endpoint address is invalid"
+                ) from error
             if (
                 address.is_loopback
                 or address.is_link_local
@@ -171,7 +218,6 @@ class RecipeOperationRequest:
             if world_size == 1:
                 if (
                     rank != 0
-                    or role != "entrypoint"
                     or local_address is not None
                     or master_address is not None
                     or master_port is not None
@@ -182,7 +228,9 @@ class RecipeOperationRequest:
                     try:
                         fabric = ipaddress.ip_address(candidate)
                     except (TypeError, ValueError) as error:
-                        raise AgentProtocolError("recipe fabric address is invalid") from error
+                        raise AgentProtocolError(
+                            "recipe fabric address is invalid"
+                        ) from error
                     if (
                         fabric.is_loopback
                         or fabric.is_link_local
@@ -207,14 +255,24 @@ class RecipeOperationRequest:
             installation_id=installation_id,
             recipe_revision_id=recipe_revision_id,
             recipe_content_sha256=recipe_digest,
+            mapping_id=mapping_id,
+            mapping_generation=(
+                mapping_generation if isinstance(mapping_generation, int) else None
+            ),
+            recipe_build_id=recipe_build_id,
+            image_digest=image_digest if isinstance(image_digest, str) else None,
             expected_bytes=expected_bytes,
             run_id=run_id,
             alias=alias if isinstance(alias, str) else None,
             rank=rank if isinstance(rank, int) and not isinstance(rank, bool) else None,
             role=role if isinstance(role, str) else None,
             port=port if isinstance(port, int) and not isinstance(port, bool) else None,
-            reserved_memory_bytes=reserved_memory if isinstance(reserved_memory, int) else None,
-            endpoint_address=endpoint_address if isinstance(endpoint_address, str) else None,
+            reserved_memory_bytes=reserved_memory
+            if isinstance(reserved_memory, int)
+            else None,
+            endpoint_address=endpoint_address
+            if isinstance(endpoint_address, str)
+            else None,
             world_size=world_size if isinstance(world_size, int) else None,
             local_address=local_address if isinstance(local_address, str) else None,
             master_address=master_address if isinstance(master_address, str) else None,

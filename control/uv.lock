@@ -223,7 +223,7 @@ dependencies = [
     { name = "jsonschema" },
 ]
 wheels = [
-    { filename = "dgx_agent_protocol-2.1.0-py3-none-any.whl", hash = "sha256:55e54dffe3c24a5010569a04dde00a05526b0b8e130179bade78d48323287024" },
+    { filename = "dgx_agent_protocol-2.1.0-py3-none-any.whl", hash = "sha256:7fcd36e5d6ce327d34ed29e7aeb2a389ce7ad780f84418d5e748d5566c1fbd06" },
 ]
 
 [package.metadata]
@@ -1054,6 +1054,7 @@ dependencies = [
     { name = "attrs" },
     { name = "httpx" },
     { name = "jsonschema" },
+    { name = "python-dateutil" },
     { name = "securesystemslib", extra = ["crypto"] },
     { name = "tuf" },
 ]
@@ -1063,6 +1064,7 @@ requires-dist = [
     { name = "attrs", specifier = "==26.1.0" },
     { name = "httpx", specifier = "==0.28.1" },
     { name = "jsonschema", specifier = ">=4.23" },
+    { name = "python-dateutil", specifier = "==2.9.0.post0" },
     { name = "securesystemslib", extras = ["crypto"], specifier = "==1.4.0" },
     { name = "tuf", specifier = "==7.0.0" },
 ]

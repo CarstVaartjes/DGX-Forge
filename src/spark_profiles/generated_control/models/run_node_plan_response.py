@@ -26,17 +26,17 @@ T = TypeVar("T", bound="RunNodePlanResponse")
 class RunNodePlanResponse:
     """
         Attributes:
-            active_gpu_reserved_bytes (int):
-            active_host_reserved_bytes (int):
+            active_reserved_bytes (int):
             allowed (bool):
+            available_memory_bytes (Union[None, int]):
             blockers (list['PlanReason']):
+            endpoint_owner (bool):
             fabric_address (Union[None, str]):
             fabric_bandwidth_mbps (Union[None, int]):
             free_after_bytes (Union[None, int]):
-            gpu_free_bytes (Union[None, int]):
-            host_free_bytes (Union[None, int]):
             inventory_observed_at (Union[None, datetime.datetime]):
             memory_floor_bytes (int):
+            memory_kind (str):
             node_id (str):
             port (int):
             rank (int):
@@ -46,17 +46,17 @@ class RunNodePlanResponse:
             warnings (list['PlanReason']):
      """
 
-    active_gpu_reserved_bytes: int
-    active_host_reserved_bytes: int
+    active_reserved_bytes: int
     allowed: bool
+    available_memory_bytes: Union[None, int]
     blockers: list['PlanReason']
+    endpoint_owner: bool
     fabric_address: Union[None, str]
     fabric_bandwidth_mbps: Union[None, int]
     free_after_bytes: Union[None, int]
-    gpu_free_bytes: Union[None, int]
-    host_free_bytes: Union[None, int]
     inventory_observed_at: Union[None, datetime.datetime]
     memory_floor_bytes: int
+    memory_kind: str
     node_id: str
     port: int
     rank: int
@@ -71,11 +71,12 @@ class RunNodePlanResponse:
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.plan_reason import PlanReason
-        active_gpu_reserved_bytes = self.active_gpu_reserved_bytes
-
-        active_host_reserved_bytes = self.active_host_reserved_bytes
+        active_reserved_bytes = self.active_reserved_bytes
 
         allowed = self.allowed
+
+        available_memory_bytes: Union[None, int]
+        available_memory_bytes = self.available_memory_bytes
 
         blockers = []
         for blockers_item_data in self.blockers:
@@ -83,6 +84,8 @@ class RunNodePlanResponse:
             blockers.append(blockers_item)
 
 
+
+        endpoint_owner = self.endpoint_owner
 
         fabric_address: Union[None, str]
         fabric_address = self.fabric_address
@@ -93,12 +96,6 @@ class RunNodePlanResponse:
         free_after_bytes: Union[None, int]
         free_after_bytes = self.free_after_bytes
 
-        gpu_free_bytes: Union[None, int]
-        gpu_free_bytes = self.gpu_free_bytes
-
-        host_free_bytes: Union[None, int]
-        host_free_bytes = self.host_free_bytes
-
         inventory_observed_at: Union[None, str]
         if isinstance(self.inventory_observed_at, datetime.datetime):
             inventory_observed_at = self.inventory_observed_at.isoformat()
@@ -106,6 +103,8 @@ class RunNodePlanResponse:
             inventory_observed_at = self.inventory_observed_at
 
         memory_floor_bytes = self.memory_floor_bytes
+
+        memory_kind = self.memory_kind
 
         node_id = self.node_id
 
@@ -131,17 +130,17 @@ class RunNodePlanResponse:
         field_dict: dict[str, Any] = {}
 
         field_dict.update({
-            "active_gpu_reserved_bytes": active_gpu_reserved_bytes,
-            "active_host_reserved_bytes": active_host_reserved_bytes,
+            "active_reserved_bytes": active_reserved_bytes,
             "allowed": allowed,
+            "available_memory_bytes": available_memory_bytes,
             "blockers": blockers,
+            "endpoint_owner": endpoint_owner,
             "fabric_address": fabric_address,
             "fabric_bandwidth_mbps": fabric_bandwidth_mbps,
             "free_after_bytes": free_after_bytes,
-            "gpu_free_bytes": gpu_free_bytes,
-            "host_free_bytes": host_free_bytes,
             "inventory_observed_at": inventory_observed_at,
             "memory_floor_bytes": memory_floor_bytes,
+            "memory_kind": memory_kind,
             "node_id": node_id,
             "port": port,
             "rank": rank,
@@ -159,11 +158,17 @@ class RunNodePlanResponse:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.plan_reason import PlanReason
         d = dict(src_dict)
-        active_gpu_reserved_bytes = d.pop("active_gpu_reserved_bytes")
-
-        active_host_reserved_bytes = d.pop("active_host_reserved_bytes")
+        active_reserved_bytes = d.pop("active_reserved_bytes")
 
         allowed = d.pop("allowed")
+
+        def _parse_available_memory_bytes(data: object) -> Union[None, int]:
+            if data is None:
+                return data
+            return cast(Union[None, int], data)
+
+        available_memory_bytes = _parse_available_memory_bytes(d.pop("available_memory_bytes"))
+
 
         blockers = []
         _blockers = d.pop("blockers")
@@ -174,6 +179,8 @@ class RunNodePlanResponse:
 
             blockers.append(blockers_item)
 
+
+        endpoint_owner = d.pop("endpoint_owner")
 
         def _parse_fabric_address(data: object) -> Union[None, str]:
             if data is None:
@@ -199,22 +206,6 @@ class RunNodePlanResponse:
         free_after_bytes = _parse_free_after_bytes(d.pop("free_after_bytes"))
 
 
-        def _parse_gpu_free_bytes(data: object) -> Union[None, int]:
-            if data is None:
-                return data
-            return cast(Union[None, int], data)
-
-        gpu_free_bytes = _parse_gpu_free_bytes(d.pop("gpu_free_bytes"))
-
-
-        def _parse_host_free_bytes(data: object) -> Union[None, int]:
-            if data is None:
-                return data
-            return cast(Union[None, int], data)
-
-        host_free_bytes = _parse_host_free_bytes(d.pop("host_free_bytes"))
-
-
         def _parse_inventory_observed_at(data: object) -> Union[None, datetime.datetime]:
             if data is None:
                 return data
@@ -234,6 +225,8 @@ class RunNodePlanResponse:
 
 
         memory_floor_bytes = d.pop("memory_floor_bytes")
+
+        memory_kind = d.pop("memory_kind")
 
         node_id = d.pop("node_id")
 
@@ -264,17 +257,17 @@ class RunNodePlanResponse:
 
 
         run_node_plan_response = cls(
-            active_gpu_reserved_bytes=active_gpu_reserved_bytes,
-            active_host_reserved_bytes=active_host_reserved_bytes,
+            active_reserved_bytes=active_reserved_bytes,
             allowed=allowed,
+            available_memory_bytes=available_memory_bytes,
             blockers=blockers,
+            endpoint_owner=endpoint_owner,
             fabric_address=fabric_address,
             fabric_bandwidth_mbps=fabric_bandwidth_mbps,
             free_after_bytes=free_after_bytes,
-            gpu_free_bytes=gpu_free_bytes,
-            host_free_bytes=host_free_bytes,
             inventory_observed_at=inventory_observed_at,
             memory_floor_bytes=memory_floor_bytes,
+            memory_kind=memory_kind,
             node_id=node_id,
             port=port,
             rank=rank,

@@ -30,6 +30,11 @@ import type {
   GlobalRecipeRevision,
   SparkRunApplied,
   SparkRunPreview,
+  SourceBundleReceipt,
+  SourcePolicyReport,
+  RecipeBuildPlan,
+  RecipeMappingPlan,
+  RecipeOperation,
 } from "./types";
 import type {
   PackageCandidate,
@@ -220,6 +225,38 @@ export class ApiClient implements ControlApi {
 
   publicationExport(recipeId: string, publisher: string): Promise<Record<string, unknown>> {
     return this.request(`/api/v1/catalog/recipes/${encodeURIComponent(recipeId)}/publication-export`, {method: "POST", body: JSON.stringify({publisher})});
+  }
+
+  async uploadSourceBundle(sha256: string, archive: Uint8Array): Promise<SourceBundleReceipt> {
+    if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error("Invalid source bundle digest");
+    const headers = new Headers({Accept: "application/json", "Content-Type": "application/vnd.vonk.source-bundle.v1+tar"});
+    const csrf = csrfToken();
+    if (csrf) headers.set("X-CSRF-Token", csrf);
+    const response = await fetch(`/api/v1/catalog/source-bundles/${sha256}`, {
+      method: "PUT", body: archive as BodyInit, headers, credentials: "same-origin",
+    });
+    if (!response.ok) throw new Error(`Source upload returned ${response.status}: ${(await response.text()).slice(0, 256)}`);
+    return response.json() as Promise<SourceBundleReceipt>;
+  }
+
+  checkRecipeSource(recipeRevisionId: string): Promise<SourcePolicyReport> {
+    return this.request("/api/v1/recipes/source-checks", {method: "POST", body: JSON.stringify({recipe_revision_id: recipeRevisionId})});
+  }
+
+  previewRecipeBuild(recipeRevisionId: string, builderNodeId: string): Promise<RecipeBuildPlan> {
+    return this.request("/api/v1/recipes/build-plans/preview", {method: "POST", body: JSON.stringify({recipe_revision_id: recipeRevisionId, builder_node_id: builderNodeId})});
+  }
+
+  buildRecipe(plan: RecipeBuildPlan): Promise<RecipeOperation> {
+    return this.request("/api/v1/recipes/builds", {method: "POST", body: JSON.stringify({recipe_revision_id: plan.recipe_revision_id, builder_node_id: plan.builder_node_id, build_input_sha256: plan.build_input_sha256, request_key: crypto.randomUUID()})});
+  }
+
+  previewRecipeMapping(recipeRevisionId: string, profileName: string, nodeIds: string[]): Promise<RecipeMappingPlan> {
+    return this.request("/api/v1/recipes/mapping-plans/preview", {method: "POST", body: JSON.stringify({recipe_revision_id: recipeRevisionId, profile_name: profileName, node_ids: nodeIds, parameters: {}})});
+  }
+
+  createRecipeMapping(plan: RecipeMappingPlan): Promise<{mapping_id: string; generation: number; placement_digest: string}> {
+    return this.request("/api/v1/recipes/mappings", {method: "POST", body: JSON.stringify({recipe_revision_id: plan.recipe_revision_id, profile_name: plan.profile_name, node_ids: plan.nodes.map(node => node.node_id), parameters: plan.parameters, placement_digest: plan.placement_digest, request_key: crypto.randomUUID()})});
   }
 
   previewSparkRun(sourceYaml: string): Promise<SparkRunPreview> {

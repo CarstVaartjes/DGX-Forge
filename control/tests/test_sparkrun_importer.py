@@ -36,7 +36,12 @@ def test_container_and_mods_become_a_source_bundle() -> None:
 
     dockerfile = result.bundle.files["Dockerfile"].decode()
     assert dockerfile.startswith("FROM ghcr.io/example/sglang@sha256:")
+    assert 'LABEL ai.vonkforge.runtime-interface="v1"' in dockerfile
     assert "COPY mods/ /opt/vonk/mods/" in dockerfile
+    assert result.draft_document["build"]["network"] == {
+        "mode": "none",
+        "hosts": [],
+    }
     assert result.draft_document["build"]["context"]["sha256"] == result.bundle.sha256
     validate_recipe(result.draft_document)
 

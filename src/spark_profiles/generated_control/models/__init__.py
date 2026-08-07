@@ -6,6 +6,9 @@ from .apply_platform_update_response_apply_update_api_v1_updates_post import App
 from .apply_request import ApplyRequest
 from .approve_platform_update_recovery_response_approve_update_resume_api_v1_updates_rollout_id_approve_resume_post import ApprovePlatformUpdateRecoveryResponseApproveUpdateResumeApiV1UpdatesRolloutIdApproveResumePost
 from .bounded_error_response import BoundedErrorResponse
+from .build_plan_response import BuildPlanResponse
+from .build_preview_request import BuildPreviewRequest
+from .build_request import BuildRequest
 from .cancel_reconciliation_response_cancel_reconciliation_api_v1_reconciliations_reconciliation_id_cancel_post import CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost
 from .catalog_problem import CatalogProblem
 from .change_request import ChangeRequest
@@ -31,6 +34,7 @@ from .global_revision_response import GlobalRevisionResponse
 from .global_revision_response_document import GlobalRevisionResponseDocument
 from .grant_request import GrantRequest
 from .http_validation_error import HTTPValidationError
+from .image_distribution_request import ImageDistributionRequest
 from .install_node_plan_response import InstallNodePlanResponse
 from .install_plan_response import InstallPlanResponse
 from .install_preview_request import InstallPreviewRequest
@@ -45,6 +49,14 @@ from .job_summary import JobSummary
 from .jobs_response import JobsResponse
 from .list_audit_events_response_audit_view_api_v1_audit_get import ListAuditEventsResponseAuditViewApiV1AuditGet
 from .list_documents_response_document_view_api_v1_documents_get import ListDocumentsResponseDocumentViewApiV1DocumentsGet
+from .mapping_node_plan_response import MappingNodePlanResponse
+from .mapping_plan_response import MappingPlanResponse
+from .mapping_plan_response_parameters import MappingPlanResponseParameters
+from .mapping_preview_request import MappingPreviewRequest
+from .mapping_preview_request_parameters import MappingPreviewRequestParameters
+from .mapping_request import MappingRequest
+from .mapping_request_parameters import MappingRequestParameters
+from .mapping_response import MappingResponse
 from .migration_grant_request import MigrationGrantRequest
 from .node_status import NodeStatus
 from .node_status_labels import NodeStatusLabels
@@ -81,8 +93,6 @@ from .package_rollout_resource_envelope_evidence_item import PackageRolloutResou
 from .package_spark_inventory import PackageSparkInventory
 from .package_spark_resources import PackageSparkResources
 from .package_spark_storage import PackageSparkStorage
-from .placement_request import PlacementRequest
-from .placement_request_role import PlacementRequestRole
 from .plan_endpoint import PlanEndpoint
 from .plan_endpoint_scheme import PlanEndpointScheme
 from .plan_input_digests import PlanInputDigests
@@ -131,6 +141,10 @@ from .run_node_plan_response import RunNodePlanResponse
 from .run_plan_response import RunPlanResponse
 from .run_preview_request import RunPreviewRequest
 from .run_request import RunRequest
+from .source_bundle_response import SourceBundleResponse
+from .source_check_request import SourceCheckRequest
+from .source_policy_finding_response import SourcePolicyFindingResponse
+from .source_policy_response import SourcePolicyResponse
 from .submit_change_response_submit_change_api_v1_changes_post import SubmitChangeResponseSubmitChangeApiV1ChangesPost
 from .test_report_request import TestReportRequest
 from .test_report_request_report import TestReportRequestReport
@@ -148,6 +162,9 @@ __all__ = (
     "ApplyRequest",
     "ApprovePlatformUpdateRecoveryResponseApproveUpdateResumeApiV1UpdatesRolloutIdApproveResumePost",
     "BoundedErrorResponse",
+    "BuildPlanResponse",
+    "BuildPreviewRequest",
+    "BuildRequest",
     "CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost",
     "CatalogProblem",
     "ChangeRequest",
@@ -173,6 +190,7 @@ __all__ = (
     "GlobalRevisionResponseDocument",
     "GrantRequest",
     "HTTPValidationError",
+    "ImageDistributionRequest",
     "InstallNodePlanResponse",
     "InstallPlanResponse",
     "InstallPreviewRequest",
@@ -187,6 +205,14 @@ __all__ = (
     "JobSummary",
     "ListAuditEventsResponseAuditViewApiV1AuditGet",
     "ListDocumentsResponseDocumentViewApiV1DocumentsGet",
+    "MappingNodePlanResponse",
+    "MappingPlanResponse",
+    "MappingPlanResponseParameters",
+    "MappingPreviewRequest",
+    "MappingPreviewRequestParameters",
+    "MappingRequest",
+    "MappingRequestParameters",
+    "MappingResponse",
     "MigrationGrantRequest",
     "NodeStatus",
     "NodeStatusLabels",
@@ -223,8 +249,6 @@ __all__ = (
     "PackageSparkInventory",
     "PackageSparkResources",
     "PackageSparkStorage",
-    "PlacementRequest",
-    "PlacementRequestRole",
     "PlanEndpoint",
     "PlanEndpointScheme",
     "PlanInputDigests",
@@ -273,6 +297,10 @@ __all__ = (
     "RunPlanResponse",
     "RunPreviewRequest",
     "RunRequest",
+    "SourceBundleResponse",
+    "SourceCheckRequest",
+    "SourcePolicyFindingResponse",
+    "SourcePolicyResponse",
     "SubmitChangeResponseSubmitChangeApiV1ChangesPost",
     "TestReportRequest",
     "TestReportRequestReport",

@@ -6,6 +6,18 @@ type CatalogListApi = Pick<CatalogApi, "catalogRecipes"> & Partial<Pick<CatalogA
 
 function object(value: unknown): Record<string, unknown> { return typeof value === "object" && value !== null ? value as Record<string, unknown> : {}; }
 function gb(value: unknown): string { return `${(Number(value) / 1_000_000_000).toFixed(1)} GB`; }
+function profiles(value: unknown): Record<string, unknown>[] { return Array.isArray(value) ? value.map(object) : []; }
+function roles(value: unknown): Record<string, unknown>[] { return Array.isArray(value) ? value.map(object) : []; }
+function maximumInstalled(document: Record<string, unknown>): number {
+  const fields = ["image_bytes", "artifact_bytes", "staging_bytes", "cache_bytes", "rollback_bytes", "safety_margin_bytes"];
+  return Math.max(0, ...profiles(document.deployment_profiles).flatMap(profile => roles(profile.roles).map(role => {
+    const disk = object(object(role.resources).disk);
+    return fields.reduce((total, field) => total + Number(disk[field] ?? 0), 0);
+  })));
+}
+function maximumMemory(document: Record<string, unknown>): number {
+  return Math.max(0, ...profiles(document.deployment_profiles).flatMap(profile => roles(profile.roles).map(role => Number(object(object(role.resources).memory).startup_peak_bytes ?? 0))));
+}
 
 export function CatalogPage({api}: {api: CatalogListApi}) {
   const [recipes, setRecipes] = useState<CatalogRecipeSummary[]>([]);
@@ -35,13 +47,17 @@ export function CatalogPage({api}: {api: CatalogListApi}) {
     } catch (value) { setError(value instanceof Error ? value.message.slice(0, 256) : "Unable to import global recipe"); }
   }
   const metadata = object(preview?.document.metadata);
-  const perNode = object(object(preview?.document.resources).per_node);
+  const build = object(preview?.document.build);
+  const context = object(build.context);
+  const nodeCounts = profiles(preview?.document.deployment_profiles).map(profile => Number(profile.node_count));
+  const installed = maximumInstalled(preview?.document ?? {});
+  const memory = maximumMemory(preview?.document ?? {});
   return <>
     <div className="page-heading"><div><h2>Recipe catalog</h2><p>Local PostgreSQL is authoritative. Recipes remain available when vonkforge.ai or Git is unavailable.</p></div><div className="actions"><a className="button" href="/catalog/import/sparkrun">Import SparkRun</a><a className="button" href="/catalog/new">Create local recipe</a></div></div>
     {error && <p role="alert">{error}</p>}{!error && recipes.length === 0 && <p role="status">No recipes yet.</p>}
     {message && <p role="status">{message}</p>}
-    {api.previewGlobalRecipe && <section className="confirmation" aria-labelledby="global-import-heading"><h3 id="global-import-heading">Import from vonkforge.ai</h3><p>Paste the immutable URI from a public recipe. Review its exact container, weights, sizing, and topology before creating a durable local copy.</p><label>Immutable vonkforge.ai URI<input value={uri} onChange={event => setUri(event.target.value)} placeholder={`vonk://catalog/vonk/model@sha256:${"0".repeat(64)}`}/></label><button type="button" onClick={() => void review()}>Review global recipe</button></section>}
-    {preview && <section className="confirmation" aria-labelledby="global-review-heading"><h3 id="global-review-heading">Review {String(metadata.title ?? preview.slug)}</h3><p><code>{preview.publisher}/{preview.slug}@sha256:{preview.content_sha256}</code></p><dl className="evidence-grid compact"><div><dt>Global revision</dt><dd>{preview.revision_number}</dd></div><div><dt>Disk</dt><dd>{gb(perNode.installed_bytes)} disk / node</dd></div><div><dt>Memory</dt><dd>{gb(perNode.resident_memory_bytes)} RAM / node</dd></div><div><dt>Topology</dt><dd>{String(object(preview.document.topology).kind ?? "unknown")}</dd></div></dl><button type="button" onClick={() => void importExact()}>Import exact revision</button></section>}
+    {api.previewGlobalRecipe && <section className="confirmation" aria-labelledby="global-import-heading"><h3 id="global-import-heading">Import from vonkforge.ai</h3><p>Paste the immutable URI from a public recipe. Review its exact build source, weights, sizing, and deployment profiles before creating a durable local copy.</p><label>Immutable vonkforge.ai URI<input value={uri} onChange={event => setUri(event.target.value)} placeholder={`vonk://catalog/vonk/model@sha256:${"0".repeat(64)}`}/></label><button type="button" onClick={() => void review()}>Review global recipe</button></section>}
+    {preview && <section className="confirmation" aria-labelledby="global-review-heading"><h3 id="global-review-heading">Review {String(metadata.title ?? preview.slug)}</h3><p><code>{preview.publisher}/{preview.slug}@sha256:{preview.content_sha256}</code></p><dl className="evidence-grid compact"><div><dt>Global revision</dt><dd>{preview.revision_number}</dd></div><div><dt>Source</dt><dd>sha256:{String(context.sha256 ?? "missing")}</dd></div><div><dt>Maximum disk</dt><dd>{gb(installed)} disk / node</dd></div><div><dt>Maximum memory</dt><dd>{gb(memory)} RAM / node</dd></div><div><dt>Profiles</dt><dd>{nodeCounts.join(", ")} node(s)</dd></div></dl><button type="button" onClick={() => void importExact()}>Import exact revision</button></section>}
     <div className="recipe-grid">{recipes.map(recipe => <RecipeSummary key={recipe.recipe_id} recipe={recipe}/>)}</div>
   </>;
 }

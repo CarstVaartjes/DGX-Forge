@@ -34,15 +34,17 @@ MUTATION_ROLES = {
     ("POST", "/api/v1/reconciliations/{reconciliation_id}/cancel"): frozenset(
         {"operator", "administrator"}
     ),
-    ("POST", "/api/v1/jobs/{job_id}/resume"): frozenset(
-        {"operator", "administrator"}
-    ),
+    ("POST", "/api/v1/jobs/{job_id}/resume"): frozenset({"operator", "administrator"}),
     ("POST", "/api/v1/agents/enrollments/grants"): frozenset({"administrator"}),
     ("POST", "/api/v1/agents/nodes/{node_id}/migration-grant"): frozenset(
         {"administrator"}
     ),
-    ("POST", "/api/v1/agents/enrollments/{enrollment_id}/approve"): frozenset({"administrator"}),
-    ("POST", "/api/v1/agents/enrollments/{enrollment_id}/reject"): frozenset({"administrator"}),
+    ("POST", "/api/v1/agents/enrollments/{enrollment_id}/approve"): frozenset(
+        {"administrator"}
+    ),
+    ("POST", "/api/v1/agents/enrollments/{enrollment_id}/reject"): frozenset(
+        {"administrator"}
+    ),
     ("POST", "/api/v1/agents/nodes/{node_id}/revoke"): frozenset({"administrator"}),
     ("POST", "/api/v1/updates/plan"): frozenset({"operator", "administrator"}),
     ("POST", "/api/v1/updates"): frozenset({"operator", "administrator"}),
@@ -52,9 +54,10 @@ MUTATION_ROLES = {
     # Workload-package mutations use the same explicit role matrix as the
     # legacy control-plane mutations.  Preview operations are still mutations
     # of the authorization/audit surface and therefore must be represented.
-    ("POST", "/api/v1/packages/candidates/{candidate_id}/validation-preview"): frozenset(
-        {"operator", "administrator"}
-    ),
+    (
+        "POST",
+        "/api/v1/packages/candidates/{candidate_id}/validation-preview",
+    ): frozenset({"operator", "administrator"}),
     ("POST", "/api/v1/packages/candidates/{candidate_id}/validate"): frozenset(
         {"operator", "administrator"}
     ),
@@ -70,12 +73,14 @@ MUTATION_ROLES = {
     ("POST", "/api/v1/deployments/{deployment_id}/rollouts"): frozenset(
         {"operator", "administrator"}
     ),
-    ("POST", "/api/v1/deployments/{deployment_id}/rollouts/{rollout_id}/rollback-preview"): frozenset(
-        {"administrator"}
-    ),
-    ("POST", "/api/v1/deployments/{deployment_id}/rollouts/{rollout_id}/rollback"): frozenset(
-        {"administrator"}
-    ),
+    (
+        "POST",
+        "/api/v1/deployments/{deployment_id}/rollouts/{rollout_id}/rollback-preview",
+    ): frozenset({"administrator"}),
+    (
+        "POST",
+        "/api/v1/deployments/{deployment_id}/rollouts/{rollout_id}/rollback",
+    ): frozenset({"administrator"}),
     ("POST", "/api/v1/deployments/{deployment_id}/repair-preview"): frozenset(
         {"operator", "administrator"}
     ),
@@ -95,24 +100,14 @@ MUTATION_ROLES = {
     # preview calls too: previews accept untrusted source documents and are
     # part of the same explicitly audited authorization surface.
     ("POST", "/api/v1/catalog/recipes"): frozenset({"administrator"}),
-    ("PUT", "/api/v1/catalog/recipes/{recipe_id}/draft"): frozenset(
-        {"administrator"}
-    ),
+    ("PUT", "/api/v1/catalog/recipes/{recipe_id}/draft"): frozenset({"administrator"}),
     ("POST", "/api/v1/catalog/recipes/{recipe_id}/resolve"): frozenset(
         {"administrator"}
     ),
-    ("POST", "/api/v1/catalog/recipes/{recipe_id}/fork"): frozenset(
-        {"administrator"}
-    ),
-    ("POST", "/api/v1/catalog/imports/sparkrun/preview"): frozenset(
-        {"administrator"}
-    ),
-    ("POST", "/api/v1/catalog/imports/sparkrun"): frozenset(
-        {"administrator"}
-    ),
-    ("POST", "/api/v1/catalog/imports/global/preview"): frozenset(
-        {"administrator"}
-    ),
+    ("POST", "/api/v1/catalog/recipes/{recipe_id}/fork"): frozenset({"administrator"}),
+    ("POST", "/api/v1/catalog/imports/sparkrun/preview"): frozenset({"administrator"}),
+    ("POST", "/api/v1/catalog/imports/sparkrun"): frozenset({"administrator"}),
+    ("POST", "/api/v1/catalog/imports/global/preview"): frozenset({"administrator"}),
     ("POST", "/api/v1/catalog/imports/global"): frozenset({"administrator"}),
     ("PUT", "/api/v1/catalog/recipes/{recipe_id}/publication-report"): frozenset(
         {"administrator"}
@@ -123,6 +118,13 @@ MUTATION_ROLES = {
     ("POST", "/api/v1/catalog/recipes/{recipe_id}/resolve-import"): frozenset(
         {"administrator"}
     ),
+    ("PUT", "/api/v1/catalog/source-bundles/{sha256}"): frozenset({"administrator"}),
+    ("POST", "/api/v1/recipes/source-checks"): frozenset({"administrator"}),
+    ("POST", "/api/v1/recipes/build-plans/preview"): frozenset({"administrator"}),
+    ("POST", "/api/v1/recipes/builds"): frozenset({"administrator"}),
+    ("POST", "/api/v1/recipes/mapping-plans/preview"): frozenset({"administrator"}),
+    ("POST", "/api/v1/recipes/mappings"): frozenset({"administrator"}),
+    ("POST", "/api/v1/recipes/image-distributions"): frozenset({"administrator"}),
     ("POST", "/api/v1/recipes/install-plans/preview"): frozenset({"administrator"}),
     ("POST", "/api/v1/recipes/installations"): frozenset({"administrator"}),
     ("POST", "/api/v1/recipes/run-plans/preview"): frozenset({"administrator"}),
@@ -243,7 +245,8 @@ class TrustedProxyAgentIdentityMiddleware:
                 duplicate_forwarded_headers = True
             forwarded[name] = value.decode("latin-1")
         sanitized = tuple(
-            (key, value) for key, value in raw_headers
+            (key, value)
+            for key, value in raw_headers
             if not key.lower().startswith(b"x-dgx-agent-")
         )
         safe_scope = dict(scope)
@@ -251,7 +254,11 @@ class TrustedProxyAgentIdentityMiddleware:
         safe_scope.pop(_AGENT_SOURCE_SCOPE_KEY, None)
         safe_scope["headers"] = sanitized
         supplied_proxy_auth = forwarded.get("x-dgx-agent-proxy-auth", "").encode()
-        if self._trusted_proxy_auth and hmac.compare_digest(supplied_proxy_auth, self._trusted_proxy_auth) and not duplicate_forwarded_headers:
+        if (
+            self._trusted_proxy_auth
+            and hmac.compare_digest(supplied_proxy_auth, self._trusted_proxy_auth)
+            and not duplicate_forwarded_headers
+        ):
             try:
                 identity = AgentIdentity(
                     node_id=forwarded["x-dgx-agent-node"],
@@ -373,7 +380,9 @@ class CursorCodec:
             raise ValueError("cursor document is invalid") from error
         body = _encode(payload)
         signature = _encode(
-            hmac.new(self._key, _CURSOR_DOMAIN + body.encode("ascii"), hashlib.sha256).digest()
+            hmac.new(
+                self._key, _CURSOR_DOMAIN + body.encode("ascii"), hashlib.sha256
+            ).digest()
         )
         token = f"v1.{body}.{signature}"
         if len(body) > 384 or len(token) > _MAX_CURSOR_LENGTH:

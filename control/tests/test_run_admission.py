@@ -10,6 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from dgx_control.cluster_mappings import ClusterMappingService
 from dgx_control.inventory_repository import InventoryRepository, InventorySnapshotInput
 from dgx_control.models import (
     AgentNode,
@@ -17,11 +18,11 @@ from dgx_control.models import (
     InstallationNode,
     LocalRecipe,
     LocalRecipeRevision,
+    RecipeBuild,
     RecipeInstallation,
     ResourceReservation,
 )
 from dgx_control.run_admission import RunAdmissionService, RunPlanConflict
-from dgx_control.topology import Placement
 from sqlalchemy import create_engine
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
@@ -43,8 +44,14 @@ def setup(
     document = json.loads(
         (Path(__file__).parent / "fixtures/global/recipe-v1-minimal.json").read_text()
     )
-    document["resources"]["per_node"].update(
-        {"resident_memory_bytes": 200, "activation_memory_bytes": 25}
+    memory = document["deployment_profiles"][0]["roles"][0]["resources"]["memory"]
+    memory.update(
+        {
+            "startup_peak_bytes": 225,
+            "steady_state_bytes": 200,
+            "runtime_growth_bytes": 25,
+            "system_reserve_bytes": 0,
+        }
     )
     with sessions.begin() as session:
         session.add(
@@ -78,8 +85,33 @@ def setup(
         )
         session.add(revision)
         session.flush()
+        revision_id = revision.id
+    mappings = ClusterMappingService(sessions)
+    mapping_plan = mappings.plan(revision_id, "solo", (node,), parameters={})
+    mapping_id = mappings.materialize(mapping_plan, actor="admin", now=now)
+    with sessions.begin() as session:
+        build = RecipeBuild(
+            recipe_revision_id=revision_id,
+            builder_node_id=node,
+            source_bundle_sha256=document["build"]["context"]["sha256"],
+            build_input_sha256="e" * 64,
+            state="succeeded",
+            policy_report={"passed": True},
+            plan={},
+            image_digest="sha256:" + "f" * 64,
+            oci_layout_sha256="0" * 64,
+            image_bytes=1,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(build)
+        session.flush()
         installation = RecipeInstallation(
-            recipe_revision_id=revision.id,
+            recipe_revision_id=revision_id,
+            mapping_id=mapping_id,
+            mapping_generation=1,
+            recipe_build_id=build.id,
+            image_digest=build.image_digest,
             plan_digest="b" * 64,
             plan={},
             state="installed",
@@ -93,6 +125,8 @@ def setup(
             InstallationNode(
                 installation_id=installation.id,
                 node_id=node,
+                rank=0,
+                role="entrypoint",
                 state="installed",
                 required_bytes=1,
                 installed_bytes=1,
@@ -178,11 +212,11 @@ def postgres_engine():
 
 
 def test_run_plan_accounts_for_memory_floor_and_persists_reservations(tmp_path) -> None:
-    sessions, now, node, installation = setup(tmp_path, free_memory=300)
+    sessions, now, _node, installation = setup(tmp_path, free_memory=300)
     service = RunAdmissionService(
         sessions, inventory_max_age=300, memory_floor_bytes=50
     )
-    plan = service.plan_run(installation, (Placement(node, 0, "entrypoint"),), now=now)
+    plan = service.plan_run(installation, now=now)
     assert (
         plan.allowed is True
         and plan.nodes[0].required_memory_bytes == 225
@@ -193,7 +227,7 @@ def test_run_plan_accounts_for_memory_floor_and_persists_reservations(tmp_path) 
 
 
 def test_memory_capability_and_port_conflicts_are_explained(tmp_path) -> None:
-    sessions, now, node, installation = setup(
+    sessions, now, _node, installation = setup(
         tmp_path,
         free_memory=260,
         capabilities=("runtime.sglang.v1",),
@@ -201,7 +235,7 @@ def test_memory_capability_and_port_conflicts_are_explained(tmp_path) -> None:
     )
     plan = RunAdmissionService(
         sessions, inventory_max_age=300, memory_floor_bytes=50
-    ).plan_run(installation, (Placement(node, 0, "entrypoint"),), now=now)
+    ).plan_run(installation, now=now)
     codes = {reason.code for reason in plan.nodes[0].blockers}
     assert {
         "run.insufficient_memory",
@@ -215,7 +249,7 @@ def test_accept_rechecks_memory_reservations_while_holding_node_lock(tmp_path) -
     service = RunAdmissionService(
         sessions, inventory_max_age=300, memory_floor_bytes=50
     )
-    plan = service.plan_run(installation, (Placement(node, 0, "entrypoint"),), now=now)
+    plan = service.plan_run(installation, now=now)
     with sessions.begin() as session:
         session.add_all(
             [
@@ -230,7 +264,7 @@ def test_accept_rechecks_memory_reservations_while_holding_node_lock(tmp_path) -
                     plan_digest="d" * 64,
                     created_at=now,
                 )
-                for kind in ("host-memory", "gpu-memory")
+                for kind in ("unified-memory",)
             ]
         )
     service.plan_run = lambda *args, **kwargs: plan
@@ -243,13 +277,13 @@ def test_postgres_competing_admissions_have_one_capacity_winner(
     tmp_path, postgres_engine
 ) -> None:
     Base.metadata.drop_all(postgres_engine)
-    sessions, now, node, installation = setup(
+    sessions, now, _node, installation = setup(
         tmp_path, free_memory=300, engine=postgres_engine
     )
     service = RunAdmissionService(
         sessions, inventory_max_age=300, memory_floor_bytes=50
     )
-    plan = service.plan_run(installation, (Placement(node, 0, "entrypoint"),), now=now)
+    plan = service.plan_run(installation, now=now)
     barrier = threading.Barrier(2)
 
     def accept(alias: str) -> bool:
@@ -266,5 +300,5 @@ def test_postgres_competing_admissions_have_one_capacity_winner(
     assert sorted(outcomes) == [False, True]
     with sessions() as session:
         active = session.query(ResourceReservation).filter_by(state="active").all()
-        assert len(active) == 3
+        assert len(active) == 2
         assert len({row.owner_id for row in active}) == 1

@@ -6,7 +6,6 @@ from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
 
-from typing import cast
 
 
 
@@ -21,30 +20,28 @@ T = TypeVar("T", bound="InstallPreviewRequest")
 class InstallPreviewRequest:
     """
         Attributes:
-            node_ids (list[str]):
-            recipe_revision_id (str):
+            mapping_id (str):
+            recipe_build_id (str):
      """
 
-    node_ids: list[str]
-    recipe_revision_id: str
+    mapping_id: str
+    recipe_build_id: str
 
 
 
 
 
     def to_dict(self) -> dict[str, Any]:
-        node_ids = self.node_ids
+        mapping_id = self.mapping_id
 
-
-
-        recipe_revision_id = self.recipe_revision_id
+        recipe_build_id = self.recipe_build_id
 
 
         field_dict: dict[str, Any] = {}
 
         field_dict.update({
-            "node_ids": node_ids,
-            "recipe_revision_id": recipe_revision_id,
+            "mapping_id": mapping_id,
+            "recipe_build_id": recipe_build_id,
         })
 
         return field_dict
@@ -54,14 +51,13 @@ class InstallPreviewRequest:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        node_ids = cast(list[str], d.pop("node_ids"))
+        mapping_id = d.pop("mapping_id")
 
-
-        recipe_revision_id = d.pop("recipe_revision_id")
+        recipe_build_id = d.pop("recipe_build_id")
 
         install_preview_request = cls(
-            node_ids=node_ids,
-            recipe_revision_id=recipe_revision_id,
+            mapping_id=mapping_id,
+            recipe_build_id=recipe_build_id,
         )
 
         return install_preview_request

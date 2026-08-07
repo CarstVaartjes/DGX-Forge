@@ -23,9 +23,7 @@ def contract_lock() -> dict[str, object]:
 
 
 def test_recipe_hash_matches_global_fixture() -> None:
-    expected = contract_lock()["fixtures"]["recipe-v1-minimal.json"][
-        "content_sha256"
-    ]
+    expected = contract_lock()["fixtures"]["recipe-v1-minimal.json"]["content_sha256"]
 
     assert recipe_content_sha256(fixture("recipe-v1-minimal.json")) == expected
 
@@ -45,9 +43,7 @@ def test_vendored_multinode_profile_supports_three_nodes() -> None:
 
 
 def test_canonical_recipe_matches_global_bytes() -> None:
-    assert canonical_recipe({"z": 1, "a": [True, None]}) == (
-        b'{"a":[true,null],"z":1}'
-    )
+    assert canonical_recipe({"z": 1, "a": [True, None]}) == (b'{"a":[true,null],"z":1}')
 
 
 def test_recipe_parser_rejects_duplicate_keys_and_floats() -> None:
@@ -76,7 +72,7 @@ def test_recipe_validation_rejects_unsafe_values(path, value, message) -> None:
 
 def test_global_contract_lock_matches_vendored_bytes() -> None:
     lock = contract_lock()
-    assert lock["source_commit"] == "37ef29be4a5423e08ac5d4eca4a39b703d7cb217"
+    assert lock["source_commit"] == "89d2fedfb4a9dcda36a0805f77f25d125cd93b66"
     for relative_path, metadata in lock["files"].items():
         payload = (ROOT / relative_path).read_bytes()
         assert __import__("hashlib").sha256(payload).hexdigest() == metadata["sha256"]
@@ -91,11 +87,8 @@ def test_vendored_runtime_policy_matches_agent_rootless_contract() -> None:
         "name": "ai.vonkforge.runtime-interface",
         "value": "v1",
     }
-    assert policy["accepted_config_users"] == [
-        "",
-        "0",
-        "root",
-        "0:0",
-        "root:root",
-    ]
-    assert policy["host_isolation"] == "rootless-podman-single-uid"
+    assert policy["config_user_policy"] == {
+        "kind": "numeric-non-root",
+        "pattern": "^[1-9][0-9]*(?::[1-9][0-9]*)?$",
+    }
+    assert policy["host_isolation"] == "rootless-podman-subuid"

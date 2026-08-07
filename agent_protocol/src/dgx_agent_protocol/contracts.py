@@ -30,12 +30,10 @@ UNSAFE_KEY = re.compile(
 
 
 def _ascii_case_pattern(token: str, *, initial_upper: bool = False) -> str:
-    prefix = (
-        token[0].upper()
-        if initial_upper
-        else f"[{token[0].upper()}{token[0]}]"
+    prefix = token[0].upper() if initial_upper else f"[{token[0].upper()}{token[0]}]"
+    return prefix + "".join(
+        f"[{character.upper()}{character}]" for character in token[1:]
     )
-    return prefix + "".join(f"[{character.upper()}{character}]" for character in token[1:])
 
 
 PATH_KEY_TOKENS = ("path", "file", "filename", "filepath", "directory", "folder")
@@ -75,6 +73,8 @@ class AgentOperation(StrEnum):
     PACKAGE_REMOVE = "package.remove"
     PACKAGE_REPAIR = "package.repair"
     PACKAGE_GC = "package.gc"
+    RECIPE_BUILD = "recipe.build.v1"
+    RECIPE_IMAGE_IMPORT = "recipe.image.import.v1"
     RECIPE_INSTALL = "recipe.install"
     RECIPE_START = "recipe.start"
     RECIPE_STOP = "recipe.stop"
@@ -92,7 +92,9 @@ def _is_utc_date_time(value: Any) -> bool:
         deadline = datetime.fromisoformat(value)
     except ValueError:
         return False
-    return deadline.tzinfo is not None and deadline.utcoffset() == UTC.utcoffset(deadline)
+    return deadline.tzinfo is not None and deadline.utcoffset() == UTC.utcoffset(
+        deadline
+    )
 
 
 def canonical_message(value: Any) -> bytes:
@@ -115,7 +117,9 @@ def _to_wire(value: Any) -> Any:
     if isinstance(value, datetime):
         return value.isoformat()
     if is_dataclass(value) and not isinstance(value, type):
-        return {field.name: _to_wire(getattr(value, field.name)) for field in fields(value)}
+        return {
+            field.name: _to_wire(getattr(value, field.name)) for field in fields(value)
+        }
     if isinstance(value, Mapping):
         return {str(key): _to_wire(item) for key, item in value.items()}
     if isinstance(value, (tuple, list)):
@@ -176,9 +180,7 @@ def _validate_safe_keys(
             return
         if field_name == "platform_target_name":
             if VERSIONED_PLATFORM_TARGET.fullmatch(value) is None:
-                raise AgentProtocolError(
-                    "platform target identifier is not canonical"
-                )
+                raise AgentProtocolError("platform target identifier is not canonical")
         elif "/" in value or "\\" in value:
             raise AgentProtocolError("filesystem path values are not allowed")
 
@@ -209,7 +211,11 @@ def _fields(value: Mapping[str, Any], *, required: set[str]) -> None:
     if set(value) != required:
         missing = sorted(required - set(value))
         unknown = sorted(set(value) - required)
-        detail = f"missing fields: {', '.join(missing)}" if missing else f"unknown fields: {', '.join(unknown)}"
+        detail = (
+            f"missing fields: {', '.join(missing)}"
+            if missing
+            else f"unknown fields: {', '.join(unknown)}"
+        )
         raise AgentProtocolError(detail)
 
 
@@ -250,7 +256,9 @@ def _deadline(value: Any) -> datetime:
         try:
             deadline = datetime.fromisoformat(value)
         except ValueError as error:
-            raise AgentProtocolError("deadline must be an ISO-8601 UTC timestamp") from error
+            raise AgentProtocolError(
+                "deadline must be an ISO-8601 UTC timestamp"
+            ) from error
     else:
         raise AgentProtocolError("deadline must be an ISO-8601 UTC timestamp")
     if deadline.tzinfo is None or deadline.utcoffset() != UTC.utcoffset(deadline):
@@ -287,18 +295,29 @@ class AgentClaim:
     def __post_init__(self) -> None:
         object.__setattr__(self, "schema_version", _version(self.schema_version))
         object.__setattr__(self, "job_id", _uuid(self.job_id, name="job_id"))
-        object.__setattr__(self, "operation_id", _uuid(self.operation_id, name="operation_id"))
+        object.__setattr__(
+            self, "operation_id", _uuid(self.operation_id, name="operation_id")
+        )
         object.__setattr__(self, "attempt", _attempt(self.attempt))
         object.__setattr__(self, "fence", _uuid(self.fence, name="fence"))
         object.__setattr__(self, "node_id", _node_id(self.node_id))
         if not isinstance(self.operation, AgentOperation):
             raise AgentProtocolError("operation is not supported")
-        if not isinstance(self.base_commit, str) or not COMMIT.fullmatch(self.base_commit):
-            raise AgentProtocolError("base_commit must be a 40-character lowercase SHA-1")
-        if not isinstance(self.payload_digest, str) or not DIGEST.fullmatch(self.payload_digest):
+        if not isinstance(self.base_commit, str) or not COMMIT.fullmatch(
+            self.base_commit
+        ):
+            raise AgentProtocolError(
+                "base_commit must be a 40-character lowercase SHA-1"
+            )
+        if not isinstance(self.payload_digest, str) or not DIGEST.fullmatch(
+            self.payload_digest
+        ):
             raise AgentProtocolError("payload_digest must be a lowercase SHA-256")
         payload = _validate_bounded_document(self.payload, name="payload")
-        if hashlib.sha256(canonical_message(payload)).hexdigest() != self.payload_digest:
+        if (
+            hashlib.sha256(canonical_message(payload)).hexdigest()
+            != self.payload_digest
+        ):
             raise AgentProtocolError("payload digest does not match payload")
         object.__setattr__(self, "payload", payload)
         object.__setattr__(self, "deadline", _deadline(self.deadline))
@@ -309,8 +328,17 @@ class AgentClaim:
         _fields(
             value,
             required={
-                "schema_version", "job_id", "operation_id", "attempt", "fence", "node_id",
-                "operation", "base_commit", "payload_digest", "payload", "deadline",
+                "schema_version",
+                "job_id",
+                "operation_id",
+                "attempt",
+                "fence",
+                "node_id",
+                "operation",
+                "base_commit",
+                "payload_digest",
+                "payload",
+                "deadline",
             },
         )
         try:
@@ -319,11 +347,19 @@ class AgentClaim:
             raise AgentProtocolError("operation is not supported") from error
         base_commit = value["base_commit"]
         if not isinstance(base_commit, str) or not COMMIT.fullmatch(base_commit):
-            raise AgentProtocolError("base_commit must be a 40-character lowercase SHA-1")
+            raise AgentProtocolError(
+                "base_commit must be a 40-character lowercase SHA-1"
+            )
         payload_digest = value["payload_digest"]
         if not isinstance(payload_digest, str) or not DIGEST.fullmatch(payload_digest):
             raise AgentProtocolError("payload_digest must be a lowercase SHA-256")
-        return cls(**_attempt_fields(value), operation=operation, base_commit=base_commit, payload_digest=payload_digest, payload=value["payload"])
+        return cls(
+            **_attempt_fields(value),
+            operation=operation,
+            base_commit=base_commit,
+            payload_digest=payload_digest,
+            payload=value["payload"],
+        )
 
 
 @dataclass(frozen=True)
@@ -340,17 +376,33 @@ class AgentProgress:
     def __post_init__(self) -> None:
         object.__setattr__(self, "schema_version", _version(self.schema_version))
         object.__setattr__(self, "job_id", _uuid(self.job_id, name="job_id"))
-        object.__setattr__(self, "operation_id", _uuid(self.operation_id, name="operation_id"))
+        object.__setattr__(
+            self, "operation_id", _uuid(self.operation_id, name="operation_id")
+        )
         object.__setattr__(self, "attempt", _attempt(self.attempt))
         object.__setattr__(self, "fence", _uuid(self.fence, name="fence"))
         object.__setattr__(self, "node_id", _node_id(self.node_id))
         object.__setattr__(self, "deadline", _deadline(self.deadline))
-        object.__setattr__(self, "progress", _validate_bounded_document(self.progress, name="progress"))
+        object.__setattr__(
+            self, "progress", _validate_bounded_document(self.progress, name="progress")
+        )
 
     @classmethod
     def parse(cls, raw: Any) -> AgentProgress:
         value = _mapping(raw)
-        _fields(value, required={"schema_version", "job_id", "operation_id", "attempt", "fence", "node_id", "deadline", "progress"})
+        _fields(
+            value,
+            required={
+                "schema_version",
+                "job_id",
+                "operation_id",
+                "attempt",
+                "fence",
+                "node_id",
+                "deadline",
+                "progress",
+            },
+        )
         return cls(**_attempt_fields(value), progress=value["progress"])
 
 
@@ -369,20 +421,39 @@ class AgentResult:
     def __post_init__(self) -> None:
         object.__setattr__(self, "schema_version", _version(self.schema_version))
         object.__setattr__(self, "job_id", _uuid(self.job_id, name="job_id"))
-        object.__setattr__(self, "operation_id", _uuid(self.operation_id, name="operation_id"))
+        object.__setattr__(
+            self, "operation_id", _uuid(self.operation_id, name="operation_id")
+        )
         object.__setattr__(self, "attempt", _attempt(self.attempt))
         object.__setattr__(self, "fence", _uuid(self.fence, name="fence"))
         object.__setattr__(self, "node_id", _node_id(self.node_id))
         object.__setattr__(self, "deadline", _deadline(self.deadline))
         if self.state not in {"succeeded", "failed", "waiting-for-operator"}:
             raise AgentProtocolError("result state is not supported")
-        object.__setattr__(self, "result", _validate_bounded_document(self.result, name="result"))
+        object.__setattr__(
+            self, "result", _validate_bounded_document(self.result, name="result")
+        )
 
     @classmethod
     def parse(cls, raw: Any) -> AgentResult:
         value = _mapping(raw)
-        _fields(value, required={"schema_version", "job_id", "operation_id", "attempt", "fence", "node_id", "deadline", "state", "result"})
-        return cls(**_attempt_fields(value), state=value["state"], result=value["result"])
+        _fields(
+            value,
+            required={
+                "schema_version",
+                "job_id",
+                "operation_id",
+                "attempt",
+                "fence",
+                "node_id",
+                "deadline",
+                "state",
+                "result",
+            },
+        )
+        return cls(
+            **_attempt_fields(value), state=value["state"], result=value["result"]
+        )
 
 
 def schema_validator(schema_name: str) -> Draft202012Validator:

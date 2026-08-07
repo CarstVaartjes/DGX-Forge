@@ -8,8 +8,8 @@ from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
 from dgx_control.catalog_service import CatalogService, RecipeDraftInput
-from dgx_control.models import Base
-from dgx_control.recipe_deployments import RecipeDeploymentService
+from dgx_control.cluster_mappings import ClusterMappingService
+from dgx_control.models import AgentNode, Base, ClusterMapping
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import sessionmaker
 
@@ -56,7 +56,10 @@ def test_migration_backfills_legacy_authority_and_allows_recipe_authority(
             },
         )
     command.upgrade(config, "head")
-    columns = {column["name"]: column for column in inspect(engine).get_columns("package_rollouts")}
+    columns = {
+        column["name"]: column
+        for column in inspect(engine).get_columns("package_rollouts")
+    }
     assert columns["base_commit"]["nullable"] is True
     assert columns["recipe_revision_id"]["nullable"] is True
     assert columns["authority_digest"]["nullable"] is False
@@ -68,12 +71,22 @@ def test_migration_backfills_legacy_authority_and_allows_recipe_authority(
     assert row.recipe_revision_id is None
 
 
-def test_resolved_recipe_plans_without_git_remote(tmp_path: Path) -> None:
+def test_resolved_recipe_maps_without_git_remote(tmp_path: Path) -> None:
     engine = create_engine(f"sqlite:///{tmp_path / 'catalog.sqlite'}")
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
     clock = lambda: datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
     catalog = CatalogService(sessions, clock=clock)
+    node_id = "spk_" + "1" * 32
+    with sessions.begin() as session:
+        session.add(
+            AgentNode(
+                node_id=node_id,
+                state="active",
+                architecture="linux-arm64",
+                capabilities=["runtime.vonk.v1"],
+            )
+        )
     document = json.loads(
         (Path(__file__).parent / "fixtures/global/recipe-v1-minimal.json").read_text()
     )
@@ -81,45 +94,18 @@ def test_resolved_recipe_plans_without_git_remote(tmp_path: Path) -> None:
         "admin", RecipeDraftInput(slug="qwen3-vllm", document=document)
     )
     resolved = catalog.resolve(draft.recipe_id, draft.revision_number, "admin")
-    git = _ForbiddenGit()
-    service = RecipeDeploymentService(sessions, clock=clock, repository=git)
+    service = ClusterMappingService(sessions)
 
-    plan = service.preview_recipe(
+    plan = service.plan(
         resolved.id,
-        alias="qwen3",
-        placements=[{"node_id": "spk_" + "1" * 32, "rank": 0, "role": "entrypoint"}],
-        actor="admin",
+        "solo",
+        (node_id,),
+        parameters={},
     )
+    mapping_id = service.materialize(plan, actor="admin", now=clock())
 
     assert plan.recipe_revision_id == resolved.id
-    assert len(plan.placement_digest) == len(plan.plan_digest) == 64
-    assert plan.base_commit is None
-    assert git.calls == []
-
-    payloads = service.agent_payloads(plan, operation_fence="f" * 64)
-    assert payloads == (
-        {
-            "schema_version": 1,
-            "operation_fence": "f" * 64,
-            "recipe_revision_id": resolved.id,
-            "recipe_content_sha256": resolved.content_sha256,
-            "plan_digest": plan.plan_digest,
-            "placement_digest": plan.placement_digest,
-            "node_id": "spk_" + "1" * 32,
-            "rank": 0,
-            "role": "entrypoint",
-            "runtime": plan.payload["runtime"],
-            "artifacts": plan.payload["artifacts"],
-            "endpoint": plan.payload["endpoint"],
-            "security": plan.payload["security"],
-        },
-    )
-
-
-class _ForbiddenGit:
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-
-    def head(self) -> str:
-        self.calls.append("head")
-        raise AssertionError("recipe deployment consulted Git")
+    assert len(plan.placement_digest) == 64
+    with sessions() as session:
+        mapping = session.get(ClusterMapping, mapping_id)
+        assert mapping is not None and mapping.generation == 1

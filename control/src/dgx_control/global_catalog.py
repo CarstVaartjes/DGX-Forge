@@ -20,6 +20,7 @@ _UUID = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
 _MAX_RESPONSE_BYTES = 512 * 1024
+_MAX_SOURCE_BUNDLE_BYTES = 64 * 1024 * 1024
 
 
 class GlobalCatalogError(RuntimeError):
@@ -43,8 +44,7 @@ class GlobalRecipeRevision:
     @property
     def uri(self) -> str:
         return (
-            f"vonk://catalog/{self.publisher}/{self.slug}"
-            f"@sha256:{self.content_sha256}"
+            f"vonk://catalog/{self.publisher}/{self.slug}@sha256:{self.content_sha256}"
         )
 
 
@@ -122,12 +122,59 @@ class GlobalCatalogClient:
             )
         return result
 
+    def fetch_source_bundle(self, sha256: str) -> bytes:
+        if re.fullmatch(r"[0-9a-f]{64}", sha256) is None:
+            raise GlobalCatalogError(
+                "global.source_digest_invalid", "source bundle digest is invalid"
+            )
+        try:
+            with self._client.stream("GET", f"/v1/source-bundles/{sha256}") as response:
+                if 300 <= response.status_code < 400:
+                    raise GlobalCatalogError(
+                        "global.redirect_forbidden",
+                        "catalog redirects are not followed",
+                    )
+                if response.status_code == 404:
+                    raise GlobalCatalogError(
+                        "global.source_not_found", "catalog source bundle is not public"
+                    )
+                if response.status_code != 200:
+                    raise GlobalCatalogError(
+                        "global.unavailable", "global catalog source request failed"
+                    )
+                media_type = response.headers.get("content-type", "").split(";", 1)[0]
+                if media_type != "application/vnd.vonk.source-bundle.v1+tar":
+                    raise GlobalCatalogError(
+                        "global.response_invalid",
+                        "catalog source response is not a Vonk bundle",
+                    )
+                body = bytearray()
+                for chunk in response.iter_bytes():
+                    body.extend(chunk)
+                    if len(body) > _MAX_SOURCE_BUNDLE_BYTES:
+                        raise GlobalCatalogError(
+                            "global.response_too_large",
+                            "catalog source bundle exceeds 64 MiB",
+                        )
+        except GlobalCatalogError:
+            raise
+        except (httpx.HTTPError, OSError) as error:
+            raise GlobalCatalogError(
+                "global.unavailable", "global catalog source is unavailable"
+            ) from error
+        if not body:
+            raise GlobalCatalogError(
+                "global.response_invalid", "catalog source bundle is empty"
+            )
+        return bytes(body)
+
     def _get_json(self, path: str) -> dict[str, Any]:
         try:
             with self._client.stream("GET", path) as response:
                 if 300 <= response.status_code < 400:
                     raise GlobalCatalogError(
-                        "global.redirect_forbidden", "catalog redirects are not followed"
+                        "global.redirect_forbidden",
+                        "catalog redirects are not followed",
                     )
                 if response.status_code == 404:
                     raise GlobalCatalogError(
@@ -147,13 +194,15 @@ class GlobalCatalogClient:
                     body.extend(chunk)
                     if len(body) > _MAX_RESPONSE_BYTES:
                         raise GlobalCatalogError(
-                            "global.response_too_large", "catalog response exceeds 512 KiB"
+                            "global.response_too_large",
+                            "catalog response exceeds 512 KiB",
                         )
         except GlobalCatalogError:
             raise
         except (httpx.HTTPError, OSError) as error:
             raise GlobalCatalogError(
-                "global.unavailable", "global catalog is unavailable; local recipes are unaffected"
+                "global.unavailable",
+                "global catalog is unavailable; local recipes are unaffected",
             ) from error
         try:
             value = json.loads(body)

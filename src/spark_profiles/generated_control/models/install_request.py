@@ -6,7 +6,6 @@ from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
 
-from typing import cast
 
 
 
@@ -21,15 +20,15 @@ T = TypeVar("T", bound="InstallRequest")
 class InstallRequest:
     """
         Attributes:
-            node_ids (list[str]):
+            mapping_id (str):
             plan_digest (str):
-            recipe_revision_id (str):
+            recipe_build_id (str):
             request_key (str):
      """
 
-    node_ids: list[str]
+    mapping_id: str
     plan_digest: str
-    recipe_revision_id: str
+    recipe_build_id: str
     request_key: str
 
 
@@ -37,13 +36,11 @@ class InstallRequest:
 
 
     def to_dict(self) -> dict[str, Any]:
-        node_ids = self.node_ids
-
-
+        mapping_id = self.mapping_id
 
         plan_digest = self.plan_digest
 
-        recipe_revision_id = self.recipe_revision_id
+        recipe_build_id = self.recipe_build_id
 
         request_key = self.request_key
 
@@ -51,9 +48,9 @@ class InstallRequest:
         field_dict: dict[str, Any] = {}
 
         field_dict.update({
-            "node_ids": node_ids,
+            "mapping_id": mapping_id,
             "plan_digest": plan_digest,
-            "recipe_revision_id": recipe_revision_id,
+            "recipe_build_id": recipe_build_id,
             "request_key": request_key,
         })
 
@@ -64,19 +61,18 @@ class InstallRequest:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
-        node_ids = cast(list[str], d.pop("node_ids"))
-
+        mapping_id = d.pop("mapping_id")
 
         plan_digest = d.pop("plan_digest")
 
-        recipe_revision_id = d.pop("recipe_revision_id")
+        recipe_build_id = d.pop("recipe_build_id")
 
         request_key = d.pop("request_key")
 
         install_request = cls(
-            node_ids=node_ids,
+            mapping_id=mapping_id,
             plan_digest=plan_digest,
-            recipe_revision_id=recipe_revision_id,
+            recipe_build_id=recipe_build_id,
             request_key=request_key,
         )
 

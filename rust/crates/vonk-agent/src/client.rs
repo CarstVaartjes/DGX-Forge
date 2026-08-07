@@ -1,8 +1,10 @@
-use std::{fs, time::Duration};
+use std::{fs, path::Path, time::Duration};
 
 use reqwest::{Certificate, Client, Identity, StatusCode};
 use serde::Serialize;
 use thiserror::Error;
+use tokio::io::AsyncWriteExt;
+use tokio_util::io::ReaderStream;
 use url::Url;
 use vonk_agent_protocol::{AgentClaim, AgentResult, canonical_json, parse_strict};
 
@@ -165,17 +167,15 @@ impl AgentHttpClient {
         }
     }
 
-    pub async fn recipe_spec(&self, content_sha256: &str) -> Result<WorkloadSpec, ClientError> {
-        if content_sha256.len() != 64
-            || !content_sha256
-                .bytes()
-                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-        {
+    pub async fn recipe_spec(&self, installation_id: &str) -> Result<WorkloadSpec, ClientError> {
+        if uuid::Uuid::parse_str(installation_id).is_err() {
             return Err(ClientError::Protocol);
         }
         let response = self
             .client
-            .get(self.endpoint(&format!("/agent/v1/recipe-specs/{content_sha256}"))?)
+            .get(self.endpoint(&format!(
+                "/agent/v1/recipe-installations/{installation_id}/spec"
+            ))?)
             .send()
             .await?;
         classify_status(response.status())?;
@@ -184,6 +184,107 @@ impl AgentHttpClient {
             serde_json::from_slice(&body).map_err(|_| ClientError::Protocol)?;
         spec.validate().map_err(|_| ClientError::Protocol)?;
         Ok(spec)
+    }
+
+    pub async fn source_bundle(
+        &self,
+        source_sha256: &str,
+        expected_bytes: u64,
+    ) -> Result<Vec<u8>, ClientError> {
+        if source_sha256.len() != 64
+            || !source_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+            || !(1..=64 * 1024 * 1024).contains(&expected_bytes)
+        {
+            return Err(ClientError::Protocol);
+        }
+        let response = self
+            .client
+            .get(self.endpoint(&format!("/agent/v1/source-bundles/{source_sha256}"))?)
+            .send()
+            .await?;
+        classify_status(response.status())?;
+        if response.content_length() != Some(expected_bytes) {
+            return Err(ClientError::Protocol);
+        }
+        bounded_body_limit(response, expected_bytes as usize).await
+    }
+
+    pub async fn upload_recipe_image(
+        &self,
+        build_id: uuid::Uuid,
+        image_digest: &str,
+        oci_layout_sha256: &str,
+        image_bytes: u64,
+        path: &Path,
+    ) -> Result<(), ClientError> {
+        if !valid_oci_digest(image_digest)
+            || !valid_sha256(oci_layout_sha256)
+            || !(1..=16 * 1024_u64.pow(4)).contains(&image_bytes)
+            || tokio::fs::metadata(path).await?.len() != image_bytes
+        {
+            return Err(ClientError::Protocol);
+        }
+        let file = tokio::fs::File::open(path).await?;
+        let response = self
+            .client
+            .put(self.endpoint(&format!("/agent/v1/recipe-builds/{build_id}/image"))?)
+            .header("content-type", "application/vnd.oci.image.layout.v1.tar")
+            .header("content-length", image_bytes)
+            .header("x-vonk-image-digest", image_digest)
+            .header("x-vonk-oci-layout-sha256", oci_layout_sha256)
+            .body(reqwest::Body::wrap_stream(ReaderStream::new(file)))
+            .send()
+            .await?;
+        if response.status() == StatusCode::NO_CONTENT {
+            Ok(())
+        } else {
+            classify_status(response.status())?;
+            Err(ClientError::Protocol)
+        }
+    }
+
+    pub async fn download_artifact(
+        &self,
+        sha256: &str,
+        expected_bytes: u64,
+        destination: &Path,
+    ) -> Result<(), ClientError> {
+        if !valid_sha256(sha256) || !(1..=16 * 1024_u64.pow(4)).contains(&expected_bytes) {
+            return Err(ClientError::Protocol);
+        }
+        let mut output = tokio::fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(destination)
+            .await?;
+        let mut offset = 0_u64;
+        while offset < expected_bytes {
+            let end = expected_bytes
+                .saturating_sub(1)
+                .min(offset.saturating_add(8 * 1024 * 1024 - 1));
+            let response = self
+                .client
+                .get(self.endpoint(&format!("/agent/v1/artifacts/{sha256}"))?)
+                .header("range", format!("bytes={offset}-{end}"))
+                .send()
+                .await?;
+            if response.status() != StatusCode::PARTIAL_CONTENT
+                || response.content_length() != Some(end - offset + 1)
+            {
+                classify_status(response.status())?;
+                return Err(ClientError::Protocol);
+            }
+            let chunk = bounded_body_limit(response, (end - offset + 1) as usize).await?;
+            if chunk.len() as u64 != end - offset + 1 {
+                return Err(ClientError::Protocol);
+            }
+            output.write_all(&chunk).await?;
+            offset = end + 1;
+        }
+        output.sync_all().await?;
+        Ok(())
     }
 
     pub async fn report_inventory(&self, inventory: &Inventory) -> Result<(), ClientError> {
@@ -280,15 +381,36 @@ fn classify_status(status: StatusCode) -> Result<(), ClientError> {
 }
 
 async fn bounded_body(response: reqwest::Response) -> Result<Vec<u8>, ClientError> {
+    bounded_body_limit(response, MAX_BODY_BYTES).await
+}
+
+async fn bounded_body_limit(
+    mut response: reqwest::Response,
+    maximum_bytes: usize,
+) -> Result<Vec<u8>, ClientError> {
     if response
         .content_length()
-        .is_some_and(|length| length > MAX_BODY_BYTES as u64)
+        .is_some_and(|length| length > maximum_bytes as u64)
     {
         return Err(ClientError::Protocol);
     }
-    let body = response.bytes().await?;
-    if body.len() > MAX_BODY_BYTES {
-        return Err(ClientError::Protocol);
+    let mut body = Vec::with_capacity(response.content_length().unwrap_or(0) as usize);
+    while let Some(chunk) = response.chunk().await? {
+        if body.len().saturating_add(chunk.len()) > maximum_bytes {
+            return Err(ClientError::Protocol);
+        }
+        body.extend_from_slice(&chunk);
     }
-    Ok(body.to_vec())
+    Ok(body)
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn valid_oci_digest(value: &str) -> bool {
+    value.strip_prefix("sha256:").is_some_and(valid_sha256)
 }

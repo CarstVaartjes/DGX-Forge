@@ -40,6 +40,10 @@ def test_digest_pinned_non_root_source_passes(recipe: dict[str, object]) -> None
     [
         ("FROM ghcr.io/example/vllm:latest\nUSER 10001\n", "dockerfile.base_unpinned"),
         (
+            "FROM ghcr.io/example/vllm@sha256:" + "0" * 64 + "\nUSER 10001\n",
+            "dockerfile.base_placeholder",
+        ),
+        (
             "FROM ghcr.io/example/x@sha256:"
             + "a" * 64
             + "\nADD https://evil.invalid/x /x\nUSER 10001\n",

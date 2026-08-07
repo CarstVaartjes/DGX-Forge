@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from datetime import UTC, datetime
 from pathlib import Path
@@ -12,6 +13,7 @@ from dgx_control.catalog_service import CatalogService
 from dgx_control.global_catalog import GlobalRecipeRevision
 from dgx_control.models import Base
 from dgx_control.recipe_contract import recipe_content_sha256
+from dgx_control.source_bundles import SourceBundleStore, generate_source_bundle
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -43,7 +45,9 @@ def api(tmp_path: Path):
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
     service = CatalogService(
-        sessions, clock=lambda: datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
+        sessions,
+        clock=lambda: datetime(2026, 8, 7, 12, 0, tzinfo=UTC),
+        source_bundles=SourceBundleStore(tmp_path / "source-bundles"),
     )
     codec = TokenCodec(b"c" * 32)
     audits = MemoryAuditStore()
@@ -72,8 +76,14 @@ def bridge_api(tmp_path: Path, recipe_document):
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
     service = CatalogService(
-        sessions, clock=lambda: datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
+        sessions,
+        clock=lambda: datetime(2026, 8, 7, 12, 0, tzinfo=UTC),
+        source_bundles=SourceBundleStore(tmp_path / "source-bundles"),
     )
+    bundle = generate_source_bundle({"Dockerfile": b"FROM scratch\nUSER 65532:65532\n"})
+    recipe_document = copy.deepcopy(recipe_document)
+    recipe_document["build"]["context"]["sha256"] = bundle.sha256
+    recipe_document["build"]["context"]["expected_bytes"] = len(bundle.archive)
     digest = recipe_content_sha256(recipe_document)
     remote = GlobalRecipeRevision(
         publisher="vonk",
@@ -90,6 +100,10 @@ def bridge_api(tmp_path: Path, recipe_document):
         def fetch(self, uri: str):
             assert uri == remote.uri
             return remote
+
+        def fetch_source_bundle(self, sha256: str):
+            assert sha256 == bundle.sha256
+            return bundle.archive
 
     codec = TokenCodec(b"b" * 32)
     audits = MemoryAuditStore()
@@ -224,6 +238,67 @@ def test_catalog_operation_ids_are_stable(api) -> None:
         paths["/api/v1/catalog/recipes/{recipe_id}/fork"]["post"]["operationId"]
         == "forkLocalRecipe"
     )
+    assert (
+        paths["/api/v1/catalog/source-bundles/{sha256}"]["get"]["operationId"]
+        == "downloadLocalRecipeSourceBundle"
+    )
+    assert (
+        paths["/api/v1/catalog/source-bundles/{sha256}"]["put"]["operationId"]
+        == "uploadLocalRecipeSourceBundle"
+    )
+
+
+def test_administrator_uploads_a_digest_verified_source_bundle(api) -> None:
+    client, headers, audits = api
+    bundle = generate_source_bundle({"Dockerfile": b"FROM scratch\nUSER 65532:65532\n"})
+
+    denied = client.put(
+        f"/api/v1/catalog/source-bundles/{bundle.sha256}",
+        headers={**headers("operator"), "content-type": "application/x-tar"},
+        content=bundle.archive,
+    )
+    uploaded = client.put(
+        f"/api/v1/catalog/source-bundles/{bundle.sha256}",
+        headers={**headers("administrator"), "content-type": "application/x-tar"},
+        content=bundle.archive,
+    )
+
+    assert denied.status_code == 403
+    assert uploaded.status_code == 200
+    assert uploaded.json() == {
+        "sha256": bundle.sha256,
+        "archive_bytes": len(bundle.archive),
+        "total_bytes": bundle.manifest.total_bytes,
+        "file_count": 1,
+        "files": ["Dockerfile"],
+    }
+    downloaded = client.get(
+        f"/api/v1/catalog/source-bundles/{bundle.sha256}",
+        headers=headers("viewer"),
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.content == bundle.archive
+    assert downloaded.headers["etag"] == f'"sha256:{bundle.sha256}"'
+    assert downloaded.headers["content-disposition"].endswith(
+        f'filename="vonk-source-{bundle.sha256}.tar"'
+    )
+    assert any(
+        event.action == "catalog.source_bundle.upload" for event in audits.list()
+    )
+
+
+def test_source_bundle_upload_rejects_a_mismatched_digest(api) -> None:
+    client, headers, _audits = api
+    bundle = generate_source_bundle({"Dockerfile": b"FROM scratch\nUSER 65532:65532\n"})
+
+    response = client.put(
+        f"/api/v1/catalog/source-bundles/{'f' * 64}",
+        headers=headers("administrator"),
+        content=bundle.archive,
+    )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "bundle.digest_mismatch"
 
 
 def test_preview_and_explicit_global_import_are_separate(bridge_api) -> None:

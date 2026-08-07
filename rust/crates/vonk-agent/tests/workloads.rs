@@ -7,8 +7,8 @@ use vonk_agent::{
     oci::OciRuntime,
     process::{ProcessError, ProcessOutput, ProcessRunner, Program},
     workloads::{
-        ArgumentValue, ArtifactSpec, EndpointSpec, MountSpec, Placement, RuntimeArgument,
-        RuntimeSpec, SecuritySpec, WorkloadSpec,
+        ArgumentValue, ArtifactMountSpec, ArtifactSpec, EndpointSpec, LifecycleSpec, MountSpec,
+        Placement, RuntimeArgument, RuntimeSpec, SecuritySpec, WorkloadSpec,
     },
 };
 
@@ -79,9 +79,11 @@ fn spec() -> WorkloadSpec {
     WorkloadSpec {
         runtime: RuntimeSpec {
             interface: "vonk.runtime.v1".to_owned(),
-            family: "vllm".to_owned(),
+            adapter: "vllm".to_owned(),
+            adapter_version: 1,
             image: format!("registry.example/vonk/vllm@sha256:{DIGEST}"),
             architecture: "linux/arm64".to_owned(),
+            entrypoint: vec!["vllm".to_owned(), "serve".to_owned(), "/models".to_owned()],
             arguments: vec![
                 RuntimeArgument {
                     name: "max_model_len".to_owned(),
@@ -92,12 +94,20 @@ fn spec() -> WorkloadSpec {
                     value: ArgumentValue::Boolean(true),
                 },
             ],
+            environment: vec![],
         },
         artifacts: vec![ArtifactSpec {
+            id: "model".to_owned(),
             kind: "huggingface.snapshot".to_owned(),
             repository: "publisher/model".to_owned(),
             revision: "b".repeat(40),
-            expected_bytes: 7,
+            download_bytes: 7,
+            installed_bytes: 7,
+            mount: ArtifactMountSpec {
+                target: "/models".to_owned(),
+                read_only: true,
+            },
+            roles: vec!["entrypoint".to_owned(), "worker".to_owned()],
         }],
         endpoint: EndpointSpec {
             protocol: "openai".to_owned(),
@@ -110,6 +120,7 @@ fn spec() -> WorkloadSpec {
             capabilities: vec![],
             host_network: false,
             privileged: false,
+            user: "10001:10001".to_owned(),
             mounts: vec![
                 MountSpec {
                     source: "model".to_owned(),
@@ -122,6 +133,11 @@ fn spec() -> WorkloadSpec {
                     read_only: false,
                 },
             ],
+        },
+        lifecycle: LifecycleSpec {
+            pre_start: vec![],
+            post_stop: vec![],
+            stop_timeout_seconds: 30,
         },
     }
 }
@@ -166,7 +182,7 @@ fn image_is_pulled_and_verified_by_digest() {
             },
             ProcessOutput {
                 success: true,
-                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
+                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t10001:10001\n").into_bytes(),
                 stderr: vec![],
             },
         ])),
@@ -186,7 +202,7 @@ fn image_is_pulled_and_verified_by_digest() {
     assert!(calls[1].1[3].contains(".Config.User"));
     drop(calls);
 
-    let non_root_runner = FakeRunner {
+    let root_runner = FakeRunner {
         calls: RefCell::new(vec![]),
         outputs: RefCell::new(VecDeque::from([
             ProcessOutput {
@@ -196,14 +212,14 @@ fn image_is_pulled_and_verified_by_digest() {
             },
             ProcessOutput {
                 success: true,
-                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t10001:10001\n").into_bytes(),
+                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
                 stderr: vec![],
             },
         ])),
     };
     assert!(
         OciRuntime {
-            runner: &non_root_runner,
+            runner: &root_runner,
             data_root: directory.path(),
             huggingface_curl_config: None,
         }
@@ -305,7 +321,7 @@ fn installation_records_and_rechecks_a_content_manifest() {
             },
             ProcessOutput {
                 success: true,
-                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
+                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t10001:10001\n").into_bytes(),
                 stderr: vec![],
             },
             ProcessOutput {
@@ -354,7 +370,7 @@ fn http_artifacts_reject_private_hosts_before_curl_runs() {
             },
             ProcessOutput {
                 success: true,
-                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
+                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t10001:10001\n").into_bytes(),
                 stderr: vec![],
             },
             ProcessOutput {
@@ -367,11 +383,18 @@ fn http_artifacts_reject_private_hosts_before_curl_runs() {
     let directory = tempdir().unwrap();
     let mut workload = spec();
     workload.artifacts[0] = ArtifactSpec {
+        id: "model".to_owned(),
         kind: "http.file".to_owned(),
         repository: "https://127.0.0.1/private".to_owned(),
         revision: "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c"
             .to_owned(),
-        expected_bytes: 7,
+        download_bytes: 7,
+        installed_bytes: 7,
+        mount: ArtifactMountSpec {
+            target: "/models".to_owned(),
+            read_only: true,
+        },
+        roles: vec!["entrypoint".to_owned()],
     };
 
     assert!(
@@ -404,7 +427,7 @@ fn http_artifacts_reject_embedded_credentials_before_curl_runs() {
             },
             ProcessOutput {
                 success: true,
-                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
+                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t10001:10001\n").into_bytes(),
                 stderr: vec![],
             },
         ])),
@@ -412,11 +435,18 @@ fn http_artifacts_reject_embedded_credentials_before_curl_runs() {
     let directory = tempdir().unwrap();
     let mut workload = spec();
     workload.artifacts[0] = ArtifactSpec {
+        id: "model".to_owned(),
         kind: "http.file".to_owned(),
         repository: "https://user:password@93.184.216.34/artifact".to_owned(),
         revision: "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c"
             .to_owned(),
-        expected_bytes: 7,
+        download_bytes: 7,
+        installed_bytes: 7,
+        mount: ArtifactMountSpec {
+            target: "/models".to_owned(),
+            read_only: true,
+        },
+        roles: vec!["entrypoint".to_owned()],
     };
 
     assert!(
@@ -447,7 +477,7 @@ fn http_artifacts_reject_more_than_five_explicit_redirects() {
         },
         ProcessOutput {
             success: true,
-            stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
+            stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t10001:10001\n").into_bytes(),
             stderr: vec![],
         },
     ]);
@@ -465,11 +495,18 @@ fn http_artifacts_reject_more_than_five_explicit_redirects() {
     let directory = tempdir().unwrap();
     let mut workload = spec();
     workload.artifacts[0] = ArtifactSpec {
+        id: "model".to_owned(),
         kind: "http.file".to_owned(),
         repository: "https://93.184.216.34/artifact".to_owned(),
         revision: "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c"
             .to_owned(),
-        expected_bytes: 7,
+        download_bytes: 7,
+        installed_bytes: 7,
+        mount: ArtifactMountSpec {
+            target: "/models".to_owned(),
+            read_only: true,
+        },
+        roles: vec!["entrypoint".to_owned()],
     };
 
     assert!(
@@ -504,7 +541,7 @@ fn http_artifacts_are_https_only_and_byte_limited_without_implicit_redirects() {
             },
             ProcessOutput {
                 success: true,
-                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
+                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t10001:10001\n").into_bytes(),
                 stderr: vec![],
             },
             ProcessOutput {
@@ -517,11 +554,18 @@ fn http_artifacts_are_https_only_and_byte_limited_without_implicit_redirects() {
     let directory = tempdir().unwrap();
     let mut workload = spec();
     workload.artifacts[0] = ArtifactSpec {
+        id: "model".to_owned(),
         kind: "http.file".to_owned(),
         repository: "https://93.184.216.34/artifact".to_owned(),
         revision: "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c"
             .to_owned(),
-        expected_bytes: 7,
+        download_bytes: 7,
+        installed_bytes: 7,
+        mount: ArtifactMountSpec {
+            target: "/models".to_owned(),
+            read_only: true,
+        },
+        roles: vec!["entrypoint".to_owned()],
     };
 
     OciRuntime {
@@ -559,7 +603,7 @@ fn oci_artifacts_reject_private_registry_hosts_before_oras_runs() {
             },
             ProcessOutput {
                 success: true,
-                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
+                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t10001:10001\n").into_bytes(),
                 stderr: vec![],
             },
             ProcessOutput {
@@ -572,10 +616,17 @@ fn oci_artifacts_reject_private_registry_hosts_before_oras_runs() {
     let directory = tempdir().unwrap();
     let mut workload = spec();
     workload.artifacts[0] = ArtifactSpec {
+        id: "model".to_owned(),
         kind: "oci.artifact".to_owned(),
         repository: "127.0.0.1/private/artifact".to_owned(),
         revision: format!("sha256:{DIGEST}"),
-        expected_bytes: 7,
+        download_bytes: 7,
+        installed_bytes: 7,
+        mount: ArtifactMountSpec {
+            target: "/models".to_owned(),
+            read_only: true,
+        },
+        roles: vec!["entrypoint".to_owned()],
     };
 
     assert!(
@@ -609,7 +660,8 @@ fn oci_artifacts_run_under_the_declared_staging_budget() {
                 },
                 ProcessOutput {
                     success: true,
-                    stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
+                    stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t10001:10001\n")
+                        .into_bytes(),
                     stderr: vec![],
                 },
                 ProcessOutput {
@@ -624,11 +676,18 @@ fn oci_artifacts_run_under_the_declared_staging_budget() {
     let directory = tempdir().unwrap();
     let mut workload = spec();
     workload.artifacts[0] = ArtifactSpec {
+        id: "model".to_owned(),
         kind: "oci.artifact".to_owned(),
         repository: "ghcr.io/vonkforge/public-artifact".to_owned(),
         revision: "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c"
             .to_owned(),
-        expected_bytes: 7,
+        download_bytes: 7,
+        installed_bytes: 7,
+        mount: ArtifactMountSpec {
+            target: "/models".to_owned(),
+            read_only: true,
+        },
+        roles: vec!["entrypoint".to_owned()],
     };
 
     OciRuntime {
@@ -742,4 +801,100 @@ fn stop_is_idempotent_when_a_gang_rank_never_started() {
             format!("vonk-{run_id}"),
         ]
     );
+}
+
+#[test]
+fn lifecycle_hooks_run_as_typed_hardened_one_shot_containers() {
+    let runner = FakeRunner {
+        calls: RefCell::new(vec![]),
+        outputs: RefCell::new(VecDeque::from([
+            ProcessOutput {
+                success: true,
+                stdout: vec![],
+                stderr: vec![],
+            },
+            ProcessOutput {
+                success: true,
+                stdout: "a".repeat(64).into_bytes(),
+                stderr: vec![],
+            },
+            ProcessOutput {
+                success: true,
+                stdout: vec![],
+                stderr: vec![],
+            },
+            ProcessOutput {
+                success: true,
+                stdout: vec![],
+                stderr: vec![],
+            },
+        ])),
+    };
+    let directory = tempdir().unwrap();
+    let runtime = OciRuntime {
+        runner: &runner,
+        data_root: directory.path(),
+        huggingface_curl_config: None,
+    };
+    let mut workload = spec();
+    workload.lifecycle.pre_start = vec![vec![
+        "python".to_owned(),
+        "-m".to_owned(),
+        "prepare".to_owned(),
+    ]];
+    workload.lifecycle.post_stop = vec![vec![
+        "python".to_owned(),
+        "-m".to_owned(),
+        "cleanup".to_owned(),
+    ]];
+    let run_id = "45ea6921-50c9-4971-be2a-4cd04ce05069";
+    let installation_id = "cb555393-764b-4eb6-8f15-b416d289428f";
+    let installation = directory.path().join("installations").join(installation_id);
+    fs::create_dir_all(&installation).unwrap();
+    fs::write(
+        installation.join("spec.json"),
+        serde_json::to_vec(&workload).unwrap(),
+    )
+    .unwrap();
+
+    runtime
+        .start(
+            &workload,
+            installation_id,
+            run_id,
+            &Placement {
+                rank: 0,
+                role: "entrypoint".to_owned(),
+                world_size: 1,
+                local_address: None,
+                master_address: None,
+                master_port: None,
+                port: 8101,
+                reserved_memory_bytes: 64 * 1024 * 1024 * 1024,
+            },
+        )
+        .unwrap();
+    runtime.stop(run_id).unwrap();
+
+    let calls = runner.calls.borrow();
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[0].0, Program::Podman);
+    assert_eq!(calls[0].1[0..2], ["run", "--rm"]);
+    assert!(
+        !calls[0]
+            .1
+            .iter()
+            .any(|value| value == "--detach" || value == "--name")
+    );
+    assert_eq!(
+        &calls[0].1[calls[0].1.len() - 3..],
+        ["python", "-m", "prepare"]
+    );
+    assert!(calls[1].1.iter().any(|value| value == "--detach"));
+    assert_eq!(calls[2].1[0], "rm");
+    assert_eq!(
+        &calls[3].1[calls[3].1.len() - 3..],
+        ["python", "-m", "cleanup"]
+    );
+    assert!(calls[3].1.iter().any(|value| value == "--read-only"));
 }

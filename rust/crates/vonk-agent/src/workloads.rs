@@ -16,16 +16,28 @@ pub struct WorkloadSpec {
     pub artifacts: Vec<ArtifactSpec>,
     pub endpoint: EndpointSpec,
     pub security: SecuritySpec,
+    pub lifecycle: LifecycleSpec,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct RuntimeSpec {
     pub interface: String,
-    pub family: String,
+    pub adapter: String,
+    pub adapter_version: u32,
     pub image: String,
     pub architecture: String,
+    pub entrypoint: Vec<String>,
     pub arguments: Vec<RuntimeArgument>,
+    pub environment: Vec<RuntimeEnvironment>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct RuntimeEnvironment {
+    pub name: String,
+    pub value: Option<ArgumentValue>,
+    pub secret: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -46,10 +58,21 @@ pub enum ArgumentValue {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ArtifactSpec {
+    pub id: String,
     pub kind: String,
     pub repository: String,
     pub revision: String,
-    pub expected_bytes: u64,
+    pub download_bytes: u64,
+    pub installed_bytes: u64,
+    pub mount: ArtifactMountSpec,
+    pub roles: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactMountSpec {
+    pub target: String,
+    pub read_only: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -68,7 +91,16 @@ pub struct SecuritySpec {
     pub capabilities: Vec<String>,
     pub host_network: bool,
     pub privileged: bool,
+    pub user: String,
     pub mounts: Vec<MountSpec>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleSpec {
+    pub pre_start: Vec<Vec<String>>,
+    pub post_stop: Vec<Vec<String>>,
+    pub stop_timeout_seconds: u16,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -79,11 +111,12 @@ pub struct MountSpec {
     pub read_only: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
 pub struct Placement {
-    pub rank: u16,
+    pub rank: u32,
     pub role: String,
-    pub world_size: u16,
+    pub world_size: u32,
     pub local_address: Option<IpAddr>,
     pub master_address: Option<IpAddr>,
     pub master_port: Option<u16>,
@@ -130,6 +163,16 @@ impl WorkloadSpec {
                 .devices
                 .iter()
                 .any(|value| value != "nvidia.com/gpu=all")
+            || !numeric_non_root_user(&self.security.user)
+            || self.lifecycle.pre_start.len() > 16
+            || self.lifecycle.post_stop.len() > 16
+            || !(1..=600).contains(&self.lifecycle.stop_timeout_seconds)
+            || self
+                .lifecycle
+                .pre_start
+                .iter()
+                .chain(&self.lifecycle.post_stop)
+                .any(|argv| !valid_argv(argv))
         {
             return Err(WorkloadError::Invalid("security"));
         }
@@ -140,13 +183,13 @@ impl WorkloadSpec {
 impl RuntimeSpec {
     fn validate(&self) -> Result<(), WorkloadError> {
         if self.interface != "vonk.runtime.v1"
-            || !matches!(
-                self.family.as_str(),
-                "vllm" | "sglang" | "llama.cpp" | "ds4"
-            )
+            || !valid_name(&self.adapter)
+            || self.adapter_version == 0
             || self.architecture != "linux/arm64"
             || image_digest(&self.image).is_none()
+            || !valid_argv(&self.entrypoint)
             || self.arguments.len() > 128
+            || self.environment.len() > 128
         {
             return Err(WorkloadError::Invalid("runtime"));
         }
@@ -167,6 +210,25 @@ impl RuntimeSpec {
                 return Err(WorkloadError::Invalid("runtime argument"));
             }
         }
+        for environment in &self.environment {
+            if environment.name.is_empty()
+                || environment.name.len() > 128
+                || !environment.name.bytes().enumerate().all(|(index, byte)| {
+                    if index == 0 {
+                        byte.is_ascii_uppercase()
+                    } else {
+                        byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'
+                    }
+                })
+                || (environment.value.is_some() == environment.secret.is_some())
+                || environment
+                    .secret
+                    .as_ref()
+                    .is_some_and(|name| !valid_name(name))
+            {
+                return Err(WorkloadError::Invalid("runtime environment"));
+            }
+        }
         Ok(())
     }
 }
@@ -176,7 +238,13 @@ impl ArtifactSpec {
         if self.repository.is_empty()
             || self.repository.len() > 512
             || self.repository.contains('\0')
-            || self.expected_bytes == 0
+            || self.download_bytes == 0
+            || self.installed_bytes == 0
+            || !valid_name(&self.id)
+            || self.roles.is_empty()
+            || self.roles.iter().any(|role| !valid_role(role))
+            || !self.mount.target.starts_with('/')
+            || self.mount.target.contains("..")
         {
             return Err(WorkloadError::Invalid("artifact"));
         }
@@ -201,7 +269,7 @@ impl Placement {
     pub fn validate(&self) -> Result<(), WorkloadError> {
         if self.rank >= self.world_size
             || self.world_size == 0
-            || !matches!(self.role.as_str(), "entrypoint" | "worker")
+            || !valid_role(&self.role)
             || self.port < 1024
             || self.reserved_memory_bytes == 0
             || if self.world_size == 1 {
@@ -209,7 +277,6 @@ impl Placement {
                     || self.master_address.is_some()
                     || self.master_port.is_some()
                     || self.rank != 0
-                    || self.role != "entrypoint"
             } else {
                 self.local_address.is_none()
                     || self.master_address.is_none()
@@ -258,4 +325,45 @@ fn lower_hex(value: &str, length: usize) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn valid_role(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value.bytes().enumerate().all(|(index, byte)| {
+            if index == 0 {
+                byte.is_ascii_lowercase()
+            } else {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+            }
+        })
+}
+
+fn valid_name(value: &str) -> bool {
+    valid_role(value)
+        || !value.is_empty()
+            && value.len() <= 64
+            && value.bytes().all(|byte| {
+                byte.is_ascii_lowercase()
+                    || byte.is_ascii_digit()
+                    || matches!(byte, b'.' | b'_' | b'-')
+            })
+}
+
+fn valid_argv(value: &[String]) -> bool {
+    !value.is_empty()
+        && value.len() <= 64
+        && value
+            .iter()
+            .all(|item| !item.is_empty() && item.len() <= 512 && !item.contains('\0'))
+}
+
+fn numeric_non_root_user(value: &str) -> bool {
+    let mut parts = value.split(':');
+    let valid = |part: &str| {
+        !part.is_empty() && !part.starts_with('0') && part.bytes().all(|byte| byte.is_ascii_digit())
+    };
+    valid(parts.next().unwrap_or_default())
+        && parts.next().is_none_or(valid)
+        && parts.next().is_none()
 }

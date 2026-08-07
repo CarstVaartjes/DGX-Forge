@@ -155,6 +155,99 @@
         "title": "BoundedErrorResponse",
         "type": "object"
       },
+      "BuildPlanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "build_id": {
+            "title": "Build Id",
+            "type": "string"
+          },
+          "build_input_sha256": {
+            "title": "Build Input Sha256",
+            "type": "string"
+          },
+          "builder_node_id": {
+            "title": "Builder Node Id",
+            "type": "string"
+          },
+          "recipe_content_sha256": {
+            "title": "Recipe Content Sha256",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "title": "Recipe Revision Id",
+            "type": "string"
+          },
+          "source_bundle_sha256": {
+            "title": "Source Bundle Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "build_id",
+          "recipe_revision_id",
+          "recipe_content_sha256",
+          "builder_node_id",
+          "source_bundle_sha256",
+          "build_input_sha256"
+        ],
+        "title": "BuildPlanResponse",
+        "type": "object"
+      },
+      "BuildPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "builder_node_id": {
+            "pattern": "^spk_[0-9a-f]{32}$",
+            "title": "Builder Node Id",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_revision_id",
+          "builder_node_id"
+        ],
+        "title": "BuildPreviewRequest",
+        "type": "object"
+      },
+      "BuildRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "build_input_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Build Input Sha256",
+            "type": "string"
+          },
+          "builder_node_id": {
+            "pattern": "^spk_[0-9a-f]{32}$",
+            "title": "Builder Node Id",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Revision Id",
+            "type": "string"
+          },
+          "request_key": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Request Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_revision_id",
+          "builder_node_id",
+          "build_input_sha256",
+          "request_key"
+        ],
+        "title": "BuildRequest",
+        "type": "object"
+      },
       "CatalogProblem": {
         "additionalProperties": false,
         "properties": {
@@ -792,6 +885,39 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "ImageDistributionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "mapping_generation": {
+            "minimum": 1.0,
+            "title": "Mapping Generation",
+            "type": "integer"
+          },
+          "mapping_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Mapping Id",
+            "type": "string"
+          },
+          "recipe_build_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Build Id",
+            "type": "string"
+          },
+          "request_key": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Request Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_build_id",
+          "mapping_id",
+          "mapping_generation",
+          "request_key"
+        ],
+        "title": "ImageDistributionRequest",
+        "type": "object"
+      },
       "InstallNodePlanResponse": {
         "additionalProperties": false,
         "properties": {
@@ -852,6 +978,10 @@
             "title": "Node Id",
             "type": "string"
           },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
           "required_bytes": {
             "title": "Required Bytes",
             "type": "integer"
@@ -864,6 +994,10 @@
             "title": "Reused Bytes",
             "type": "integer"
           },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
           "warnings": {
             "items": {
               "$ref": "#/components/schemas/PlanReason"
@@ -874,6 +1008,8 @@
         },
         "required": [
           "node_id",
+          "rank",
+          "role",
           "allowed",
           "inventory_observed_at",
           "free_bytes",
@@ -896,6 +1032,18 @@
             "title": "Allowed",
             "type": "boolean"
           },
+          "image_digest": {
+            "title": "Image Digest",
+            "type": "string"
+          },
+          "mapping_generation": {
+            "title": "Mapping Generation",
+            "type": "integer"
+          },
+          "mapping_id": {
+            "title": "Mapping Id",
+            "type": "string"
+          },
           "nodes": {
             "items": {
               "$ref": "#/components/schemas/InstallNodePlanResponse"
@@ -905,6 +1053,10 @@
           },
           "plan_digest": {
             "title": "Plan Digest",
+            "type": "string"
+          },
+          "recipe_build_id": {
+            "title": "Recipe Build Id",
             "type": "string"
           },
           "recipe_content_sha256": {
@@ -917,6 +1069,10 @@
           }
         },
         "required": [
+          "mapping_id",
+          "mapping_generation",
+          "recipe_build_id",
+          "image_digest",
           "recipe_revision_id",
           "recipe_content_sha256",
           "allowed",
@@ -929,24 +1085,20 @@
       "InstallPreviewRequest": {
         "additionalProperties": false,
         "properties": {
-          "node_ids": {
-            "items": {
-              "type": "string"
-            },
-            "maxItems": 64,
-            "minItems": 1,
-            "title": "Node Ids",
-            "type": "array"
-          },
-          "recipe_revision_id": {
+          "mapping_id": {
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-            "title": "Recipe Revision Id",
+            "title": "Mapping Id",
+            "type": "string"
+          },
+          "recipe_build_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Build Id",
             "type": "string"
           }
         },
         "required": [
-          "recipe_revision_id",
-          "node_ids"
+          "mapping_id",
+          "recipe_build_id"
         ],
         "title": "InstallPreviewRequest",
         "type": "object"
@@ -954,23 +1106,19 @@
       "InstallRequest": {
         "additionalProperties": false,
         "properties": {
-          "node_ids": {
-            "items": {
-              "type": "string"
-            },
-            "maxItems": 64,
-            "minItems": 1,
-            "title": "Node Ids",
-            "type": "array"
+          "mapping_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Mapping Id",
+            "type": "string"
           },
           "plan_digest": {
             "pattern": "^[0-9a-f]{64}$",
             "title": "Plan Digest",
             "type": "string"
           },
-          "recipe_revision_id": {
+          "recipe_build_id": {
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
-            "title": "Recipe Revision Id",
+            "title": "Recipe Build Id",
             "type": "string"
           },
           "request_key": {
@@ -980,8 +1128,8 @@
           }
         },
         "required": [
-          "recipe_revision_id",
-          "node_ids",
+          "mapping_id",
+          "recipe_build_id",
           "plan_digest",
           "request_key"
         ],
@@ -1345,6 +1493,193 @@
           "total"
         ],
         "title": "JobsResponse",
+        "type": "object"
+      },
+      "MappingNodePlanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "endpoint_owner": {
+            "title": "Endpoint Owner",
+            "type": "boolean"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_id",
+          "rank",
+          "role",
+          "endpoint_owner"
+        ],
+        "title": "MappingNodePlanResponse",
+        "type": "object"
+      },
+      "MappingPlanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "generation": {
+            "title": "Generation",
+            "type": "integer"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/MappingNodePlanResponse"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "placement_digest": {
+            "title": "Placement Digest",
+            "type": "string"
+          },
+          "profile_name": {
+            "title": "Profile Name",
+            "type": "string"
+          },
+          "recipe_content_sha256": {
+            "title": "Recipe Content Sha256",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "title": "Recipe Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_revision_id",
+          "recipe_content_sha256",
+          "profile_name",
+          "generation",
+          "parameters",
+          "nodes",
+          "placement_digest"
+        ],
+        "title": "MappingPlanResponse",
+        "type": "object"
+      },
+      "MappingPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "node_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1024,
+            "minItems": 1,
+            "title": "Node Ids",
+            "type": "array"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "maxProperties": 128,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "profile_name": {
+            "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+            "title": "Profile Name",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_revision_id",
+          "profile_name",
+          "node_ids"
+        ],
+        "title": "MappingPreviewRequest",
+        "type": "object"
+      },
+      "MappingRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "node_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1024,
+            "minItems": 1,
+            "title": "Node Ids",
+            "type": "array"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "maxProperties": 128,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "placement_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Placement Digest",
+            "type": "string"
+          },
+          "profile_name": {
+            "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+            "title": "Profile Name",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Revision Id",
+            "type": "string"
+          },
+          "request_key": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Request Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_revision_id",
+          "profile_name",
+          "node_ids",
+          "placement_digest",
+          "request_key"
+        ],
+        "title": "MappingRequest",
+        "type": "object"
+      },
+      "MappingResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "generation": {
+            "title": "Generation",
+            "type": "integer"
+          },
+          "mapping_id": {
+            "title": "Mapping Id",
+            "type": "string"
+          },
+          "placement_digest": {
+            "title": "Placement Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mapping_id",
+          "generation",
+          "placement_digest"
+        ],
+        "title": "MappingResponse",
         "type": "object"
       },
       "MigrationGrantRequest": {
@@ -3207,37 +3542,6 @@
         "title": "PackageSparkStorage",
         "type": "object"
       },
-      "PlacementRequest": {
-        "additionalProperties": false,
-        "properties": {
-          "node_id": {
-            "pattern": "^spk_[0-9a-f]{32}$",
-            "title": "Node Id",
-            "type": "string"
-          },
-          "rank": {
-            "maximum": 1023.0,
-            "minimum": 0.0,
-            "title": "Rank",
-            "type": "integer"
-          },
-          "role": {
-            "enum": [
-              "entrypoint",
-              "worker"
-            ],
-            "title": "Role",
-            "type": "string"
-          }
-        },
-        "required": [
-          "node_id",
-          "rank",
-          "role"
-        ],
-        "title": "PlacementRequest",
-        "type": "object"
-      },
       "PlanEndpoint": {
         "additionalProperties": false,
         "properties": {
@@ -3894,14 +4198,9 @@
       "RecipeRevisionResponse": {
         "additionalProperties": false,
         "properties": {
-          "activation_memory_bytes_per_node": {
-            "minimum": 1.0,
-            "title": "Activation Memory Bytes Per Node",
-            "type": "integer"
-          },
           "artifact_count": {
-            "maximum": 16.0,
-            "minimum": 1.0,
+            "maximum": 32.0,
+            "minimum": 0.0,
             "title": "Artifact Count",
             "type": "integer"
           },
@@ -3948,11 +4247,6 @@
             "title": "Id",
             "type": "string"
           },
-          "installed_bytes_per_node": {
-            "minimum": 1.0,
-            "title": "Installed Bytes Per Node",
-            "type": "integer"
-          },
           "lifecycle": {
             "enum": [
               "draft",
@@ -3963,16 +4257,14 @@
             "title": "Lifecycle",
             "type": "string"
           },
-          "max_nodes": {
-            "maximum": 16.0,
+          "maximum_installed_bytes_per_node": {
             "minimum": 1.0,
-            "title": "Max Nodes",
+            "title": "Maximum Installed Bytes Per Node",
             "type": "integer"
           },
-          "min_nodes": {
-            "maximum": 16.0,
+          "maximum_runtime_memory_bytes_per_node": {
             "minimum": 1.0,
-            "title": "Min Nodes",
+            "title": "Maximum Runtime Memory Bytes Per Node",
             "type": "integer"
           },
           "origin": {
@@ -3984,15 +4276,18 @@
             "title": "Origin",
             "type": "string"
           },
+          "profile_node_counts": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Profile Node Counts",
+            "type": "array"
+          },
           "recipe_id": {
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
             "title": "Recipe Id",
             "type": "string"
-          },
-          "resident_memory_bytes_per_node": {
-            "minimum": 1.0,
-            "title": "Resident Memory Bytes Per Node",
-            "type": "integer"
           },
           "revision_number": {
             "minimum": 1.0,
@@ -4005,12 +4300,6 @@
             "title": "Runtime Family",
             "type": "string"
           },
-          "runtime_image": {
-            "maxLength": 512,
-            "minLength": 1,
-            "title": "Runtime Image",
-            "type": "string"
-          },
           "schema_version": {
             "const": 1,
             "title": "Schema Version",
@@ -4019,6 +4308,11 @@
           "slug": {
             "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
             "title": "Slug",
+            "type": "string"
+          },
+          "source_bundle_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Bundle Sha256",
             "type": "string"
           },
           "title": {
@@ -4036,14 +4330,12 @@
           "revision_number",
           "lifecycle",
           "runtime_family",
-          "runtime_image",
+          "source_bundle_sha256",
           "artifact_count",
           "expected_download_bytes",
-          "installed_bytes_per_node",
-          "resident_memory_bytes_per_node",
-          "activation_memory_bytes_per_node",
-          "min_nodes",
-          "max_nodes",
+          "profile_node_counts",
+          "maximum_installed_bytes_per_node",
+          "maximum_runtime_memory_bytes_per_node",
           "id",
           "description",
           "schema_version",
@@ -4057,14 +4349,9 @@
       "RecipeSummaryResponse": {
         "additionalProperties": false,
         "properties": {
-          "activation_memory_bytes_per_node": {
-            "minimum": 1.0,
-            "title": "Activation Memory Bytes Per Node",
-            "type": "integer"
-          },
           "artifact_count": {
-            "maximum": 16.0,
-            "minimum": 1.0,
+            "maximum": 32.0,
+            "minimum": 0.0,
             "title": "Artifact Count",
             "type": "integer"
           },
@@ -4085,11 +4372,6 @@
             "title": "Expected Download Bytes",
             "type": "integer"
           },
-          "installed_bytes_per_node": {
-            "minimum": 1.0,
-            "title": "Installed Bytes Per Node",
-            "type": "integer"
-          },
           "lifecycle": {
             "enum": [
               "draft",
@@ -4100,16 +4382,14 @@
             "title": "Lifecycle",
             "type": "string"
           },
-          "max_nodes": {
-            "maximum": 16.0,
+          "maximum_installed_bytes_per_node": {
             "minimum": 1.0,
-            "title": "Max Nodes",
+            "title": "Maximum Installed Bytes Per Node",
             "type": "integer"
           },
-          "min_nodes": {
-            "maximum": 16.0,
+          "maximum_runtime_memory_bytes_per_node": {
             "minimum": 1.0,
-            "title": "Min Nodes",
+            "title": "Maximum Runtime Memory Bytes Per Node",
             "type": "integer"
           },
           "origin": {
@@ -4121,15 +4401,18 @@
             "title": "Origin",
             "type": "string"
           },
+          "profile_node_counts": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Profile Node Counts",
+            "type": "array"
+          },
           "recipe_id": {
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
             "title": "Recipe Id",
             "type": "string"
-          },
-          "resident_memory_bytes_per_node": {
-            "minimum": 1.0,
-            "title": "Resident Memory Bytes Per Node",
-            "type": "integer"
           },
           "revision_number": {
             "minimum": 1.0,
@@ -4142,15 +4425,14 @@
             "title": "Runtime Family",
             "type": "string"
           },
-          "runtime_image": {
-            "maxLength": 512,
-            "minLength": 1,
-            "title": "Runtime Image",
-            "type": "string"
-          },
           "slug": {
             "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
             "title": "Slug",
+            "type": "string"
+          },
+          "source_bundle_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Bundle Sha256",
             "type": "string"
           },
           "title": {
@@ -4168,14 +4450,12 @@
           "revision_number",
           "lifecycle",
           "runtime_family",
-          "runtime_image",
+          "source_bundle_sha256",
           "artifact_count",
           "expected_download_bytes",
-          "installed_bytes_per_node",
-          "resident_memory_bytes_per_node",
-          "activation_memory_bytes_per_node",
-          "min_nodes",
-          "max_nodes"
+          "profile_node_counts",
+          "maximum_installed_bytes_per_node",
+          "maximum_runtime_memory_bytes_per_node"
         ],
         "title": "RecipeSummaryResponse",
         "type": "object"
@@ -4418,17 +4698,24 @@
       "RunNodePlanResponse": {
         "additionalProperties": false,
         "properties": {
-          "active_gpu_reserved_bytes": {
-            "title": "Active Gpu Reserved Bytes",
-            "type": "integer"
-          },
-          "active_host_reserved_bytes": {
-            "title": "Active Host Reserved Bytes",
+          "active_reserved_bytes": {
+            "title": "Active Reserved Bytes",
             "type": "integer"
           },
           "allowed": {
             "title": "Allowed",
             "type": "boolean"
+          },
+          "available_memory_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available Memory Bytes"
           },
           "blockers": {
             "items": {
@@ -4436,6 +4723,10 @@
             },
             "title": "Blockers",
             "type": "array"
+          },
+          "endpoint_owner": {
+            "title": "Endpoint Owner",
+            "type": "boolean"
           },
           "fabric_address": {
             "anyOf": [
@@ -4470,28 +4761,6 @@
             ],
             "title": "Free After Bytes"
           },
-          "gpu_free_bytes": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Gpu Free Bytes"
-          },
-          "host_free_bytes": {
-            "anyOf": [
-              {
-                "type": "integer"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Host Free Bytes"
-          },
           "inventory_observed_at": {
             "anyOf": [
               {
@@ -4507,6 +4776,10 @@
           "memory_floor_bytes": {
             "title": "Memory Floor Bytes",
             "type": "integer"
+          },
+          "memory_kind": {
+            "title": "Memory Kind",
+            "type": "string"
           },
           "node_id": {
             "title": "Node Id",
@@ -4551,14 +4824,14 @@
           "node_id",
           "rank",
           "role",
+          "endpoint_owner",
           "port",
           "allowed",
           "inventory_observed_at",
+          "memory_kind",
           "required_memory_bytes",
-          "host_free_bytes",
-          "gpu_free_bytes",
-          "active_host_reserved_bytes",
-          "active_gpu_reserved_bytes",
+          "available_memory_bytes",
+          "active_reserved_bytes",
           "free_after_bytes",
           "memory_floor_bytes",
           "fabric_address",
@@ -4581,6 +4854,14 @@
             "title": "Installation Id",
             "type": "string"
           },
+          "mapping_generation": {
+            "title": "Mapping Generation",
+            "type": "integer"
+          },
+          "mapping_id": {
+            "title": "Mapping Id",
+            "type": "string"
+          },
           "nodes": {
             "items": {
               "$ref": "#/components/schemas/RunNodePlanResponse"
@@ -4599,6 +4880,8 @@
         },
         "required": [
           "installation_id",
+          "mapping_id",
+          "mapping_generation",
           "recipe_revision_id",
           "allowed",
           "nodes",
@@ -4614,20 +4897,10 @@
             "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
             "title": "Installation Id",
             "type": "string"
-          },
-          "placements": {
-            "items": {
-              "$ref": "#/components/schemas/PlacementRequest"
-            },
-            "maxItems": 64,
-            "minItems": 1,
-            "title": "Placements",
-            "type": "array"
           }
         },
         "required": [
-          "installation_id",
-          "placements"
+          "installation_id"
         ],
         "title": "RunPreviewRequest",
         "type": "object"
@@ -4645,15 +4918,6 @@
             "title": "Installation Id",
             "type": "string"
           },
-          "placements": {
-            "items": {
-              "$ref": "#/components/schemas/PlacementRequest"
-            },
-            "maxItems": 64,
-            "minItems": 1,
-            "title": "Placements",
-            "type": "array"
-          },
           "plan_digest": {
             "pattern": "^[0-9a-f]{64}$",
             "title": "Plan Digest",
@@ -4667,12 +4931,138 @@
         },
         "required": [
           "installation_id",
-          "placements",
           "alias",
           "plan_digest",
           "request_key"
         ],
         "title": "RunRequest",
+        "type": "object"
+      },
+      "SourceBundleResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "archive_bytes": {
+            "minimum": 1.0,
+            "title": "Archive Bytes",
+            "type": "integer"
+          },
+          "file_count": {
+            "maximum": 4096.0,
+            "minimum": 1.0,
+            "title": "File Count",
+            "type": "integer"
+          },
+          "files": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4096,
+            "minItems": 1,
+            "title": "Files",
+            "type": "array"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "total_bytes": {
+            "minimum": 0.0,
+            "title": "Total Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sha256",
+          "archive_bytes",
+          "total_bytes",
+          "file_count",
+          "files"
+        ],
+        "title": "SourceBundleResponse",
+        "type": "object"
+      },
+      "SourceCheckRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "recipe_revision_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_revision_id"
+        ],
+        "title": "SourceCheckRequest",
+        "type": "object"
+      },
+      "SourcePolicyFindingResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "path",
+          "line",
+          "detail"
+        ],
+        "title": "SourcePolicyFindingResponse",
+        "type": "object"
+      },
+      "SourcePolicyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "dockerfile": {
+            "title": "Dockerfile",
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/SourcePolicyFindingResponse"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "source_bundle_sha256": {
+            "title": "Source Bundle Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "passed",
+          "source_bundle_sha256",
+          "dockerfile",
+          "findings"
+        ],
+        "title": "SourcePolicyResponse",
         "type": "object"
       },
       "TestReportRequest": {
@@ -6219,6 +6609,148 @@
           }
         ],
         "summary": "Resolve Imported"
+      }
+    },
+    "/api/v1/catalog/source-bundles/{sha256}": {
+      "get": {
+        "operationId": "downloadLocalRecipeSourceBundle",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sha256",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/vnd.vonk.source-bundle.v1+tar": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Download Source Bundle"
+      },
+      "put": {
+        "operationId": "uploadLocalRecipeSourceBundle",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sha256",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceBundleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Upload Source Bundle"
       }
     },
     "/api/v1/changes": {
@@ -9367,6 +9899,135 @@
         "summary": "Proposal Preview"
       }
     },
+    "/api/v1/recipes/build-plans/preview": {
+      "post": {
+        "operationId": "previewRecipeBuild",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BuildPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuildPlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview Build"
+      }
+    },
+    "/api/v1/recipes/builds": {
+      "post": {
+        "operationId": "buildRecipe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BuildRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Build"
+      }
+    },
+    "/api/v1/recipes/image-distributions": {
+      "post": {
+        "operationId": "distributeRecipeImage",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageDistributionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Distribute Image"
+      }
+    },
     "/api/v1/recipes/install-plans/preview": {
       "post": {
         "operationId": "previewRecipeInstall",
@@ -9506,6 +10167,92 @@
           }
         ],
         "summary": "Uninstall"
+      }
+    },
+    "/api/v1/recipes/mapping-plans/preview": {
+      "post": {
+        "operationId": "previewRecipeMapping",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MappingPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MappingPlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview Mapping"
+      }
+    },
+    "/api/v1/recipes/mappings": {
+      "post": {
+        "operationId": "createRecipeMapping",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MappingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MappingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create Mapping"
       }
     },
     "/api/v1/recipes/operations/{operation_id}": {
@@ -9747,6 +10494,49 @@
           }
         ],
         "summary": "Stop"
+      }
+    },
+    "/api/v1/recipes/source-checks": {
+      "post": {
+        "operationId": "checkRecipeBuildSource",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourcePolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Check Source"
       }
     },
     "/api/v1/reconciliations": {

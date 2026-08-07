@@ -96,6 +96,8 @@ async fn run_agent(config: &AgentConfig) -> Result<(), Box<dyn std::error::Error
     let runner = SystemProcessRunner;
     let capabilities = [
         "agent.runtime.rust.v1",
+        "recipe.build.v1",
+        "recipe.image.import.v1",
         "recipe.install",
         "recipe.start",
         "recipe.stop",

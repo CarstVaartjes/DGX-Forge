@@ -31,7 +31,6 @@ T = TypeVar("T", bound="RecipeRevisionResponse")
 class RecipeRevisionResponse:
     """
         Attributes:
-            activation_memory_bytes_per_node (int):
             artifact_count (int):
             created_at (str):
             created_by (str):
@@ -39,23 +38,21 @@ class RecipeRevisionResponse:
             document (RecipeRevisionResponseDocument):
             expected_download_bytes (int):
             id (str):
-            installed_bytes_per_node (int):
             lifecycle (RecipeRevisionResponseLifecycle):
-            max_nodes (int):
-            min_nodes (int):
+            maximum_installed_bytes_per_node (int):
+            maximum_runtime_memory_bytes_per_node (int):
             origin (RecipeRevisionResponseOrigin):
+            profile_node_counts (list[int]):
             recipe_id (str):
-            resident_memory_bytes_per_node (int):
             revision_number (int):
             runtime_family (str):
-            runtime_image (str):
             schema_version (Literal[1]):
             slug (str):
+            source_bundle_sha256 (str):
             title (str):
             content_sha256 (Union[None, Unset, str]):
      """
 
-    activation_memory_bytes_per_node: int
     artifact_count: int
     created_at: str
     created_by: str
@@ -63,18 +60,17 @@ class RecipeRevisionResponse:
     document: 'RecipeRevisionResponseDocument'
     expected_download_bytes: int
     id: str
-    installed_bytes_per_node: int
     lifecycle: RecipeRevisionResponseLifecycle
-    max_nodes: int
-    min_nodes: int
+    maximum_installed_bytes_per_node: int
+    maximum_runtime_memory_bytes_per_node: int
     origin: RecipeRevisionResponseOrigin
+    profile_node_counts: list[int]
     recipe_id: str
-    resident_memory_bytes_per_node: int
     revision_number: int
     runtime_family: str
-    runtime_image: str
     schema_version: Literal[1]
     slug: str
+    source_bundle_sha256: str
     title: str
     content_sha256: Union[None, Unset, str] = UNSET
 
@@ -84,8 +80,6 @@ class RecipeRevisionResponse:
 
     def to_dict(self) -> dict[str, Any]:
         from ..models.recipe_revision_response_document import RecipeRevisionResponseDocument
-        activation_memory_bytes_per_node = self.activation_memory_bytes_per_node
-
         artifact_count = self.artifact_count
 
         created_at = self.created_at
@@ -100,29 +94,29 @@ class RecipeRevisionResponse:
 
         id = self.id
 
-        installed_bytes_per_node = self.installed_bytes_per_node
-
         lifecycle: str = self.lifecycle
 
-        max_nodes = self.max_nodes
+        maximum_installed_bytes_per_node = self.maximum_installed_bytes_per_node
 
-        min_nodes = self.min_nodes
+        maximum_runtime_memory_bytes_per_node = self.maximum_runtime_memory_bytes_per_node
 
         origin: str = self.origin
 
-        recipe_id = self.recipe_id
+        profile_node_counts = self.profile_node_counts
 
-        resident_memory_bytes_per_node = self.resident_memory_bytes_per_node
+
+
+        recipe_id = self.recipe_id
 
         revision_number = self.revision_number
 
         runtime_family = self.runtime_family
 
-        runtime_image = self.runtime_image
-
         schema_version = self.schema_version
 
         slug = self.slug
+
+        source_bundle_sha256 = self.source_bundle_sha256
 
         title = self.title
 
@@ -136,7 +130,6 @@ class RecipeRevisionResponse:
         field_dict: dict[str, Any] = {}
 
         field_dict.update({
-            "activation_memory_bytes_per_node": activation_memory_bytes_per_node,
             "artifact_count": artifact_count,
             "created_at": created_at,
             "created_by": created_by,
@@ -144,18 +137,17 @@ class RecipeRevisionResponse:
             "document": document,
             "expected_download_bytes": expected_download_bytes,
             "id": id,
-            "installed_bytes_per_node": installed_bytes_per_node,
             "lifecycle": lifecycle,
-            "max_nodes": max_nodes,
-            "min_nodes": min_nodes,
+            "maximum_installed_bytes_per_node": maximum_installed_bytes_per_node,
+            "maximum_runtime_memory_bytes_per_node": maximum_runtime_memory_bytes_per_node,
             "origin": origin,
+            "profile_node_counts": profile_node_counts,
             "recipe_id": recipe_id,
-            "resident_memory_bytes_per_node": resident_memory_bytes_per_node,
             "revision_number": revision_number,
             "runtime_family": runtime_family,
-            "runtime_image": runtime_image,
             "schema_version": schema_version,
             "slug": slug,
+            "source_bundle_sha256": source_bundle_sha256,
             "title": title,
         })
         if content_sha256 is not UNSET:
@@ -169,8 +161,6 @@ class RecipeRevisionResponse:
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         from ..models.recipe_revision_response_document import RecipeRevisionResponseDocument
         d = dict(src_dict)
-        activation_memory_bytes_per_node = d.pop("activation_memory_bytes_per_node")
-
         artifact_count = d.pop("artifact_count")
 
         created_at = d.pop("created_at")
@@ -188,37 +178,36 @@ class RecipeRevisionResponse:
 
         id = d.pop("id")
 
-        installed_bytes_per_node = d.pop("installed_bytes_per_node")
-
         lifecycle = check_recipe_revision_response_lifecycle(d.pop("lifecycle"))
 
 
 
 
-        max_nodes = d.pop("max_nodes")
+        maximum_installed_bytes_per_node = d.pop("maximum_installed_bytes_per_node")
 
-        min_nodes = d.pop("min_nodes")
+        maximum_runtime_memory_bytes_per_node = d.pop("maximum_runtime_memory_bytes_per_node")
 
         origin = check_recipe_revision_response_origin(d.pop("origin"))
 
 
 
 
-        recipe_id = d.pop("recipe_id")
+        profile_node_counts = cast(list[int], d.pop("profile_node_counts"))
 
-        resident_memory_bytes_per_node = d.pop("resident_memory_bytes_per_node")
+
+        recipe_id = d.pop("recipe_id")
 
         revision_number = d.pop("revision_number")
 
         runtime_family = d.pop("runtime_family")
-
-        runtime_image = d.pop("runtime_image")
 
         schema_version = cast(Literal[1] , d.pop("schema_version"))
         if schema_version != 1:
             raise ValueError(f"schema_version must match const 1, got '{schema_version}'")
 
         slug = d.pop("slug")
+
+        source_bundle_sha256 = d.pop("source_bundle_sha256")
 
         title = d.pop("title")
 
@@ -233,7 +222,6 @@ class RecipeRevisionResponse:
 
 
         recipe_revision_response = cls(
-            activation_memory_bytes_per_node=activation_memory_bytes_per_node,
             artifact_count=artifact_count,
             created_at=created_at,
             created_by=created_by,
@@ -241,18 +229,17 @@ class RecipeRevisionResponse:
             document=document,
             expected_download_bytes=expected_download_bytes,
             id=id,
-            installed_bytes_per_node=installed_bytes_per_node,
             lifecycle=lifecycle,
-            max_nodes=max_nodes,
-            min_nodes=min_nodes,
+            maximum_installed_bytes_per_node=maximum_installed_bytes_per_node,
+            maximum_runtime_memory_bytes_per_node=maximum_runtime_memory_bytes_per_node,
             origin=origin,
+            profile_node_counts=profile_node_counts,
             recipe_id=recipe_id,
-            resident_memory_bytes_per_node=resident_memory_bytes_per_node,
             revision_number=revision_number,
             runtime_family=runtime_family,
-            runtime_image=runtime_image,
             schema_version=schema_version,
             slug=slug,
+            source_bundle_sha256=source_bundle_sha256,
             title=title,
             content_sha256=content_sha256,
         )

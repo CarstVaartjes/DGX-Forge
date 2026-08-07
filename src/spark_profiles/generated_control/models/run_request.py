@@ -6,10 +6,7 @@ from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
 
-from typing import cast
 
-if TYPE_CHECKING:
-  from ..models.placement_request import PlacementRequest
 
 
 
@@ -25,14 +22,12 @@ class RunRequest:
         Attributes:
             alias (str):
             installation_id (str):
-            placements (list['PlacementRequest']):
             plan_digest (str):
             request_key (str):
      """
 
     alias: str
     installation_id: str
-    placements: list['PlacementRequest']
     plan_digest: str
     request_key: str
 
@@ -41,17 +36,9 @@ class RunRequest:
 
 
     def to_dict(self) -> dict[str, Any]:
-        from ..models.placement_request import PlacementRequest
         alias = self.alias
 
         installation_id = self.installation_id
-
-        placements = []
-        for placements_item_data in self.placements:
-            placements_item = placements_item_data.to_dict()
-            placements.append(placements_item)
-
-
 
         plan_digest = self.plan_digest
 
@@ -63,7 +50,6 @@ class RunRequest:
         field_dict.update({
             "alias": alias,
             "installation_id": installation_id,
-            "placements": placements,
             "plan_digest": plan_digest,
             "request_key": request_key,
         })
@@ -74,21 +60,10 @@ class RunRequest:
 
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
-        from ..models.placement_request import PlacementRequest
         d = dict(src_dict)
         alias = d.pop("alias")
 
         installation_id = d.pop("installation_id")
-
-        placements = []
-        _placements = d.pop("placements")
-        for placements_item_data in (_placements):
-            placements_item = PlacementRequest.from_dict(placements_item_data)
-
-
-
-            placements.append(placements_item)
-
 
         plan_digest = d.pop("plan_digest")
 
@@ -97,7 +72,6 @@ class RunRequest:
         run_request = cls(
             alias=alias,
             installation_id=installation_id,
-            placements=placements,
             plan_digest=plan_digest,
             request_key=request_key,
         )

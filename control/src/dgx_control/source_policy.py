@@ -13,7 +13,7 @@ import yaml
 
 from .source_bundles import GeneratedSourceBundle
 
-_PINNED_IMAGE = re.compile(r"^[^\s$]+@sha256:[0-9a-f]{64}$")
+_PINNED_IMAGE = re.compile(r"^[^\s$]+@sha256:([0-9a-f]{64})$")
 _NON_ROOT_USER = re.compile(r"^[1-9][0-9]*(?::[1-9][0-9]*)?$")
 _COMPOSE_NAMES = frozenset(
     {"compose.yml", "compose.yaml", "docker-compose.yml", "docker-compose.yaml"}
@@ -120,7 +120,17 @@ def _inspect_dockerfile(path: str, payload: bytes) -> list[SourcePolicyFinding]:
             tokens = argument.split()
             tokens = [token for token in tokens if not token.startswith("--platform=")]
             base = tokens[0] if tokens else ""
-            if base != "scratch" and _PINNED_IMAGE.fullmatch(base) is None:
+            pinned = _PINNED_IMAGE.fullmatch(base)
+            if pinned is not None and pinned.group(1) == "0" * 64:
+                findings.append(
+                    _finding(
+                        "dockerfile.base_placeholder",
+                        path,
+                        line_number,
+                        "replace the all-zero base-image placeholder with a verified linux/arm64 digest",
+                    )
+                )
+            elif base != "scratch" and pinned is None:
                 findings.append(
                     _finding(
                         "dockerfile.base_unpinned",
@@ -249,7 +259,17 @@ def _inspect_copy(
     for token in tokens:
         if token.startswith("--from="):
             source = token.removeprefix("--from=")
-            if source not in aliases and _PINNED_IMAGE.fullmatch(source) is None:
+            pinned = _PINNED_IMAGE.fullmatch(source)
+            if pinned is not None and pinned.group(1) == "0" * 64:
+                findings.append(
+                    _finding(
+                        "dockerfile.copy_base_placeholder",
+                        path,
+                        line,
+                        "replace the all-zero external COPY placeholder with a verified digest",
+                    )
+                )
+            elif source not in aliases and pinned is None:
                 findings.append(
                     _finding(
                         "dockerfile.copy_base_unpinned",
@@ -325,7 +345,7 @@ def _inspect_compose(path: str, payload: bytes) -> list[SourcePolicyFinding]:
                     "privileged Compose services are forbidden",
                 )
             )
-        for key in ("network_mode", "pid", "ipc"):
+        for key in ("network_mode", "pid", "ipc", "uts", "userns_mode"):
             if raw_service.get(key) == "host":
                 findings.append(
                     _finding(

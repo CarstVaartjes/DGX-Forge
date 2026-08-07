@@ -7,11 +7,11 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from jsonschema import Draft202012Validator, FormatChecker
 from sqlalchemy import and_, func, or_, select
@@ -26,6 +26,7 @@ from .models import (
     RecipeGlobalLink,
     RecipeImport,
     RecipeImportItem,
+    RecipeSourceBundle,
     RecipeTestReport,
 )
 from .recipe_contract import (
@@ -34,6 +35,7 @@ from .recipe_contract import (
     recipe_content_sha256,
     validate_recipe,
 )
+from .source_bundles import SourceBundleError, SourceBundleStore
 
 _SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}$")
 _MUTABLE_REVISIONS = frozenset(
@@ -101,6 +103,15 @@ class RecipeSummary:
     maximum_runtime_memory_bytes_per_node: int
 
 
+@dataclass(frozen=True, slots=True)
+class SourceBundleView:
+    sha256: str
+    archive_bytes: int
+    total_bytes: int
+    file_count: int
+    files: tuple[str, ...]
+
+
 class CatalogService:
     def __init__(
         self,
@@ -108,10 +119,87 @@ class CatalogService:
         *,
         clock: Callable[[], datetime],
         repository: CatalogRepository | None = None,
+        source_bundles: SourceBundleStore | None = None,
     ) -> None:
         self._sessions = sessions
         self._clock = clock
         self._repository = repository or CatalogRepository()
+        self._source_bundles = source_bundles
+
+    def store_source_bundle(
+        self, expected_sha256: str, payload: BinaryIO, actor: str
+    ) -> SourceBundleView:
+        del actor  # Attribution is captured by the API audit record.
+        if self._source_bundles is None:
+            raise CatalogError(
+                "bundle.storage_unavailable", "source bundle storage is unavailable"
+            )
+        try:
+            stored = self._source_bundles.put(expected_sha256, payload)
+        except SourceBundleError as error:
+            raise CatalogValidationError(error.code, error.detail) from error
+        manifest = stored.manifest
+        row = RecipeSourceBundle(
+            sha256=manifest.sha256,
+            media_type="application/vnd.vonk.source-bundle.v1+tar",
+            archive_bytes=stored.archive_bytes,
+            total_bytes=manifest.total_bytes,
+            file_count=len(manifest.files),
+            storage_key=f"{manifest.sha256[:2]}/{manifest.sha256}.tar",
+            manifest={
+                "schema_version": 1,
+                "files": [asdict(item) for item in manifest.files],
+                "total_bytes": manifest.total_bytes,
+                "sha256": manifest.sha256,
+            },
+            verified_at=self._clock(),
+        )
+        try:
+            with self._sessions.begin() as session:
+                existing = session.get(RecipeSourceBundle, manifest.sha256)
+                if existing is None:
+                    session.add(row)
+                else:
+                    row = existing
+        except IntegrityError as error:
+            raise CatalogConflict(
+                "bundle.storage_conflict", "source bundle metadata conflicts"
+            ) from error
+        return SourceBundleView(
+            sha256=row.sha256,
+            archive_bytes=row.archive_bytes,
+            total_bytes=row.total_bytes,
+            file_count=row.file_count,
+            files=tuple(item.path for item in manifest.files),
+        )
+
+    def read_source_bundle(self, sha256: str) -> bytes:
+        """Return a verified local source archive for publication or inspection."""
+
+        if self._source_bundles is None:
+            raise CatalogError(
+                "bundle.storage_unavailable", "source bundle storage is unavailable"
+            )
+        with self._sessions() as session:
+            row = session.get(RecipeSourceBundle, sha256)
+            if row is None:
+                raise KeyError(sha256)
+            expected = (row.archive_bytes, row.total_bytes, row.file_count)
+        try:
+            stored = self._source_bundles.get(sha256)
+        except SourceBundleError as error:
+            raise CatalogValidationError(error.code, error.detail) from error
+        observed = (
+            len(stored.archive),
+            stored.manifest.total_bytes,
+            len(stored.manifest.files),
+        )
+        if observed != expected:
+            raise CatalogValidationError(
+                "bundle.metadata_mismatch",
+                "source bundle storage does not match its database metadata",
+            )
+        return stored.archive
 
     def list_recipes(
         self, *, limit: int = 20, cursor: str | None = None

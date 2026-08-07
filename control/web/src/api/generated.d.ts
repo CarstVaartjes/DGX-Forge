@@ -345,6 +345,24 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/catalog/source-bundles/{sha256}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Download Source Bundle */
+        get: operations["downloadLocalRecipeSourceBundle"];
+        /** Upload Source Bundle */
+        put: operations["uploadLocalRecipeSourceBundle"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/changes": {
         parameters: {
             query?: never;
@@ -957,6 +975,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/recipes/build-plans/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Build */
+        post: operations["previewRecipeBuild"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recipes/builds": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Build */
+        post: operations["buildRecipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recipes/image-distributions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Distribute Image */
+        post: operations["distributeRecipeImage"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/recipes/install-plans/preview": {
         parameters: {
             query?: never;
@@ -1002,6 +1071,40 @@ export interface paths {
         put?: never;
         /** Uninstall */
         post: operations["uninstallRecipe"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recipes/mapping-plans/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Preview Mapping */
+        post: operations["previewRecipeMapping"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recipes/mappings": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Create Mapping */
+        post: operations["createRecipeMapping"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1087,6 +1190,23 @@ export interface paths {
         put?: never;
         /** Stop */
         post: operations["stopRecipeRun"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/recipes/source-checks": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Check Source */
+        post: operations["checkRecipeBuildSource"];
         delete?: never;
         options?: never;
         head?: never;
@@ -1292,6 +1412,39 @@ export interface components {
             /** Detail */
             detail: string;
         };
+        /** BuildPlanResponse */
+        BuildPlanResponse: {
+            /** Build Id */
+            build_id: string;
+            /** Build Input Sha256 */
+            build_input_sha256: string;
+            /** Builder Node Id */
+            builder_node_id: string;
+            /** Recipe Content Sha256 */
+            recipe_content_sha256: string;
+            /** Recipe Revision Id */
+            recipe_revision_id: string;
+            /** Source Bundle Sha256 */
+            source_bundle_sha256: string;
+        };
+        /** BuildPreviewRequest */
+        BuildPreviewRequest: {
+            /** Builder Node Id */
+            builder_node_id: string;
+            /** Recipe Revision Id */
+            recipe_revision_id: string;
+        };
+        /** BuildRequest */
+        BuildRequest: {
+            /** Build Input Sha256 */
+            build_input_sha256: string;
+            /** Builder Node Id */
+            builder_node_id: string;
+            /** Recipe Revision Id */
+            recipe_revision_id: string;
+            /** Request Key */
+            request_key: string;
+        };
         /** CatalogProblem */
         CatalogProblem: {
             /** Code */
@@ -1485,6 +1638,17 @@ export interface components {
             /** Detail */
             detail?: components["schemas"]["ValidationError"][];
         };
+        /** ImageDistributionRequest */
+        ImageDistributionRequest: {
+            /** Mapping Generation */
+            mapping_generation: number;
+            /** Mapping Id */
+            mapping_id: string;
+            /** Recipe Build Id */
+            recipe_build_id: string;
+            /** Request Key */
+            request_key: string;
+        };
         /** InstallNodePlanResponse */
         InstallNodePlanResponse: {
             /** Active Reserved Bytes */
@@ -1503,12 +1667,16 @@ export interface components {
             inventory_observed_at: string | null;
             /** Node Id */
             node_id: string;
+            /** Rank */
+            rank: number;
             /** Required Bytes */
             required_bytes: number;
             /** Required Download Bytes */
             required_download_bytes: number;
             /** Reused Bytes */
             reused_bytes: number;
+            /** Role */
+            role: string;
             /** Warnings */
             warnings: components["schemas"]["PlanReason"][];
         };
@@ -1516,10 +1684,18 @@ export interface components {
         InstallPlanResponse: {
             /** Allowed */
             allowed: boolean;
+            /** Image Digest */
+            image_digest: string;
+            /** Mapping Generation */
+            mapping_generation: number;
+            /** Mapping Id */
+            mapping_id: string;
             /** Nodes */
             nodes: components["schemas"]["InstallNodePlanResponse"][];
             /** Plan Digest */
             plan_digest: string;
+            /** Recipe Build Id */
+            recipe_build_id: string;
             /** Recipe Content Sha256 */
             recipe_content_sha256: string;
             /** Recipe Revision Id */
@@ -1527,19 +1703,19 @@ export interface components {
         };
         /** InstallPreviewRequest */
         InstallPreviewRequest: {
-            /** Node Ids */
-            node_ids: string[];
-            /** Recipe Revision Id */
-            recipe_revision_id: string;
+            /** Mapping Id */
+            mapping_id: string;
+            /** Recipe Build Id */
+            recipe_build_id: string;
         };
         /** InstallRequest */
         InstallRequest: {
-            /** Node Ids */
-            node_ids: string[];
+            /** Mapping Id */
+            mapping_id: string;
             /** Plan Digest */
             plan_digest: string;
-            /** Recipe Revision Id */
-            recipe_revision_id: string;
+            /** Recipe Build Id */
+            recipe_build_id: string;
             /** Request Key */
             request_key: string;
         };
@@ -1638,6 +1814,75 @@ export interface components {
             next_cursor?: string | null;
             /** Total */
             total: number;
+        };
+        /** MappingNodePlanResponse */
+        MappingNodePlanResponse: {
+            /** Endpoint Owner */
+            endpoint_owner: boolean;
+            /** Node Id */
+            node_id: string;
+            /** Rank */
+            rank: number;
+            /** Role */
+            role: string;
+        };
+        /** MappingPlanResponse */
+        MappingPlanResponse: {
+            /** Generation */
+            generation: number;
+            /** Nodes */
+            nodes: components["schemas"]["MappingNodePlanResponse"][];
+            /** Parameters */
+            parameters: {
+                [key: string]: unknown;
+            };
+            /** Placement Digest */
+            placement_digest: string;
+            /** Profile Name */
+            profile_name: string;
+            /** Recipe Content Sha256 */
+            recipe_content_sha256: string;
+            /** Recipe Revision Id */
+            recipe_revision_id: string;
+        };
+        /** MappingPreviewRequest */
+        MappingPreviewRequest: {
+            /** Node Ids */
+            node_ids: string[];
+            /** Parameters */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            /** Profile Name */
+            profile_name: string;
+            /** Recipe Revision Id */
+            recipe_revision_id: string;
+        };
+        /** MappingRequest */
+        MappingRequest: {
+            /** Node Ids */
+            node_ids: string[];
+            /** Parameters */
+            parameters?: {
+                [key: string]: unknown;
+            };
+            /** Placement Digest */
+            placement_digest: string;
+            /** Profile Name */
+            profile_name: string;
+            /** Recipe Revision Id */
+            recipe_revision_id: string;
+            /** Request Key */
+            request_key: string;
+        };
+        /** MappingResponse */
+        MappingResponse: {
+            /** Generation */
+            generation: number;
+            /** Mapping Id */
+            mapping_id: string;
+            /** Placement Digest */
+            placement_digest: string;
         };
         /** MigrationGrantRequest */
         MigrationGrantRequest: {
@@ -2172,18 +2417,6 @@ export interface components {
             /** Used Bytes */
             used_bytes: number;
         };
-        /** PlacementRequest */
-        PlacementRequest: {
-            /** Node Id */
-            node_id: string;
-            /** Rank */
-            rank: number;
-            /**
-             * Role
-             * @enum {string}
-             */
-            role: "entrypoint" | "worker";
-        };
         /** PlanEndpoint */
         PlanEndpoint: {
             /** Path */
@@ -2413,8 +2646,6 @@ export interface components {
         };
         /** RecipeRevisionResponse */
         RecipeRevisionResponse: {
-            /** Activation Memory Bytes Per Node */
-            activation_memory_bytes_per_node: number;
             /** Artifact Count */
             artifact_count: number;
             /** Content Sha256 */
@@ -2433,32 +2664,28 @@ export interface components {
             expected_download_bytes: number;
             /** Id */
             id: string;
-            /** Installed Bytes Per Node */
-            installed_bytes_per_node: number;
             /**
              * Lifecycle
              * @enum {string}
              */
             lifecycle: "draft" | "blocked" | "resolved" | "deprecated";
-            /** Max Nodes */
-            max_nodes: number;
-            /** Min Nodes */
-            min_nodes: number;
+            /** Maximum Installed Bytes Per Node */
+            maximum_installed_bytes_per_node: number;
+            /** Maximum Runtime Memory Bytes Per Node */
+            maximum_runtime_memory_bytes_per_node: number;
             /**
              * Origin
              * @enum {string}
              */
             origin: "local" | "sparkrun" | "global";
+            /** Profile Node Counts */
+            profile_node_counts: number[];
             /** Recipe Id */
             recipe_id: string;
-            /** Resident Memory Bytes Per Node */
-            resident_memory_bytes_per_node: number;
             /** Revision Number */
             revision_number: number;
             /** Runtime Family */
             runtime_family: string;
-            /** Runtime Image */
-            runtime_image: string;
             /**
              * Schema Version
              * @constant
@@ -2466,47 +2693,45 @@ export interface components {
             schema_version: 1;
             /** Slug */
             slug: string;
+            /** Source Bundle Sha256 */
+            source_bundle_sha256: string;
             /** Title */
             title: string;
         };
         /** RecipeSummaryResponse */
         RecipeSummaryResponse: {
-            /** Activation Memory Bytes Per Node */
-            activation_memory_bytes_per_node: number;
             /** Artifact Count */
             artifact_count: number;
             /** Content Sha256 */
             content_sha256?: string | null;
             /** Expected Download Bytes */
             expected_download_bytes: number;
-            /** Installed Bytes Per Node */
-            installed_bytes_per_node: number;
             /**
              * Lifecycle
              * @enum {string}
              */
             lifecycle: "draft" | "blocked" | "resolved" | "deprecated";
-            /** Max Nodes */
-            max_nodes: number;
-            /** Min Nodes */
-            min_nodes: number;
+            /** Maximum Installed Bytes Per Node */
+            maximum_installed_bytes_per_node: number;
+            /** Maximum Runtime Memory Bytes Per Node */
+            maximum_runtime_memory_bytes_per_node: number;
             /**
              * Origin
              * @enum {string}
              */
             origin: "local" | "sparkrun" | "global";
+            /** Profile Node Counts */
+            profile_node_counts: number[];
             /** Recipe Id */
             recipe_id: string;
-            /** Resident Memory Bytes Per Node */
-            resident_memory_bytes_per_node: number;
             /** Revision Number */
             revision_number: number;
             /** Runtime Family */
             runtime_family: string;
-            /** Runtime Image */
-            runtime_image: string;
             /** Slug */
             slug: string;
+            /** Source Bundle Sha256 */
+            source_bundle_sha256: string;
             /** Title */
             title: string;
         };
@@ -2586,28 +2811,28 @@ export interface components {
         };
         /** RunNodePlanResponse */
         RunNodePlanResponse: {
-            /** Active Gpu Reserved Bytes */
-            active_gpu_reserved_bytes: number;
-            /** Active Host Reserved Bytes */
-            active_host_reserved_bytes: number;
+            /** Active Reserved Bytes */
+            active_reserved_bytes: number;
             /** Allowed */
             allowed: boolean;
+            /** Available Memory Bytes */
+            available_memory_bytes: number | null;
             /** Blockers */
             blockers: components["schemas"]["PlanReason"][];
+            /** Endpoint Owner */
+            endpoint_owner: boolean;
             /** Fabric Address */
             fabric_address: string | null;
             /** Fabric Bandwidth Mbps */
             fabric_bandwidth_mbps: number | null;
             /** Free After Bytes */
             free_after_bytes: number | null;
-            /** Gpu Free Bytes */
-            gpu_free_bytes: number | null;
-            /** Host Free Bytes */
-            host_free_bytes: number | null;
             /** Inventory Observed At */
             inventory_observed_at: string | null;
             /** Memory Floor Bytes */
             memory_floor_bytes: number;
+            /** Memory Kind */
+            memory_kind: string;
             /** Node Id */
             node_id: string;
             /** Port */
@@ -2629,6 +2854,10 @@ export interface components {
             allowed: boolean;
             /** Installation Id */
             installation_id: string;
+            /** Mapping Generation */
+            mapping_generation: number;
+            /** Mapping Id */
+            mapping_id: string;
             /** Nodes */
             nodes: components["schemas"]["RunNodePlanResponse"][];
             /** Plan Digest */
@@ -2640,8 +2869,6 @@ export interface components {
         RunPreviewRequest: {
             /** Installation Id */
             installation_id: string;
-            /** Placements */
-            placements: components["schemas"]["PlacementRequest"][];
         };
         /** RunRequest */
         RunRequest: {
@@ -2649,12 +2876,50 @@ export interface components {
             alias: string;
             /** Installation Id */
             installation_id: string;
-            /** Placements */
-            placements: components["schemas"]["PlacementRequest"][];
             /** Plan Digest */
             plan_digest: string;
             /** Request Key */
             request_key: string;
+        };
+        /** SourceBundleResponse */
+        SourceBundleResponse: {
+            /** Archive Bytes */
+            archive_bytes: number;
+            /** File Count */
+            file_count: number;
+            /** Files */
+            files: string[];
+            /** Sha256 */
+            sha256: string;
+            /** Total Bytes */
+            total_bytes: number;
+        };
+        /** SourceCheckRequest */
+        SourceCheckRequest: {
+            /** Recipe Revision Id */
+            recipe_revision_id: string;
+        };
+        /** SourcePolicyFindingResponse */
+        SourcePolicyFindingResponse: {
+            /** Code */
+            code: string;
+            /** Detail */
+            detail: string;
+            /** Line */
+            line: number | null;
+            /** Path */
+            path: string;
+        };
+        /** SourcePolicyResponse */
+        SourcePolicyResponse: {
+            /** Dockerfile */
+            dockerfile: string;
+            /** Findings */
+            findings: components["schemas"]["SourcePolicyFindingResponse"][];
+            /** Passed */
+            passed: boolean;
+            /** Source Bundle Sha256 */
+            source_bundle_sha256: string;
         };
         /** TestReportRequest */
         TestReportRequest: {
@@ -3758,6 +4023,114 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    downloadLocalRecipeSourceBundle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                    "application/vnd.vonk.source-bundle.v1+tar": string;
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Not Found */
+            404: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+        };
+    };
+    uploadLocalRecipeSourceBundle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                sha256: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourceBundleResponse"];
+                };
+            };
+            /** @description Unauthorized */
+            401: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Forbidden */
+            403: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Conflict */
+            409: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
+                };
+            };
+            /** @description Unprocessable Entity */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CatalogProblem"];
                 };
             };
         };
@@ -5992,6 +6365,105 @@ export interface operations {
             };
         };
     };
+    previewRecipeBuild: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BuildPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BuildPlanResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    buildRecipe: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BuildRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    distributeRecipeImage: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ImageDistributionRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["OperationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     previewRecipeInstall: {
         parameters: {
             query?: never;
@@ -6080,6 +6552,72 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OperationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    previewRecipeMapping: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MappingPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MappingPlanResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    createRecipeMapping: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MappingRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MappingResponse"];
                 };
             };
             /** @description Validation Error */
@@ -6247,6 +6785,39 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["OperationResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    checkRecipeBuildSource: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SourceCheckRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SourcePolicyResponse"];
                 };
             };
             /** @description Validation Error */

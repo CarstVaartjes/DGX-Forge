@@ -40,8 +40,9 @@ def test_recipe_catalog_tables_upgrade_and_downgrade(tmp_path: Path) -> None:
         "recipe_import_items",
         "recipe_global_links",
         "recipe_test_reports",
-        "materialized_deployments",
-        "materialized_deployment_nodes",
+        "recipe_builds",
+        "cluster_mappings",
+        "cluster_mapping_nodes",
     }
     assert catalog_tables <= set(inspect(engine).get_table_names())
 
@@ -135,8 +136,9 @@ def test_sqlalchemy_metadata_matches_catalog_and_resolved_rows_are_immutable() -
         "recipe_import_items",
         "recipe_global_links",
         "recipe_test_reports",
-        "materialized_deployments",
-        "materialized_deployment_nodes",
+        "recipe_builds",
+        "cluster_mappings",
+        "cluster_mapping_nodes",
     } <= set(Base.metadata.tables)
     engine = create_engine("sqlite+pysqlite:///:memory:")
     Base.metadata.create_all(engine)

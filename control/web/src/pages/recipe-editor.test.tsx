@@ -2,39 +2,46 @@ import {render, screen} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {RecipeEditorPage} from "./recipe-editor";
 
-test("authors a typed recipe without exposing command or shell fields", async () => {
+test("uploads source first and authors a source-first typed recipe", async () => {
   const created: unknown[] = [];
+  const uploaded: string[] = [];
   const api = {
+    uploadSourceBundle: async (sha256: string) => {
+      uploaded.push(sha256);
+      return {sha256, archive_bytes: 1, total_bytes: 1, file_count: 1, files: ["Dockerfile"]};
+    },
     createCatalogRecipe: async (input: unknown) => {
       created.push(input);
       return {recipe_id: "10000000-0000-4000-8000-000000000001", revision_number: 1};
     },
   };
-  render(<RecipeEditorPage api={api}/>);
+  render(<RecipeEditorPage api={api as any}/>);
   const user = userEvent.setup();
 
   expect(screen.getByRole("heading", {name: "Create local recipe"})).toBeVisible();
-  expect(screen.queryByLabelText(/shell|command/i)).not.toBeInTheDocument();
-  expect(screen.queryByRole("textbox", {name: /json/i})).not.toBeInTheDocument();
+  expect((screen.getByLabelText("Dockerfile") as HTMLTextAreaElement).value).toContain("USER 65532:65532");
 
   await user.type(screen.getByLabelText("Recipe slug"), "my-model");
   await user.type(screen.getByLabelText("Title"), "My model");
   await user.type(screen.getByLabelText("Description"), "A locally authored model recipe.");
   await user.type(screen.getByLabelText("Artifact repository"), "Example/MyModel");
   await user.type(screen.getByLabelText("Artifact revision"), "0123456789abcdef0123456789abcdef01234567");
+  await user.clear(screen.getByLabelText("Artifact bytes"));
   await user.type(screen.getByLabelText("Artifact bytes"), "1000000");
-  await user.type(screen.getByLabelText("Runtime image digest"), `ghcr.io/example/vllm@sha256:${"a".repeat(64)}`);
-  await user.click(screen.getByRole("button", {name: "Save draft"}));
+  await user.click(screen.getByRole("button", {name: "Verify source & save draft"}));
 
+  expect(uploaded).toHaveLength(1);
   expect(created).toHaveLength(1);
   const input = created[0] as {slug: string; document: Record<string, any>};
   expect(input.slug).toBe("my-model");
-  expect(input.document.security.privileged).toBe(false);
-  expect(input.document.security.host_network).toBe(false);
-  expect(input.document.runtime.architecture).toBe("linux/arm64");
+  expect(input.document.runtime.security.privileged).toBe(false);
+  expect(input.document.runtime.security.host_network).toBe(false);
+  expect(input.document.build.platform).toBe("linux/arm64");
   expect(input.document.runtime.interface).toBe("vonk.runtime.v1");
-  expect(input.document.security.mounts).toHaveLength(2);
-  expect(await screen.findByRole("status")).toHaveTextContent("Draft saved as revision 1");
+  expect(input.document.runtime).not.toHaveProperty("image");
+  expect(input.document.build.context.sha256).toBe(uploaded[0]);
+  expect(input.document.deployment_profiles[0].node_count).toBe(1);
+  expect(await screen.findByRole("status")).toHaveTextContent("Source verified and draft saved as revision 1");
 });
 
 test("attaches local test evidence and exports for an exact publisher namespace", async () => {

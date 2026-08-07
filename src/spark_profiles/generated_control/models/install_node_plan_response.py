@@ -34,9 +34,11 @@ class InstallNodePlanResponse:
             free_bytes (Union[None, int]):
             inventory_observed_at (Union[None, datetime.datetime]):
             node_id (str):
+            rank (int):
             required_bytes (int):
             required_download_bytes (int):
             reused_bytes (int):
+            role (str):
             warnings (list['PlanReason']):
      """
 
@@ -48,9 +50,11 @@ class InstallNodePlanResponse:
     free_bytes: Union[None, int]
     inventory_observed_at: Union[None, datetime.datetime]
     node_id: str
+    rank: int
     required_bytes: int
     required_download_bytes: int
     reused_bytes: int
+    role: str
     warnings: list['PlanReason']
 
 
@@ -86,11 +90,15 @@ class InstallNodePlanResponse:
 
         node_id = self.node_id
 
+        rank = self.rank
+
         required_bytes = self.required_bytes
 
         required_download_bytes = self.required_download_bytes
 
         reused_bytes = self.reused_bytes
+
+        role = self.role
 
         warnings = []
         for warnings_item_data in self.warnings:
@@ -111,9 +119,11 @@ class InstallNodePlanResponse:
             "free_bytes": free_bytes,
             "inventory_observed_at": inventory_observed_at,
             "node_id": node_id,
+            "rank": rank,
             "required_bytes": required_bytes,
             "required_download_bytes": required_download_bytes,
             "reused_bytes": reused_bytes,
+            "role": role,
             "warnings": warnings,
         })
 
@@ -177,11 +187,15 @@ class InstallNodePlanResponse:
 
         node_id = d.pop("node_id")
 
+        rank = d.pop("rank")
+
         required_bytes = d.pop("required_bytes")
 
         required_download_bytes = d.pop("required_download_bytes")
 
         reused_bytes = d.pop("reused_bytes")
+
+        role = d.pop("role")
 
         warnings = []
         _warnings = d.pop("warnings")
@@ -202,9 +216,11 @@ class InstallNodePlanResponse:
             free_bytes=free_bytes,
             inventory_observed_at=inventory_observed_at,
             node_id=node_id,
+            rank=rank,
             required_bytes=required_bytes,
             required_download_bytes=required_download_bytes,
             reused_bytes=reused_bytes,
+            role=role,
             warnings=warnings,
         )
 

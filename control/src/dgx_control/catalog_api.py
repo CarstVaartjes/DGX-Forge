@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import io
 import json
+import tempfile
 from collections.abc import Mapping
 from typing import Any, Literal, Protocol
 
 from fastapi import FastAPI, HTTPException, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, Response
 
 from .audit import AuditRecord
 from .auth import Actor
@@ -16,6 +18,7 @@ from .catalog_service import (
     CatalogConflict,
     CatalogError,
     CatalogService,
+    CatalogValidationError,
     RecipeDraftInput,
     RecipeRevisionView,
     RecipeSummary,
@@ -34,6 +37,14 @@ CATALOG_OPERATION_IDS = {
     ("put", "/api/v1/catalog/recipes/{recipe_id}/draft"): "updateLocalRecipeDraft",
     ("post", "/api/v1/catalog/recipes/{recipe_id}/resolve"): "resolveLocalRecipe",
     ("post", "/api/v1/catalog/recipes/{recipe_id}/fork"): "forkLocalRecipe",
+    (
+        "get",
+        "/api/v1/catalog/source-bundles/{sha256}",
+    ): "downloadLocalRecipeSourceBundle",
+    (
+        "put",
+        "/api/v1/catalog/source-bundles/{sha256}",
+    ): "uploadLocalRecipeSourceBundle",
     ("post", "/api/v1/catalog/imports/global/preview"): "previewGlobalRecipeImport",
     ("post", "/api/v1/catalog/imports/global"): "importGlobalRecipe",
     (
@@ -53,6 +64,7 @@ class AuditSink(Protocol):
 
 class GlobalCatalogReader(Protocol):
     def fetch(self, uri: str) -> GlobalRecipeRevision: ...
+    def fetch_source_bundle(self, sha256: str) -> bytes: ...
 
 
 class StrictModel(BaseModel):
@@ -140,6 +152,14 @@ class RecipeRevisionResponse(RecipeSummaryResponse):
     document: dict[str, object]
     created_by: str = Field(min_length=1, max_length=200)
     created_at: str
+
+
+class SourceBundleResponse(StrictModel):
+    sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    archive_bytes: int = Field(ge=1)
+    total_bytes: int = Field(ge=0)
+    file_count: int = Field(ge=1, le=4096)
+    files: list[str] = Field(min_length=1, max_length=4096)
 
 
 def _problem(request: Request, error: CatalogError) -> JSONResponse:
@@ -231,6 +251,99 @@ def install_catalog_routes(
                 "global.unavailable", "global catalog is not configured"
             )
         return global_catalog.fetch(uri)
+
+    @app.get(
+        "/api/v1/catalog/source-bundles/{sha256}",
+        responses={
+            200: {
+                "content": {
+                    "application/vnd.vonk.source-bundle.v1+tar": {
+                        "schema": {"type": "string", "format": "binary"}
+                    }
+                }
+            },
+            401: {"model": CatalogProblem},
+            404: {"model": CatalogProblem},
+            422: {"model": CatalogProblem},
+        },
+        operation_id="downloadLocalRecipeSourceBundle",
+    )
+    def download_source_bundle(
+        request: Request,
+        sha256: str = Path(pattern=r"^[0-9a-f]{64}$"),
+        _actor: Actor = authenticated,
+    ):
+        try:
+            archive = catalog().read_source_bundle(sha256)
+        except KeyError:
+            raise HTTPException(
+                status_code=404, detail="source bundle not found"
+            ) from None
+        except CatalogError as error:
+            return _problem(request, error)
+        return Response(
+            archive,
+            media_type="application/vnd.vonk.source-bundle.v1+tar",
+            headers={
+                "Cache-Control": "private, max-age=31536000, immutable",
+                "Content-Disposition": f'attachment; filename="vonk-source-{sha256}.tar"',
+                "ETag": f'"sha256:{sha256}"',
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
+
+    @app.put(
+        "/api/v1/catalog/source-bundles/{sha256}",
+        response_model=SourceBundleResponse,
+        responses={
+            401: {"model": CatalogProblem},
+            403: {"model": CatalogProblem},
+            409: {"model": CatalogProblem},
+            422: {"model": CatalogProblem},
+        },
+        operation_id="uploadLocalRecipeSourceBundle",
+    )
+    async def upload_source_bundle(
+        request: Request,
+        sha256: str = Path(pattern=r"^[0-9a-f]{64}$"),
+        actor: Actor = authenticated,
+    ):
+        administrator(actor)
+        maximum = 64 * 1024 * 1024
+        received = 0
+        with tempfile.SpooledTemporaryFile(max_size=1024 * 1024, mode="w+b") as payload:
+            async for chunk in request.stream():
+                received += len(chunk)
+                if received > maximum:
+                    return _problem(
+                        request,
+                        CatalogError(
+                            "bundle.archive_too_large",
+                            "source bundle is too large",
+                        ),
+                    )
+                payload.write(chunk)
+            payload.seek(0)
+            try:
+                result = catalog().store_source_bundle(sha256, payload, actor.subject)
+            except CatalogError as error:
+                return _problem(request, error)
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                actor.subject,
+                "catalog.source_bundle.upload",
+                None,
+                (sha256, str(result.archive_bytes)),
+            )
+        )
+        return {
+            "sha256": result.sha256,
+            "archive_bytes": result.archive_bytes,
+            "total_bytes": result.total_bytes,
+            "file_count": result.file_count,
+            "files": list(result.files),
+        }
 
     def global_problem(request: Request, error: GlobalCatalogError) -> JSONResponse:
         status_code = (
@@ -498,9 +611,26 @@ def install_catalog_routes(
                 ),
             )
         try:
+            build = fetched.document.get("build")
+            context = build.get("context") if isinstance(build, dict) else None
+            source_sha256 = context.get("sha256") if isinstance(context, dict) else None
+            if not isinstance(source_sha256, str):
+                raise CatalogValidationError(
+                    "global.source_invalid", "global recipe source identity is invalid"
+                )
+            source = (
+                global_catalog.fetch_source_bundle(source_sha256)
+                if global_catalog is not None
+                else b""
+            )
+            catalog().store_source_bundle(
+                source_sha256, io.BytesIO(source), actor.subject
+            )
             result = catalog().import_global(actor.subject, fetched)
         except CatalogError as error:
             return _problem(request, error)
+        except GlobalCatalogError as error:
+            return global_problem(request, error)
         audits.append(
             AuditRecord(
                 request.state.request_id,
