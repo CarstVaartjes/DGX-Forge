@@ -138,7 +138,7 @@ def test_host_updater_has_a_separate_minimal_provenance_attestation_job() -> Non
     assert "attestations: write" not in builder
     assert "packages: write" not in attestor
     assert "permissions:\n      contents: read\n      id-token: write\n      attestations: write" in attestor
-    assert "actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26" in attestor
+    assert "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6" in attestor
     assert "subject-path: release-output/dgx-forge-host-updater.tar" in attestor
     assert "attest-host-updater" in release.split("needs:", 1)[1].splitlines()[0]
 
