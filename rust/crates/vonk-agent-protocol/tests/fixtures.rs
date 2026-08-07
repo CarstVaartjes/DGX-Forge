@@ -8,6 +8,14 @@ use vonk_agent_protocol::{
     hex_sha256, parse_strict,
 };
 
+#[test]
+fn sha256_digest_is_lowercase_hex() {
+    assert_eq!(
+        hex_sha256(b"abc"),
+        "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
+}
+
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../agent_protocol/fixtures")
 }
