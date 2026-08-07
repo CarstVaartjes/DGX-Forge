@@ -215,7 +215,7 @@ def test_all_container_publications_are_serialized_without_cancellation() -> Non
 def test_publisher_uses_pinned_docker_actions_and_exact_artifacts() -> None:
     text = workflow()
     for action in (
-        "docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f",
+        "docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c",
         "docker/login-action@dbcb813823bdd20940b903addbd779551569679f",
         "docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a",
     ):
