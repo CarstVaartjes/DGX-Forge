@@ -764,6 +764,14 @@ def test_helper_cli_requires_exact_systemd_socket_activation(monkeypatch) -> Non
         main(["--listen-fd=3"])
 
 
+def test_helper_cli_help_uses_the_canonical_program_name(capsys) -> None:
+    with pytest.raises(SystemExit) as exited:
+        main(["--help"])
+
+    assert exited.value.code == 0
+    assert capsys.readouterr().out.startswith("usage: vonk-forge-package-helper ")
+
+
 def test_helper_cli_rejects_same_grant_and_receipt_public_key(monkeypatch) -> None:
     import vonk_agent.package_helper as helper_module
 
@@ -874,8 +882,10 @@ def test_helper_cli_builds_only_fixed_installed_boundaries_and_fd3(
 
 def test_package_helper_units_define_one_persistent_bounded_authority() -> None:
     root = Path(__file__).parents[1] / "systemd"
+    agent_unit = ConfigParser(interpolation=None, strict=False)
     socket_unit = ConfigParser(interpolation=None, strict=True)
     service_unit = ConfigParser(interpolation=None, strict=True)
+    assert agent_unit.read(root / "vonk-forge-agent.service")
     assert socket_unit.read(root / "vonk-forge-package-helper.socket")
     assert service_unit.read(root / "vonk-forge-package-helper.service")
 
@@ -896,6 +906,8 @@ def test_package_helper_units_define_one_persistent_bounded_authority() -> None:
     assert service_unit["Unit"]["After"] == "vonk-forge-agent-supervisor.service"
     assert service_unit["Service"]["NoNewPrivileges"] == "yes"
     assert service_unit["Service"]["PrivateTmp"] == "yes"
+    assert agent_unit["Service"]["RuntimeDirectory"] == "vonk-forge-agent"
+    assert "RuntimeDirectory" not in service_unit["Service"]
     capabilities = set(service_unit["Service"]["CapabilityBoundingSet"].split())
     assert capabilities == {"CAP_CHOWN"}
 

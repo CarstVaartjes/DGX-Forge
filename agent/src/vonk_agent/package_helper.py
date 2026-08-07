@@ -1473,7 +1473,7 @@ def main(argv: list[str] | None = None) -> int:
     """Run the helper only when launched by systemd socket activation."""
     import argparse
 
-    parser = argparse.ArgumentParser(prog="dgx-package-helper")
+    parser = argparse.ArgumentParser(prog="vonk-forge-package-helper")
     parser.add_argument("--listen-fd", type=int, default=3)
     args = parser.parse_args(argv)
     if (

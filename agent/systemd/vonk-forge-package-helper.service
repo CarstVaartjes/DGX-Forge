@@ -39,6 +39,5 @@ CapabilityBoundingSet=CAP_CHOWN
 AmbientCapabilities=
 UMask=0077
 TimeoutStartSec=95s
-RuntimeDirectory=vonk-forge-agent
 StateDirectory=vonk-forge-package-helper
 ReadWritePaths=/var/lib/vonk-forge-package-helper
