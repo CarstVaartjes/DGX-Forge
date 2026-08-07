@@ -375,7 +375,7 @@ services:
       control-api: {condition: service_healthy}
 
   grafana:
-    image: ${GRAFANA_IMAGE:-grafana/grafana:13.0.2@sha256:5dad0df181cb644a14e13617b913b261a54f7d4fd4510721dba420929f35bea2}
+    image: ${GRAFANA_IMAGE:-grafana/grafana:13.1.2@sha256:d177053ab62253815f130d81504f77063baf5fd4ca93299d6048453bd31e047a}
     restart: unless-stopped
     logging: *bounded-logging
     read_only: true
