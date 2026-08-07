@@ -76,7 +76,7 @@ class RunAdmissionService:
         fresh=self.plan_run(plan.installation_id,tuple(Placement(node.node_id,node.rank,node.role) for node in plan.nodes),now=now)
         if not fresh.allowed or fresh.plan_digest!=plan.plan_digest: raise RunPlanConflict("run plan is stale or blocked")
         document={"schema_version":1,"installation_id":plan.installation_id,"recipe_revision_id":plan.recipe_revision_id,"plan_digest":plan.plan_digest,"nodes":[{**asdict(node),"inventory_observed_at":node.inventory_observed_at.isoformat() if node.inventory_observed_at else None} for node in plan.nodes]}
-        run=RecipeRun(installation_id=plan.installation_id,alias=alias,plan_digest=plan.plan_digest,plan=document,state="planned",actor=actor,created_at=now,updated_at=now)
+        run=RecipeRun(installation_id=plan.installation_id,alias=alias,plan_digest=plan.plan_digest,plan=document,state="planned",route_state="withdrawn",actor=actor,created_at=now,updated_at=now)
         with self._sessions.begin() as session:
             for node in plan.nodes:
                 if session.scalar(select(AgentNode).where(AgentNode.node_id==node.node_id).with_for_update()) is None: raise RunPlanConflict("run node disappeared")

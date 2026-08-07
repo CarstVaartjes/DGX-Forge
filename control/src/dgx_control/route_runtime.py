@@ -842,6 +842,48 @@ class AtomicRouteBundlePublisher:
             self._require_supervisor_ack(marker)
             return marker
 
+    def publish_compiled(
+        self,
+        *,
+        authority_id: str,
+        plan_digest: str,
+        evidence_set_digest: str,
+        routes: bytes,
+        litellm: bytes,
+        expires_at: datetime,
+        state: str = "published",
+    ) -> ActivationMarker:
+        """Activate a complete controller-validated database recipe bundle.
+
+        This is the Git-independent counterpart of ``publish``. Callers must
+        compile typed recipe state first; the same lock, validators, immutable
+        generation directory, atomic marker, and supervisor acknowledgement
+        remain mandatory.
+        """
+        self._identity(authority_id, plan_digest, evidence_set_digest)
+        if state not in {"published", "maintenance"}:
+            raise RouteRuntimeError("compiled route state is invalid")
+        with self._locked():
+            self._require_update_boundary(None)
+            issued, expires = self._lease(expires_at)
+            current = self._read_marker(
+                optional=True, verify_files=True, verify_lease=False
+            )
+            generation = (current.generation if current is not None else 0) + 1
+            marker = self._activate(
+                generation=generation,
+                state=state,
+                reconciliation_id=authority_id,
+                plan_digest=plan_digest,
+                evidence_set_digest=evidence_set_digest,
+                routes=routes,
+                litellm=litellm,
+                issued=issued,
+                expires=expires,
+            )
+            self._require_supervisor_ack(marker)
+            return marker
+
     def withdraw(
         self,
         *,

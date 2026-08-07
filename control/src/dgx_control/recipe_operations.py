@@ -226,6 +226,8 @@ class RecipeOperationService:
             run = session.get(RecipeRun, run_id)
             assert run is not None
             run.state = "stopping"
+            run.route_state = "withdrawn"
+            run.route_error = None
             run.updated_at = self._clock()
         return self._queue(
             kind="recipe.stop",
@@ -499,6 +501,8 @@ class RecipeOperationService:
                 run = session.get(RecipeRun, owner_id)
                 assert run is not None
                 run.state = "failed" if failed else "running"
+                run.route_state = "failed" if failed else "pending"
+                run.route_error = "one or more ranks failed to start" if failed else None
                 run.updated_at = now
             elif job.kind == "recipe.stop":
                 run = session.get(RecipeRun, owner_id)

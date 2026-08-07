@@ -1615,6 +1615,7 @@ def production_app() -> FastAPI:
         load_reconciliation_authority_input,
     )
     from .audit import SqlAuditStore
+    from .artifact_sizes import DeclaredArtifactSizeResolver
     from .code_host import RepositoryCodeHost
     from .catalog_seeds import seed_standard_families
     from .dashboard import DashboardService
@@ -1630,6 +1631,7 @@ def production_app() -> FastAPI:
     from .logging import JobLogStore
     from .metrics import MetricsRegistry, OperationalMetricsCollector
     from .models import Job
+    from .install_admission import InstallAdmissionService
     from .offline import OnlineLock
     from .operation_api import durable_operation_services
     from .orchestration import ReconciliationOrchestrator
@@ -1639,6 +1641,10 @@ def production_app() -> FastAPI:
     from .proposals import ProposalService
     from .reconcile import ChangeService, Reconciler
     from .repository import RepositoryService
+    from .run_admission import RunAdmissionService
+    from .recipe_routes import AtomicRecipeRoutePublisher, RecipeRouteService
+    from .route_runtime import AtomicRouteBundlePublisher, FileSupervisorAcknowledger
+    from .presence import ManagementAddressPolicy
     from .settings import GenerationStartupSettings, Settings
     from .update_admin import (
         DurableUpdateGrantRefresher,
@@ -1854,6 +1860,41 @@ def production_app() -> FastAPI:
             settings.repository_path
         ).deployments,
     )
+    recipe_route_runtime = AtomicRouteBundlePublisher(
+        Path("/routes"),
+        management_policy=ManagementAddressPolicy.parse(
+            settings.management_cidrs,
+            forbidden_cidrs=settings.direct_fabric_cidrs,
+        ),
+        clock=clock,
+        maximum_lease_seconds=300,
+        await_supervisor_ack=FileSupervisorAcknowledger(
+            Path("/supervisor/ack.json"), clock=clock
+        ),
+    )
+    recipe_routes = RecipeRouteService(
+        sessions,
+        publisher=AtomicRecipeRoutePublisher(recipe_route_runtime, clock=clock),
+        clock=clock,
+        maximum_age_seconds=300,
+    )
+    recipe_operations = RecipeOperationService(
+        sessions,
+        install_admission=InstallAdmissionService(
+            sessions,
+            sizes=DeclaredArtifactSizeResolver(),
+            inventory_max_age=300,
+            disk_floor_bytes=10_000_000_000,
+        ),
+        run_admission=RunAdmissionService(
+            sessions,
+            inventory_max_age=300,
+            memory_floor_bytes=4_000_000_000,
+        ),
+        agent_jobs=agent_services.operations,
+        clock=clock,
+        route_withdrawer=lambda run_id: recipe_routes.withdraw_run(run_id),
+    )
     reconciliation_cancellations = bind_reconciliation_result_consumer(
         sessions,
         operations=agent_services.operations,
@@ -1861,6 +1902,7 @@ def production_app() -> FastAPI:
         clock=clock,
         commit_eligible=commit_eligible,
         current_commit=current_commit,
+        additional_result_consumer=recipe_operations.consume_agent_result,
     )
     def refresh_metrics() -> None:
         operational_metrics.refresh()
@@ -1906,6 +1948,7 @@ def production_app() -> FastAPI:
         packages=PackageApiServices.from_object(package_services),
         catalog=CatalogService(sessions, clock=clock),
         sparkrun=SparkRunWorkflow(sessions, clock=clock),
+        recipe_operations=recipe_operations,
     )
     install_selected_generation_readiness(app, generation_readiness)
     web_root = Path(__file__).resolve().parent / "web"

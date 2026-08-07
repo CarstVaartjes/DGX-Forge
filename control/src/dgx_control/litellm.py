@@ -53,7 +53,8 @@ class LiteLlmPublisher:
         self._validate = validate
         self._apply = apply
 
-    def render(self, routes: RouteState, policy: LiteLlmPolicy) -> bytes:
+    @staticmethod
+    def render(routes: RouteState, policy: LiteLlmPolicy) -> bytes:
         if routes.state != "published" or not routes.aliases:
             raise LiteLlmPolicyError("LiteLLM models require a published route snapshot")
         if any(not isinstance(value, str) or not value for value in routes.aliases.values()):
@@ -88,7 +89,7 @@ class LiteLlmPublisher:
         if len({item.workload for item in deployments}) != len(deployments):
             raise LiteLlmPolicyError("Hermes deployment workloads must be unique")
         for deployment in deployments:
-            self._validate_hermes_deployment(deployment)
+            LiteLlmPublisher._validate_hermes_deployment(deployment)
             model_list.append({
                 "model_name": deployment.model_name,
                 "litellm_params": {
@@ -195,6 +196,17 @@ class LiteLlmPublisher:
 
     def publish(self, routes: RouteState, policy: LiteLlmPolicy) -> LiteLlmGeneration:
         content = self.render(routes, policy)
+        return self._publish_content(content, routes.digest)
+
+    def publish_empty(self, route_digest: str) -> LiteLlmGeneration:
+        """Atomically withdraw every model while retaining generation history."""
+        if re.fullmatch(r"[0-9a-f]{64}", route_digest) is None:
+            raise LiteLlmPolicyError("empty LiteLLM route digest is invalid")
+        return self._publish_content(self.render_empty(), route_digest)
+
+    def _publish_content(
+        self, content: bytes, route_digest: str
+    ) -> LiteLlmGeneration:
         if self._validate(content) is not True:
             raise LiteLlmPolicyError("LiteLLM candidate failed validation")
         current = self.active(optional=True)
@@ -212,7 +224,7 @@ class LiteLlmPublisher:
             raise
         except Exception as error:
             raise LiteLlmPolicyError("LiteLLM candidate apply failed; previous generation retained") from error
-        generation = LiteLlmGeneration(number, routes.digest, digest, str(target))
+        generation = LiteLlmGeneration(number, route_digest, digest, str(target))
         pointer = (json.dumps(generation.__dict__, sort_keys=True, separators=(",", ":")) + "\n").encode()
         descriptor, temporary_raw = tempfile.mkstemp(prefix=".active-", dir=self._root)
         temporary = Path(temporary_raw)
