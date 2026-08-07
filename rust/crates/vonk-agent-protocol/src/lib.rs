@@ -376,7 +376,10 @@ pub fn canonical_json<T: Serialize>(value: &T) -> Result<Vec<u8>, ProtocolError>
 }
 
 pub fn hex_sha256(value: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(value))
+    Sha256::digest(value)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn sort_value(value: Value) -> Value {

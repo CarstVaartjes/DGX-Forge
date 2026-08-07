@@ -239,5 +239,5 @@ fn sha256_file(path: &Path) -> Result<String, std::io::Error> {
         }
         digest.update(&buffer[..read]);
     }
-    Ok(format!("{:x}", digest.finalize()))
+    Ok(hex::encode(digest.finalize()))
 }
