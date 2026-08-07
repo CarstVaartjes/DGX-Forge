@@ -35,6 +35,7 @@ LiteLLM publishes only routes acknowledged by the control plane.
 
 - [Architecture overview](architecture-overview.md)
 - [Testing and CI](testing-and-ci.md)
+- [Identity verification policy](identity-verifier.md)
 - [Control-plane bootstrap](runbooks/control-plane-bootstrap.md)
 - [Node onboarding and health](runbooks/node-onboarding.md)
 - [Recipe and workload operations](runbooks/workload-packages.md)
