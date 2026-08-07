@@ -86,6 +86,39 @@ def test_identity_verifier_ignores_cache_build_and_binary_artifacts(tmp_path: Pa
     }
 
 
+def test_identity_verifier_uses_git_visibility_for_checkout_roots(tmp_path: Path) -> None:
+    legacy = _legacy_token()
+    subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
+    (tmp_path / ".gitignore").write_text("scratch/\n", encoding="utf-8")
+
+    tracked = tmp_path / "owned" / "tracked.txt"
+    tracked.parent.mkdir()
+    tracked.write_text(legacy, encoding="utf-8")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
+
+    visible = tmp_path / "notes" / f"{legacy}-visible.txt"
+    visible.parent.mkdir()
+    visible.write_text("clean\n", encoding="utf-8")
+    work_record = tmp_path / ".superpowers" / f"{legacy}-visible.txt"
+    work_record.parent.mkdir()
+    work_record.write_text("clean\n", encoding="utf-8")
+    sibling_checkout = tmp_path / ".worktrees" / f"{legacy}-visible.txt"
+    sibling_checkout.parent.mkdir()
+    sibling_checkout.write_text("clean\n", encoding="utf-8")
+    ignored = tmp_path / "scratch" / f"{legacy}-ignored.txt"
+    ignored.parent.mkdir()
+    ignored.write_text(legacy, encoding="utf-8")
+
+    result = verify(tmp_path)
+
+    paths = {match["path"] for match in result["owned_matches"]}
+    assert str(tracked.relative_to(tmp_path)) in paths
+    assert str(visible.relative_to(tmp_path)) in paths
+    assert str(work_record.relative_to(tmp_path)) in paths
+    assert str(sibling_checkout.relative_to(tmp_path)) in paths
+    assert not any(path.startswith("scratch/") for path in paths)
+
+
 def test_identity_cli_emits_sorted_json_and_nonzero_for_owned_matches(tmp_path: Path) -> None:
     legacy = _legacy_token()
     (tmp_path / "README.md").write_text(legacy, encoding="utf-8")

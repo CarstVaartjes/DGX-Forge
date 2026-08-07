@@ -1,10 +1,10 @@
 """Deterministically report legacy identity tokens in a source tree.
 
-The inventory omits repository metadata, agent work records, generated
-cache/build directories, and binary or encoded artifacts.  It scans names and
-UTF-8 text only for regular source files; binary or encoded artifact names are
-omitted too.  Declared external evidence roots are scanned but reported
-separately, so they never fail the owned-source guard.
+Git checkouts scan tracked and untracked files that are not ignored. Other
+roots omit repository metadata and generated cache/build directories. Both
+modes scan names and UTF-8 text only for regular source files; binary or
+encoded artifact names are omitted too. Declared external evidence roots are
+scanned but reported separately, so they never fail the owned-source guard.
 """
 
 from __future__ import annotations
@@ -13,6 +13,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -24,10 +25,8 @@ _EXTERNAL_EVIDENCE_ROOTS = (
 )
 _SKIPPED_DIRECTORY_NAMES = {
     ".git",
-    ".worktrees",
     "__pycache__",
     "node_modules",
-    ".superpowers",
 }
 _GENERATED_DIRECTORY = re.compile(
     r"(?:^|[._-])(?:cache|caches|build|dist|out|target|coverage|htmlcov|venv|virtualenv|tox)(?:$|[._-])",
@@ -90,21 +89,11 @@ def verify(root: Path) -> dict[str, object]:
     owned_matches: list[dict[str, object]] = []
     external_matches: list[dict[str, object]] = []
 
-    for directory, names, files in os.walk(root, topdown=True, followlinks=False):
-        names[:] = sorted(name for name in names if not _is_skipped_directory(name))
-        for name in names:
-            relative_path = Path(directory, name).relative_to(root)
-            _append_matches(relative_path, _path_matches(relative_path), owned_matches, external_matches)
-        for name in sorted(files):
-            path = Path(directory, name)
-            if path.is_symlink() or not path.is_file():
-                continue
-            text = _read_text(path)
-            if text is None:
-                continue
-            relative_path = path.relative_to(root)
-            _append_matches(relative_path, _path_matches(relative_path), owned_matches, external_matches)
-            _append_matches(relative_path, _matches(relative_path, text), owned_matches, external_matches)
+    git_paths = _git_visible_paths(root)
+    if git_paths is not None:
+        _scan_git_paths(root, git_paths, owned_matches, external_matches)
+    else:
+        _scan_directory(root, owned_matches, external_matches)
 
     owned_matches.sort(key=_match_key)
     external_matches.sort(key=_match_key)
@@ -113,6 +102,87 @@ def verify(root: Path) -> dict[str, object]:
         "owned_matches": owned_matches,
         "status": "failed" if owned_matches else "passed",
     }
+
+
+def _git_visible_paths(root: Path) -> list[Path] | None:
+    try:
+        completed = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(root),
+                "ls-files",
+                "--cached",
+                "--others",
+                "--exclude-standard",
+                "-z",
+            ],
+            check=False,
+            stderr=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+        )
+    except OSError:
+        return None
+    if completed.returncode != 0:
+        return None
+    return sorted(
+        {Path(os.fsdecode(raw_path)) for raw_path in completed.stdout.split(b"\0") if raw_path},
+        key=lambda path: path.as_posix(),
+    )
+
+
+def _scan_git_paths(
+    root: Path,
+    paths: list[Path],
+    owned_matches: list[dict[str, object]],
+    external_matches: list[dict[str, object]],
+) -> None:
+    directories = {
+        parent
+        for relative_path in paths
+        for parent in relative_path.parents
+        if parent != Path(".")
+    }
+    for relative_path in sorted(directories, key=lambda path: path.as_posix()):
+        _append_matches(
+            relative_path,
+            _path_matches(relative_path),
+            owned_matches,
+            external_matches,
+        )
+    for relative_path in paths:
+        _scan_file(root / relative_path, relative_path, owned_matches, external_matches)
+
+
+def _scan_directory(
+    root: Path,
+    owned_matches: list[dict[str, object]],
+    external_matches: list[dict[str, object]],
+) -> None:
+    for directory, names, files in os.walk(root, topdown=True, followlinks=False):
+        names[:] = sorted(name for name in names if not _is_skipped_directory(name))
+        for name in names:
+            relative_path = Path(directory, name).relative_to(root)
+            _append_matches(relative_path, _path_matches(relative_path), owned_matches, external_matches)
+        for name in sorted(files):
+            path = Path(directory, name)
+            relative_path = path.relative_to(root)
+            _scan_file(path, relative_path, owned_matches, external_matches)
+
+
+def _scan_file(
+    path: Path,
+    relative_path: Path,
+    owned_matches: list[dict[str, object]],
+    external_matches: list[dict[str, object]],
+) -> None:
+    if path.is_symlink() or not path.is_file():
+        return
+    text = _read_text(path)
+    if text is None:
+        return
+    _append_matches(relative_path, _path_matches(relative_path), owned_matches, external_matches)
+    _append_matches(relative_path, _matches(relative_path, text), owned_matches, external_matches)
 
 
 def _read_text(path: Path) -> str | None:
