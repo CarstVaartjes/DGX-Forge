@@ -52,6 +52,34 @@ jobs:
             uvx --from ruff==0.16.1 ruff check .
           fi
 
+  rust:
+    name: Rust agent contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install uv and Python
+        uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          version: "0.12.1"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup set profile minimal
+          rustup toolchain install 1.97.1 --component clippy,rustfmt
+      - name: Verify Rust formatting
+        run: cargo fmt --all --check
+      - name: Lint Rust workspace
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Test Rust workspace
+        run: cargo test --workspace --locked
+      - name: Verify Python protocol parity
+        run: uv run --project agent_protocol --frozen pytest -q agent_protocol/tests/test_rust_fixtures.py
+
   generated-clients:
     name: Generated control clients
     runs-on: ubuntu-latest
