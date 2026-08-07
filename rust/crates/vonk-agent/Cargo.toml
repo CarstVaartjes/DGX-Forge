@@ -6,10 +6,12 @@ license.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+chrono.workspace = true
 clap.workspace = true
 hex.workspace = true
 rcgen.workspace = true
 reqwest.workspace = true
+rusqlite.workspace = true
 rustls-pemfile.workspace = true
 rustix.workspace = true
 serde.workspace = true
@@ -19,6 +21,7 @@ thiserror.workspace = true
 tokio.workspace = true
 toml.workspace = true
 url.workspace = true
+uuid.workspace = true
 vonk-agent-protocol = { path = "../vonk-agent-protocol" }
 x509-parser.workspace = true
 

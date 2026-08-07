@@ -1,0 +1,317 @@
+use std::{
+    fs::{self, OpenOptions},
+    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    path::Path,
+    time::Duration,
+};
+
+use chrono::{DateTime, Utc};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use serde_json::{Value, json};
+use thiserror::Error;
+use vonk_agent_protocol::{AgentClaim, AgentResult, canonical_json, parse_strict};
+
+#[derive(Debug, Error)]
+pub enum StateError {
+    #[error("durable agent state failed")]
+    Database(#[from] rusqlite::Error),
+    #[error("durable result is invalid")]
+    Protocol(#[from] vonk_agent_protocol::ProtocolError),
+    #[error("state file is unsafe")]
+    Io(#[from] std::io::Error),
+    #[error("claim is bound to another node")]
+    Identity,
+    #[error("claim deadline has elapsed")]
+    Expired,
+    #[error("claim attempt or fence is stale")]
+    Stale,
+    #[error("claim is already executing")]
+    Busy,
+    #[error("result state is invalid")]
+    ResultState,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum BeginDecision {
+    Execute,
+    Replay(AgentResult),
+}
+
+pub struct StateStore {
+    connection: Connection,
+    node_id: String,
+}
+
+struct StoredOperation {
+    attempt: u32,
+    fence: String,
+    state: String,
+    result: Option<Vec<u8>>,
+}
+
+impl StateStore {
+    pub fn open(path: &Path, node_id: &str) -> Result<Self, StateError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if !path.exists() {
+            OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)?;
+        }
+        let metadata = fs::symlink_metadata(path)?;
+        if !metadata.file_type().is_file() || metadata.file_type().is_symlink() {
+            return Err(std::io::Error::other("state database path is unsafe").into());
+        }
+        fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
+        let connection = Connection::open(path)?;
+        connection.execute_batch(
+            "PRAGMA journal_mode=WAL;
+             PRAGMA synchronous=FULL;
+             PRAGMA foreign_keys=ON;
+             PRAGMA trusted_schema=OFF;
+             CREATE TABLE IF NOT EXISTS metadata (
+               key TEXT PRIMARY KEY NOT NULL,
+               value TEXT NOT NULL
+             ) STRICT;
+             CREATE TABLE IF NOT EXISTS operations (
+               operation_id TEXT PRIMARY KEY NOT NULL,
+               job_id TEXT NOT NULL,
+               node_id TEXT NOT NULL,
+               attempt INTEGER NOT NULL CHECK (attempt > 0),
+               fence TEXT NOT NULL,
+               deadline TEXT NOT NULL,
+               state TEXT NOT NULL CHECK (state IN ('running','completed')),
+               result_json BLOB,
+               result_acknowledged INTEGER NOT NULL DEFAULT 0 CHECK (result_acknowledged IN (0,1)),
+               CHECK ((state = 'running' AND result_json IS NULL) OR (state = 'completed' AND result_json IS NOT NULL))
+             ) STRICT;",
+        )?;
+        let stored: Option<String> = connection
+            .query_row(
+                "SELECT value FROM metadata WHERE key='node_id'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match stored {
+            Some(stored) if stored != node_id => return Err(StateError::Identity),
+            None => {
+                connection.execute(
+                    "INSERT INTO metadata(key, value) VALUES ('node_id', ?1)",
+                    [node_id],
+                )?;
+            }
+            Some(_) => {}
+        }
+        Ok(Self {
+            connection,
+            node_id: node_id.to_owned(),
+        })
+    }
+
+    pub fn begin(
+        &mut self,
+        claim: &AgentClaim,
+        now: DateTime<Utc>,
+    ) -> Result<BeginDecision, StateError> {
+        claim.validate()?;
+        if claim.node_id != self.node_id {
+            return Err(StateError::Identity);
+        }
+        if claim.deadline.with_timezone(&Utc) <= now {
+            return Err(StateError::Expired);
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing = transaction
+            .query_row(
+                "SELECT attempt, fence, state, result_json FROM operations WHERE operation_id=?1",
+                [claim.operation_id.to_string()],
+                |row| {
+                    Ok(StoredOperation {
+                        attempt: row.get(0)?,
+                        fence: row.get(1)?,
+                        state: row.get(2)?,
+                        result: row.get(3)?,
+                    })
+                },
+            )
+            .optional()?;
+        let decision = match existing {
+            None => {
+                transaction.execute(
+                    "INSERT INTO operations(operation_id,job_id,node_id,attempt,fence,deadline,state)
+                     VALUES (?1,?2,?3,?4,?5,?6,'running')",
+                    params![
+                        claim.operation_id.to_string(),
+                        claim.job_id.to_string(),
+                        claim.node_id,
+                        claim.attempt,
+                        claim.fence.to_string(),
+                        claim.deadline.to_rfc3339(),
+                    ],
+                )?;
+                BeginDecision::Execute
+            }
+            Some(stored) if claim.attempt < stored.attempt => return Err(StateError::Stale),
+            Some(stored) if claim.attempt == stored.attempt => {
+                if stored.fence != claim.fence.to_string() {
+                    return Err(StateError::Stale);
+                }
+                if stored.state == "running" {
+                    return Err(StateError::Busy);
+                }
+                let bytes = stored.result.ok_or(StateError::ResultState)?;
+                BeginDecision::Replay(parse_strict(&bytes)?)
+            }
+            Some(_) => {
+                transaction.execute(
+                    "UPDATE operations SET job_id=?2,node_id=?3,attempt=?4,fence=?5,deadline=?6,
+                     state='running',result_json=NULL,result_acknowledged=0 WHERE operation_id=?1",
+                    params![
+                        claim.operation_id.to_string(),
+                        claim.job_id.to_string(),
+                        claim.node_id,
+                        claim.attempt,
+                        claim.fence.to_string(),
+                        claim.deadline.to_rfc3339(),
+                    ],
+                )?;
+                BeginDecision::Execute
+            }
+        };
+        transaction.commit()?;
+        Ok(decision)
+    }
+
+    pub fn finish(
+        &mut self,
+        claim: &AgentClaim,
+        state: &str,
+        result: Value,
+    ) -> Result<AgentResult, StateError> {
+        if !matches!(state, "succeeded" | "failed" | "waiting-for-operator") {
+            return Err(StateError::ResultState);
+        }
+        let result = AgentResult {
+            attempt: claim.attempt,
+            deadline: claim.deadline,
+            fence: claim.fence,
+            job_id: claim.job_id,
+            node_id: claim.node_id.clone(),
+            operation_id: claim.operation_id,
+            result,
+            schema_version: claim.schema_version,
+            state: state.to_owned(),
+        };
+        result.validate()?;
+        let body = canonical_json(&result)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = transaction.execute(
+            "UPDATE operations SET state='completed',result_json=?4,result_acknowledged=0
+             WHERE operation_id=?1 AND attempt=?2 AND fence=?3 AND state='running'",
+            params![
+                claim.operation_id.to_string(),
+                claim.attempt,
+                claim.fence.to_string(),
+                body
+            ],
+        )?;
+        if changed != 1 {
+            return Err(StateError::Stale);
+        }
+        transaction.commit()?;
+        Ok(result)
+    }
+
+    pub fn pending_results(&self) -> Result<Vec<AgentResult>, StateError> {
+        let mut statement = self.connection.prepare(
+            "SELECT result_json FROM operations
+             WHERE state='completed' AND result_acknowledged=0 ORDER BY rowid",
+        )?;
+        let values = statement
+            .query_map([], |row| row.get::<_, Vec<u8>>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+        values
+            .into_iter()
+            .map(|value| parse_strict(&value).map_err(StateError::from))
+            .collect()
+    }
+
+    pub fn acknowledge(&mut self, result: &AgentResult) -> Result<(), StateError> {
+        result.validate()?;
+        let changed = self.connection.execute(
+            "UPDATE operations SET result_acknowledged=1
+             WHERE operation_id=?1 AND attempt=?2 AND fence=?3 AND state='completed'",
+            params![
+                result.operation_id.to_string(),
+                result.attempt,
+                result.fence.to_string()
+            ],
+        )?;
+        if changed != 1 {
+            return Err(StateError::Stale);
+        }
+        Ok(())
+    }
+
+    pub fn recover_interrupted(&mut self) -> Result<(), StateError> {
+        let claims = {
+            let mut statement = self.connection.prepare(
+                "SELECT job_id,operation_id,attempt,fence,node_id,deadline FROM operations WHERE state='running'",
+            )?;
+            statement
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, u32>(2)?,
+                        row.get::<_, String>(3)?,
+                        row.get::<_, String>(4)?,
+                        row.get::<_, String>(5)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?
+        };
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        for (job_id, operation_id, attempt, fence, node_id, deadline) in claims {
+            let result = AgentResult {
+                attempt,
+                deadline: DateTime::parse_from_rfc3339(&deadline)
+                    .map_err(|_| StateError::ResultState)?,
+                fence: fence.parse().map_err(|_| StateError::ResultState)?,
+                job_id: job_id.parse().map_err(|_| StateError::ResultState)?,
+                node_id,
+                operation_id: operation_id.parse().map_err(|_| StateError::ResultState)?,
+                result: json!({"reason": "agent restarted with an operation in progress"}),
+                schema_version: 1,
+                state: "waiting-for-operator".to_owned(),
+            };
+            result.validate()?;
+            transaction.execute(
+                "UPDATE operations SET state='completed',result_json=?2,result_acknowledged=0
+                 WHERE operation_id=?1 AND state='running'",
+                params![operation_id, canonical_json(&result)?],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+}
+
+pub fn backoff_delay(attempt: u32, entropy: u64, minimum: u64, maximum: u64) -> Duration {
+    assert!(minimum > 0 && minimum <= maximum);
+    let multiplier = 1_u64.checked_shl(attempt.min(62)).unwrap_or(u64::MAX);
+    let base = minimum.saturating_mul(multiplier).min(maximum);
+    let lower = (base.saturating_mul(3) / 4).max(minimum);
+    let upper = (base.saturating_mul(5) / 4).min(maximum).max(lower);
+    Duration::from_secs(lower + entropy % (upper - lower + 1))
+}
