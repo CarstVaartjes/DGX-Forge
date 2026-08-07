@@ -201,17 +201,17 @@ agent/package path and never fall back to SSH.
 | Model Definition candidate | Preferred loader and precision | Placement | Residency |
 | --- | --- | --- | --- |
 | DeepSeek 0731 Mia service | Audited MiaAI-Lab/Anemll vLLM; BF16 model dtype, block-scaled FP8 E4M3 weights with UE8M0 scales, and padded `nvfp4_ds_mla` KV cache | both GPU nodes, TP=2 over NCCL | exclusive, persistent |
-| DeepSeek 0731 DS4 GGUF | Audited DS4 v0.5.3 GB10/GPU node CUDA build with the Q2-imatrix base and draft-model drafter pair | one GPU node by default; optional two-GPU node TCP layer pipeline | mapped/registered no-copy |
-| DeepSeek 0731 DS4 branch variant | The same DS4 model with `bleysg` draft-model work merged into the Entrpi branch; release and drafter pins change together | one GPU node initially | model-owned mapped/registered no-copy |
-| Nemotron 3 Super 120B-A12B | NVIDIA Vonk Forge GPU node vLLM NVFP4 playbook; TensorRT-LLM comparison definition | either single GPU node | persistent, single-exclusive initially |
-| Nemotron 3 Nano Omni 30B-A3B | NVIDIA Vonk Forge GPU node vLLM playbook with BF16 correctness and FP8/NVFP4 optimized definitions | either single GPU node | persistent; shareable only after combined-load tests |
-| Qwen-Image | accepted ModelOpt NVFP4 SGLang GPU node path; official Diffusers as non-serving correctness oracle | either single GPU node | persistent, fully resident |
-| Qwen-Image-Edit-2511 | accepted Nunchaku NVFP4 or ModelOpt FP8 GPU node path, selected by quality and performance; DiffSynth as oracle | either single GPU node | persistent, fully resident |
-| Pixal3D | audited GPU node-native Pixal3D/TRELLIS.2 build with official fully resident or staged mode | either single GPU node | fully resident; official staged mode as fallback |
-| TRELLIS.2 4B | audited CUDA 13/ARM64 Vonk Forge GPU node build of the official Microsoft pipeline | either single GPU node | fully resident |
+| DeepSeek 0731 DS4 GGUF | Audited DS4 v0.5.3 GB10/GPU node CUDA build with the Q2-imatrix base and DSpark drafter pair | one GPU node by default; optional two-GPU node TCP layer pipeline | mapped/registered no-copy |
+| DeepSeek 0731 DS4 branch variant | The same DS4 model with `bleysg` DSpark work merged into the Entrpi branch; release and drafter pins change together | one GPU node initially | model-owned mapped/registered no-copy |
+| Nemotron 3 Super 120B-A12B | NVIDIA DGX Spark vLLM NVFP4 playbook; TensorRT-LLM comparison definition | either single GPU node | persistent, single-exclusive initially |
+| Nemotron 3 Nano Omni 30B-A3B | NVIDIA DGX Spark vLLM playbook with BF16 correctness and FP8/NVFP4 optimized definitions | either single GPU node | persistent; shareable only after combined-load tests |
+| Qwen-Image | accepted ModelOpt NVFP4 SGLang DGX Spark path; official Diffusers as non-serving correctness oracle | either single GPU node | persistent, fully resident |
+| Qwen-Image-Edit-2511 | accepted Nunchaku NVFP4 or ModelOpt FP8 DGX Spark path, selected by quality and performance; DiffSynth as oracle | either single GPU node | persistent, fully resident |
+| Pixal3D | audited DGX Spark-native Pixal3D/TRELLIS.2 build with official fully resident or staged mode | either single GPU node | fully resident; official staged mode as fallback |
+| TRELLIS.2 4B | audited CUDA 13/ARM64 DGX Spark build of the official Microsoft pipeline | either single GPU node | fully resident |
 | Qwen3-VL-8B-Instruct | accepted GB10-native vLLM or SGLang build with optimized vision attention | either single GPU node | persistent server with paged KV cache |
 | Laguna S 2.1 | official Laguna S 2.1 NVFP4 vLLM path; FP8 and forked loaders are separate comparison definitions | either single GPU node | persistent MoE service with bounded KV cache |
-| SkinTokens / TokenRig | audited FP16 GPU node integration or GB10-native TokenRig build | either single GPU node | persistent Qwen3-0.6B plus FSQ-CVAE |
+| SkinTokens / TokenRig | audited FP16 DGX Spark integration or GB10-native TokenRig build | either single GPU node | persistent Qwen3-0.6B plus FSQ-CVAE |
 | Step1X-3D | GB10-native build of the official Step1X geometry and texture pipelines | either single GPU node | sequential stage residency |
 | TripoSG | GB10-native build of the official TripoSG Diffusers pipeline | either single GPU node | persistent lightweight worker |
 | Hunyuan3D-Omni | GB10-native official runtime with accepted FlashVDM acceleration | either single GPU node | persistent lightweight worker |
@@ -232,7 +232,7 @@ that node. It never migrates a live request.
 
 ### DeepSeek with DS4
 
-- Store the checked Q2-imatrix base GGUF and draft-model drafter on local NVMe and use DS4's `mmap` path.
+- Store the checked Q2-imatrix base GGUF and DSpark drafter on local NVMe and use DS4's `mmap` path.
 - Production uses mapped/registered no-copy startup. Never set `DS4_CUDA_COPY_MODEL` or enable `DS4_MODEL_ANON_HUGE`; full-copy startup is prohibited. Set `DS4_NO_UPDATE_CHECK=1`.
 - MXFP4 remains deferred until both loader support and measured one-GPU node admission exist. DS4 v0.5.3 rejects GGUF type 39, and the available 155,976,458,848-byte MXFP4 GGUF does not fit one GPU node's visible memory.
 - Use one GPU node for the single-GPU node DeepSeek Model Definition. Treat DS4's documented two-host TCP layer pipeline as a separate experimental Model Definition: it divides layers and KV state but adds an inter-node hop to every decoded token and does not use NCCL tensor parallelism.
@@ -241,15 +241,15 @@ that node. It never migrates a live request.
 ### Nemotron
 
 - Keep DeepSeek 0731 as the default agent; Nemotron Cluster Profiles are explicit alternatives rather than an automatic replacement.
-- Start Nemotron 3 Super from NVIDIA's Vonk Forge GPU node NVFP4 vLLM recipe. Pin its Marlin/CUTLASS MoE backend, FP8 KV-cache setting, MTP setting, reasoning parser, tool-call parser, context, and concurrency limits. TensorRT-LLM is a measured comparison definition, not an assumed upgrade.
-- Start Nemotron 3 Nano Omni with the official NVIDIA GPU node vLLM recipe. Preserve BF16 as the semantic reference and evaluate the official FP8 and NVFP4 artifacts separately.
+- Start Nemotron 3 Super from NVIDIA's DGX Spark NVFP4 vLLM recipe. Pin its Marlin/CUTLASS MoE backend, FP8 KV-cache setting, MTP setting, reasoning parser, tool-call parser, context, and concurrency limits. TensorRT-LLM is a measured comparison definition, not an assumed upgrade.
+- Start Nemotron 3 Nano Omni with the official NVIDIA DGX Spark vLLM recipe. Preserve BF16 as the semantic reference and evaluate the official FP8 and NVFP4 artifacts separately.
 - Nano Omni is the first candidate for a lightweight resident agent beside a creative profile on the other GPU node. It still begins as `single-exclusive`; only a recorded exact-set co-residency test can make it `single-shareable` in a named Cluster Profile.
 - Super and Nano expose OpenAI-compatible endpoints and receive the same pinned sampling, reasoning, tool-use, concurrency, and long-context admission controls as DeepSeek.
 
 ### Qwen image generation and editing
 
 - Use official Diffusers output only as the correctness oracle.
-- Serve Qwen-Image through the accepted ModelOpt NVFP4 SGLang GPU node path. Serve Qwen-Image-Edit through the accepted Nunchaku NVFP4 or ModelOpt FP8 path, selected by the cluster's quality, memory, and throughput results.
+- Serve Qwen-Image through the accepted ModelOpt NVFP4 SGLang DGX Spark path. Serve Qwen-Image-Edit through the accepted Nunchaku NVFP4 or ModelOpt FP8 path, selected by the cluster's quality, memory, and throughput results.
 - Keep DiffSynth as the Qwen-Image-Edit-2511 compatibility reference and as an offload fallback. Its staged and disk-offload modes are not enabled merely because they use less CUDA allocator space.
 - Cache-based denoising, quantization, Lightning/distilled checkpoints, or approximate step skipping require separate Model Definitions because they may change output quality.
 - SGLang's documented multi-GPU diffusion modes do not establish two-host GPU node support. Cross-host execution remains disabled until a strict fabric-only acceptance test proves it; one GPU node has sufficient capacity for the requested image models.
@@ -295,25 +295,25 @@ If no exact GPU node path is available, implementation produces and benchmarks a
 
 Candidate status has four meanings:
 
-1. **Official GPU node path:** NVIDIA or the model owner publishes a Vonk Forge GPU node recipe or artifact for the exact model.
-2. **GPU node community path:** a GPU node-specific integration exists, but source, image, checkpoint, licensing, and results require independent audit.
+1. **Official GPU node path:** NVIDIA or the model owner publishes a DGX Spark recipe or artifact for the exact model.
+2. **GPU node community path:** a DGX Spark-specific integration exists, but source, image, checkpoint, licensing, and results require independent audit.
 3. **Upstream optimization:** the exact model has an optimized artifact or mode, but two-GPU node or GB10 validation is not established.
 4. **No exact GPU node path found:** the current primary-source survey found no maintained optimization for the exact requested model; this is not evidence that none can exist.
 
 | Model | Best optimized candidate found on 2026-08-02 | Status and adoption rule |
 | --- | --- | --- |
-| DeepSeek-V4-Flash-0731 | Mia's dual-GPU node vLLM recipe with MTP and padded `nvfp4_ds_mla`; DS4 v0.5.3 Q2-imatrix plus draft-model pair; NVIDIA `DeepSeek-V4-Flash-NVFP4` | Mia remains the first dual-GPU node service candidate. The audited DS4 pair is the single-GPU node candidate, subject to runtime admission. MXFP4 remains deferred until DS4 has loader support and measured one-GPU node admission. |
-| Nemotron 3 Super 120B-A12B | NVIDIA's exact NVFP4 checkpoint and Vonk Forge GPU node vLLM/TensorRT-LLM playbook | Official GPU node path and preferred initial profile. Validate the pinned Marlin/CUTLASS, FP8 KV, MTP, reasoning, and tool settings on this cluster. |
-| Nemotron 3 Nano Omni 30B-A3B | NVIDIA's Vonk Forge GPU node vLLM BF16/FP8/NVFP4 recipes and exact FP8 artifact | Official GPU node path. BF16 is the semantic reference; FP8 and NVFP4 compete on quality, memory, and throughput. |
-| Qwen-Image | `lmsys/qwen-image-modelopt-nvfp4-sglang` plus NVIDIA's published NVFP4-on-GPU node path | Official/upstream GPU node path. Compare against official BF16 Diffusers using fixed prompt, text-rendering, and identity fixtures before promotion. |
-| Qwen-Image-Edit-2511 | Nunchaku SVDQuant W4A4/NVFP4 build reporting Vonk Forge GPU node measurements; ModelOpt FP8 transformer; community FP8 checkpoint | Exact GPU node community and upstream optimized paths. Audit Nunchaku and compare edit fidelity and protected-region preservation against BF16 before promotion. |
-| Pixal3D | Official `--low_vram` staging; Super-Idol-Master GPU node integration | Upstream optimization plus recent community GPU node integration. The official fully resident path remains the reference; the community ARM64 patches are audited independently. |
-| TRELLIS.2 4B | `vonk-trellis2` and `Trellis2-Vonk Forge-GPU node-Docker` | GPU node community paths. Use them as CUDA 13/ARM64 build references, not as trusted deployment pins, until reproducibility and output parity pass. |
+| DeepSeek-V4-Flash-0731 | Mia's dual-DGX Spark vLLM recipe with MTP and padded `nvfp4_ds_mla`; DS4 v0.5.3 Q2-imatrix plus DSpark pair; NVIDIA `DeepSeek-V4-Flash-NVFP4` | Mia remains the first dual-GPU node service candidate. The audited DS4 pair is the single-GPU node candidate, subject to runtime admission. MXFP4 remains deferred until DS4 has loader support and measured one-GPU node admission. |
+| Nemotron 3 Super 120B-A12B | NVIDIA's exact NVFP4 checkpoint and DGX Spark vLLM/TensorRT-LLM playbook | Official GPU node path and preferred initial profile. Validate the pinned Marlin/CUTLASS, FP8 KV, MTP, reasoning, and tool settings on this cluster. |
+| Nemotron 3 Nano Omni 30B-A3B | NVIDIA's DGX Spark vLLM BF16/FP8/NVFP4 recipes and exact FP8 artifact | Official GPU node path. BF16 is the semantic reference; FP8 and NVFP4 compete on quality, memory, and throughput. |
+| Qwen-Image | `lmsys/qwen-image-modelopt-nvfp4-sglang` plus NVIDIA's published NVFP4-on-DGX Spark path | Official/upstream GPU node path. Compare against official BF16 Diffusers using fixed prompt, text-rendering, and identity fixtures before promotion. |
+| Qwen-Image-Edit-2511 | Nunchaku SVDQuant W4A4/NVFP4 build reporting DGX Spark measurements; ModelOpt FP8 transformer; community FP8 checkpoint | Exact GPU node community and upstream optimized paths. Audit Nunchaku and compare edit fidelity and protected-region preservation against BF16 before promotion. |
+| Pixal3D | Official `--low_vram` staging; Super-Idol-Master DGX Spark integration | Upstream optimization plus recent community GPU node integration. The official fully resident path remains the reference; the community ARM64 patches are audited independently. |
+| TRELLIS.2 4B | `dgx-trellis2` and `Trellis2-DGX-Spark-Docker` | GPU node community paths. Use them as CUDA 13/ARM64 build references, not as trusted deployment pins, until reproducibility and output parity pass. |
 | Qwen3-VL-8B-Instruct | vLLM/SGLang FlashAttention path; no exact official 8B NVFP4 GPU node artifact found | Upstream optimization. Do not substitute NVIDIA's different-size Qwen3-VL NVFP4 artifacts for the required 8B model. Benchmark BF16, FP8, and an audited weight-quantized 8B candidate if available. |
-| SkinTokens / TokenRig | FP16 GPU node integration in Super-Idol-Master | GPU node community path. No dedicated exact-model optimized loader was found; audit the integration while retaining official TokenRig as the non-serving correctness oracle. |
+| SkinTokens / TokenRig | FP16 DGX Spark integration in Super-Idol-Master | GPU node community path. No dedicated exact-model optimized loader was found; audit the integration while retaining official TokenRig as the non-serving correctness oracle. |
 | Step1X-3D | Official sequential geometry/texture loading and offload controls | No exact GPU node path found. Build the official runtime for ARM64/GB10 and measure phase release rather than assuming a community quantization. |
 | TripoSG | Official lightweight Diffusers pipeline | No exact GPU node path found. Its published memory requirement already makes single-GPU node serving practical; produce and measure the GB10-native build before declaring its Model Definition accepted. |
-| Hunyuan3D-Omni | Official FlashVDM mode | Upstream optimization. A GPU node container for Hunyuan3D 2.1 is useful as an ARM64 build reference but is not the requested Omni model and cannot replace it. |
+| Hunyuan3D-Omni | Official FlashVDM mode | Upstream optimization. A DGX Spark container for Hunyuan3D 2.1 is useful as an ARM64 build reference but is not the requested Omni model and cannot replace it. |
 
 Before an optimized Model Definition becomes selectable, its checked-in
 evidence must include immutable source, container, checkpoint, and
@@ -559,7 +559,7 @@ The design was checked on 2026-08-02 against these upstream source snapshots. Th
 | Project | Reviewed commit |
 | --- | --- |
 | DS4 | v0.5.3, peeled commit `4ad370b4a338efe9723a386673c0e04f6e214108`; see the immutable DS4 audit |
-| MiaAI-Lab dual GPU node | `b131b2a22164675890dd1465fd8862b5cfb6ff13` |
+| MiaAI-Lab dual DGX Spark | `b131b2a22164675890dd1465fd8862b5cfb6ff13` |
 | Qwen-Image | `6b5e1f5cec987d404be5ac6657db3b9aacb56a89` |
 | SGLang | `8d106c3d79ef885f2fc0684f1915ebc404acfbe8` |
 | DiffSynth-Studio | `6e2b14bc73ff317229b2a28487fe09250bbf463f` |
@@ -573,31 +573,31 @@ The design was checked on 2026-08-02 against these upstream source snapshots. Th
 ## References
 
 - [DS4 audited source](https://github.com/Entrpi/ds4)
-- [MiaAI-Lab DeepSeek dual-GPU node recipe](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark)
+- [MiaAI-Lab DeepSeek dual-DGX Spark recipe](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark)
 - [NVIDIA DeepSeek-V4-Flash NVFP4](https://huggingface.co/nvidia/DeepSeek-V4-Flash-NVFP4)
-- [DS4 on GPU node](https://github.com/Entrpi/ds4-on-spark)
-- [NVIDIA Nemotron Vonk Forge GPU node playbook](https://build.nvidia.com/spark/nemotron)
-- [NVIDIA vLLM Vonk Forge GPU node playbook](https://build.nvidia.com/spark/vllm/instructions)
+- [DS4 on Spark](https://github.com/Entrpi/ds4-on-spark)
+- [NVIDIA Nemotron DGX Spark playbook](https://build.nvidia.com/spark/nemotron)
+- [NVIDIA vLLM DGX Spark playbook](https://build.nvidia.com/spark/vllm/instructions)
 - [NVIDIA Nemotron 3 Super 120B-A12B NVFP4](https://huggingface.co/nvidia/NVIDIA-Nemotron-3-Super-120B-A12B-NVFP4)
 - [NVIDIA Nemotron 3 Nano Omni 30B-A3B Reasoning FP8](https://huggingface.co/nvidia/Nemotron-3-Nano-Omni-30B-A3B-Reasoning-FP8)
 - [Qwen-Image](https://github.com/QwenLM/Qwen-Image)
 - [Qwen-Image ModelOpt NVFP4 for SGLang](https://huggingface.co/lmsys/qwen-image-modelopt-nvfp4-sglang)
-- [NVIDIA: NVFP4 Qwen-Image on Vonk Forge GPU node](https://blogs.nvidia.com/blog/dgx-spark-and-station-open-source-frontier-models/)
+- [NVIDIA: NVFP4 Qwen-Image on DGX Spark](https://blogs.nvidia.com/blog/dgx-spark-and-station-open-source-frontier-models/)
 - [Nunchaku Qwen-Image-Edit-2511](https://huggingface.co/stuqiu/nunchaku-qwen-image-edit-2511)
 - [SGLang Diffusion](https://docs.sglang.io/docs/sglang-diffusion)
 - [DiffSynth-Studio](https://github.com/modelscope/DiffSynth-Studio)
 - [Pixal3D](https://github.com/TencentARC/Pixal3D)
 - [TRELLIS.2](https://github.com/microsoft/TRELLIS.2)
-- [NVIDIA forum: TRELLIS.2 on Vonk Forge GPU node](https://forums.developer.nvidia.com/t/trellis-2-on-dgx-spark/355816)
-- [vonk-trellis2](https://github.com/raziel2001au/dgx-trellis2)
-- [TRELLIS.2 Vonk Forge GPU node Docker](https://github.com/dr-vij/Trellis2-DGX-Spark-Docker)
-- [Super-Idol-Master Vonk Forge GPU node integration](https://github.com/SidneyArt/Super-Idol-Master)
+- [NVIDIA forum: TRELLIS.2 on DGX Spark](https://forums.developer.nvidia.com/t/trellis-2-on-dgx-spark/355816)
+- [dgx-trellis2](https://github.com/raziel2001au/dgx-trellis2)
+- [TRELLIS.2 DGX Spark Docker](https://github.com/dr-vij/Trellis2-DGX-Spark-Docker)
+- [Super-Idol-Master DGX Spark integration](https://github.com/SidneyArt/Super-Idol-Master)
 - [Qwen3-VL-8B-Instruct](https://huggingface.co/Qwen/Qwen3-VL-8B-Instruct)
 - [SkinTokens / TokenRig](https://github.com/VAST-AI-Research/SkinTokens)
 - [Step1X-3D](https://github.com/stepfun-ai/Step1X-3D)
 - [TripoSG](https://github.com/VAST-AI-Research/TripoSG)
 - [Hunyuan3D-Omni](https://github.com/Tencent-Hunyuan/Hunyuan3D-Omni)
-- [Hunyuan3D 2.1 Vonk Forge GPU node Docker build reference](https://github.com/dr-vij/Hunyuan3D-2.1-DGX-Spark-Docker)
-- [NVIDIA Vonk Forge GPU node NGC best practices](https://docs.nvidia.com/dgx/dgx-spark/ngc.html)
-- [NVIDIA Vonk Forge GPU node clustering](https://docs.nvidia.com/dgx/dgx-spark/spark-clustering.html)
-- [NVIDIA Vonk Forge GPU node playbooks](https://github.com/NVIDIA/dgx-spark-playbooks)
+- [Hunyuan3D 2.1 DGX Spark Docker build reference](https://github.com/dr-vij/Hunyuan3D-2.1-DGX-Spark-Docker)
+- [NVIDIA DGX Spark NGC best practices](https://docs.nvidia.com/dgx/dgx-spark/ngc.html)
+- [NVIDIA DGX Spark clustering](https://docs.nvidia.com/dgx/dgx-spark/spark-clustering.html)
+- [NVIDIA DGX Spark playbooks](https://github.com/NVIDIA/dgx-spark-playbooks)

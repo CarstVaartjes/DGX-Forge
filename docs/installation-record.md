@@ -233,8 +233,8 @@ On 2026-08-03, GPU node 1 received immutable DS4 release
 `ca69bf50d544856357716d4f326dfd88a6c2d1f40f8fb9cfce426f60858482b2`.
 It pins Entrpi DS4 commit `4ad370b4a338efe9723a386673c0e04f6e214108`,
 the Q2-imatrix base from `antirez/deepseek-v4-gguf` revision
-`1cd7b564460821938add0475a60b942c409295e0`, the draft-model drafter from
-`bleysg/DeepSeek-V4-Flash-draft-model-drafter-GGUF` revision
+`1cd7b564460821938add0475a60b942c409295e0`, the DSpark drafter from
+`bleysg/DeepSeek-V4-Flash-DSpark-drafter-GGUF` revision
 `81c6fdd38f9582da45ba27f0ed7b63bcd3ea3b62`, and the ARM64 image
 `ghcr.io/carstvaartjes/spark-ds4@sha256:084d9a9ffa47431842c5dec84de97b058034dec0535b2a563bc5db78c9e14615`.
 Both GGUFs were rehashed inside a read-only, network-disabled container before
@@ -246,7 +246,7 @@ reasoning off/low/high/max, structured tool calling, an 8,204-token prompt, and
 a second tool-result turn that reused 2,441 cached prefix tokens while computing
 only 15. Startup used 474 in-process derived artifacts without a full host copy;
 the measured cold start was 67 seconds, peak observed temperature was 50 C, and
-the live draft-model counters accepted 193 of 246 drafts (`0.7846`).
+the live DSpark counters accepted 193 of 246 drafts (`0.7846`).
 
 The definition is `verified`, not `accepted`. Stable performance thresholds,
 the sustained thermal run, three-cycle lifecycle acceptance, reboot/no-autostart

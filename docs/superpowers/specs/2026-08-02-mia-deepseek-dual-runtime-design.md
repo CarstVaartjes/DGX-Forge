@@ -9,7 +9,7 @@
 ## Outcome
 
 Make the existing `deepseek-agent-dual` Model Definition runnable and
-qualifiable on the two Vonk Forge GPU nodes using the MiaAI-Lab dual-GPU node approach. The
+qualifiable on the two Vonk Forge GPU nodes using the MiaAI-Lab dual-DGX Spark approach. The
 client-facing model name remains `deepseek`, and the existing
 `agent-full-dual` Cluster Profile remains the default profile.
 
@@ -26,8 +26,8 @@ Use the currently audited Mia recipe, not the older provisional source pin:
 
 | Artifact | Pin |
 |---|---|
-| Mia source | `MiaAI-Lab/DeepSeek-v4-Flash-draft-model-2x-Vonk Forge-GPU node@b131b2a22164675890dd1465fd8862b5cfb6ff13` |
-| Runtime image | `ghcr.io/anemll/draft-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8` |
+| Mia source | `MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark@b131b2a22164675890dd1465fd8862b5cfb6ff13` |
+| Runtime image | `ghcr.io/anemll/dspark-vllm-gx10@sha256:a83948492cf13df455170fb42885f5ef4db54fefe0feff0f841ecbff464ac9d8` |
 | Checkpoint | `deepseek-ai/DeepSeek-V4-Flash-0731@9e165c30e2704aec5d9d593cce3eebd58bbef1cb` |
 | Precision/runtime | model checkpoint's audited quantization with `nvfp4_ds_mla` KV cache |
 | Parallelism | TP=2, PP=1, `mp`, one rank per GPU node |
@@ -157,8 +157,8 @@ constrained below:
 - `--gpu-memory-utilization 0.80`
 - `--block-size 256`
 - `--max-cudagraph-capture-size 36`
-- draft-model speculative decoding pinned exactly to
-  `{"method":"draft","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}`
+- DSpark speculative decoding pinned exactly to
+  `{"method":"dspark","num_speculative_tokens":5,"draft_sample_method":"probabilistic"}`
 - prefix caching, chunked prefill, async scheduling
 - DeepSeek v4 tokenizer, reasoning parser, and tool-call parser
 - FlashInfer B12X MoE and autotuning
@@ -390,7 +390,7 @@ until the candidate has completed live acceptance. Model snapshots and images
 may coexist during qualification because both GPU nodes have sufficient storage.
 
 Routine maintenance should periodically check the Mia repository, runtime image,
-DeepSeek checkpoint, vLLM/FlashInfer support, and NVIDIA Vonk Forge GPU node software
+DeepSeek checkpoint, vLLM/FlashInfer support, and NVIDIA DGX Spark software
 releases. Discovery can be automated later; promotion always remains an explicit
 recorded operation.
 
@@ -418,4 +418,4 @@ Model Definition.
 - [Mia executable Compose recipe](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docker-compose.dspark.yml)
 - [Mia DeepSeek 0731 runtime notes](https://github.com/MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark/blob/b131b2a22164675890dd1465fd8862b5cfb6ff13/docs/DEEPSEEK_V4_FLASH_0731.md)
 - [Pinned DeepSeek checkpoint](https://huggingface.co/deepseek-ai/DeepSeek-V4-Flash-0731/tree/9e165c30e2704aec5d9d593cce3eebd58bbef1cb)
-- [NVIDIA Vonk Forge GPU node hardware guide](https://docs.nvidia.com/dgx/dgx-spark/hardware.html)
+- [NVIDIA DGX Spark hardware guide](https://docs.nvidia.com/dgx/dgx-spark/hardware.html)

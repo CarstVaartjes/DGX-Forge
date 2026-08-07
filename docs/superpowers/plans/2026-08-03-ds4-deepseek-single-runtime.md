@@ -10,7 +10,7 @@ DeepSeek-V4-Flash-0731 that preserves the public OpenAI model name `deepseek`
 and can later share the cluster with creative workloads on GPU node 2.
 
 **Architecture:** GPU node 1 runs the Entrpi DS4 v0.5.3 CUDA/GB10 fork against a
-manifest-verified asymmetric Q2 0731 GGUF and its generation-matched draft-model
+manifest-verified asymmetric Q2 0731 GGUF and its generation-matched DSpark
 drafter. The model files remain on GPU node 1 local NVMe and are mounted read-only
 into a loopback-only container; scratch, derived-weight, and disk-KV data use
 bounded workload-specific directories. The definition enters the catalog as
@@ -25,7 +25,7 @@ pytest, Ruff, and `vonkctl`.
 
 - Pin runtime source `https://github.com/Entrpi/ds4.git` at tag `v0.5.3`,
   peeled commit `4ad370b4a338efe9723a386673c0e04f6e214108`.
-- Record the audited GPU node recipe
+- Record the audited DS4-on-Spark recipe
   `https://github.com/Entrpi/ds4-on-spark.git` at commit
   `185487ba5749a3c24a71ca81d1bc514c45f10dca`; do not execute its installer.
 - Verify the source archive SHA-256
@@ -41,11 +41,11 @@ pytest, Ruff, and `vonkctl`.
   `DeepSeek-V4-Flash-IQ2XXS-w2Q2K-AProjQ8-SExpQ8-OutQ8-chat-v2-imatrix-0731.gguf`,
   exactly `86,720,111,488` bytes with SHA-256
   `ca22ae2f838e14077c22bc1c1417b71b45b5e5a3687bd96c2ac6e17fdb6261c0`.
-- Pin drafter repository `bleysg/DeepSeek-V4-Flash-draft-model-drafter-GGUF` at
+- Pin drafter repository `bleysg/DeepSeek-V4-Flash-DSpark-drafter-GGUF` at
   revision `81c6fdd38f9582da45ba27f0ed7b63bcd3ea3b62` and file
-  `draft-model-drafter-Q2K-Q8-0731.gguf`, exactly `6,971,241,504` bytes with
+  `DSpark-drafter-Q2K-Q8-0731.gguf`, exactly `6,971,241,504` bytes with
   SHA-256 `8fa269560dc76fd73e4233ad9b1938b5f65dd363381fd9b1a5c6183f7d12d686`.
-- The single-GPU node lane is Q2-imatrix plus draft-model, not MXFP4. The available
+- The single-GPU node lane is Q2-imatrix plus DSpark, not MXFP4. The available
   0731 MXFP4 GGUF is `155,976,458,848` bytes, exceeds one GPU node's visible
   memory, and is rejected by DS4 v0.5.3's loader. Keep it as a deferred
   research candidate, not a serving artifact.
@@ -206,7 +206,7 @@ the v0.5.3 loader and does not fit one GPU node.
 
 - [x] **Step 5: Reconcile current design and overview wording**
 
-Replace `DS4 Flash 0731 MXFP4 candidate` with the audited Q2-imatrix + draft-model
+Replace `DS4 Flash 0731 MXFP4 candidate` with the audited Q2-imatrix + DSpark
 definition. State explicitly that MXFP4 remains deferred until both loader
 support and measured one-GPU node admission exist. Replace the obsolete
 `DS4_CUDA_COPY_MODEL` design assumption with the mapped/registered no-copy
@@ -292,7 +292,7 @@ model selection, prompt rendering, sampling, or tool-call logic.
 Mount `/srv/models/snapshots/deepseek-v4-flash-0731-ds4` read-only at
 `/models`. Mount workload-specific derived-weight, KV, and log directories
 writable. Set `DS4_SERVED_MODEL_NAME=deepseek`, `DS4_NO_UPDATE_CHECK=1`,
-`DS4_CONT_MTP_MODE=2`, `DS4_CONT_DRAFT=1`, and the exact drafter path. Start:
+`DS4_CONT_MTP_MODE=2`, `DS4_CONT_DSPARK=1`, and the exact drafter path. Start:
 
 ```text
 /opt/ds4/ds4-server --cuda
@@ -502,7 +502,7 @@ artifact source, and no full-copy fallback.
 Generate the canonical verified report with single-node gates `offline`,
 `release`, `image`, `architecture`, `manifest`, `mmap`, and `api_identity` all
 true. Advance maturity from `prepared` to `verified`. Record actual cold-start,
-memory, disk, KV, basic throughput, temperature, and draft-model acceptance metrics
+memory, disk, KV, basic throughput, temperature, and DSpark acceptance metrics
 in `deepseek-ds4-operational.json`, with performance/thermal/lifecycle/reboot
 acceptance explicitly false.
 

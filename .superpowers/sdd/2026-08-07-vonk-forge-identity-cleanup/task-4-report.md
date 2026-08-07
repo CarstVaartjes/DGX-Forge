@@ -175,3 +175,47 @@ exit 0
 git diff --check
 exit 0
 ```
+
+## Round 3 review remediation — 2026-08-08
+
+Restored the remaining external provenance that the mechanical identity rename
+had rewritten inside upstream names and immutable values. The Mia design now
+matches the executable workload, adapter, inventory evidence, and pre-cleanup
+record exactly:
+
+- `MiaAI-Lab/DeepSeek-v4-Flash-DSpark-2x-DGX-Spark`
+- `ghcr.io/anemll/dspark-vllm-gx10`
+- speculative API method `dspark`
+
+The DS4 installation record and completed implementation plan again use the
+drafter repository, filename, and runtime setting from the checked manifest and
+Compose contract: `bleysg/DeepSeek-V4-Flash-DSpark-drafter-GGUF`,
+`DSpark-drafter-Q2K-Q8-0731.gguf`, and `DS4_CONT_DSPARK=1`.
+
+The multi-runtime research record now preserves the actual external candidate
+identities exposed by its URLs, including `dgx-trellis2` and
+`Trellis2-DGX-Spark-Docker`. The same audit corrected adjacent NVIDIA,
+DS4-on-Spark, and community DGX Spark labels where the cleanup had falsely
+presented upstream/vendor resources as Vonk products. Vonk-owned node IDs,
+services, controller commands, placement language, and package contracts remain
+canonical.
+
+No new prose-only regression test was added: it would freeze human wording
+rather than exercise behavior. The existing adapter and contract suites already
+validate the executable source, image, manifest, DS4 environment, and artifact
+identities; a focused comparison against those executable contracts was run in
+this remediation.
+
+Fresh verification:
+
+```text
+113 passed — documentation contracts plus DS4 and Mia adapter contracts
+14 passed  — focused Compose and NAS runbook tests
+38 passed  — supply-chain verifier tests
+bash tests/runbooks/test_fabric_safety.sh: PASS
+external provenance comparison against manifests/Compose: PASS
+top-level Compose render: exit 0
+DS4 Compose render: exit 0
+scripts/verify-supply-chain --json: ok=true; 7 images; 4 SBOMs
+git diff --check: exit 0
+```
