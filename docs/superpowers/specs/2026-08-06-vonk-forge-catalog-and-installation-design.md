@@ -5,6 +5,16 @@ Date: 2026-08-06
 Status: architecture approved; implementation requires separate plans for the
 local product and global service
 
+> **Recipe-model update (2026-08-07):** The source-first recipe specification
+> in [2026-08-07-source-first-recipe-design.md](2026-08-07-source-first-recipe-design.md)
+> supersedes this document's unreleased image-first recipe, payload,
+> container-publication, SparkRun execution, sizing, topology-profile, global
+> publication, and related verification assumptions. Nothing has been released,
+> so the source-first contract is the sole initial `schema_version: 1`; no
+> internal recipe migration or compatibility path is required. The remaining
+> product, authority, agent, service-host, Tailscale, routing, and repository
+> boundaries in this document continue to apply.
+
 ## Purpose
 
 Turn DGX-Forge into Vonk Forge: a local-first application for installing,
