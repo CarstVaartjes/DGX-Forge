@@ -534,6 +534,8 @@ def test_pinned_step_ca_issues_tracked_leaf_profile_and_serves_fresh_crl(tmp_pat
     # projection (1000:1000, mode 0400). These contain fixed test-only values;
     # make them readable by the image's configured `step` user without relying
     # on the GitHub runner and image having the same numeric UID.
+    root.chmod(0o444)
+    intermediate.chmod(0o444)
     intermediate_key.chmod(0o444)
     intermediate_password.chmod(0o444)
 
