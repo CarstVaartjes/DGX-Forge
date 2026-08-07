@@ -117,13 +117,177 @@ def validate_recipe(document: Mapping[str, object]) -> None:
         _validator().iter_errors(document),
         key=lambda error: tuple(str(part) for part in error.absolute_path),
     )
-    if not errors:
-        return
-    error = _most_specific(errors[0])
-    path = ".".join(str(part) for part in error.absolute_path) or "$"
-    raise RecipeContractError(
-        f"recipe.schema.{error.validator}", path, _safe_detail(error)
+    if errors:
+        error = _most_specific(errors[0])
+        path = ".".join(str(part) for part in error.absolute_path) or "$"
+        raise RecipeContractError(
+            f"recipe.schema.{error.validator}", path, _safe_detail(error)
+        )
+    _validate_recipe_semantics(document)
+
+
+def deployment_profile(
+    document: Mapping[str, object], name: str
+) -> Mapping[str, object]:
+    profiles = document.get("deployment_profiles")
+    if not isinstance(profiles, Sequence) or isinstance(profiles, (str, bytes)):
+        raise RecipeContractError(
+            "recipe.profiles", "deployment_profiles", "profiles are required"
+        )
+    matches = [
+        profile
+        for profile in profiles
+        if isinstance(profile, Mapping) and profile.get("name") == name
+    ]
+    if len(matches) != 1:
+        raise RecipeContractError(
+            "recipe.profile_unknown",
+            "deployment_profiles",
+            "profile name is missing or not unique",
+        )
+    return matches[0]
+
+
+def _validate_recipe_semantics(document: Mapping[str, object]) -> None:
+    parameters = _mapping_sequence(document.get("parameters"), "parameters")
+    parameter_names = _unique_field(parameters, "name", "parameters")
+    for index, parameter in enumerate(parameters):
+        path = f"parameters.{index}"
+        default = parameter.get("default")
+        kind = parameter.get("type")
+        if (
+            (kind == "integer" and (not isinstance(default, int) or isinstance(default, bool)))
+            or (kind == "boolean" and not isinstance(default, bool))
+            or (kind in {"string", "enum"} and not isinstance(default, str))
+        ):
+            raise RecipeContractError(
+                "recipe.parameter_type", f"{path}.default", "default does not match parameter type"
+            )
+        minimum = parameter.get("minimum")
+        maximum = parameter.get("maximum")
+        if isinstance(minimum, int) and isinstance(maximum, int) and minimum > maximum:
+            raise RecipeContractError(
+                "recipe.parameter_bounds", path, "minimum exceeds maximum"
+            )
+        allowed = parameter.get("allowed_values")
+        if kind == "enum" and (
+            not isinstance(allowed, Sequence) or default not in allowed
+        ):
+            raise RecipeContractError(
+                "recipe.parameter_enum",
+                f"{path}.allowed_values",
+                "enum default must be allowed",
+            )
+
+    artifacts = _mapping_sequence(document.get("artifacts"), "artifacts")
+    artifact_ids = _unique_field(artifacts, "id", "artifacts")
+    runtime = document.get("runtime")
+    if not isinstance(runtime, Mapping):
+        raise RecipeContractError("recipe.runtime", "runtime", "runtime is required")
+    arguments = _mapping_sequence(runtime.get("arguments"), "runtime.arguments")
+    for index, argument in enumerate(arguments):
+        parameter = argument.get("parameter")
+        if parameter is not None and parameter not in parameter_names:
+            raise RecipeContractError(
+                "recipe.parameter_unknown",
+                f"runtime.arguments.{index}.parameter",
+                "parameter does not exist",
+            )
+
+    profiles = _mapping_sequence(
+        document.get("deployment_profiles"), "deployment_profiles"
     )
+    _unique_field(profiles, "name", "deployment_profiles")
+    all_role_names: set[object] = set()
+    for profile_index, profile in enumerate(profiles):
+        path = f"deployment_profiles.{profile_index}"
+        roles = _mapping_sequence(profile.get("roles"), f"{path}.roles")
+        role_names = _unique_field(roles, "name", f"{path}.roles")
+        all_role_names.update(role_names)
+        node_count = profile.get("node_count")
+        if sum(int(role["count"]) for role in roles) != node_count:
+            raise RecipeContractError(
+                "recipe.profile_node_count",
+                f"{path}.node_count",
+                "role counts must equal node_count",
+            )
+        owners = [role for role in roles if role.get("endpoint_owner") is True]
+        if len(owners) != 1 or owners[0].get("count") != 1:
+            raise RecipeContractError(
+                "recipe.profile_endpoint",
+                f"{path}.roles",
+                "exactly one single-node role must own the endpoint",
+            )
+        parallelism = profile.get("parallelism")
+        if not isinstance(parallelism, Mapping):
+            raise RecipeContractError(
+                "recipe.profile_parallelism", f"{path}.parallelism", "parallelism is required"
+            )
+        world_size = (
+            int(parallelism["tensor"])
+            * int(parallelism["pipeline"])
+            * int(parallelism["data"])
+        )
+        if world_size != node_count:
+            raise RecipeContractError(
+                "recipe.profile_parallelism",
+                f"{path}.parallelism",
+                "parallelism product must equal node_count",
+            )
+        fabric = profile.get("fabric")
+        if not isinstance(fabric, Mapping):
+            raise RecipeContractError(
+                "recipe.profile_fabric", f"{path}.fabric", "fabric is required"
+            )
+        if (node_count == 1) != (fabric.get("connectivity") == "none"):
+            raise RecipeContractError(
+                "recipe.profile_fabric",
+                f"{path}.fabric",
+                "only a one-node profile may use no fabric",
+            )
+        overrides = profile.get("parameter_overrides")
+        if not isinstance(overrides, Mapping) or not set(overrides).issubset(
+            parameter_names
+        ):
+            raise RecipeContractError(
+                "recipe.parameter_unknown",
+                f"{path}.parameter_overrides",
+                "override parameter does not exist",
+            )
+        for role_index, role in enumerate(roles):
+            if set(role.get("artifacts", ())) - artifact_ids:
+                raise RecipeContractError(
+                    "recipe.artifact_unknown",
+                    f"{path}.roles.{role_index}.artifacts",
+                    "artifact does not exist",
+                )
+
+    for index, artifact in enumerate(artifacts):
+        if set(artifact.get("roles", ())) - all_role_names:
+            raise RecipeContractError(
+                "recipe.role_unknown",
+                f"artifacts.{index}.roles",
+                "role does not exist in a profile",
+            )
+
+
+def _mapping_sequence(value: object, path: str) -> list[Mapping[str, object]]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+        raise RecipeContractError("recipe.array", path, "array is required")
+    if not all(isinstance(item, Mapping) for item in value):
+        raise RecipeContractError("recipe.object", path, "object entries are required")
+    return list(value)  # type: ignore[arg-type]
+
+
+def _unique_field(
+    values: Sequence[Mapping[str, object]], field: str, path: str
+) -> set[object]:
+    names = [value.get(field) for value in values]
+    if len(names) != len(set(names)):
+        raise RecipeContractError(
+            "recipe.unique", path, f"{field} values must be unique"
+        )
+    return set(names)
 
 
 def _most_specific(error: ValidationError) -> ValidationError:

@@ -1580,6 +1580,25 @@ class PackageFamily(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class RecipeSourceBundle(Base):
+    __tablename__ = "recipe_source_bundles"
+    __table_args__ = (
+        CheckConstraint(_lower_hex("sha256", 64), name="ck_recipe_source_bundle_digest"),
+        CheckConstraint(
+            "archive_bytes > 0 AND total_bytes >= 0 AND file_count >= 1",
+            name="ck_recipe_source_bundle_sizes",
+        ),
+    )
+    sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    media_type: Mapped[str] = mapped_column(String(96), nullable=False)
+    archive_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    file_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    manifest: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    verified_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class LocalRecipe(Base):
     __tablename__ = "local_recipes"
     __table_args__ = (

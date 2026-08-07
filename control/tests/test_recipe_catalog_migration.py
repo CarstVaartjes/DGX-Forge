@@ -33,6 +33,7 @@ def test_recipe_catalog_tables_upgrade_and_downgrade(tmp_path: Path) -> None:
     engine = create_engine(url)
     catalog_tables = {
         "package_families",
+        "recipe_source_bundles",
         "local_recipes",
         "local_recipe_revisions",
         "recipe_imports",
@@ -127,6 +128,7 @@ def test_resolved_revision_requires_digest_and_known_lifecycle(tmp_path: Path) -
 def test_sqlalchemy_metadata_matches_catalog_and_resolved_rows_are_immutable() -> None:
     assert {
         "package_families",
+        "recipe_source_bundles",
         "local_recipes",
         "local_recipe_revisions",
         "recipe_imports",

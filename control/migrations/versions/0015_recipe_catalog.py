@@ -39,6 +39,22 @@ def upgrade() -> None:
     )
     op.create_index("ix_package_families_provider_kind", "package_families", ["provider_kind"])
     op.create_table(
+        "recipe_source_bundles",
+        sa.Column("sha256", sa.String(64), primary_key=True),
+        sa.Column("media_type", sa.String(96), nullable=False),
+        sa.Column("archive_bytes", sa.BigInteger, nullable=False),
+        sa.Column("total_bytes", sa.BigInteger, nullable=False),
+        sa.Column("file_count", sa.Integer, nullable=False),
+        sa.Column("storage_key", sa.String(255), nullable=False, unique=True),
+        sa.Column("manifest", sa.JSON, nullable=False),
+        sa.Column("verified_at", sa.DateTime(timezone=True), nullable=False),
+        sa.CheckConstraint(_lower_hex("sha256", 64), name="ck_recipe_source_bundle_digest"),
+        sa.CheckConstraint(
+            "archive_bytes > 0 AND total_bytes >= 0 AND file_count >= 1",
+            name="ck_recipe_source_bundle_sizes",
+        ),
+    )
+    op.create_table(
         "local_recipes",
         sa.Column("id", sa.String(36), primary_key=True),
         sa.Column("slug", sa.String(128), nullable=False, unique=True),
@@ -171,6 +187,7 @@ def downgrade() -> None:
         "recipe_imports",
         "local_recipe_revisions",
         "local_recipes",
+        "recipe_source_bundles",
         "package_families",
     ):
         op.drop_table(table)

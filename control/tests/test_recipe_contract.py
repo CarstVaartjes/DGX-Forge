@@ -5,6 +5,7 @@ import pytest
 from dgx_control.recipe_contract import (
     RecipeContractError,
     canonical_recipe,
+    deployment_profile,
     parse_recipe_json,
     recipe_content_sha256,
     validate_recipe,
@@ -29,6 +30,20 @@ def test_recipe_hash_matches_global_fixture() -> None:
     assert recipe_content_sha256(fixture("recipe-v1-minimal.json")) == expected
 
 
+def test_vendored_recipe_contract_is_source_first() -> None:
+    document = fixture("recipe-v1-minimal.json")
+
+    assert document["build"]["context"]["sha256"] == "a" * 64
+    assert "image" not in document["runtime"]
+
+
+def test_vendored_multinode_profile_supports_three_nodes() -> None:
+    profile = deployment_profile(fixture("recipe-v1-multinode.json"), "triple-tp3")
+
+    assert profile["node_count"] == 3
+    assert sum(role["count"] for role in profile["roles"]) == 3
+
+
 def test_canonical_recipe_matches_global_bytes() -> None:
     assert canonical_recipe({"z": 1, "a": [True, None]}) == (
         b'{"a":[true,null],"z":1}'
@@ -47,7 +62,7 @@ def test_recipe_parser_rejects_duplicate_keys_and_floats() -> None:
     [
         (("runtime", "image"), "ghcr.io/vonk/vllm:latest", "image"),
         (("runtime", "command"), ["sh", "-c", "id"], "command"),
-        (("security", "privileged"), True, "privileged"),
+        (("build", "dockerfile"), "../Dockerfile", "dockerfile"),
     ],
 )
 def test_recipe_validation_rejects_unsafe_values(path, value, message) -> None:
@@ -61,7 +76,7 @@ def test_recipe_validation_rejects_unsafe_values(path, value, message) -> None:
 
 def test_global_contract_lock_matches_vendored_bytes() -> None:
     lock = contract_lock()
-    assert lock["source_commit"] == "64a17a462be046a44ae5945b7b794c0220044640"
+    assert lock["source_commit"] == "37ef29be4a5423e08ac5d4eca4a39b703d7cb217"
     for relative_path, metadata in lock["files"].items():
         payload = (ROOT / relative_path).read_bytes()
         assert __import__("hashlib").sha256(payload).hexdigest() == metadata["sha256"]
