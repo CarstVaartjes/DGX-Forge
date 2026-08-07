@@ -5,12 +5,13 @@ requires-python = ">=3.12"
 dependencies = [
   "alembic==1.16.4",
   "cryptography==46.0.7",
-  "dgx-agent-protocol==2.0.0",
+  "dgx-agent-protocol==2.1.0",
   "fastapi==0.116.1",
   "httpx==0.28.1",
   "jsonschema==4.25.1",
   "psycopg[binary]==3.2.9",
   "PyJWT==2.13.0",
+  "PyYAML==6.0.3",
   "sqlalchemy==2.0.42",
   "spark-profiles==0.1.0",
   "tomli-w==1.2.0",
@@ -21,7 +22,7 @@ dependencies = [
 dgx-control-offline = "dgx_control.offline:main"
 
 [tool.uv.sources]
-dgx-agent-protocol = { path = "../inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl" }
+dgx-agent-protocol = { path = "../inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl" }
 spark-profiles = { path = ".." }
 
 [dependency-groups]

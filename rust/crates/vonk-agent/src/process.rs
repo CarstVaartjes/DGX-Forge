@@ -1,0 +1,277 @@
+use std::{
+    fs::{self, File},
+    io::{Read, Seek, SeekFrom},
+    path::Path,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
+};
+
+use tempfile::tempfile;
+use thiserror::Error;
+
+const OUTPUT_LIMIT: u64 = 64 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Program {
+    Curl,
+    NvidiaSmi,
+    Oras,
+    Podman,
+}
+
+impl Program {
+    fn path(self) -> &'static str {
+        match self {
+            Self::Curl => "/usr/bin/curl",
+            Self::NvidiaSmi => "/usr/bin/nvidia-smi",
+            Self::Oras => "/usr/bin/oras",
+            Self::Podman => "/usr/bin/podman",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProcessOutput {
+    pub success: bool,
+    pub stdout: Vec<u8>,
+    pub stderr: Vec<u8>,
+}
+
+#[derive(Debug, Error)]
+pub enum ProcessError {
+    #[error("approved subprocess failed to start or complete")]
+    Io(#[from] std::io::Error),
+    #[error("approved subprocess exceeded its deadline")]
+    Timeout,
+    #[error("approved subprocess output exceeded its limit")]
+    OutputLimit,
+    #[error("approved subprocess exceeded its storage limit")]
+    StorageLimit,
+}
+
+pub trait ProcessRunner {
+    fn run(
+        &self,
+        program: Program,
+        arguments: &[String],
+        timeout: Duration,
+    ) -> Result<ProcessOutput, ProcessError>;
+
+    fn run_bounded_directory(
+        &self,
+        program: Program,
+        arguments: &[String],
+        timeout: Duration,
+        directory: &Path,
+        maximum_bytes: u64,
+    ) -> Result<ProcessOutput, ProcessError> {
+        let output = self.run(program, arguments, timeout)?;
+        if directory_bytes(directory)? > maximum_bytes {
+            return Err(ProcessError::StorageLimit);
+        }
+        Ok(output)
+    }
+}
+
+pub struct SystemProcessRunner;
+
+impl ProcessRunner for SystemProcessRunner {
+    fn run(
+        &self,
+        program: Program,
+        arguments: &[String],
+        timeout: Duration,
+    ) -> Result<ProcessOutput, ProcessError> {
+        run_process(program, arguments, timeout, None)
+    }
+
+    fn run_bounded_directory(
+        &self,
+        program: Program,
+        arguments: &[String],
+        timeout: Duration,
+        directory: &Path,
+        maximum_bytes: u64,
+    ) -> Result<ProcessOutput, ProcessError> {
+        run_process(
+            program,
+            arguments,
+            timeout,
+            Some((directory, maximum_bytes)),
+        )
+    }
+}
+
+fn run_process(
+    program: Program,
+    arguments: &[String],
+    timeout: Duration,
+    storage_limit: Option<(&Path, u64)>,
+) -> Result<ProcessOutput, ProcessError> {
+    let mut stdout = tempfile()?;
+    let mut stderr = tempfile()?;
+    let mut child = Command::new(program.path())
+        .args(arguments)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout.try_clone()?))
+        .stderr(Stdio::from(stderr.try_clone()?))
+        .env_clear()
+        .env("LANG", "C.UTF-8")
+        .env("LC_ALL", "C.UTF-8")
+        .env("PATH", "/usr/bin:/bin")
+        .env("HOME", "/var/lib/vonk-forge/agent")
+        .env("XDG_DATA_HOME", "/var/lib/vonk-forge/agent")
+        .env("XDG_RUNTIME_DIR", "/run/vonk-forge-agent")
+        .env(
+            "CONTAINERS_STORAGE_CONF",
+            "/etc/vonk-forge/containers-storage.conf",
+        )
+        .spawn()?;
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() >= timeout {
+            child.kill()?;
+            child.wait()?;
+            return Err(ProcessError::Timeout);
+        }
+        if stdout.metadata()?.len() > OUTPUT_LIMIT || stderr.metadata()?.len() > OUTPUT_LIMIT {
+            child.kill()?;
+            child.wait()?;
+            return Err(ProcessError::OutputLimit);
+        }
+        if let Some((directory, maximum_bytes)) = storage_limit {
+            match directory_bytes(directory) {
+                Ok(bytes) if bytes > maximum_bytes => {
+                    child.kill()?;
+                    child.wait()?;
+                    return Err(ProcessError::StorageLimit);
+                }
+                Err(error) => {
+                    child.kill()?;
+                    child.wait()?;
+                    return Err(ProcessError::Io(error));
+                }
+                Ok(_) => {}
+            }
+        }
+        thread::sleep(Duration::from_millis(25));
+    };
+    Ok(ProcessOutput {
+        success: status.success(),
+        stdout: bounded_read(&mut stdout)?,
+        stderr: bounded_read(&mut stderr)?,
+    })
+}
+
+fn directory_bytes(path: &Path) -> Result<u64, std::io::Error> {
+    if !path.exists() {
+        return Ok(0);
+    }
+    let mut total = 0_u64;
+    let mut pending = vec![path.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let metadata = entry.file_type()?;
+            if metadata.is_symlink() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "bounded subprocess created a symlink",
+                ));
+            }
+            if metadata.is_dir() {
+                pending.push(entry.path());
+            } else if metadata.is_file() {
+                total = total
+                    .checked_add(entry.metadata()?.len())
+                    .ok_or_else(|| std::io::Error::other("directory size overflow"))?;
+            }
+        }
+    }
+    Ok(total)
+}
+
+fn bounded_read(file: &mut File) -> Result<Vec<u8>, ProcessError> {
+    if file.metadata()?.len() > OUTPUT_LIMIT {
+        return Err(ProcessError::OutputLimit);
+    }
+    file.seek(SeekFrom::Start(0))?;
+    let mut value = Vec::new();
+    file.take(OUTPUT_LIMIT + 1).read_to_end(&mut value)?;
+    if value.len() as u64 > OUTPUT_LIMIT {
+        return Err(ProcessError::OutputLimit);
+    }
+    Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProcessError, ProcessRunner, Program, SystemProcessRunner};
+    use std::{fs, io::Write, net::TcpListener, thread, time::Duration};
+    use tempfile::tempdir;
+
+    #[test]
+    fn system_runner_kills_a_process_while_output_exceeds_the_live_cap() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n")
+                .unwrap();
+            for _ in 0..1024 {
+                if stream.write_all(&[b'x'; 1024]).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        });
+        let result = SystemProcessRunner.run(
+            Program::Curl,
+            &["--silent".to_owned(), format!("http://{address}")],
+            Duration::from_secs(5),
+        );
+        assert!(matches!(result, Err(ProcessError::OutputLimit)));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn curl_enforces_the_download_body_limit() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n")
+                .unwrap();
+            let _ = stream.write_all(&[b'x'; 1024]);
+        });
+        let directory = tempdir().unwrap();
+        let destination = directory.path().join("artifact");
+        let output = SystemProcessRunner
+            .run(
+                Program::Curl,
+                &[
+                    "--silent".to_owned(),
+                    "--show-error".to_owned(),
+                    "--max-filesize".to_owned(),
+                    "16".to_owned(),
+                    "--output".to_owned(),
+                    destination.display().to_string(),
+                    format!("http://{address}"),
+                ],
+                Duration::from_secs(5),
+            )
+            .unwrap();
+
+        assert!(!output.success);
+        if destination.exists() {
+            assert!(fs::metadata(destination).unwrap().len() <= 16);
+        }
+        server.join().unwrap();
+    }
+}

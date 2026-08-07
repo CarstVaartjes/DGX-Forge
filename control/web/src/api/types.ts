@@ -86,6 +86,46 @@ export type PackageRemovalPreview = components["schemas"]["PackageRemovalPreview
 export type PackageRemovalProgress = components["schemas"]["PackageProgressResponse"];
 export type PackagePlan = components["schemas"]["PackagePlanResponse"];
 export type PackageProgress = components["schemas"]["PackageProgressResponse"];
+export type CatalogRecipeSummary = components["schemas"]["RecipeSummaryResponse"];
+export type CatalogRecipeRevision = components["schemas"]["RecipeRevisionResponse"];
+export type CatalogRecipeList = components["schemas"]["RecipeListResponse"];
+export type CatalogRecipeDocument = Record<string, unknown>;
+export type SourceBundleReceipt = {sha256: string; archive_bytes: number; total_bytes: number; file_count: number; files: string[]};
+export type SourcePolicyFinding = {code: string; path: string; line: number | null; detail: string};
+export type SourcePolicyReport = {passed: boolean; source_bundle_sha256: string; dockerfile: string; findings: SourcePolicyFinding[]};
+export type RecipeMappingPlan = {recipe_revision_id: string; recipe_content_sha256: string; profile_name: string; generation: number; parameters: Record<string, unknown>; nodes: Array<{node_id: string; rank: number; role: string; endpoint_owner: boolean}>; placement_digest: string};
+export type RecipeBuildPlan = {build_id: string; recipe_revision_id: string; recipe_content_sha256: string; builder_node_id: string; source_bundle_sha256: string; build_input_sha256: string};
+export type RecipeOperation = {id: string; kind: string; owner_id: string; state: string; plan_digest: string; nodes: string[]; result: Record<string, unknown> | null};
+export type GlobalRecipeRevision = {
+  publisher: string; slug: string; recipe_id: string; revision_number: number; revision_id: string;
+  content_sha256: string; published_at: string; document: Record<string, unknown>;
+};
+export interface CatalogApi {
+  catalogRecipes(cursor?: string): Promise<CatalogRecipeList>;
+  catalogRecipe(recipeId: string): Promise<CatalogRecipeRevision>;
+  createCatalogRecipe(input: {slug: string; document: CatalogRecipeDocument}): Promise<CatalogRecipeRevision>;
+  updateCatalogRecipe(recipeId: string, expectedRevision: number, document: CatalogRecipeDocument): Promise<CatalogRecipeRevision>;
+  resolveCatalogRecipe(recipeId: string, expectedRevision: number): Promise<CatalogRecipeRevision>;
+  forkCatalogRecipe(recipeId: string, revision: number, slug: string): Promise<CatalogRecipeRevision>;
+  previewGlobalRecipe(uri: string): Promise<GlobalRecipeRevision>;
+  importGlobalRecipe(uri: string, expectedContentSha256: string): Promise<CatalogRecipeRevision>;
+  attachPublicationReport(recipeId: string, report: Record<string, unknown>): Promise<void>;
+  publicationExport(recipeId: string, publisher: string): Promise<Record<string, unknown>>;
+  uploadSourceBundle(sha256: string, archive: Uint8Array): Promise<SourceBundleReceipt>;
+  checkRecipeSource(recipeRevisionId: string): Promise<SourcePolicyReport>;
+  previewRecipeBuild(recipeRevisionId: string, builderNodeId: string): Promise<RecipeBuildPlan>;
+  buildRecipe(plan: RecipeBuildPlan): Promise<RecipeOperation>;
+  previewRecipeMapping(recipeRevisionId: string, profileName: string, nodeIds: string[]): Promise<RecipeMappingPlan>;
+  createRecipeMapping(plan: RecipeMappingPlan): Promise<{mapping_id: string; generation: number; placement_digest: string}>;
+}
+export type ImportDisposition = "imported" | "transformed" | "resolution_required" | "overlay_required" | "unsupported_blocking" | "dropped_redundant";
+export type ImportReportItem = {source_path: string; disposition: ImportDisposition; destination_path: string | null; reason_code: string; detail: string; blocking: boolean};
+export type SparkRunPreview = {draft_document: Record<string, unknown>; report: ImportReportItem[]; source_sha256: string; report_digest: string; redacted_source: Record<string, unknown>; runnable: boolean};
+export type SparkRunApplied = {recipe_id: string; revision_number: number; lifecycle: string};
+export interface SparkRunApi {
+  previewSparkRun(sourceYaml: string): Promise<SparkRunPreview>;
+  applySparkRun(sourceYaml: string, sourceSha256: string, reportDigest: string): Promise<SparkRunApplied>;
+}
 export interface ControlApi {
   fleet(): Promise<FleetResponse>; documents(kind: "models" | "profiles"): Promise<DocumentList>;
   jobs(cursor?: string): Promise<JobsResponse>;
@@ -98,6 +138,7 @@ export interface ControlApi {
   agents(): Promise<AgentsResponse>;
   enrollments(): Promise<EnrollmentListResponse>;
   createEnrollmentGrant(nodeId: string, ttlSeconds: number, signal?: AbortSignal): Promise<EnrollmentGrantResponse>;
+  createAgentMigrationGrant(nodeId: string, ttlSeconds: number, signal?: AbortSignal): Promise<EnrollmentGrantResponse>;
   approveEnrollment(enrollmentId: string): Promise<EnrollmentDecisionResponse>;
   rejectEnrollment(enrollmentId: string, reason: string): Promise<EnrollmentDecisionResponse>;
   revokeAgentNode(nodeId: string): Promise<void>;

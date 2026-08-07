@@ -3,24 +3,42 @@
 from .agent_summary import AgentSummary
 from .agents_response import AgentsResponse
 from .apply_platform_update_response_apply_update_api_v1_updates_post import ApplyPlatformUpdateResponseApplyUpdateApiV1UpdatesPost
+from .apply_request import ApplyRequest
 from .approve_platform_update_recovery_response_approve_update_resume_api_v1_updates_rollout_id_approve_resume_post import ApprovePlatformUpdateRecoveryResponseApproveUpdateResumeApiV1UpdatesRolloutIdApproveResumePost
 from .bounded_error_response import BoundedErrorResponse
+from .build_plan_response import BuildPlanResponse
+from .build_preview_request import BuildPreviewRequest
+from .build_request import BuildRequest
 from .cancel_reconciliation_response_cancel_reconciliation_api_v1_reconciliations_reconciliation_id_cancel_post import CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost
+from .catalog_problem import CatalogProblem
 from .change_request import ChangeRequest
+from .create_recipe_request import CreateRecipeRequest
+from .create_recipe_request_document import CreateRecipeRequestDocument
 from .deployment_response import DeploymentResponse
 from .deployments_response import DeploymentsResponse
 from .endpoint_response import EndpointResponse
 from .enrollment_decision_response import EnrollmentDecisionResponse
 from .enrollment_decision_response_state import EnrollmentDecisionResponseState
 from .enrollment_grant_response import EnrollmentGrantResponse
+from .enrollment_grant_response_purpose import EnrollmentGrantResponsePurpose
 from .enrollment_list_response import EnrollmentListResponse
 from .enrollment_summary import EnrollmentSummary
 from .fleet_status_response import FleetStatusResponse
+from .fork_recipe_request import ForkRecipeRequest
 from .get_platform_update_response_update_status_api_v1_updates_rollout_id_get import GetPlatformUpdateResponseUpdateStatusApiV1UpdatesRolloutIdGet
 from .get_platform_update_skew_response_update_skew_api_v1_updates_skew_get import GetPlatformUpdateSkewResponseUpdateSkewApiV1UpdatesSkewGet
 from .get_repository_response_repository_view_api_v1_repository_get import GetRepositoryResponseRepositoryViewApiV1RepositoryGet
+from .global_import_preview_request import GlobalImportPreviewRequest
+from .global_import_request import GlobalImportRequest
+from .global_revision_response import GlobalRevisionResponse
+from .global_revision_response_document import GlobalRevisionResponseDocument
 from .grant_request import GrantRequest
 from .http_validation_error import HTTPValidationError
+from .image_distribution_request import ImageDistributionRequest
+from .install_node_plan_response import InstallNodePlanResponse
+from .install_plan_response import InstallPlanResponse
+from .install_preview_request import InstallPreviewRequest
+from .install_request import InstallRequest
 from .job_detail_response import JobDetailResponse
 from .job_logs_response import JobLogsResponse
 from .job_operation_progress import JobOperationProgress
@@ -31,8 +49,19 @@ from .job_summary import JobSummary
 from .jobs_response import JobsResponse
 from .list_audit_events_response_audit_view_api_v1_audit_get import ListAuditEventsResponseAuditViewApiV1AuditGet
 from .list_documents_response_document_view_api_v1_documents_get import ListDocumentsResponseDocumentViewApiV1DocumentsGet
+from .mapping_node_plan_response import MappingNodePlanResponse
+from .mapping_plan_response import MappingPlanResponse
+from .mapping_plan_response_parameters import MappingPlanResponseParameters
+from .mapping_preview_request import MappingPreviewRequest
+from .mapping_preview_request_parameters import MappingPreviewRequestParameters
+from .mapping_request import MappingRequest
+from .mapping_request_parameters import MappingRequestParameters
+from .mapping_response import MappingResponse
+from .migration_grant_request import MigrationGrantRequest
 from .node_status import NodeStatus
 from .node_status_labels import NodeStatusLabels
+from .operation_response import OperationResponse
+from .operation_response_result_type_0 import OperationResponseResultType0
 from .package_candidate_response import PackageCandidateResponse
 from .package_candidate_response_metadata import PackageCandidateResponseMetadata
 from .package_candidates_response import PackageCandidatesResponse
@@ -73,6 +102,7 @@ from .plan_placements import PlanPlacements
 from .plan_platform_update_response_update_plan_api_v1_updates_plan_post import PlanPlatformUpdateResponseUpdatePlanApiV1UpdatesPlanPost
 from .plan_prepare_request import PlanPrepareRequest
 from .plan_quota import PlanQuota
+from .plan_reason import PlanReason
 from .plan_release import PlanRelease
 from .plan_release_request import PlanReleaseRequest
 from .plan_releases import PlanReleases
@@ -84,43 +114,87 @@ from .plan_verify_request import PlanVerifyRequest
 from .plan_workload_request import PlanWorkloadRequest
 from .plan_workload_requests import PlanWorkloadRequests
 from .preview_proposal_response_proposal_preview_api_v1_proposals_post import PreviewProposalResponseProposalPreviewApiV1ProposalsPost
+from .preview_request import PreviewRequest
 from .proposal_change_request import ProposalChangeRequest
 from .proposal_change_request_document import ProposalChangeRequestDocument
 from .proposal_request import ProposalRequest
+from .publication_export_request import PublicationExportRequest
+from .recipe_list_response import RecipeListResponse
+from .recipe_revision_response import RecipeRevisionResponse
+from .recipe_revision_response_document import RecipeRevisionResponseDocument
+from .recipe_revision_response_lifecycle import RecipeRevisionResponseLifecycle
+from .recipe_revision_response_origin import RecipeRevisionResponseOrigin
+from .recipe_summary_response import RecipeSummaryResponse
+from .recipe_summary_response_lifecycle import RecipeSummaryResponseLifecycle
+from .recipe_summary_response_origin import RecipeSummaryResponseOrigin
 from .reconciliation_accepted_response import ReconciliationAcceptedResponse
 from .reconciliation_cancel_request import ReconciliationCancelRequest
 from .reconciliation_plan_request import ReconciliationPlanRequest
 from .reconciliation_plan_response import ReconciliationPlanResponse
 from .reconciliation_request import ReconciliationRequest
 from .reject_request import RejectRequest
+from .request_key import RequestKey
+from .resolve_import_request import ResolveImportRequest
+from .resolve_import_request_overlays import ResolveImportRequestOverlays
+from .resolve_recipe_request import ResolveRecipeRequest
+from .run_node_plan_response import RunNodePlanResponse
+from .run_plan_response import RunPlanResponse
+from .run_preview_request import RunPreviewRequest
+from .run_request import RunRequest
+from .source_bundle_response import SourceBundleResponse
+from .source_check_request import SourceCheckRequest
+from .source_policy_finding_response import SourcePolicyFindingResponse
+from .source_policy_response import SourcePolicyResponse
 from .submit_change_response_submit_change_api_v1_changes_post import SubmitChangeResponseSubmitChangeApiV1ChangesPost
+from .test_report_request import TestReportRequest
+from .test_report_request_report import TestReportRequestReport
 from .update_apply_request import UpdateApplyRequest
 from .update_approve_resume_request import UpdateApproveResumeRequest
 from .update_plan_request import UpdatePlanRequest
+from .update_recipe_draft_request import UpdateRecipeDraftRequest
+from .update_recipe_draft_request_document import UpdateRecipeDraftRequestDocument
 from .validation_error import ValidationError
 
 __all__ = (
     "AgentsResponse",
     "AgentSummary",
     "ApplyPlatformUpdateResponseApplyUpdateApiV1UpdatesPost",
+    "ApplyRequest",
     "ApprovePlatformUpdateRecoveryResponseApproveUpdateResumeApiV1UpdatesRolloutIdApproveResumePost",
     "BoundedErrorResponse",
+    "BuildPlanResponse",
+    "BuildPreviewRequest",
+    "BuildRequest",
     "CancelReconciliationResponseCancelReconciliationApiV1ReconciliationsReconciliationIdCancelPost",
+    "CatalogProblem",
     "ChangeRequest",
+    "CreateRecipeRequest",
+    "CreateRecipeRequestDocument",
     "DeploymentResponse",
     "DeploymentsResponse",
     "EndpointResponse",
     "EnrollmentDecisionResponse",
     "EnrollmentDecisionResponseState",
     "EnrollmentGrantResponse",
+    "EnrollmentGrantResponsePurpose",
     "EnrollmentListResponse",
     "EnrollmentSummary",
     "FleetStatusResponse",
+    "ForkRecipeRequest",
     "GetPlatformUpdateResponseUpdateStatusApiV1UpdatesRolloutIdGet",
     "GetPlatformUpdateSkewResponseUpdateSkewApiV1UpdatesSkewGet",
     "GetRepositoryResponseRepositoryViewApiV1RepositoryGet",
+    "GlobalImportPreviewRequest",
+    "GlobalImportRequest",
+    "GlobalRevisionResponse",
+    "GlobalRevisionResponseDocument",
     "GrantRequest",
     "HTTPValidationError",
+    "ImageDistributionRequest",
+    "InstallNodePlanResponse",
+    "InstallPlanResponse",
+    "InstallPreviewRequest",
+    "InstallRequest",
     "JobDetailResponse",
     "JobLogsResponse",
     "JobOperationProgress",
@@ -131,8 +205,19 @@ __all__ = (
     "JobSummary",
     "ListAuditEventsResponseAuditViewApiV1AuditGet",
     "ListDocumentsResponseDocumentViewApiV1DocumentsGet",
+    "MappingNodePlanResponse",
+    "MappingPlanResponse",
+    "MappingPlanResponseParameters",
+    "MappingPreviewRequest",
+    "MappingPreviewRequestParameters",
+    "MappingRequest",
+    "MappingRequestParameters",
+    "MappingResponse",
+    "MigrationGrantRequest",
     "NodeStatus",
     "NodeStatusLabels",
+    "OperationResponse",
+    "OperationResponseResultType0",
     "PackageCandidateResponse",
     "PackageCandidateResponseMetadata",
     "PackageCandidatesResponse",
@@ -173,6 +258,7 @@ __all__ = (
     "PlanPlatformUpdateResponseUpdatePlanApiV1UpdatesPlanPost",
     "PlanPrepareRequest",
     "PlanQuota",
+    "PlanReason",
     "PlanRelease",
     "PlanReleaseRequest",
     "PlanReleases",
@@ -184,18 +270,44 @@ __all__ = (
     "PlanWorkloadRequest",
     "PlanWorkloadRequests",
     "PreviewProposalResponseProposalPreviewApiV1ProposalsPost",
+    "PreviewRequest",
     "ProposalChangeRequest",
     "ProposalChangeRequestDocument",
     "ProposalRequest",
+    "PublicationExportRequest",
+    "RecipeListResponse",
+    "RecipeRevisionResponse",
+    "RecipeRevisionResponseDocument",
+    "RecipeRevisionResponseLifecycle",
+    "RecipeRevisionResponseOrigin",
+    "RecipeSummaryResponse",
+    "RecipeSummaryResponseLifecycle",
+    "RecipeSummaryResponseOrigin",
     "ReconciliationAcceptedResponse",
     "ReconciliationCancelRequest",
     "ReconciliationPlanRequest",
     "ReconciliationPlanResponse",
     "ReconciliationRequest",
     "RejectRequest",
+    "RequestKey",
+    "ResolveImportRequest",
+    "ResolveImportRequestOverlays",
+    "ResolveRecipeRequest",
+    "RunNodePlanResponse",
+    "RunPlanResponse",
+    "RunPreviewRequest",
+    "RunRequest",
+    "SourceBundleResponse",
+    "SourceCheckRequest",
+    "SourcePolicyFindingResponse",
+    "SourcePolicyResponse",
     "SubmitChangeResponseSubmitChangeApiV1ChangesPost",
+    "TestReportRequest",
+    "TestReportRequestReport",
     "UpdateApplyRequest",
     "UpdateApproveResumeRequest",
     "UpdatePlanRequest",
+    "UpdateRecipeDraftRequest",
+    "UpdateRecipeDraftRequestDocument",
     "ValidationError",
 )

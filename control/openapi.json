@@ -4,6 +4,11 @@
       "AgentSummary": {
         "additionalProperties": false,
         "properties": {
+          "agent_implementation": {
+            "pattern": "^(pending|python|rust)$",
+            "title": "Agent Implementation",
+            "type": "string"
+          },
           "capabilities": {
             "items": {
               "type": "string"
@@ -45,6 +50,11 @@
             ],
             "title": "Last Seen At"
           },
+          "migration_state": {
+            "pattern": "^(required|complete)$",
+            "title": "Migration State",
+            "type": "string"
+          },
           "node_id": {
             "pattern": "^spk_[0-9a-f]{32}$",
             "title": "Node Id",
@@ -74,6 +84,8 @@
         "required": [
           "node_id",
           "state",
+          "agent_implementation",
+          "migration_state",
           "capabilities",
           "last_seen_at",
           "stale",
@@ -99,6 +111,34 @@
         "title": "AgentsResponse",
         "type": "object"
       },
+      "ApplyRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "report_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Report Digest",
+            "type": "string"
+          },
+          "source_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Sha256",
+            "type": "string"
+          },
+          "source_yaml": {
+            "maxLength": 262144,
+            "minLength": 1,
+            "title": "Source Yaml",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_yaml",
+          "source_sha256",
+          "report_digest"
+        ],
+        "title": "ApplyRequest",
+        "type": "object"
+      },
       "BoundedErrorResponse": {
         "additionalProperties": false,
         "properties": {
@@ -115,6 +155,128 @@
         "title": "BoundedErrorResponse",
         "type": "object"
       },
+      "BuildPlanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "build_id": {
+            "title": "Build Id",
+            "type": "string"
+          },
+          "build_input_sha256": {
+            "title": "Build Input Sha256",
+            "type": "string"
+          },
+          "builder_node_id": {
+            "title": "Builder Node Id",
+            "type": "string"
+          },
+          "recipe_content_sha256": {
+            "title": "Recipe Content Sha256",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "title": "Recipe Revision Id",
+            "type": "string"
+          },
+          "source_bundle_sha256": {
+            "title": "Source Bundle Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "build_id",
+          "recipe_revision_id",
+          "recipe_content_sha256",
+          "builder_node_id",
+          "source_bundle_sha256",
+          "build_input_sha256"
+        ],
+        "title": "BuildPlanResponse",
+        "type": "object"
+      },
+      "BuildPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "builder_node_id": {
+            "pattern": "^spk_[0-9a-f]{32}$",
+            "title": "Builder Node Id",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_revision_id",
+          "builder_node_id"
+        ],
+        "title": "BuildPreviewRequest",
+        "type": "object"
+      },
+      "BuildRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "build_input_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Build Input Sha256",
+            "type": "string"
+          },
+          "builder_node_id": {
+            "pattern": "^spk_[0-9a-f]{32}$",
+            "title": "Builder Node Id",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Revision Id",
+            "type": "string"
+          },
+          "request_key": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Request Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_revision_id",
+          "builder_node_id",
+          "build_input_sha256",
+          "request_key"
+        ],
+        "title": "BuildRequest",
+        "type": "object"
+      },
+      "CatalogProblem": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "maxLength": 256,
+            "minLength": 1,
+            "title": "Detail",
+            "type": "string"
+          },
+          "request_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "detail",
+          "request_id"
+        ],
+        "title": "CatalogProblem",
+        "type": "object"
+      },
       "ChangeRequest": {
         "additionalProperties": false,
         "properties": {
@@ -128,6 +290,27 @@
           "proposal_digest"
         ],
         "title": "ChangeRequest",
+        "type": "object"
+      },
+      "CreateRecipeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "document": {
+            "additionalProperties": true,
+            "title": "Document",
+            "type": "object"
+          },
+          "slug": {
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "slug",
+          "document"
+        ],
+        "title": "CreateRecipeRequest",
         "type": "object"
       },
       "DeploymentResponse": {
@@ -336,6 +519,14 @@
             "title": "Node Id",
             "type": "string"
           },
+          "purpose": {
+            "enum": [
+              "new-node",
+              "rust-migration"
+            ],
+            "title": "Purpose",
+            "type": "string"
+          },
           "token": {
             "maxLength": 64,
             "minLength": 43,
@@ -347,6 +538,7 @@
           "id",
           "node_id",
           "expires_at",
+          "purpose",
           "token"
         ],
         "title": "EnrollmentGrantResponse",
@@ -541,6 +733,123 @@
         "title": "FleetStatusResponse",
         "type": "object"
       },
+      "ForkRecipeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "revision": {
+            "minimum": 1.0,
+            "title": "Revision",
+            "type": "integer"
+          },
+          "slug": {
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "revision",
+          "slug"
+        ],
+        "title": "ForkRecipeRequest",
+        "type": "object"
+      },
+      "GlobalImportPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "uri": {
+            "maxLength": 256,
+            "minLength": 100,
+            "title": "Uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uri"
+        ],
+        "title": "GlobalImportPreviewRequest",
+        "type": "object"
+      },
+      "GlobalImportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_content_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Expected Content Sha256",
+            "type": "string"
+          },
+          "uri": {
+            "maxLength": 256,
+            "minLength": 100,
+            "title": "Uri",
+            "type": "string"
+          }
+        },
+        "required": [
+          "uri",
+          "expected_content_sha256"
+        ],
+        "title": "GlobalImportRequest",
+        "type": "object"
+      },
+      "GlobalRevisionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "content_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Content Sha256",
+            "type": "string"
+          },
+          "document": {
+            "additionalProperties": true,
+            "title": "Document",
+            "type": "object"
+          },
+          "published_at": {
+            "title": "Published At",
+            "type": "string"
+          },
+          "publisher": {
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+            "title": "Publisher",
+            "type": "string"
+          },
+          "recipe_id": {
+            "maxLength": 36,
+            "minLength": 32,
+            "title": "Recipe Id",
+            "type": "string"
+          },
+          "revision_id": {
+            "maxLength": 36,
+            "minLength": 32,
+            "title": "Revision Id",
+            "type": "string"
+          },
+          "revision_number": {
+            "minimum": 1.0,
+            "title": "Revision Number",
+            "type": "integer"
+          },
+          "slug": {
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+            "title": "Slug",
+            "type": "string"
+          }
+        },
+        "required": [
+          "publisher",
+          "slug",
+          "recipe_id",
+          "revision_number",
+          "revision_id",
+          "content_sha256",
+          "published_at",
+          "document"
+        ],
+        "title": "GlobalRevisionResponse",
+        "type": "object"
+      },
       "GrantRequest": {
         "additionalProperties": false,
         "properties": {
@@ -574,6 +883,257 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "ImageDistributionRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "mapping_generation": {
+            "minimum": 1.0,
+            "title": "Mapping Generation",
+            "type": "integer"
+          },
+          "mapping_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Mapping Id",
+            "type": "string"
+          },
+          "recipe_build_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Build Id",
+            "type": "string"
+          },
+          "request_key": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Request Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_build_id",
+          "mapping_id",
+          "mapping_generation",
+          "request_key"
+        ],
+        "title": "ImageDistributionRequest",
+        "type": "object"
+      },
+      "InstallNodePlanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "active_reserved_bytes": {
+            "title": "Active Reserved Bytes",
+            "type": "integer"
+          },
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/PlanReason"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "disk_floor_bytes": {
+            "title": "Disk Floor Bytes",
+            "type": "integer"
+          },
+          "free_after_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free After Bytes"
+          },
+          "free_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Bytes"
+          },
+          "inventory_observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inventory Observed At"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "required_bytes": {
+            "title": "Required Bytes",
+            "type": "integer"
+          },
+          "required_download_bytes": {
+            "title": "Required Download Bytes",
+            "type": "integer"
+          },
+          "reused_bytes": {
+            "title": "Reused Bytes",
+            "type": "integer"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/PlanReason"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "node_id",
+          "rank",
+          "role",
+          "allowed",
+          "inventory_observed_at",
+          "free_bytes",
+          "active_reserved_bytes",
+          "reused_bytes",
+          "required_download_bytes",
+          "required_bytes",
+          "disk_floor_bytes",
+          "free_after_bytes",
+          "blockers",
+          "warnings"
+        ],
+        "title": "InstallNodePlanResponse",
+        "type": "object"
+      },
+      "InstallPlanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "image_digest": {
+            "title": "Image Digest",
+            "type": "string"
+          },
+          "mapping_generation": {
+            "title": "Mapping Generation",
+            "type": "integer"
+          },
+          "mapping_id": {
+            "title": "Mapping Id",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/InstallNodePlanResponse"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "plan_digest": {
+            "title": "Plan Digest",
+            "type": "string"
+          },
+          "recipe_build_id": {
+            "title": "Recipe Build Id",
+            "type": "string"
+          },
+          "recipe_content_sha256": {
+            "title": "Recipe Content Sha256",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "title": "Recipe Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mapping_id",
+          "mapping_generation",
+          "recipe_build_id",
+          "image_digest",
+          "recipe_revision_id",
+          "recipe_content_sha256",
+          "allowed",
+          "nodes",
+          "plan_digest"
+        ],
+        "title": "InstallPlanResponse",
+        "type": "object"
+      },
+      "InstallPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "mapping_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Mapping Id",
+            "type": "string"
+          },
+          "recipe_build_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Build Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mapping_id",
+          "recipe_build_id"
+        ],
+        "title": "InstallPreviewRequest",
+        "type": "object"
+      },
+      "InstallRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "mapping_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Mapping Id",
+            "type": "string"
+          },
+          "plan_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Plan Digest",
+            "type": "string"
+          },
+          "recipe_build_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Build Id",
+            "type": "string"
+          },
+          "request_key": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Request Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mapping_id",
+          "recipe_build_id",
+          "plan_digest",
+          "request_key"
+        ],
+        "title": "InstallRequest",
         "type": "object"
       },
       "JobDetailResponse": {
@@ -935,6 +1495,207 @@
         "title": "JobsResponse",
         "type": "object"
       },
+      "MappingNodePlanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "endpoint_owner": {
+            "title": "Endpoint Owner",
+            "type": "boolean"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_id",
+          "rank",
+          "role",
+          "endpoint_owner"
+        ],
+        "title": "MappingNodePlanResponse",
+        "type": "object"
+      },
+      "MappingPlanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "generation": {
+            "title": "Generation",
+            "type": "integer"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/MappingNodePlanResponse"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "placement_digest": {
+            "title": "Placement Digest",
+            "type": "string"
+          },
+          "profile_name": {
+            "title": "Profile Name",
+            "type": "string"
+          },
+          "recipe_content_sha256": {
+            "title": "Recipe Content Sha256",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "title": "Recipe Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_revision_id",
+          "recipe_content_sha256",
+          "profile_name",
+          "generation",
+          "parameters",
+          "nodes",
+          "placement_digest"
+        ],
+        "title": "MappingPlanResponse",
+        "type": "object"
+      },
+      "MappingPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "node_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1024,
+            "minItems": 1,
+            "title": "Node Ids",
+            "type": "array"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "maxProperties": 128,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "profile_name": {
+            "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+            "title": "Profile Name",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_revision_id",
+          "profile_name",
+          "node_ids"
+        ],
+        "title": "MappingPreviewRequest",
+        "type": "object"
+      },
+      "MappingRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "node_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 1024,
+            "minItems": 1,
+            "title": "Node Ids",
+            "type": "array"
+          },
+          "parameters": {
+            "additionalProperties": true,
+            "maxProperties": 128,
+            "title": "Parameters",
+            "type": "object"
+          },
+          "placement_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Placement Digest",
+            "type": "string"
+          },
+          "profile_name": {
+            "pattern": "^[a-z][a-z0-9_.-]{0,63}$",
+            "title": "Profile Name",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Revision Id",
+            "type": "string"
+          },
+          "request_key": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Request Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_revision_id",
+          "profile_name",
+          "node_ids",
+          "placement_digest",
+          "request_key"
+        ],
+        "title": "MappingRequest",
+        "type": "object"
+      },
+      "MappingResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "generation": {
+            "title": "Generation",
+            "type": "integer"
+          },
+          "mapping_id": {
+            "title": "Mapping Id",
+            "type": "string"
+          },
+          "placement_digest": {
+            "title": "Placement Digest",
+            "type": "string"
+          }
+        },
+        "required": [
+          "mapping_id",
+          "generation",
+          "placement_digest"
+        ],
+        "title": "MappingResponse",
+        "type": "object"
+      },
+      "MigrationGrantRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "ttl_seconds": {
+            "default": 600,
+            "maximum": 600.0,
+            "minimum": 1.0,
+            "title": "Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "title": "MigrationGrantRequest",
+        "type": "object"
+      },
       "NodeStatus": {
         "additionalProperties": false,
         "properties": {
@@ -960,6 +1721,17 @@
             ],
             "title": "Agent Build Digest"
           },
+          "agent_implementation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Implementation"
+          },
           "agent_last_seen_at": {
             "anyOf": [
               {
@@ -970,6 +1742,17 @@
               }
             ],
             "title": "Agent Last Seen At"
+          },
+          "agent_migration_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Migration State"
           },
           "agent_online": {
             "default": false,
@@ -1151,6 +1934,61 @@
           "disk_available_bytes"
         ],
         "title": "NodeStatus",
+        "type": "object"
+      },
+      "OperationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "owner_id": {
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "plan_digest": {
+            "title": "Plan Digest",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "owner_id",
+          "state",
+          "plan_digest",
+          "nodes",
+          "result"
+        ],
+        "title": "OperationResponse",
         "type": "object"
       },
       "PackageCandidateResponse": {
@@ -2920,6 +3758,29 @@
         "title": "PlanQuota",
         "type": "object"
       },
+      "PlanReason": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "detail"
+        ],
+        "title": "PlanReason",
+        "type": "object"
+      },
       "PlanRelease": {
         "additionalProperties": false,
         "properties": {
@@ -3226,6 +4087,22 @@
         "title": "PlanWorkloadRequests",
         "type": "object"
       },
+      "PreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "source_yaml": {
+            "maxLength": 262144,
+            "minLength": 1,
+            "title": "Source Yaml",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_yaml"
+        ],
+        "title": "PreviewRequest",
+        "type": "object"
+      },
       "ProposalChangeRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3271,6 +4148,316 @@
           "changes"
         ],
         "title": "ProposalRequest",
+        "type": "object"
+      },
+      "PublicationExportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "publisher": {
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+            "title": "Publisher",
+            "type": "string"
+          }
+        },
+        "required": [
+          "publisher"
+        ],
+        "title": "PublicationExportRequest",
+        "type": "object"
+      },
+      "RecipeListResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "next_cursor": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "recipes": {
+            "items": {
+              "$ref": "#/components/schemas/RecipeSummaryResponse"
+            },
+            "maxItems": 100,
+            "title": "Recipes",
+            "type": "array"
+          }
+        },
+        "required": [
+          "recipes"
+        ],
+        "title": "RecipeListResponse",
+        "type": "object"
+      },
+      "RecipeRevisionResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_count": {
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Artifact Count",
+            "type": "integer"
+          },
+          "content_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Sha256"
+          },
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "created_by": {
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Created By",
+            "type": "string"
+          },
+          "description": {
+            "maxLength": 4000,
+            "minLength": 1,
+            "title": "Description",
+            "type": "string"
+          },
+          "document": {
+            "additionalProperties": true,
+            "title": "Document",
+            "type": "object"
+          },
+          "expected_download_bytes": {
+            "minimum": 1.0,
+            "title": "Expected Download Bytes",
+            "type": "integer"
+          },
+          "id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Id",
+            "type": "string"
+          },
+          "lifecycle": {
+            "enum": [
+              "draft",
+              "blocked",
+              "resolved",
+              "deprecated"
+            ],
+            "title": "Lifecycle",
+            "type": "string"
+          },
+          "maximum_installed_bytes_per_node": {
+            "minimum": 1.0,
+            "title": "Maximum Installed Bytes Per Node",
+            "type": "integer"
+          },
+          "maximum_runtime_memory_bytes_per_node": {
+            "minimum": 1.0,
+            "title": "Maximum Runtime Memory Bytes Per Node",
+            "type": "integer"
+          },
+          "origin": {
+            "enum": [
+              "local",
+              "sparkrun",
+              "global"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "profile_node_counts": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Profile Node Counts",
+            "type": "array"
+          },
+          "recipe_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Id",
+            "type": "string"
+          },
+          "revision_number": {
+            "minimum": 1.0,
+            "title": "Revision Number",
+            "type": "integer"
+          },
+          "runtime_family": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Runtime Family",
+            "type": "string"
+          },
+          "schema_version": {
+            "const": 1,
+            "title": "Schema Version",
+            "type": "integer"
+          },
+          "slug": {
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+            "title": "Slug",
+            "type": "string"
+          },
+          "source_bundle_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Bundle Sha256",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_id",
+          "slug",
+          "title",
+          "origin",
+          "revision_number",
+          "lifecycle",
+          "runtime_family",
+          "source_bundle_sha256",
+          "artifact_count",
+          "expected_download_bytes",
+          "profile_node_counts",
+          "maximum_installed_bytes_per_node",
+          "maximum_runtime_memory_bytes_per_node",
+          "id",
+          "description",
+          "schema_version",
+          "document",
+          "created_by",
+          "created_at"
+        ],
+        "title": "RecipeRevisionResponse",
+        "type": "object"
+      },
+      "RecipeSummaryResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "artifact_count": {
+            "maximum": 32.0,
+            "minimum": 0.0,
+            "title": "Artifact Count",
+            "type": "integer"
+          },
+          "content_sha256": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Sha256"
+          },
+          "expected_download_bytes": {
+            "minimum": 1.0,
+            "title": "Expected Download Bytes",
+            "type": "integer"
+          },
+          "lifecycle": {
+            "enum": [
+              "draft",
+              "blocked",
+              "resolved",
+              "deprecated"
+            ],
+            "title": "Lifecycle",
+            "type": "string"
+          },
+          "maximum_installed_bytes_per_node": {
+            "minimum": 1.0,
+            "title": "Maximum Installed Bytes Per Node",
+            "type": "integer"
+          },
+          "maximum_runtime_memory_bytes_per_node": {
+            "minimum": 1.0,
+            "title": "Maximum Runtime Memory Bytes Per Node",
+            "type": "integer"
+          },
+          "origin": {
+            "enum": [
+              "local",
+              "sparkrun",
+              "global"
+            ],
+            "title": "Origin",
+            "type": "string"
+          },
+          "profile_node_counts": {
+            "items": {
+              "type": "integer"
+            },
+            "minItems": 1,
+            "title": "Profile Node Counts",
+            "type": "array"
+          },
+          "recipe_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Id",
+            "type": "string"
+          },
+          "revision_number": {
+            "minimum": 1.0,
+            "title": "Revision Number",
+            "type": "integer"
+          },
+          "runtime_family": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Runtime Family",
+            "type": "string"
+          },
+          "slug": {
+            "pattern": "^[a-z0-9][a-z0-9-]{1,62}$",
+            "title": "Slug",
+            "type": "string"
+          },
+          "source_bundle_sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Source Bundle Sha256",
+            "type": "string"
+          },
+          "title": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_id",
+          "slug",
+          "title",
+          "origin",
+          "revision_number",
+          "lifecycle",
+          "runtime_family",
+          "source_bundle_sha256",
+          "artifact_count",
+          "expected_download_bytes",
+          "profile_node_counts",
+          "maximum_installed_bytes_per_node",
+          "maximum_runtime_memory_bytes_per_node"
+        ],
+        "title": "RecipeSummaryResponse",
         "type": "object"
       },
       "ReconciliationAcceptedResponse": {
@@ -3457,6 +4644,442 @@
         "title": "RejectRequest",
         "type": "object"
       },
+      "RequestKey": {
+        "additionalProperties": false,
+        "properties": {
+          "request_key": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Request Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_key"
+        ],
+        "title": "RequestKey",
+        "type": "object"
+      },
+      "ResolveImportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          },
+          "overlays": {
+            "additionalProperties": true,
+            "title": "Overlays",
+            "type": "object"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "overlays"
+        ],
+        "title": "ResolveImportRequest",
+        "type": "object"
+      },
+      "ResolveRecipeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision"
+        ],
+        "title": "ResolveRecipeRequest",
+        "type": "object"
+      },
+      "RunNodePlanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "active_reserved_bytes": {
+            "title": "Active Reserved Bytes",
+            "type": "integer"
+          },
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "available_memory_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Available Memory Bytes"
+          },
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/PlanReason"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "endpoint_owner": {
+            "title": "Endpoint Owner",
+            "type": "boolean"
+          },
+          "fabric_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fabric Address"
+          },
+          "fabric_bandwidth_mbps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fabric Bandwidth Mbps"
+          },
+          "free_after_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free After Bytes"
+          },
+          "inventory_observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inventory Observed At"
+          },
+          "memory_floor_bytes": {
+            "title": "Memory Floor Bytes",
+            "type": "integer"
+          },
+          "memory_kind": {
+            "title": "Memory Kind",
+            "type": "string"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "port": {
+            "title": "Port",
+            "type": "integer"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "rendezvous_port": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rendezvous Port"
+          },
+          "required_memory_bytes": {
+            "title": "Required Memory Bytes",
+            "type": "integer"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/PlanReason"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "node_id",
+          "rank",
+          "role",
+          "endpoint_owner",
+          "port",
+          "allowed",
+          "inventory_observed_at",
+          "memory_kind",
+          "required_memory_bytes",
+          "available_memory_bytes",
+          "active_reserved_bytes",
+          "free_after_bytes",
+          "memory_floor_bytes",
+          "fabric_address",
+          "fabric_bandwidth_mbps",
+          "rendezvous_port",
+          "blockers",
+          "warnings"
+        ],
+        "title": "RunNodePlanResponse",
+        "type": "object"
+      },
+      "RunPlanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "mapping_generation": {
+            "title": "Mapping Generation",
+            "type": "integer"
+          },
+          "mapping_id": {
+            "title": "Mapping Id",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/RunNodePlanResponse"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "plan_digest": {
+            "title": "Plan Digest",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "title": "Recipe Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id",
+          "mapping_id",
+          "mapping_generation",
+          "recipe_revision_id",
+          "allowed",
+          "nodes",
+          "plan_digest"
+        ],
+        "title": "RunPlanResponse",
+        "type": "object"
+      },
+      "RunPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "installation_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Installation Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id"
+        ],
+        "title": "RunPreviewRequest",
+        "type": "object"
+      },
+      "RunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Alias",
+            "type": "string"
+          },
+          "installation_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "plan_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Plan Digest",
+            "type": "string"
+          },
+          "request_key": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Request Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id",
+          "alias",
+          "plan_digest",
+          "request_key"
+        ],
+        "title": "RunRequest",
+        "type": "object"
+      },
+      "SourceBundleResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "archive_bytes": {
+            "minimum": 1.0,
+            "title": "Archive Bytes",
+            "type": "integer"
+          },
+          "file_count": {
+            "maximum": 4096.0,
+            "minimum": 1.0,
+            "title": "File Count",
+            "type": "integer"
+          },
+          "files": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4096,
+            "minItems": 1,
+            "title": "Files",
+            "type": "array"
+          },
+          "sha256": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Sha256",
+            "type": "string"
+          },
+          "total_bytes": {
+            "minimum": 0.0,
+            "title": "Total Bytes",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "sha256",
+          "archive_bytes",
+          "total_bytes",
+          "file_count",
+          "files"
+        ],
+        "title": "SourceBundleResponse",
+        "type": "object"
+      },
+      "SourceCheckRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "recipe_revision_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_revision_id"
+        ],
+        "title": "SourceCheckRequest",
+        "type": "object"
+      },
+      "SourcePolicyFindingResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "line": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Line"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "path",
+          "line",
+          "detail"
+        ],
+        "title": "SourcePolicyFindingResponse",
+        "type": "object"
+      },
+      "SourcePolicyResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "dockerfile": {
+            "title": "Dockerfile",
+            "type": "string"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/SourcePolicyFindingResponse"
+            },
+            "title": "Findings",
+            "type": "array"
+          },
+          "passed": {
+            "title": "Passed",
+            "type": "boolean"
+          },
+          "source_bundle_sha256": {
+            "title": "Source Bundle Sha256",
+            "type": "string"
+          }
+        },
+        "required": [
+          "passed",
+          "source_bundle_sha256",
+          "dockerfile",
+          "findings"
+        ],
+        "title": "SourcePolicyResponse",
+        "type": "object"
+      },
+      "TestReportRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "report": {
+            "additionalProperties": true,
+            "title": "Report",
+            "type": "object"
+          }
+        },
+        "required": [
+          "report"
+        ],
+        "title": "TestReportRequest",
+        "type": "object"
+      },
       "UpdateApplyRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3500,6 +5123,27 @@
           "release"
         ],
         "title": "UpdatePlanRequest",
+        "type": "object"
+      },
+      "UpdateRecipeDraftRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "document": {
+            "additionalProperties": true,
+            "title": "Document",
+            "type": "object"
+          },
+          "expected_revision": {
+            "minimum": 1.0,
+            "title": "Expected Revision",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "expected_revision",
+          "document"
+        ],
+        "title": "UpdateRecipeDraftRequest",
         "type": "object"
       },
       "ValidationError": {
@@ -3950,6 +5594,100 @@
         "summary": "Reject"
       }
     },
+    "/api/v1/agents/nodes/{node_id}/migration-grant": {
+      "post": {
+        "operationId": "createAgentMigrationGrant",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MigrationGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentGrantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create Migration Grant"
+      }
+    },
     "/api/v1/agents/nodes/{node_id}/revoke": {
       "post": {
         "operationId": "revokeAgentNode",
@@ -4050,6 +5788,969 @@
           }
         ],
         "summary": "Audit View"
+      }
+    },
+    "/api/v1/catalog/imports/global": {
+      "post": {
+        "operationId": "importGlobalRecipe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GlobalImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Import Global Recipe"
+      }
+    },
+    "/api/v1/catalog/imports/global/preview": {
+      "post": {
+        "operationId": "previewGlobalRecipeImport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GlobalImportPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GlobalRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview Global Import"
+      }
+    },
+    "/api/v1/catalog/imports/sparkrun": {
+      "post": {
+        "operationId": "applySparkRunImport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Apply"
+      }
+    },
+    "/api/v1/catalog/imports/sparkrun/preview": {
+      "post": {
+        "operationId": "previewSparkRunImport",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview"
+      }
+    },
+    "/api/v1/catalog/recipes": {
+      "get": {
+        "operationId": "listLocalRecipes",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 20,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeListResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "List Recipes"
+      },
+      "post": {
+        "operationId": "createLocalRecipe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRecipeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create Recipe"
+      }
+    },
+    "/api/v1/catalog/recipes/{recipe_id}": {
+      "get": {
+        "operationId": "getLocalRecipe",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recipe_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Recipe Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Recipe"
+      }
+    },
+    "/api/v1/catalog/recipes/{recipe_id}/draft": {
+      "put": {
+        "operationId": "updateLocalRecipeDraft",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recipe_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Recipe Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateRecipeDraftRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Update Draft"
+      }
+    },
+    "/api/v1/catalog/recipes/{recipe_id}/fork": {
+      "post": {
+        "operationId": "forkLocalRecipe",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recipe_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Recipe Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ForkRecipeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Fork Recipe"
+      }
+    },
+    "/api/v1/catalog/recipes/{recipe_id}/publication-export": {
+      "post": {
+        "operationId": "exportRecipeForPublication",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recipe_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Recipe Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublicationExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Export For Publication"
+      }
+    },
+    "/api/v1/catalog/recipes/{recipe_id}/publication-report": {
+      "put": {
+        "operationId": "attachRecipePublicationReport",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recipe_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Recipe Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Attach Publication Report"
+      }
+    },
+    "/api/v1/catalog/recipes/{recipe_id}/resolve": {
+      "post": {
+        "operationId": "resolveLocalRecipe",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recipe_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Recipe Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveRecipeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecipeRevisionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Resolve Recipe"
+      }
+    },
+    "/api/v1/catalog/recipes/{recipe_id}/resolve-import": {
+      "post": {
+        "operationId": "resolveSparkRunImport",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "recipe_id",
+            "required": true,
+            "schema": {
+              "title": "Recipe Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveImportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Resolve Imported"
+      }
+    },
+    "/api/v1/catalog/source-bundles/{sha256}": {
+      "get": {
+        "operationId": "downloadLocalRecipeSourceBundle",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sha256",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              },
+              "application/vnd.vonk.source-bundle.v1+tar": {
+                "schema": {
+                  "format": "binary",
+                  "type": "string"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Not Found"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Download Source Bundle"
+      },
+      "put": {
+        "operationId": "uploadLocalRecipeSourceBundle",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "sha256",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{64}$",
+              "title": "Sha256",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourceBundleResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogProblem"
+                }
+              }
+            },
+            "description": "Unprocessable Entity"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Upload Source Bundle"
       }
     },
     "/api/v1/changes": {
@@ -7196,6 +9897,646 @@
           }
         ],
         "summary": "Proposal Preview"
+      }
+    },
+    "/api/v1/recipes/build-plans/preview": {
+      "post": {
+        "operationId": "previewRecipeBuild",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BuildPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BuildPlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview Build"
+      }
+    },
+    "/api/v1/recipes/builds": {
+      "post": {
+        "operationId": "buildRecipe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BuildRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Build"
+      }
+    },
+    "/api/v1/recipes/image-distributions": {
+      "post": {
+        "operationId": "distributeRecipeImage",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImageDistributionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Distribute Image"
+      }
+    },
+    "/api/v1/recipes/install-plans/preview": {
+      "post": {
+        "operationId": "previewRecipeInstall",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallPlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview Install"
+      }
+    },
+    "/api/v1/recipes/installations": {
+      "post": {
+        "operationId": "installRecipe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Install"
+      }
+    },
+    "/api/v1/recipes/installations/{installation_id}/uninstall": {
+      "post": {
+        "operationId": "uninstallRecipe",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "installation_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Installation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Uninstall"
+      }
+    },
+    "/api/v1/recipes/mapping-plans/preview": {
+      "post": {
+        "operationId": "previewRecipeMapping",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MappingPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MappingPlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview Mapping"
+      }
+    },
+    "/api/v1/recipes/mappings": {
+      "post": {
+        "operationId": "createRecipeMapping",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MappingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MappingResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create Mapping"
+      }
+    },
+    "/api/v1/recipes/operations/{operation_id}": {
+      "get": {
+        "operationId": "getRecipeOperation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Operation"
+      }
+    },
+    "/api/v1/recipes/operations/{operation_id}/retry": {
+      "post": {
+        "operationId": "retryRecipeOperation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Retry"
+      }
+    },
+    "/api/v1/recipes/run-plans/preview": {
+      "post": {
+        "operationId": "previewRecipeRun",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview Run"
+      }
+    },
+    "/api/v1/recipes/runs": {
+      "post": {
+        "operationId": "startRecipeRun",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Start"
+      }
+    },
+    "/api/v1/recipes/runs/{run_id}/stop": {
+      "post": {
+        "operationId": "stopRecipeRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Stop"
+      }
+    },
+    "/api/v1/recipes/source-checks": {
+      "post": {
+        "operationId": "checkRecipeBuildSource",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourcePolicyResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Check Source"
       }
     },
     "/api/v1/reconciliations": {

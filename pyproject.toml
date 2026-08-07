@@ -11,6 +11,7 @@ dependencies = [
   "attrs==26.1.0",
   "httpx==0.28.1",
   "jsonschema>=4.23",
+  "python-dateutil==2.9.0.post0",
   "securesystemslib[crypto]==1.4.0",
   "tuf==7.0.0",
 ]

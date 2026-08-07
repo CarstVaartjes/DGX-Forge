@@ -8,12 +8,25 @@ from .contracts import (
     schema_validator,
     validate_schema_message,
 )
+from .host_helper import (
+    AgentSlot,
+    HostHelperGrantClaims,
+    HostHelperOperation,
+    HostHelperSignature,
+    HostOperationKind,
+    ManagedArea,
+    RestartUnit,
+    SignedHostHelperGrant,
+    host_artifact_signing_bytes,
+    host_helper_grant_signing_bytes,
+)
 from .package_operations import (
     PACKAGE_OPERATIONS,
     RELEASE_BOUND_PACKAGE_OPERATIONS,
     AgentDirective,
     PackageOperationRequest,
 )
+from .recipe_operations import RECIPE_OPERATIONS, RecipeOperationRequest
 from .workload_packages import (
     ComponentDescriptor,
     OciBundleMetadata,
@@ -31,6 +44,7 @@ from .workload_packages import (
 
 __all__ = [
     "PACKAGE_OPERATIONS",
+    "RECIPE_OPERATIONS",
     "RELEASE_BOUND_PACKAGE_OPERATIONS",
     "AgentClaim",
     "AgentDirective",
@@ -38,7 +52,13 @@ __all__ = [
     "AgentProgress",
     "AgentProtocolError",
     "AgentResult",
+    "AgentSlot",
     "ComponentDescriptor",
+    "HostHelperGrantClaims",
+    "HostHelperOperation",
+    "HostHelperSignature",
+    "HostOperationKind",
+    "ManagedArea",
     "OciBundleMetadata",
     "PackageHelperGrantClaims",
     "PackageHelperOperation",
@@ -47,9 +67,14 @@ __all__ = [
     "PackageOperationRequest",
     "PackageReleaseGraph",
     "PackageReleaseLock",
+    "RecipeOperationRequest",
+    "RestartUnit",
+    "SignedHostHelperGrant",
     "SignedPackageHelperGrant",
     "SignedPackageObjectReceipt",
     "canonical_message",
+    "host_artifact_signing_bytes",
+    "host_helper_grant_signing_bytes",
     "package_helper_grant_signing_bytes",
     "package_object_receipt_signing_bytes",
     "schema_validator",

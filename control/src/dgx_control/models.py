@@ -1,7 +1,14 @@
-"""Operational database models; Git remains definition authority."""
+"""Local catalog authority and operational database state.
+
+PostgreSQL is authoritative for recipes, revisions, placement, and runtime
+state. Git remains an immutable source for legacy package definitions and
+signed release evidence while those adapters are migrated.
+"""
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
 from datetime import datetime
 
@@ -17,6 +24,8 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -50,7 +59,9 @@ def _uuid_shape(column: str) -> str:
 
 class Job(Base):
     __tablename__ = "jobs"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
     request_id: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
     kind: Mapped[str] = mapped_column(String(80), nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
@@ -62,8 +73,12 @@ class Job(Base):
     result: Mapped[dict[str, object] | None] = mapped_column(JSON)
     status_reason: Mapped[str | None] = mapped_column(Text)
     current_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     reconciliation_id: Mapped[str | None] = mapped_column(
         ForeignKey("reconciliations.id"), unique=True, index=True
     )
@@ -72,33 +87,47 @@ class Job(Base):
 class JobAttempt(Base):
     __tablename__ = "job_attempts"
     __table_args__ = (UniqueConstraint("job_id", "attempt"),)
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    job_id: Mapped[str] = mapped_column(
+        ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     attempt: Mapped[int] = mapped_column(Integer, nullable=False)
     fence: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
     worker_id: Mapped[str] = mapped_column(String(200), nullable=False)
-    lease_deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    lease_deadline: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     state: Mapped[str] = mapped_column(String(32), nullable=False)
 
 
 class AuditEvent(Base):
     __tablename__ = "audit_events"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
     request_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     actor: Mapped[str] = mapped_column(String(200), nullable=False)
     action: Mapped[str] = mapped_column(String(120), nullable=False)
     base_commit: Mapped[str | None] = mapped_column(String(128))
     targets: Mapped[list[str]] = mapped_column(JSON, nullable=False)
-    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
 
 
 class Observation(Base):
     __tablename__ = "observations"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
     node_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     kind: Mapped[str] = mapped_column(String(80), nullable=False)
     payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
-    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
 
 
 class ControlProcessHeartbeat(Base):
@@ -156,7 +185,9 @@ class ControlProcessHeartbeat(Base):
 
 class Reconciliation(Base):
     __tablename__ = "reconciliations"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
     base_commit: Mapped[str] = mapped_column(String(128), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False)
     summary: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
@@ -177,9 +208,7 @@ class Reconciliation(Base):
         default="5c061eb8dfce0a3f2bcbfbf06cb71d695c33e8f4269e17bfe5cd1cda0054cdc5",
         server_default="5c061eb8dfce0a3f2bcbfbf06cb71d695c33e8f4269e17bfe5cd1cda0054cdc5",
     )
-    plan_digest: Mapped[str | None] = mapped_column(
-        String(64), unique=True, index=True
-    )
+    plan_digest: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
     resolved_plan: Mapped[dict[str, object] | None] = mapped_column(JSON)
     current_phase: Mapped[str] = mapped_column(
         String(32), nullable=False, default="legacy", server_default="legacy"
@@ -191,7 +220,9 @@ class Reconciliation(Base):
     completion_generation: Mapped[int | None] = mapped_column(
         BigInteger, unique=True, index=True
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
 
 
 class ReconciliationCompletionGeneration(Base):
@@ -326,8 +357,7 @@ class RoutePublication(Base):
             name="ck_route_publications_bundle_digest_length",
         ),
         CheckConstraint(
-            "activation_marker_digest IS NULL OR "
-            "length(activation_marker_digest) = 64",
+            "activation_marker_digest IS NULL OR length(activation_marker_digest) = 64",
             name="ck_route_publications_activation_marker_digest_length",
         ),
         CheckConstraint(
@@ -340,9 +370,7 @@ class RoutePublication(Base):
         ForeignKey("reconciliations.id", ondelete="CASCADE"), primary_key=True
     )
     state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    generation: Mapped[int | None] = mapped_column(
-        BigInteger, unique=True, index=True
-    )
+    generation: Mapped[int | None] = mapped_column(BigInteger, unique=True, index=True)
     plan_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     evidence_digest: Mapped[str | None] = mapped_column(String(64))
     route_digest: Mapped[str | None] = mapped_column(String(64))
@@ -383,7 +411,9 @@ class RoutePublicationOwner(Base):
 
 class User(Base):
     __tablename__ = "users"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
     subject: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
     role: Mapped[str] = mapped_column(String(32), nullable=False)
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -391,10 +421,16 @@ class User(Base):
 
 class LoginSession(Base):
     __tablename__ = "sessions"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -405,9 +441,28 @@ class AgentNode(Base):
             "architecture IS NULL OR architecture IN ('linux-arm64', 'linux-x86_64')",
             name="ck_agent_nodes_architecture",
         ),
+        CheckConstraint(
+            "agent_implementation IN ('pending', 'python', 'rust')",
+            name="ck_agent_nodes_implementation",
+        ),
+        CheckConstraint(
+            "migration_state IN ('required', 'complete')",
+            name="ck_agent_nodes_migration_state",
+        ),
+        CheckConstraint(
+            "(agent_implementation = 'rust' AND migration_state = 'complete') OR "
+            "(agent_implementation IN ('pending', 'python') AND migration_state = 'required')",
+            name="ck_agent_nodes_migration_consistency",
+        ),
     )
     node_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     state: Mapped[str] = mapped_column(String(24), nullable=False)
+    agent_implementation: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="python", server_default="pending"
+    )
+    migration_state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="required", server_default="required"
+    )
     protocol_version: Mapped[int | None] = mapped_column(Integer)
     architecture: Mapped[str | None] = mapped_column(String(16))
     platform_version: Mapped[str | None] = mapped_column(String(32))
@@ -467,15 +522,21 @@ class NodeMutationLease(Base):
     acquired_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False
     )
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class AgentCertificate(Base):
     __tablename__ = "agent_certificates"
     __table_args__ = (UniqueConstraint("node_id", "generation"),)
     serial: Mapped[str] = mapped_column(String(128), primary_key=True)
-    node_id: Mapped[str] = mapped_column(ForeignKey("agent_nodes.node_id"), nullable=False, index=True)
-    not_before: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    node_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_nodes.node_id"), nullable=False, index=True
+    )
+    not_before: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     not_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     fingerprint: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
     state: Mapped[str] = mapped_column(String(24), nullable=False, default="active")
@@ -503,9 +564,7 @@ class AgentPresence(Base):
     certificate_serial: Mapped[str] = mapped_column(
         ForeignKey("agent_certificates.serial"), nullable=False, index=True
     )
-    certificate_fingerprint: Mapped[str] = mapped_column(
-        String(128), nullable=False
-    )
+    certificate_fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
     management_address: Mapped[str] = mapped_column(String(45), nullable=False)
     observed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
@@ -521,10 +580,16 @@ class AgentCertificateRotation(Base):
     generation: Mapped[int] = mapped_column(Integer, nullable=False)
     csr_pem: Mapped[str] = mapped_column(Text, nullable=False)
     csr_public_key_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
-    provider_request_id: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    provider_request_id: Mapped[str] = mapped_column(
+        String(64), unique=True, nullable=False
+    )
     state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class AgentIssuedCertificateRevocation(Base):
@@ -539,27 +604,50 @@ class AgentIssuedCertificateRevocation(Base):
     fingerprint: Mapped[str] = mapped_column(String(128), nullable=False)
     generation: Mapped[int] = mapped_column(Integer, nullable=False)
     state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     ca_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AgentEnrollmentGrant(Base):
     __tablename__ = "agent_enrollment_grants"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    __table_args__ = (
+        CheckConstraint(
+            "purpose IN ('new-node', 'rust-migration')",
+            name="ck_agent_enrollment_grants_purpose",
+        ),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
     node_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    purpose: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="new-node", server_default="new-node"
+    )
     token_digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     created_by: Mapped[str] = mapped_column(String(200), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AgentEnrollment(Base):
     __tablename__ = "agent_enrollments"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
     grant_id: Mapped[str] = mapped_column(
-        ForeignKey("agent_enrollment_grants.id", ondelete="CASCADE"), unique=True, nullable=False
+        ForeignKey("agent_enrollment_grants.id", ondelete="CASCADE"),
+        unique=True,
+        nullable=False,
     )
     node_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
     state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
@@ -570,23 +658,38 @@ class AgentEnrollment(Base):
     hardware_fingerprint: Mapped[str] = mapped_column(String(512), nullable=False)
     agent_digest: Mapped[str] = mapped_column(String(128), nullable=False)
     boot_id: Mapped[str] = mapped_column(String(128), nullable=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
     decision_actor: Mapped[str | None] = mapped_column(String(200))
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     rejection_reason: Mapped[str | None] = mapped_column(Text)
     certificate_pem: Mapped[str | None] = mapped_column(Text)
     chain_pem: Mapped[str | None] = mapped_column(Text)
     certificate_serial: Mapped[str | None] = mapped_column(String(128), unique=True)
-    certificate_fingerprint: Mapped[str | None] = mapped_column(String(128), unique=True)
-    certificate_not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    certificate_not_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    certificate_fingerprint: Mapped[str | None] = mapped_column(
+        String(128), unique=True
+    )
+    certificate_generation: Mapped[int | None] = mapped_column(Integer)
+    certificate_not_before: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    certificate_not_after: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
 
 
 class AgentOperation(Base):
     __tablename__ = "agent_operations"
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    parent_job_id: Mapped[str] = mapped_column(ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True)
-    node_id: Mapped[str] = mapped_column(ForeignKey("agent_nodes.node_id"), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    parent_job_id: Mapped[str] = mapped_column(
+        ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    node_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_nodes.node_id"), nullable=False, index=True
+    )
     kind: Mapped[str] = mapped_column(String(80), nullable=False)
     payload_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
@@ -595,19 +698,33 @@ class AgentOperation(Base):
     current_attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     retry_disposition: Mapped[str | None] = mapped_column(String(32))
     retry_disposition_attempt: Mapped[int | None] = mapped_column(Integer)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class AgentOperationAttempt(Base):
     __tablename__ = "agent_operation_attempts"
     __table_args__ = (UniqueConstraint("operation_id", "attempt"),)
-    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    operation_id: Mapped[str] = mapped_column(ForeignKey("agent_operations.id", ondelete="CASCADE"), nullable=False, index=True)
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    operation_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_operations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     attempt: Mapped[int] = mapped_column(Integer, nullable=False)
     fence: Mapped[str] = mapped_column(String(36), unique=True, nullable=False)
-    lease_deadline: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    agent_certificate_serial: Mapped[str] = mapped_column(ForeignKey("agent_certificates.serial"), nullable=False, index=True)
+    lease_deadline: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    agent_certificate_serial: Mapped[str] = mapped_column(
+        ForeignKey("agent_certificates.serial"), nullable=False, index=True
+    )
     state: Mapped[str] = mapped_column(String(32), nullable=False)
     progress: Mapped[dict[str, object] | None] = mapped_column(JSON)
     result: Mapped[dict[str, object] | None] = mapped_column(JSON)
@@ -693,9 +810,7 @@ class UpdateRollout(Base):
         ForeignKey("jobs.id", ondelete="SET NULL"), unique=True
     )
     state: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
-    plan_digest: Mapped[str] = mapped_column(
-        String(64), nullable=False, unique=True
-    )
+    plan_digest: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
     release_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     base_commit: Mapped[str] = mapped_column(String(128), nullable=False)
     fleet_digest: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -717,16 +832,16 @@ class UpdateRollout(Base):
     failure_evidence_digest: Mapped[str | None] = mapped_column(String(64))
     rollback_evidence_digest: Mapped[str | None] = mapped_column(String(64))
     approval_actor: Mapped[str | None] = mapped_column(String(200))
-    approval_request_id: Mapped[str | None] = mapped_column(
-        String(36), unique=True
-    )
+    approval_request_id: Mapped[str | None] = mapped_column(String(36), unique=True)
     approval_reason: Mapped[str | None] = mapped_column(Text)
     approval_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     approval_evidence_digest: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -844,7 +959,9 @@ class UpdateRolloutNode(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -945,13 +1062,19 @@ class UpdateAuthorizationIntent(Base):
     expected_tuf_targets_version: Mapped[int | None] = mapped_column(Integer)
     admin_grant: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
     admin_grant_digest: Mapped[str] = mapped_column(String(64), nullable=False)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     request: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
     request_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     signed_response: Mapped[dict[str, object] | None] = mapped_column(JSON)
     response_digest: Mapped[str | None] = mapped_column(String(64))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     queued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -1029,7 +1152,9 @@ class PackageCandidate(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class PackageResolution(Base):
@@ -1091,7 +1216,9 @@ class PackageResolution(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
 
 
 class PackageValidationRun(Base):
@@ -1166,7 +1293,9 @@ class PackageValidationRun(Base):
     policy_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     fleet_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     state: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
-    attempt: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    attempt: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     actor: Mapped[str] = mapped_column(String(200), nullable=False)
     reason_code: Mapped[str | None] = mapped_column(String(80))
     failure_detail: Mapped[dict[str, object] | None] = mapped_column(JSON)
@@ -1175,7 +1304,9 @@ class PackageValidationRun(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -1224,8 +1355,17 @@ class PackageRollout(Base):
             name="ck_package_rollouts_plan_digest",
         ),
         CheckConstraint(
-            "length(base_commit) BETWEEN 40 AND 128",
+            "base_commit IS NULL OR length(base_commit) BETWEEN 40 AND 128",
             name="ck_package_rollouts_base_commit_length",
+        ),
+        CheckConstraint(
+            _lower_hex("authority_digest", 64),
+            name="ck_package_rollouts_authority_digest",
+        ),
+        CheckConstraint(
+            "(base_commit IS NOT NULL AND recipe_revision_id IS NULL) OR "
+            "(base_commit IS NULL AND recipe_revision_id IS NOT NULL)",
+            name="ck_package_rollouts_authority_kind",
         ),
         CheckConstraint(
             "current_batch >= 0",
@@ -1255,10 +1395,9 @@ class PackageRollout(Base):
         ),
         UniqueConstraint(
             "deployment_id",
-            "release_digest",
-            "base_commit",
+            "authority_digest",
             "plan_digest",
-            name="uq_package_rollouts_deployment_release_commit_plan",
+            name="uq_package_rollouts_deployment_authority_plan",
         ),
     )
     id: Mapped[str] = mapped_column(
@@ -1271,7 +1410,11 @@ class PackageRollout(Base):
     deployment_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     release_digest: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     previous_release_digest: Mapped[str | None] = mapped_column(String(64))
-    base_commit: Mapped[str] = mapped_column(String(128), nullable=False)
+    base_commit: Mapped[str | None] = mapped_column(String(128))
+    recipe_revision_id: Mapped[str | None] = mapped_column(
+        ForeignKey("local_recipe_revisions.id", ondelete="RESTRICT"), index=True
+    )
+    authority_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     policy_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     tuf_target_digest: Mapped[str] = mapped_column(String(64), nullable=False)
     fleet_digest: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -1281,15 +1424,43 @@ class PackageRollout(Base):
     actor: Mapped[str] = mapped_column(String(200), nullable=False)
     plan: Mapped[dict[str, object] | None] = mapped_column(JSON)
     progress: Mapped[dict[str, object] | None] = mapped_column(JSON)
-    current_batch: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    current_batch: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
     failure_reason: Mapped[str | None] = mapped_column(Text)
     failure_evidence_digest: Mapped[str | None] = mapped_column(String(64))
     rollback_evidence_digest: Mapped[str | None] = mapped_column(String(64))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+@event.listens_for(PackageRollout, "before_insert")
+def _populate_rollout_authority_digest(
+    _mapper, _connection, target: PackageRollout
+) -> None:
+    if target.authority_digest:
+        return
+    if target.recipe_revision_id is None:
+        authority = {
+            "base_commit": target.base_commit,
+            "deployment_digest": target.deployment_digest,
+            "release_digest": target.release_digest,
+        }
+    else:
+        authority = {
+            "recipe_revision_id": target.recipe_revision_id,
+            "deployment_digest": target.deployment_digest,
+            "release_digest": target.release_digest,
+            "plan_digest": target.plan_digest,
+        }
+    target.authority_digest = hashlib.sha256(
+        json.dumps(authority, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 class PackageRolloutNode(Base):
@@ -1382,11 +1553,15 @@ class PackageRolloutNode(Base):
     rollback_evidence_digest: Mapped[str | None] = mapped_column(String(64))
     progress: Mapped[dict[str, object] | None] = mapped_column(JSON)
     dispatch_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    activation_deadline: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    activation_deadline: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, index=True
     )
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
@@ -1487,6 +1662,687 @@ class PackageActionPlan(Base):
     state: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
     actor: Mapped[str | None] = mapped_column(String(200))
     result: Mapped[dict[str, object] | None] = mapped_column(JSON)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class PackageFamily(Base):
+    __tablename__ = "package_families"
+    __table_args__ = (
+        CheckConstraint("schema_version >= 1", name="ck_package_families_schema"),
+        CheckConstraint("length(id) BETWEEN 1 AND 128", name="ck_package_families_id"),
+    )
+    id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    provider_kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    definition: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    builtin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class RecipeSourceBundle(Base):
+    __tablename__ = "recipe_source_bundles"
+    __table_args__ = (
+        CheckConstraint(
+            _lower_hex("sha256", 64), name="ck_recipe_source_bundle_digest"
+        ),
+        CheckConstraint(
+            "archive_bytes > 0 AND total_bytes >= 0 AND file_count >= 1",
+            name="ck_recipe_source_bundle_sizes",
+        ),
+    )
+    sha256: Mapped[str] = mapped_column(String(64), primary_key=True)
+    media_type: Mapped[str] = mapped_column(String(96), nullable=False)
+    archive_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    file_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    storage_key: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    manifest: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    verified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class LocalRecipe(Base):
+    __tablename__ = "local_recipes"
+    __table_args__ = (
+        CheckConstraint(
+            "source_kind IN ('local','sparkrun','global')",
+            name="ck_local_recipes_source_kind",
+        ),
+        CheckConstraint(
+            "slug = lower(slug) AND length(slug) BETWEEN 2 AND 128",
+            name="ck_local_recipes_slug",
+        ),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    slug: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, nullable=False)
+    source_kind: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class LocalRecipeRevision(Base):
+    __tablename__ = "local_recipe_revisions"
+    __table_args__ = (
+        UniqueConstraint(
+            "recipe_id", "revision_number", name="uq_local_recipe_revision_number"
+        ),
+        UniqueConstraint(
+            "recipe_id", "content_sha256", name="uq_local_recipe_revision_content"
+        ),
+        CheckConstraint(
+            "revision_number >= 1", name="ck_local_recipe_revisions_number"
+        ),
+        CheckConstraint("schema_version >= 1", name="ck_local_recipe_revisions_schema"),
+        CheckConstraint(
+            "lifecycle IN ('draft','blocked','resolved','deprecated')",
+            name="ck_local_recipe_revisions_lifecycle",
+        ),
+        CheckConstraint(
+            "lifecycle != 'resolved' OR content_sha256 IS NOT NULL",
+            name="ck_local_recipe_revisions_resolved_digest",
+        ),
+        CheckConstraint(
+            _nullable_lower_hex("content_sha256", 64),
+            name="ck_local_recipe_revisions_content_digest",
+        ),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    recipe_id: Mapped[str] = mapped_column(
+        ForeignKey("local_recipes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    revision_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    lifecycle: Mapped[str] = mapped_column(String(16), nullable=False, index=True)
+    schema_version: Mapped[int] = mapped_column(Integer, nullable=False)
+    document: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    content_sha256: Mapped[str | None] = mapped_column(String(64), index=True)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+@event.listens_for(LocalRecipeRevision, "before_update")
+@event.listens_for(LocalRecipeRevision, "before_delete")
+def _resolved_recipe_revision_is_immutable(
+    _mapper, _connection, target: LocalRecipeRevision
+) -> None:
+    if target.lifecycle == "resolved":
+        raise ValueError("resolved recipe revisions are immutable")
+
+
+class RecipeImport(Base):
+    __tablename__ = "recipe_imports"
+    __table_args__ = (
+        UniqueConstraint(
+            "source_kind", "source_sha256", name="uq_recipe_import_source"
+        ),
+        CheckConstraint(
+            "source_kind IN ('local','sparkrun','global')",
+            name="ck_recipe_imports_source_kind",
+        ),
+        CheckConstraint(
+            _lower_hex("source_sha256", 64), name="ck_recipe_imports_source_digest"
+        ),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    recipe_id: Mapped[str] = mapped_column(
+        ForeignKey("local_recipes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    source_reference: Mapped[str] = mapped_column(Text, nullable=False)
+    source_sha256: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    redacted_source: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class RecipeImportItem(Base):
+    __tablename__ = "recipe_import_items"
+    __table_args__ = (
+        CheckConstraint(
+            "disposition IN ('imported','incorporated','resolved','transformed','resolution_required',"
+            "'overlay_required','unsupported_blocking','dropped_redundant')",
+            name="ck_recipe_import_items_disposition",
+        ),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    import_id: Mapped[str] = mapped_column(
+        ForeignKey("recipe_imports.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_path: Mapped[str] = mapped_column(Text, nullable=False)
+    disposition: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    destination_path: Mapped[str | None] = mapped_column(Text)
+    reason_code: Mapped[str] = mapped_column(String(128), nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False)
+    blocking: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+
+class RecipeGlobalLink(Base):
+    __tablename__ = "recipe_global_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "global_publisher", "global_slug", name="uq_recipe_global_link_identity"
+        ),
+        CheckConstraint("global_revision >= 1", name="ck_recipe_global_links_revision"),
+        CheckConstraint(
+            _lower_hex("global_content_sha256", 64),
+            name="ck_recipe_global_links_digest",
+        ),
+        CheckConstraint(
+            "sync_state IN ('current','local-ahead','remote-ahead','unavailable')",
+            name="ck_recipe_global_links_state",
+        ),
+    )
+    recipe_id: Mapped[str] = mapped_column(
+        ForeignKey("local_recipes.id", ondelete="CASCADE"), primary_key=True
+    )
+    global_recipe_id: Mapped[str] = mapped_column(
+        String(36), nullable=False, index=True
+    )
+    global_publisher: Mapped[str] = mapped_column(String(63), nullable=False)
+    global_slug: Mapped[str] = mapped_column(String(63), nullable=False)
+    global_revision: Mapped[int] = mapped_column(Integer, nullable=False)
+    global_content_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    sync_state: Mapped[str] = mapped_column(String(24), nullable=False)
+    synced_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RecipeTestReport(Base):
+    """Publisher-submitted local test evidence bound to one immutable revision."""
+
+    __tablename__ = "recipe_test_reports"
+    __table_args__ = (
+        UniqueConstraint(
+            "recipe_revision_id", "report_sha256", name="uq_recipe_test_report_digest"
+        ),
+        CheckConstraint(
+            _lower_hex("report_sha256", 64), name="ck_recipe_test_reports_digest"
+        ),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    recipe_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("local_recipe_revisions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    report_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    report: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class RecipeBuild(Base):
+    __tablename__ = "recipe_builds"
+    __table_args__ = (
+        UniqueConstraint(
+            "recipe_revision_id",
+            "builder_node_id",
+            "build_input_sha256",
+            name="uq_recipe_build_input_builder",
+        ),
+        CheckConstraint(
+            "state IN ('planned','building','succeeded','failed')",
+            name="ck_recipe_builds_state",
+        ),
+        CheckConstraint(
+            _lower_hex("source_bundle_sha256", 64),
+            name="ck_recipe_builds_source_digest",
+        ),
+        CheckConstraint(
+            _lower_hex("build_input_sha256", 64),
+            name="ck_recipe_builds_input_digest",
+        ),
+        CheckConstraint(
+            "image_digest IS NULL OR "
+            "(length(image_digest) = 71 AND substr(image_digest, 1, 7) = 'sha256:')",
+            name="ck_recipe_builds_image_digest",
+        ),
+        CheckConstraint(
+            "oci_layout_sha256 IS NULL OR length(oci_layout_sha256) = 64",
+            name="ck_recipe_builds_layout_digest",
+        ),
+        CheckConstraint(
+            "image_bytes IS NULL OR image_bytes > 0",
+            name="ck_recipe_builds_image_size",
+        ),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    recipe_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("local_recipe_revisions.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    builder_node_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_nodes.node_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    source_bundle_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    build_input_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    policy_report: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    plan: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    image_digest: Mapped[str | None] = mapped_column(String(71))
+    oci_layout_sha256: Mapped[str | None] = mapped_column(String(64))
+    image_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    error: Mapped[str | None] = mapped_column(String(512))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class ClusterMapping(Base):
+    __tablename__ = "cluster_mappings"
+    __table_args__ = (
+        CheckConstraint("generation >= 1", name="ck_cluster_mappings_generation"),
+        CheckConstraint("node_count >= 1", name="ck_cluster_mappings_node_count"),
+        CheckConstraint(
+            "state IN ('planned','ready','stale')", name="ck_cluster_mappings_state"
+        ),
+        CheckConstraint(
+            _lower_hex("placement_digest", 64),
+            name="ck_cluster_mappings_placement_digest",
+        ),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    recipe_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("local_recipe_revisions.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    profile_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    node_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False, index=True)
+    parameters: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    placement_digest: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True
+    )
+    endpoint_owner_node_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_nodes.node_id", ondelete="RESTRICT"), nullable=False
+    )
+    created_by: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class ClusterMappingNode(Base):
+    __tablename__ = "cluster_mapping_nodes"
+    __table_args__ = (
+        UniqueConstraint("mapping_id", "node_id", name="uq_cluster_mapping_node"),
+        UniqueConstraint("mapping_id", "rank", name="uq_cluster_mapping_rank"),
+        CheckConstraint("rank >= 0", name="ck_cluster_mapping_nodes_rank"),
+        CheckConstraint(
+            "length(role) BETWEEN 1 AND 64", name="ck_cluster_mapping_nodes_role"
+        ),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    mapping_id: Mapped[str] = mapped_column(
+        ForeignKey("cluster_mappings.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    node_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_nodes.node_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    endpoint_owner: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class NodeInventorySnapshot(Base):
+    __tablename__ = "node_inventory_snapshots"
+    __table_args__ = (
+        UniqueConstraint("node_id", "observed_at", name="uq_inventory_node_observed"),
+        CheckConstraint(
+            "disk_total_bytes>=0 AND disk_free_bytes>=0 AND disk_free_bytes<=disk_total_bytes",
+            name="ck_inventory_disk",
+        ),
+        CheckConstraint(
+            "host_memory_total_bytes>=0 AND host_memory_free_bytes>=0 AND host_memory_free_bytes<=host_memory_total_bytes",
+            name="ck_inventory_host_memory",
+        ),
+        CheckConstraint(
+            "gpu_memory_total_bytes>=0 AND gpu_memory_free_bytes>=0 AND gpu_memory_free_bytes<=gpu_memory_total_bytes AND gpu_count>=0",
+            name="ck_inventory_gpu_memory",
+        ),
+        CheckConstraint(
+            "(fabric_address IS NULL AND fabric_bandwidth_mbps IS NULL) OR (fabric_address IS NOT NULL AND fabric_bandwidth_mbps>0)",
+            name="ck_inventory_fabric",
+        ),
+        CheckConstraint(_lower_hex("evidence_digest", 64), name="ck_inventory_digest"),
+        Index("ix_inventory_node_observed", "node_id", "observed_at"),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    node_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_nodes.node_id", ondelete="CASCADE"), nullable=False
+    )
+    observed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    received_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    disk_total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    disk_free_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    host_memory_total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    host_memory_free_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    gpu_memory_total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    gpu_memory_free_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    gpu_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    fabric_address: Mapped[str | None] = mapped_column(String(45))
+    fabric_bandwidth_mbps: Mapped[int | None] = mapped_column(BigInteger)
+    nvidia_driver_version: Mapped[str] = mapped_column(
+        String(256), nullable=False, default="unknown", server_default="unknown"
+    )
+    container_runtime_version: Mapped[str] = mapped_column(
+        String(256), nullable=False, default="unknown", server_default="unknown"
+    )
+    artifact_store_read_only: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    capabilities: Mapped[list[str]] = mapped_column(JSON, nullable=False)
+    evidence_digest: Mapped[str] = mapped_column(
+        String(64), nullable=False, unique=True
+    )
+
+
+class NodeArtifact(Base):
+    __tablename__ = "node_artifacts"
+    __table_args__ = (
+        UniqueConstraint("node_id", "digest", name="uq_node_artifact_digest"),
+        CheckConstraint(
+            "kind IN ('image','image-layer','model','auxiliary')",
+            name="ck_node_artifacts_kind",
+        ),
+        CheckConstraint(
+            "state IN ('partial','verified','missing','corrupt')",
+            name="ck_node_artifacts_state",
+        ),
+        CheckConstraint(
+            "size_bytes>=0 AND ref_count>=0", name="ck_node_artifacts_sizes"
+        ),
+        CheckConstraint(_lower_hex("digest", 64), name="ck_node_artifacts_digest"),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    node_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_nodes.node_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    size_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    ref_count: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0"
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class RecipeInstallation(Base):
+    __tablename__ = "recipe_installations"
+    __table_args__ = (
+        CheckConstraint(
+            _lower_hex("plan_digest", 64), name="ck_recipe_installations_digest"
+        ),
+        CheckConstraint(
+            "state IN ('planned','installing','installed','partial','failed','uninstalled')",
+            name="ck_recipe_installations_state",
+        ),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    recipe_revision_id: Mapped[str] = mapped_column(
+        ForeignKey("local_recipe_revisions.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    mapping_id: Mapped[str] = mapped_column(
+        ForeignKey("cluster_mappings.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    mapping_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    recipe_build_id: Mapped[str] = mapped_column(
+        ForeignKey("recipe_builds.id", ondelete="RESTRICT"), nullable=False, index=True
+    )
+    image_digest: Mapped[str] = mapped_column(String(71), nullable=False)
+    plan_digest: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    plan: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    actor: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class InstallationNode(Base):
+    __tablename__ = "installation_nodes"
+    __table_args__ = (
+        UniqueConstraint("installation_id", "node_id", name="uq_installation_node"),
+        CheckConstraint(
+            "required_bytes>=0 AND installed_bytes>=0",
+            name="ck_installation_nodes_bytes",
+        ),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    installation_id: Mapped[str] = mapped_column(
+        ForeignKey("recipe_installations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    node_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_nodes.node_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    required_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    installed_bytes: Mapped[int] = mapped_column(
+        BigInteger, nullable=False, default=0, server_default="0"
+    )
+    evidence_digest: Mapped[str | None] = mapped_column(String(64))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class RecipeRun(Base):
+    __tablename__ = "recipe_runs"
+    __table_args__ = (
+        CheckConstraint(_lower_hex("plan_digest", 64), name="ck_recipe_runs_digest"),
+        CheckConstraint(
+            "state IN ('planned','starting','running','stopping','stopped','failed','lost')",
+            name="ck_recipe_runs_state",
+        ),
+        CheckConstraint(
+            "route_state IN ('withdrawn','pending','published','failed')",
+            name="ck_recipe_runs_route_state",
+        ),
+        CheckConstraint(
+            "route_generation IS NULL OR route_generation>=1",
+            name="ck_recipe_runs_route_generation",
+        ),
+        CheckConstraint(
+            "route_digest IS NULL OR length(route_digest)=64",
+            name="ck_recipe_runs_route_digest",
+        ),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    installation_id: Mapped[str] = mapped_column(
+        ForeignKey("recipe_installations.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    mapping_id: Mapped[str] = mapped_column(
+        ForeignKey("cluster_mappings.id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    mapping_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    alias: Mapped[str] = mapped_column(String(128), nullable=False)
+    plan_digest: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    plan: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    route_state: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="withdrawn", server_default="withdrawn"
+    )
+    route_generation: Mapped[int | None] = mapped_column(BigInteger)
+    route_digest: Mapped[str | None] = mapped_column(String(64))
+    route_error: Mapped[str | None] = mapped_column(String(512))
+    actor: Mapped[str] = mapped_column(String(200), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    stopped_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RunNode(Base):
+    __tablename__ = "run_nodes"
+    __table_args__ = (
+        UniqueConstraint("run_id", "node_id", name="uq_run_node"),
+        UniqueConstraint("run_id", "rank", name="uq_run_rank"),
+        CheckConstraint(
+            "rank>=0 AND port BETWEEN 1024 AND 65535 AND reserved_memory_bytes>=0 AND (observed_memory_bytes IS NULL OR observed_memory_bytes>=0)",
+            name="ck_run_nodes_resources",
+        ),
+        CheckConstraint("length(role) BETWEEN 1 AND 64", name="ck_run_nodes_role"),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    run_id: Mapped[str] = mapped_column(
+        ForeignKey("recipe_runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    node_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_nodes.node_id", ondelete="RESTRICT"),
+        nullable=False,
+        index=True,
+    )
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    role: Mapped[str] = mapped_column(String(64), nullable=False)
+    state: Mapped[str] = mapped_column(String(24), nullable=False)
+    port: Mapped[int] = mapped_column(Integer, nullable=False)
+    reserved_memory_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    observed_memory_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    endpoint: Mapped[dict[str, object] | None] = mapped_column(JSON)
+    evidence_digest: Mapped[str | None] = mapped_column(String(64))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+
+
+class ResourceReservation(Base):
+    __tablename__ = "resource_reservations"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('disk','unified-memory','host-memory','gpu-memory','port')",
+            name="ck_reservations_kind",
+        ),
+        CheckConstraint(
+            "state IN ('active','released','expired') AND amount_bytes>=0",
+            name="ck_reservations_state",
+        ),
+        CheckConstraint(_lower_hex("plan_digest", 64), name="ck_reservations_digest"),
+        Index("ix_reservations_node_state", "node_id", "state"),
+        Index(
+            "uq_active_node_port",
+            "node_id",
+            "kind",
+            "resource_key",
+            unique=True,
+            postgresql_where=text("state='active' AND kind='port'"),
+            sqlite_where=text("state='active' AND kind='port'"),
+        ),
+    )
+    id: Mapped[str] = mapped_column(
+        String(36), primary_key=True, default=lambda: str(uuid.uuid4())
+    )
+    node_id: Mapped[str] = mapped_column(
+        ForeignKey("agent_nodes.node_id", ondelete="RESTRICT"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    resource_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    amount_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    owner_kind: Mapped[str] = mapped_column(String(24), nullable=False)
+    owner_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    state: Mapped[str] = mapped_column(String(16), nullable=False)
+    plan_digest: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    released_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

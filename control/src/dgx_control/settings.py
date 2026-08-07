@@ -214,6 +214,7 @@ class Settings:
     package_helper_grant_private_key_path: Path | None = None
     package_helper_receipt_private_key_path: Path | None = None
     workload_signer_socket_path: Path = Path("/run/dgx-workload-signer/signer.sock")
+    global_catalog_url: str = "https://vonkforge.ai"
 
     @property
     def database_host(self) -> str | None:
@@ -420,6 +421,25 @@ class Settings:
             if os.environ.get("DGX_PACKAGE_HELPER_RECEIPT_PRIVATE_KEY_FILE")
             else None
         )
+        global_catalog_url = os.environ.get(
+            "DGX_GLOBAL_CATALOG_URL", "https://vonkforge.ai"
+        ).rstrip("/")
+        parsed_catalog = urlsplit(global_catalog_url)
+        catalog_loopback = parsed_catalog.hostname in {
+            "localhost", "127.0.0.1", "::1"
+        }
+        if (
+            (parsed_catalog.scheme != "https" and not (
+                parsed_catalog.scheme == "http" and catalog_loopback
+            ))
+            or not parsed_catalog.hostname
+            or parsed_catalog.path not in {"", "/"}
+            or parsed_catalog.query
+            or parsed_catalog.fragment
+            or parsed_catalog.username is not None
+            or parsed_catalog.password is not None
+        ):
+            raise SettingsError("global catalog URL must be a fixed HTTPS origin")
         return cls(
             database_url=database_url,
             repository_path=Path(os.environ.get("DGX_REPOSITORY_PATH", "/srv/dgx-forge/repository")),
@@ -461,6 +481,7 @@ class Settings:
                 "DGX_WORKLOAD_SIGNER_SOCKET",
                 "/run/dgx-workload-signer/signer.sock",
             ),
+            global_catalog_url=global_catalog_url,
         )
 
 

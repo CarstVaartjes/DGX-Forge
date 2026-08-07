@@ -1,0 +1,42 @@
+[Unit]
+Description=Vonk Forge narrow privileged agent helper
+Requires=vonk-agent-helper.socket
+After=local-fs.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/vonk-forge/vonk-agent-helper
+User=root
+Group=root
+UMask=0077
+NoNewPrivileges=yes
+PrivateTmp=yes
+PrivateDevices=yes
+PrivateNetwork=yes
+IPAddressDeny=any
+ProtectSystem=strict
+ProtectHome=yes
+ProtectHostname=yes
+ProtectClock=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @raw-io @obsolete @debug
+RestrictAddressFamilies=AF_UNIX
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_FSETID CAP_SETGID CAP_SETUID
+AmbientCapabilities=
+ReadWritePaths=/var/lib/vonk-forge /var/lib/dpkg /var/log /var/cache/apt /var/cache/debconf /etc/vonk-forge /usr/lib/vonk-forge /usr/bin /lib/systemd/system
+TimeoutStartSec=30s
+TimeoutStopSec=15s
+KillMode=mixed
+
+[Install]
+WantedBy=multi-user.target

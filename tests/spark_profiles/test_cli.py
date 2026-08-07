@@ -972,7 +972,14 @@ def test_dependencies_prefer_generic_fleet_when_repository_contains_one(tmp_path
     repository = tmp_path / "repository"
     shutil.copytree(
         REPOSITORY_ROOT, repository,
-        ignore=shutil.ignore_patterns(".git", ".venv", ".worktrees", "node_modules", "__pycache__"),
+        ignore=shutil.ignore_patterns(
+            ".git",
+            ".venv",
+            ".worktrees",
+            "node_modules",
+            "target",
+            "__pycache__",
+        ),
     )
     node_id = "spk_0000000000000000000000000000000a"
     (repository / "inventory/fleet.toml").write_text(f'''schema_version = 2

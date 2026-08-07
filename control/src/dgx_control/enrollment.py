@@ -75,6 +75,7 @@ class EnrollmentGrant:
     id: str
     node_id: str
     expires_at: datetime
+    purpose: str
     token: str = field(repr=False)
 
 
@@ -89,6 +90,7 @@ class PendingEnrollment:
 class _IssuanceClaim:
     node_id: str
     csr_pem: bytes
+    purpose: str
 
 
 @dataclass(frozen=True)
@@ -126,6 +128,29 @@ class EnrollmentService:
         self._rotation_lock = threading.RLock()
 
     def create(self, node_id: str, actor: str, ttl_seconds: int) -> EnrollmentGrant:
+        return self._create(node_id, actor, ttl_seconds, purpose="new-node")
+
+    def create_migration(
+        self, node_id: str, actor: str, ttl_seconds: int
+    ) -> EnrollmentGrant:
+        _validate_node_id(node_id)
+        with self._sessions() as session:
+            node = session.get(AgentNode, node_id)
+            if (
+                node is None
+                or node.state != "active"
+                or node.revoked_at is not None
+                or node.agent_implementation != "python"
+                or node.migration_state != "required"
+            ):
+                raise EnrollmentDenied(
+                    "Rust migration requires an active legacy Python node"
+                )
+        return self._create(node_id, actor, ttl_seconds, purpose="rust-migration")
+
+    def _create(
+        self, node_id: str, actor: str, ttl_seconds: int, *, purpose: str
+    ) -> EnrollmentGrant:
         _validate_node_id(node_id)
         _validate_actor(actor)
         if not 0 < ttl_seconds <= _MAX_GRANT_TTL_SECONDS:
@@ -136,6 +161,7 @@ class EnrollmentService:
         grant = AgentEnrollmentGrant(
             id=str(uuid.uuid4()),
             node_id=node_id,
+            purpose=purpose,
             token_digest=_digest(token_bytes),
             created_by=actor,
             created_at=now,
@@ -143,7 +169,13 @@ class EnrollmentService:
         )
         with self._sessions.begin() as session:
             session.add(grant)
-        return EnrollmentGrant(id=grant.id, node_id=node_id, expires_at=grant.expires_at, token=token)
+        return EnrollmentGrant(
+            id=grant.id,
+            node_id=node_id,
+            expires_at=grant.expires_at,
+            purpose=purpose,
+            token=token,
+        )
 
     def submit(
         self, token: str, csr: bytes, evidence: Mapping[str, object]
@@ -232,9 +264,26 @@ class EnrollmentService:
                     enrollment = _locked_enrollment(session, enrollment_id)
                     if enrollment.state != "issuing":
                         raise EnrollmentDenied("certificate issuance state changed; manual recovery required")
-                    if session.get(AgentNode, enrollment.node_id) is not None:
+                    if (
+                        claim.purpose == "new-node"
+                        and session.get(AgentNode, enrollment.node_id) is not None
+                    ):
                         raise EnrollmentDenied("node identity already exists")
-                    _persist_issued_enrollment(session, enrollment, issued, actor, now)
+                    _persist_issued_enrollment(
+                        session,
+                        enrollment,
+                        issued,
+                        actor,
+                        now,
+                        purpose=claim.purpose,
+                    )
+                    if enrollment.certificate_generation is None:
+                        raise EnrollmentDenied(
+                            "certificate generation was not persisted"
+                        )
+                    issued = replace(
+                        issued, generation=enrollment.certificate_generation
+                    )
             except IntegrityError as error:
                 # The durable issuing state was committed before the provider
                 # call.  Never retry automatically after an uncertain write:
@@ -772,8 +821,20 @@ class EnrollmentService:
             if enrollment.state != "pending-approval":
                 raise EnrollmentDenied("enrollment state cannot be approved")
             _lock_node_issuance(session, enrollment.node_id)
-            if session.get(AgentNode, enrollment.node_id) is not None:
+            grant = session.get(AgentEnrollmentGrant, enrollment.grant_id)
+            if grant is None or grant.purpose not in {"new-node", "rust-migration"}:
+                raise EnrollmentDenied("enrollment purpose is invalid")
+            node = session.get(AgentNode, enrollment.node_id)
+            if grant.purpose == "new-node" and node is not None:
                 raise EnrollmentDenied("node identity already exists")
+            if grant.purpose == "rust-migration" and (
+                node is None
+                or node.state != "active"
+                or node.revoked_at is not None
+                or node.agent_implementation != "python"
+                or node.migration_state != "required"
+            ):
+                raise EnrollmentDenied("node is not eligible for Rust migration")
             competing = session.scalar(
                 select(AgentEnrollment.id)
                 .where(
@@ -789,7 +850,11 @@ class EnrollmentService:
             enrollment.state = "issuing"
             enrollment.decision_actor = actor
             enrollment.decided_at = now
-            return _IssuanceClaim(enrollment.node_id, enrollment.csr_pem.encode("ascii"))
+            return _IssuanceClaim(
+                enrollment.node_id,
+                enrollment.csr_pem.encode("ascii"),
+                grant.purpose,
+            )
 
 
 def _persist_issued_enrollment(
@@ -798,18 +863,50 @@ def _persist_issued_enrollment(
     issued: IssuedCertificate,
     actor: str,
     now: datetime,
+    *,
+    purpose: str,
 ) -> None:
     try:
         certificate_pem = issued.certificate_pem.decode("ascii")
         chain_pem = issued.chain_pem.decode("ascii")
     except UnicodeDecodeError as error:
         raise EnrollmentDenied("certificate authority returned non-PEM certificate material") from error
-    node = AgentNode(node_id=enrollment.node_id, state="active", capabilities=[])
-    session.add(node)
-    # There is no ORM relationship between these operational rows. Flush the
-    # FK parent explicitly before adding its certificate child; PostgreSQL does
-    # not infer the ordering that SQLite happened to tolerate.
-    session.flush([node])
+    node = session.get(AgentNode, enrollment.node_id)
+    if purpose == "new-node":
+        if node is not None:
+            raise EnrollmentDenied("node identity already exists")
+        node = AgentNode(
+            node_id=enrollment.node_id,
+            state="active",
+            capabilities=[],
+            agent_implementation="pending",
+            migration_state="required",
+        )
+        session.add(node)
+        # There is no ORM relationship between these operational rows. Flush
+        # the FK parent explicitly for PostgreSQL.
+        session.flush([node])
+        generation = 1
+    elif purpose == "rust-migration":
+        if (
+            node is None
+            or node.state != "active"
+            or node.revoked_at is not None
+            or node.agent_implementation != "python"
+            or node.migration_state != "required"
+        ):
+            raise EnrollmentDenied("node is not eligible for Rust migration")
+        generation = (
+            session.scalar(
+                select(AgentCertificate.generation)
+                .where(AgentCertificate.node_id == enrollment.node_id)
+                .order_by(AgentCertificate.generation.desc())
+                .limit(1)
+            )
+            or 0
+        ) + 1
+    else:
+        raise EnrollmentDenied("enrollment purpose is invalid")
     session.add(AgentCertificate(
         serial=issued.serial,
         node_id=enrollment.node_id,
@@ -817,7 +914,7 @@ def _persist_issued_enrollment(
         not_after=issued.not_after,
         fingerprint=issued.fingerprint,
         state="active",
-        generation=1,
+        generation=generation,
         certificate_pem=certificate_pem,
         chain_pem=chain_pem,
     ))
@@ -828,6 +925,7 @@ def _persist_issued_enrollment(
     enrollment.chain_pem = chain_pem
     enrollment.certificate_serial = issued.serial
     enrollment.certificate_fingerprint = issued.fingerprint
+    enrollment.certificate_generation = generation
     enrollment.certificate_not_before = issued.not_before
     enrollment.certificate_not_after = issued.not_after
 
@@ -856,6 +954,7 @@ def _issued(enrollment: AgentEnrollment) -> IssuedCertificate:
         enrollment.certificate_fingerprint,
         enrollment.certificate_not_before,
         enrollment.certificate_not_after,
+        enrollment.certificate_generation,
     )):
         raise RuntimeError("approved enrollment is missing certificate metadata")
     return IssuedCertificate(
@@ -866,6 +965,7 @@ def _issued(enrollment: AgentEnrollment) -> IssuedCertificate:
         fingerprint=enrollment.certificate_fingerprint,  # type: ignore[arg-type]
         not_before=_stored_utc(enrollment.certificate_not_before),  # type: ignore[arg-type]
         not_after=_stored_utc(enrollment.certificate_not_after),  # type: ignore[arg-type]
+        generation=enrollment.certificate_generation,  # type: ignore[arg-type]
     )
 
 

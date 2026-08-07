@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
+import json
 import os
 import platform
 import shutil
@@ -10,10 +12,32 @@ from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 import pytest
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILDER = ROOT / "agent/tools/build-slot-artifact"
-PROTOCOL = ROOT / "inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl"
+PROTOCOL = ROOT / "inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
+
+
+def test_rust_slot_manifest_fixture_is_canonical_and_domain_signed() -> None:
+    raw = (ROOT / "agent_protocol/fixtures/slot-manifest.json").read_bytes().rstrip(
+        b"\n"
+    )
+    document = json.loads(raw)
+    assert json.dumps(
+        document, sort_keys=True, separators=(",", ":")
+    ).encode() == raw
+    claims = json.dumps(
+        document["claims"], sort_keys=True, separators=(",", ":")
+    ).encode()
+    public_key = bytes.fromhex(
+        "66cd608b928b88e50e0efeaa33faf1c43cefe07294b0b87e9fe0aba6a3cf7633"
+    )
+    assert hashlib.sha256(public_key).hexdigest() == document["signature"]["key_id"]
+    Ed25519PublicKey.from_public_bytes(public_key).verify(
+        bytes.fromhex(document["signature"]["value"]),
+        b"VONK-AGENT-SLOT-MANIFEST-V1\x00" + claims,
+    )
 
 
 def _architecture() -> str:

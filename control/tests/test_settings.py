@@ -112,6 +112,21 @@ def test_database_secret_is_read_from_file(tmp_path: Path, monkeypatch) -> None:
     settings = Settings.from_env_and_secrets()
     assert settings.database_host == "postgres"
     assert settings.repository_path == Path("/srv/dgx-forge/repository")
+    assert settings.global_catalog_url == "https://vonkforge.ai"
+
+
+def test_global_catalog_origin_is_https_or_explicit_loopback(monkeypatch) -> None:
+    monkeypatch.setenv("DGX_DATABASE_URL", "postgresql://db/control")
+    monkeypatch.setenv("DGX_GLOBAL_CATALOG_URL", "http://127.0.0.1:9000")
+    assert Settings.from_env_and_secrets().global_catalog_url == "http://127.0.0.1:9000"
+
+    monkeypatch.setenv("DGX_GLOBAL_CATALOG_URL", "http://catalog.example")
+    with pytest.raises(SettingsError, match="global catalog URL"):
+        Settings.from_env_and_secrets()
+
+    monkeypatch.setenv("DGX_GLOBAL_CATALOG_URL", "https://user:secret@catalog.example")
+    with pytest.raises(SettingsError, match="global catalog URL"):
+        Settings.from_env_and_secrets()
 
 
 def test_management_networks_are_explicit_and_policy_validated(monkeypatch) -> None:

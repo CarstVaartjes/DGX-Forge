@@ -223,7 +223,9 @@ def test_direct_progress_construction_enforces_protocol_boundary() -> None:
         {"evidence": "../private"},
     ],
 )
-def test_protocol_rejects_client_selected_filesystem_paths(payload: dict[str, str]) -> None:
+def test_protocol_rejects_client_selected_filesystem_paths(
+    payload: dict[str, str],
+) -> None:
     with pytest.raises(AgentProtocolError, match="path"):
         AgentClaim.parse(valid_claim() | {"payload": payload})
 
@@ -298,10 +300,13 @@ def test_progress_and_result_are_fenced_node_messages() -> None:
 
 def test_results_are_bounded_and_reject_secret_bearing_keys() -> None:
     with pytest.raises(AgentProtocolError, match="large"):
-        AgentResult.parse(valid_attempt() | {"state": "succeeded", "result": {"x": "x" * 65536}})
+        AgentResult.parse(
+            valid_attempt() | {"state": "succeeded", "result": {"x": "x" * 65536}}
+        )
     with pytest.raises(AgentProtocolError):
         AgentResult.parse(
-            valid_attempt() | {"state": "succeeded", "result": {"private_key": "unsafe"}}
+            valid_attempt()
+            | {"state": "succeeded", "result": {"private_key": "unsafe"}}
         )
 
 
@@ -324,6 +329,12 @@ def test_operation_enum_contains_only_supported_operations() -> None:
         "package.remove",
         "package.repair",
         "package.gc",
+        "recipe.build.v1",
+        "recipe.image.import.v1",
+        "recipe.install",
+        "recipe.start",
+        "recipe.stop",
+        "recipe.uninstall",
     }
 
 
@@ -334,30 +345,81 @@ def schema(name: str) -> Draft202012Validator:
 @pytest.mark.parametrize(
     ("name", "fixture"),
     [
-        ("agent-job.schema.json", valid_claim() | {"payload": {"nested": {"apiToken": "unsafe"}}}),
-        ("agent-job.schema.json", valid_claim() | {"payload": {"artifact_path": "release"}}),
-        ("agent-job.schema.json", valid_claim() | {"payload": {"artifactPath": "release"}}),
-        ("agent-job.schema.json", valid_claim() | {"payload": {"artifactPATH": "release"}}),
-        ("agent-job.schema.json", valid_claim() | {"payload": {"artifactFILE": "release"}}),
-        ("agent-job.schema.json", valid_claim() | {"payload": {"someDIRECTORY": "release"}}),
-        ("agent-job.schema.json", valid_claim() | {"deadline": "2026-08-03T12:00:00+02:00"}),
-        ("agent-job.schema.json", valid_claim() | {"deadline": "2026-99-99T12:00:00+00:00"}),
-        ("agent-result.schema.json", valid_attempt() | {"state": "succeeded", "result": {"log_path": "/tmp/log"}}),
-        ("agent-result.schema.json", valid_attempt() | {"deadline": "2026-08-03T12:00:00+02:00", "state": "succeeded", "result": {}}),
+        (
+            "agent-job.schema.json",
+            valid_claim() | {"payload": {"nested": {"apiToken": "unsafe"}}},
+        ),
+        (
+            "agent-job.schema.json",
+            valid_claim() | {"payload": {"artifact_path": "release"}},
+        ),
+        (
+            "agent-job.schema.json",
+            valid_claim() | {"payload": {"artifactPath": "release"}},
+        ),
+        (
+            "agent-job.schema.json",
+            valid_claim() | {"payload": {"artifactPATH": "release"}},
+        ),
+        (
+            "agent-job.schema.json",
+            valid_claim() | {"payload": {"artifactFILE": "release"}},
+        ),
+        (
+            "agent-job.schema.json",
+            valid_claim() | {"payload": {"someDIRECTORY": "release"}},
+        ),
+        (
+            "agent-job.schema.json",
+            valid_claim() | {"deadline": "2026-08-03T12:00:00+02:00"},
+        ),
+        (
+            "agent-job.schema.json",
+            valid_claim() | {"deadline": "2026-99-99T12:00:00+00:00"},
+        ),
+        (
+            "agent-result.schema.json",
+            valid_attempt()
+            | {"state": "succeeded", "result": {"log_path": "/tmp/log"}},
+        ),
+        (
+            "agent-result.schema.json",
+            valid_attempt()
+            | {
+                "deadline": "2026-08-03T12:00:00+02:00",
+                "state": "succeeded",
+                "result": {},
+            },
+        ),
     ],
 )
-def test_schemas_reject_protocol_boundary_violations(name: str, fixture: dict[str, object]) -> None:
+def test_schemas_reject_protocol_boundary_violations(
+    name: str, fixture: dict[str, object]
+) -> None:
     assert not schema(name).is_valid(fixture)
 
 
 @pytest.mark.parametrize(
     ("name", "raw"),
     [
-        ("agent-job.schema.json", valid_claim() | {"deadline": "2026-99-99T12:00:00+00:00"}),
-        ("agent-result.schema.json", valid_attempt() | {"deadline": "2026-99-99T12:00:00+00:00", "state": "succeeded", "result": {}}),
+        (
+            "agent-job.schema.json",
+            valid_claim() | {"deadline": "2026-99-99T12:00:00+00:00"},
+        ),
+        (
+            "agent-result.schema.json",
+            valid_attempt()
+            | {
+                "deadline": "2026-99-99T12:00:00+00:00",
+                "state": "succeeded",
+                "result": {},
+            },
+        ),
     ],
 )
-def test_parse_and_shared_schema_validator_reject_bogus_utc_dates(name: str, raw: dict[str, object]) -> None:
+def test_parse_and_shared_schema_validator_reject_bogus_utc_dates(
+    name: str, raw: dict[str, object]
+) -> None:
     parser = AgentClaim.parse if name == "agent-job.schema.json" else AgentResult.parse
 
     with pytest.raises(AgentProtocolError):
@@ -367,10 +429,15 @@ def test_parse_and_shared_schema_validator_reject_bogus_utc_dates(name: str, raw
 
 
 @pytest.mark.parametrize("name", ["agent-job.schema.json", "agent-result.schema.json"])
-def test_shared_schema_validator_and_parser_reject_oversized_canonical_documents(name: str) -> None:
+def test_shared_schema_validator_and_parser_reject_oversized_canonical_documents(
+    name: str,
+) -> None:
     document = {"x": "x" * 65536}
     if name == "agent-job.schema.json":
-        raw = valid_claim() | {"payload": document, "payload_digest": hashlib.sha256(canonical_message(document)).hexdigest()}
+        raw = valid_claim() | {
+            "payload": document,
+            "payload_digest": hashlib.sha256(canonical_message(document)).hexdigest(),
+        }
         parser = AgentClaim.parse
     else:
         raw = valid_attempt() | {"state": "succeeded", "result": document}

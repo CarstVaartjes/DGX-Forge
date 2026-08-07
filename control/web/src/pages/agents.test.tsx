@@ -26,11 +26,13 @@ const privateKey = "must-never-render-private-key";
 const certificateBody = "must-never-render-certificate-body";
 
 const agent: Agent = {
+  agent_implementation: "python",
   capabilities: ["reconciliation", "telemetry"],
   certificate_expires_at: "2026-09-01T12:00:00Z",
   last_seen_age_seconds: 12,
   last_seen_at: "2026-08-05T09:59:48Z",
   node_id: nodeId,
+  migration_state: "required",
   protocol_version: 4,
   stale: false,
   state: "active",
@@ -141,7 +143,13 @@ function installApiFake(options: {
     if (request.method === "POST" && url.pathname === "/api/v1/agents/enrollments/grants") {
       if (options.grantResponse) return options.grantResponse;
       return jsonResponse(
-        {expires_at: "2026-08-05T10:15:00Z", id: "grant-001", node_id: nodeId, token: grantToken},
+        {expires_at: "2026-08-05T10:15:00Z", id: "grant-001", node_id: nodeId, purpose: "new-node", token: grantToken},
+        201,
+      );
+    }
+    if (request.method === "POST" && url.pathname === `/api/v1/agents/nodes/${nodeId}/migration-grant`) {
+      return jsonResponse(
+        {expires_at: "2026-08-05T10:15:00Z", id: "grant-migration", node_id: nodeId, purpose: "rust-migration", token: grantToken},
         201,
       );
     }
@@ -214,6 +222,8 @@ it("keeps fleet and enrollment evidence semantic, bounded, and secret-free", asy
   expect(within(agentTable).getByRole("columnheader", {name: "Immutable node ID"})).toBeVisible();
   const agentRow = within(agentTable).getByRole("row", {name: new RegExp(nodeId)});
   expect(agentRow).toHaveTextContent("Protocol 4");
+  expect(agentRow).toHaveTextContent("Python agent");
+  expect(agentRow).toHaveTextContent("Migration required");
   expect(agentRow).toHaveTextContent("compatible");
   expect(agentRow).toHaveTextContent("2026-08-05T09:59:48Z");
   expect(agentRow).toHaveTextContent("2026-09-01T12:00:00Z");
@@ -234,7 +244,7 @@ it("keeps fleet and enrollment evidence semantic, bounded, and secret-free", asy
   expect(new URL(litellm.getAttribute("href")!, location.origin).origin).toBe(location.origin);
   expect(new URL(litellm.getAttribute("href")!, location.origin).pathname).toBe("/litellm/ui/");
   expect(new URL(grafana.getAttribute("href")!, location.origin).origin).toBe(location.origin);
-  expect(screen.getByText(/Model definitions remain repository-backed/)).toBeVisible();
+  expect(screen.getByText(/Local PostgreSQL remains recipe and routing authority/)).toBeVisible();
 });
 
 it("shows a grant token only for its creation response and clears it before reload", async () => {
@@ -266,6 +276,25 @@ it("shows a grant token only for its creation response and clears it before relo
   expect(screen.queryByText(leakedListToken)).not.toBeInTheDocument();
 });
 
+it("creates a dedicated Rust migration grant from a legacy agent row", async () => {
+  const requests = installApiFake();
+  render(<AgentsPage api={new ApiClient()}/>);
+  const user = userEvent.setup();
+
+  await screen.findByRole("table", {name: "Enrolled agents"});
+  await user.click(screen.getByRole("button", {name: "Create Rust migration grant"}));
+
+  const secret = await screen.findByRole("status", {name: "One-time enrollment grant"});
+  expect(secret).toHaveTextContent("Rust migration");
+  expect(secret).toHaveTextContent(grantToken);
+  expect(requests.find(request => request.path.endsWith("/migration-grant"))).toEqual({
+    body: {ttl_seconds: 300},
+    method: "POST",
+    path: `/api/v1/agents/nodes/${nodeId}/migration-grant`,
+    signal: expect.any(AbortSignal),
+  });
+});
+
 it("allows only one pending grant request and preserves its one display lifecycle", async () => {
   // Break caught: overlapping responses could replace a token before the administrator copied it.
   const pending = deferred<Response>();
@@ -286,7 +315,7 @@ it("allows only one pending grant request and preserves its one display lifecycl
   ).toHaveLength(1));
 
   pending.resolve(jsonResponse(
-    {expires_at: "2026-08-05T10:15:00Z", id: "grant-001", node_id: nodeId, token: grantToken},
+    {expires_at: "2026-08-05T10:15:00Z", id: "grant-001", node_id: nodeId, purpose: "new-node", token: grantToken},
     201,
   ));
   expect(await screen.findByText(grantToken)).toBeVisible();
@@ -314,7 +343,7 @@ it("aborts and invalidates a pending grant when refreshed", async () => {
   await user.click(screen.getByRole("button", {name: "Refresh agent data"}));
   expect(grantRequest.signal.aborted).toBe(true);
   pending.resolve(jsonResponse(
-    {expires_at: "2026-08-05T10:15:00Z", id: "grant-001", node_id: nodeId, token: grantToken},
+    {expires_at: "2026-08-05T10:15:00Z", id: "grant-001", node_id: nodeId, purpose: "new-node", token: grantToken},
     201,
   ));
   await waitFor(() => expect(screen.queryByText(grantToken)).not.toBeInTheDocument());

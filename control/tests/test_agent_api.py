@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import json
 import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 import pytest
 from cryptography import x509
@@ -36,11 +38,22 @@ from dgx_control.models import (
     AgentOperationAttempt,
     AgentPresence,
     Base,
+    ClusterMapping,
+    ClusterMappingNode,
+    InstallationNode,
     Job,
+    LocalRecipe,
+    LocalRecipeRevision,
+    NodeInventorySnapshot,
     Observation,
+    RecipeBuild,
+    RecipeInstallation,
+    RecipeSourceBundle,
 )
 from dgx_control.pki import CertificateAuthority, IssuedCertificate
 from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
+from dgx_control.recipe_contract import recipe_content_sha256
+from dgx_control.source_bundles import SourceBundleStore, generate_source_bundle
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -76,9 +89,14 @@ PROBE_RESULT = {
 
 
 class Jobs:
-    def list(self): return []
-    def get(self, _): raise KeyError
-    def enqueue(self, *_args, **_kwargs): raise AssertionError
+    def list(self):
+        return []
+
+    def get(self, _):
+        raise KeyError
+
+    def enqueue(self, *_args, **_kwargs):
+        raise AssertionError
 
 
 class Clock:
@@ -121,8 +139,18 @@ class Authority(CertificateAuthority):
     def __init__(self) -> None:
         self.fail_revoke = False
 
-    def issue_node(self, node_id: str, public_key_pem: bytes, now: datetime) -> IssuedCertificate:
-        return IssuedCertificate(node_id, b"certificate", b"chain", "issued-serial", "issued-fingerprint", now, now + timedelta(days=1))
+    def issue_node(
+        self, node_id: str, public_key_pem: bytes, now: datetime
+    ) -> IssuedCertificate:
+        return IssuedCertificate(
+            node_id,
+            b"certificate",
+            b"chain",
+            "issued-serial",
+            "issued-fingerprint",
+            now,
+            now + timedelta(days=1),
+        )
 
     def renew_node(
         self,
@@ -144,14 +172,25 @@ class Authority(CertificateAuthority):
 
 @pytest.fixture
 def agent_system(tmp_path):
-    engine = create_engine(f"sqlite:///{tmp_path / 'agent-api.sqlite'}", connect_args={"check_same_thread": False})
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'agent-api.sqlite'}",
+        connect_args={"check_same_thread": False},
+    )
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
     clock = Clock()
     with sessions.begin() as session:
         for node, serial in ((NODE_A, "serial-a"), (NODE_B, "serial-b")):
             session.add(AgentNode(node_id=node, state="active", capabilities=[]))
-            session.add(AgentCertificate(serial=serial, node_id=node, fingerprint=f"fingerprint-{serial}", not_before=clock.now - timedelta(seconds=1), not_after=clock.now + timedelta(hours=1)))
+            session.add(
+                AgentCertificate(
+                    serial=serial,
+                    node_id=node,
+                    fingerprint=f"fingerprint-{serial}",
+                    not_before=clock.now - timedelta(seconds=1),
+                    not_after=clock.now + timedelta(hours=1),
+                )
+            )
     presence = AgentPresenceService(
         sessions,
         ManagementAddressPolicy.parse("10.0.0.0/24"),
@@ -166,12 +205,14 @@ def agent_system(tmp_path):
         clock=clock,
         presence=presence,
         artifact_root=tmp_path / "artifacts",
+        source_bundles=SourceBundleStore(tmp_path / "source-bundles"),
         tuf_metadata_root=tmp_path / "tuf-metadata",
         tuf_target_root=tmp_path / "tuf-targets",
         workload_tuf_metadata_root=tmp_path / "workload-tuf-metadata",
         workload_tuf_target_root=tmp_path / "workload-tuf-targets",
         max_tuf_metadata_bytes=128,
         max_tuf_target_bytes=128,
+        fabric_policy=ManagementAddressPolicy.parse("192.168.100.0/24"),
     )
     services.artifact_root.mkdir()
     services.tuf_metadata_root.mkdir()
@@ -180,7 +221,15 @@ def agent_system(tmp_path):
     services.workload_tuf_target_root.mkdir()
     codec = TokenCodec(b"k" * 32)
     audits = MemoryAuditStore()
-    app = create_app(jobs=Jobs(), tokens=codec, audits=audits, fleet=dict, now=lambda: 0, agent=services, trusted_agent_proxy_auth=b"p" * 32)
+    app = create_app(
+        jobs=Jobs(),
+        tokens=codec,
+        audits=audits,
+        fleet=dict,
+        now=lambda: 0,
+        agent=services,
+        trusted_agent_proxy_auth=b"p" * 32,
+    )
     app.state.test_audits = audits
     return TestClient(app), services, codec, clock
 
@@ -196,8 +245,222 @@ def agent_headers(node: str, serial: str) -> dict[str, str]:
     }
 
 
+def test_agent_posts_authenticated_runtime_and_fabric_inventory(agent_system) -> None:
+    client, services, _, clock = agent_system
+    payload = {
+        "schema_version": 1,
+        "observed_at": clock.now.isoformat(),
+        "disk_total_bytes": 1000,
+        "disk_free_bytes": 700,
+        "host_memory_total_bytes": 2000,
+        "host_memory_free_bytes": 1500,
+        "gpu_memory_total_bytes": 1000,
+        "gpu_memory_free_bytes": 800,
+        "gpu_count": 1,
+        "artifact_store_read_only": False,
+        "capabilities": ["runtime.vonk.v1", "fabric.tcp.mbps.200000"],
+        "fabric_address": "192.168.100.2",
+        "fabric_bandwidth_mbps": 200000,
+        "nvidia_driver_version": "580.65.06",
+        "container_runtime_version": "28.3.3",
+    }
+
+    response = client.post(
+        "/agent/v1/inventory",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json=payload,
+    )
+    assert response.status_code == 204
+    with services.sessions() as session:
+        row = session.scalar(
+            select(NodeInventorySnapshot).where(NodeInventorySnapshot.node_id == NODE_A)
+        )
+        assert row is not None
+        assert row.fabric_address == "192.168.100.2"
+        assert row.fabric_bandwidth_mbps == 200000
+        assert row.capabilities == sorted(payload["capabilities"])
+
+    denied = payload | {"fabric_address": "10.0.0.42"}
+    assert (
+        client.post(
+            "/agent/v1/inventory",
+            headers=agent_headers(NODE_B, "serial-b"),
+            json=denied,
+        ).status_code
+        == 422
+    )
+
+
+def test_builder_can_download_only_its_authorized_canonical_source_bundle(
+    agent_system,
+) -> None:
+    client, services, _, clock = agent_system
+    bundle = generate_source_bundle(
+        {
+            "Dockerfile": (
+                f"FROM ghcr.io/vonkforge/base@sha256:{'a' * 64}\nUSER 10001:10001\n"
+            ).encode()
+        }
+    )
+    stored = services.source_bundles.put(bundle.sha256, io.BytesIO(bundle.archive))
+    recipe_id = str(uuid.uuid4())
+    revision_id = str(uuid.uuid4())
+    with services.sessions.begin() as session:
+        session.add(
+            LocalRecipe(
+                id=recipe_id,
+                slug="bundle-download",
+                title="Bundle download",
+                description="Agent source authorization fixture",
+                source_kind="local",
+                created_by="administrator",
+                created_at=clock.now,
+                updated_at=clock.now,
+            )
+        )
+        session.add(
+            LocalRecipeRevision(
+                id=revision_id,
+                recipe_id=recipe_id,
+                revision_number=1,
+                lifecycle="resolved",
+                schema_version=1,
+                document={},
+                content_sha256="c" * 64,
+                created_by="administrator",
+                created_at=clock.now,
+            )
+        )
+        session.add(
+            RecipeSourceBundle(
+                sha256=bundle.sha256,
+                media_type="application/vnd.vonk.source-bundle.v1+tar",
+                archive_bytes=len(bundle.archive),
+                total_bytes=bundle.manifest.total_bytes,
+                file_count=len(bundle.manifest.files),
+                storage_key=str(stored.path),
+                manifest={"schema_version": 1},
+                verified_at=clock.now,
+            )
+        )
+        session.add(
+            RecipeBuild(
+                recipe_revision_id=revision_id,
+                builder_node_id=NODE_A,
+                source_bundle_sha256=bundle.sha256,
+                build_input_sha256="d" * 64,
+                state="planned",
+                policy_report={"passed": True},
+                plan={},
+                created_at=clock.now,
+                updated_at=clock.now,
+            )
+        )
+
+    response = client.get(
+        f"/agent/v1/source-bundles/{bundle.sha256}",
+        headers=agent_headers(NODE_A, "serial-a"),
+    )
+    assert response.status_code == 200
+    assert response.content == bundle.archive
+    assert response.headers["etag"] == f'"sha256:{bundle.sha256}"'
+    assert (
+        client.get(
+            f"/agent/v1/source-bundles/{bundle.sha256}",
+            headers=agent_headers(NODE_B, "serial-b"),
+        ).status_code
+        == 404
+    )
+    assert client.get(f"/agent/v1/source-bundles/{bundle.sha256}").status_code == 401
+
+
+def test_builder_uploads_digest_verified_oci_archive_without_a_registry(
+    agent_system,
+) -> None:
+    client, services, _, clock = agent_system
+    recipe_id = str(uuid.uuid4())
+    revision_id = str(uuid.uuid4())
+    build_id = str(uuid.uuid4())
+    payload = b"exact oci layout"
+    layout_digest = hashlib.sha256(payload).hexdigest()
+    image_digest = "sha256:" + "d" * 64
+    with services.sessions.begin() as session:
+        session.add(
+            LocalRecipe(
+                id=recipe_id,
+                slug="image-upload",
+                title="Image upload",
+                description="Exact OCI upload fixture",
+                source_kind="local",
+                created_by="administrator",
+                created_at=clock.now,
+                updated_at=clock.now,
+            )
+        )
+        session.add(
+            LocalRecipeRevision(
+                id=revision_id,
+                recipe_id=recipe_id,
+                revision_number=1,
+                lifecycle="resolved",
+                schema_version=1,
+                document={},
+                content_sha256="c" * 64,
+                created_by="administrator",
+                created_at=clock.now,
+            )
+        )
+        session.add(
+            RecipeBuild(
+                id=build_id,
+                recipe_revision_id=revision_id,
+                builder_node_id=NODE_A,
+                source_bundle_sha256="a" * 64,
+                build_input_sha256="b" * 64,
+                state="building",
+                policy_report={"passed": True},
+                plan={},
+                created_at=clock.now,
+                updated_at=clock.now,
+            )
+        )
+    headers = agent_headers(NODE_A, "serial-a") | {
+        "content-type": "application/vnd.oci.image.layout.v1.tar",
+        "x-vonk-image-digest": image_digest,
+        "x-vonk-oci-layout-sha256": layout_digest,
+    }
+
+    response = client.put(
+        f"/agent/v1/recipe-builds/{build_id}/image",
+        headers=headers,
+        content=payload,
+    )
+
+    assert response.status_code == 204
+    assert (services.artifact_root / layout_digest).read_bytes() == payload
+    with services.sessions() as session:
+        build = session.get(RecipeBuild, build_id)
+        assert build.image_digest == image_digest
+        assert build.oci_layout_sha256 == layout_digest
+        assert build.image_bytes == len(payload)
+    assert (
+        client.put(
+            f"/agent/v1/recipe-builds/{build_id}/image",
+            headers=agent_headers(NODE_B, "serial-b")
+            | {
+                "x-vonk-image-digest": image_digest,
+                "x-vonk-oci-layout-sha256": layout_digest,
+            },
+            content=payload,
+        ).status_code
+        == 404
+    )
+
+
 def admin_headers(codec: TokenCodec, role: str = "administrator") -> dict[str, str]:
-    return {"Authorization": f"Bearer {codec.issue(Actor(role, role), ttl_seconds=100, now=0)}"}
+    return {
+        "Authorization": f"Bearer {codec.issue(Actor(role, role), ttl_seconds=100, now=0)}"
+    }
 
 
 def enrollment_grant(services: AgentApiServices) -> str:
@@ -213,32 +476,49 @@ def valid_enrollment_body(token: str) -> bytes:
     key = ed25519.Ed25519PrivateKey.generate()
     csr = (
         x509.CertificateSigningRequestBuilder()
-        .subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_A)]))
-        .add_extension(x509.SubjectAlternativeName([
-            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_A}")
-        ]), critical=False)
+        .subject_name(
+            x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_A)])
+        )
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    x509.UniformResourceIdentifier(
+                        f"spiffe://dgx-forge.local/node/{NODE_A}"
+                    )
+                ]
+            ),
+            critical=False,
+        )
         .sign(key, algorithm=None)
         .public_bytes(serialization.Encoding.PEM)
     )
-    public = x509.load_pem_x509_csr(csr).public_key().public_bytes(
-        serialization.Encoding.DER,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
+    public = (
+        x509.load_pem_x509_csr(csr)
+        .public_key()
+        .public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
     )
-    return json.dumps({
-        "grant_token": token,
-        "csr": csr.decode("ascii"),
-        "evidence": {
-            "node_id": NODE_A,
-            "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(),
-            "host_key_fingerprint": "host",
-            "hardware_fingerprint": "hardware",
-            "agent_digest": "a" * 64,
-            "boot_id": "boot",
-        },
-    }).encode("utf-8")
+    return json.dumps(
+        {
+            "grant_token": token,
+            "csr": csr.decode("ascii"),
+            "evidence": {
+                "node_id": NODE_A,
+                "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(),
+                "host_key_fingerprint": "host",
+                "hardware_fingerprint": "hardware",
+                "agent_digest": "a" * 64,
+                "boot_id": "boot",
+            },
+        }
+    ).encode("utf-8")
 
 
-def asgi_post(app, path: str, body: bytes, *, content_type: str = "application/json") -> tuple[int, bytes]:
+def asgi_post(
+    app, path: str, body: bytes, *, content_type: str = "application/json"
+) -> tuple[int, bytes]:
     async def request() -> tuple[int, bytes]:
         sent: list[dict[str, object]] = []
         delivered = False
@@ -254,18 +534,28 @@ def asgi_post(app, path: str, body: bytes, *, content_type: str = "application/j
             sent.append(message)
 
         scope = {
-            "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
-            "http_version": "1.1", "method": "POST", "scheme": "http",
-            "path": path, "raw_path": path.encode("ascii"), "query_string": b"",
+            "type": "http",
+            "asgi": {"version": "3.0", "spec_version": "2.3"},
+            "http_version": "1.1",
+            "method": "POST",
+            "scheme": "http",
+            "path": path,
+            "raw_path": path.encode("ascii"),
+            "query_string": b"",
             "headers": ((b"content-type", content_type.encode("ascii")),),
-            "client": ("testclient", 1234), "server": ("testserver", 80),
-            "root_path": "", "state": {},
+            "client": ("testclient", 1234),
+            "server": ("testserver", 80),
+            "root_path": "",
+            "state": {},
         }
         await asyncio.wait_for(app(scope, receive, send), timeout=1)
-        start = next(message for message in sent if message["type"] == "http.response.start")
+        start = next(
+            message for message in sent if message["type"] == "http.response.start"
+        )
         content = b"".join(
             message.get("body", b"")  # type: ignore[arg-type]
-            for message in sent if message["type"] == "http.response.body"
+            for message in sent
+            if message["type"] == "http.response.body"
         )
         return int(start["status"]), content
 
@@ -274,9 +564,17 @@ def asgi_post(app, path: str, body: bytes, *, content_type: str = "application/j
 
 def parent(sessions, clock: Clock) -> Job:
     job = Job(
-        request_id=str(uuid.uuid4()), kind="agent.operations", state="queued", actor="administrator",
-        base_commit="a" * 40, targets=[NODE_A], payload_digest=hashlib.sha256(b"{}").hexdigest(),
-        payload={}, current_attempt=0, created_at=clock.now, updated_at=clock.now,
+        request_id=str(uuid.uuid4()),
+        kind="agent.operations",
+        state="queued",
+        actor="administrator",
+        base_commit="a" * 40,
+        targets=[NODE_A],
+        payload_digest=hashlib.sha256(b"{}").hexdigest(),
+        payload={},
+        current_attempt=0,
+        created_at=clock.now,
+        updated_at=clock.now,
     )
     with sessions.begin() as session:
         session.add(job)
@@ -285,19 +583,25 @@ def parent(sessions, clock: Clock) -> Job:
 
 def test_spoofed_agent_header_is_rejected() -> None:
     app = create_app(
-        jobs=Jobs(), tokens=TokenCodec(b"k" * 32),
-        audits=MemoryAuditStore(), fleet=dict,
+        jobs=Jobs(),
+        tokens=TokenCodec(b"k" * 32),
+        audits=MemoryAuditStore(),
+        fleet=dict,
     )
 
-    response = TestClient(app).post("/agent/v1/claim", headers={"x-dgx-agent-node": NODE_A})
+    response = TestClient(app).post(
+        "/agent/v1/claim", headers={"x-dgx-agent-node": NODE_A}
+    )
 
     assert response.status_code == 401
 
 
 def test_unauthenticated_agent_gate_returns_without_reading_request_body() -> None:
     app = create_app(
-        jobs=Jobs(), tokens=TokenCodec(b"k" * 32),
-        audits=MemoryAuditStore(), fleet=dict,
+        jobs=Jobs(),
+        tokens=TokenCodec(b"k" * 32),
+        audits=MemoryAuditStore(),
+        fleet=dict,
     )
     sent: list[dict[str, object]] = []
     body_reads = 0
@@ -311,16 +615,26 @@ def test_unauthenticated_agent_gate_returns_without_reading_request_body() -> No
         sent.append(message)
 
     scope = {
-        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
-        "http_version": "1.1", "method": "POST", "scheme": "http",
-        "path": "/agent/v1/claim", "raw_path": b"/agent/v1/claim",
-        "query_string": b"", "headers": (), "client": ("untrusted", 1234),
-        "server": ("testserver", 80), "root_path": "", "state": {},
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/agent/v1/claim",
+        "raw_path": b"/agent/v1/claim",
+        "query_string": b"",
+        "headers": (),
+        "client": ("untrusted", 1234),
+        "server": ("testserver", 80),
+        "root_path": "",
+        "state": {},
     }
 
     asyncio.run(asyncio.wait_for(app(scope, receive, send), timeout=0.5))
 
-    start = next(message for message in sent if message["type"] == "http.response.start")
+    start = next(
+        message for message in sent if message["type"] == "http.response.start"
+    )
     headers = dict(start["headers"])  # type: ignore[arg-type]
     assert start["status"] == 401
     assert body_reads == 0
@@ -330,27 +644,53 @@ def test_unauthenticated_agent_gate_returns_without_reading_request_body() -> No
 
 def test_agent_routes_do_not_require_human_bearer_tokens() -> None:
     app = create_app(
-        jobs=Jobs(), tokens=TokenCodec(b"k" * 32),
-        audits=MemoryAuditStore(), fleet=dict,
+        jobs=Jobs(),
+        tokens=TokenCodec(b"k" * 32),
+        audits=MemoryAuditStore(),
+        fleet=dict,
     )
 
-    response = TestClient(app).post("/agent/v1/claim", headers={"Authorization": "Bearer invalid"})
+    response = TestClient(app).post(
+        "/agent/v1/claim", headers={"Authorization": "Bearer invalid"}
+    )
 
     assert response.status_code == 401
 
 
-def test_untrusted_proxy_and_malformed_forwarded_identity_are_rejected(agent_system) -> None:
+def test_untrusted_proxy_and_malformed_forwarded_identity_are_rejected(
+    agent_system,
+) -> None:
     client, _, _, _ = agent_system
     assert client.post("/agent/v1/claim").status_code == 401
-    assert client.post("/agent/v1/claim", headers={**agent_headers(NODE_A, "serial-a"), "x-dgx-agent-verified": "false"}).status_code == 401
+    assert (
+        client.post(
+            "/agent/v1/claim",
+            headers={
+                **agent_headers(NODE_A, "serial-a"),
+                "x-dgx-agent-verified": "false",
+            },
+        ).status_code
+        == 401
+    )
 
-    app = create_app(jobs=Jobs(), tokens=TokenCodec(b"k" * 32), audits=MemoryAuditStore(), fleet=dict)
-    assert TestClient(app).post("/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")).status_code == 401
+    app = create_app(
+        jobs=Jobs(), tokens=TokenCodec(b"k" * 32), audits=MemoryAuditStore(), fleet=dict
+    )
+    assert (
+        TestClient(app)
+        .post("/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a"))
+        .status_code
+        == 401
+    )
 
 
 def test_verified_identity_cannot_claim_other_node(agent_system) -> None:
     client, _, _, _ = agent_system
-    response = client.post("/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a"), json={"node_id": NODE_B})
+    response = client.post(
+        "/agent/v1/claim",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json={"node_id": NODE_B},
+    )
     assert response.status_code == 403
 
 
@@ -376,9 +716,7 @@ def test_claim_requires_a_trusted_policy_bounded_source(agent_system) -> None:
 def test_authenticated_claim_persists_certificate_bound_source(agent_system) -> None:
     client, services, _, clock = agent_system
 
-    response = client.post(
-        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
-    )
+    response = client.post("/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a"))
 
     assert response.status_code == 204
     with services.sessions() as session:
@@ -401,9 +739,7 @@ def test_claim_uses_atomic_presence_consumer_not_post_commit(
 
     monkeypatch.setattr(services.presence, "observe", reject_post_commit)
 
-    response = client.post(
-        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
-    )
+    response = client.post("/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a"))
 
     assert response.status_code == 204
     with services.sessions() as session:
@@ -750,9 +1086,7 @@ def test_exact_fenced_probe_success_writes_bounded_durable_health(agent_system) 
     assert response.status_code == 204
     with services.sessions() as session:
         observations = list(
-            session.scalars(
-                select(Observation).where(Observation.node_id == NODE_A)
-            )
+            session.scalars(select(Observation).where(Observation.node_id == NODE_A))
         )
         assert len(observations) == 1
         assert observations[0].kind == "health"
@@ -792,11 +1126,14 @@ def test_failed_probe_result_never_writes_health_observation(agent_system) -> No
         "result": {"status": "failed", "error_code": "probe_failed"},
     }
 
-    assert client.post(
-        "/agent/v1/result",
-        headers=agent_headers(NODE_A, "serial-a"),
-        json=result,
-    ).status_code == 204
+    assert (
+        client.post(
+            "/agent/v1/result",
+            headers=agent_headers(NODE_A, "serial-a"),
+            json=result,
+        ).status_code
+        == 204
+    )
     with services.sessions() as session:
         assert session.scalar(select(Observation)) is None
 
@@ -896,7 +1233,9 @@ def test_boolean_protocol_advertisement_is_rejected_without_recording_contact(
 
 
 @pytest.mark.parametrize("mutation", ("revoked", "retired", "expired", "fingerprint"))
-def test_persisted_certificate_state_is_checked_on_every_agent_request(agent_system, mutation: str) -> None:
+def test_persisted_certificate_state_is_checked_on_every_agent_request(
+    agent_system, mutation: str
+) -> None:
     client, services, _, clock = agent_system
     with services.sessions.begin() as session:
         certificate = session.get(AgentCertificate, "serial-a")
@@ -910,34 +1249,320 @@ def test_persisted_certificate_state_is_checked_on_every_agent_request(agent_sys
             certificate.not_after = clock.now
         else:
             certificate.fingerprint = "different"
-    assert client.post("/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")).status_code == 401
+    assert (
+        client.post(
+            "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
+        ).status_code
+        == 401
+    )
 
 
 def test_fence_and_cross_node_result_updates_are_denied(agent_system) -> None:
     client, services, _, clock = agent_system
-    services.operations.enqueue(parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {})
-    claim = client.post("/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")).json()
-    result = {key: claim[key] for key in ("schema_version", "job_id", "operation_id", "attempt", "fence", "node_id", "deadline")}
-    foreign = {**result, "node_id": NODE_B, "state": "succeeded", "result": {"healthy": True}}
-    assert client.post("/agent/v1/result", headers=agent_headers(NODE_A, "serial-a"), json=foreign).status_code == 403
-    stale = {**result, "fence": str(uuid.uuid4()), "state": "succeeded", "result": {"healthy": True}}
-    assert client.post("/agent/v1/result", headers=agent_headers(NODE_A, "serial-a"), json=stale).status_code == 409
+    services.operations.enqueue(
+        parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {}
+    )
+    claim = client.post(
+        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
+    ).json()
+    result = {
+        key: claim[key]
+        for key in (
+            "schema_version",
+            "job_id",
+            "operation_id",
+            "attempt",
+            "fence",
+            "node_id",
+            "deadline",
+        )
+    }
+    foreign = {
+        **result,
+        "node_id": NODE_B,
+        "state": "succeeded",
+        "result": {"healthy": True},
+    }
+    assert (
+        client.post(
+            "/agent/v1/result", headers=agent_headers(NODE_A, "serial-a"), json=foreign
+        ).status_code
+        == 403
+    )
+    stale = {
+        **result,
+        "fence": str(uuid.uuid4()),
+        "state": "succeeded",
+        "result": {"healthy": True},
+    }
+    assert (
+        client.post(
+            "/agent/v1/result", headers=agent_headers(NODE_A, "serial-a"), json=stale
+        ).status_code
+        == 409
+    )
 
 
-def test_enrollment_routes_are_admin_only_and_pending_exact_replay_is_idempotent(agent_system) -> None:
+def test_enrollment_routes_are_admin_only_and_pending_exact_replay_is_idempotent(
+    agent_system,
+) -> None:
     client, _, codec, _ = agent_system
-    assert client.post("/api/v1/agents/enrollments/grants", headers=admin_headers(codec, "operator"), json={"node_id": NODE_A, "ttl_seconds": 60}).status_code == 403
+    assert (
+        client.post(
+            "/api/v1/agents/enrollments/grants",
+            headers=admin_headers(codec, "operator"),
+            json={"node_id": NODE_A, "ttl_seconds": 60},
+        ).status_code
+        == 403
+    )
     # Existing node is deliberately unrelated to submitting a one-use grant;
     # approval remains the point that rejects a duplicate immutable node.
-    grant = client.post("/api/v1/agents/enrollments/grants", headers=admin_headers(codec), json={"node_id": NODE_A, "ttl_seconds": 60}).json()
+    grant = client.post(
+        "/api/v1/agents/enrollments/grants",
+        headers=admin_headers(codec),
+        json={"node_id": NODE_A, "ttl_seconds": 60},
+    ).json()
     key = ed25519.Ed25519PrivateKey.generate()
-    csr = x509.CertificateSigningRequestBuilder().subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_A)])).add_extension(x509.SubjectAlternativeName([x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_A}")]), critical=False).sign(key, algorithm=None).public_bytes(serialization.Encoding.PEM)
-    public = x509.load_pem_x509_csr(csr).public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
-    body = {"grant_token": grant["token"], "csr": csr.decode(), "evidence": {"node_id": NODE_A, "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(), "host_key_fingerprint": "host", "hardware_fingerprint": "hardware", "agent_digest": "a" * 64, "boot_id": "boot"}}
+    csr = (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(
+            x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_A)])
+        )
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    x509.UniformResourceIdentifier(
+                        f"spiffe://dgx-forge.local/node/{NODE_A}"
+                    )
+                ]
+            ),
+            critical=False,
+        )
+        .sign(key, algorithm=None)
+        .public_bytes(serialization.Encoding.PEM)
+    )
+    public = (
+        x509.load_pem_x509_csr(csr)
+        .public_key()
+        .public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+    )
+    body = {
+        "grant_token": grant["token"],
+        "csr": csr.decode(),
+        "evidence": {
+            "node_id": NODE_A,
+            "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(),
+            "host_key_fingerprint": "host",
+            "hardware_fingerprint": "hardware",
+            "agent_digest": "a" * 64,
+            "boot_id": "boot",
+        },
+    }
     first = client.post("/agent/v1/enroll", json=body)
     replay = client.post("/agent/v1/enroll", json=body)
     assert first.status_code == replay.status_code == 202
     assert first.content == replay.content == canonical_message(first.json())
+
+
+def test_rust_migration_grant_is_admin_only_and_bound_to_legacy_node(
+    agent_system,
+) -> None:
+    client, _services, codec, _clock = agent_system
+    endpoint = f"/api/v1/agents/nodes/{NODE_A}/migration-grant"
+
+    assert (
+        client.post(
+            endpoint,
+            headers=admin_headers(codec, "operator"),
+            json={"ttl_seconds": 60},
+        ).status_code
+        == 403
+    )
+    response = client.post(
+        endpoint,
+        headers=admin_headers(codec),
+        json={"ttl_seconds": 60},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["node_id"] == NODE_A
+    assert response.json()["purpose"] == "rust-migration"
+    assert len(response.json()["token"]) == 43
+
+
+def test_rust_agent_enrollment_shape_remains_controller_compatible(
+    agent_system,
+) -> None:
+    client, services, _, _ = agent_system
+    audits = client.app.state.test_audits
+    fixture = json.loads(
+        (
+            Path(__file__).parents[2]
+            / "agent_protocol/fixtures/enrollment-request.json"
+        ).read_text()
+    )
+    body = json.loads(valid_enrollment_body(enrollment_grant(services)))
+
+    assert set(body) == set(fixture) == {"csr", "evidence", "grant_token"}
+    assert set(body["evidence"]) == set(fixture["evidence"])
+    response = client.post("/agent/v1/enroll", json=body)
+
+    assert response.status_code == 202
+    assert response.json()["node_id"] == NODE_A
+    event = audits.for_request(response.headers["x-request-id"])
+    assert event.action == "agent.enrollment.submit.pending-approval"
+    assert event.targets[1:] == (response.json()["id"], NODE_A)
+    assert body["grant_token"] not in repr(event)
+
+
+def test_agent_reads_only_its_installation_bound_built_recipe_spec(
+    agent_system,
+) -> None:
+    client, services, _, clock = agent_system
+    document = json.loads(
+        (Path(__file__).parent / "fixtures/global/recipe-v1-minimal.json").read_text()
+    )
+    digest = recipe_content_sha256(document)
+    recipe_id = str(uuid.uuid4())
+    revision_id = str(uuid.uuid4())
+    mapping_id = str(uuid.uuid4())
+    build_id = str(uuid.uuid4())
+    installation_id = str(uuid.uuid4())
+    image_digest = "sha256:" + "d" * 64
+    parameters = {item["name"]: item["default"] for item in document["parameters"]}
+    with services.sessions.begin() as session:
+        session.add(
+            LocalRecipe(
+                id=recipe_id,
+                slug="agent-spec",
+                title="Agent spec",
+                description="Digest-bound agent fixture",
+                source_kind="local",
+                created_by="administrator",
+                created_at=clock.now,
+                updated_at=clock.now,
+            )
+        )
+        session.add(
+            LocalRecipeRevision(
+                id=revision_id,
+                recipe_id=recipe_id,
+                revision_number=1,
+                lifecycle="resolved",
+                schema_version=1,
+                document=document,
+                content_sha256=digest,
+                created_by="administrator",
+                created_at=clock.now,
+            )
+        )
+        session.add(
+            ClusterMapping(
+                id=mapping_id,
+                recipe_revision_id=revision_id,
+                profile_name=document["deployment_profiles"][0]["name"],
+                generation=1,
+                node_count=1,
+                state="ready",
+                parameters=parameters,
+                placement_digest="e" * 64,
+                endpoint_owner_node_id=NODE_A,
+                created_by="administrator",
+                created_at=clock.now,
+                updated_at=clock.now,
+            )
+        )
+        session.add(
+            ClusterMappingNode(
+                mapping_id=mapping_id,
+                node_id=NODE_A,
+                rank=0,
+                role="entrypoint",
+                endpoint_owner=True,
+                created_at=clock.now,
+            )
+        )
+        session.add(
+            RecipeBuild(
+                id=build_id,
+                recipe_revision_id=revision_id,
+                builder_node_id=NODE_A,
+                source_bundle_sha256=document["build"]["context"]["sha256"],
+                build_input_sha256="f" * 64,
+                state="succeeded",
+                policy_report={"passed": True},
+                plan={},
+                image_digest=image_digest,
+                oci_layout_sha256="a" * 64,
+                image_bytes=1024,
+                created_at=clock.now,
+                updated_at=clock.now,
+            )
+        )
+        session.add(
+            RecipeInstallation(
+                id=installation_id,
+                recipe_revision_id=revision_id,
+                mapping_id=mapping_id,
+                mapping_generation=1,
+                recipe_build_id=build_id,
+                image_digest=image_digest,
+                plan_digest="b" * 64,
+                plan={},
+                state="installing",
+                actor="administrator",
+                created_at=clock.now,
+                updated_at=clock.now,
+            )
+        )
+        session.add(
+            InstallationNode(
+                installation_id=installation_id,
+                node_id=NODE_A,
+                rank=0,
+                role="entrypoint",
+                state="installing",
+                required_bytes=1024,
+                installed_bytes=0,
+                updated_at=clock.now,
+            )
+        )
+
+    response = client.get(
+        f"/agent/v1/recipe-installations/{installation_id}/spec",
+        headers=agent_headers(NODE_A, "serial-a"),
+    )
+
+    assert response.status_code == 200
+    assert response.content == canonical_message(response.json())
+    assert set(response.json()) == {
+        "artifacts",
+        "endpoint",
+        "runtime",
+        "security",
+        "lifecycle",
+    }
+    assert response.json()["runtime"]["image"].endswith("@" + image_digest)
+    assert (
+        client.get(
+            f"/agent/v1/recipe-installations/{uuid.uuid4()}/spec",
+            headers=agent_headers(NODE_A, "serial-a"),
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/agent/v1/recipe-installations/{installation_id}/spec",
+            headers=agent_headers(NODE_B, "serial-b"),
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(f"/agent/v1/recipe-installations/{installation_id}/spec").status_code
+        == 401
+    )
 
 
 def test_approved_exact_enrollment_replay_picks_up_certificate_and_mismatch_is_denied(
@@ -948,16 +1573,29 @@ def test_approved_exact_enrollment_replay_picks_up_certificate_and_mismatch_is_d
     key = ed25519.Ed25519PrivateKey.generate()
     csr = (
         x509.CertificateSigningRequestBuilder()
-        .subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_C)]))
-        .add_extension(x509.SubjectAlternativeName([
-            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_C}")
-        ]), critical=False)
+        .subject_name(
+            x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_C)])
+        )
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    x509.UniformResourceIdentifier(
+                        f"spiffe://dgx-forge.local/node/{NODE_C}"
+                    )
+                ]
+            ),
+            critical=False,
+        )
         .sign(key, algorithm=None)
         .public_bytes(serialization.Encoding.PEM)
     )
-    public = x509.load_pem_x509_csr(csr).public_key().public_bytes(
-        serialization.Encoding.DER,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
+    public = (
+        x509.load_pem_x509_csr(csr)
+        .public_key()
+        .public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
     )
     body = {
         "grant_token": grant.token,
@@ -1063,7 +1701,12 @@ def test_human_enrollment_mutations_audit_only_success_with_request_actor_and_ta
         headers=headers,
     )
 
-    assert [grant_response.status_code, approval.status_code, rejection.status_code, revocation.status_code] == [201, 200, 200, 204]
+    assert [
+        grant_response.status_code,
+        approval.status_code,
+        rejection.status_code,
+        revocation.status_code,
+    ] == [201, 200, 200, 204]
     expected = {
         grant_response.headers["x-request-id"]: (
             "agent.enrollment.grant.create",
@@ -1096,9 +1739,7 @@ def test_human_enrollment_mutations_audit_only_success_with_request_actor_and_ta
             headers=headers,
             json={"node_id": "invalid", "ttl_seconds": 60},
         ),
-        client.post(
-            "/api/v1/agents/enrollments/unknown/approve", headers=headers
-        ),
+        client.post("/api/v1/agents/enrollments/unknown/approve", headers=headers),
         client.post(
             "/api/v1/agents/enrollments/unknown/reject",
             headers=headers,
@@ -1117,19 +1758,32 @@ def _csr_for(node_id: str) -> bytes:
     key = ed25519.Ed25519PrivateKey.generate()
     return (
         x509.CertificateSigningRequestBuilder()
-        .subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, node_id)]))
-        .add_extension(x509.SubjectAlternativeName([
-            x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{node_id}")
-        ]), critical=False)
+        .subject_name(
+            x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, node_id)])
+        )
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    x509.UniformResourceIdentifier(
+                        f"spiffe://dgx-forge.local/node/{node_id}"
+                    )
+                ]
+            ),
+            critical=False,
+        )
         .sign(key, algorithm=None)
         .public_bytes(serialization.Encoding.PEM)
     )
 
 
 def _csr_fingerprint(csr_pem: bytes) -> str:
-    public_key = x509.load_pem_x509_csr(csr_pem).public_key().public_bytes(
-        serialization.Encoding.DER,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
+    public_key = (
+        x509.load_pem_x509_csr(csr_pem)
+        .public_key()
+        .public_bytes(
+            serialization.Encoding.DER,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
     )
     return hashlib.sha256(public_key).hexdigest()
 
@@ -1140,17 +1794,19 @@ def test_fresh_rotation_follower_receives_canonical_retryable_response(
     client, services, _, clock = agent_system
     request = _csr_for(NODE_A)
     with services.sessions.begin() as session:
-        session.add(AgentCertificateRotation(
-            node_id=NODE_A,
-            source_serial="serial-a",
-            generation=2,
-            csr_pem=request.decode("ascii"),
-            csr_public_key_fingerprint=_csr_fingerprint(request),
-            provider_request_id="r" * 43,
-            state="issuing",
-            created_at=clock.now,
-            updated_at=clock.now,
-        ))
+        session.add(
+            AgentCertificateRotation(
+                node_id=NODE_A,
+                source_serial="serial-a",
+                generation=2,
+                csr_pem=request.decode("ascii"),
+                csr_public_key_fingerprint=_csr_fingerprint(request),
+                provider_request_id="r" * 43,
+                state="issuing",
+                created_at=clock.now,
+                updated_at=clock.now,
+            )
+        )
 
     response = client.post(
         "/agent/v1/renew",
@@ -1160,9 +1816,7 @@ def test_fresh_rotation_follower_receives_canonical_retryable_response(
 
     assert response.status_code == 503
     assert response.content == canonical_message(response.json())
-    assert response.json() == {
-        "detail": "certificate rotation issuance is in progress"
-    }
+    assert response.json() == {"detail": "certificate rotation issuance is in progress"}
 
 
 def test_staged_certificate_can_only_activate_and_activation_is_idempotent_after_response_loss(
@@ -1187,31 +1841,53 @@ def test_staged_certificate_can_only_activate_and_activation_is_idempotent_after
     staged_headers["x-dgx-agent-fingerprint"] = issued["fingerprint"]
 
     assert client.post("/agent/v1/claim", headers=staged_headers).status_code == 401
-    assert client.post(
-        "/agent/v1/heartbeat", headers=staged_headers, json={"invalid": True}
-    ).status_code == 401
-    assert client.post(
-        "/agent/v1/result", headers=staged_headers, json={"invalid": True}
-    ).status_code == 401
-    assert client.post(
-        "/agent/v1/renew", headers=staged_headers,
-        json={"node_id": NODE_A, "csr": _csr_for(NODE_A).decode()},
-    ).status_code == 401
-    assert client.get(
-        "/agent/v1/artifacts/" + "a" * 64,
-        headers=staged_headers,
-    ).status_code == 401
+    assert (
+        client.post(
+            "/agent/v1/heartbeat", headers=staged_headers, json={"invalid": True}
+        ).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            "/agent/v1/result", headers=staged_headers, json={"invalid": True}
+        ).status_code
+        == 401
+    )
+    assert (
+        client.post(
+            "/agent/v1/renew",
+            headers=staged_headers,
+            json={"node_id": NODE_A, "csr": _csr_for(NODE_A).decode()},
+        ).status_code
+        == 401
+    )
+    assert (
+        client.get(
+            "/agent/v1/artifacts/" + "a" * 64,
+            headers=staged_headers,
+        ).status_code
+        == 401
+    )
 
     activation = {"node_id": NODE_A, "generation": issued["generation"]}
-    assert client.post(
-        "/agent/v1/renew/activate", headers=staged_headers, json=activation
-    ).status_code == 204
-    assert client.post(
-        "/agent/v1/renew/activate", headers=staged_headers, json=activation
-    ).status_code == 204
-    assert client.post(
-        "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
-    ).status_code == 401
+    assert (
+        client.post(
+            "/agent/v1/renew/activate", headers=staged_headers, json=activation
+        ).status_code
+        == 204
+    )
+    assert (
+        client.post(
+            "/agent/v1/renew/activate", headers=staged_headers, json=activation
+        ).status_code
+        == 204
+    )
+    assert (
+        client.post(
+            "/agent/v1/claim", headers=agent_headers(NODE_A, "serial-a")
+        ).status_code
+        == 401
+    )
     assert client.post("/agent/v1/claim", headers=staged_headers).status_code == 204
     with services.sessions() as session:
         old = session.get(AgentCertificate, "serial-a")
@@ -1220,7 +1896,9 @@ def test_staged_certificate_can_only_activate_and_activation_is_idempotent_after
         assert new is not None and new.state == "active" and new.revoked_at is None
 
 
-def test_failed_result_preserves_canonical_evidence_and_maps_parent_reason(agent_system) -> None:
+def test_failed_result_preserves_canonical_evidence_and_maps_parent_reason(
+    agent_system,
+) -> None:
     client, services, _, clock = agent_system
     services.operations.enqueue(
         parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {}
@@ -1231,8 +1909,13 @@ def test_failed_result_preserves_canonical_evidence_and_maps_parent_reason(agent
     result = {
         key: claim[key]
         for key in (
-            "schema_version", "job_id", "operation_id", "attempt", "fence",
-            "node_id", "deadline",
+            "schema_version",
+            "job_id",
+            "operation_id",
+            "attempt",
+            "fence",
+            "node_id",
+            "deadline",
         )
     } | {
         "state": "failed",
@@ -1245,7 +1928,9 @@ def test_failed_result_preserves_canonical_evidence_and_maps_parent_reason(agent
 
     assert response.status_code == 204
     with services.sessions() as session:
-        attempt = session.query(AgentOperationAttempt).filter_by(fence=claim["fence"]).one()
+        attempt = (
+            session.query(AgentOperationAttempt).filter_by(fence=claim["fence"]).one()
+        )
         parent_job = session.get(Job, claim["job_id"])
         assert attempt.result == {"status": "failed", "error_code": "probe_failed"}
         assert parent_job is not None and parent_job.status_reason == "probe_failed"
@@ -1286,14 +1971,25 @@ def test_claim_endpoint_long_poll_wakes_when_work_is_enqueued(agent_system) -> N
     assert time.monotonic() - started < 0.8
 
 
-def test_enrollment_rate_limit_rejects_before_reading_request_body(agent_system) -> None:
+def test_enrollment_rate_limit_rejects_before_reading_request_body(
+    agent_system,
+) -> None:
     _, services, codec, _ = agent_system
     limiter = EnrollmentRateLimiter(maximum=1, window_seconds=60, clock=lambda: 0.0)
     app = create_app(
-        jobs=Jobs(), tokens=codec, audits=MemoryAuditStore(), fleet=dict, agent=services,
+        jobs=Jobs(),
+        tokens=codec,
+        audits=MemoryAuditStore(),
+        fleet=dict,
+        agent=services,
         enrollment_rate_limiter=limiter,
     )
-    assert asgi_post(app, "/agent/v1/enroll", valid_enrollment_body(enrollment_grant(services)))[0] == 202
+    assert (
+        asgi_post(
+            app, "/agent/v1/enroll", valid_enrollment_body(enrollment_grant(services))
+        )[0]
+        == 202
+    )
     sent: list[dict[str, object]] = []
     reads = 0
 
@@ -1306,19 +2002,34 @@ def test_enrollment_rate_limit_rejects_before_reading_request_body(agent_system)
         sent.append(message)
 
     scope = {
-        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.3"},
-        "http_version": "1.1", "method": "POST", "scheme": "http",
-        "path": "/agent/v1/enroll", "raw_path": b"/agent/v1/enroll", "query_string": b"",
-        "headers": ((b"content-type", b"application/json"),), "client": ("testclient", 1234),
-        "server": ("testserver", 80), "root_path": "", "state": {},
+        "type": "http",
+        "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1",
+        "method": "POST",
+        "scheme": "http",
+        "path": "/agent/v1/enroll",
+        "raw_path": b"/agent/v1/enroll",
+        "query_string": b"",
+        "headers": ((b"content-type", b"application/json"),),
+        "client": ("testclient", 1234),
+        "server": ("testserver", 80),
+        "root_path": "",
+        "state": {},
     }
     asyncio.run(asyncio.wait_for(app(scope, receive, send), timeout=0.5))
 
-    assert next(message for message in sent if message["type"] == "http.response.start")["status"] == 429
+    assert (
+        next(message for message in sent if message["type"] == "http.response.start")[
+            "status"
+        ]
+        == 429
+    )
     assert reads == 0
 
 
-def test_duplicate_enrollment_grants_consume_unicode_escaped_token_values(agent_system) -> None:
+def test_duplicate_enrollment_grants_consume_unicode_escaped_token_values(
+    agent_system,
+) -> None:
     client, services, _, _ = agent_system
     first = enrollment_grant(services)
     second = enrollment_grant(services)
@@ -1363,11 +2074,16 @@ def test_oversized_enrollment_preserves_split_discovery_prefix(agent_system) -> 
     assert_grant_consumed(services, token)
 
 
-def test_one_huge_enrollment_chunk_is_only_copied_through_fixed_prefix(agent_system) -> None:
+def test_one_huge_enrollment_chunk_is_only_copied_through_fixed_prefix(
+    agent_system,
+) -> None:
     _, services, _, _ = agent_system
     token = enrollment_grant(services)
     huge = CopyBoundedChunk(
-        b'{"grant_token":"' + token.encode("ascii") + b'","padding":"' + b"x" * (1024 * 1024)
+        b'{"grant_token":"'
+        + token.encode("ascii")
+        + b'","padding":"'
+        + b"x" * (1024 * 1024)
     )
     request = ChunkedEnrollmentRequest(huge, b"must-not-be-received")
 
@@ -1385,7 +2101,9 @@ def test_one_huge_enrollment_chunk_is_only_copied_through_fixed_prefix(agent_sys
     (b"[1]", b"[]", b'"scalar"', b"0", b"true", b"false", b"null"),
     ids=("array", "empty-array", "string", "number", "true", "false", "null"),
 )
-def test_enrollment_rejects_non_object_json_without_server_error(agent_system, raw: bytes) -> None:
+def test_enrollment_rejects_non_object_json_without_server_error(
+    agent_system, raw: bytes
+) -> None:
     client, _, _, _ = agent_system
 
     status_code, _ = asgi_post(client.app, "/agent/v1/enroll", raw)
@@ -1404,7 +2122,9 @@ def test_non_object_enrollment_consumes_identifiable_nested_grant(agent_system) 
     assert_grant_consumed(services, token)
 
 
-def test_service_denied_enrollment_consumes_every_discovered_grant(agent_system) -> None:
+def test_service_denied_enrollment_consumes_every_discovered_grant(
+    agent_system,
+) -> None:
     client, services, _, _ = agent_system
     effective = enrollment_grant(services)
     nested = enrollment_grant(services)
@@ -1449,7 +2169,9 @@ def test_invalid_enrollment_json_consumes_identifiable_grant(
     assert_grant_consumed(services, token)
 
 
-def test_wrong_enrollment_content_type_consumes_identifiable_grant(agent_system) -> None:
+def test_wrong_enrollment_content_type_consumes_identifiable_grant(
+    agent_system,
+) -> None:
     client, services, _, _ = agent_system
     token = enrollment_grant(services)
 
@@ -1466,43 +2188,104 @@ def test_wrong_enrollment_content_type_consumes_identifiable_grant(agent_system)
 
 def test_enrollment_evidence_has_a_fixed_bounded_schema(agent_system) -> None:
     client, _, _, _ = agent_system
-    response = client.post("/agent/v1/enroll", json={
-        "grant_token": "a" * 43, "csr": "x",
-        "evidence": {
-            "node_id": NODE_A, "csr_public_key_fingerprint": "a" * 64,
-            "host_key_fingerprint": "host", "hardware_fingerprint": "hardware",
-            "agent_digest": "a" * 64, "boot_id": "boot", "unexpected": "x",
+    response = client.post(
+        "/agent/v1/enroll",
+        json={
+            "grant_token": "a" * 43,
+            "csr": "x",
+            "evidence": {
+                "node_id": NODE_A,
+                "csr_public_key_fingerprint": "a" * 64,
+                "host_key_fingerprint": "host",
+                "hardware_fingerprint": "hardware",
+                "agent_digest": "a" * 64,
+                "boot_id": "boot",
+                "unexpected": "x",
+            },
         },
-    })
+    )
     assert response.status_code == 403
 
 
-def test_artifact_access_is_owned_content_addressed_and_range_bounded(agent_system) -> None:
+def test_artifact_access_is_owned_content_addressed_and_range_bounded(
+    agent_system,
+) -> None:
     client, services, _, clock = agent_system
     digest = hashlib.sha256(b"artifact").hexdigest()
     (services.artifact_root / digest).write_bytes(b"artifact")
-    services.operations.enqueue(parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {"artifact_digest": digest})
-    response = client.get(f"/agent/v1/artifacts/{digest}", headers={**agent_headers(NODE_A, "serial-a"), "Range": "bytes=1-3"})
-    assert (response.status_code, response.content, response.headers["content-range"]) == (206, b"rti", "bytes 1-3/8")
-    assert client.get(f"/agent/v1/artifacts/{digest}", headers=agent_headers(NODE_B, "serial-b")).status_code == 404
-    assert client.get("/agent/v1/artifacts/../secret", headers=agent_headers(NODE_A, "serial-a")).status_code == 404
-    assert client.get(f"/agent/v1/artifacts/{digest}", headers={**agent_headers(NODE_A, "serial-a"), "Range": "bytes=0-99999999"}).status_code == 416
+    services.operations.enqueue(
+        parent(services.sessions, clock).id,
+        NODE_A,
+        "node.probe",
+        "a" * 40,
+        {"artifact_digest": digest},
+    )
+    response = client.get(
+        f"/agent/v1/artifacts/{digest}",
+        headers={**agent_headers(NODE_A, "serial-a"), "Range": "bytes=1-3"},
+    )
+    assert (
+        response.status_code,
+        response.content,
+        response.headers["content-range"],
+    ) == (206, b"rti", "bytes 1-3/8")
+    assert (
+        client.get(
+            f"/agent/v1/artifacts/{digest}", headers=agent_headers(NODE_B, "serial-b")
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            "/agent/v1/artifacts/../secret", headers=agent_headers(NODE_A, "serial-a")
+        ).status_code
+        == 404
+    )
+    assert (
+        client.get(
+            f"/agent/v1/artifacts/{digest}",
+            headers={**agent_headers(NODE_A, "serial-a"), "Range": "bytes=0-99999999"},
+        ).status_code
+        == 416
+    )
 
 
 def test_artifact_symlink_is_never_served(agent_system, tmp_path) -> None:
     client, services, _, clock = agent_system
     digest = "a" * 64
     (services.artifact_root / digest).symlink_to(tmp_path / "outside")
-    services.operations.enqueue(parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {"artifact_digest": digest})
-    assert client.get(f"/agent/v1/artifacts/{digest}", headers=agent_headers(NODE_A, "serial-a")).status_code == 404
+    services.operations.enqueue(
+        parent(services.sessions, clock).id,
+        NODE_A,
+        "node.probe",
+        "a" * 40,
+        {"artifact_digest": digest},
+    )
+    assert (
+        client.get(
+            f"/agent/v1/artifacts/{digest}", headers=agent_headers(NODE_A, "serial-a")
+        ).status_code
+        == 404
+    )
 
 
 def test_artifact_digest_is_verified_from_open_descriptor(agent_system) -> None:
     client, services, _, clock = agent_system
     digest = hashlib.sha256(b"expected").hexdigest()
     (services.artifact_root / digest).write_bytes(b"tampered")
-    services.operations.enqueue(parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {"artifact_digest": digest})
-    assert client.get(f"/agent/v1/artifacts/{digest}", headers=agent_headers(NODE_A, "serial-a")).status_code == 404
+    services.operations.enqueue(
+        parent(services.sessions, clock).id,
+        NODE_A,
+        "node.probe",
+        "a" * 40,
+        {"artifact_digest": digest},
+    )
+    assert (
+        client.get(
+            f"/agent/v1/artifacts/{digest}", headers=agent_headers(NODE_A, "serial-a")
+        ).status_code
+        == 404
+    )
 
 
 def test_authenticated_agents_can_fetch_bounded_platform_tuf_files(
@@ -1561,12 +2344,15 @@ def test_authenticated_agents_can_fetch_only_signed_workload_tuf_targets(
     assert metadata.content == b'{"signed":{"_type":"timestamp"}}'
     assert target.status_code == 200
     assert target.content == raw
-    assert client.get(
-        "/agent/v1/workload-tuf/targets/platform/releases/1.2.3/"
-        + "a" * 64
-        + ".json",
-        headers=agent_headers(NODE_A, "serial-a"),
-    ).status_code == 404
+    assert (
+        client.get(
+            "/agent/v1/workload-tuf/targets/platform/releases/1.2.3/"
+            + "a" * 64
+            + ".json",
+            headers=agent_headers(NODE_A, "serial-a"),
+        ).status_code
+        == 404
+    )
 
 
 @pytest.mark.parametrize(
@@ -1623,15 +2409,11 @@ def test_platform_tuf_routes_reject_symlinks_writable_files_and_oversize(
 
     headers = agent_headers(NODE_A, "serial-a")
     assert (
-        client.get(
-            "/agent/v1/tuf/metadata/timestamp.json", headers=headers
-        ).status_code
+        client.get("/agent/v1/tuf/metadata/timestamp.json", headers=headers).status_code
         == 404
     )
     assert (
-        client.get(
-            f"/agent/v1/tuf/targets/{target_name}", headers=headers
-        ).status_code
+        client.get(f"/agent/v1/tuf/targets/{target_name}", headers=headers).status_code
         == 404
     )
     assert (
@@ -1662,10 +2444,13 @@ def test_platform_tuf_target_rejects_nested_symlinks_and_hardlinks(
     outside_target.write_bytes(b"outside")
     (services.tuf_target_root / "platform").symlink_to(outside)
 
-    assert client.get(
-        f"/agent/v1/tuf/targets/platform/releases/1.2.3/{'d' * 64}.json",
-        headers=headers,
-    ).status_code == 404
+    assert (
+        client.get(
+            f"/agent/v1/tuf/targets/platform/releases/1.2.3/{'d' * 64}.json",
+            headers=headers,
+        ).status_code
+        == 404
+    )
 
     (services.tuf_target_root / "platform").unlink()
     target_directory = services.tuf_target_root / "platform/releases/1.2.3"
@@ -1674,10 +2459,13 @@ def test_platform_tuf_target_rejects_nested_symlinks_and_hardlinks(
     source.write_bytes(b"hard-linked")
     os.link(source, target_directory / f"{'e' * 64}.json")
 
-    assert client.get(
-        f"/agent/v1/tuf/targets/platform/releases/1.2.3/{'e' * 64}.json",
-        headers=headers,
-    ).status_code == 404
+    assert (
+        client.get(
+            f"/agent/v1/tuf/targets/platform/releases/1.2.3/{'e' * 64}.json",
+            headers=headers,
+        ).status_code
+        == 404
+    )
 
 
 def test_platform_tuf_target_rejects_file_changed_while_reading(
@@ -1714,10 +2502,25 @@ def test_invalid_ranges_do_not_leak_artifact_descriptors(agent_system) -> None:
     client, services, _, clock = agent_system
     digest = hashlib.sha256(b"artifact").hexdigest()
     (services.artifact_root / digest).write_bytes(b"artifact")
-    services.operations.enqueue(parent(services.sessions, clock).id, NODE_A, "node.probe", "a" * 40, {"artifact_digest": digest})
+    services.operations.enqueue(
+        parent(services.sessions, clock).id,
+        NODE_A,
+        "node.probe",
+        "a" * 40,
+        {"artifact_digest": digest},
+    )
     before = len(os.listdir("/proc/self/fd"))
     for _ in range(25):
-        assert client.get(f"/agent/v1/artifacts/{digest}", headers={**agent_headers(NODE_A, "serial-a"), "Range": "bytes=" + "9" * 5000 + "-1"}).status_code == 416
+        assert (
+            client.get(
+                f"/agent/v1/artifacts/{digest}",
+                headers={
+                    **agent_headers(NODE_A, "serial-a"),
+                    "Range": "bytes=" + "9" * 5000 + "-1",
+                },
+            ).status_code
+            == 416
+        )
     assert len(os.listdir("/proc/self/fd")) <= before + 1
 
 
@@ -1736,7 +2539,9 @@ def test_artifact_snapshot_is_immutable_after_source_overwrite(tmp_path) -> None
     source = tmp_path / "artifact"
     source.write_bytes(b"original")
     descriptor = os.open(source, os.O_RDONLY)
-    snapshot = _sealed_snapshot(descriptor, 8, 1024, hashlib.sha256(b"original").hexdigest())
+    snapshot = _sealed_snapshot(
+        descriptor, 8, 1024, hashlib.sha256(b"original").hexdigest()
+    )
     source.write_bytes(b"replaced")
     try:
         assert snapshot.read() == b"original"
@@ -1744,35 +2549,74 @@ def test_artifact_snapshot_is_immutable_after_source_overwrite(tmp_path) -> None
         snapshot.close()
 
 
-def test_snapshot_allocation_failure_closes_source_descriptor(tmp_path, monkeypatch) -> None:
+def test_snapshot_allocation_failure_closes_source_descriptor(
+    tmp_path, monkeypatch
+) -> None:
     source = tmp_path / "artifact"
     source.write_bytes(b"original")
     descriptor = os.open(source, os.O_RDONLY)
-    monkeypatch.setattr("dgx_control.agent_api.tempfile.TemporaryFile", lambda **_kwargs: (_ for _ in ()).throw(OSError("full")))
+    monkeypatch.setattr(
+        "dgx_control.agent_api.tempfile.TemporaryFile",
+        lambda **_kwargs: (_ for _ in ()).throw(OSError("full")),
+    )
     with pytest.raises(OSError, match="full"):
         _sealed_snapshot(descriptor, 8, 1024, hashlib.sha256(b"original").hexdigest())
     with pytest.raises(OSError):
         os.fstat(descriptor)
 
 
-def test_protected_agent_routes_gate_untrusted_invalid_bodies_before_parsing(agent_system) -> None:
+def test_protected_agent_routes_gate_untrusted_invalid_bodies_before_parsing(
+    agent_system,
+) -> None:
     client, _, _, _ = agent_system
-    for path in ("/agent/v1/claim", "/agent/v1/heartbeat", "/agent/v1/result", "/agent/v1/renew"):
-        assert client.post(path, content=b"{not-json", headers={"content-type": "application/json"}).status_code == 401
+    for path in (
+        "/agent/v1/claim",
+        "/agent/v1/heartbeat",
+        "/agent/v1/result",
+        "/agent/v1/renew",
+    ):
+        assert (
+            client.post(
+                path, content=b"{not-json", headers={"content-type": "application/json"}
+            ).status_code
+            == 401
+        )
 
 
 def test_revoked_identity_is_gated_before_invalid_json_is_parsed(agent_system) -> None:
     client, services, _, clock = agent_system
     with services.sessions.begin() as session:
         session.get(AgentCertificate, "serial-a").revoked_at = clock.now  # type: ignore[union-attr]
-    assert client.post("/agent/v1/result", headers={**agent_headers(NODE_A, "serial-a"), "content-type": "application/json"}, content=b"{not-json").status_code == 401
+    assert (
+        client.post(
+            "/agent/v1/result",
+            headers={
+                **agent_headers(NODE_A, "serial-a"),
+                "content-type": "application/json",
+            },
+            content=b"{not-json",
+        ).status_code
+        == 401
+    )
 
 
-def test_node_revocation_has_typed_4xx_and_uncertain_remote_statuses(agent_system) -> None:
+def test_node_revocation_has_typed_4xx_and_uncertain_remote_statuses(
+    agent_system,
+) -> None:
     client, services, codec, _ = agent_system
     headers = admin_headers(codec)
-    assert client.post("/api/v1/agents/nodes/not-canonical/revoke", headers=headers).status_code == 422
-    assert client.post(f"/api/v1/agents/nodes/{'spk_' + '1' * 32}/revoke", headers=headers).status_code == 404
+    assert (
+        client.post(
+            "/api/v1/agents/nodes/not-canonical/revoke", headers=headers
+        ).status_code
+        == 422
+    )
+    assert (
+        client.post(
+            f"/api/v1/agents/nodes/{'spk_' + '1' * 32}/revoke", headers=headers
+        ).status_code
+        == 404
+    )
 
     authority = services.enrollment._authority
     authority.fail_revoke = True
@@ -1785,37 +2629,147 @@ def test_node_revocation_has_typed_4xx_and_uncertain_remote_statuses(agent_syste
 
 def test_enrollment_overflow_burns_valid_grant_before_rejection(agent_system) -> None:
     client, _, codec, _ = agent_system
-    grant = client.post("/api/v1/agents/enrollments/grants", headers=admin_headers(codec), json={"node_id": NODE_A, "ttl_seconds": 60}).json()
+    grant = client.post(
+        "/api/v1/agents/enrollments/grants",
+        headers=admin_headers(codec),
+        json={"node_id": NODE_A, "ttl_seconds": 60},
+    ).json()
     key = ed25519.Ed25519PrivateKey.generate()
-    csr = x509.CertificateSigningRequestBuilder().subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_A)])).add_extension(x509.SubjectAlternativeName([x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_A}")]), critical=False).sign(key, algorithm=None).public_bytes(serialization.Encoding.PEM)
-    public = x509.load_pem_x509_csr(csr).public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
-    body = {"grant_token": grant["token"], "csr": csr.decode(), "evidence": {"node_id": NODE_A, "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(), "host_key_fingerprint": "x" * 513, "hardware_fingerprint": "hardware", "agent_digest": "a" * 64, "boot_id": "boot"}}
+    csr = (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(
+            x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_A)])
+        )
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    x509.UniformResourceIdentifier(
+                        f"spiffe://dgx-forge.local/node/{NODE_A}"
+                    )
+                ]
+            ),
+            critical=False,
+        )
+        .sign(key, algorithm=None)
+        .public_bytes(serialization.Encoding.PEM)
+    )
+    public = (
+        x509.load_pem_x509_csr(csr)
+        .public_key()
+        .public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+    )
+    body = {
+        "grant_token": grant["token"],
+        "csr": csr.decode(),
+        "evidence": {
+            "node_id": NODE_A,
+            "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(),
+            "host_key_fingerprint": "x" * 513,
+            "hardware_fingerprint": "hardware",
+            "agent_digest": "a" * 64,
+            "boot_id": "boot",
+        },
+    }
     assert client.post("/agent/v1/enroll", json=body).status_code == 403
     assert client.post("/agent/v1/enroll", json=body).status_code == 403
 
 
 def test_enrollment_unknown_top_level_field_burns_valid_grant(agent_system) -> None:
     client, _, codec, _ = agent_system
-    grant = client.post("/api/v1/agents/enrollments/grants", headers=admin_headers(codec), json={"node_id": NODE_A, "ttl_seconds": 60}).json()
+    grant = client.post(
+        "/api/v1/agents/enrollments/grants",
+        headers=admin_headers(codec),
+        json={"node_id": NODE_A, "ttl_seconds": 60},
+    ).json()
     key = ed25519.Ed25519PrivateKey.generate()
-    csr = x509.CertificateSigningRequestBuilder().subject_name(x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_A)])).add_extension(x509.SubjectAlternativeName([x509.UniformResourceIdentifier(f"spiffe://dgx-forge.local/node/{NODE_A}")]), critical=False).sign(key, algorithm=None).public_bytes(serialization.Encoding.PEM)
-    public = x509.load_pem_x509_csr(csr).public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
-    body = {"grant_token": grant["token"], "csr": csr.decode(), "evidence": {"node_id": NODE_A, "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(), "host_key_fingerprint": "host", "hardware_fingerprint": "hardware", "agent_digest": "a" * 64, "boot_id": "boot"}, "unknown": "denied"}
+    csr = (
+        x509.CertificateSigningRequestBuilder()
+        .subject_name(
+            x509.Name([x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, NODE_A)])
+        )
+        .add_extension(
+            x509.SubjectAlternativeName(
+                [
+                    x509.UniformResourceIdentifier(
+                        f"spiffe://dgx-forge.local/node/{NODE_A}"
+                    )
+                ]
+            ),
+            critical=False,
+        )
+        .sign(key, algorithm=None)
+        .public_bytes(serialization.Encoding.PEM)
+    )
+    public = (
+        x509.load_pem_x509_csr(csr)
+        .public_key()
+        .public_bytes(
+            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+    )
+    body = {
+        "grant_token": grant["token"],
+        "csr": csr.decode(),
+        "evidence": {
+            "node_id": NODE_A,
+            "csr_public_key_fingerprint": hashlib.sha256(public).hexdigest(),
+            "host_key_fingerprint": "host",
+            "hardware_fingerprint": "hardware",
+            "agent_digest": "a" * 64,
+            "boot_id": "boot",
+        },
+        "unknown": "denied",
+    }
     assert client.post("/agent/v1/enroll", json=body).status_code == 403
     assert client.post("/agent/v1/enroll", json=body).status_code == 403
 
 
-def test_enrollment_listing_paginates_stably_and_can_filter_issuing(agent_system) -> None:
+def test_enrollment_listing_paginates_stably_and_can_filter_issuing(
+    agent_system,
+) -> None:
     client, services, codec, clock = agent_system
     with services.sessions.begin() as session:
         for index in range(101):
             grant_id = str(uuid.uuid4())
-            session.add(AgentEnrollmentGrant(id=grant_id, node_id=NODE_A, token_digest=hashlib.sha256(str(index).encode()).hexdigest(), created_by="admin", created_at=clock.now, expires_at=clock.now + timedelta(seconds=60)))
-            session.add(AgentEnrollment(id=str(uuid.uuid4()), grant_id=grant_id, node_id=NODE_A, state="issuing" if index == 0 else "rejected", csr_pem="csr", csr_public_key_pem="pem", csr_public_key_fingerprint="a" * 64, host_key_fingerprint="host", hardware_fingerprint="hardware", agent_digest="a" * 64, boot_id="boot", created_at=clock.now))
-    first = client.get("/api/v1/agents/enrollments?limit=100", headers=admin_headers(codec)).json()
+            session.add(
+                AgentEnrollmentGrant(
+                    id=grant_id,
+                    node_id=NODE_A,
+                    token_digest=hashlib.sha256(str(index).encode()).hexdigest(),
+                    created_by="admin",
+                    created_at=clock.now,
+                    expires_at=clock.now + timedelta(seconds=60),
+                )
+            )
+            session.add(
+                AgentEnrollment(
+                    id=str(uuid.uuid4()),
+                    grant_id=grant_id,
+                    node_id=NODE_A,
+                    state="issuing" if index == 0 else "rejected",
+                    csr_pem="csr",
+                    csr_public_key_pem="pem",
+                    csr_public_key_fingerprint="a" * 64,
+                    host_key_fingerprint="host",
+                    hardware_fingerprint="hardware",
+                    agent_digest="a" * 64,
+                    boot_id="boot",
+                    created_at=clock.now,
+                )
+            )
+    first = client.get(
+        "/api/v1/agents/enrollments?limit=100", headers=admin_headers(codec)
+    ).json()
     assert len(first["enrollments"]) == 100
     assert first["next_cursor"]
-    second = client.get(f"/api/v1/agents/enrollments?limit=100&cursor={first['next_cursor']}", headers=admin_headers(codec)).json()
+    second = client.get(
+        f"/api/v1/agents/enrollments?limit=100&cursor={first['next_cursor']}",
+        headers=admin_headers(codec),
+    ).json()
     assert len(second["enrollments"]) == 1
-    issuing = client.get("/api/v1/agents/enrollments?state=issuing", headers=admin_headers(codec)).json()
+    issuing = client.get(
+        "/api/v1/agents/enrollments?state=issuing", headers=admin_headers(codec)
+    ).json()
     assert [item["state"] for item in issuing["enrollments"]] == ["issuing"]

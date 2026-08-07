@@ -32,6 +32,7 @@ x-api-environment: &api-environment
   DGX_GIT_SIGNING_KEY_FILE: /run/secrets/git-signing-key
   DGX_DEPLOYMENT_BRANCH: ${DEPLOYMENT_BRANCH:-deploy}
   DGX_REQUIRED_CHECKS: ${REQUIRED_CHECKS:-}
+  DGX_GLOBAL_CATALOG_URL: ${DGX_GLOBAL_CATALOG_URL:-https://vonkforge.ai}
   DGX_MANAGEMENT_CIDRS: ${DGX_MANAGEMENT_CIDRS:?set trusted Spark management CIDRs}
   DGX_DIRECT_FABRIC_CIDRS: ${DGX_DIRECT_FABRIC_CIDRS:-}
   DGX_AGENT_ARTIFACT_ROOT: /state/agent-artifacts

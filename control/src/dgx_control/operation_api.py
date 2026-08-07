@@ -38,6 +38,7 @@ NODE_PATTERN = r"^spk_[0-9a-f]{32}$"
 _ACTIVE_PUBLICATION_STATES = frozenset({"completed"})
 _ADMIN_OPERATION_IDS = {
     ("post", "/api/v1/agents/enrollments/grants"): "createEnrollmentGrant",
+    ("post", "/api/v1/agents/nodes/{node_id}/migration-grant"): "createAgentMigrationGrant",
     ("get", "/api/v1/agents/enrollments"): "listAgentEnrollments",
     ("post", "/api/v1/agents/enrollments/{enrollment_id}/approve"): "approveAgentEnrollment",
     ("post", "/api/v1/agents/enrollments/{enrollment_id}/reject"): "rejectAgentEnrollment",
@@ -87,6 +88,15 @@ _ADMIN_OPERATION_IDS = {
     ("post", "/api/v1/deployments/{deployment_id}/repair"): "repairPackage",
     ("post", "/api/v1/packages/gc-preview"): "previewPackageGc",
     ("post", "/api/v1/packages/gc"): "applyPackageGc",
+    ("get", "/api/v1/catalog/recipes"): "listLocalRecipes",
+    ("post", "/api/v1/catalog/recipes"): "createLocalRecipe",
+    ("get", "/api/v1/catalog/recipes/{recipe_id}"): "getLocalRecipe",
+    ("put", "/api/v1/catalog/recipes/{recipe_id}/draft"): "updateLocalRecipeDraft",
+    ("post", "/api/v1/catalog/recipes/{recipe_id}/resolve"): "resolveLocalRecipe",
+    ("post", "/api/v1/catalog/recipes/{recipe_id}/fork"): "forkLocalRecipe",
+    ("post", "/api/v1/catalog/imports/sparkrun/preview"): "previewSparkRunImport",
+    ("post", "/api/v1/catalog/imports/sparkrun"): "applySparkRunImport",
+    ("post", "/api/v1/catalog/recipes/{recipe_id}/resolve-import"): "resolveSparkRunImport",
 }
 _HTTP_METHODS = frozenset({"delete", "get", "patch", "post", "put"})
 BoundedIdentifier = Annotated[str, Field(min_length=1, max_length=128)]
@@ -253,6 +263,8 @@ class EndpointResponse(StrictModel):
 class AgentSummary(StrictModel):
     node_id: str = Field(pattern=NODE_PATTERN)
     state: str
+    agent_implementation: str = Field(pattern=r"^(pending|python|rust)$")
+    migration_state: str = Field(pattern=r"^(required|complete)$")
     protocol_version: int | None = Field(default=None, ge=1)
     capabilities: list[str]
     last_seen_at: str | None
@@ -615,6 +627,8 @@ class _DurableOperationProjection:
                     "last_seen_age_seconds": age,
                     "last_seen_at": None if last_seen is None else last_seen.isoformat(),
                     "node_id": node.node_id,
+                    "agent_implementation": node.agent_implementation,
+                    "migration_state": node.migration_state,
                     "protocol_version": node.protocol_version,
                     "platform_version": node.platform_version,
                     "build_digest": node.build_digest,
@@ -871,6 +885,8 @@ class NodeStatus(StrictModel):
     disk_available_bytes: int = Field(ge=0)
     probe_age_seconds: float | None = Field(default=None, ge=0)
     agent_state: str = "unregistered"
+    agent_implementation: str | None = None
+    agent_migration_state: str | None = None
     last_seen_at: str | None = None
     last_seen_age_seconds: float | None = Field(default=None, ge=0)
     agent_last_seen_at: str | None = None

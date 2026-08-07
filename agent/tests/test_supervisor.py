@@ -2071,3 +2071,29 @@ def test_installed_systemd_harness_verifies_units_by_installed_name() -> None:
     assert all(
         unit["exposure"] == "OK" for unit in report["security_units"].values()
     )
+
+
+def test_rust_supervisor_is_stable_outside_slots_and_units_keep_agent_unprivileged() -> None:
+    packaging = PROJECT.parent / "packaging/systemd"
+    rust_agent = (packaging / "vonk-agent.service").read_text().splitlines()
+    rust_supervisor = (
+        packaging / "vonk-agent-supervisor.service"
+    ).read_text().splitlines()
+
+    assert "User=vonk-agent" in rust_agent
+    assert "SupplementaryGroups=" in rust_agent
+    assert (
+        "ExecStart=/usr/lib/vonk-forge/vonk-agent-supervisor run-agent"
+        in rust_agent
+    )
+    assert (
+        "LoadCredential=activation-challenge:"
+        "/var/lib/vonk-forge/supervisor/activation-challenge"
+        in rust_agent
+    )
+    assert (
+        "ExecStart=/usr/lib/vonk-forge/vonk-agent-supervisor supervise"
+        in rust_supervisor
+    )
+    assert "PrivateNetwork=yes" in rust_supervisor
+    assert not any("/slots/" in line for line in rust_supervisor if line.startswith("ExecStart="))

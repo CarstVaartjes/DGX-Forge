@@ -89,6 +89,7 @@ def test_production_builder_wires_signer_queue_route_boundary_and_update_worker(
         publisher=publisher,
         route_root=route_root,
         endpoint_resolver=lambda _session, _node: ("10.0.0.11", clock()),
+        management_policy=ManagementAddressPolicy.parse("10.0.0.0/24"),
         clock=clock,
         authority=Authority(),
         worker_id="control-worker-test",

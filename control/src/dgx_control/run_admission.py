@@ -1,0 +1,514 @@
+"""Mapping-fenced memory, port, capability, and fabric admission."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from dataclasses import asdict, dataclass, replace
+from datetime import datetime
+
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session, sessionmaker
+
+from .install_admission import AdmissionReason
+from .inventory_repository import InventoryRepository
+from .models import (
+    AgentNode,
+    ClusterMapping,
+    ClusterMappingNode,
+    InstallationNode,
+    LocalRecipeRevision,
+    NodeInventorySnapshot,
+    RecipeInstallation,
+    RecipeRun,
+    ResourceReservation,
+    RunNode,
+)
+from .recipe_contract import deployment_profile
+from .topology import Placement, TopologyError, validate_topology
+
+
+class RunPlanConflict(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class RunNodePlan:
+    node_id: str
+    rank: int
+    role: str
+    endpoint_owner: bool
+    port: int
+    allowed: bool
+    inventory_observed_at: datetime | None
+    memory_kind: str
+    required_memory_bytes: int
+    available_memory_bytes: int | None
+    active_reserved_bytes: int
+    free_after_bytes: int | None
+    memory_floor_bytes: int
+    fabric_address: str | None
+    fabric_bandwidth_mbps: int | None
+    rendezvous_port: int | None
+    blockers: tuple[AdmissionReason, ...]
+    warnings: tuple[AdmissionReason, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class RunPlan:
+    installation_id: str
+    mapping_id: str
+    mapping_generation: int
+    recipe_revision_id: str
+    allowed: bool
+    nodes: tuple[RunNodePlan, ...]
+    plan_digest: str
+
+
+class RunAdmissionService:
+    def __init__(
+        self,
+        sessions: sessionmaker[Session],
+        *,
+        inventory_max_age: int = 300,
+        memory_floor_bytes: int = 4_000_000_000,
+    ) -> None:
+        self._sessions = sessions
+        self._inventory = InventoryRepository(sessions)
+        self._max_age = inventory_max_age
+        self._floor = memory_floor_bytes
+
+    def plan_run(self, installation_id: str, *, now: datetime) -> RunPlan:
+        with self._sessions() as session:
+            installation = session.get(RecipeInstallation, installation_id)
+            if installation is None:
+                raise KeyError(installation_id)
+            if installation.state != "installed":
+                raise ValueError("recipe installation is not complete")
+            mapping = session.get(ClusterMapping, installation.mapping_id)
+            if (
+                mapping is None
+                or mapping.state != "ready"
+                or mapping.generation != installation.mapping_generation
+            ):
+                raise ValueError(
+                    "cluster mapping generation changed after installation"
+                )
+            revision = session.get(LocalRecipeRevision, installation.recipe_revision_id)
+            if revision is None or revision.lifecycle != "resolved":
+                raise ValueError("recipe revision is unavailable")
+            mapping_nodes = tuple(
+                session.scalars(
+                    select(ClusterMappingNode)
+                    .where(ClusterMappingNode.mapping_id == mapping.id)
+                    .order_by(ClusterMappingNode.rank)
+                )
+            )
+            installed_nodes = {
+                (row.node_id, row.rank, row.role)
+                for row in session.scalars(
+                    select(InstallationNode).where(
+                        InstallationNode.installation_id == installation_id,
+                        InstallationNode.state == "installed",
+                    )
+                )
+            }
+        placements = tuple(
+            Placement(item.node_id, item.rank, item.role) for item in mapping_nodes
+        )
+        capabilities: dict[str, tuple[str, ...]] = {}
+        snapshots = {}
+        for placement in placements:
+            try:
+                snapshot = self._inventory.latest(
+                    placement.node_id, now=now, maximum_age=self._max_age
+                )
+                snapshots[placement.node_id] = snapshot
+                capabilities[placement.node_id] = snapshot.capabilities
+            except KeyError:
+                pass
+        topology_reason: AdmissionReason | None = None
+        try:
+            ordered = validate_topology(
+                revision.document, mapping.profile_name, placements, capabilities
+            )
+        except TopologyError as error:
+            ordered = tuple(sorted(placements, key=lambda item: item.rank))
+            topology_reason = AdmissionReason(error.code, str(error))
+        profile = deployment_profile(revision.document, mapping.profile_name)
+        profile_roles = profile.get("roles")
+        runtime = revision.document.get("runtime")
+        if not isinstance(profile_roles, list) or not isinstance(runtime, dict):
+            raise TypeError("recipe runtime profile is invalid")
+        role_by_name = {
+            str(role["name"]): role for role in profile_roles if isinstance(role, dict)
+        }
+        endpoint = runtime.get("endpoint")
+        if not isinstance(endpoint, dict):
+            raise TypeError("recipe endpoint is invalid")
+        port = int(endpoint["port"])
+        multi_node = len(ordered) > 1
+        endpoint_owner = next(
+            (item for item in mapping_nodes if item.endpoint_owner), None
+        )
+        if endpoint_owner is None:
+            raise TypeError("mapping endpoint owner is missing")
+        plans: list[RunNodePlan] = []
+        fabric_addresses: list[str] = []
+        for placement in ordered:
+            blockers = [] if topology_reason is None else [topology_reason]
+            warnings: list[AdmissionReason] = []
+            snapshot = snapshots.get(placement.node_id)
+            if (
+                placement.node_id,
+                placement.rank,
+                placement.role,
+            ) not in installed_nodes:
+                blockers.append(
+                    AdmissionReason(
+                        "run.not_installed",
+                        "Recipe content is not installed for this mapped rank.",
+                    )
+                )
+            if snapshot is None:
+                blockers.append(
+                    AdmissionReason(
+                        "run.inventory_missing",
+                        "No authenticated memory inventory is available.",
+                    )
+                )
+            elif snapshot.stale:
+                blockers.append(
+                    AdmissionReason(
+                        "run.stale_inventory", "Spark memory inventory is stale."
+                    )
+                )
+            role = role_by_name.get(placement.role)
+            resources = role.get("resources") if isinstance(role, dict) else None
+            memory = resources.get("memory") if isinstance(resources, dict) else None
+            if not isinstance(memory, dict):
+                raise TypeError("profile role memory is invalid")
+            required = max(
+                int(memory["startup_peak_bytes"]),
+                int(memory["steady_state_bytes"]) + int(memory["runtime_growth_bytes"]),
+            ) + int(memory["system_reserve_bytes"])
+            memory_kind = str(memory["kind"])
+            reservation_kind = {
+                "unified": "unified-memory",
+                "host": "host-memory",
+                "accelerator": "gpu-memory",
+            }[memory_kind]
+            with self._sessions() as session:
+                reserved = int(
+                    session.scalar(
+                        select(
+                            func.coalesce(func.sum(ResourceReservation.amount_bytes), 0)
+                        ).where(
+                            ResourceReservation.node_id == placement.node_id,
+                            ResourceReservation.kind == reservation_kind,
+                            ResourceReservation.state == "active",
+                        )
+                    )
+                    or 0
+                )
+                occupied = session.scalar(
+                    select(ResourceReservation.id).where(
+                        ResourceReservation.node_id == placement.node_id,
+                        ResourceReservation.kind == "port",
+                        ResourceReservation.resource_key == str(port),
+                        ResourceReservation.state == "active",
+                    )
+                )
+                rendezvous_occupied = (
+                    session.scalar(
+                        select(ResourceReservation.id).where(
+                            ResourceReservation.node_id == placement.node_id,
+                            ResourceReservation.kind == "port",
+                            ResourceReservation.resource_key == "29500",
+                            ResourceReservation.state == "active",
+                        )
+                    )
+                    if multi_node and placement.node_id == endpoint_owner.node_id
+                    else None
+                )
+            if occupied is not None:
+                blockers.append(
+                    AdmissionReason(
+                        "run.port_occupied",
+                        f"Port {port} is already reserved on this Spark.",
+                    )
+                )
+            rendezvous_port = (
+                29500
+                if multi_node and placement.node_id == endpoint_owner.node_id
+                else None
+            )
+            if rendezvous_port == port or rendezvous_occupied is not None:
+                blockers.append(
+                    AdmissionReason(
+                        "run.rendezvous_port_occupied",
+                        "Multi-node rendezvous port 29500 is already reserved.",
+                    )
+                )
+            if multi_node and (
+                snapshot is None
+                or snapshot.fabric_address is None
+                or snapshot.fabric_bandwidth_mbps is None
+            ):
+                blockers.append(
+                    AdmissionReason(
+                        "run.fabric_address_missing",
+                        "Authenticated direct-fabric evidence is unavailable.",
+                    )
+                )
+            if snapshot is not None and snapshot.fabric_address is not None:
+                fabric_addresses.append(snapshot.fabric_address)
+            available = (
+                None
+                if snapshot is None
+                else min(
+                    snapshot.host_memory_free_bytes,
+                    snapshot.gpu_memory_free_bytes,
+                )
+                if memory_kind == "unified"
+                else snapshot.host_memory_free_bytes
+                if memory_kind == "host"
+                else snapshot.gpu_memory_free_bytes
+            )
+            free_after = None if available is None else available - reserved - required
+            if free_after is not None and free_after < self._floor:
+                blockers.append(
+                    AdmissionReason(
+                        "run.insufficient_memory",
+                        f"Run would leave {free_after} bytes, below the {self._floor}-byte memory floor.",
+                    )
+                )
+            plans.append(
+                RunNodePlan(
+                    placement.node_id,
+                    placement.rank,
+                    placement.role,
+                    placement.node_id == endpoint_owner.node_id,
+                    port,
+                    not blockers,
+                    snapshot.observed_at if snapshot else None,
+                    memory_kind,
+                    required,
+                    available,
+                    reserved,
+                    free_after,
+                    self._floor,
+                    snapshot.fabric_address if snapshot else None,
+                    snapshot.fabric_bandwidth_mbps if snapshot else None,
+                    rendezvous_port,
+                    tuple(blockers),
+                    tuple(warnings),
+                )
+            )
+        if multi_node and len(fabric_addresses) != len(set(fabric_addresses)):
+            duplicate = AdmissionReason(
+                "run.fabric_address_duplicate",
+                "Mapped Sparks must have unique direct-fabric addresses.",
+            )
+            plans = [
+                replace(item, allowed=False, blockers=(*item.blockers, duplicate))
+                for item in plans
+            ]
+        identity = {
+            "schema_version": 1,
+            "installation_id": installation_id,
+            "mapping_id": mapping.id,
+            "mapping_generation": mapping.generation,
+            "recipe_revision_id": revision.id,
+            "nodes": [_node_document(item) for item in plans],
+        }
+        digest = hashlib.sha256(
+            json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        return RunPlan(
+            installation_id,
+            mapping.id,
+            mapping.generation,
+            revision.id,
+            all(item.allowed for item in plans),
+            tuple(plans),
+            digest,
+        )
+
+    def accept_run(
+        self, plan: RunPlan, *, alias: str, actor: str, now: datetime
+    ) -> str:
+        with self._sessions.begin() as session:
+            return self.accept_run_in_session(
+                session, plan, alias=alias, actor=actor, now=now
+            )
+
+    def accept_run_in_session(
+        self,
+        session: Session,
+        plan: RunPlan,
+        *,
+        alias: str,
+        actor: str,
+        now: datetime,
+    ) -> str:
+        fresh = self.plan_run(plan.installation_id, now=now)
+        if (
+            not fresh.allowed
+            or fresh.plan_digest != plan.plan_digest
+            or fresh.mapping_generation != plan.mapping_generation
+        ):
+            raise RunPlanConflict("run plan is stale or blocked")
+        mapping = session.get(ClusterMapping, plan.mapping_id, with_for_update=True)
+        if (
+            mapping is None
+            or mapping.state != "ready"
+            or mapping.generation != plan.mapping_generation
+        ):
+            raise RunPlanConflict("mapping generation changed while reserving")
+        run = RecipeRun(
+            installation_id=plan.installation_id,
+            mapping_id=plan.mapping_id,
+            mapping_generation=plan.mapping_generation,
+            alias=alias,
+            plan_digest=plan.plan_digest,
+            plan={
+                "schema_version": 1,
+                "installation_id": plan.installation_id,
+                "mapping_id": plan.mapping_id,
+                "mapping_generation": plan.mapping_generation,
+                "recipe_revision_id": plan.recipe_revision_id,
+                "plan_digest": plan.plan_digest,
+                "nodes": [_node_document(item) for item in plan.nodes],
+            },
+            state="planned",
+            route_state="withdrawn",
+            actor=actor,
+            created_at=now,
+            updated_at=now,
+        )
+        ordered = tuple(sorted(plan.nodes, key=lambda node: node.node_id))
+        for node in ordered:
+            if (
+                session.scalar(
+                    select(AgentNode)
+                    .where(AgentNode.node_id == node.node_id)
+                    .with_for_update()
+                )
+                is None
+            ):
+                raise RunPlanConflict("run node disappeared")
+            snapshot = session.scalar(
+                select(NodeInventorySnapshot)
+                .where(NodeInventorySnapshot.node_id == node.node_id)
+                .order_by(NodeInventorySnapshot.observed_at.desc())
+                .limit(1)
+                .with_for_update()
+            )
+            if snapshot is None:
+                raise RunPlanConflict("run inventory disappeared")
+            reservation_kind = {
+                "unified": "unified-memory",
+                "host": "host-memory",
+                "accelerator": "gpu-memory",
+            }[node.memory_kind]
+            reserved = int(
+                session.scalar(
+                    select(
+                        func.coalesce(func.sum(ResourceReservation.amount_bytes), 0)
+                    ).where(
+                        ResourceReservation.node_id == node.node_id,
+                        ResourceReservation.kind == reservation_kind,
+                        ResourceReservation.state == "active",
+                    )
+                )
+                or 0
+            )
+            if (
+                node.available_memory_bytes is None
+                or node.available_memory_bytes - reserved - node.required_memory_bytes
+                < self._floor
+            ):
+                raise RunPlanConflict("memory capacity changed while reserving")
+            ports = (
+                (node.port,)
+                if node.rendezvous_port is None
+                else (node.port, node.rendezvous_port)
+            )
+            for reserved_port in ports:
+                if (
+                    session.scalar(
+                        select(ResourceReservation.id).where(
+                            ResourceReservation.node_id == node.node_id,
+                            ResourceReservation.kind == "port",
+                            ResourceReservation.resource_key == str(reserved_port),
+                            ResourceReservation.state == "active",
+                        )
+                    )
+                    is not None
+                ):
+                    raise RunPlanConflict("run port changed while reserving")
+        session.add(run)
+        session.flush()
+        for node in plan.nodes:
+            session.add(
+                RunNode(
+                    run_id=run.id,
+                    node_id=node.node_id,
+                    rank=node.rank,
+                    role=node.role,
+                    state="planned",
+                    port=node.port,
+                    reserved_memory_bytes=node.required_memory_bytes,
+                    updated_at=now,
+                )
+            )
+            memory_kind = {
+                "unified": "unified-memory",
+                "host": "host-memory",
+                "accelerator": "gpu-memory",
+            }[node.memory_kind]
+            session.add(
+                ResourceReservation(
+                    node_id=node.node_id,
+                    kind=memory_kind,
+                    resource_key=plan.plan_digest,
+                    amount_bytes=node.required_memory_bytes,
+                    owner_kind="run",
+                    owner_id=run.id,
+                    state="active",
+                    plan_digest=plan.plan_digest,
+                    created_at=now,
+                )
+            )
+            ports = (
+                (node.port,)
+                if node.rendezvous_port is None
+                else (node.port, node.rendezvous_port)
+            )
+            for reserved_port in ports:
+                session.add(
+                    ResourceReservation(
+                        node_id=node.node_id,
+                        kind="port",
+                        resource_key=str(reserved_port),
+                        amount_bytes=0,
+                        owner_kind="run",
+                        owner_id=run.id,
+                        state="active",
+                        plan_digest=plan.plan_digest,
+                        created_at=now,
+                    )
+                )
+        return run.id
+
+
+def _node_document(node: RunNodePlan) -> dict[str, object]:
+    return {
+        **asdict(node),
+        "inventory_observed_at": (
+            node.inventory_observed_at.isoformat()
+            if node.inventory_observed_at
+            else None
+        ),
+    }

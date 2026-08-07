@@ -1,0 +1,11 @@
+Package: vonk-forge-agent
+Version: @VERSION@
+Section: admin
+Priority: optional
+Architecture: arm64
+Maintainer: Vonk Forge <release@vonkforge.ai>
+Depends: adduser, ca-certificates, fuse-overlayfs, init-system-helpers, openssl, podman (>= 4.9), slirp4netns, systemd
+Homepage: https://vonkforge.ai
+Description: Secure outbound agent for NVIDIA DGX Spark clusters
+ Rust agent, narrow privileged helper, and stable A/B supervisor used by a
+ local Vonk Forge controller to install and run digest-pinned AI recipes.

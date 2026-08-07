@@ -106,3 +106,17 @@ def test_abbreviated_or_unknown_commit_is_rejected(repository) -> None:
         service.inspect(commit[:12])
     with pytest.raises(RepositoryPolicyError, match="commit"):
         service.inspect("0" * 40)
+
+
+def test_repository_accepts_a_valid_linked_worktree(repository, tmp_path: Path) -> None:
+    root, commit = repository
+    linked = tmp_path / "linked"
+    _git(root, "worktree", "add", "-q", "-b", "linked-test", str(linked), commit)
+
+    service = RepositoryService(linked)
+
+    assert service.head() == commit
+    assert service.object_store == (root / ".git" / "objects").resolve()
+    assert service.read_document(commit, "inventory/fleet.toml").parsed == {
+        "schema_version": 2
+    }

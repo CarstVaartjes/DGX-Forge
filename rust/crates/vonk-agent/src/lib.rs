@@ -1,0 +1,19 @@
+#![forbid(unsafe_code)]
+
+pub mod build_source;
+pub mod client;
+pub mod config;
+pub mod executor;
+pub mod health;
+pub mod identity;
+pub mod image_importer;
+pub mod inventory;
+pub mod oci;
+pub mod pair;
+pub mod process;
+pub mod recipe_builder;
+pub mod rotation;
+pub mod source_policy;
+pub mod state;
+pub mod supervisor_readiness;
+pub mod workloads;

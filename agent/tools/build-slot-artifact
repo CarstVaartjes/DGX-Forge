@@ -24,7 +24,7 @@ MAX_WHEEL = 256 * 1024 * 1024
 MAX_ARTIFACT = 256 * 1024 * 1024
 MAX_BUILD_ATTEMPTS = 3
 PYINSTALLER = "6.15.0"
-LOCK_SHA256 = "5cfd57fe69d37e5a5439726d874565958e4137196c48b94326b47929465b5a74"
+LOCK_SHA256 = "9e49bc2dcd983b2f505270d03a52a79ca0eeb926234a8256731a1704133bb30f"
 PACKAGING_DISTRIBUTIONS = {
     "altgraph": "0.17.5",
     "attrs": "26.1.0",
@@ -51,7 +51,7 @@ PACKAGING_DISTRIBUTIONS = {
 }
 INPUT_DISTRIBUTIONS = {
     "agent wheel": ("dgx-agent", "0.1.0"),
-    "protocol wheel": ("dgx-agent-protocol", "2.0.0"),
+    "protocol wheel": ("dgx-agent-protocol", "2.1.0"),
     "platform wheel": ("spark-profiles", "0.1.0"),
 }
 

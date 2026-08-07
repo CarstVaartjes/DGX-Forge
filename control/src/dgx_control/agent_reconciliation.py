@@ -1562,7 +1562,7 @@ class AgentReconciliationService:
             # withdrawing its route.  Finalize only that explicit terminal
             # handoff, then acquire the successor lease; held or active
             # predecessors remain a hard conflict.
-            rows = self._node_leases._rows(  # noqa: SLF001
+            rows = self._node_leases._rows(
                 session, tuple(sorted(graph.targets))
             )
             if not rows:
@@ -2295,6 +2295,8 @@ def bind_reconciliation_result_consumer(
     maximum_presence_age_seconds: int = 300,
     commit_eligible: Callable[[str], bool] | None = None,
     current_commit: Callable[[], str] | None = None,
+    additional_result_consumer: Callable[[Session, Any, Any, AgentResult], None]
+    | None = None,
 ) -> AgentReconciliationService:
     """Bind the API's result queue to the same durable execution projection."""
 
@@ -2318,5 +2320,15 @@ def bind_reconciliation_result_consumer(
         commit_eligible=commit_eligible,
         current_commit=current_commit,
     )
-    operations.set_result_consumer(service.consume_result)
+    if additional_result_consumer is None:
+        operations.set_result_consumer(service.consume_result)
+    else:
+        if not callable(additional_result_consumer):
+            raise TypeError("additional agent result consumer must be callable")
+
+        def consume(session, operation, attempt, message) -> None:
+            service.consume_result(session, operation, attempt, message)
+            additional_result_consumer(session, operation, attempt, message)
+
+        operations.set_result_consumer(consume)
     return service

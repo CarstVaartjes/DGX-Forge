@@ -1,0 +1,7 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	./scripts/build-agent-deb --version "$${DEB_VERSION}" --release-private-key "$${VONK_RELEASE_PRIVATE_KEY}" --output-dir "$${CURDIR}/dist"

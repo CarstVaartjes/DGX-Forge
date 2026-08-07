@@ -186,6 +186,7 @@ class Worker:
         updates=None,
         packages=None,
         validation=None,
+        recipes=None,
         quarantine_unlinked: bool = False,
         loop_heartbeat: Callable[[], object] | None = None,
     ) -> None:
@@ -198,6 +199,7 @@ class Worker:
         self._updates = updates
         self._packages = packages
         self._validation = validation
+        self._recipes = recipes
         self._quarantine_unlinked = quarantine_unlinked
         self._loop_heartbeat = loop_heartbeat
         self._source_cursor = 0
@@ -214,6 +216,8 @@ class Worker:
             sources.append(self._packages.tick)
         if self._validation is not None:
             sources.append(self._validation.tick)
+        if self._recipes is not None:
+            sources.append(self._recipes.tick)
         sources.append(self._run_generic)
         if self._source_cursor >= len(sources):
             self._source_cursor = 0
@@ -268,6 +272,7 @@ def assemble_production_worker(
     publisher,
     route_root,
     endpoint_resolver,
+    management_policy,
     clock,
     authority,
     worker_id: str,
@@ -279,6 +284,8 @@ def assemble_production_worker(
     from .package_rollout_worker import PackageRolloutWorker
     from .package_rollouts import PackageRolloutOrchestrator
     from .package_validation_runner import PackageValidationRunner
+    from .recipe_operation_worker import RecipeOperationWorker
+    from .recipe_routes import AtomicRecipeRoutePublisher, RecipeRouteService
     from .update_routes import (
         ProductionUpdateRouteBoundary,
         load_authoritative_route_request,
@@ -331,6 +338,16 @@ def assemble_production_worker(
         authority_check=authority.authorization_reason,
         authority_clear=authority.clear,
     )
+    recipe_routes = RecipeRouteService(
+        sessions,
+        publisher=AtomicRecipeRoutePublisher(publisher, clock=clock),
+        management_policy=management_policy,
+        clock=clock,
+        maximum_age_seconds=300,
+    )
+    recipe_operations = RecipeOperationWorker(
+        sessions, recipe_routes, clock=clock
+    )
     return Worker(
         jobs,
         worker_id,
@@ -339,6 +356,7 @@ def assemble_production_worker(
         updates=updates,
         packages=package_rollouts,
         validation=package_validation,
+        recipes=recipe_operations,
         quarantine_unlinked=True,
         loop_heartbeat=loop_heartbeat,
     )
@@ -421,6 +439,7 @@ if __name__ == "__main__":
         publisher=publisher,
         route_root=route_root,
         endpoint_resolver=endpoint,
+        management_policy=address_policy,
         clock=clock,
         authority=authority,
         worker_id=os.environ.get("HOSTNAME", "control-worker"),

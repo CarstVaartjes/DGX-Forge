@@ -57,6 +57,10 @@ from .auth import (
     TokenCodec,
     TrustedProxyAgentIdentityMiddleware,
 )
+from .catalog_api import install_catalog_routes
+from .catalog_service import CatalogService
+from .cluster_mappings import ClusterMappingService
+from .global_catalog import GlobalCatalogClient
 from .metrics import MetricsRegistry
 from .operation_api import (
     AgentsResponse,
@@ -79,16 +83,18 @@ from .operation_api import (
 )
 from .package_api import PackageApiServices, install_package_routes
 from .proposals import DocumentChange
+from .recipe_api import install_recipe_operation_routes
+from .recipe_builds import RecipeBuildService
+from .recipe_operations import RecipeOperationService
 from .reconcile import IneligibleCommit, StaleFleetEvidence
 from .repository import RepositoryPolicyError
 from .settings import StartupMode
+from .source_bundles import SourceBundleStore
+from .sparkrun_api import install_sparkrun_routes
+from .sparkrun_workflow import SparkRunWorkflow
 
-_CONTROL_GENERATION = re.compile(
-    r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z"
-)
-_CONTROL_OPERATION = re.compile(
-    r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z"
-)
+_CONTROL_GENERATION = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
+_CONTROL_OPERATION = re.compile(r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z")
 _CONTROL_DIGEST = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _CONTROL_IMAGE = re.compile(r"[^\s]{1,1900}@sha256:[0-9a-f]{64}\Z")
 _CONTROL_START_NONCE = re.compile(r"[0-9a-f]{64}\Z")
@@ -124,10 +130,13 @@ class GenerationProcessIdentity:
             raise ValueError("release digest is invalid")
         if _CONTROL_DIGEST.fullmatch(self.build_digest) is None:
             raise ValueError("build digest is invalid")
-        if re.fullmatch(
-            r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",
-            self.platform_version,
-        ) is None:
+        if (
+            re.fullmatch(
+                r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)",
+                self.platform_version,
+            )
+            is None
+        ):
             raise ValueError("platform version is invalid")
         if _CONTROL_IMAGE.fullmatch(self.process_image) is None:
             raise ValueError("process image is invalid")
@@ -190,10 +199,7 @@ class DirectoryIdentityProjectionSource:
                 try:
                     descriptor = os.open(
                         part,
-                        os.O_RDONLY
-                        | os.O_DIRECTORY
-                        | os.O_NOFOLLOW
-                        | os.O_CLOEXEC,
+                        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC,
                         dir_fd=descriptor,
                     )
                 except FileNotFoundError:
@@ -246,7 +252,10 @@ class DirectoryIdentityProjectionSource:
                 "st_mtime_ns",
                 "st_ctime_ns",
             )
-            if any(getattr(before, field) != getattr(after, field) for field in stable_fields):
+            if any(
+                getattr(before, field) != getattr(after, field)
+                for field in stable_fields
+            ):
                 raise GenerationReadinessError(
                     "identity projection changed while being read"
                 )
@@ -298,17 +307,19 @@ class DirectoryIdentityProjectionSource:
                 HostOperationPlan.from_document(content)
                 return
             if kind != "active":
-                raise GenerationReadinessError(
-                    "identity projection kind is invalid"
-                )
-            if set(document) != {
-                "generation_receipt_sha256",
-                "projection_kind",
-                "projection_sequence",
-                "schema_version",
-                "selection",
-                "selection_receipt_sha256",
-            } or document.get("schema_version") != 1:
+                raise GenerationReadinessError("identity projection kind is invalid")
+            if (
+                set(document)
+                != {
+                    "generation_receipt_sha256",
+                    "projection_kind",
+                    "projection_sequence",
+                    "schema_version",
+                    "selection",
+                    "selection_receipt_sha256",
+                }
+                or document.get("schema_version") != 1
+            ):
                 raise GenerationReadinessError("active projection is invalid")
             sequence = document.get("projection_sequence")
             if (
@@ -381,9 +392,7 @@ class GenerationReadinessService:
         self._database_revision = database_revision
         self._maximum_age = heartbeat_maximum_age_seconds
 
-    def candidate(
-        self, generation_id: str, start_nonce: str
-    ) -> Mapping[str, object]:
+    def candidate(self, generation_id: str, start_nonce: str) -> Mapping[str, object]:
         identity = self._require_call_identity(
             StartupMode.PRESELECTION, generation_id, start_nonce
         )
@@ -408,9 +417,7 @@ class GenerationReadinessService:
             "status": "ready",
         }
 
-    def selected(
-        self, generation_id: str, start_nonce: str
-    ) -> Mapping[str, object]:
+    def selected(self, generation_id: str, start_nonce: str) -> Mapping[str, object]:
         from sqlalchemy import select
 
         from .models import ControlProcessHeartbeat
@@ -458,9 +465,13 @@ class GenerationReadinessService:
         if identity.startup_mode is not mode:
             raise GenerationReadinessError(f"{mode.value} mode is not active")
         if generation_id != identity.generation_id:
-            raise GenerationReadinessError("requested generation does not match process")
+            raise GenerationReadinessError(
+                "requested generation does not match process"
+            )
         if start_nonce != identity.start_nonce:
-            raise GenerationReadinessError("requested start nonce does not match process")
+            raise GenerationReadinessError(
+                "requested start nonce does not match process"
+            )
         return identity
 
     def _require_projection(
@@ -496,17 +507,19 @@ class GenerationReadinessService:
                 or not isinstance(sequence, int)
                 or sequence < 1
             ):
-                raise GenerationReadinessError(
-                    "active projection sequence is invalid"
-                )
+                raise GenerationReadinessError("active projection sequence is invalid")
 
     def _require_database_revision(self) -> None:
         try:
             revision = self._database_revision()
         except Exception as error:
-            raise GenerationReadinessError("database revision is unavailable") from error
+            raise GenerationReadinessError(
+                "database revision is unavailable"
+            ) from error
         if revision != self._identity.database_revision:
-            raise GenerationReadinessError("database revision does not match generation")
+            raise GenerationReadinessError(
+                "database revision does not match generation"
+            )
 
 
 def _aware_utc(value: datetime) -> datetime:
@@ -607,7 +620,11 @@ def build_agent_services(
     if settings.agent_intermediate_certificate_path is None:
         raise RuntimeError("agent intermediate certificate path is unavailable")
     if settings.agent_ca_provider == "step-ca":
-        if settings.agent_ca_root_path is None or settings.agent_ca_credential_path is None or settings.agent_ca_provisioner_public_jwk_path is None:
+        if (
+            settings.agent_ca_root_path is None
+            or settings.agent_ca_credential_path is None
+            or settings.agent_ca_provisioner_public_jwk_path is None
+        ):
             raise RuntimeError("step-ca provider files are unavailable")
         authority = StepCertificateAuthority(
             ca_url=settings.agent_ca_url,
@@ -675,18 +692,17 @@ def build_agent_services(
     operations.set_contact_consumer(presence.observe_in_session)
     helper_authority = None
     grant_key_path = getattr(settings, "package_helper_grant_private_key_path", None)
-    receipt_key_path = getattr(settings, "package_helper_receipt_private_key_path", None)
-    if (
-        getattr(settings, "deployment_mode", "") == "production"
-        and (grant_key_path is None or receipt_key_path is None)
+    receipt_key_path = getattr(
+        settings, "package_helper_receipt_private_key_path", None
+    )
+    if getattr(settings, "deployment_mode", "") == "production" and (
+        grant_key_path is None or receipt_key_path is None
     ):
         raise RuntimeError("package helper authority keys are unavailable")
     if grant_key_path is not None and receipt_key_path is not None:
         helper_authority = PackageHelperAuthorityService(
             sessions,
-            PackageHelperGrantIssuer.from_private_key_file(
-                grant_key_path, clock=clock
-            ),
+            PackageHelperGrantIssuer.from_private_key_file(grant_key_path, clock=clock),
             PackageObjectReceiptIssuer.from_private_key_file(receipt_key_path),
             workload_target_root=workload_tuf_target_root,
             clock=clock,
@@ -698,11 +714,23 @@ def build_agent_services(
         clock=clock,
         presence=presence,
         artifact_root=settings.agent_artifact_root,
+        source_bundles=SourceBundleStore(
+            getattr(settings, "state_path", settings.agent_artifact_root.parent)
+            / "source-bundles"
+        ),
         tuf_metadata_root=tuf_metadata_root,
         tuf_target_root=tuf_target_root,
         workload_tuf_metadata_root=workload_tuf_metadata_root,
         workload_tuf_target_root=workload_tuf_target_root,
         package_helper_authority=helper_authority,
+        fabric_policy=(
+            ManagementAddressPolicy.parse(
+                settings.direct_fabric_cidrs,
+                forbidden_cidrs=settings.management_cidrs,
+            )
+            if settings.direct_fabric_cidrs
+            else None
+        ),
     )
 
 
@@ -717,10 +745,26 @@ class SpaFiles(StaticFiles):
 
 
 class JobQueue(Protocol):
-    def enqueue(self, kind: str, actor: str, base_commit: str, targets: Sequence[str], payload: Mapping[str, object], *, request_id: str) -> Any: ...
+    def enqueue(
+        self,
+        kind: str,
+        actor: str,
+        base_commit: str,
+        targets: Sequence[str],
+        payload: Mapping[str, object],
+        *,
+        request_id: str,
+    ) -> Any: ...
     def get(self, job_id: str) -> Any: ...
     def list(self, *, limit: int = 100) -> list[Any]: ...
-    def list_page(self, *, limit: int = 100, cursor: str | None = None, status: str | None = None, target: str | None = None) -> tuple[list[Any], str | None, int]: ...
+    def list_page(
+        self,
+        *,
+        limit: int = 100,
+        cursor: str | None = None,
+        status: str | None = None,
+        target: str | None = None,
+    ) -> tuple[list[Any], str | None, int]: ...
 
 
 class AuditSink(Protocol):
@@ -746,9 +790,7 @@ def refresh_fleet_metrics(
             ready=node.get("healthy") is True,
             memory_available_bytes=int(node["memory_available_bytes"]),
             disk_available_bytes=int(node["disk_available_bytes"]),
-            probe_age_seconds=(
-                None if probe_age is None else float(probe_age)
-            ),
+            probe_age_seconds=(None if probe_age is None else float(probe_age)),
         )
 
 
@@ -846,8 +888,14 @@ def create_app(
     operations: OperationApiServices | None = None,
     updates: Any | None = None,
     packages: PackageApiServices | None = None,
+    catalog: CatalogService | None = None,
+    global_catalog: Any | None = None,
+    sparkrun: SparkRunWorkflow | None = None,
+    recipe_operations: RecipeOperationService | None = None,
 ) -> FastAPI:
-    app = FastAPI(title="DGX Forge Control", version="1.0", docs_url=None, redoc_url=None)
+    app = FastAPI(
+        title="DGX Forge Control", version="1.0", docs_url=None, redoc_url=None
+    )
     cursor_codec = tokens.cursor_codec()
 
     @app.exception_handler(StarletteHTTPException)
@@ -867,9 +915,21 @@ def create_app(
     async def canonical_agent_validation_error(
         request: Request, error: RequestValidationError
     ) -> Response:
-        if request.url.path.startswith("/api/v1/packages/") or request.url.path.startswith(
-            "/api/v1/deployments"
-        ):
+        if request.url.path.startswith("/api/v1/catalog/"):
+            return Response(
+                content=canonical_message(
+                    {
+                        "code": "catalog.invalid_request",
+                        "detail": "catalog request is invalid",
+                        "request_id": request.state.request_id,
+                    }
+                ),
+                status_code=422,
+                media_type="application/json",
+            )
+        if request.url.path.startswith(
+            "/api/v1/packages/"
+        ) or request.url.path.startswith("/api/v1/deployments"):
             return Response(
                 content=canonical_message({"detail": "package request is invalid"}),
                 status_code=422,
@@ -886,10 +946,16 @@ def create_app(
     app.add_middleware(
         TrustedProxyAgentIdentityMiddleware,
         trusted_proxy_auth=trusted_agent_proxy_auth,
-        agent_identity_validator=(lambda identity: active_agent_identity(agent, identity)) if agent is not None else None,
+        agent_identity_validator=(
+            lambda identity: active_agent_identity(agent, identity)
+        )
+        if agent is not None
+        else None,
         activation_identity_validator=(
             lambda identity: activation_agent_identity(agent, identity)
-        ) if agent is not None else None,
+        )
+        if agent is not None
+        else None,
     )
 
     @app.middleware("http")
@@ -902,14 +968,20 @@ def create_app(
             request_id = str(uuid.uuid4())
         request.state.request_id = request_id
         length = request.headers.get("content-length")
-        if length and int(length) > 1_048_576 and request.url.path != "/agent/v1/enroll":
+        if (
+            length
+            and int(length) > 1_048_576
+            and request.url.path != "/agent/v1/enroll"
+        ):
             response = Response(status_code=413)
         else:
             response = await call_next(request)
         response.headers["x-request-id"] = request_id
         response.headers["x-content-type-options"] = "nosniff"
         if metrics is not None:
-            metrics.observe_api(request.method, response.status_code, time.monotonic() - started)
+            metrics.observe_api(
+                request.method, response.status_code, time.monotonic() - started
+            )
         return response
 
     def actor(request: Request) -> Actor:
@@ -925,7 +997,9 @@ def create_app(
         try:
             authenticated = tokens.verify(encoded, now=now())
         except AuthError:
-            raise HTTPException(status_code=401, detail="authentication failed") from None
+            raise HTTPException(
+                status_code=401, detail="authentication failed"
+            ) from None
         if cookie_auth and request.method not in {"GET", "HEAD", "OPTIONS"}:
             cookie = request.cookies.get("dgx_csrf")
             header = request.headers.get("x-csrf-token")
@@ -961,6 +1035,22 @@ def create_app(
         audits=audits,
         services=packages,
     )
+    install_catalog_routes(
+        app,
+        actor_dependency=authenticated_actor,
+        audits=audits,
+        service=catalog,
+        global_catalog=global_catalog,
+    )
+    install_sparkrun_routes(
+        app, actor_dependency=authenticated_actor, audits=audits, workflow=sparkrun
+    )
+    install_recipe_operation_routes(
+        app,
+        actor_dependency=authenticated_actor,
+        audits=audits,
+        service=recipe_operations,
+    )
 
     @app.get("/api/v1/healthz")
     def healthz() -> dict[str, str]:
@@ -979,7 +1069,10 @@ def create_app(
             raise HTTPException(status_code=401, detail="authentication required")
         if metrics_refresh is not None:
             metrics_refresh()
-        return Response(metrics.render(), media_type="application/openmetrics-text; version=1.0.0; charset=utf-8")
+        return Response(
+            metrics.render(),
+            media_type="application/openmetrics-text; version=1.0.0; charset=utf-8",
+        )
 
     @app.get(
         "/api/v1/fleet",
@@ -1039,17 +1132,32 @@ def create_app(
             ) from None
 
     @app.get("/api/v1/repository")
-    def repository_view(commit: str | None = None, _actor: Actor = authenticated_actor) -> dict[str, object]:
+    def repository_view(
+        commit: str | None = None, _actor: Actor = authenticated_actor
+    ) -> dict[str, object]:
         if admin is None:
-            raise HTTPException(status_code=503, detail="repository administration unavailable")
+            raise HTTPException(
+                status_code=503, detail="repository administration unavailable"
+            )
         resolved = commit or admin.repository.head()
         snapshot = admin.repository.inspect(resolved)
-        return {"commit": snapshot.commit, "documents": dict(snapshot.documents), "dependencies": dict(snapshot.dependencies)}
+        return {
+            "commit": snapshot.commit,
+            "documents": dict(snapshot.documents),
+            "dependencies": dict(snapshot.dependencies),
+        }
 
     @app.get("/api/v1/documents")
-    def document_view(commit: str | None = None, path: str | None = None, kind: str | None = None, _actor: Actor = authenticated_actor) -> dict[str, object]:
+    def document_view(
+        commit: str | None = None,
+        path: str | None = None,
+        kind: str | None = None,
+        _actor: Actor = authenticated_actor,
+    ) -> dict[str, object]:
         if admin is None:
-            raise HTTPException(status_code=503, detail="repository administration unavailable")
+            raise HTTPException(
+                status_code=503, detail="repository administration unavailable"
+            )
         resolved = commit or admin.repository.head()
         if path is None:
             snapshot = admin.repository.inspect(resolved)
@@ -1060,15 +1168,29 @@ def create_app(
             selected = prefixes.get(kind or "", ())
             if not selected:
                 raise HTTPException(status_code=400, detail="document kind is invalid")
-            return {"commit": resolved, "documents": [name for name in snapshot.documents if name.startswith(selected)]}
+            return {
+                "commit": resolved,
+                "documents": [
+                    name for name in snapshot.documents if name.startswith(selected)
+                ],
+            }
         document = admin.repository.read_document(resolved, path)
-        return {"commit": document.commit, "path": document.path, "sha256": document.sha256, "document": document.parsed}
+        return {
+            "commit": document.commit,
+            "path": document.path,
+            "sha256": document.sha256,
+            "document": document.parsed,
+        }
 
     @app.post("/api/v1/proposals")
-    def proposal_preview(body: ProposalRequest, authenticated: Actor = authenticated_actor) -> dict[str, object]:
+    def proposal_preview(
+        body: ProposalRequest, authenticated: Actor = authenticated_actor
+    ) -> dict[str, object]:
         require_mutation_role(authenticated, "/api/v1/proposals")
         if admin is None:
-            raise HTTPException(status_code=503, detail="repository administration unavailable")
+            raise HTTPException(
+                status_code=503, detail="repository administration unavailable"
+            )
         preview = admin.proposals.preview(
             authenticated.subject,
             body.base_commit,
@@ -1083,12 +1205,26 @@ def create_app(
         }
 
     @app.post("/api/v1/changes", status_code=status.HTTP_202_ACCEPTED)
-    def submit_change(body: ChangeRequest, request: Request, authenticated: Actor = authenticated_actor) -> dict[str, object]:
+    def submit_change(
+        body: ChangeRequest,
+        request: Request,
+        authenticated: Actor = authenticated_actor,
+    ) -> dict[str, object]:
         require_mutation_role(authenticated, "/api/v1/changes")
         if admin is None or admin.changes is None:
             raise HTTPException(status_code=503, detail="change submission unavailable")
-        result = admin.changes.submit(body.proposal_digest, authenticated.subject, request.state.request_id)
-        audits.append(AuditRecord(request.state.request_id, authenticated.subject, "repository.change.submit", None, ()))
+        result = admin.changes.submit(
+            body.proposal_digest, authenticated.subject, request.state.request_id
+        )
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                authenticated.subject,
+                "repository.change.submit",
+                None,
+                (),
+            )
+        )
         return dict(result)
 
     def planned_response(commit: str, profile_id: str) -> ReconciliationPlanResponse:
@@ -1124,7 +1260,9 @@ def create_app(
         responses=bounded_error_responses(401, 403, 409, 503),
         operation_id="planReconciliation",
     )
-    def reconcile_plan(body: ReconciliationPlanRequest, authenticated: Actor = authenticated_actor) -> ReconciliationPlanResponse:
+    def reconcile_plan(
+        body: ReconciliationPlanRequest, authenticated: Actor = authenticated_actor
+    ) -> ReconciliationPlanResponse:
         require_mutation_role(authenticated, "/api/v1/reconciliations/plan")
         return planned_response(body.commit, body.profile_id)
 
@@ -1140,9 +1278,7 @@ def create_app(
         authenticated: Actor = authenticated_actor,
     ) -> ReconciliationPlanResponse:
         del body
-        require_mutation_role(
-            authenticated, "/api/v1/profiles/{profile_id}/plan"
-        )
+        require_mutation_role(authenticated, "/api/v1/profiles/{profile_id}/plan")
         if admin is None:
             raise HTTPException(status_code=503, detail="reconciliation unavailable")
         return planned_response(admin.repository.head(), profile_id)
@@ -1154,7 +1290,11 @@ def create_app(
         status_code=status.HTTP_202_ACCEPTED,
         operation_id="applyReconciliation",
     )
-    def reconcile(body: ReconciliationRequest, request: Request, authenticated: Actor = authenticated_actor) -> dict[str, object]:
+    def reconcile(
+        body: ReconciliationRequest,
+        request: Request,
+        authenticated: Actor = authenticated_actor,
+    ) -> dict[str, object]:
         require_mutation_role(authenticated, "/api/v1/reconciliations")
         if admin is None or admin.reconciler is None:
             raise HTTPException(status_code=503, detail="reconciliation unavailable")
@@ -1170,9 +1310,9 @@ def create_app(
                     authenticated.subject,
                     request.state.request_id,
                     fleet_evidence_digest=body.fleet_evidence_digest,
-                    current_fleet_evidence=lambda: fleet_response(
-                        fleet()
-                    ).evidence_digest,
+                    current_fleet_evidence=lambda: (
+                        fleet_response(fleet()).evidence_digest
+                    ),
                 )
             )
             audits.append(
@@ -1250,7 +1390,9 @@ def create_app(
         status_code=status.HTTP_202_ACCEPTED,
         include_in_schema=False,
     )
-    def enqueue(body: JobRequest, request: Request, authenticated: Actor = authenticated_actor) -> JobResponse:
+    def enqueue(
+        body: JobRequest, request: Request, authenticated: Actor = authenticated_actor
+    ) -> JobResponse:
         require_mutation_role(authenticated, "/api/v1/jobs")
         if not generic_jobs_enabled:
             raise HTTPException(
@@ -1262,8 +1404,23 @@ def create_app(
                 status_code=422,
                 detail="reconciliations require an accepted immutable plan",
             )
-        job = jobs.enqueue(body.kind, authenticated.subject, body.base_commit, body.targets, body.payload, request_id=request.state.request_id)
-        audits.append(AuditRecord(request.state.request_id, authenticated.subject, f"job.enqueue:{body.kind}", body.base_commit, tuple(body.targets)))
+        job = jobs.enqueue(
+            body.kind,
+            authenticated.subject,
+            body.base_commit,
+            body.targets,
+            body.payload,
+            request_id=request.state.request_id,
+        )
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                authenticated.subject,
+                f"job.enqueue:{body.kind}",
+                body.base_commit,
+                tuple(body.targets),
+            )
+        )
         return JobResponse(id=str(job.id), state=str(job.state))
 
     @app.get(
@@ -1278,9 +1435,7 @@ def create_app(
         job_status: str | None = Query(
             default=None, alias="status", pattern=r"^[a-z][a-z0-9-]{0,31}$"
         ),
-        target: str | None = Query(
-            default=None, pattern=r"^spk_[0-9a-f]{32}$"
-        ),
+        target: str | None = Query(default=None, pattern=r"^spk_[0-9a-f]{32}$"),
         _actor: Actor = authenticated_actor,
     ) -> dict[str, object]:
         try:
@@ -1291,7 +1446,9 @@ def create_app(
                 target=target,
             )
         except ValueError:
-            raise HTTPException(status_code=422, detail="job cursor is invalid") from None
+            raise HTTPException(
+                status_code=422, detail="job cursor is invalid"
+            ) from None
         return {
             "jobs": [
                 {"id": str(job.id), "state": str(job.state), "kind": str(job.kind)}
@@ -1303,10 +1460,18 @@ def create_app(
 
     @app.get("/api/v1/audit")
     def audit_view(_actor: Actor = authenticated_actor) -> dict[str, object]:
-        return {"events": [
-            {"request_id": event.request_id, "actor": event.actor, "action": event.action, "base_commit": event.base_commit, "targets": list(event.targets)}
-            for event in audits.list()
-        ]}
+        return {
+            "events": [
+                {
+                    "request_id": event.request_id,
+                    "actor": event.actor,
+                    "action": event.action,
+                    "base_commit": event.base_commit,
+                    "targets": list(event.targets),
+                }
+                for event in audits.list()
+            ]
+        }
 
     @app.get(
         "/api/v1/jobs/{job_id}",
@@ -1327,7 +1492,9 @@ def create_app(
             raise HTTPException(status_code=404, detail="job not found") from None
         try:
             projected = (
-                OperationPage((), None, JobProgress(completed=0, failed=0, running=0, total=0))
+                OperationPage(
+                    (), None, JobProgress(completed=0, failed=0, running=0, total=0)
+                )
                 if operations is None
                 else operations.job_operations(job_id, operation_cursor, limit)
             )
@@ -1343,7 +1510,9 @@ def create_app(
                 cursors=cursor_codec,
             )
         except ValueError:
-            raise HTTPException(status_code=422, detail="job cursor is invalid") from None
+            raise HTTPException(
+                status_code=422, detail="job cursor is invalid"
+            ) from None
 
     @app.post(
         "/api/v1/jobs/{job_id}/resume",
@@ -1388,7 +1557,9 @@ def create_app(
         responses=bounded_error_responses(401, 403, 404, 503),
         operation_id="listJobLogs",
     )
-    def job_log_list(job_id: str, authenticated: Actor = authenticated_actor) -> dict[str, object]:
+    def job_log_list(
+        job_id: str, authenticated: Actor = authenticated_actor
+    ) -> dict[str, object]:
         if authenticated.role not in {"operator", "administrator"}:
             raise HTTPException(status_code=403, detail="insufficient role")
         if job_logs is None:
@@ -1403,14 +1574,18 @@ def create_app(
         "/api/v1/jobs/{job_id}/logs/{digest}",
         responses=bounded_error_responses(401, 403, 404, 503),
     )
-    def job_log_content(job_id: str, digest: str, authenticated: Actor = authenticated_actor) -> Response:
+    def job_log_content(
+        job_id: str, digest: str, authenticated: Actor = authenticated_actor
+    ) -> Response:
         if authenticated.role not in {"operator", "administrator"}:
             raise HTTPException(status_code=403, detail="insufficient role")
         if job_logs is None:
             raise HTTPException(status_code=503, detail="job logs unavailable")
         try:
             jobs.get(job_id)
-            return Response(job_logs.read(job_id, digest), media_type="text/plain; charset=utf-8")
+            return Response(
+                job_logs.read(job_id, digest), media_type="text/plain; charset=utf-8"
+            )
         except (KeyError, ValueError):
             raise HTTPException(status_code=404, detail="job log not found") from None
 
@@ -1520,9 +1695,13 @@ def create_app(
                 result["can_approve_resume"] = False
             return result
         except KeyError:
-            raise HTTPException(status_code=404, detail="update rollout not found") from None
+            raise HTTPException(
+                status_code=404, detail="update rollout not found"
+            ) from None
         except ValueError:
-            raise HTTPException(status_code=422, detail="update rollout ID is invalid") from None
+            raise HTTPException(
+                status_code=422, detail="update rollout ID is invalid"
+            ) from None
         except (OSError, RuntimeError, TypeError):
             raise HTTPException(
                 status_code=503,
@@ -1551,7 +1730,9 @@ def create_app(
                 )
             )
         except KeyError:
-            raise HTTPException(status_code=404, detail="update rollout not found") from None
+            raise HTTPException(
+                status_code=404, detail="update rollout not found"
+            ) from None
         except ValueError as error:
             raise HTTPException(status_code=409, detail=str(error)) from None
         except (OSError, RuntimeError, TypeError):
@@ -1580,7 +1761,9 @@ def production_app() -> FastAPI:
         bind_reconciliation_result_consumer,
         load_reconciliation_authority_input,
     )
+    from .artifact_sizes import DeclaredArtifactSizeResolver
     from .audit import SqlAuditStore
+    from .catalog_seeds import seed_standard_families
     from .code_host import RepositoryCodeHost
     from .dashboard import DashboardService
     from .db import build_engine, session_factory
@@ -1591,6 +1774,7 @@ def production_app() -> FastAPI:
     from .git_policy import GitPolicy, PolicyStore
     from .hermes_routes import RepositoryHermesRoutePolicy
     from .host_state import HostGenerationStore
+    from .install_admission import InstallAdmissionService
     from .jobs import JobService
     from .logging import JobLogStore
     from .metrics import MetricsRegistry, OperationalMetricsCollector
@@ -1601,9 +1785,13 @@ def production_app() -> FastAPI:
     from .package_publication import PackagePublicationService
     from .package_services import ProductionPackageProjectionService
     from .package_validation_runner import PackageValidationRunner
+    from .presence import ManagementAddressPolicy
     from .proposals import ProposalService
+    from .recipe_routes import AtomicRecipeRoutePublisher, RecipeRouteService
     from .reconcile import ChangeService, Reconciler
     from .repository import RepositoryService
+    from .route_runtime import AtomicRouteBundlePublisher, FileSupervisorAcknowledger
+    from .run_admission import RunAdmissionService
     from .settings import GenerationStartupSettings, Settings
     from .update_admin import (
         DurableUpdateGrantRefresher,
@@ -1657,6 +1845,12 @@ def production_app() -> FastAPI:
     if generation.startup_mode is StartupMode.PRESELECTION:
         return create_preselection_app(generation_readiness)
 
+    actual_revision = database_revision()
+    if actual_revision != generation.database_revision:
+        raise RuntimeError("selected database revision does not match generation")
+    with sessions.begin() as session:
+        seed_standard_families(session, clock())
+
     online_lock = OnlineLock(settings.state_path / "offline.lock")
     online_lock.__enter__()
     token_codec = TokenCodec(settings.token_signing_key)
@@ -1673,7 +1867,8 @@ def production_app() -> FastAPI:
         lock_path=settings.state_path / "git-change.lock",
     )
     git_policy = GitPolicy(
-        policy_store, code_host,
+        policy_store,
+        code_host,
         protected_branch=settings.deployment_branch,
         required_checks=settings.required_checks,
     )
@@ -1762,9 +1957,7 @@ def production_app() -> FastAPI:
         workload_source=lambda: durable_distributed_workloads(sessions),
         orchestrator=api_update_orchestrator,
         grant_issuer=admin_grant_issuer,
-        status_source=lambda identifier: durable_update_status(
-            sessions, identifier
-        ),
+        status_source=lambda identifier: durable_update_status(sessions, identifier),
         clock=clock,
         grant_refresher=DurableUpdateGrantRefresher(
             sessions,
@@ -1772,12 +1965,11 @@ def production_app() -> FastAPI:
             clock=clock,
         ),
         topology_source=lambda: topology_exclusions_from_document(
-            repository.read_document(
-                current_commit(), "inventory/topology.json"
-            ).parsed
+            repository.read_document(current_commit(), "inventory/topology.json").parsed
         ),
         route_source=lambda: durable_route_impacts(sessions),
     )
+
     def reconciliation_authority_input(
         reconciliation_id: str,
     ) -> tuple[str, str, tuple[Any, ...], str]:
@@ -1806,12 +1998,55 @@ def production_app() -> FastAPI:
         current_commit=current_commit,
         commit_eligible=commit_eligible,
         reconciliation_input=reconciliation_authority_input,
-        current_fleet_evidence=lambda: fleet_response(
-            dashboard.fleet()
-        ).evidence_digest,
-        deployments=RepositoryHermesRoutePolicy(
-            settings.repository_path
-        ).deployments,
+        current_fleet_evidence=lambda: (
+            fleet_response(dashboard.fleet()).evidence_digest
+        ),
+        deployments=RepositoryHermesRoutePolicy(settings.repository_path).deployments,
+    )
+    recipe_route_runtime = AtomicRouteBundlePublisher(
+        Path("/routes"),
+        management_policy=ManagementAddressPolicy.parse(
+            settings.management_cidrs,
+            forbidden_cidrs=settings.direct_fabric_cidrs,
+        ),
+        clock=clock,
+        maximum_lease_seconds=300,
+        await_supervisor_ack=FileSupervisorAcknowledger(
+            Path("/supervisor/ack.json"), clock=clock
+        ),
+    )
+    recipe_routes = RecipeRouteService(
+        sessions,
+        publisher=AtomicRecipeRoutePublisher(recipe_route_runtime, clock=clock),
+        management_policy=ManagementAddressPolicy.parse(
+            settings.management_cidrs,
+            forbidden_cidrs=settings.direct_fabric_cidrs,
+        ),
+        clock=clock,
+        maximum_age_seconds=300,
+    )
+    recipe_operations = RecipeOperationService(
+        sessions,
+        install_admission=InstallAdmissionService(
+            sessions,
+            sizes=DeclaredArtifactSizeResolver(),
+            inventory_max_age=300,
+            disk_floor_bytes=10_000_000_000,
+        ),
+        run_admission=RunAdmissionService(
+            sessions,
+            inventory_max_age=300,
+            memory_floor_bytes=4_000_000_000,
+        ),
+        agent_jobs=agent_services.operations,
+        clock=clock,
+        route_withdrawer=lambda run_id: recipe_routes.withdraw_run(run_id),
+        builds=RecipeBuildService(
+            sessions,
+            bundles=SourceBundleStore(settings.state_path / "source-bundles"),
+            inventory_max_age=300,
+        ),
+        mappings=ClusterMappingService(sessions),
     )
     reconciliation_cancellations = bind_reconciliation_result_consumer(
         sessions,
@@ -1820,13 +2055,17 @@ def production_app() -> FastAPI:
         clock=clock,
         commit_eligible=commit_eligible,
         current_commit=current_commit,
+        additional_result_consumer=recipe_operations.consume_agent_result,
     )
+
     def refresh_metrics() -> None:
         operational_metrics.refresh()
         fleet_state = dashboard.fleet()
         refresh_fleet_metrics(metrics, fleet_state)
         with sessions() as session:
-            for kind, state, count in session.execute(select(Job.kind, Job.state, func.count()).group_by(Job.kind, Job.state)):
+            for kind, state, count in session.execute(
+                select(Job.kind, Job.state, func.count()).group_by(Job.kind, Job.state)
+            ):
                 metrics.set_job_count(kind, state, count)
         backup_marker = settings.state_path / "last-successful-backup.epoch"
         if backup_marker.is_file() and not backup_marker.is_symlink():
@@ -1835,6 +2074,8 @@ def production_app() -> FastAPI:
                 metrics.set_backup_age(max(0, int(time.time()) - completed_at))
             except (OSError, ValueError):
                 pass
+
+    global_catalog = GlobalCatalogClient(settings.global_catalog_url)
     app = create_app(
         jobs=job_service,
         tokens=token_codec,
@@ -1863,14 +2104,29 @@ def production_app() -> FastAPI:
         ),
         updates=update_admin,
         packages=PackageApiServices.from_object(package_services),
+        catalog=CatalogService(
+            sessions,
+            clock=clock,
+            source_bundles=SourceBundleStore(settings.state_path / "source-bundles"),
+        ),
+        global_catalog=global_catalog,
+        sparkrun=SparkRunWorkflow(
+            sessions,
+            clock=clock,
+            bundles=SourceBundleStore(settings.state_path / "source-bundles"),
+        ),
+        recipe_operations=recipe_operations,
     )
     install_selected_generation_readiness(app, generation_readiness)
     web_root = Path(__file__).resolve().parent / "web"
     if web_root.is_dir():
         app.mount("/", SpaFiles(directory=web_root, html=True), name="admin-web")
+
     @app.on_event("shutdown")
     def release_online_lock() -> None:
+        global_catalog.close()
         online_lock.__exit__()
+
     return app
 
 

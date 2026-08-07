@@ -1,0 +1,118 @@
+{
+  "schema_version": 1,
+  "identity": {"publisher": "vonk", "slug": "qwen3-vllm"},
+  "metadata": {
+    "title": "Qwen3 on vLLM",
+    "description": "A single-node OpenAI-compatible Qwen3 runtime.",
+    "tags": ["text", "qwen"]
+  },
+  "workload": {"family": "qwen3", "capabilities": ["openai.chat"]},
+  "build": {
+    "context": {
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected_bytes": 2048,
+      "media_type": "application/vnd.vonk.source-bundle.v1+tar"
+    },
+    "dockerfile": "Dockerfile",
+    "platform": "linux/arm64",
+    "arguments": [],
+    "network": {"mode": "public", "hosts": ["pypi.org"]},
+    "resources": {
+      "download_bytes": 1000000000,
+      "temporary_bytes": 12000000000,
+      "memory_bytes": 8000000000,
+      "timeout_seconds": 3600
+    }
+  },
+  "parameters": [
+    {
+      "name": "max_model_len",
+      "description": "Maximum context length.",
+      "type": "integer",
+      "default": 32768,
+      "minimum": 1024,
+      "maximum": 131072,
+      "change_effect": "restart"
+    }
+  ],
+  "artifacts": [
+    {
+      "id": "weights",
+      "kind": "huggingface.snapshot",
+      "repository": "Qwen/Qwen3-30B-A3B-Instruct-2507",
+      "revision": "0123456789abcdef0123456789abcdef01234567",
+      "download_bytes": 61000000000,
+      "installed_bytes": 61000000000,
+      "mount": {"target": "/models", "read_only": true},
+      "roles": ["entrypoint"]
+    }
+  ],
+  "runtime": {
+    "interface": "vonk.runtime.v1",
+    "adapter": "vllm",
+    "adapter_version": 1,
+    "entrypoint": ["vllm", "serve", "/models"],
+    "arguments": [{"name": "max-model-len", "parameter": "max_model_len"}],
+    "environment": [],
+    "endpoint": {
+      "protocol": "openai",
+      "port": 8000,
+      "model_aliases": ["qwen3"],
+      "health_path": "/v1/models"
+    },
+    "security": {
+      "devices": ["nvidia.com/gpu=all"],
+      "capabilities": [],
+      "host_network": false,
+      "privileged": false,
+      "user": "10001:10001",
+      "mounts": [
+        {"source": "model", "target": "/models", "read_only": true},
+        {"source": "state", "target": "/state", "read_only": false}
+      ]
+    },
+    "lifecycle": {"pre_start": [], "post_stop": [], "stop_timeout_seconds": 30}
+  },
+  "deployment_profiles": [
+    {
+      "name": "solo",
+      "description": "One Spark.",
+      "node_count": 1,
+      "strategy": "single",
+      "parallelism": {"tensor": 1, "pipeline": 1, "data": 1, "backend": "local"},
+      "roles": [
+        {
+          "name": "entrypoint",
+          "count": 1,
+          "endpoint_owner": true,
+          "artifacts": ["weights"],
+          "resources": {
+            "disk": {
+              "image_bytes": 5000000000,
+              "artifact_bytes": 61000000000,
+              "staging_bytes": 8000000000,
+              "cache_bytes": 2000000000,
+              "rollback_bytes": 0,
+              "safety_margin_bytes": 10000000000
+            },
+            "memory": {
+              "kind": "unified",
+              "startup_peak_bytes": 80000000000,
+              "steady_state_bytes": 72000000000,
+              "runtime_growth_bytes": 8000000000,
+              "system_reserve_bytes": 8000000000
+            }
+          }
+        }
+      ],
+      "fabric": {"connectivity": "none", "minimum_bandwidth_mbps": 0},
+      "parameter_overrides": {},
+      "measurement": "declared"
+    }
+  ],
+  "validation": {
+    "checks": ["container.started", "endpoint.healthy", "inference.completed"],
+    "benchmarks": []
+  },
+  "provenance": {"source_kind": "local", "source_reference": null, "attribution": []}
+}

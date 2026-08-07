@@ -4,6 +4,13 @@ from dataclasses import replace
 
 import pytest
 from dgx_agent_protocol import AgentProtocolError
+from dgx_agent_protocol.host_helper import (
+    HOST_HELPER_GRANT_DOMAIN,
+    HostHelperGrantClaims,
+    HostHelperOperation,
+    HostOperationKind,
+    host_helper_grant_signing_bytes,
+)
 from dgx_agent_protocol.workload_packages import (
     PackageHelperGrantClaims,
     PackageHelperOperation,
@@ -123,3 +130,52 @@ def test_object_receipt_has_explicit_same_key_envelope_but_distinct_domain() -> 
 def test_object_receipt_rejects_a_noncanonical_object_location() -> None:
     with pytest.raises(AgentProtocolError, match="relative name"):
         replace(receipt_claims(), relative_name="objects/sha256/" + "f" * 64)
+
+
+def test_host_helper_grant_has_a_distinct_narrow_authority_domain() -> None:
+    claims = HostHelperGrantClaims(
+        schema_version=1,
+        authority="vonk.host-maintenance-helper",
+        request_id=REQUEST_ID,
+        node_id="spk_" + "1" * 32,
+        issued_at=2_000_000_000,
+        expires_at=2_000_000_060,
+        operation=HostHelperOperation(
+            HostOperationKind.RESTART_VONK_UNIT, {"unit": "agent"}
+        ),
+    )
+
+    encoded = host_helper_grant_signing_bytes(claims)
+
+    assert encoded.startswith(HOST_HELPER_GRANT_DOMAIN)
+    assert not encoded.startswith(b"DGX-WORKLOAD-PACKAGE-HELPER-GRANT-V1\x00")
+
+
+@pytest.mark.parametrize(
+    "document",
+    (
+        {
+            "type": "create-managed-directory",
+            "area": "models",
+            "relative_path": "../etc",
+        },
+        {"type": "restart-vonk-unit", "unit": "sshd"},
+        {
+            "type": "restart-vonk-unit",
+            "unit": "agent",
+            "executable": "/bin/sh",
+        },
+        {
+            "type": "install-vonk-deb",
+            "package_sha256": "a" * 64,
+            "package_signature": "b" * 128,
+            "arguments": ["--force"],
+        },
+        {"type": "schedule-reboot", "delay_seconds": 5},
+    ),
+)
+def test_host_helper_protocol_rejects_paths_and_untyped_process_control(
+    document: dict[str, object],
+) -> None:
+    with pytest.raises(AgentProtocolError):
+        HostHelperOperation.parse(document)

@@ -24,6 +24,17 @@ import type {
   UpdatePlan,
   UpdateRollout,
   UpdateSkew,
+  CatalogRecipeDocument,
+  CatalogRecipeList,
+  CatalogRecipeRevision,
+  GlobalRecipeRevision,
+  SparkRunApplied,
+  SparkRunPreview,
+  SourceBundleReceipt,
+  SourcePolicyReport,
+  RecipeBuildPlan,
+  RecipeMappingPlan,
+  RecipeOperation,
 } from "./types";
 import type {
   PackageCandidate,
@@ -162,8 +173,98 @@ export class ApiClient implements ControlApi {
     const csrf = csrfToken();
     if (csrf && init.method && !["GET", "HEAD"].includes(init.method)) headers.set("X-CSRF-Token", csrf);
     const response = await fetch(path, {...init, headers, credentials: "same-origin"});
-    if (!response.ok) throw new Error(`Control API returned ${response.status}`);
+    if (!response.ok) {
+      let problem: unknown;
+      try { problem = await response.json(); } catch { problem = null; }
+      if (typeof problem === "object" && problem !== null) {
+        const body = problem as {code?: unknown; detail?: unknown};
+        const code = typeof body.code === "string" ? body.code.slice(0, 128) : `HTTP ${response.status}`;
+        const detail = typeof body.detail === "string" ? body.detail.slice(0, 256) : "request failed";
+        throw new Error(`${code}: ${detail}`);
+      }
+      throw new Error(`Control API returned ${response.status}`);
+    }
     return response.json() as Promise<T>;
+  }
+
+  async catalogRecipes(cursor?: string): Promise<CatalogRecipeList> {
+    return resultData(await this.generated.GET("/api/v1/catalog/recipes", {params: {query: {cursor, limit: 20}}}));
+  }
+
+  async catalogRecipe(recipeId: string): Promise<CatalogRecipeRevision> {
+    return resultData(await this.generated.GET("/api/v1/catalog/recipes/{recipe_id}", {params: {path: {recipe_id: recipeId}}}));
+  }
+
+  async createCatalogRecipe(input: {slug: string; document: CatalogRecipeDocument}): Promise<CatalogRecipeRevision> {
+    return resultData(await this.generated.POST("/api/v1/catalog/recipes", {body: input}));
+  }
+
+  async updateCatalogRecipe(recipeId: string, expectedRevision: number, document: CatalogRecipeDocument): Promise<CatalogRecipeRevision> {
+    return resultData(await this.generated.PUT("/api/v1/catalog/recipes/{recipe_id}/draft", {params: {path: {recipe_id: recipeId}}, body: {expected_revision: expectedRevision, document}}));
+  }
+
+  async resolveCatalogRecipe(recipeId: string, expectedRevision: number): Promise<CatalogRecipeRevision> {
+    return resultData(await this.generated.POST("/api/v1/catalog/recipes/{recipe_id}/resolve", {params: {path: {recipe_id: recipeId}}, body: {expected_revision: expectedRevision}}));
+  }
+
+  async forkCatalogRecipe(recipeId: string, revision: number, slug: string): Promise<CatalogRecipeRevision> {
+    return resultData(await this.generated.POST("/api/v1/catalog/recipes/{recipe_id}/fork", {params: {path: {recipe_id: recipeId}}, body: {revision, slug}}));
+  }
+
+  previewGlobalRecipe(uri: string): Promise<GlobalRecipeRevision> {
+    return this.request("/api/v1/catalog/imports/global/preview", {method: "POST", body: JSON.stringify({uri})});
+  }
+
+  importGlobalRecipe(uri: string, expectedContentSha256: string): Promise<CatalogRecipeRevision> {
+    return this.request("/api/v1/catalog/imports/global", {method: "POST", body: JSON.stringify({uri, expected_content_sha256: expectedContentSha256})});
+  }
+
+  async attachPublicationReport(recipeId: string, report: Record<string, unknown>): Promise<void> {
+    await this.request(`/api/v1/catalog/recipes/${encodeURIComponent(recipeId)}/publication-report`, {method: "PUT", body: JSON.stringify({report})});
+  }
+
+  publicationExport(recipeId: string, publisher: string): Promise<Record<string, unknown>> {
+    return this.request(`/api/v1/catalog/recipes/${encodeURIComponent(recipeId)}/publication-export`, {method: "POST", body: JSON.stringify({publisher})});
+  }
+
+  async uploadSourceBundle(sha256: string, archive: Uint8Array): Promise<SourceBundleReceipt> {
+    if (!/^[0-9a-f]{64}$/.test(sha256)) throw new Error("Invalid source bundle digest");
+    const headers = new Headers({Accept: "application/json", "Content-Type": "application/vnd.vonk.source-bundle.v1+tar"});
+    const csrf = csrfToken();
+    if (csrf) headers.set("X-CSRF-Token", csrf);
+    const response = await fetch(`/api/v1/catalog/source-bundles/${sha256}`, {
+      method: "PUT", body: archive as BodyInit, headers, credentials: "same-origin",
+    });
+    if (!response.ok) throw new Error(`Source upload returned ${response.status}: ${(await response.text()).slice(0, 256)}`);
+    return response.json() as Promise<SourceBundleReceipt>;
+  }
+
+  checkRecipeSource(recipeRevisionId: string): Promise<SourcePolicyReport> {
+    return this.request("/api/v1/recipes/source-checks", {method: "POST", body: JSON.stringify({recipe_revision_id: recipeRevisionId})});
+  }
+
+  previewRecipeBuild(recipeRevisionId: string, builderNodeId: string): Promise<RecipeBuildPlan> {
+    return this.request("/api/v1/recipes/build-plans/preview", {method: "POST", body: JSON.stringify({recipe_revision_id: recipeRevisionId, builder_node_id: builderNodeId})});
+  }
+
+  buildRecipe(plan: RecipeBuildPlan): Promise<RecipeOperation> {
+    return this.request("/api/v1/recipes/builds", {method: "POST", body: JSON.stringify({recipe_revision_id: plan.recipe_revision_id, builder_node_id: plan.builder_node_id, build_input_sha256: plan.build_input_sha256, request_key: crypto.randomUUID()})});
+  }
+
+  previewRecipeMapping(recipeRevisionId: string, profileName: string, nodeIds: string[]): Promise<RecipeMappingPlan> {
+    return this.request("/api/v1/recipes/mapping-plans/preview", {method: "POST", body: JSON.stringify({recipe_revision_id: recipeRevisionId, profile_name: profileName, node_ids: nodeIds, parameters: {}})});
+  }
+
+  createRecipeMapping(plan: RecipeMappingPlan): Promise<{mapping_id: string; generation: number; placement_digest: string}> {
+    return this.request("/api/v1/recipes/mappings", {method: "POST", body: JSON.stringify({recipe_revision_id: plan.recipe_revision_id, profile_name: plan.profile_name, node_ids: plan.nodes.map(node => node.node_id), parameters: plan.parameters, placement_digest: plan.placement_digest, request_key: crypto.randomUUID()})});
+  }
+
+  previewSparkRun(sourceYaml: string): Promise<SparkRunPreview> {
+    return this.request("/api/v1/catalog/imports/sparkrun/preview", {method: "POST", body: JSON.stringify({source_yaml: sourceYaml})});
+  }
+
+  applySparkRun(sourceYaml: string, sourceSha256: string, reportDigest: string): Promise<SparkRunApplied> {
+    return this.request("/api/v1/catalog/imports/sparkrun", {method: "POST", body: JSON.stringify({source_yaml: sourceYaml, source_sha256: sourceSha256, report_digest: reportDigest})});
   }
 
   async fleet(): Promise<FleetResponse> {
@@ -181,6 +282,14 @@ export class ApiClient implements ControlApi {
   async createEnrollmentGrant(nodeId: string, ttlSeconds: number, signal?: AbortSignal): Promise<EnrollmentGrantResponse> {
     return resultData(await this.generated.POST("/api/v1/agents/enrollments/grants", {
       body: {node_id: nodeId, ttl_seconds: ttlSeconds},
+      signal,
+    }));
+  }
+
+  async createAgentMigrationGrant(nodeId: string, ttlSeconds: number, signal?: AbortSignal): Promise<EnrollmentGrantResponse> {
+    return resultData(await this.generated.POST("/api/v1/agents/nodes/{node_id}/migration-grant", {
+      body: {ttl_seconds: ttlSeconds},
+      params: {path: {node_id: nodeId}},
       signal,
     }));
   }
