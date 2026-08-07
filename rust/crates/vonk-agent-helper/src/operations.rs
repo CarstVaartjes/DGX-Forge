@@ -467,7 +467,7 @@ impl<R: CommandRunner> OperationExecutor<R> {
             .metadata()
             .map_err(|_| OperationError::InvalidArtifact)?;
         if stable_identity(&before) != stable_identity(&after)
-            || format!("{:x}", digest.finalize()) != expected_digest
+            || hex::encode(digest.finalize()) != expected_digest
         {
             return Err(OperationError::InvalidArtifact);
         }
