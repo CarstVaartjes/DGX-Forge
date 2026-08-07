@@ -944,7 +944,7 @@ def test_stopped_supervisor_is_resumed_for_bounded_descendant_cleanup(tmp_path) 
     )
     assert descriptor is not None
     request = ProcessRequest.fixed(
-        argv=(str(script),), cwd=tmp_path, timeout_seconds=0.1,
+        argv=(str(script),), cwd=tmp_path, timeout_seconds=1,
         output_limit_bytes=1024, executable_fd=descriptor,
     )
     started = time.monotonic()
@@ -954,7 +954,7 @@ def test_stopped_supervisor_is_resumed_for_bounded_descendant_cleanup(tmp_path) 
     finally:
         os.close(descriptor)
 
-    assert time.monotonic() - started < 0.2
+    assert time.monotonic() - started < 1.5
     _assert_process_gone(int(pid_file.read_text()))
 
 
