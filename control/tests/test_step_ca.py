@@ -544,6 +544,7 @@ def test_pinned_step_ca_issues_tracked_leaf_profile_and_serves_fresh_crl(tmp_pat
     generated_config.write_text(json.dumps(config))
     database = tmp_path / "db"
     database.mkdir(mode=0o777)
+    database.chmod(0o777)
     container = f"dgx-step-ca-test-{uuid.uuid4().hex}"
     subprocess.run([
         "docker", "run", "-d", "--name", container, "-p", "127.0.0.1::9000",
