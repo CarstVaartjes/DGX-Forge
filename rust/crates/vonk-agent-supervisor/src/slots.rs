@@ -680,7 +680,7 @@ impl SlotStore {
             || header[..7] != *b"\x7fELF\x02\x01\x01"
             || !matches!(elf_type, 2 | 3)
             || machine != 183
-            || format!("{:x}", hash.finalize()) != claims.artifact_sha256
+            || hex::encode(hash.finalize()) != claims.artifact_sha256
         {
             return Err(SupervisorError::InvalidArtifact);
         }
