@@ -85,6 +85,27 @@ struct RuntimePlacement<'a> {
     master_port: Option<u16>,
 }
 
+#[derive(Debug, Deserialize)]
+struct RuntimePolicy {
+    runtime_interface: String,
+    architecture: String,
+    required_image_label: RuntimePolicyLabel,
+    accepted_config_users: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct RuntimePolicyLabel {
+    name: String,
+    value: String,
+}
+
+fn runtime_policy() -> Result<RuntimePolicy, OciError> {
+    serde_json::from_str(include_str!(
+        "../../../../schemas/global/container-runtime-policy-v1.json"
+    ))
+    .map_err(OciError::Json)
+}
+
 impl<R: ProcessRunner> OciRuntime<'_, R> {
     pub fn ensure_disk_available(&self, required_bytes: u64) -> Result<(), OciError> {
         let required = required_bytes
@@ -146,6 +167,10 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
 
     pub fn verify_image(&self, spec: &WorkloadSpec) -> Result<(), OciError> {
         spec.validate()?;
+        let policy = runtime_policy()?;
+        if spec.runtime.interface != policy.runtime_interface {
+            return Err(OciError::Runtime);
+        }
         let pull = self.runner.run(
             Program::Podman,
             &["pull".to_owned(), spec.runtime.image.clone()],
@@ -154,13 +179,17 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
         if !pull.success {
             return Err(OciError::Runtime);
         }
+        let label_template = format!(
+            "{{{{.Id}}}}\\t{{{{.Os}}}}\\t{{{{.Architecture}}}}\\t{{{{index .Config.Labels {:?}}}}}\\t{{{{.Config.User}}}}",
+            policy.required_image_label.name
+        );
         let inspect = self.runner.run(
             Program::Podman,
             &[
                 "image".to_owned(),
                 "inspect".to_owned(),
                 "--format".to_owned(),
-                "{{.Id}}\\t{{.Os}}\\t{{.Architecture}}\\t{{index .Config.Labels \"ai.vonkforge.runtime-interface\"}}\\t{{.Config.User}}".to_owned(),
+                label_template,
                 spec.runtime.image.clone(),
             ],
             Duration::from_secs(30),
@@ -174,11 +203,24 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
             .map(|value| value.trim_end_matches(['\r', '\n']))
             .map(|value| value.split('\t').collect::<Vec<_>>())
             .unwrap_or_default();
-        let root_user = fields
-            .get(4)
-            .is_some_and(|value| matches!(*value, "" | "0" | "root" | "0:0" | "root:root"));
+        let expected_architecture = policy
+            .architecture
+            .split_once('/')
+            .ok_or(OciError::ImageDigest)?;
+        let root_user = fields.get(4).is_some_and(|value| {
+            policy
+                .accepted_config_users
+                .iter()
+                .any(|accepted| accepted == value)
+        });
         if !inspect.success
-            || fields.get(..4) != Some(&[expected.as_str(), "linux", "arm64", "v1"])
+            || fields.get(..4)
+                != Some(&[
+                    expected.as_str(),
+                    expected_architecture.0,
+                    expected_architecture.1,
+                    policy.required_image_label.value.as_str(),
+                ])
             || fields.len() != 5
             || !root_user
         {
@@ -494,10 +536,16 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
                         false,
                     )
                 }),
-            "oci.artifact" => validate_oci_repository(&artifact.repository).and_then(|()| {
+            "oci.artifact" => oci_endpoint(&artifact.repository).and_then(|endpoint| {
+                let address = match endpoint.address {
+                    IpAddr::V4(address) => address.to_string(),
+                    IpAddr::V6(address) => format!("[{address}]"),
+                };
                 let arguments = vec![
                     "pull".to_owned(),
                     format!("{}@{}", artifact.repository, artifact.revision),
+                    "--resolve".to_owned(),
+                    format!("{}:{}:{}", endpoint.hostname, endpoint.port, address),
                     "--output".to_owned(),
                     staging.display().to_string(),
                 ];
@@ -737,7 +785,7 @@ fn public_https_endpoint(url: &Url) -> Result<PublicEndpoint, OciError> {
     })
 }
 
-fn validate_oci_repository(repository: &str) -> Result<(), OciError> {
+fn oci_endpoint(repository: &str) -> Result<PublicEndpoint, OciError> {
     if repository.contains("://")
         || repository.contains('@')
         || repository.contains('?')
@@ -746,11 +794,14 @@ fn validate_oci_repository(repository: &str) -> Result<(), OciError> {
         return Err(OciError::Artifact);
     }
     let url = Url::parse(&format!("https://{repository}")).map_err(|_| OciError::Artifact)?;
-    if url.path() == "/" || url.path().contains("//") || url.path().contains("..") {
+    if url.host_str() != Some("ghcr.io")
+        || url.path() == "/"
+        || url.path().contains("//")
+        || url.path().contains("..")
+    {
         return Err(OciError::Artifact);
     }
-    public_https_endpoint(&url)?;
-    Ok(())
+    public_https_endpoint(&url)
 }
 
 fn is_public_ip(address: IpAddr) -> bool {
@@ -775,12 +826,14 @@ fn is_public_ip(address: IpAddr) -> bool {
                 return is_public_ip(IpAddr::V4(mapped));
             }
             let segments = address.segments();
-            !address.is_loopback()
-                && !address.is_unspecified()
-                && !address.is_multicast()
-                && !(segments[0] & 0xfe00 == 0xfc00)
-                && !(segments[0] & 0xffc0 == 0xfe80)
+            // Fail closed to ordinary globally routed unicast space. Exclude
+            // the IETF special-purpose blocks at the start of 2001::/16,
+            // deprecated 6to4, and the documentation allocation.
+            segments[0] & 0xe000 == 0x2000
+                && !(segments[0] == 0x2001 && segments[1] < 0x0200)
                 && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
+                && segments[0] != 0x2002
+                && !(segments[0] == 0x3fff && segments[1] & 0xf000 == 0)
         }
     }
 }
@@ -954,4 +1007,18 @@ fn atomic_write(root: &Path, name: &str, value: &[u8]) -> Result<(), OciError> {
     file.sync_all()?;
     fs::rename(temporary, root.join(name))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_public_ip;
+    use std::net::IpAddr;
+
+    #[test]
+    fn only_globally_routable_ipv6_is_public() {
+        for value in ["::1", "fe80::1", "fec0::1", "fc00::1", "2001:db8::1"] {
+            assert!(!is_public_ip(value.parse::<IpAddr>().unwrap()), "{value}");
+        }
+        assert!(is_public_ip("2606:4700:4700::1111".parse().unwrap()));
+    }
 }

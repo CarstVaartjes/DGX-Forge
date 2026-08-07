@@ -262,8 +262,13 @@ class RecipeOperationService:
         self._route_withdrawer(run_id)
         now = self._clock()
         with self._sessions.begin() as session:
-            run = session.get(RecipeRun, run_id)
-            assert run is not None
+            run = session.get(RecipeRun, run_id, with_for_update=True)
+            if run is None:
+                raise RecipeOperationConflict("recipe run does not exist")
+            if run.state not in {"starting", "running", "failed", "lost"}:
+                raise RecipeOperationConflict("recipe run is not stoppable")
+            if run.plan_digest != plan_digest:
+                raise RecipeOperationConflict("recipe run changed before stop admission")
             nodes = tuple(
                 session.scalars(
                     select(RunNode)
@@ -356,15 +361,31 @@ class RecipeOperationService:
     def retry(
         self, operation_id: str, *, actor: str, request_id: str
     ) -> RecipeOperationView:
-        previous = self.get(operation_id)
-        if previous.kind != "recipe.install" or previous.state != "failed":
-            raise RecipeOperationConflict("only failed recipe installs can be retried")
-        existing = self._idempotent(request_id, "recipe.install", previous.plan_digest)
-        if existing is not None:
-            return existing
-        with self._sessions() as session:
-            installation = session.get(RecipeInstallation, previous.owner_id)
-            assert installation is not None
+        now = self._clock()
+        with self._sessions.begin() as session:
+            previous = session.get(Job, operation_id, with_for_update=True)
+            if (
+                previous is None
+                or previous.kind != "recipe.install"
+                or previous.state != "failed"
+            ):
+                raise RecipeOperationConflict("only failed recipe installs can be retried")
+            previous_plan_digest = _required_string(previous.payload, "plan_digest")
+            existing = session.scalar(select(Job).where(Job.request_id == request_id))
+            if existing is not None:
+                if (
+                    existing.kind != "recipe.install"
+                    or _required_string(existing.payload, "plan_digest")
+                    != previous_plan_digest
+                ):
+                    raise RecipeOperationConflict("request key was already used")
+                return self._view(existing)
+            owner_id = _required_string(previous.payload, "owner_id")
+            installation = session.get(
+                RecipeInstallation, owner_id, with_for_update=True
+            )
+            if installation is None or installation.state not in {"partial", "failed"}:
+                raise RecipeOperationConflict("recipe installation is not retryable")
             recipe_revision_id = installation.recipe_revision_id
             nodes = tuple(
                 session.scalars(
@@ -376,10 +397,6 @@ class RecipeOperationService:
             revision = session.get(LocalRecipeRevision, installation.recipe_revision_id)
             assert revision is not None and revision.content_sha256 is not None
             recipe_digest = revision.content_sha256
-        now = self._clock()
-        with self._sessions.begin() as session:
-            installation = session.get(RecipeInstallation, previous.owner_id)
-            assert installation is not None
             installation.state = "installing"
             installation.updated_at = now
             for node in session.scalars(
@@ -392,8 +409,8 @@ class RecipeOperationService:
                 session,
                 kind="recipe.install",
                 owner_kind="installation",
-                owner_id=previous.owner_id,
-                plan_digest=previous.plan_digest,
+                owner_id=owner_id,
+                plan_digest=previous_plan_digest,
                 actor=actor,
                 request_id=request_id,
                 node_payloads=tuple(
@@ -401,10 +418,10 @@ class RecipeOperationService:
                         node.node_id,
                         {
                             "schema_version": 1,
-                            "installation_id": previous.owner_id,
+                            "installation_id": owner_id,
                             "recipe_revision_id": recipe_revision_id,
                             "recipe_content_sha256": recipe_digest,
-                            "plan_digest": previous.plan_digest,
+                            "plan_digest": previous_plan_digest,
                             "expected_bytes": node.required_bytes,
                         },
                     )
@@ -439,7 +456,7 @@ class RecipeOperationService:
                 raise RecipeOperationConflict("node is not part of operation group")
             operation.state = "succeeded" if succeeded else "failed"
             operation.updated_at = now
-            self._project_node_result(
+            cleanup_queued = self._project_node_result(
                 session,
                 job,
                 operation,
@@ -447,6 +464,8 @@ class RecipeOperationService:
                 evidence=evidence,
                 now=now,
             )
+        if cleanup_queued:
+            self._agent_jobs.notify_available()
         return self.get(operation_id)
 
     def consume_agent_result(
@@ -487,7 +506,12 @@ class RecipeOperationService:
         succeeded: bool,
         evidence: Mapping[str, object],
         now: datetime,
-    ) -> None:
+    ) -> bool:
+        cleanup_queued = False
+        locked_job = session.get(Job, job.id, with_for_update=True)
+        if locked_job is None:
+            raise RecipeOperationConflict("recipe operation disappeared")
+        job = locked_job
         node_id = operation.node_id
         owner_id = _required_string(job.payload, "owner_id")
         if job.kind == "recipe.install":
@@ -599,7 +623,7 @@ class RecipeOperationService:
                             authority_digest=run.plan_digest,
                             now=now,
                         )
-                        self._agent_jobs.notify_available()
+                        cleanup_queued = True
                 else:
                     run.state = "running"
                     run.route_state = "pending"
@@ -623,6 +647,7 @@ class RecipeOperationService:
         else:
             job.state = "running"
         job.updated_at = now
+        return cleanup_queued
 
     def get(self, operation_id: str) -> RecipeOperationView:
         with self._sessions() as session:

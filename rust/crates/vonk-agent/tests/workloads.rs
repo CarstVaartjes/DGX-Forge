@@ -525,7 +525,7 @@ fn oci_artifacts_run_under_the_declared_staging_budget() {
     let mut workload = spec();
     workload.artifacts[0] = ArtifactSpec {
         kind: "oci.artifact".to_owned(),
-        repository: "93.184.216.34/public/artifact".to_owned(),
+        repository: "ghcr.io/vonkforge/public-artifact".to_owned(),
         revision: "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c"
             .to_owned(),
         expected_bytes: 7,
@@ -540,6 +540,14 @@ fn oci_artifacts_run_under_the_declared_staging_budget() {
     .unwrap();
 
     assert_eq!(*runner.budgets.borrow(), [7]);
+    let calls = runner.inner.calls.borrow();
+    let oras = calls.iter().find(|call| call.0 == Program::Oras).unwrap();
+    let resolve = oras
+        .1
+        .iter()
+        .position(|value| value == "--resolve")
+        .unwrap();
+    assert!(oras.1[resolve + 1].starts_with("ghcr.io:443:"));
 }
 
 #[test]

@@ -197,14 +197,16 @@ jobs:
 
   workload-package-evidence:
     name: Workload package acceptance evidence
-    needs: [lint, generated-clients, test]
+    needs: [lint, rust, generated-clients, test, catalog-runtime]
     if: >-
       (github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'push' && github.ref_type == 'tag')) &&
       always() &&
       needs.lint.result == 'success' &&
+      needs.rust.result == 'success' &&
       needs.generated-clients.result == 'success' &&
-      needs.test.result == 'success'
+      needs.test.result == 'success' &&
+      needs.catalog-runtime.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       contents: read

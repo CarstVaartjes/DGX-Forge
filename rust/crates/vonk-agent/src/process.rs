@@ -138,6 +138,11 @@ fn run_process(
             child.wait()?;
             return Err(ProcessError::Timeout);
         }
+        if stdout.metadata()?.len() > OUTPUT_LIMIT || stderr.metadata()?.len() > OUTPUT_LIMIT {
+            child.kill()?;
+            child.wait()?;
+            return Err(ProcessError::OutputLimit);
+        }
         if let Some((directory, maximum_bytes)) = storage_limit {
             match directory_bytes(directory) {
                 Ok(bytes) if bytes > maximum_bytes => {
@@ -201,4 +206,35 @@ fn bounded_read(file: &mut File) -> Result<Vec<u8>, ProcessError> {
         return Err(ProcessError::OutputLimit);
     }
     Ok(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ProcessError, ProcessRunner, Program, SystemProcessRunner};
+    use std::{io::Write, net::TcpListener, thread, time::Duration};
+
+    #[test]
+    fn system_runner_kills_a_process_while_output_exceeds_the_live_cap() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n")
+                .unwrap();
+            for _ in 0..1024 {
+                if stream.write_all(&[b'x'; 1024]).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        });
+        let result = SystemProcessRunner.run(
+            Program::Curl,
+            &["--silent".to_owned(), format!("http://{address}")],
+            Duration::from_secs(5),
+        );
+        assert!(matches!(result, Err(ProcessError::OutputLimit)));
+        server.join().unwrap();
+    }
 }

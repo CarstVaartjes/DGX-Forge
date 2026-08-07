@@ -2,6 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
+import socket
+import subprocess
+import threading
+import time
+import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -30,6 +37,7 @@ from dgx_control.recipe_operations import (
 from dgx_control.run_admission import RunAdmissionService
 from dgx_control.topology import Placement
 from sqlalchemy import create_engine, select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker
 
 
@@ -95,8 +103,8 @@ def start_evidence(payload: dict[str, object]) -> dict[str, object]:
     }
 
 
-def setup_services(tmp_path: Path, *, nodes: int = 1):
-    engine = create_engine(
+def setup_services(tmp_path: Path, *, nodes: int = 1, engine=None):
+    engine = engine or create_engine(
         f"sqlite:///{tmp_path / 'operations.sqlite'}",
         connect_args={"check_same_thread": False},
     )
@@ -112,6 +120,7 @@ def setup_services(tmp_path: Path, *, nodes: int = 1):
                 architecture="linux-arm64",
                 capabilities=["runtime.vonk.v1", "recipe.operations.v1"],
             ))
+            session.flush()
             session.add(AgentCertificate(
                 serial=serial,
                 node_id=node_id,
@@ -201,6 +210,44 @@ def setup_services(tmp_path: Path, *, nodes: int = 1):
         clock=lambda: NOW,
     )
     return sessions, service, queue, revision.id, node_ids
+
+
+@pytest.fixture(scope="module")
+def postgres_engine():
+    if shutil.which("docker") is None:
+        pytest.skip("Docker is required for PostgreSQL recipe concurrency tests")
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port = reservation.getsockname()[1]
+    name = f"vonk-recipe-test-{uuid.uuid4().hex[:12]}"
+    try:
+        subprocess.run(
+            [
+                "docker", "run", "--rm", "-d", "--name", name,
+                "-e", "POSTGRES_PASSWORD=postgres", "-p", f"127.0.0.1:{port}:5432",
+                "postgres:18.0-bookworm",
+            ],
+            check=True,
+            capture_output=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        pytest.skip(f"disposable PostgreSQL is unavailable: {error}")
+    engine = create_engine(
+        f"postgresql+psycopg://postgres:postgres@127.0.0.1:{port}/postgres"
+    )
+    try:
+        for _ in range(50):
+            try:
+                with engine.connect():
+                    break
+            except OperationalError:
+                time.sleep(0.1)
+        else:
+            pytest.skip("disposable PostgreSQL did not become ready")
+        yield engine
+    finally:
+        engine.dispose()
+        subprocess.run(["docker", "stop", name], check=False, capture_output=True)
 
 
 def test_install_is_digest_bound_idempotent_and_gang_complete(tmp_path: Path) -> None:
@@ -343,6 +390,8 @@ def test_partial_install_fails_as_a_group_and_can_retry(tmp_path: Path) -> None:
     retry = service.retry(first.id, actor="admin", request_id="3" * 36)
     assert retry.id != first.id
     assert retry.owner_id == first.owner_id
+    with pytest.raises(RecipeOperationConflict, match="not retryable"):
+        service.retry(first.id, actor="admin", request_id="3" * 35 + "4")
 
 
 def test_failed_install_retry_state_rolls_back_when_queue_write_fails(
@@ -423,6 +472,8 @@ def test_start_stop_and_uninstall_preserve_capacity_safely(tmp_path: Path) -> No
     assert service.get(start.id).state == "succeeded"
     stop = service.stop(start.owner_id, actor="admin", request_id="7" * 36)
     assert service.get(stop.id).state == "running"
+    with pytest.raises(RecipeOperationConflict, match="not stoppable"):
+        service.stop(start.owner_id, actor="admin", request_id="7" * 35 + "a")
     service.record_node_result(stop.id, nodes[0], succeeded=True, evidence={"stopped": True})
     with sessions() as session:
         run = session.get(RecipeRun, start.owner_id)
@@ -553,6 +604,84 @@ def test_failed_multinode_start_queues_idempotent_stop_for_every_rank(
         )
         assert cleanup_nodes == set(nodes)
         assert session.get(RecipeRun, start.owner_id).state == "stopping"
+
+
+def test_concurrent_final_rank_results_serialize_gang_cleanup(
+    tmp_path: Path, postgres_engine
+) -> None:
+    Base.metadata.drop_all(postgres_engine)
+    sessions, service, _queue, revision_id, nodes = setup_services(
+        tmp_path, nodes=2, engine=postgres_engine
+    )
+    install_plan = service.preview_install(revision_id, nodes)
+    install = service.install(
+        install_plan,
+        plan_digest=install_plan.plan_digest,
+        actor="admin",
+        request_id="d" * 36,
+    )
+    for node in nodes:
+        service.record_node_result(
+            install.id, node, succeeded=True, evidence={"installed_bytes": 120}
+        )
+    run_plan = service.preview_run(
+        install.owner_id,
+        (
+            Placement(nodes[0], 0, "entrypoint"),
+            Placement(nodes[1], 1, "worker"),
+        ),
+    )
+    start = service.start(
+        run_plan,
+        plan_digest=run_plan.plan_digest,
+        alias="qwen-gang",
+        actor="admin",
+        request_id="e" * 36,
+    )
+    with sessions() as session:
+        child = session.scalar(
+            select(AgentOperation).where(
+                AgentOperation.parent_job_id == start.id,
+                AgentOperation.node_id == nodes[0],
+            )
+        )
+        assert child is not None
+        evidence = start_evidence(child.payload)
+    barrier = threading.Barrier(2)
+
+    def result(node_id: str, succeeded: bool) -> None:
+        barrier.wait()
+        service.record_node_result(
+            start.id,
+            node_id,
+            succeeded=succeeded,
+            evidence=evidence if succeeded else {"code": "start.failed"},
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [
+            pool.submit(result, nodes[0], True),
+            pool.submit(result, nodes[1], False),
+        ]
+        for future in futures:
+            future.result(timeout=10)
+
+    with sessions() as session:
+        cleanup = session.scalar(
+            select(Job).where(
+                Job.kind == "recipe.stop",
+                Job.payload["owner_id"].as_string() == start.owner_id,
+            )
+        )
+        assert cleanup is not None
+        assert session.get(RecipeRun, start.owner_id).state == "stopping"
+        assert set(
+            session.scalars(
+                select(AgentOperation.node_id).where(
+                    AgentOperation.parent_job_id == cleanup.id
+                )
+            )
+        ) == set(nodes)
 
 
 def test_changed_plan_or_reused_request_key_is_rejected(tmp_path: Path) -> None:
