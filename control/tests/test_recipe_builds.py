@@ -10,17 +10,52 @@ from dgx_control.catalog_service import CatalogService, RecipeDraftInput
 from dgx_control.inventory_repository import InventoryRepository, InventorySnapshotInput
 from dgx_control.models import (
     AgentNode,
+    AgentOperation,
     Base,
     ClusterMapping,
     ClusterMappingNode,
     NodeArtifact,
     RecipeBuild,
     RecipeSourceBundle,
+    ResourceReservation,
 )
 from dgx_control.recipe_builds import RecipeBuildService
+from dgx_control.recipe_operations import RecipeOperationService
 from dgx_control.source_bundles import SourceBundleStore, generate_source_bundle
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
+
+
+class RecordingQueue:
+    def enqueue_in_session(
+        self,
+        session,
+        parent_job_id,
+        node_id,
+        operation,
+        base_commit,
+        payload,
+        *,
+        operation_id,
+    ):
+        session.add(
+            AgentOperation(
+                id=operation_id,
+                parent_job_id=parent_job_id,
+                node_id=node_id,
+                kind=operation,
+                payload_digest="f" * 64,
+                payload=dict(payload),
+                base_commit=base_commit,
+                state="queued",
+                current_attempt=0,
+                created_at=datetime(2026, 8, 7, 12, tzinfo=UTC),
+                updated_at=datetime(2026, 8, 7, 12, tzinfo=UTC),
+            )
+        )
+
+    def notify_available(self) -> None:
+        pass
 
 
 def setup(tmp_path: Path):
@@ -113,6 +148,68 @@ def test_build_plan_is_typed_sandboxed_and_durable(tmp_path: Path) -> None:
     with sessions() as session:
         stored = session.get(RecipeBuild, plan.build_id)
         assert stored is not None and stored.state == "planned"
+
+
+def test_starting_build_atomically_reserves_temporary_disk_and_memory(
+    tmp_path: Path,
+) -> None:
+    sessions, bundles, now, node_id, revision = setup(tmp_path)
+    builds = RecipeBuildService(sessions, bundles=bundles)
+    plan = builds.plan(revision.id, node_id, now=now)
+    operations = RecipeOperationService(
+        sessions,
+        install_admission=object(),
+        run_admission=object(),
+        agent_jobs=RecordingQueue(),
+        clock=lambda: now,
+        builds=builds,
+    )
+
+    operation = operations.build(
+        plan,
+        build_input_sha256=plan.build_input_sha256,
+        actor="admin",
+        request_id="build-reservation-test",
+    )
+
+    with sessions() as session:
+        reservations = tuple(
+            session.scalars(
+                select(ResourceReservation)
+                .where(
+                    ResourceReservation.owner_kind == "recipe-build",
+                    ResourceReservation.owner_id == plan.build_id,
+                    ResourceReservation.state == "active",
+                )
+                .order_by(ResourceReservation.kind)
+            )
+        )
+    assert [(item.kind, item.amount_bytes) for item in reservations] == [
+        (
+            "disk",
+            plan.agent_payload["limits"]["temporary_bytes"]
+            + plan.agent_payload["source_bundle_bytes"],
+        ),
+        ("host-memory", plan.agent_payload["limits"]["memory_bytes"]),
+    ]
+
+    operations.record_node_result(
+        operation.id,
+        node_id,
+        succeeded=False,
+        evidence={"reason": "expected test failure"},
+    )
+    with sessions() as session:
+        assert (
+            session.scalar(
+                select(ResourceReservation).where(
+                    ResourceReservation.owner_kind == "recipe-build",
+                    ResourceReservation.owner_id == plan.build_id,
+                    ResourceReservation.state == "active",
+                )
+            )
+            is None
+        )
 
 
 def test_source_check_returns_the_structured_pre_dispatch_policy_report(

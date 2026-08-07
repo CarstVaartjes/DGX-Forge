@@ -334,6 +334,76 @@ class RecipeBuildService:
             build_id, image_digest, oci_layout_sha256, image_bytes
         )
 
+    def reserve_in_session(
+        self, session: Session, plan: RecipeBuildPlan, *, now: datetime
+    ) -> None:
+        try:
+            snapshot = self._inventory.latest(
+                plan.builder_node_id, now=now, maximum_age=self._inventory_max_age
+            )
+        except KeyError as error:
+            raise RecipeBuildError(
+                "build.inventory_missing", "fresh builder inventory is unavailable"
+            ) from error
+        node = session.get(AgentNode, plan.builder_node_id, with_for_update=True)
+        if node is None:
+            raise RecipeBuildError("build.node_unknown", "builder Spark is unknown")
+        _validate_builder(node)
+        if snapshot.stale:
+            raise RecipeBuildError(
+                "build.inventory_stale", "builder inventory is stale"
+            )
+        limits = plan.agent_payload.get("limits")
+        source_bytes = plan.agent_payload.get("source_bundle_bytes")
+        if not isinstance(limits, dict) or not isinstance(source_bytes, int):
+            raise RecipeBuildError("build.plan_invalid", "build plan is invalid")
+        temporary_bytes = limits.get("temporary_bytes")
+        memory_bytes = limits.get("memory_bytes")
+        if not isinstance(temporary_bytes, int) or not isinstance(memory_bytes, int):
+            raise RecipeBuildError("build.plan_invalid", "build plan is invalid")
+        disk_bytes = temporary_bytes + source_bytes
+        if (
+            snapshot.disk_free_bytes - _reserved(session, plan.builder_node_id, "disk")
+            < disk_bytes
+        ):
+            raise RecipeBuildError(
+                "build.insufficient_disk", "builder disk capacity changed"
+            )
+        if (
+            snapshot.host_memory_free_bytes
+            - _reserved(session, plan.builder_node_id, "host-memory")
+            < memory_bytes
+        ):
+            raise RecipeBuildError(
+                "build.insufficient_memory", "builder memory capacity changed"
+            )
+        session.add_all(
+            (
+                ResourceReservation(
+                    node_id=plan.builder_node_id,
+                    kind="disk",
+                    resource_key=plan.build_input_sha256,
+                    amount_bytes=disk_bytes,
+                    owner_kind="recipe-build",
+                    owner_id=plan.build_id,
+                    state="active",
+                    plan_digest=plan.build_input_sha256,
+                    created_at=now,
+                ),
+                ResourceReservation(
+                    node_id=plan.builder_node_id,
+                    kind="host-memory",
+                    resource_key=plan.build_input_sha256,
+                    amount_bytes=memory_bytes,
+                    owner_kind="recipe-build",
+                    owner_id=plan.build_id,
+                    state="active",
+                    plan_digest=plan.build_input_sha256,
+                    created_at=now,
+                ),
+            )
+        )
+
     def plan_distribution(
         self, build_id: str, mapping_id: str, *, generation: int
     ) -> ImageDistributionPlan:

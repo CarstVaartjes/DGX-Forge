@@ -151,6 +151,9 @@ class RecipeOperationService:
                 or build.builder_node_id != plan.builder_node_id
             ):
                 raise RecipeOperationConflict("recipe build preview is stale")
+            if self._builds is None:
+                raise RecipeOperationConflict("recipe build service is unavailable")
+            self._builds.reserve_in_session(session, plan, now=now)
             build.state = "building"
             build.updated_at = now
             job = self._queue_in_session(
@@ -736,7 +739,9 @@ class RecipeOperationService:
             )
             job.state = "failed" if failed else "succeeded"
             job.result = {"successful_nodes": successful, "failed_nodes": failed}
-            if job.kind == "recipe.install":
+            if job.kind == "recipe.build.v1":
+                self._release(session, "recipe-build", owner_id, now)
+            elif job.kind == "recipe.install":
                 installation = session.get(RecipeInstallation, owner_id)
                 assert installation is not None
                 installation.state = "partial" if failed else "installed"
