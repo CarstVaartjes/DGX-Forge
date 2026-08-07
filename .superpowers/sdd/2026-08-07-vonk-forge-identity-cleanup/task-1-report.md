@@ -128,3 +128,40 @@ exit=1 status=failed owned=8942 external=10
 $ git diff --check
 exit 0
 ```
+
+## Fix round 3 — 2026-08-07
+
+Status: COMPLETE
+
+- Git-visible paths now apply the same generic skipped-directory policy as
+  filesystem walking before files or derived parent directory names are
+  inspected. Tracked or unignored cache/build, dependency, bytecode-cache, and
+  virtual-environment paths therefore cannot bypass the exclusion.
+- The Git checkout regression tracks representative `build/`,
+  `compiler-cache/`, `__pycache__/`, `node_modules/`, and `.venv/` paths and
+  confirms none are reported. It retains coverage for a visible
+  `.superpowers/` path and an ignored scratch path; its temporary checkout is
+  pytest-managed and self-cleaning.
+- `docs/identity-verifier.md` now states that Git ignores control ignored-file
+  visibility only; generic cache/build, dependency, virtual-environment, and
+  binary-artifact exclusions remain unconditional.
+
+### Verification output
+
+```text
+$ uv run --isolated --with pytest==9.1.1 pytest tests/scripts/test_verify_vonk_identity.py -q
+........                                                                 [100%]
+8 passed in 0.06s
+
+$ uv run --isolated --with ruff==0.16.1 ruff check scripts/vonk_identity.py tests/scripts/test_verify_vonk_identity.py docs/identity-verifier.md
+All checks passed!
+
+$ python3 -m py_compile scripts/vonk_identity.py scripts/verify-vonk-identity
+exit 0
+
+$ scripts/verify-vonk-identity --json . >/dev/null
+exit 1 (expected while repository identity cleanup remains incomplete)
+
+$ git diff --check
+exit 0
+```

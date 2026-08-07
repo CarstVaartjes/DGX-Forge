@@ -137,11 +137,12 @@ def _scan_git_paths(
     owned_matches: list[dict[str, object]],
     external_matches: list[dict[str, object]],
 ) -> None:
+    paths = [path for path in paths if not _is_skipped_path(path)]
     directories = {
         parent
         for relative_path in paths
         for parent in relative_path.parents
-        if parent != Path(".")
+        if parent != Path(".") and not _is_skipped_path(parent)
     }
     for relative_path in sorted(directories, key=lambda path: path.as_posix()):
         _append_matches(
@@ -200,6 +201,10 @@ def _read_text(path: Path) -> str | None:
 
 def _is_skipped_directory(name: str) -> bool:
     return name in _SKIPPED_DIRECTORY_NAMES or _GENERATED_DIRECTORY.search(name) is not None
+
+
+def _is_skipped_path(path: Path) -> bool:
+    return any(_is_skipped_directory(part) for part in path.parts)
 
 
 def _is_binary(path: Path, raw: bytes) -> bool:

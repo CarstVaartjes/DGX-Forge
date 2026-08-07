@@ -94,6 +94,16 @@ def test_identity_verifier_uses_git_visibility_for_checkout_roots(tmp_path: Path
     tracked = tmp_path / "owned" / "tracked.txt"
     tracked.parent.mkdir()
     tracked.write_text(legacy, encoding="utf-8")
+    skipped_files = [
+        tmp_path / "build" / f"{legacy}-ignored.txt",
+        tmp_path / "compiler-cache" / f"{legacy}-ignored.txt",
+        tmp_path / "__pycache__" / f"{legacy}-ignored.txt",
+        tmp_path / "node_modules" / f"{legacy}-ignored.txt",
+        tmp_path / ".venv" / f"{legacy}-ignored.txt",
+    ]
+    for skipped_file in skipped_files:
+        skipped_file.parent.mkdir()
+        skipped_file.write_text(legacy, encoding="utf-8")
     subprocess.run(["git", "-C", str(tmp_path), "add", "."], check=True)
 
     visible = tmp_path / "notes" / f"{legacy}-visible.txt"
@@ -116,6 +126,10 @@ def test_identity_verifier_uses_git_visibility_for_checkout_roots(tmp_path: Path
     assert str(visible.relative_to(tmp_path)) in paths
     assert str(work_record.relative_to(tmp_path)) in paths
     assert str(sibling_checkout.relative_to(tmp_path)) in paths
+    assert not any(
+        path.startswith(("build/", "compiler-cache/", "__pycache__/", "node_modules/", ".venv/"))
+        for path in paths
+    )
     assert not any(path.startswith("scratch/") for path in paths)
 
 

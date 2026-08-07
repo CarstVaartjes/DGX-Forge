@@ -7,10 +7,11 @@ content.
 
 In a Git checkout, the verifier examines the tracked and untracked files
 reported by `git ls-files --cached --others --exclude-standard -z`. Git ignore
-rules therefore decide which checkout paths are excluded. In an arbitrary
-non-Git root, the verifier walks the filesystem while skipping repository
-metadata, dependency directories, generalized cache/build directories, and
-virtual environments.
+rules therefore decide ignored-file visibility, but they do not override the
+generic exclusions: repository metadata, dependency directories, generalized
+cache/build directories, and virtual environments are always skipped. In an
+arbitrary non-Git root, the verifier walks the filesystem with those same
+directory exclusions.
 
 Both modes examine names and UTF-8 text in ordinary source files and skip
 binary or encoded artifacts identified by suffix, file signature, NUL bytes,
