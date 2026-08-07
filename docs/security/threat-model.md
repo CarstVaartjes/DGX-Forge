@@ -1,4 +1,4 @@
-# vonk-forge platform threat model
+# Vonk Forge platform threat model
 
 ## Security objectives
 

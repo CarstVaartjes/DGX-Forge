@@ -1,6 +1,6 @@
-# vonk-forge
+# Vonk Forge
 
-`vonk-forge` is a local-first control plane for one or more NVIDIA DGX Sparks.
+Vonk Forge is a local-first control plane for one or more NVIDIA DGX Sparks.
 Each Spark is onboarded independently; the Docker-capable service host runs
 separate Caddy, API/worker, PostgreSQL, LiteLLM, Hermes Agent, Prometheus, and Grafana
 services. Administration is available through both `sparkctl admin` and the
@@ -15,7 +15,7 @@ Before a real release, run `scripts/verify-platform-release --candidate X.Y.Z
 protected-code-host evidence exists. PR-only repository mutation is a one-way
 transition and must not be enabled from simulator evidence.
 
-`vonk-forge` is a collection of contracts, controllers, runtime adapters, and
+Vonk Forge is a collection of contracts, controllers, runtime adapters, and
 operational tooling for defining, validating, deploying, and operating
 model-serving profiles across NVIDIA DGX Spark systems. The repository keeps
 cluster admission and model maturity fail-closed: a checked-in definition is
@@ -37,7 +37,7 @@ not treated as production-ready until its evidence gates are accepted.
 - Build and operate model-specific runtime adapters, including the checked-in
   DeepSeek Mia and DS4 definitions.
 - Publish and operate generic, signed workload packages independently from
-  `vonk-forge` platform releases; ordinary model/runtime releases do not require
+  Vonk Forge platform releases; ordinary model/runtime releases do not require
   an agent update.
 - Review and apply NAS-to-Spark platform skew updates through the Admin web UX
   or `sparkctl`, with explicit signed fan-out over the outbound agent channel.
@@ -154,4 +154,4 @@ Docker group is root-equivalent and should be limited to trusted operators.
 
 ## License
 
-`vonk-forge` is available under the [MIT License](LICENSE).
+Vonk Forge is available under the [MIT License](LICENSE).
