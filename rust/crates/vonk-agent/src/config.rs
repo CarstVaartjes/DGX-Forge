@@ -30,6 +30,9 @@ pub struct AgentConfig {
     pub node_id: String,
     pub poll_min_seconds: u64,
     pub poll_max_seconds: u64,
+    pub fabric_address: Option<std::net::IpAddr>,
+    pub fabric_bandwidth_mbps: Option<u64>,
+    pub huggingface_curl_config: Option<PathBuf>,
 }
 
 impl AgentConfig {
@@ -69,6 +72,13 @@ impl AgentConfig {
                 return Err(ConfigError::Unsafe(name));
             }
         }
+        if self
+            .huggingface_curl_config
+            .as_deref()
+            .is_some_and(|path| !canonical_absolute(path))
+        {
+            return Err(ConfigError::Unsafe("huggingface_curl_config"));
+        }
         if self.ca_sha256.len() != 64
             || !self
                 .ca_sha256
@@ -90,6 +100,24 @@ impl AgentConfig {
             || self.poll_max_seconds > 300
         {
             return Err(ConfigError::Unsafe("poll timing"));
+        }
+        if self.fabric_address.is_some() != self.fabric_bandwidth_mbps.is_some()
+            || self
+                .fabric_bandwidth_mbps
+                .is_some_and(|value| value == 0 || value > 1_000_000)
+            || self.fabric_address.is_some_and(|address| {
+                address.is_loopback()
+                    || address.is_unspecified()
+                    || address.is_multicast()
+                    || match address {
+                        std::net::IpAddr::V4(value) => {
+                            value.is_link_local() || value.is_broadcast()
+                        }
+                        std::net::IpAddr::V6(value) => value.is_unicast_link_local(),
+                    }
+            })
+        {
+            return Err(ConfigError::Unsafe("fabric settings"));
         }
         Ok(())
     }

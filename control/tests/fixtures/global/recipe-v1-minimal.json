@@ -16,6 +16,7 @@
     }
   ],
   "runtime": {
+    "interface": "vonk.runtime.v1",
     "family": "vllm",
     "image": "ghcr.io/vonk-forge/vllm@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "architecture": "linux/arm64",
@@ -43,7 +44,10 @@
     "capabilities": [],
     "host_network": false,
     "privileged": false,
-    "mounts": [{"source": "model", "target": "/models", "read_only": true}]
+    "mounts": [
+      {"source": "model", "target": "/models", "read_only": true},
+      {"source": "state", "target": "/state", "read_only": false}
+    ]
   },
   "provenance": {"source_kind": "local", "source_reference": null, "attribution": []}
 }

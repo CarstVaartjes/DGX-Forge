@@ -1,29 +1,35 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import sessionmaker
-
+from dgx_agent_protocol import canonical_message
 from dgx_control.artifact_sizes import ArtifactSize, StaticArtifactSizeResolver
 from dgx_control.catalog_service import CatalogService, RecipeDraftInput
 from dgx_control.install_admission import InstallAdmissionService
 from dgx_control.inventory_repository import InventoryRepository, InventorySnapshotInput
 from dgx_control.models import (
+    AgentCertificate,
     AgentNode,
     AgentOperation,
+    AgentPresence,
     Base,
     Job,
     RecipeInstallation,
     RecipeRun,
     ResourceReservation,
 )
-from dgx_control.recipe_operations import RecipeOperationConflict, RecipeOperationService
+from dgx_control.recipe_operations import (
+    RecipeOperationConflict,
+    RecipeOperationService,
+)
 from dgx_control.run_admission import RunAdmissionService
 from dgx_control.topology import Placement
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
 
 
 class RecordingQueue:
@@ -64,6 +70,25 @@ class RecordingQueue:
 NOW = datetime(2026, 8, 7, 12, tzinfo=UTC)
 
 
+def start_evidence(payload: dict[str, object]) -> dict[str, object]:
+    identity = {
+        "recipe_revision_id": payload["recipe_revision_id"],
+        "recipe_content_sha256": payload["recipe_content_sha256"],
+        "image_digest": "a" * 64,
+        "artifact_set_digest": "b" * 64,
+        "model_identity": "Qwen/Qwen3-30B-A3B-Instruct-2507@0123456789abcdef0123456789abcdef01234567",
+        "rank": payload["rank"],
+        "world_size": payload["world_size"],
+        "endpoint": f"http://{payload['endpoint_address']}:{payload['port']}",
+        "memory_reservation_bytes": payload["reserved_memory_bytes"],
+        "ready": True,
+    }
+    return {
+        **identity,
+        "evidence_digest": hashlib.sha256(canonical_message(identity)).hexdigest(),
+    }
+
+
 def setup_services(tmp_path: Path, *, nodes: int = 1):
     engine = create_engine(
         f"sqlite:///{tmp_path / 'operations.sqlite'}",
@@ -73,20 +98,33 @@ def setup_services(tmp_path: Path, *, nodes: int = 1):
     sessions = sessionmaker(engine, expire_on_commit=False)
     node_ids = tuple("spk_" + f"{index + 1:032x}" for index in range(nodes))
     with sessions.begin() as session:
-        session.add_all(
-            AgentNode(
+        for index, node_id in enumerate(node_ids):
+            serial = f"serial-{index}"
+            session.add(AgentNode(
                 node_id=node_id,
                 state="active",
                 architecture="linux-arm64",
-                capabilities=["runtime.vllm.v1", "recipe.operations.v1"],
-            )
-            for node_id in node_ids
-        )
+                capabilities=["runtime.vonk.v1", "recipe.operations.v1"],
+            ))
+            session.add(AgentCertificate(
+                serial=serial,
+                node_id=node_id,
+                fingerprint=f"fingerprint-{index}",
+                not_before=NOW,
+                not_after=datetime(2027, 8, 7, 12, tzinfo=UTC),
+            ))
+            session.add(AgentPresence(
+                node_id=node_id,
+                certificate_serial=serial,
+                certificate_fingerprint=f"fingerprint-{index}",
+                management_address=f"192.168.1.{211 + index}",
+                observed_at=NOW,
+            ))
     inventory = InventoryRepository(sessions, clock=lambda: NOW)
-    capabilities = ("runtime.vllm.v1", "recipe.operations.v1") + (
+    capabilities = ("runtime.vonk.v1", "recipe.operations.v1") + (
         ("fabric.tcp.mbps.1000",) if nodes > 1 else ()
     )
-    for node_id in node_ids:
+    for index, node_id in enumerate(node_ids):
         inventory.record(
             InventorySnapshotInput(
                 node_id,
@@ -100,6 +138,8 @@ def setup_services(tmp_path: Path, *, nodes: int = 1):
                 1,
                 False,
                 capabilities,
+                fabric_address=(f"192.168.100.{index + 2}" if nodes > 1 else None),
+                fabric_bandwidth_mbps=(1000 if nodes > 1 else None),
             )
         )
     document = json.loads(
@@ -216,6 +256,15 @@ def test_start_stop_and_uninstall_preserve_capacity_safely(tmp_path: Path) -> No
         actor="admin",
         request_id="5" * 36,
     )
+    with sessions() as session:
+        child = session.scalar(
+            select(AgentOperation).where(AgentOperation.parent_job_id == start.id)
+        )
+        assert child is not None
+        assert child.payload["endpoint_address"] == "192.168.1.211"
+        assert child.payload["world_size"] == 1
+        assert child.payload["master_address"] is None
+        evidence = start_evidence(child.payload)
     with pytest.raises(RecipeOperationConflict, match="active run"):
         service.uninstall(install.owner_id, actor="admin", request_id="6" * 36)
 
@@ -223,7 +272,7 @@ def test_start_stop_and_uninstall_preserve_capacity_safely(tmp_path: Path) -> No
         start.id,
         nodes[0],
         succeeded=True,
-        evidence={"endpoint": "http://10.0.0.2:8000", "evidence_digest": "a" * 64},
+        evidence=evidence,
     )
     assert service.get(start.id).state == "succeeded"
     stop = service.stop(start.owner_id, actor="admin", request_id="7" * 36)
@@ -247,6 +296,54 @@ def test_start_stop_and_uninstall_preserve_capacity_safely(tmp_path: Path) -> No
     with sessions() as session:
         installation = session.get(RecipeInstallation, install.owner_id)
         assert installation.state == "uninstalled"
+
+
+def test_multinode_start_is_bound_to_authenticated_fabric_rendezvous(tmp_path: Path) -> None:
+    sessions, service, _queue, revision_id, nodes = setup_services(tmp_path, nodes=2)
+    install_plan = service.preview_install(revision_id, nodes)
+    install = service.install(
+        install_plan,
+        plan_digest=install_plan.plan_digest,
+        actor="admin",
+        request_id="d" * 36,
+    )
+    for node in nodes:
+        service.record_node_result(
+            install.id, node, succeeded=True, evidence={"installed_bytes": 120}
+        )
+    run_plan = service.preview_run(
+        install.owner_id,
+        (
+            Placement(nodes[0], 0, "entrypoint"),
+            Placement(nodes[1], 1, "worker"),
+        ),
+    )
+    assert run_plan.allowed is True
+    start = service.start(
+        run_plan,
+        plan_digest=run_plan.plan_digest,
+        alias="qwen-gang",
+        actor="admin",
+        request_id="e" * 36,
+    )
+
+    with sessions() as session:
+        children = list(
+            session.scalars(
+                select(AgentOperation)
+                .where(AgentOperation.parent_job_id == start.id)
+                .order_by(AgentOperation.node_id)
+            )
+        )
+        assert [child.payload["local_address"] for child in children] == [
+            "192.168.100.2",
+            "192.168.100.3",
+        ]
+        assert {child.payload["master_address"] for child in children} == {
+            "192.168.100.2"
+        }
+        assert {child.payload["master_port"] for child in children} == {29500}
+        assert {child.payload["world_size"] for child in children} == {2}
 
 
 def test_changed_plan_or_reused_request_key_is_rejected(tmp_path: Path) -> None:

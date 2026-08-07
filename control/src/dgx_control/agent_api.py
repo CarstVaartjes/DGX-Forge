@@ -13,7 +13,7 @@ import time
 from collections import deque
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Lock
 from typing import Any, Literal, Protocol
@@ -28,7 +28,7 @@ from dgx_agent_protocol.workload_packages import (
     PackageHelperOperation,
 )
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session, sessionmaker
 from starlette.responses import StreamingResponse
@@ -49,14 +49,22 @@ from .enrollment import (
     RemoteRevocationUncertain,
     RenewalInProgress,
 )
-from .models import AgentCertificate, AgentEnrollment, AgentNode, AgentOperation
+from .inventory_repository import InventoryRepository, InventorySnapshotInput
+from .models import (
+    AgentCertificate,
+    AgentEnrollment,
+    AgentNode,
+    AgentOperation,
+    LocalRecipeRevision,
+)
 from .operation_api import bounded_error_responses
 from .package_helper_authority import (
     PackageHelperAuthorityError,
     PackageHelperAuthorityService,
 )
 from .pki import IssuedCertificate
-from .presence import AgentPresenceService, PresenceError
+from .presence import AgentPresenceService, ManagementAddressPolicy, PresenceError
+from .recipe_contract import recipe_content_sha256, validate_recipe
 
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _LIVE_OPERATION_STATES = frozenset({"queued", "running"})
@@ -112,6 +120,7 @@ class AgentApiServices:
     max_workload_tuf_metadata_bytes: int = 2 * 1024 * 1024
     max_workload_tuf_target_bytes: int = 1024 * 1024
     package_helper_authority: PackageHelperAuthorityService | None = None
+    fabric_policy: ManagementAddressPolicy | None = None
 
 
 class EnrollmentRateLimiter:
@@ -244,6 +253,43 @@ class ClaimRequest(BaseModel):
     capabilities: list[str] | None = Field(default=None, max_length=32)
     runtime_identity: AgentRuntimeIdentityRequest | None = None
     wait_seconds: int = Field(default=0, ge=0, le=60)
+
+
+class InventoryRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    schema_version: Literal[1]
+    observed_at: datetime
+    disk_total_bytes: int = Field(ge=0, le=16 * 1024**4, strict=True)
+    disk_free_bytes: int = Field(ge=0, le=16 * 1024**4, strict=True)
+    host_memory_total_bytes: int = Field(ge=0, le=16 * 1024**4, strict=True)
+    host_memory_free_bytes: int = Field(ge=0, le=16 * 1024**4, strict=True)
+    gpu_memory_total_bytes: int = Field(ge=0, le=16 * 1024**4, strict=True)
+    gpu_memory_free_bytes: int = Field(ge=0, le=16 * 1024**4, strict=True)
+    gpu_count: int = Field(ge=0, le=64, strict=True)
+    artifact_store_read_only: bool
+    capabilities: list[str] = Field(max_length=64)
+    fabric_address: str | None = Field(default=None, max_length=45)
+    fabric_bandwidth_mbps: int | None = Field(
+        default=None, ge=1, le=1_000_000, strict=True
+    )
+    nvidia_driver_version: str = Field(min_length=1, max_length=256)
+    container_runtime_version: str = Field(min_length=1, max_length=256)
+
+    @model_validator(mode="after")
+    def internally_consistent(self) -> InventoryRequest:
+        if (
+            self.disk_free_bytes > self.disk_total_bytes
+            or self.host_memory_free_bytes > self.host_memory_total_bytes
+            or self.gpu_memory_free_bytes > self.gpu_memory_total_bytes
+            or (self.fabric_address is None) != (self.fabric_bandwidth_mbps is None)
+            or len(self.capabilities) != len(set(self.capabilities))
+            or any(
+                re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,127}", item) is None
+                for item in self.capabilities
+            )
+        ):
+            raise ValueError("inventory evidence is inconsistent")
+        return self
 
 
 class RenewRequest(BaseModel):
@@ -1061,6 +1107,77 @@ def install_agent_routes(
         except ValueError as error:
             raise HTTPException(status_code=422, detail=str(error)) from None
         return Response(status_code=status.HTTP_204_NO_CONTENT) if result is None else _json_response(_wire(result))
+
+    @agent.post("/inventory", status_code=status.HTTP_204_NO_CONTENT)
+    def inventory(body: InventoryRequest, request: Request) -> Response:
+        _scope_identity(request)
+        required = _require_services(services)
+        identity = _authenticated_identity(request, required)
+        if body.observed_at.tzinfo is None or body.observed_at.utcoffset() is None:
+            raise HTTPException(status_code=422, detail="inventory time must be timezone-aware")
+        observed_at = body.observed_at.astimezone(UTC)
+        now = _now(required.clock()).astimezone(UTC)
+        if observed_at > now + timedelta(seconds=30) or now - observed_at > timedelta(hours=24):
+            raise HTTPException(status_code=422, detail="inventory time is outside the accepted window")
+        if body.fabric_address is not None:
+            if required.fabric_policy is None:
+                raise HTTPException(status_code=422, detail="direct fabric is not configured")
+            try:
+                required.fabric_policy.validate(body.fabric_address)
+            except PresenceError as error:
+                raise HTTPException(status_code=422, detail=str(error)) from None
+        try:
+            InventoryRepository(required.sessions, clock=required.clock).record(
+                InventorySnapshotInput(
+                    node_id=identity.node_id,
+                    observed_at=observed_at,
+                    disk_total_bytes=body.disk_total_bytes,
+                    disk_free_bytes=body.disk_free_bytes,
+                    host_memory_total_bytes=body.host_memory_total_bytes,
+                    host_memory_free_bytes=body.host_memory_free_bytes,
+                    gpu_memory_total_bytes=body.gpu_memory_total_bytes,
+                    gpu_memory_free_bytes=body.gpu_memory_free_bytes,
+                    gpu_count=body.gpu_count,
+                    artifact_store_read_only=body.artifact_store_read_only,
+                    capabilities=tuple(body.capabilities),
+                    fabric_address=body.fabric_address,
+                    fabric_bandwidth_mbps=body.fabric_bandwidth_mbps,
+                    nvidia_driver_version=body.nvidia_driver_version,
+                    container_runtime_version=body.container_runtime_version,
+                )
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @agent.get("/recipe-specs/{content_sha256}")
+    def recipe_spec(content_sha256: str, request: Request) -> Response:
+        _scope_identity(request)
+        required = _require_services(services)
+        _authenticated_identity(request, required)
+        if _DIGEST.fullmatch(content_sha256) is None:
+            raise HTTPException(status_code=404, detail="recipe specification does not exist")
+        with required.sessions() as session:
+            revision = session.scalar(
+                select(LocalRecipeRevision).where(
+                    LocalRecipeRevision.content_sha256 == content_sha256,
+                    LocalRecipeRevision.lifecycle == "resolved",
+                )
+            )
+            if revision is None:
+                raise HTTPException(status_code=404, detail="recipe specification does not exist")
+            document = revision.document
+        validate_recipe(document)
+        if recipe_content_sha256(document) != content_sha256:
+            raise HTTPException(status_code=409, detail="recipe specification digest changed")
+        return _json_response(
+            {
+                "artifacts": document["artifacts"],
+                "endpoint": document["endpoint"],
+                "runtime": document["runtime"],
+                "security": document["security"],
+            }
+        )
 
     def package_helper_service() -> PackageHelperAuthorityService:
         required = services.package_helper_authority if services is not None else None

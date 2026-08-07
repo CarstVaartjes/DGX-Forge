@@ -6,9 +6,6 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from dgx_control.catalog_service import (
     CatalogConflict,
     CatalogService,
@@ -16,6 +13,8 @@ from dgx_control.catalog_service import (
     RecipeDraftInput,
 )
 from dgx_control.models import Base
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 @pytest.fixture
@@ -115,3 +114,14 @@ def test_mutable_external_revision_is_rejected(
         )
 
     assert caught.value.code == "catalog.mutable_artifact"
+
+
+def test_short_opaque_artifact_revision_is_not_treated_as_immutable(
+    service: CatalogService, recipe_document: dict[str, object]
+) -> None:
+    recipe_document["artifacts"][0]["revision"] = "deadbeefdeadbeef"
+
+    with pytest.raises(CatalogValidationError):
+        service.create_recipe(
+            "admin", RecipeDraftInput(slug="qwen3-vllm", document=recipe_document)
+        )

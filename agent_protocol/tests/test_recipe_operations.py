@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import pytest
-
 from dgx_agent_protocol import (
     AgentOperation,
     AgentProtocolError,
     RecipeOperationRequest,
 )
-
 
 INSTALL = {
     "schema_version": 1,
@@ -29,6 +27,11 @@ START = {
     "role": "entrypoint",
     "port": 8000,
     "reserved_memory_bytes": 200,
+    "endpoint_address": "192.168.1.211",
+    "world_size": 1,
+    "local_address": None,
+    "master_address": None,
+    "master_port": None,
 }
 STOP = {
     "schema_version": 1,
@@ -88,3 +91,45 @@ def test_recipe_operations_reject_hacks_unknown_fields_and_weak_identity(
 ) -> None:
     with pytest.raises(AgentProtocolError):
         RecipeOperationRequest.parse(operation, payload)
+
+
+def test_recipe_start_accepts_tailnet_address_but_rejects_localhost() -> None:
+    request = RecipeOperationRequest.parse(
+        AgentOperation.RECIPE_START,
+        START | {"endpoint_address": "100.100.20.30"},
+    )
+    assert request.endpoint_address == "100.100.20.30"
+
+    with pytest.raises(AgentProtocolError, match="endpoint address"):
+        RecipeOperationRequest.parse(
+            AgentOperation.RECIPE_START,
+            START | {"endpoint_address": "127.0.0.1"},
+        )
+
+
+def test_multinode_start_requires_explicit_direct_fabric_rendezvous() -> None:
+    request = RecipeOperationRequest.parse(
+        AgentOperation.RECIPE_START,
+        START
+        | {
+            "world_size": 2,
+            "local_address": "192.168.100.3",
+            "master_address": "192.168.100.2",
+            "master_port": 29500,
+            "rank": 1,
+            "role": "worker",
+        },
+    )
+    assert request.master_address == "192.168.100.2"
+
+    with pytest.raises(AgentProtocolError, match="fabric"):
+        RecipeOperationRequest.parse(
+            AgentOperation.RECIPE_START,
+            START
+            | {
+                "world_size": 2,
+                "local_address": None,
+                "master_address": "192.168.100.2",
+                "master_port": 29500,
+            },
+        )

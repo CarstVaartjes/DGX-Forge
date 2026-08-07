@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
-from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -60,6 +60,11 @@ class RecipeOperationRequest:
     role: str | None = None
     port: int | None = None
     reserved_memory_bytes: int | None = None
+    endpoint_address: str | None = None
+    world_size: int | None = None
+    local_address: str | None = None
+    master_address: str | None = None
+    master_port: int | None = None
 
     @classmethod
     def parse(cls, operation: AgentOperation, payload: Any) -> RecipeOperationRequest:
@@ -85,6 +90,11 @@ class RecipeOperationRequest:
                 "role",
                 "port",
                 "reserved_memory_bytes",
+                "endpoint_address",
+                "world_size",
+                "local_address",
+                "master_address",
+                "master_port",
             }
         elif operation is AgentOperation.RECIPE_STOP:
             required = common | {"run_id"}
@@ -121,6 +131,11 @@ class RecipeOperationRequest:
         role = value.get("role")
         port = value.get("port")
         reserved_memory = value.get("reserved_memory_bytes")
+        endpoint_address = value.get("endpoint_address")
+        world_size = value.get("world_size")
+        local_address = value.get("local_address")
+        master_address = value.get("master_address")
+        master_port = value.get("master_port")
         if operation is AgentOperation.RECIPE_START:
             if not isinstance(alias, str) or _ALIAS.fullmatch(alias) is None:
                 raise AgentProtocolError("recipe alias is invalid")
@@ -134,6 +149,54 @@ class RecipeOperationRequest:
                 or not 1024 <= port <= 65535
             ):
                 raise AgentProtocolError("recipe start placement is invalid")
+            if (
+                not isinstance(world_size, int)
+                or isinstance(world_size, bool)
+                or not 1 <= world_size <= 16
+                or rank >= world_size
+            ):
+                raise AgentProtocolError("recipe start world size is invalid")
+            try:
+                address = ipaddress.ip_address(endpoint_address)
+            except (TypeError, ValueError) as error:
+                raise AgentProtocolError("recipe endpoint address is invalid") from error
+            if (
+                address.is_loopback
+                or address.is_link_local
+                or address.is_multicast
+                or address.is_unspecified
+                or str(address) != endpoint_address
+            ):
+                raise AgentProtocolError("recipe endpoint address is invalid")
+            if world_size == 1:
+                if (
+                    rank != 0
+                    or role != "entrypoint"
+                    or local_address is not None
+                    or master_address is not None
+                    or master_port is not None
+                ):
+                    raise AgentProtocolError("recipe single-node rendezvous is invalid")
+            else:
+                for candidate in (local_address, master_address):
+                    try:
+                        fabric = ipaddress.ip_address(candidate)
+                    except (TypeError, ValueError) as error:
+                        raise AgentProtocolError("recipe fabric address is invalid") from error
+                    if (
+                        fabric.is_loopback
+                        or fabric.is_link_local
+                        or fabric.is_multicast
+                        or fabric.is_unspecified
+                        or str(fabric) != candidate
+                    ):
+                        raise AgentProtocolError("recipe fabric address is invalid")
+                if (
+                    not isinstance(master_port, int)
+                    or isinstance(master_port, bool)
+                    or not 1024 <= master_port <= 65535
+                ):
+                    raise AgentProtocolError("recipe fabric port is invalid")
             reserved_memory = _bytes(
                 reserved_memory, "reserved_memory_bytes", positive=True
             )
@@ -151,6 +214,11 @@ class RecipeOperationRequest:
             role=role if isinstance(role, str) else None,
             port=port if isinstance(port, int) and not isinstance(port, bool) else None,
             reserved_memory_bytes=reserved_memory if isinstance(reserved_memory, int) else None,
+            endpoint_address=endpoint_address if isinstance(endpoint_address, str) else None,
+            world_size=world_size if isinstance(world_size, int) else None,
+            local_address=local_address if isinstance(local_address, str) else None,
+            master_address=master_address if isinstance(master_address, str) else None,
+            master_port=master_port if isinstance(master_port, int) else None,
         )
 
 

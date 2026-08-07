@@ -2,7 +2,6 @@ import json
 from pathlib import Path
 
 import pytest
-
 from dgx_control.recipe_contract import (
     RecipeContractError,
     canonical_recipe,
@@ -10,7 +9,6 @@ from dgx_control.recipe_contract import (
     recipe_content_sha256,
     validate_recipe,
 )
-
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -63,7 +61,7 @@ def test_recipe_validation_rejects_unsafe_values(path, value, message) -> None:
 
 def test_global_contract_lock_matches_vendored_bytes() -> None:
     lock = contract_lock()
-    assert lock["source_commit"] == "f1518fce10d05e3b4bf58f56a2472893d0378802"
+    assert lock["source_commit"] == "5b9304d19ebd581270bf4f848ed177d9bcd9982d"
     for relative_path, metadata in lock["files"].items():
         payload = (ROOT / relative_path).read_bytes()
         assert __import__("hashlib").sha256(payload).hexdigest() == metadata["sha256"]

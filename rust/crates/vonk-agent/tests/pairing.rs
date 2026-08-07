@@ -126,6 +126,9 @@ async fn ca_pin_is_checked_before_any_identity_material_is_written() {
         node_id: NODE_ID.to_owned(),
         poll_min_seconds: 2,
         poll_max_seconds: 60,
+        fabric_address: None,
+        fabric_bandwidth_mbps: None,
+        huggingface_curl_config: None,
     };
     let evidence = EnrollmentEvidence {
         agent_digest: "a".repeat(64),

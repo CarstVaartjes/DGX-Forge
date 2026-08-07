@@ -38,10 +38,14 @@ from dgx_control.models import (
     AgentPresence,
     Base,
     Job,
+    LocalRecipe,
+    LocalRecipeRevision,
+    NodeInventorySnapshot,
     Observation,
 )
 from dgx_control.pki import CertificateAuthority, IssuedCertificate
 from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
+from dgx_control.recipe_contract import recipe_content_sha256
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -173,6 +177,7 @@ def agent_system(tmp_path):
         workload_tuf_target_root=tmp_path / "workload-tuf-targets",
         max_tuf_metadata_bytes=128,
         max_tuf_target_bytes=128,
+        fabric_policy=ManagementAddressPolicy.parse("192.168.100.0/24"),
     )
     services.artifact_root.mkdir()
     services.tuf_metadata_root.mkdir()
@@ -195,6 +200,49 @@ def agent_headers(node: str, serial: str) -> dict[str, str]:
         "x-dgx-agent-proxy-auth": "p" * 32,
         "x-dgx-agent-source": "10.0.0.42",
     }
+
+
+def test_agent_posts_authenticated_runtime_and_fabric_inventory(agent_system) -> None:
+    client, services, _, clock = agent_system
+    payload = {
+        "schema_version": 1,
+        "observed_at": clock.now.isoformat(),
+        "disk_total_bytes": 1000,
+        "disk_free_bytes": 700,
+        "host_memory_total_bytes": 2000,
+        "host_memory_free_bytes": 1500,
+        "gpu_memory_total_bytes": 1000,
+        "gpu_memory_free_bytes": 800,
+        "gpu_count": 1,
+        "artifact_store_read_only": False,
+        "capabilities": ["runtime.vonk.v1", "fabric.tcp.mbps.200000"],
+        "fabric_address": "192.168.100.2",
+        "fabric_bandwidth_mbps": 200000,
+        "nvidia_driver_version": "580.65.06",
+        "container_runtime_version": "28.3.3",
+    }
+
+    response = client.post(
+        "/agent/v1/inventory",
+        headers=agent_headers(NODE_A, "serial-a"),
+        json=payload,
+    )
+    assert response.status_code == 204
+    with services.sessions() as session:
+        row = session.scalar(
+            select(NodeInventorySnapshot).where(NodeInventorySnapshot.node_id == NODE_A)
+        )
+        assert row is not None
+        assert row.fabric_address == "192.168.100.2"
+        assert row.fabric_bandwidth_mbps == 200000
+        assert row.capabilities == sorted(payload["capabilities"])
+
+    denied = payload | {"fabric_address": "10.0.0.42"}
+    assert client.post(
+        "/agent/v1/inventory",
+        headers=agent_headers(NODE_B, "serial-b"),
+        json=denied,
+    ).status_code == 422
 
 
 def admin_headers(codec: TokenCodec, role: str = "administrator") -> dict[str, str]:
@@ -959,6 +1007,53 @@ def test_rust_agent_enrollment_shape_remains_controller_compatible(agent_system)
     assert event.action == "agent.enrollment.submit.pending-approval"
     assert event.targets[1:] == (response.json()["id"], NODE_A)
     assert body["grant_token"] not in repr(event)
+
+
+def test_agent_reads_only_digest_bound_resolved_recipe_execution_spec(agent_system) -> None:
+    client, services, _, clock = agent_system
+    document = json.loads(
+        (Path(__file__).parent / "fixtures/global/recipe-v1-minimal.json").read_text()
+    )
+    digest = recipe_content_sha256(document)
+    recipe_id = str(uuid.uuid4())
+    with services.sessions.begin() as session:
+        session.add(
+            LocalRecipe(
+                id=recipe_id,
+                slug="agent-spec",
+                title="Agent spec",
+                description="Digest-bound agent fixture",
+                source_kind="local",
+                created_by="administrator",
+                created_at=clock.now,
+                updated_at=clock.now,
+            )
+        )
+        session.add(
+            LocalRecipeRevision(
+                id=str(uuid.uuid4()),
+                recipe_id=recipe_id,
+                revision_number=1,
+                lifecycle="resolved",
+                schema_version=1,
+                document=document,
+                content_sha256=digest,
+                created_by="administrator",
+                created_at=clock.now,
+            )
+        )
+
+    response = client.get(
+        f"/agent/v1/recipe-specs/{digest}", headers=agent_headers(NODE_A, "serial-a")
+    )
+
+    assert response.status_code == 200
+    assert response.content == canonical_message(response.json())
+    assert set(response.json()) == {"artifacts", "endpoint", "runtime", "security"}
+    assert client.get(
+        f"/agent/v1/recipe-specs/{'f' * 64}", headers=agent_headers(NODE_A, "serial-a")
+    ).status_code == 404
+    assert client.get(f"/agent/v1/recipe-specs/{digest}").status_code == 401
 
 
 def test_approved_exact_enrollment_replay_picks_up_certificate_and_mismatch_is_denied(

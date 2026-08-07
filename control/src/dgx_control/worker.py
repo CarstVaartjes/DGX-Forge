@@ -272,6 +272,7 @@ def assemble_production_worker(
     publisher,
     route_root,
     endpoint_resolver,
+    management_policy,
     clock,
     authority,
     worker_id: str,
@@ -340,6 +341,7 @@ def assemble_production_worker(
     recipe_routes = RecipeRouteService(
         sessions,
         publisher=AtomicRecipeRoutePublisher(publisher, clock=clock),
+        management_policy=management_policy,
         clock=clock,
         maximum_age_seconds=300,
     )
@@ -437,6 +439,7 @@ if __name__ == "__main__":
         publisher=publisher,
         route_root=route_root,
         endpoint_resolver=endpoint,
+        management_policy=address_policy,
         clock=clock,
         authority=authority,
         worker_id=os.environ.get("HOSTNAME", "control-worker"),

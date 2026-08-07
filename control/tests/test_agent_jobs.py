@@ -389,6 +389,35 @@ def test_package_validation_result_is_not_sent_to_reconciliation_consumer(servic
         assert stored_operation is not None and stored_operation.state == "succeeded"
 
 
+def test_recipe_only_agent_is_not_forced_to_advertise_legacy_executors(service) -> None:
+    jobs, sessions, clock = service
+    queued = jobs.enqueue(
+        parent(sessions, clock).id,
+        NODE_A,
+        "recipe.install",
+        COMMIT,
+        {
+            "schema_version": 1,
+            "installation_id": "00000000-0000-4000-8000-000000000001",
+            "recipe_revision_id": "00000000-0000-4000-8000-000000000002",
+            "recipe_content_sha256": "a" * 64,
+            "plan_digest": "b" * 64,
+            "expected_bytes": 100,
+        },
+    )
+
+    claim = jobs.claim(
+        NODE_A,
+        "serial-a",
+        30,
+        protocol_version=2,
+        capabilities=["recipe.install"],
+    )
+
+    assert claim is not None
+    assert claim.operation.value == queued.kind == "recipe.install"
+
+
 def test_update_enqueue_persists_one_signed_payload_and_claims_its_reserved_fence(
     service,
 ) -> None:

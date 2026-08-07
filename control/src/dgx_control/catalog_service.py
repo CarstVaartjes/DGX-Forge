@@ -324,6 +324,16 @@ class CatalogService:
                 "catalog.sensitive_field", f"sensitive field is forbidden at {sensitive}"
             )
         clean: dict[str, object] = copy.deepcopy(dict(document))
+        artifacts = clean.get("artifacts")
+        if isinstance(artifacts, list):
+            for artifact in artifacts:
+                if not isinstance(artifact, Mapping):
+                    continue
+                revision = str(artifact.get("revision", "")).lower()
+                if revision in _MUTABLE_REVISIONS or revision.endswith("-latest"):
+                    raise CatalogValidationError(
+                        "catalog.mutable_artifact", "artifact revision must be immutable"
+                    )
         try:
             validate_recipe(clean)
         except RecipeContractError as error:
@@ -333,12 +343,6 @@ class CatalogService:
             raise CatalogValidationError(
                 "catalog.slug_mismatch", "recipe identity slug does not match"
             )
-        for artifact in clean["artifacts"]:
-            revision = str(_mapping(artifact)["revision"]).lower()
-            if revision in _MUTABLE_REVISIONS or revision.endswith("-latest"):
-                raise CatalogValidationError(
-                    "catalog.mutable_artifact", "artifact revision must be immutable"
-                )
         return clean
 
 

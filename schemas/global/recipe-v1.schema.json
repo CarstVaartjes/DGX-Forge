@@ -66,8 +66,9 @@
     "runtime": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["family", "image", "architecture", "arguments"],
+      "required": ["interface", "family", "image", "architecture", "arguments"],
       "properties": {
+        "interface": {"const": "vonk.runtime.v1"},
         "family": {"enum": ["vllm", "sglang", "llama.cpp", "ds4"]},
         "image": {
           "type": "string",
@@ -137,9 +138,10 @@
         "host_network": {"const": false},
         "privileged": {"const": false},
         "mounts": {
-          "type": "array",
-          "maxItems": 8,
-          "items": {"$ref": "#/$defs/mount"}
+          "const": [
+            {"source": "model", "target": "/models", "read_only": true},
+            {"source": "state", "target": "/state", "read_only": false}
+          ]
         }
       }
     },
@@ -166,9 +168,19 @@
       "properties": {
         "kind": {"enum": ["huggingface.snapshot", "http.file", "oci.artifact"]},
         "repository": {"type": "string", "minLength": 1, "maxLength": 512},
-        "revision": {"type": "string", "pattern": "^[A-Za-z0-9._:-]{8,128}$"},
+        "revision": {"type": "string", "minLength": 40, "maxLength": 71},
         "expected_bytes": {"type": "integer", "minimum": 1}
-      }
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "huggingface.snapshot"}}},
+          "then": {"properties": {"revision": {"pattern": "^(?:[a-f0-9]{40}|[a-f0-9]{64})$"}}}
+        },
+        {
+          "if": {"properties": {"kind": {"enum": ["http.file", "oci.artifact"]}}},
+          "then": {"properties": {"revision": {"pattern": "^sha256:[a-f0-9]{64}$"}}}
+        }
+      ]
     },
     "resourceSet": {
       "type": "object",
@@ -237,22 +249,6 @@
           }
         }
       }
-    },
-    "mount": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["source", "target", "read_only"],
-      "properties": {
-        "source": {"enum": ["model", "state"]},
-        "target": {"type": "string", "pattern": "^/(models|state)(/[A-Za-z0-9_.-]+)*$"},
-        "read_only": {"type": "boolean"}
-      },
-      "allOf": [
-        {
-          "if": {"properties": {"source": {"const": "model"}}},
-          "then": {"properties": {"read_only": {"const": true}}}
-        }
-      ]
     }
   }
 }

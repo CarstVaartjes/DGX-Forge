@@ -12,7 +12,15 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .install_admission import AdmissionReason
 from .inventory_repository import InventoryRepository
-from .models import AgentNode, InstallationNode, LocalRecipeRevision, RecipeInstallation, RecipeRun, ResourceReservation, RunNode
+from .models import (
+    AgentNode,
+    InstallationNode,
+    LocalRecipeRevision,
+    RecipeInstallation,
+    RecipeRun,
+    ResourceReservation,
+    RunNode,
+)
 from .topology import Placement, TopologyError, validate_topology
 
 
@@ -23,6 +31,7 @@ class RunPlanConflict(RuntimeError): pass
 class RunNodePlan:
     node_id: str; rank: int; role: str; port: int; allowed: bool; inventory_observed_at: datetime | None
     required_memory_bytes: int; host_free_bytes: int | None; gpu_free_bytes: int | None; active_host_reserved_bytes: int; active_gpu_reserved_bytes: int; free_after_bytes: int | None; memory_floor_bytes: int
+    fabric_address: str | None; fabric_bandwidth_mbps: int | None; rendezvous_port: int | None
     blockers: tuple[AdmissionReason,...]; warnings: tuple[AdmissionReason,...]
 
 
@@ -50,8 +59,9 @@ class RunAdmissionService:
         topology_reason:AdmissionReason|None=None
         try: ordered=validate_topology(revision.document,placements,capabilities)
         except TopologyError as error: ordered=tuple(sorted(placements,key=lambda item:item.rank));topology_reason=AdmissionReason(error.code,str(error))
-        resources=revision.document["resources"];endpoint=revision.document["endpoint"]
-        assert isinstance(resources,dict) and isinstance(resources["per_node"],dict) and isinstance(endpoint,dict)
+        resources=revision.document["resources"];endpoint=revision.document["endpoint"];topology=revision.document["topology"]
+        assert isinstance(resources,dict) and isinstance(resources["per_node"],dict) and isinstance(endpoint,dict) and isinstance(topology,dict)
+        gang=topology.get("kind")=="gang"
         required=int(resources["per_node"]["resident_memory_bytes"])+int(resources["per_node"]["activation_memory_bytes"]);port=int(endpoint["port"])
         plans=[]
         for placement in ordered:
@@ -63,11 +73,15 @@ class RunAdmissionService:
                 host_reserved=int(session.scalar(select(func.coalesce(func.sum(ResourceReservation.amount_bytes),0)).where(ResourceReservation.node_id==placement.node_id,ResourceReservation.kind=="host-memory",ResourceReservation.state=="active")) or 0)
                 gpu_reserved=int(session.scalar(select(func.coalesce(func.sum(ResourceReservation.amount_bytes),0)).where(ResourceReservation.node_id==placement.node_id,ResourceReservation.kind=="gpu-memory",ResourceReservation.state=="active")) or 0)
                 occupied=session.scalar(select(ResourceReservation.id).where(ResourceReservation.node_id==placement.node_id,ResourceReservation.kind=="port",ResourceReservation.resource_key==str(port),ResourceReservation.state=="active"))
+                rendezvous_occupied=session.scalar(select(ResourceReservation.id).where(ResourceReservation.node_id==placement.node_id,ResourceReservation.kind=="port",ResourceReservation.resource_key=="29500",ResourceReservation.state=="active")) if gang and placement.role=="entrypoint" else None
             if occupied is not None: blockers.append(AdmissionReason("run.port_occupied",f"Port {port} is already reserved on this Spark."))
+            rendezvous_port=29500 if gang and placement.role=="entrypoint" else None
+            if rendezvous_port == port or rendezvous_occupied is not None: blockers.append(AdmissionReason("run.rendezvous_port_occupied","Multi-node rendezvous port 29500 is already reserved on the entrypoint Spark."))
+            if gang and (snapshot is None or snapshot.fabric_address is None or snapshot.fabric_bandwidth_mbps is None): blockers.append(AdmissionReason("run.fabric_address_missing","Authenticated direct-fabric address evidence is unavailable."))
             host_free=snapshot.host_memory_free_bytes if snapshot else None;gpu_free=snapshot.gpu_memory_free_bytes if snapshot else None
             free_after=None if snapshot is None else min(host_free-host_reserved-required,gpu_free-gpu_reserved-required)
             if free_after is not None and free_after<self._floor: blockers.append(AdmissionReason("run.insufficient_memory",f"Run would leave {free_after} bytes, below the {self._floor}-byte memory floor."))
-            plans.append(RunNodePlan(placement.node_id,placement.rank,placement.role,port,not blockers,snapshot.observed_at if snapshot else None,required,host_free,gpu_free,host_reserved,gpu_reserved,free_after,self._floor,tuple(blockers),tuple(warnings)))
+            plans.append(RunNodePlan(placement.node_id,placement.rank,placement.role,port,not blockers,snapshot.observed_at if snapshot else None,required,host_free,gpu_free,host_reserved,gpu_reserved,free_after,self._floor,snapshot.fabric_address if snapshot else None,snapshot.fabric_bandwidth_mbps if snapshot else None,rendezvous_port,tuple(blockers),tuple(warnings)))
         identity={"schema_version":1,"installation_id":installation_id,"recipe_revision_id":revision.id,"nodes":[{**asdict(node),"inventory_observed_at":node.inventory_observed_at.isoformat() if node.inventory_observed_at else None} for node in plans]}
         digest=hashlib.sha256(json.dumps(identity,sort_keys=True,separators=(",",":"),default=str).encode()).hexdigest()
         return RunPlan(installation_id,revision.id,all(node.allowed for node in plans),tuple(plans),digest)
@@ -84,5 +98,7 @@ class RunAdmissionService:
             session.add(run);session.flush()
             for node in plan.nodes:
                 session.add(RunNode(run_id=run.id,node_id=node.node_id,rank=node.rank,role=node.role,state="planned",port=node.port,reserved_memory_bytes=node.required_memory_bytes,updated_at=now))
-                for kind,amount,key in (("host-memory",node.required_memory_bytes,plan.plan_digest),("gpu-memory",node.required_memory_bytes,plan.plan_digest),("port",0,str(node.port))): session.add(ResourceReservation(node_id=node.node_id,kind=kind,resource_key=key,amount_bytes=amount,owner_kind="run",owner_id=run.id,state="active",plan_digest=plan.plan_digest,created_at=now))
+                reservations=[("host-memory",node.required_memory_bytes,plan.plan_digest),("gpu-memory",node.required_memory_bytes,plan.plan_digest),("port",0,str(node.port))]
+                if node.rendezvous_port is not None: reservations.append(("port",0,str(node.rendezvous_port)))
+                for kind,amount,key in reservations: session.add(ResourceReservation(node_id=node.node_id,kind=kind,resource_key=key,amount_bytes=amount,owner_kind="run",owner_id=run.id,state="active",plan_digest=plan.plan_digest,created_at=now))
         return run.id

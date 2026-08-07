@@ -6,7 +6,9 @@ use thiserror::Error;
 use url::Url;
 use vonk_agent_protocol::{AgentClaim, AgentResult, canonical_json, parse_strict};
 
-use crate::{config::AgentConfig, pair::verify_ca_pin};
+use crate::{
+    config::AgentConfig, inventory::Inventory, pair::verify_ca_pin, workloads::WorkloadSpec,
+};
 
 const MAX_BODY_BYTES: usize = 64 * 1024;
 
@@ -42,6 +44,15 @@ struct ClaimRequest<'a> {
     node_id: &'a str,
     protocol_version: u32,
     wait_seconds: u64,
+}
+
+#[derive(Serialize)]
+#[serde(deny_unknown_fields)]
+struct InventoryRequest<'a> {
+    schema_version: u8,
+    observed_at: chrono::DateTime<chrono::Utc>,
+    #[serde(flatten)]
+    inventory: &'a Inventory,
 }
 
 pub struct AgentHttpClient {
@@ -115,6 +126,46 @@ impl AgentHttpClient {
             response.status(),
             StatusCode::NO_CONTENT | StatusCode::CONFLICT
         ) {
+            Ok(())
+        } else {
+            classify_status(response.status())?;
+            Err(ClientError::Protocol)
+        }
+    }
+
+    pub async fn recipe_spec(&self, content_sha256: &str) -> Result<WorkloadSpec, ClientError> {
+        if content_sha256.len() != 64
+            || !content_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+        {
+            return Err(ClientError::Protocol);
+        }
+        let response = self
+            .client
+            .get(self.endpoint(&format!("/agent/v1/recipe-specs/{content_sha256}"))?)
+            .send()
+            .await?;
+        classify_status(response.status())?;
+        let body = bounded_body(response).await?;
+        let spec: WorkloadSpec =
+            serde_json::from_slice(&body).map_err(|_| ClientError::Protocol)?;
+        spec.validate().map_err(|_| ClientError::Protocol)?;
+        Ok(spec)
+    }
+
+    pub async fn report_inventory(&self, inventory: &Inventory) -> Result<(), ClientError> {
+        let response = self
+            .client
+            .post(self.endpoint("/agent/v1/inventory")?)
+            .json(&InventoryRequest {
+                schema_version: 1,
+                observed_at: chrono::Utc::now(),
+                inventory,
+            })
+            .send()
+            .await?;
+        if response.status() == StatusCode::NO_CONTENT {
             Ok(())
         } else {
             classify_status(response.status())?;

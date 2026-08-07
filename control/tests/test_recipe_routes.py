@@ -5,9 +5,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from dgx_control.litellm import LiteLlmPolicyError, LiteLlmPublisher
 from dgx_control.models import (
     AgentNode,
@@ -20,14 +17,15 @@ from dgx_control.models import (
     RunNode,
 )
 from dgx_control.presence import ManagementAddressPolicy
+from dgx_control.recipe_operation_worker import RecipeOperationWorker
 from dgx_control.recipe_routes import (
     AtomicRecipeRoutePublisher,
     RecipeRouteError,
     RecipeRouteService,
 )
-from dgx_control.recipe_operation_worker import RecipeOperationWorker
 from dgx_control.route_runtime import AtomicRouteBundlePublisher
-
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 NOW = datetime(2026, 8, 7, 12, tzinfo=UTC)
 
@@ -56,7 +54,13 @@ def setup(tmp_path: Path, *, ranks=2, stale=False, failed_rank=False, validate=l
             session.add(RunNode(run_id=run.id, node_id=node, rank=rank, role="entrypoint" if rank == 0 else "worker", state="failed" if failed_rank and rank == ranks - 1 else "running", port=8000, reserved_memory_bytes=100, endpoint={"url": f"http://10.0.0.{rank + 2}:8000"}, evidence_digest=str(rank + 1) * 64, updated_at=NOW - (timedelta(seconds=301) if stale else timedelta())))
     applied: list[bytes] = []
     publisher = LiteLlmPublisher(tmp_path / "litellm", validate=validate, apply=applied.append)
-    service = RecipeRouteService(sessions, publisher=publisher, clock=lambda: NOW, maximum_age_seconds=300)
+    service = RecipeRouteService(
+        sessions,
+        publisher=publisher,
+        management_policy=ManagementAddressPolicy.parse("10.0.0.0/24"),
+        clock=lambda: NOW,
+        maximum_age_seconds=300,
+    )
     return service, publisher, applied, run.id
 
 
@@ -70,6 +74,17 @@ def test_all_ranks_must_be_fresh_and_ready_but_only_entrypoint_is_routed(tmp_pat
     assert document["model_list"][0]["model_name"] == "qwen"
     assert document["model_list"][0]["litellm_params"]["api_base"] == "http://10.0.0.2:8000/v1"
     assert b"10.0.0.3" not in applied[-1]
+
+
+def test_tailnet_endpoint_is_accepted_by_configured_management_policy(tmp_path: Path) -> None:
+    service, _publisher, applied, run_id = setup(tmp_path, ranks=1)
+    with service.sessions.begin() as session:
+        node = session.query(RunNode).filter_by(run_id=run_id).one()
+        node.endpoint = {"url": "http://100.100.20.30:8000"}
+    service._management_policy = ManagementAddressPolicy.parse("100.64.0.0/10")
+
+    service.publish_run(run_id)
+    assert b"http://100.100.20.30:8000/v1" in applied[-1]
 
 
 @pytest.mark.parametrize(("stale", "failed"), [(True, False), (False, True)])
@@ -86,6 +101,7 @@ def test_invalid_candidate_retains_previous_generation(tmp_path: Path) -> None:
     rejecting = RecipeRouteService(
         service.sessions,
         publisher=LiteLlmPublisher(tmp_path / "litellm", validate=lambda _: False, apply=lambda _: None),
+        management_policy=ManagementAddressPolicy.parse("10.0.0.0/24"),
         clock=lambda: NOW,
         maximum_age_seconds=300,
     )
@@ -141,6 +157,7 @@ def test_atomic_adapter_keeps_caddy_routes_static_and_activates_litellm(tmp_path
     service = RecipeRouteService(
         service.sessions,
         publisher=AtomicRecipeRoutePublisher(atomic, clock=lambda: NOW),
+        management_policy=ManagementAddressPolicy.parse("10.0.0.0/24"),
         clock=lambda: NOW,
         maximum_age_seconds=300,
     )

@@ -23,7 +23,7 @@ def validate_topology(recipe: Mapping[str, object], placements: Sequence[Placeme
     if not ordered or len(nodes)!=len(set(nodes)) or ranks!=list(range(len(ordered))) or sum(item.role=="entrypoint" for item in ordered)!=1 or any(item.role not in {"entrypoint","worker"} for item in ordered):
         raise TopologyError("topology.placement_invalid", "placement must contain unique contiguous ranks and one entrypoint")
     if not int(topology["min_nodes"]) <= len(ordered) <= int(topology["max_nodes"]): raise TopologyError("topology.node_count", "placement node count is outside recipe bounds")
-    required_runtime=f"runtime.{runtime['family']}.v1"
+    required_runtime="runtime.vonk.v1"
     if any(required_runtime not in capabilities.get(node, ()) for node in nodes): raise TopologyError("topology.runtime_capability_missing", f"every Spark must advertise {required_runtime}")
     declared=topology.get("ranks")
     if topology.get("kind")=="gang":

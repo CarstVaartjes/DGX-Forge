@@ -2,7 +2,7 @@
 
 use std::{
     io::{self, Read},
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -11,8 +11,11 @@ use url::Url;
 use vonk_agent::{
     client::AgentHttpClient,
     config::{AgentConfig, DEFAULT_CONFIG_PATH},
-    executor::{RejectingExecutor, run_once},
+    executor::{RecipeExecutor, run_once},
+    inventory::InventoryCollector,
+    oci::OciRuntime,
     pair::{EnrollmentOutcome, collect_evidence, pair},
+    process::SystemProcessRunner,
     state::{StateStore, backoff_delay},
 };
 
@@ -75,14 +78,60 @@ async fn run_agent(config: &AgentConfig) -> Result<(), Box<dyn std::error::Error
     let client = AgentHttpClient::from_config(config)?;
     let mut state = StateStore::open(&config.data_dir.join("state.sqlite"), &config.node_id)?;
     state.recover_interrupted()?;
-    let executor = RejectingExecutor;
+    let runner = SystemProcessRunner;
+    let executor = RecipeExecutor {
+        client: &client,
+        runtime: OciRuntime {
+            runner: &runner,
+            data_root: &config.data_dir,
+            huggingface_curl_config: config.huggingface_curl_config.as_deref(),
+        },
+    };
+    let capabilities = [
+        "recipe.install",
+        "recipe.start",
+        "recipe.stop",
+        "recipe.uninstall",
+    ];
     let mut failures = 0_u32;
+    let mut next_inventory = tokio::time::Instant::now();
     loop {
+        if tokio::time::Instant::now() >= next_inventory {
+            let inventory = InventoryCollector {
+                runner: &runner,
+                meminfo_path: Path::new("/proc/meminfo"),
+                store_path: &config.data_dir,
+                fabric_address: config.fabric_address,
+                fabric_bandwidth_mbps: config.fabric_bandwidth_mbps,
+            }
+            .collect()?;
+            match client.report_inventory(&inventory).await {
+                Ok(()) => {
+                    failures = 0;
+                    next_inventory =
+                        tokio::time::Instant::now() + std::time::Duration::from_secs(60);
+                }
+                Err(error) if error.retryable() => {
+                    failures = failures.saturating_add(1);
+                    let entropy =
+                        SystemTime::now().duration_since(UNIX_EPOCH)?.subsec_nanos() as u64;
+                    tokio::time::sleep(backoff_delay(
+                        failures,
+                        entropy,
+                        config.poll_min_seconds,
+                        config.poll_max_seconds,
+                    ))
+                    .await;
+                    continue;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
         let operation = run_once(
             &client,
             &mut state,
             &executor,
-            &[],
+            &capabilities,
             config.poll_max_seconds.min(60),
         );
         tokio::select! {

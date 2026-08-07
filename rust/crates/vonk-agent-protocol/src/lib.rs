@@ -113,6 +113,126 @@ pub struct PackageOperationRequest {
     pub schema_version: u8,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum RecipeOperationRequest {
+    Install(RecipeInstallRequest),
+    Start(RecipeStartRequest),
+    Stop(RecipeStopRequest),
+    Uninstall(RecipeUninstallRequest),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RecipeInstallRequest {
+    pub expected_bytes: u64,
+    pub installation_id: Uuid,
+    pub plan_digest: String,
+    pub recipe_content_sha256: String,
+    pub recipe_revision_id: Uuid,
+    pub schema_version: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RecipeStartRequest {
+    pub alias: String,
+    pub endpoint_address: std::net::IpAddr,
+    pub installation_id: Uuid,
+    pub local_address: Option<std::net::IpAddr>,
+    pub master_address: Option<std::net::IpAddr>,
+    pub master_port: Option<u16>,
+    pub plan_digest: String,
+    pub port: u16,
+    pub rank: u16,
+    pub recipe_content_sha256: String,
+    pub recipe_revision_id: Uuid,
+    pub reserved_memory_bytes: u64,
+    pub role: String,
+    pub run_id: Uuid,
+    pub schema_version: u8,
+    pub world_size: u16,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RecipeStopRequest {
+    pub plan_digest: String,
+    pub run_id: Uuid,
+    pub schema_version: u8,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct RecipeUninstallRequest {
+    pub installation_id: Uuid,
+    pub plan_digest: String,
+    pub recipe_content_sha256: String,
+    pub schema_version: u8,
+}
+
+impl RecipeOperationRequest {
+    pub fn parse(claim: &AgentClaim) -> Result<Self, ProtocolError> {
+        claim.validate()?;
+        let request = match claim.operation.as_str() {
+            "recipe.install" => Self::Install(serde_json::from_value(claim.payload.clone())?),
+            "recipe.start" => Self::Start(serde_json::from_value(claim.payload.clone())?),
+            "recipe.stop" => Self::Stop(serde_json::from_value(claim.payload.clone())?),
+            "recipe.uninstall" => Self::Uninstall(serde_json::from_value(claim.payload.clone())?),
+            _ => return Err(ProtocolError::Identity("recipe operation")),
+        };
+        request.validate()?;
+        Ok(request)
+    }
+
+    fn validate(&self) -> Result<(), ProtocolError> {
+        let valid_common = |version: u8, plan: &str| version == 1 && lower_hex(plan, 64);
+        let valid = match self {
+            Self::Install(value) => {
+                valid_common(value.schema_version, &value.plan_digest)
+                    && value.expected_bytes <= 16 * 1024_u64.pow(4)
+                    && lower_hex(&value.recipe_content_sha256, 64)
+            }
+            Self::Start(value) => {
+                valid_common(value.schema_version, &value.plan_digest)
+                    && lower_hex(&value.recipe_content_sha256, 64)
+                    && value.rank <= 1023
+                    && (1..=16).contains(&value.world_size)
+                    && value.rank < value.world_size
+                    && matches!(value.role.as_str(), "entrypoint" | "worker")
+                    && value.port >= 1024
+                    && value.reserved_memory_bytes > 0
+                    && value.reserved_memory_bytes <= 16 * 1024_u64.pow(4)
+                    && !value.endpoint_address.is_loopback()
+                    && !value.endpoint_address.is_unspecified()
+                    && !value.endpoint_address.is_multicast()
+                    && !link_local(value.endpoint_address)
+                    && if value.world_size == 1 {
+                        value.rank == 0
+                            && value.role == "entrypoint"
+                            && value.local_address.is_none()
+                            && value.master_address.is_none()
+                            && value.master_port.is_none()
+                    } else {
+                        value.local_address.is_some_and(valid_fabric_address)
+                            && value.master_address.is_some_and(valid_fabric_address)
+                            && value.master_port.is_some_and(|port| port >= 1024)
+                    }
+                    && valid_alias(&value.alias)
+            }
+            Self::Stop(value) => valid_common(value.schema_version, &value.plan_digest),
+            Self::Uninstall(value) => {
+                valid_common(value.schema_version, &value.plan_digest)
+                    && lower_hex(&value.recipe_content_sha256, 64)
+            }
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(ProtocolError::Identity("recipe payload"))
+        }
+    }
+}
+
 pub fn parse_strict<T: DeserializeOwned>(input: &[u8]) -> Result<T, ProtocolError> {
     Ok(serde_json::from_slice(input)?)
 }
@@ -154,4 +274,26 @@ fn lower_hex(value: &str, length: usize) -> bool {
         && value
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
+}
+
+fn valid_alias(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 63
+        && value.bytes().enumerate().all(|(index, byte)| {
+            let edge = index == 0 || index + 1 == value.len();
+            byte.is_ascii_lowercase()
+                || byte.is_ascii_digit()
+                || !edge && matches!(byte, b'.' | b'_' | b'-')
+        })
+}
+
+fn link_local(value: std::net::IpAddr) -> bool {
+    match value {
+        std::net::IpAddr::V4(address) => address.is_link_local() || address.is_broadcast(),
+        std::net::IpAddr::V6(address) => address.is_unicast_link_local(),
+    }
+}
+
+fn valid_fabric_address(value: std::net::IpAddr) -> bool {
+    !value.is_loopback() && !value.is_unspecified() && !value.is_multicast() && !link_local(value)
 }

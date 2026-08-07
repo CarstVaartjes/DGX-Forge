@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from .install_admission import InstallAdmissionService, InstallPlan
 from .models import (
     AgentOperation,
+    AgentPresence,
     InstallationNode,
     Job,
     LocalRecipeRevision,
@@ -158,6 +160,33 @@ class RecipeOperationService:
             return existing
         if plan_digest != plan.plan_digest:
             raise RecipeOperationConflict("submitted plan digest does not match preview")
+        with self._sessions() as session:
+            presences = {
+                node_id: address
+                for node_id, address in session.execute(
+                    select(
+                        AgentPresence.node_id, AgentPresence.management_address
+                    ).where(
+                        AgentPresence.node_id.in_(
+                            [node.node_id for node in plan.nodes]
+                        )
+                    )
+                )
+            }
+        if set(presences) != {node.node_id for node in plan.nodes}:
+            raise RecipeOperationConflict(
+                "recipe node endpoint evidence is unavailable"
+            )
+        master = next((node for node in plan.nodes if node.rank == 0), None)
+        if master is None:
+            raise RecipeOperationConflict("recipe run has no rank-zero entrypoint")
+        world_size = len(plan.nodes)
+        master_address = master.fabric_address if world_size > 1 else None
+        master_port = master.rendezvous_port if world_size > 1 else None
+        if world_size > 1 and (master_address is None or master_port is None):
+            raise RecipeOperationConflict(
+                "recipe direct-fabric rendezvous is unavailable"
+            )
         try:
             run_id = self._run_admission.accept_run(
                 plan, alias=alias, actor=actor, now=self._clock()
@@ -194,6 +223,11 @@ class RecipeOperationService:
                         "role": node.role,
                         "port": node.port,
                         "reserved_memory_bytes": node.required_memory_bytes,
+                        "endpoint_address": presences[node.node_id],
+                        "world_size": world_size,
+                        "local_address": node.fabric_address if world_size > 1 else None,
+                        "master_address": master_address,
+                        "master_port": master_port,
                     },
                 )
                 for node in plan.nodes
@@ -411,6 +445,8 @@ class RecipeOperationService:
         raw_evidence = result.get("evidence", result)
         if not isinstance(raw_evidence, Mapping):
             raise RecipeOperationConflict("recipe agent evidence is invalid")
+        if raw_evidence is not result and "evidence_digest" in result:
+            raw_evidence = {**raw_evidence, "evidence_digest": result["evidence_digest"]}
         self._project_node_result(
             session,
             job,
@@ -462,10 +498,9 @@ class RecipeOperationService:
                 else "failed"
             )
             if job.kind == "recipe.start" and succeeded:
-                endpoint = evidence.get("endpoint")
-                digest = evidence.get("evidence_digest")
-                if not isinstance(endpoint, str) or not isinstance(digest, str):
-                    raise RecipeOperationConflict("start evidence is invalid")
+                endpoint, digest = _validate_start_evidence(
+                    session, owner_id, operation, evidence
+                )
                 node.endpoint = {"url": endpoint}
                 node.evidence_digest = digest
             node.updated_at = now
@@ -630,6 +665,81 @@ def _required_string(value: Mapping[str, object], key: str) -> str:
     if not isinstance(item, str):
         raise RecipeOperationConflict(f"operation {key} is invalid")
     return item
+
+
+def _validate_start_evidence(
+    session: Session,
+    run_id: str,
+    operation: AgentOperation,
+    evidence: Mapping[str, object],
+) -> tuple[str, str]:
+    expected_fields = {
+        "recipe_revision_id",
+        "recipe_content_sha256",
+        "image_digest",
+        "artifact_set_digest",
+        "model_identity",
+        "rank",
+        "world_size",
+        "endpoint",
+        "memory_reservation_bytes",
+        "ready",
+        "evidence_digest",
+    }
+    if set(evidence) != expected_fields or evidence.get("ready") is not True:
+        raise RecipeOperationConflict("start evidence is invalid")
+    run = session.get(RecipeRun, run_id)
+    installation = (
+        session.get(RecipeInstallation, run.installation_id) if run is not None else None
+    )
+    revision = (
+        session.get(LocalRecipeRevision, installation.recipe_revision_id)
+        if installation is not None
+        else None
+    )
+    if revision is None:
+        raise RecipeOperationConflict("start evidence authority is unavailable")
+    runtime = revision.document.get("runtime")
+    artifacts = revision.document.get("artifacts")
+    first = artifacts[0] if isinstance(artifacts, list) and artifacts else None
+    if not isinstance(runtime, Mapping) or not isinstance(first, Mapping):
+        raise RecipeOperationConflict("start evidence authority is invalid")
+    image = runtime.get("image")
+    image_digest = image.rsplit("@sha256:", 1)[-1] if isinstance(image, str) else None
+    model_identity = f"{first.get('repository')}@{first.get('revision')}"
+    endpoint_address = operation.payload.get("endpoint_address")
+    port = operation.payload.get("port")
+    try:
+        parsed_address = ipaddress.ip_address(endpoint_address)
+    except (TypeError, ValueError) as error:
+        raise RecipeOperationConflict("start evidence authority is invalid") from error
+    host = f"[{parsed_address}]" if parsed_address.version == 6 else str(parsed_address)
+    expected_endpoint = f"http://{host}:{port}"
+    comparisons = {
+        "recipe_revision_id": operation.payload.get("recipe_revision_id"),
+        "recipe_content_sha256": operation.payload.get("recipe_content_sha256"),
+        "image_digest": image_digest,
+        "model_identity": model_identity,
+        "rank": operation.payload.get("rank"),
+        "world_size": operation.payload.get("world_size"),
+        "endpoint": expected_endpoint,
+        "memory_reservation_bytes": operation.payload.get("reserved_memory_bytes"),
+    }
+    if any(evidence.get(key) != value for key, value in comparisons.items()):
+        raise RecipeOperationConflict("start evidence does not match its fenced request")
+    artifact_set_digest = evidence.get("artifact_set_digest")
+    if (
+        not isinstance(artifact_set_digest, str)
+        or len(artifact_set_digest) != 64
+        or any(character not in "0123456789abcdef" for character in artifact_set_digest)
+    ):
+        raise RecipeOperationConflict("start artifact evidence is invalid")
+    digest = evidence.get("evidence_digest")
+    identity = {key: value for key, value in evidence.items() if key != "evidence_digest"}
+    observed_digest = hashlib.sha256(canonical_message(identity)).hexdigest()
+    if not isinstance(digest, str) or digest != observed_digest:
+        raise RecipeOperationConflict("start evidence digest is invalid")
+    return expected_endpoint, digest
 
 
 __all__ = [

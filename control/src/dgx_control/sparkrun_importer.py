@@ -13,8 +13,8 @@ from .import_report import (
     ImportReportBuilder,
     ImportReportItem,
 )
-from .sparkrun_source import SparkRunSource
 from .runtime_compilers import RuntimeCompileError, RuntimeProjection, compile_runtime
+from .sparkrun_source import SparkRunSource
 
 _SENSITIVE = re.compile(
     r"(?:^|_)(?:authorization|credential|password|secret|token|private_key|certificate)(?:$|_)",
@@ -171,6 +171,7 @@ def _draft(
         "workload": {"family": slug, "capabilities": ["openai.chat"]},
         "artifacts": [{"kind": "huggingface.snapshot", "repository": source.model, "revision": source.model_revision or "resolution-required", "expected_bytes": 1}],
         "runtime": {
+            "interface": "vonk.runtime.v1",
             "family": projection.family if projection is not None else source.runtime,
             "image": source.container or "resolution-required",
             "architecture": "linux/arm64",
@@ -184,7 +185,7 @@ def _draft(
             "model_aliases": [slug],
             "health_path": str(projection.endpoint["health_path"]) if projection is not None else "/v1/models",
         },
-        "security": {"devices": ["nvidia.com/gpu=all"], "capabilities": [], "host_network": False, "privileged": False, "mounts": [{"source": "model", "target": "/models", "read_only": True}]},
+        "security": {"devices": ["nvidia.com/gpu=all"], "capabilities": [], "host_network": False, "privileged": False, "mounts": [{"source": "model", "target": "/models", "read_only": True}, {"source": "state", "target": "/state", "read_only": False}]},
         "provenance": {"source_kind": "sparkrun", "source_reference": None, "attribution": [f"Imported from SparkRun profile sha256:{source.source_sha256}"]},
     }
 

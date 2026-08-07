@@ -59,10 +59,6 @@ from .auth import (
 )
 from .catalog_api import install_catalog_routes
 from .catalog_service import CatalogService
-from .sparkrun_api import install_sparkrun_routes
-from .recipe_api import install_recipe_operation_routes
-from .recipe_operations import RecipeOperationService
-from .sparkrun_workflow import SparkRunWorkflow
 from .metrics import MetricsRegistry
 from .operation_api import (
     AgentsResponse,
@@ -85,9 +81,13 @@ from .operation_api import (
 )
 from .package_api import PackageApiServices, install_package_routes
 from .proposals import DocumentChange
+from .recipe_api import install_recipe_operation_routes
+from .recipe_operations import RecipeOperationService
 from .reconcile import IneligibleCommit, StaleFleetEvidence
 from .repository import RepositoryPolicyError
 from .settings import StartupMode
+from .sparkrun_api import install_sparkrun_routes
+from .sparkrun_workflow import SparkRunWorkflow
 
 _CONTROL_GENERATION = re.compile(
     r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z"
@@ -709,6 +709,14 @@ def build_agent_services(
         workload_tuf_metadata_root=workload_tuf_metadata_root,
         workload_tuf_target_root=workload_tuf_target_root,
         package_helper_authority=helper_authority,
+        fabric_policy=(
+            ManagementAddressPolicy.parse(
+                settings.direct_fabric_cidrs,
+                forbidden_cidrs=settings.management_cidrs,
+            )
+            if settings.direct_fabric_cidrs
+            else None
+        ),
     )
 
 
@@ -1614,10 +1622,10 @@ def production_app() -> FastAPI:
         bind_reconciliation_result_consumer,
         load_reconciliation_authority_input,
     )
-    from .audit import SqlAuditStore
     from .artifact_sizes import DeclaredArtifactSizeResolver
-    from .code_host import RepositoryCodeHost
+    from .audit import SqlAuditStore
     from .catalog_seeds import seed_standard_families
+    from .code_host import RepositoryCodeHost
     from .dashboard import DashboardService
     from .db import build_engine, session_factory
     from .desired_state import (
@@ -1627,24 +1635,24 @@ def production_app() -> FastAPI:
     from .git_policy import GitPolicy, PolicyStore
     from .hermes_routes import RepositoryHermesRoutePolicy
     from .host_state import HostGenerationStore
+    from .install_admission import InstallAdmissionService
     from .jobs import JobService
     from .logging import JobLogStore
     from .metrics import MetricsRegistry, OperationalMetricsCollector
     from .models import Job
-    from .install_admission import InstallAdmissionService
     from .offline import OnlineLock
     from .operation_api import durable_operation_services
     from .orchestration import ReconciliationOrchestrator
     from .package_publication import PackagePublicationService
     from .package_services import ProductionPackageProjectionService
     from .package_validation_runner import PackageValidationRunner
+    from .presence import ManagementAddressPolicy
     from .proposals import ProposalService
+    from .recipe_routes import AtomicRecipeRoutePublisher, RecipeRouteService
     from .reconcile import ChangeService, Reconciler
     from .repository import RepositoryService
-    from .run_admission import RunAdmissionService
-    from .recipe_routes import AtomicRecipeRoutePublisher, RecipeRouteService
     from .route_runtime import AtomicRouteBundlePublisher, FileSupervisorAcknowledger
-    from .presence import ManagementAddressPolicy
+    from .run_admission import RunAdmissionService
     from .settings import GenerationStartupSettings, Settings
     from .update_admin import (
         DurableUpdateGrantRefresher,
@@ -1875,6 +1883,10 @@ def production_app() -> FastAPI:
     recipe_routes = RecipeRouteService(
         sessions,
         publisher=AtomicRecipeRoutePublisher(recipe_route_runtime, clock=clock),
+        management_policy=ManagementAddressPolicy.parse(
+            settings.management_cidrs,
+            forbidden_cidrs=settings.direct_fabric_cidrs,
+        ),
         clock=clock,
         maximum_age_seconds=300,
     )

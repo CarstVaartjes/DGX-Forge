@@ -405,7 +405,7 @@ jobs:
           uv run --frozen scripts/build-host-updater-artifact \
             --control-wheel release-output/wheels/dgx_control-0.1.0-py3-none-any.whl \
             --platform-wheel release-output/wheels/spark_profiles-0.1.0-py3-none-any.whl \
-            --protocol-wheel inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl \
+            --protocol-wheel inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl \
             --output release-output/dgx-forge-host-updater.tar
           sha256sum release-output/dgx-forge-host-updater.tar \
             > release-output/dgx-forge-host-updater.tar.sha256

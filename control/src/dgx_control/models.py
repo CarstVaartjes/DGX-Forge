@@ -1690,7 +1690,7 @@ class MaterializedDeploymentNode(Base):
 
 class NodeInventorySnapshot(Base):
     __tablename__ = "node_inventory_snapshots"
-    __table_args__ = (UniqueConstraint("node_id", "observed_at", name="uq_inventory_node_observed"), CheckConstraint("disk_total_bytes>=0 AND disk_free_bytes>=0 AND disk_free_bytes<=disk_total_bytes", name="ck_inventory_disk"), CheckConstraint("host_memory_total_bytes>=0 AND host_memory_free_bytes>=0 AND host_memory_free_bytes<=host_memory_total_bytes", name="ck_inventory_host_memory"), CheckConstraint("gpu_memory_total_bytes>=0 AND gpu_memory_free_bytes>=0 AND gpu_memory_free_bytes<=gpu_memory_total_bytes AND gpu_count>=0", name="ck_inventory_gpu_memory"), CheckConstraint(_lower_hex("evidence_digest", 64), name="ck_inventory_digest"), Index("ix_inventory_node_observed", "node_id", "observed_at"))
+    __table_args__ = (UniqueConstraint("node_id", "observed_at", name="uq_inventory_node_observed"), CheckConstraint("disk_total_bytes>=0 AND disk_free_bytes>=0 AND disk_free_bytes<=disk_total_bytes", name="ck_inventory_disk"), CheckConstraint("host_memory_total_bytes>=0 AND host_memory_free_bytes>=0 AND host_memory_free_bytes<=host_memory_total_bytes", name="ck_inventory_host_memory"), CheckConstraint("gpu_memory_total_bytes>=0 AND gpu_memory_free_bytes>=0 AND gpu_memory_free_bytes<=gpu_memory_total_bytes AND gpu_count>=0", name="ck_inventory_gpu_memory"), CheckConstraint("(fabric_address IS NULL AND fabric_bandwidth_mbps IS NULL) OR (fabric_address IS NOT NULL AND fabric_bandwidth_mbps>0)", name="ck_inventory_fabric"), CheckConstraint(_lower_hex("evidence_digest", 64), name="ck_inventory_digest"), Index("ix_inventory_node_observed", "node_id", "observed_at"))
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     node_id: Mapped[str] = mapped_column(ForeignKey("agent_nodes.node_id", ondelete="CASCADE"), nullable=False)
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -1698,6 +1698,8 @@ class NodeInventorySnapshot(Base):
     disk_total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False); disk_free_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     host_memory_total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False); host_memory_free_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     gpu_memory_total_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False); gpu_memory_free_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False); gpu_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    fabric_address: Mapped[str | None] = mapped_column(String(45)); fabric_bandwidth_mbps: Mapped[int | None] = mapped_column(BigInteger)
+    nvidia_driver_version: Mapped[str] = mapped_column(String(256), nullable=False, default="unknown", server_default="unknown"); container_runtime_version: Mapped[str] = mapped_column(String(256), nullable=False, default="unknown", server_default="unknown")
     artifact_store_read_only: Mapped[bool] = mapped_column(Boolean, nullable=False); capabilities: Mapped[list[str]] = mapped_column(JSON, nullable=False); evidence_digest: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
 
 

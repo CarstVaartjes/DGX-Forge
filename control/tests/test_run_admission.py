@@ -11,7 +11,7 @@ from dgx_control.run_admission import RunAdmissionService
 from dgx_control.topology import Placement
 
 
-def setup(tmp_path, *, free_memory=300, capabilities=("runtime.vllm.v1",), port_reserved=False):
+def setup(tmp_path, *, free_memory=300, capabilities=("runtime.vonk.v1",), port_reserved=False):
     engine = create_engine(f"sqlite:///{tmp_path/'run.sqlite'}"); Base.metadata.create_all(engine); sessions = sessionmaker(engine, expire_on_commit=False); now = datetime(2026,8,7,12,tzinfo=UTC); node="spk_"+"1"*32
     document=json.loads((Path(__file__).parent/"fixtures/global/recipe-v1-minimal.json").read_text()); document["resources"]["per_node"].update({"resident_memory_bytes":200,"activation_memory_bytes":25})
     with sessions.begin() as session:

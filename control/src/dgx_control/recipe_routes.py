@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from .litellm import LiteLlmGeneration, LiteLlmPolicy, LiteLlmPublisher
 from .models import RecipeRun, RunNode
+from .presence import ManagementAddressPolicy, PresenceError
 from .routes import RouteState
 
 _ALIAS = re.compile(r"[a-z0-9][a-z0-9._-]{0,62}\Z")
@@ -94,6 +95,7 @@ class RecipeRouteService:
         sessions: sessionmaker[Session],
         *,
         publisher: object,
+        management_policy: ManagementAddressPolicy,
         clock: Callable[[], datetime],
         maximum_age_seconds: int = 300,
     ) -> None:
@@ -101,6 +103,7 @@ class RecipeRouteService:
             raise ValueError("recipe route evidence age is invalid")
         self.sessions = sessions
         self._publisher = publisher
+        self._management_policy = management_policy
         self._clock = clock
         self._maximum_age = maximum_age_seconds
 
@@ -195,7 +198,7 @@ class RecipeRouteService:
                     evidence_times.append(observed)
                     node_ids.add(node.node_id)
                 entrypoint = entrypoints[0]
-                aliases[run.alias] = _endpoint(entrypoint)
+                aliases[run.alias] = _endpoint(entrypoint, self._management_policy)
                 included.add(run.id)
                 run_identities.append(
                     {
@@ -246,19 +249,19 @@ def _aware(value: datetime) -> datetime:
     return (value if value.tzinfo is not None else value.replace(tzinfo=UTC)).astimezone(UTC)
 
 
-def _endpoint(node: RunNode) -> str:
+def _endpoint(node: RunNode, management_policy: ManagementAddressPolicy) -> str:
     raw = node.endpoint.get("url") if isinstance(node.endpoint, dict) else None
     if not isinstance(raw, str):
         raise RecipeRouteError("entrypoint endpoint evidence is missing")
     try:
         parsed = urlsplit(raw)
-        address = ipaddress.ip_address(parsed.hostname or "")
+        raw_address = parsed.hostname or ""
+        address = ipaddress.ip_address(raw_address)
         port = parsed.port
     except ValueError as error:
         raise RecipeRouteError("entrypoint endpoint is invalid") from error
     if (
         parsed.scheme != "http"
-        or not address.is_private
         or address.is_loopback
         or address.is_link_local
         or address.is_multicast
@@ -271,6 +274,10 @@ def _endpoint(node: RunNode) -> str:
         or parsed.path.rstrip("/") not in {"", "/v1"}
     ):
         raise RecipeRouteError("entrypoint endpoint is outside management policy")
+    try:
+        management_policy.validate(str(address))
+    except PresenceError as error:
+        raise RecipeRouteError("entrypoint endpoint is outside management policy") from error
     host = f"[{address}]" if isinstance(address, ipaddress.IPv6Address) else str(address)
     return f"http://{host}:{port}/v1"
 

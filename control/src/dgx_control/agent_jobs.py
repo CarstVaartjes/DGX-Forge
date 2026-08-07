@@ -1045,11 +1045,10 @@ class AgentJobService:
                 operation.retry_disposition_attempt = None
                 operation.updated_at = now
                 excluded.append(operation.id)
+            if capabilities is not None and operation.kind not in capabilities:
+                return None
             if operation.kind in (_PACKAGE_CAPABILITIES | _RECIPE_CAPABILITIES) and (
-                protocol_version is None
-                or protocol_version < 2
-                or capabilities is None
-                or operation.kind not in capabilities
+                protocol_version is None or protocol_version < 2 or capabilities is None
             ):
                 return None
             if operation.kind in _MUTATING_OPERATIONS:
@@ -1754,8 +1753,9 @@ class AgentJobService:
             raise TypeError("agent capabilities are invalid")
         values = tuple(capabilities)
         if (
-            len(values) != len(set(values))
-            or not _REQUIRED_CAPABILITIES <= set(values) <= _NEXT_CAPABILITIES
+            not values
+            or len(values) != len(set(values))
+            or not set(values) <= _NEXT_CAPABILITIES
         ):
             raise ValueError("agent capabilities are invalid")
         return tuple(sorted(values))
