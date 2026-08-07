@@ -211,7 +211,8 @@ fn bounded_read(file: &mut File) -> Result<Vec<u8>, ProcessError> {
 #[cfg(test)]
 mod tests {
     use super::{ProcessError, ProcessRunner, Program, SystemProcessRunner};
-    use std::{io::Write, net::TcpListener, thread, time::Duration};
+    use std::{fs, io::Write, net::TcpListener, thread, time::Duration};
+    use tempfile::tempdir;
 
     #[test]
     fn system_runner_kills_a_process_while_output_exceeds_the_live_cap() {
@@ -235,6 +236,42 @@ mod tests {
             Duration::from_secs(5),
         );
         assert!(matches!(result, Err(ProcessError::OutputLimit)));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn curl_enforces_the_download_body_limit() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n")
+                .unwrap();
+            let _ = stream.write_all(&[b'x'; 1024]);
+        });
+        let directory = tempdir().unwrap();
+        let destination = directory.path().join("artifact");
+        let output = SystemProcessRunner
+            .run(
+                Program::Curl,
+                &[
+                    "--silent".to_owned(),
+                    "--show-error".to_owned(),
+                    "--max-filesize".to_owned(),
+                    "16".to_owned(),
+                    "--output".to_owned(),
+                    destination.display().to_string(),
+                    format!("http://{address}"),
+                ],
+                Duration::from_secs(5),
+            )
+            .unwrap();
+
+        assert!(!output.success);
+        if destination.exists() {
+            assert!(fs::metadata(destination).unwrap().len() <= 16);
+        }
         server.join().unwrap();
     }
 }

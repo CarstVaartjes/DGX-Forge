@@ -393,6 +393,106 @@ fn http_artifacts_reject_private_hosts_before_curl_runs() {
 }
 
 #[test]
+fn http_artifacts_reject_embedded_credentials_before_curl_runs() {
+    let runner = FakeRunner {
+        calls: RefCell::new(vec![]),
+        outputs: RefCell::new(VecDeque::from([
+            ProcessOutput {
+                success: true,
+                stdout: vec![],
+                stderr: vec![],
+            },
+            ProcessOutput {
+                success: true,
+                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
+                stderr: vec![],
+            },
+        ])),
+    };
+    let directory = tempdir().unwrap();
+    let mut workload = spec();
+    workload.artifacts[0] = ArtifactSpec {
+        kind: "http.file".to_owned(),
+        repository: "https://user:password@93.184.216.34/artifact".to_owned(),
+        revision: "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c"
+            .to_owned(),
+        expected_bytes: 7,
+    };
+
+    assert!(
+        OciRuntime {
+            runner: &runner,
+            data_root: directory.path(),
+            huggingface_curl_config: None,
+        }
+        .install(&workload, "cb555393-764b-4eb6-8f15-b416d289428f", DIGEST)
+        .is_err()
+    );
+    assert!(
+        !runner
+            .calls
+            .borrow()
+            .iter()
+            .any(|call| call.0 == Program::Curl)
+    );
+}
+
+#[test]
+fn http_artifacts_reject_more_than_five_explicit_redirects() {
+    let mut outputs = VecDeque::from([
+        ProcessOutput {
+            success: true,
+            stdout: vec![],
+            stderr: vec![],
+        },
+        ProcessOutput {
+            success: true,
+            stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
+            stderr: vec![],
+        },
+    ]);
+    for redirect in 0..6 {
+        outputs.push_back(ProcessOutput {
+            success: true,
+            stdout: format!("302\thttps://93.184.216.34/redirect-{redirect}\n").into_bytes(),
+            stderr: vec![],
+        });
+    }
+    let runner = FakeRunner {
+        calls: RefCell::new(vec![]),
+        outputs: RefCell::new(outputs),
+    };
+    let directory = tempdir().unwrap();
+    let mut workload = spec();
+    workload.artifacts[0] = ArtifactSpec {
+        kind: "http.file".to_owned(),
+        repository: "https://93.184.216.34/artifact".to_owned(),
+        revision: "sha256:9a129038d9a00aed0cf6a7ea059ca50a813449061ab87848cf1a13eafdf33b2c"
+            .to_owned(),
+        expected_bytes: 7,
+    };
+
+    assert!(
+        OciRuntime {
+            runner: &runner,
+            data_root: directory.path(),
+            huggingface_curl_config: None,
+        }
+        .install(&workload, "cb555393-764b-4eb6-8f15-b416d289428f", DIGEST)
+        .is_err()
+    );
+    assert_eq!(
+        runner
+            .calls
+            .borrow()
+            .iter()
+            .filter(|call| call.0 == Program::Curl)
+            .count(),
+        6
+    );
+}
+
+#[test]
 fn http_artifacts_are_https_only_and_byte_limited_without_implicit_redirects() {
     let runner = FakeRunner {
         calls: RefCell::new(vec![]),

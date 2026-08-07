@@ -761,6 +761,18 @@ struct PublicEndpoint {
 }
 
 fn public_https_endpoint(url: &Url) -> Result<PublicEndpoint, OciError> {
+    public_https_endpoint_with(url, |hostname, port| {
+        (hostname, port)
+            .to_socket_addrs()
+            .map_err(|_| OciError::Artifact)
+            .map(|addresses| addresses.map(|address| address.ip()).collect())
+    })
+}
+
+fn public_https_endpoint_with<F>(url: &Url, resolver: F) -> Result<PublicEndpoint, OciError>
+where
+    F: FnOnce(&str, u16) -> Result<Vec<IpAddr>, OciError>,
+{
     if url.scheme() != "https"
         || !url.username().is_empty()
         || url.password().is_some()
@@ -770,11 +782,7 @@ fn public_https_endpoint(url: &Url) -> Result<PublicEndpoint, OciError> {
     }
     let hostname = url.host_str().ok_or(OciError::Artifact)?.to_owned();
     let port = url.port_or_known_default().ok_or(OciError::Artifact)?;
-    let addresses = (hostname.as_str(), port)
-        .to_socket_addrs()
-        .map_err(|_| OciError::Artifact)?
-        .map(|address| address.ip())
-        .collect::<Vec<_>>();
+    let addresses = resolver(&hostname, port)?;
     if addresses.is_empty() || addresses.iter().any(|address| !is_public_ip(*address)) {
         return Err(OciError::Artifact);
     }
@@ -833,6 +841,7 @@ fn is_public_ip(address: IpAddr) -> bool {
                 && !(segments[0] == 0x2001 && segments[1] < 0x0200)
                 && !(segments[0] == 0x2001 && segments[1] == 0x0db8)
                 && segments[0] != 0x2002
+                && segments[0] != 0x3ffe
                 && !(segments[0] == 0x3fff && segments[1] & 0xf000 == 0)
         }
     }
@@ -1011,14 +1020,36 @@ fn atomic_write(root: &Path, name: &str, value: &[u8]) -> Result<(), OciError> {
 
 #[cfg(test)]
 mod tests {
-    use super::is_public_ip;
-    use std::net::IpAddr;
+    use super::{OciError, is_public_ip, public_https_endpoint_with};
+    use std::{cell::RefCell, collections::VecDeque, net::IpAddr};
+    use url::Url;
 
     #[test]
     fn only_globally_routable_ipv6_is_public() {
-        for value in ["::1", "fe80::1", "fec0::1", "fc00::1", "2001:db8::1"] {
+        for value in [
+            "::1",
+            "fe80::1",
+            "fec0::1",
+            "fc00::1",
+            "2001:db8::1",
+            "3ffe::1",
+        ] {
             assert!(!is_public_ip(value.parse::<IpAddr>().unwrap()), "{value}");
         }
         assert!(is_public_ip("2606:4700:4700::1111".parse().unwrap()));
+    }
+
+    #[test]
+    fn endpoint_validation_rejects_private_and_changed_dns_answers() {
+        let url = Url::parse("https://models.example/weights").unwrap();
+        let answers = RefCell::new(VecDeque::from([
+            vec!["93.184.216.34".parse().unwrap()],
+            vec!["127.0.0.1".parse().unwrap()],
+        ]));
+        let resolve = |_: &str, _: u16| answers.borrow_mut().pop_front().ok_or(OciError::Artifact);
+
+        let endpoint = public_https_endpoint_with(&url, resolve).unwrap();
+        assert_eq!(endpoint.address, "93.184.216.34".parse::<IpAddr>().unwrap());
+        assert!(public_https_endpoint_with(&url, resolve).is_err());
     }
 }
