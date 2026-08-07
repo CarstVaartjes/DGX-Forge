@@ -1,0 +1,444 @@
+#!/usr/bin/python3
+"""Build a deterministic, signed ARM64 Vonk Forge agent Debian package."""
+
+from __future__ import annotations
+
+import argparse
+import datetime as dt
+import hashlib
+import json
+import os
+import re
+import shutil
+import stat
+import struct
+import subprocess
+import sys
+import tempfile
+import tomllib
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+PACKAGE = "vonk-forge-agent"
+TARGET = "aarch64-unknown-linux-gnu"
+BINARIES = ("vonk-agent", "vonk-agent-helper", "vonk-agent-supervisor")
+SEMVER = re.compile(
+    r"(?:0|[1-9][0-9]*)\."
+    r"(?:0|[1-9][0-9]*)\."
+    r"(?:0|[1-9][0-9]*)(?:[-+][0-9A-Za-z.-]+)?\Z"
+)
+MAX_BINARY_BYTES = 512 * 1024 * 1024
+
+
+class BuildError(RuntimeError):
+    pass
+
+
+def canonical(value: object) -> bytes:
+    return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+
+
+def run(
+    argv: list[str],
+    *,
+    cwd: Path = ROOT,
+    env: dict[str, str] | None = None,
+) -> bytes:
+    environment = {
+        "LANG": "C.UTF-8",
+        "LC_ALL": "C.UTF-8",
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+    }
+    if env:
+        environment.update(env)
+    completed = subprocess.run(
+        argv,
+        cwd=cwd,
+        env=environment,
+        capture_output=True,
+        timeout=1800,
+        check=False,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.decode("utf-8", errors="replace").strip()
+        raise BuildError(f"command failed: {Path(argv[0]).name}: {detail}")
+    return completed.stdout
+
+
+def read_aarch64(path: Path) -> bytes:
+    metadata = path.lstat()
+    if (
+        not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+        or not 64 <= metadata.st_size <= MAX_BINARY_BYTES
+        or metadata.st_mode & 0o022
+    ):
+        raise BuildError(f"unsafe release binary: {path}")
+    before = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
+    raw = path.read_bytes()
+    after_metadata = path.stat()
+    after = (
+        after_metadata.st_dev,
+        after_metadata.st_ino,
+        after_metadata.st_size,
+        after_metadata.st_mtime_ns,
+    )
+    if before != after:
+        raise BuildError(f"release binary changed while read: {path}")
+    if raw[:7] != b"\x7fELF\x02\x01\x01" or struct.unpack_from("<H", raw, 18)[0] != 183:
+        raise BuildError(f"release binary is not AArch64 ELF: {path.name}")
+    return raw
+
+
+def compile_binaries(epoch: int) -> Path:
+    if os.uname().machine not in {"aarch64", "arm64"}:
+        raise BuildError("native production builds require an AArch64 runner")
+    cargo = shutil.which("cargo")
+    if cargo is None:
+        raise BuildError("cargo is unavailable")
+    run(
+        [cargo, "build", "--release", "--locked", "--target", TARGET, "--workspace"],
+        env={
+            "CARGO_INCREMENTAL": "0",
+            "SOURCE_DATE_EPOCH": str(epoch),
+        },
+    )
+    return ROOT / "target" / TARGET / "release"
+
+
+def install_file(root: Path, relative: str, raw: bytes, mode: int) -> Path:
+    target = root / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(raw)
+    target.chmod(mode)
+    return target
+
+
+def source(relative: str) -> bytes:
+    path = ROOT / relative
+    if not path.is_file() or path.is_symlink():
+        raise BuildError(f"required packaging source is unsafe: {relative}")
+    return path.read_bytes()
+
+
+def evidence(version: str, epoch: int, binaries: dict[str, bytes]) -> dict[str, bytes]:
+    components = [
+        {
+            "name": name,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+            "type": "application",
+            "version": version,
+        }
+        for name, raw in sorted(binaries.items())
+    ]
+    lock = tomllib.loads(source("Cargo.lock").decode("utf-8"))
+    crates = [
+        {
+            "checksum": item.get("checksum"),
+            "name": item["name"],
+            "source": item.get("source", "workspace"),
+            "version": item["version"],
+        }
+        for item in lock.get("package", [])
+    ]
+    created = (
+        dt.datetime.fromtimestamp(epoch, tz=dt.UTC).isoformat().replace("+00:00", "Z")
+    )
+    revision = os.environ.get("VONK_SOURCE_REVISION", "unknown")
+    repository = os.environ.get(
+        "VONK_SOURCE_REPOSITORY", "https://github.com/CarstVaartjes/vonk-forge"
+    )
+    cyclone = {
+        "bomFormat": "CycloneDX",
+        "components": [
+            {
+                "hashes": [{"alg": "SHA-256", "content": item["sha256"]}],
+                "name": item["name"],
+                "type": item["type"],
+                "version": version,
+            }
+            for item in components
+        ]
+        + [
+            {
+                "bom-ref": f"pkg:cargo/{item['name']}@{item['version']}",
+                "hashes": (
+                    [{"alg": "SHA-256", "content": item["checksum"]}]
+                    if item["checksum"]
+                    else []
+                ),
+                "name": item["name"],
+                "purl": f"pkg:cargo/{item['name']}@{item['version']}",
+                "type": "library",
+                "version": item["version"],
+            }
+            for item in crates
+        ],
+        "metadata": {
+            "component": {"name": PACKAGE, "type": "application", "version": version},
+            "timestamp": created,
+        },
+        "serialNumber": f"urn:uuid:00000000-0000-4000-8000-{hashlib.sha256(version.encode()).hexdigest()[:12]}",
+        "specVersion": "1.6",
+        "version": 1,
+    }
+    spdx = {
+        "SPDXID": "SPDXRef-DOCUMENT",
+        "creationInfo": {"created": created, "creators": ["Organization: Vonk Forge"]},
+        "dataLicense": "CC0-1.0",
+        "documentNamespace": f"https://vonkforge.ai/sbom/{PACKAGE}/{version}",
+        "name": f"{PACKAGE}-{version}",
+        "packages": [
+            {
+                "SPDXID": f"SPDXRef-{item['name']}",
+                "checksums": [{"algorithm": "SHA256", "checksumValue": item["sha256"]}],
+                "downloadLocation": "NOASSERTION",
+                "filesAnalyzed": False,
+                "name": item["name"],
+                "primaryPackagePurpose": "APPLICATION",
+                "versionInfo": version,
+            }
+            for item in components
+        ]
+        + [
+            {
+                "SPDXID": "SPDXRef-Crate-"
+                + hashlib.sha256(
+                    f"{item['name']}@{item['version']}".encode()
+                ).hexdigest()[:20],
+                "checksums": (
+                    [{"algorithm": "SHA256", "checksumValue": item["checksum"]}]
+                    if item["checksum"]
+                    else []
+                ),
+                "downloadLocation": item["source"],
+                "filesAnalyzed": False,
+                "name": item["name"],
+                "primaryPackagePurpose": "LIBRARY",
+                "versionInfo": item["version"],
+            }
+            for item in crates
+        ],
+        "spdxVersion": "SPDX-2.3",
+    }
+    provenance = {
+        "_type": "https://in-toto.io/Statement/v1",
+        "predicate": {
+            "buildDefinition": {
+                "buildType": "https://vonkforge.ai/build-types/rust-arm64-deb/v1",
+                "externalParameters": {"source_date_epoch": epoch, "version": version},
+                "resolvedDependencies": [
+                    {
+                        "digest": {"gitCommit": revision},
+                        "uri": repository,
+                    }
+                ],
+            },
+            "runDetails": {"builder": {"id": repository}},
+        },
+        "predicateType": "https://slsa.dev/provenance/v1",
+        "subject": [
+            {"digest": {"sha256": item["sha256"]}, "name": item["name"]}
+            for item in components
+        ],
+        "version": version,
+    }
+    return {
+        "sbom.cdx.json": canonical(cyclone),
+        "sbom.spdx.json": canonical(spdx),
+        "provenance.json": canonical(provenance),
+    }
+
+
+def normalize_tree(root: Path, epoch: int) -> None:
+    for path in sorted(root.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        if path.is_dir():
+            path.chmod(0o755)
+        os.utime(path, (epoch, epoch), follow_symlinks=False)
+    root.chmod(0o755)
+    os.utime(root, (epoch, epoch))
+
+
+def atomic_output(path: Path, raw: bytes, mode: int = 0o644) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.new")
+    descriptor = os.open(
+        temporary,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC,
+        mode,
+    )
+    try:
+        offset = 0
+        while offset < len(raw):
+            offset += os.write(descriptor, raw[offset:])
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    os.replace(temporary, path)
+
+
+def build(
+    version: str,
+    private_key: Path,
+    output: Path,
+    binaries_dir: Path | None,
+    epoch: int,
+) -> Path:
+    if SEMVER.fullmatch(version) is None:
+        raise BuildError("version is not canonical SemVer")
+    if not 0 <= epoch <= 4_102_444_800:
+        raise BuildError("SOURCE_DATE_EPOCH is outside the supported range")
+    key_metadata = private_key.lstat()
+    if (
+        not stat.S_ISREG(key_metadata.st_mode)
+        or key_metadata.st_nlink != 1
+        or key_metadata.st_mode & 0o077
+    ):
+        raise BuildError("release private key permissions are unsafe")
+    binary_root = binaries_dir.resolve() if binaries_dir else compile_binaries(epoch)
+    binaries = {name: read_aarch64(binary_root / name) for name in BINARIES}
+    output = output.resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    package_name = f"{PACKAGE}_{version}_arm64.deb"
+
+    with tempfile.TemporaryDirectory(prefix="vonk-agent-deb-") as temporary:
+        stage = Path(temporary) / "root"
+        stage.mkdir()
+        release = "usr/lib/vonk-forge/release"
+        install_file(stage, f"{release}/vonk-agent", binaries["vonk-agent"], 0o555)
+        install_file(
+            stage,
+            "usr/lib/vonk-forge/vonk-agent-helper",
+            binaries["vonk-agent-helper"],
+            0o555,
+        )
+        install_file(
+            stage,
+            "usr/lib/vonk-forge/vonk-agent-supervisor",
+            binaries["vonk-agent-supervisor"],
+            0o555,
+        )
+        signed = Path(temporary) / "signed"
+        signed.mkdir()
+        run(
+            [
+                str(ROOT / "scripts/sign-agent-release"),
+                "--artifact",
+                str(stage / release / "vonk-agent"),
+                "--private-key",
+                str(private_key),
+                "--output",
+                str(signed),
+            ]
+        )
+        for name in ("manifest-a.json", "manifest-b.json", "artifact.sig"):
+            install_file(
+                stage, f"{release}/{name}", (signed / name).read_bytes(), 0o644
+            )
+        install_file(
+            stage,
+            "usr/share/keyrings/vonk-forge-release.pub",
+            (signed / "release.pub").read_bytes(),
+            0o644,
+        )
+        install_file(
+            stage,
+            "etc/vonk-forge/agent.toml",
+            source("packaging/config/agent.toml"),
+            0o644,
+        )
+        for name in (
+            "vonk-agent.service",
+            "vonk-agent-supervisor.service",
+            "vonk-agent-helper.service",
+            "vonk-agent-helper.socket",
+        ):
+            install_file(
+                stage,
+                f"lib/systemd/system/{name}",
+                source(f"packaging/systemd/{name}"),
+                0o644,
+            )
+        documents = evidence(version, epoch, binaries)
+        for name, raw in documents.items():
+            install_file(stage, f"usr/share/doc/{PACKAGE}/{name}", raw, 0o644)
+
+        control = source("packaging/debian/control").replace(
+            b"@VERSION@", version.encode()
+        )
+        install_file(stage, "DEBIAN/control", control, 0o644)
+        install_file(
+            stage, "DEBIAN/conffiles", source("packaging/debian/conffiles"), 0o644
+        )
+        for name in ("postinst", "prerm"):
+            install_file(
+                stage, f"DEBIAN/{name}", source(f"packaging/debian/{name}"), 0o755
+            )
+        preinst = source("packaging/debian/preinst").replace(
+            b"@VERSION@", version.encode()
+        )
+        install_file(stage, "DEBIAN/preinst", preinst, 0o755)
+        checksum_lines = []
+        for path in sorted(item for item in stage.rglob("*") if item.is_file()):
+            relative = path.relative_to(stage).as_posix()
+            if relative.startswith("DEBIAN/"):
+                continue
+            digest = hashlib.md5(path.read_bytes(), usedforsecurity=False).hexdigest()
+            checksum_lines.append(f"{digest}  {relative}\n")
+        install_file(stage, "DEBIAN/md5sums", "".join(checksum_lines).encode(), 0o644)
+        normalize_tree(stage, epoch)
+
+        temporary_deb = Path(temporary) / package_name
+        run(
+            [
+                "/usr/bin/dpkg-deb",
+                "--build",
+                "--root-owner-group",
+                "--uniform-compression",
+                "-Zxz",
+                "-z9",
+                str(stage),
+                str(temporary_deb),
+            ],
+            env={"SOURCE_DATE_EPOCH": str(epoch)},
+        )
+        package = output / package_name
+        atomic_output(package, temporary_deb.read_bytes())
+        digest = hashlib.sha256(package.read_bytes()).hexdigest()
+        atomic_output(
+            output / f"{package_name}.sha256", f"{digest}  {package_name}\n".encode()
+        )
+        for name, raw in documents.items():
+            atomic_output(output / f"{PACKAGE}_{version}_arm64.{name}", raw)
+    return package
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="build-agent-deb")
+    parser.add_argument("--version", required=True)
+    parser.add_argument("--release-private-key", required=True, type=Path)
+    parser.add_argument("--output-dir", required=True, type=Path)
+    parser.add_argument("--binaries-dir", type=Path)
+    parser.add_argument(
+        "--source-date-epoch",
+        type=int,
+        default=int(os.environ.get("SOURCE_DATE_EPOCH", "0")),
+    )
+    arguments = parser.parse_args()
+    try:
+        package = build(
+            arguments.version,
+            arguments.release_private_key.absolute(),
+            arguments.output_dir,
+            arguments.binaries_dir,
+            arguments.source_date_epoch,
+        )
+    except (BuildError, OSError, ValueError) as error:
+        print(f"build-agent-deb: {error}", file=sys.stderr)
+        return 2
+    print(package)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

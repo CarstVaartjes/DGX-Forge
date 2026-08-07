@@ -146,20 +146,22 @@
 - Create: `packaging/debian/changelog`
 - Create: `packaging/debian/conffiles`
 - Create: `packaging/debian/postinst`
+- Create: `packaging/debian/preinst`
 - Create: `packaging/debian/prerm`
 - Create: `packaging/config/agent.toml`
 - Create: `scripts/build-agent-deb`
+- Create: `scripts/sign-agent-release`
 - Create: `scripts/verify-agent-deb`
 - Create: `.github/workflows/agent-release.yml`
 - Create: `docs/operations/agent-package-release.md`
 - Modify: `.github/dependabot.yml`
 
-- [ ] Write `verify-agent-deb` first to fail unless package architecture is `arm64`, binaries are AArch64 ELF, system users/permissions/units are correct, configuration survives upgrade, checksums match, SBOM/provenance exist, and maintainer scripts do not make network calls.
-- [ ] Run the verifier against an empty fixture; confirm its expected failure.
-- [ ] Cross-build or natively build locked release binaries for `aarch64-unknown-linux-gnu`; strip deterministically and package as `vonk-forge-agent_<semver>_arm64.deb`.
-- [ ] Make `postinst` create the system user/directories, daemon-reload, and enable the supervisor/socket without pairing or contacting the network.
-- [ ] Generate CycloneDX/SPDX SBOMs, SLSA-compatible provenance, SHA-256 checksums, and keyless Cosign signatures in GitHub Actions. Publish the `.deb` and evidence to a GitHub Release.
-- [ ] Add a second release job that publishes the same verified package into a signed `aptly` repository at `packages.vonkforge.ai`; keep signing identity in GitHub environment protection, not Railway or the repository.
+- [x] Write `verify-agent-deb` first to fail unless package architecture is `arm64`, binaries are AArch64 ELF, system users/permissions/units are correct, configuration survives upgrade, checksums match, SBOM/provenance exist, and maintainer scripts do not make network calls.
+- [x] Run the verifier against an empty fixture; confirm its expected failure.
+- [x] Cross-build or natively build locked release binaries for `aarch64-unknown-linux-gnu`; strip deterministically and package as `vonk-forge-agent_<semver>_arm64.deb`.
+- [x] Make `postinst` create the system user/directories, daemon-reload, and enable the supervisor/socket without pairing or contacting the network.
+- [x] Generate CycloneDX/SPDX SBOMs, SLSA-compatible provenance, SHA-256 checksums, and keyless Cosign signatures in GitHub Actions. Publish the `.deb` and evidence to a GitHub Release.
+- [x] Add a second release job that publishes the same verified package into a signed `aptly` repository at `packages.vonkforge.ai`; keep signing identity in GitHub environment protection, not Railway or the repository.
 - [ ] Test fresh install, offline reinstall from cache, upgrade, downgrade rejection, configuration preservation, removal, and rollback on Ubuntu 24.04 ARM64.
 - [ ] Commit: `build(agent): release signed ARM64 Debian package`
 

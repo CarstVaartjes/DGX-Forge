@@ -10,6 +10,7 @@ def test_dependabot_covers_every_container_and_action_location_weekly() -> None:
     assert 'package-ecosystem: "docker"' in text
     assert 'package-ecosystem: "docker-compose"' in text
     assert 'package-ecosystem: "github-actions"' in text
+    assert 'package-ecosystem: "cargo"' in text
     for directory in (
         '      - "/control"',
         '      - "/deploy/compose/hermes-agent"',
@@ -17,5 +18,5 @@ def test_dependabot_covers_every_container_and_action_location_weekly() -> None:
         '      - "/deploy/compose/tailscale"',
     ):
         assert directory in text
-    assert text.count('interval: "weekly"') == 3
+    assert text.count('interval: "weekly"') == 4
     assert "automerge" not in text.lower()

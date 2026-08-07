@@ -33,3 +33,13 @@ updates:
       timezone: "Europe/Amsterdam"
     labels: ["dependencies", "github-actions"]
     open-pull-requests-limit: 5
+
+  - package-ecosystem: "cargo"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "04:00"
+      timezone: "Europe/Amsterdam"
+    labels: ["dependencies", "rust"]
+    open-pull-requests-limit: 5

@@ -1,0 +1,8 @@
+# Replace these bootstrap placeholders before pairing the Spark.
+controller_url = "https://controller.vonkforge.invalid/"
+ca_path = "/etc/vonk-forge/controller-ca.pem"
+ca_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+data_dir = "/var/lib/vonk-forge/agent"
+node_id = "spk_00000000000000000000000000000000"
+poll_min_seconds = 2
+poll_max_seconds = 60

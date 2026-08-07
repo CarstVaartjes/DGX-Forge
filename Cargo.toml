@@ -36,3 +36,9 @@ url = { version = "2.5.4", features = ["serde"] }
 uuid = { version = "1.17.0", features = ["serde"] }
 wait-timeout = "0.2.1"
 x509-parser = "0.16.0"
+
+[profile.release]
+codegen-units = 1
+lto = true
+panic = "abort"
+strip = "symbols"
