@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from ..import_report import ImportReportBuilder
 from ..sparkrun_source import SparkRunSource
-from .common import FlagSpec, RuntimeCompileError, RuntimeProjection, environment, integer, one_of, options, tokens
+from .common import (
+    FlagSpec,
+    RuntimeCompileError,
+    RuntimeProjection,
+    environment,
+    integer,
+    one_of,
+    options,
+    tokens,
+)
 
 _FLAGS = {
     "--model-path": FlagSpec("--model-path", emit=False),

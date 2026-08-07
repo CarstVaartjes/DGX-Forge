@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping
 
 from .import_report import ImportDisposition, ImportReportItem
 from .model_resolution import ModelTransport, resolve_huggingface_snapshot

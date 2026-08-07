@@ -1,10 +1,9 @@
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from dgx_control.inventory_repository import InventoryRepository, InventorySnapshotInput
 from dgx_control.models import AgentNode, Base
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
 
 
 def repository(tmp_path):

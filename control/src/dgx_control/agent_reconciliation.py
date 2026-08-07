@@ -1562,7 +1562,7 @@ class AgentReconciliationService:
             # withdrawing its route.  Finalize only that explicit terminal
             # handoff, then acquire the successor lease; held or active
             # predecessors remain a hard conflict.
-            rows = self._node_leases._rows(  # noqa: SLF001
+            rows = self._node_leases._rows(
                 session, tuple(sorted(graph.targets))
             )
             if not rows:

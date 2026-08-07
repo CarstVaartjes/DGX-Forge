@@ -1,11 +1,10 @@
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import create_engine, select
-from sqlalchemy.orm import Session
-
 from dgx_control.catalog_seeds import seed_standard_families
 from dgx_control.models import Base, PackageFamily
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import Session
 
 
 @pytest.fixture

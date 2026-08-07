@@ -2,15 +2,19 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-
 from dgx_control.artifact_sizes import ArtifactSize, StaticArtifactSizeResolver
 from dgx_control.catalog_service import CatalogService, RecipeDraftInput
 from dgx_control.install_admission import InstallAdmissionService
 from dgx_control.inventory_repository import InventoryRepository, InventorySnapshotInput
-from dgx_control.models import AgentNode, Base, NodeArtifact, RecipeInstallation, ResourceReservation
-from sqlalchemy import select
+from dgx_control.models import (
+    AgentNode,
+    Base,
+    NodeArtifact,
+    RecipeInstallation,
+    ResourceReservation,
+)
+from sqlalchemy import create_engine, select
+from sqlalchemy.orm import sessionmaker
 
 
 def setup(tmp_path, *, nodes=1, free=200, read_only=False, observed_age=0):

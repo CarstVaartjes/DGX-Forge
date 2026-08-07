@@ -6,6 +6,7 @@ import re
 import shlex
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from math import isfinite
 
 from ..sparkrun_source import SparkRunSource
 
@@ -144,7 +145,7 @@ def decimal(minimum: float, maximum: float) -> Callable[[str], bool]:
             parsed = float(value)
         except ValueError:
             return False
-        return minimum <= parsed <= maximum and parsed == parsed
+        return isfinite(parsed) and minimum <= parsed <= maximum
     return validate
 
 

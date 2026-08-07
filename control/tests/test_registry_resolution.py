@@ -1,9 +1,7 @@
 import hashlib
 import json
-from dataclasses import dataclass
 
 import pytest
-
 from dgx_control.registry_resolution import (
     ManifestEnvelope,
     RegistryResolutionError,

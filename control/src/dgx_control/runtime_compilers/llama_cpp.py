@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from ..import_report import ImportReportBuilder
 from ..sparkrun_source import SparkRunSource
-from .common import FlagSpec, RuntimeCompileError, RuntimeProjection, environment, integer, one_of, options, tokens
+from .common import (
+    FlagSpec,
+    RuntimeCompileError,
+    RuntimeProjection,
+    environment,
+    integer,
+    one_of,
+    options,
+    tokens,
+)
 
 _FLAGS = {
     "--model": FlagSpec("--model", validate=lambda value: value.startswith("/models/") and value.endswith(".gguf")),

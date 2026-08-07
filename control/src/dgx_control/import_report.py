@@ -62,5 +62,5 @@ class ImportReportBuilder:
     def finalize(self) -> tuple[ImportReportItem, ...]:
         missing = self._source_paths - self._items.keys()
         if missing:
-            raise ImportReportError(f"unaccounted source field: {sorted(missing)[0]}")
+            raise ImportReportError(f"unaccounted source field: {min(missing)}")
         return tuple(self._items[path] for path in sorted(self._items))

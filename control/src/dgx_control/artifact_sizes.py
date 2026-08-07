@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Mapping, Protocol
+from typing import Protocol
 
 _PINNED_IMAGE = re.compile(r"^.+@sha256:([0-9a-f]{64})$")
 
@@ -92,7 +93,7 @@ class DeclaredArtifactSizeResolver:
                 raise ArtifactSizeError("recipe artifact identity is duplicated")
             seen.add(source)
             identity = hashlib.sha256(
-                f"{source}\0{expected}".encode("utf-8")
+                f"{source}\0{expected}".encode()
             ).hexdigest()
             resolved.append(ArtifactSize(source, identity, expected))
             model_total += expected

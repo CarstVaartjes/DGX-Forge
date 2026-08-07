@@ -4,7 +4,6 @@ from dgx_control.import_report import ImportDisposition
 from dgx_control.sparkrun_importer import import_sparkrun
 from dgx_control.sparkrun_source import parse_sparkrun_yaml
 
-
 FIXTURES = Path(__file__).parent / "fixtures/sparkrun"
 
 

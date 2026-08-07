@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from ..import_report import ImportReportBuilder
 from ..sparkrun_source import SparkRunSource
-from .common import FlagSpec, RuntimeCompileError, RuntimeProjection, decimal, environment, integer, one_of, options, tokens
+from .common import (
+    FlagSpec,
+    RuntimeCompileError,
+    RuntimeProjection,
+    decimal,
+    environment,
+    integer,
+    one_of,
+    options,
+    tokens,
+)
 
 _FLAGS = {
     "--max-model-len": FlagSpec("--max-model-len", validate=integer(1, 10_000_000)),

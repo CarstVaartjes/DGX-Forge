@@ -1,7 +1,4 @@
-from pathlib import Path
-
 import pytest
-
 from dgx_control.import_report import ImportReportBuilder
 from dgx_control.runtime_compilers.common import RuntimeCompileError
 from dgx_control.runtime_compilers.vllm import compile_vllm
@@ -35,6 +32,7 @@ def test_vllm_command_becomes_typed_arguments() -> None:
         "vllm serve {missing}",
         "bash -c 'vllm serve model'",
         "vllm serve {model} --api-key secret",
+        "vllm serve {model} --gpu-memory-utilization nan",
         "vllm serve {model} --port 8000 --port 8001",
     ],
 )
