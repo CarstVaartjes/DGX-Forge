@@ -137,7 +137,7 @@ fn image_is_pulled_and_verified_by_digest() {
             },
             ProcessOutput {
                 success: true,
-                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\n").into_bytes(),
+                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
                 stderr: vec![],
             },
         ])),
@@ -151,9 +151,36 @@ fn image_is_pulled_and_verified_by_digest() {
     .verify_image(&spec())
     .unwrap();
     let calls = runner.calls.borrow();
-    assert_eq!(calls[0].0, Program::Docker);
+    assert_eq!(calls[0].0, Program::Podman);
     assert_eq!(calls[0].1[0], "pull");
     assert_eq!(calls[1].1[..3], ["image", "inspect", "--format"]);
+    assert!(calls[1].1[3].contains(".Config.User"));
+    drop(calls);
+
+    let non_root_runner = FakeRunner {
+        calls: RefCell::new(vec![]),
+        outputs: RefCell::new(VecDeque::from([
+            ProcessOutput {
+                success: true,
+                stdout: vec![],
+                stderr: vec![],
+            },
+            ProcessOutput {
+                success: true,
+                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t10001:10001\n").into_bytes(),
+                stderr: vec![],
+            },
+        ])),
+    };
+    assert!(
+        OciRuntime {
+            runner: &non_root_runner,
+            data_root: directory.path(),
+            huggingface_curl_config: None,
+        }
+        .verify_image(&spec())
+        .is_err()
+    );
 }
 
 #[test]
@@ -189,8 +216,9 @@ fn container_arguments_are_typed_and_hardened() {
         "--read-only",
         "--cap-drop=ALL",
         "--security-opt=no-new-privileges",
-        "bridge",
-        "--gpus",
+        "slirp4netns:allow_host_loopback=false",
+        "--device",
+        "nvidia.com/gpu=all",
         "VONK_RANK=1",
         "VONK_WORLD_SIZE=2",
         "VONK_MASTER_ADDR=192.168.100.10",
@@ -210,7 +238,7 @@ fn container_arguments_are_typed_and_hardened() {
     assert!(
         !arguments
             .iter()
-            .any(|value| value == "--privileged" || value == "--network=host")
+            .any(|value| value == "--privileged" || value == "--network=host" || value == "--gpus")
     );
     assert!(
         arguments
@@ -248,7 +276,7 @@ fn installation_records_and_rechecks_a_content_manifest() {
             },
             ProcessOutput {
                 success: true,
-                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\n").into_bytes(),
+                stdout: format!("sha256:{DIGEST}\tlinux\tarm64\tv1\t\n").into_bytes(),
                 stderr: vec![],
             },
             ProcessOutput {

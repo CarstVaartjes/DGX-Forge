@@ -81,6 +81,8 @@ def test_dashboard_projects_agent_availability_without_addresses(tmp_path) -> No
                     node_id=active,
                     state="active",
                     capabilities=[],
+                    agent_implementation="rust",
+                    migration_state="complete",
                     last_seen_at=NOW - timedelta(seconds=149),
                 ),
                 AgentNode(
@@ -115,6 +117,9 @@ def test_dashboard_projects_agent_availability_without_addresses(tmp_path) -> No
     nodes = {node["display_name"]: node for node in result["nodes"]}
     assert nodes["Active"]["agent_state"] == "active"
     assert nodes["Active"]["agent_online"] is True
+    assert nodes["Active"]["agent_implementation"] == "rust"
+    assert nodes["Active"]["agent_migration_state"] == "complete"
+    assert nodes["Stale"]["agent_migration_state"] == "required"
     assert nodes["Active"]["agent_last_seen_at"] == (NOW - timedelta(seconds=149)).isoformat()
     assert nodes["Stale"]["agent_state"] == "active"
     assert nodes["Stale"]["agent_online"] is False

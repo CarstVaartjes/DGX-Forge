@@ -2,15 +2,13 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi.testclient import TestClient
-
 from dgx_control.api import create_app
 from dgx_control.audit import MemoryAuditStore
 from dgx_control.auth import Actor, TokenCodec
 from dgx_control.install_admission import InstallNodePlan, InstallPlan
 from dgx_control.recipe_operations import RecipeOperationView
 from dgx_control.run_admission import RunNodePlan, RunPlan
-
+from fastapi.testclient import TestClient
 
 NODE = "spk_" + "1" * 32
 REVISION = "00000000-0000-4000-8000-000000000001"
@@ -57,6 +55,9 @@ class Recipes:
                     0,
                     300,
                     50,
+                    None,
+                    None,
+                    None,
                     (),
                     (),
                 ),

@@ -37,6 +37,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Command {
     Run,
+    /// Import terminal receipts from a stopped legacy Python agent.
+    MigratePythonState {
+        #[arg(long)]
+        source: PathBuf,
+    },
     Pair {
         #[arg(long)]
         controller: Url,
@@ -53,6 +58,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let config = AgentConfig::load(&cli.config)?;
     match cli.command {
         Command::Run => run_agent(&config).await?,
+        Command::MigratePythonState { source } => {
+            let mut state =
+                StateStore::open(&config.data_dir.join("state.sqlite"), &config.node_id)?;
+            let imported = state.import_python_receipts(&source)?;
+            println!("imported {imported} terminal Python receipts");
+        }
         Command::Pair {
             controller,
             ca_sha256,
@@ -84,6 +95,7 @@ async fn run_agent(config: &AgentConfig) -> Result<(), Box<dyn std::error::Error
     state.recover_interrupted()?;
     let runner = SystemProcessRunner;
     let capabilities = [
+        "agent.runtime.rust.v1",
         "recipe.install",
         "recipe.start",
         "recipe.stop",
@@ -141,6 +153,7 @@ async fn run_agent(config: &AgentConfig) -> Result<(), Box<dyn std::error::Error
             &executor,
             &capabilities,
             config.poll_max_seconds.min(60),
+            supervisor_readiness.runtime_identity(),
         );
         tokio::select! {
             result = operation => match result {

@@ -1,15 +1,14 @@
-from pathlib import Path
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
+from dgx_control.models import Base, LocalRecipe, LocalRecipeRevision
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-
-from dgx_control.models import Base, LocalRecipe, LocalRecipeRevision
 
 
 def config(database_url: str) -> Config:
@@ -22,7 +21,7 @@ def config(database_url: str) -> Config:
 
 def test_recipe_catalog_is_the_linear_head() -> None:
     script = ScriptDirectory.from_config(config("sqlite://"))
-    assert script.get_heads() == ["0017_admission_and_run_state"]
+    assert script.get_heads() == ["0019_rust_agent_migration"]
     assert script.get_revision("0015_recipe_catalog").down_revision == (
         "0014_package_action_plans"
     )

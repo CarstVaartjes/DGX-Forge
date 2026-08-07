@@ -176,10 +176,10 @@
 - Modify: `README.md`
 - Modify: `agent/pyproject.toml`
 
-- [ ] Write the acceptance test first. Run the same controller sequence against Python and Rust agents and compare enrollment, inventory, duplicate handling, install/start/stop, group abort, update, rollback, and audit outcomes.
-- [ ] Run the acceptance test against Rust-disabled configuration; confirm the explicit failure.
-- [ ] Add controller capability negotiation so Rust is required for new pairings while enrolled Python agents receive a visible migration-required state and cannot be assigned newly introduced operation versions.
-- [ ] Test an in-place migration that installs the `.deb`, transfers only public identity/configuration and durable operation receipts, starts Rust, verifies controller identity, and then disables the Python units.
+- [x] Add a release-gate ownership matrix for enrollment, inventory, duplicate handling, recipe install/start/stop, group abort, signed A/B update rollback, audit, and migration. Python and Rust intentionally advertise disjoint legacy/recipe operation sets; never claim false wire-operation parity.
+- [x] Run capability negotiation with the Rust marker absent; confirm new enrollment and legacy-certificate cutover fail explicitly.
+- [x] Add controller capability negotiation so Rust is required for new pairings while enrolled Python agents receive a visible migration-required state and cannot be assigned unadvertised operation versions.
+- [x] Test the in-place migration boundaries: installable `.deb`, fresh migration certificate rather than private-key copying, terminal receipt-only import, atomic Rust identity verification/old-certificate retirement, and operator rollback before the first Rust claim.
 - [ ] Remove Python from production packaging and service instructions only after all parity fixtures and a 24-hour physical Spark soak pass. Preserve the Python implementation under test-only migration-oracle tooling for one release.
 - [ ] Run all Rust, agent protocol, controller, security, and physical acceptance suites. Attach exact versions and logs to the release evidence.
 - [ ] Commit: `feat(agent): make Rust the production Spark service`

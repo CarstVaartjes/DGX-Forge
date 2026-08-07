@@ -33,6 +33,21 @@ fn authenticated_generation_readiness_is_published_once_and_canonically() {
     let mut reporter =
         SupervisorReadiness::from_environment(&environment(&credentials), &runtime).unwrap();
 
+    let identity = reporter.runtime_identity().unwrap();
+    assert_eq!(
+        identity.architecture,
+        if cfg!(target_arch = "aarch64") {
+            "linux-arm64"
+        } else {
+            "linux-x86_64"
+        }
+    );
+    assert_eq!(identity.active_slot, "B");
+    assert_eq!(identity.agent_sha256, "a".repeat(64));
+    assert_eq!(identity.supervisor_generation, 7);
+    assert_eq!(identity.supervisor_ready_generation, Some(7));
+    assert!(identity.self_test_passed);
+
     assert!(reporter.report().unwrap());
     assert!(!reporter.report().unwrap());
     let raw = fs::read(runtime.join("readiness.json")).unwrap();

@@ -19,6 +19,8 @@ from pathlib import Path
 
 IMAGE = re.compile(r"^[^\s@]+(?::[^\s@]+)?@sha256:[0-9a-f]{64}$")
 PROTOCOL_WHEEL = "inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
+UV_LOCK_PACKAGE = re.compile(r"(?m)^\[\[package\]\]\n")
+UV_LOCK_SCALAR = re.compile(r'(?m)^(name|version) = "([^"\\\r\n]+)"$')
 
 
 def canonical(value: object) -> bytes:
@@ -76,9 +78,33 @@ def control_deployment_bundle(root: Path) -> bytes:
     return builder(root / "deploy/compose")
 
 
+def uv_lock_packages(lock: bytes) -> list[dict[str, str]]:
+    """Read uv's canonical package records without parsing the whole lock.
+
+    Python 3.12's recursive ``tomllib`` parser can exhaust the C stack while
+    parsing current uv locks containing very large arrays of wheel metadata.
+    For supply-chain evidence we only need uv's canonical, top-level package
+    name/version fields plus the original record for the protocol-wheel checks.
+    Splitting records first is bounded and fail-closed for non-canonical locks.
+    """
+
+    text = lock.decode("utf-8")
+    records = UV_LOCK_PACKAGE.split(text)[1:]
+    if not records:
+        raise ValueError("uv lock contains no package records")
+
+    packages: list[dict[str, str]] = []
+    for record in records:
+        fields = UV_LOCK_SCALAR.findall(record)
+        values = {key: value for key, value in fields}
+        if len(fields) != 2 or set(values) != {"name", "version"}:
+            raise ValueError("uv lock package record is not canonical")
+        packages.append({**values, "record": record})
+    return packages
+
+
 def packages_python(lock: bytes) -> list[tuple[str, str]]:
-    raw = tomllib.loads(lock.decode())
-    return sorted({(package["name"], package["version"]) for package in raw.get("package", []) if package.get("name") and package.get("version")})
+    return sorted({(package["name"], package["version"]) for package in uv_lock_packages(lock)})
 
 
 def packages_web(lock: bytes) -> list[tuple[str, str]]:
@@ -159,36 +185,35 @@ def protocol_wheel(root: Path) -> bytes:
 
 
 def protocol_version(lock: bytes) -> str:
-    raw = tomllib.loads(lock.decode())
     packages = [
-        package for package in raw.get("package", [])
-        if package.get("name") == "dgx-agent-protocol"
+        package for package in uv_lock_packages(lock)
+        if package["name"] == "dgx-agent-protocol"
     ]
-    if len(packages) != 1 or packages[0].get("source") != {"path": "../inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"}:
+    expected_source = (
+        'source = { path = "../inventory/wheels/'
+        'dgx_agent_protocol-2.1.0-py3-none-any.whl" }'
+    )
+    if len(packages) != 1 or expected_source not in packages[0]["record"].splitlines():
         raise ValueError("control and agent must resolve the verified protocol wheel")
-    version = packages[0].get("version")
-    if not isinstance(version, str):
-        raise TypeError("protocol lock has no version")
-    return version
+    return packages[0]["version"]
 
 
 def protocol_wheel_hash(lock: bytes) -> str:
-    raw = tomllib.loads(lock.decode())
-    package = next(
-        package for package in raw.get("package", [])
-        if package.get("name") == "dgx-agent-protocol"
-    )
-    wheels = package.get("wheels")
-    if (
-        not isinstance(wheels, list)
-        or len(wheels) != 1
-        or wheels[0].get("filename") != Path(PROTOCOL_WHEEL).name
-    ):
+    packages = [
+        package for package in uv_lock_packages(lock)
+        if package["name"] == "dgx-agent-protocol"
+    ]
+    if len(packages) != 1:
         raise ValueError("protocol lock must contain the verified wheel")
-    value = wheels[0].get("hash")
-    if not isinstance(value, str) or not value.startswith("sha256:"):
+    wheel_pattern = re.compile(
+        r'(?m)^wheels = \[\n    \{ filename = "'
+        + re.escape(Path(PROTOCOL_WHEEL).name)
+        + r'", hash = "sha256:([0-9a-f]{64})" \},\n\]$',
+    )
+    wheels = wheel_pattern.findall(packages[0]["record"])
+    if len(wheels) != 1:
         raise ValueError("protocol lock wheel hash is invalid")
-    return value.removeprefix("sha256:")
+    return wheels[0]
 
 
 def spdx(

@@ -4,6 +4,11 @@
       "AgentSummary": {
         "additionalProperties": false,
         "properties": {
+          "agent_implementation": {
+            "pattern": "^(pending|python|rust)$",
+            "title": "Agent Implementation",
+            "type": "string"
+          },
           "capabilities": {
             "items": {
               "type": "string"
@@ -45,6 +50,11 @@
             ],
             "title": "Last Seen At"
           },
+          "migration_state": {
+            "pattern": "^(required|complete)$",
+            "title": "Migration State",
+            "type": "string"
+          },
           "node_id": {
             "pattern": "^spk_[0-9a-f]{32}$",
             "title": "Node Id",
@@ -74,6 +84,8 @@
         "required": [
           "node_id",
           "state",
+          "agent_implementation",
+          "migration_state",
           "capabilities",
           "last_seen_at",
           "stale",
@@ -414,6 +426,14 @@
             "title": "Node Id",
             "type": "string"
           },
+          "purpose": {
+            "enum": [
+              "new-node",
+              "rust-migration"
+            ],
+            "title": "Purpose",
+            "type": "string"
+          },
           "token": {
             "maxLength": 64,
             "minLength": 43,
@@ -425,6 +445,7 @@
           "id",
           "node_id",
           "expires_at",
+          "purpose",
           "token"
         ],
         "title": "EnrollmentGrantResponse",
@@ -673,6 +694,202 @@
           }
         },
         "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "InstallNodePlanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "active_reserved_bytes": {
+            "title": "Active Reserved Bytes",
+            "type": "integer"
+          },
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/PlanReason"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "disk_floor_bytes": {
+            "title": "Disk Floor Bytes",
+            "type": "integer"
+          },
+          "free_after_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free After Bytes"
+          },
+          "free_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free Bytes"
+          },
+          "inventory_observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inventory Observed At"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "required_bytes": {
+            "title": "Required Bytes",
+            "type": "integer"
+          },
+          "required_download_bytes": {
+            "title": "Required Download Bytes",
+            "type": "integer"
+          },
+          "reused_bytes": {
+            "title": "Reused Bytes",
+            "type": "integer"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/PlanReason"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "node_id",
+          "allowed",
+          "inventory_observed_at",
+          "free_bytes",
+          "active_reserved_bytes",
+          "reused_bytes",
+          "required_download_bytes",
+          "required_bytes",
+          "disk_floor_bytes",
+          "free_after_bytes",
+          "blockers",
+          "warnings"
+        ],
+        "title": "InstallNodePlanResponse",
+        "type": "object"
+      },
+      "InstallPlanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/InstallNodePlanResponse"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "plan_digest": {
+            "title": "Plan Digest",
+            "type": "string"
+          },
+          "recipe_content_sha256": {
+            "title": "Recipe Content Sha256",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "title": "Recipe Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_revision_id",
+          "recipe_content_sha256",
+          "allowed",
+          "nodes",
+          "plan_digest"
+        ],
+        "title": "InstallPlanResponse",
+        "type": "object"
+      },
+      "InstallPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "node_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Node Ids",
+            "type": "array"
+          },
+          "recipe_revision_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_revision_id",
+          "node_ids"
+        ],
+        "title": "InstallPreviewRequest",
+        "type": "object"
+      },
+      "InstallRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "node_ids": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Node Ids",
+            "type": "array"
+          },
+          "plan_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Plan Digest",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Recipe Revision Id",
+            "type": "string"
+          },
+          "request_key": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Request Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "recipe_revision_id",
+          "node_ids",
+          "plan_digest",
+          "request_key"
+        ],
+        "title": "InstallRequest",
         "type": "object"
       },
       "JobDetailResponse": {
@@ -1034,6 +1251,20 @@
         "title": "JobsResponse",
         "type": "object"
       },
+      "MigrationGrantRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "ttl_seconds": {
+            "default": 600,
+            "maximum": 600.0,
+            "minimum": 1.0,
+            "title": "Ttl Seconds",
+            "type": "integer"
+          }
+        },
+        "title": "MigrationGrantRequest",
+        "type": "object"
+      },
       "NodeStatus": {
         "additionalProperties": false,
         "properties": {
@@ -1059,6 +1290,17 @@
             ],
             "title": "Agent Build Digest"
           },
+          "agent_implementation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Implementation"
+          },
           "agent_last_seen_at": {
             "anyOf": [
               {
@@ -1069,6 +1311,17 @@
               }
             ],
             "title": "Agent Last Seen At"
+          },
+          "agent_migration_state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Migration State"
           },
           "agent_online": {
             "default": false,
@@ -1250,6 +1503,61 @@
           "disk_available_bytes"
         ],
         "title": "NodeStatus",
+        "type": "object"
+      },
+      "OperationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "owner_id": {
+            "title": "Owner Id",
+            "type": "string"
+          },
+          "plan_digest": {
+            "title": "Plan Digest",
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "state": {
+            "title": "State",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "kind",
+          "owner_id",
+          "state",
+          "plan_digest",
+          "nodes",
+          "result"
+        ],
+        "title": "OperationResponse",
         "type": "object"
       },
       "PackageCandidateResponse": {
@@ -2803,6 +3111,37 @@
         "title": "PackageSparkStorage",
         "type": "object"
       },
+      "PlacementRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "node_id": {
+            "pattern": "^spk_[0-9a-f]{32}$",
+            "title": "Node Id",
+            "type": "string"
+          },
+          "rank": {
+            "maximum": 1023.0,
+            "minimum": 0.0,
+            "title": "Rank",
+            "type": "integer"
+          },
+          "role": {
+            "enum": [
+              "entrypoint",
+              "worker"
+            ],
+            "title": "Role",
+            "type": "string"
+          }
+        },
+        "required": [
+          "node_id",
+          "rank",
+          "role"
+        ],
+        "title": "PlacementRequest",
+        "type": "object"
+      },
       "PlanEndpoint": {
         "additionalProperties": false,
         "properties": {
@@ -3017,6 +3356,29 @@
           "tokens_per_minute"
         ],
         "title": "PlanQuota",
+        "type": "object"
+      },
+      "PlanReason": {
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Code",
+            "type": "string"
+          },
+          "detail": {
+            "maxLength": 512,
+            "minLength": 1,
+            "title": "Detail",
+            "type": "string"
+          }
+        },
+        "required": [
+          "code",
+          "detail"
+        ],
+        "title": "PlanReason",
         "type": "object"
       },
       "PlanRelease": {
@@ -3891,6 +4253,21 @@
         "title": "RejectRequest",
         "type": "object"
       },
+      "RequestKey": {
+        "additionalProperties": false,
+        "properties": {
+          "request_key": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Request Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_key"
+        ],
+        "title": "RequestKey",
+        "type": "object"
+      },
       "ResolveImportRequest": {
         "additionalProperties": false,
         "properties": {
@@ -3925,6 +4302,266 @@
           "expected_revision"
         ],
         "title": "ResolveRecipeRequest",
+        "type": "object"
+      },
+      "RunNodePlanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "active_gpu_reserved_bytes": {
+            "title": "Active Gpu Reserved Bytes",
+            "type": "integer"
+          },
+          "active_host_reserved_bytes": {
+            "title": "Active Host Reserved Bytes",
+            "type": "integer"
+          },
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "blockers": {
+            "items": {
+              "$ref": "#/components/schemas/PlanReason"
+            },
+            "title": "Blockers",
+            "type": "array"
+          },
+          "fabric_address": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fabric Address"
+          },
+          "fabric_bandwidth_mbps": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fabric Bandwidth Mbps"
+          },
+          "free_after_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Free After Bytes"
+          },
+          "gpu_free_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gpu Free Bytes"
+          },
+          "host_free_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Host Free Bytes"
+          },
+          "inventory_observed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inventory Observed At"
+          },
+          "memory_floor_bytes": {
+            "title": "Memory Floor Bytes",
+            "type": "integer"
+          },
+          "node_id": {
+            "title": "Node Id",
+            "type": "string"
+          },
+          "port": {
+            "title": "Port",
+            "type": "integer"
+          },
+          "rank": {
+            "title": "Rank",
+            "type": "integer"
+          },
+          "rendezvous_port": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rendezvous Port"
+          },
+          "required_memory_bytes": {
+            "title": "Required Memory Bytes",
+            "type": "integer"
+          },
+          "role": {
+            "title": "Role",
+            "type": "string"
+          },
+          "warnings": {
+            "items": {
+              "$ref": "#/components/schemas/PlanReason"
+            },
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "node_id",
+          "rank",
+          "role",
+          "port",
+          "allowed",
+          "inventory_observed_at",
+          "required_memory_bytes",
+          "host_free_bytes",
+          "gpu_free_bytes",
+          "active_host_reserved_bytes",
+          "active_gpu_reserved_bytes",
+          "free_after_bytes",
+          "memory_floor_bytes",
+          "fabric_address",
+          "fabric_bandwidth_mbps",
+          "rendezvous_port",
+          "blockers",
+          "warnings"
+        ],
+        "title": "RunNodePlanResponse",
+        "type": "object"
+      },
+      "RunPlanResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "allowed": {
+            "title": "Allowed",
+            "type": "boolean"
+          },
+          "installation_id": {
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/RunNodePlanResponse"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "plan_digest": {
+            "title": "Plan Digest",
+            "type": "string"
+          },
+          "recipe_revision_id": {
+            "title": "Recipe Revision Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id",
+          "recipe_revision_id",
+          "allowed",
+          "nodes",
+          "plan_digest"
+        ],
+        "title": "RunPlanResponse",
+        "type": "object"
+      },
+      "RunPreviewRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "installation_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "placements": {
+            "items": {
+              "$ref": "#/components/schemas/PlacementRequest"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Placements",
+            "type": "array"
+          }
+        },
+        "required": [
+          "installation_id",
+          "placements"
+        ],
+        "title": "RunPreviewRequest",
+        "type": "object"
+      },
+      "RunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "alias": {
+            "pattern": "^[a-z0-9][a-z0-9._-]{0,62}$",
+            "title": "Alias",
+            "type": "string"
+          },
+          "installation_id": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Installation Id",
+            "type": "string"
+          },
+          "placements": {
+            "items": {
+              "$ref": "#/components/schemas/PlacementRequest"
+            },
+            "maxItems": 64,
+            "minItems": 1,
+            "title": "Placements",
+            "type": "array"
+          },
+          "plan_digest": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Plan Digest",
+            "type": "string"
+          },
+          "request_key": {
+            "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+            "title": "Request Key",
+            "type": "string"
+          }
+        },
+        "required": [
+          "installation_id",
+          "placements",
+          "alias",
+          "plan_digest",
+          "request_key"
+        ],
+        "title": "RunRequest",
         "type": "object"
       },
       "UpdateApplyRequest": {
@@ -4439,6 +5076,100 @@
           }
         ],
         "summary": "Reject"
+      }
+    },
+    "/api/v1/agents/nodes/{node_id}/migration-grant": {
+      "post": {
+        "operationId": "createAgentMigrationGrant",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "node_id",
+            "required": true,
+            "schema": {
+              "title": "Node Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MigrationGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EnrollmentGrantResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Unauthorized"
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Forbidden"
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Conflict"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoundedErrorResponse"
+                }
+              }
+            },
+            "description": "Service Unavailable"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Create Migration Grant"
       }
     },
     "/api/v1/agents/nodes/{node_id}/revoke": {
@@ -8316,6 +9047,388 @@
           }
         ],
         "summary": "Proposal Preview"
+      }
+    },
+    "/api/v1/recipes/install-plans/preview": {
+      "post": {
+        "operationId": "previewRecipeInstall",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InstallPlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview Install"
+      }
+    },
+    "/api/v1/recipes/installations": {
+      "post": {
+        "operationId": "installRecipe",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InstallRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Install"
+      }
+    },
+    "/api/v1/recipes/installations/{installation_id}/uninstall": {
+      "post": {
+        "operationId": "uninstallRecipe",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "installation_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Installation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Uninstall"
+      }
+    },
+    "/api/v1/recipes/operations/{operation_id}": {
+      "get": {
+        "operationId": "getRecipeOperation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Get Operation"
+      }
+    },
+    "/api/v1/recipes/operations/{operation_id}/retry": {
+      "post": {
+        "operationId": "retryRecipeOperation",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "operation_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Operation Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Retry"
+      }
+    },
+    "/api/v1/recipes/run-plans/preview": {
+      "post": {
+        "operationId": "previewRecipeRun",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunPreviewRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunPlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Preview Run"
+      }
+    },
+    "/api/v1/recipes/runs": {
+      "post": {
+        "operationId": "startRecipeRun",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Start"
+      }
+    },
+    "/api/v1/recipes/runs/{run_id}/stop": {
+      "post": {
+        "operationId": "stopRecipeRun",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "run_id",
+            "required": true,
+            "schema": {
+              "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+              "title": "Run Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RequestKey"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OperationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "summary": "Stop"
       }
     },
     "/api/v1/reconciliations": {

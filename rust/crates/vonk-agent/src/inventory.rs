@@ -69,20 +69,21 @@ impl<R: ProcessRunner> InventoryCollector<'_, R> {
         }
         let (gpu_count, gpu_memory_total_bytes, gpu_memory_free_bytes, nvidia_driver_version) =
             parse_gpus(&gpu.stdout)?;
-        let docker = self.runner.run(
-            Program::Docker,
+        let podman = self.runner.run(
+            Program::Podman,
             &[
                 "version".to_owned(),
                 "--format".to_owned(),
-                "{{.Server.Version}}".to_owned(),
+                "{{.Version}}".to_owned(),
             ],
             Duration::from_secs(10),
         )?;
-        if !docker.success {
+        if !podman.success {
             return Err(InventoryError::Parse);
         }
         let mut capabilities = vec![
             "recipe.operations.v1".to_owned(),
+            "runtime.rootless-podman.v1".to_owned(),
             "runtime.vonk.v1".to_owned(),
         ];
         if let Some(speed) = self.fabric_bandwidth_mbps {
@@ -97,7 +98,7 @@ impl<R: ProcessRunner> InventoryCollector<'_, R> {
             gpu_memory_total_bytes,
             gpu_memory_free_bytes,
             nvidia_driver_version,
-            container_runtime_version: text(&docker.stdout)?,
+            container_runtime_version: text(&podman.stdout)?,
             artifact_store_read_only: filesystem
                 .f_flag
                 .contains(rustix::fs::StatVfsMountFlags::RDONLY),

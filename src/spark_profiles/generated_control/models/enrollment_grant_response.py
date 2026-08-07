@@ -6,6 +6,9 @@ from attrs import field as _attrs_field
 
 from ..types import UNSET, Unset
 
+from ..models.enrollment_grant_response_purpose import check_enrollment_grant_response_purpose
+from ..models.enrollment_grant_response_purpose import EnrollmentGrantResponsePurpose
+from typing import cast
 
 
 
@@ -23,12 +26,14 @@ class EnrollmentGrantResponse:
             expires_at (str):
             id (str):
             node_id (str):
+            purpose (EnrollmentGrantResponsePurpose):
             token (str):
      """
 
     expires_at: str
     id: str
     node_id: str
+    purpose: EnrollmentGrantResponsePurpose
     token: str
 
 
@@ -42,6 +47,8 @@ class EnrollmentGrantResponse:
 
         node_id = self.node_id
 
+        purpose: str = self.purpose
+
         token = self.token
 
 
@@ -51,6 +58,7 @@ class EnrollmentGrantResponse:
             "expires_at": expires_at,
             "id": id,
             "node_id": node_id,
+            "purpose": purpose,
             "token": token,
         })
 
@@ -67,12 +75,18 @@ class EnrollmentGrantResponse:
 
         node_id = d.pop("node_id")
 
+        purpose = check_enrollment_grant_response_purpose(d.pop("purpose"))
+
+
+
+
         token = d.pop("token")
 
         enrollment_grant_response = cls(
             expires_at=expires_at,
             id=id,
             node_id=node_id,
+            purpose=purpose,
             token=token,
         )
 

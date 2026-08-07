@@ -22,7 +22,7 @@ impl ProcessRunner for FakeRunner {
         self.calls.borrow_mut().push((program, arguments.to_vec()));
         let stdout = match program {
             Program::NvidiaSmi => b"119808, 110000, 590.44\n".to_vec(),
-            Program::Docker => b"28.3.3\n".to_vec(),
+            Program::Podman => b"5.4.2\n".to_vec(),
             _ => unreachable!(),
         };
         Ok(ProcessOutput {
@@ -69,6 +69,11 @@ fn inventory_reports_physical_and_available_memory_disk_and_gpu() {
         inventory
             .capabilities
             .contains(&"runtime.vonk.v1".to_owned())
+    );
+    assert!(
+        inventory
+            .capabilities
+            .contains(&"runtime.rootless-podman.v1".to_owned())
     );
     assert!(
         inventory

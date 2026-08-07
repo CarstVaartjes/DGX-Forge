@@ -12,6 +12,10 @@ User=vonk-agent
 Group=vonk-agent
 SupplementaryGroups=
 ExecStart=/usr/lib/vonk-forge/vonk-agent-supervisor run-agent
+Environment=HOME=/var/lib/vonk-forge/agent
+Environment=XDG_DATA_HOME=/var/lib/vonk-forge/agent
+Environment=XDG_RUNTIME_DIR=/run/vonk-forge-agent
+Environment=CONTAINERS_STORAGE_CONF=/etc/vonk-forge/containers-storage.conf
 LoadCredential=activation-challenge:/var/lib/vonk-forge/supervisor/activation-challenge
 Restart=on-failure
 RestartSec=5s
@@ -26,12 +30,14 @@ AmbientCapabilities=
 PrivateTmp=yes
 PrivateDevices=yes
 DevicePolicy=closed
+DeviceAllow=/dev/fuse rw
 DeviceAllow=/dev/nvidiactl rw
 DeviceAllow=/dev/nvidia-uvm rw
 DeviceAllow=/dev/nvidia-uvm-tools rw
 DeviceAllow=/dev/nvidia-modeset rw
 DeviceAllow=/dev/nvidia0 rw
-BindReadOnlyPaths=-/dev/nvidiactl -/dev/nvidia-uvm -/dev/nvidia-uvm-tools -/dev/nvidia-modeset -/dev/nvidia0
+DeviceAllow=char-231:* rw
+BindPaths=-/dev/fuse -/dev/nvidiactl -/dev/nvidia-uvm -/dev/nvidia-uvm-tools -/dev/nvidia-modeset -/dev/nvidia0 -/dev/infiniband
 ProtectSystem=strict
 ProtectHome=yes
 ProtectKernelTunables=yes
@@ -43,10 +49,11 @@ ProtectHostname=yes
 ProtectProc=invisible
 ProcSubset=pid
 LockPersonality=yes
-MemoryDenyWriteExecute=yes
+MemoryDenyWriteExecute=no
 RestrictRealtime=yes
 RestrictSUIDSGID=yes
-RestrictNamespaces=yes
+RestrictNamespaces=user mnt pid ipc uts cgroup net
+Delegate=yes
 RemoveIPC=yes
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6

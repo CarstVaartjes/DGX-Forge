@@ -24,9 +24,11 @@ T = TypeVar("T", bound="AgentSummary")
 class AgentSummary:
     """
         Attributes:
+            agent_implementation (str):
             capabilities (list[str]):
             certificate_expires_at (Union[None, str]):
             last_seen_at (Union[None, str]):
+            migration_state (str):
             node_id (str):
             stale (bool):
             state (str):
@@ -34,9 +36,11 @@ class AgentSummary:
             protocol_version (Union[None, Unset, int]):
      """
 
+    agent_implementation: str
     capabilities: list[str]
     certificate_expires_at: Union[None, str]
     last_seen_at: Union[None, str]
+    migration_state: str
     node_id: str
     stale: bool
     state: str
@@ -48,6 +52,8 @@ class AgentSummary:
 
 
     def to_dict(self) -> dict[str, Any]:
+        agent_implementation = self.agent_implementation
+
         capabilities = self.capabilities
 
 
@@ -57,6 +63,8 @@ class AgentSummary:
 
         last_seen_at: Union[None, str]
         last_seen_at = self.last_seen_at
+
+        migration_state = self.migration_state
 
         node_id = self.node_id
 
@@ -80,9 +88,11 @@ class AgentSummary:
         field_dict: dict[str, Any] = {}
 
         field_dict.update({
+            "agent_implementation": agent_implementation,
             "capabilities": capabilities,
             "certificate_expires_at": certificate_expires_at,
             "last_seen_at": last_seen_at,
+            "migration_state": migration_state,
             "node_id": node_id,
             "stale": stale,
             "state": state,
@@ -99,6 +109,8 @@ class AgentSummary:
     @classmethod
     def from_dict(cls: type[T], src_dict: Mapping[str, Any]) -> T:
         d = dict(src_dict)
+        agent_implementation = d.pop("agent_implementation")
+
         capabilities = cast(list[str], d.pop("capabilities"))
 
 
@@ -117,6 +129,8 @@ class AgentSummary:
 
         last_seen_at = _parse_last_seen_at(d.pop("last_seen_at"))
 
+
+        migration_state = d.pop("migration_state")
 
         node_id = d.pop("node_id")
 
@@ -145,9 +159,11 @@ class AgentSummary:
 
 
         agent_summary = cls(
+            agent_implementation=agent_implementation,
             capabilities=capabilities,
             certificate_expires_at=certificate_expires_at,
             last_seen_at=last_seen_at,
+            migration_state=migration_state,
             node_id=node_id,
             stale=stale,
             state=state,

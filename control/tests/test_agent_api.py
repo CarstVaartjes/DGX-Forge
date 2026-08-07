@@ -989,6 +989,32 @@ def test_enrollment_routes_are_admin_only_and_pending_exact_replay_is_idempotent
     assert first.content == replay.content == canonical_message(first.json())
 
 
+def test_rust_migration_grant_is_admin_only_and_bound_to_legacy_node(
+    agent_system,
+) -> None:
+    client, _services, codec, _clock = agent_system
+    endpoint = f"/api/v1/agents/nodes/{NODE_A}/migration-grant"
+
+    assert (
+        client.post(
+            endpoint,
+            headers=admin_headers(codec, "operator"),
+            json={"ttl_seconds": 60},
+        ).status_code
+        == 403
+    )
+    response = client.post(
+        endpoint,
+        headers=admin_headers(codec),
+        json={"ttl_seconds": 60},
+    )
+
+    assert response.status_code == 201
+    assert response.json()["node_id"] == NODE_A
+    assert response.json()["purpose"] == "rust-migration"
+    assert len(response.json()["token"]) == 43
+
+
 def test_rust_agent_enrollment_shape_remains_controller_compatible(agent_system) -> None:
     client, services, _, _ = agent_system
     audits = client.app.state.test_audits

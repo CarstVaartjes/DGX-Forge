@@ -347,6 +347,12 @@ def build(
             source("packaging/config/agent.toml"),
             0o644,
         )
+        install_file(
+            stage,
+            "etc/vonk-forge/containers-storage.conf",
+            source("packaging/config/containers-storage.conf"),
+            0o644,
+        )
         for name in (
             "vonk-agent.service",
             "vonk-agent-supervisor.service",

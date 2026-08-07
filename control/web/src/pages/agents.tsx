@@ -42,6 +42,12 @@ function boundedValueOrDash(
   return boundedText(String(value), maxLength);
 }
 
+function implementationLabel(value: string): string {
+  if (value === "rust") return "Rust agent";
+  if (value === "python") return "Python agent";
+  return "Agent activation pending";
+}
+
 function certificateSnapshot(agent: AgentSummary): string {
   return [agent.node_id, agent.state, agent.certificate_expires_at, agent.protocol_version].join("\u0000");
 }
@@ -226,6 +232,37 @@ export function AgentsPage({api}: {api: ControlApi}) {
     }
   }
 
+  async function createMigrationGrant(nodeId: string) {
+    if (grantPending || grant) return;
+    const controller = new AbortController();
+    const requestId = ++grantRequestId.current;
+    grantRequest.current = {controller, id: requestId};
+    setGrantPending(true);
+    setError("");
+    setStatus("");
+    try {
+      const created = await api.createAgentMigrationGrant(
+        nodeId,
+        Number(grantTtl),
+        controller.signal,
+      );
+      if (requestId !== grantRequestId.current) return;
+      setGrant(created);
+      setStatus(`Rust migration grant created for ${boundedText(created.node_id, MAX_NODE_ID_LENGTH)}`);
+    } catch (value) {
+      if (requestId !== grantRequestId.current || controller.signal.aborted) return;
+      setError(boundedText(
+        value instanceof Error ? value.message : "Migration grant creation failed",
+        MAX_MESSAGE_LENGTH,
+      ));
+    } finally {
+      if (requestId === grantRequestId.current) {
+        grantRequest.current = undefined;
+        setGrantPending(false);
+      }
+    }
+  }
+
   async function approve(enrollmentId: string) {
     await mutate(async () => {
       const decision = await api.approveEnrollment(enrollmentId);
@@ -294,7 +331,7 @@ export function AgentsPage({api}: {api: ControlApi}) {
       <h3 id="native-admin-heading">Native administration surfaces</h3>
       <p><a href={litellmPath}>LiteLLM Admin UI — keys, teams, and spend</a></p>
       <p><a href={grafanaPath}>Grafana — fleet dashboards</a></p>
-      <p>These same-origin links remain protected by Caddy. Model definitions remain repository-backed; LiteLLM records do not replace Git authority.</p>
+      <p>These same-origin links remain protected by Caddy. Local PostgreSQL remains recipe and routing authority; LiteLLM records are a controller-managed projection.</p>
     </section>
 
     <section aria-labelledby="grant-heading">
@@ -316,6 +353,7 @@ export function AgentsPage({api}: {api: ControlApi}) {
       {grantPending && <p role="status" aria-label="Enrollment grant request">Creating one-time enrollment grant…</p>}
       {grant && <div className="grant-secret" role="status" aria-label="One-time enrollment grant">
         <strong>Copy this token now. It will not be shown again.</strong>
+        <span>{grant.purpose === "rust-migration" ? "Rust migration" : "New node"}</span>
         <code>{boundedText(grant.token, MAX_TOKEN_LENGTH)}</code>
         <span>Expires at {boundedText(grant.expires_at, MAX_TIMESTAMP_LENGTH)}</span>
         <button type="button" onClick={() => setGrant(undefined)}>Dismiss token</button>
@@ -338,14 +376,27 @@ export function AgentsPage({api}: {api: ControlApi}) {
           <th scope="col">Certificate expiry</th>
           <th scope="col">Compatibility</th>
           <th scope="col">Capabilities</th>
+          <th scope="col">Migration action</th>
         </tr></thead>
         <tbody>{visibleAgents.map(agent => <tr key={agent.node_id}>
           <th scope="row"><code>{boundedText(agent.node_id, MAX_NODE_ID_LENGTH)}</code></th>
-          <td><span className="status">{boundedText(agent.state, MAX_STATE_LENGTH)}</span><small>Protocol {boundedValueOrDash(agent.protocol_version, MAX_STATE_LENGTH)}</small></td>
+          <td>
+            <span className="status">{boundedText(agent.state, MAX_STATE_LENGTH)}</span>
+            <small>{implementationLabel(agent.agent_implementation)}</small>
+            <small>Protocol {boundedValueOrDash(agent.protocol_version, MAX_STATE_LENGTH)}</small>
+            {agent.migration_state === "required" && <strong role="status">Migration required</strong>}
+          </td>
           <td>{boundedValueOrDash(agent.last_seen_at, MAX_TIMESTAMP_LENGTH)}<small>{agent.stale ? "Stale" : `${boundedValueOrDash(agent.last_seen_age_seconds, MAX_TIMESTAMP_LENGTH)} seconds ago`}</small></td>
           <td>{boundedValueOrDash(agent.certificate_expires_at, MAX_TIMESTAMP_LENGTH)}</td>
           <td>{boundedText(compatibility.get(agent.node_id) ?? "unknown", MAX_COMPATIBILITY_LENGTH)}</td>
           <td><Capabilities agent={agent}/></td>
+          <td>{agent.agent_implementation === "python" && agent.migration_state === "required"
+            ? <button
+              type="button"
+              disabled={grantPending || Boolean(grant)}
+              onClick={() => void createMigrationGrant(agent.node_id)}
+            >Create Rust migration grant</button>
+            : "—"}</td>
         </tr>)}</tbody>
       </table></div>
       {agentPageCount > 1 && <div className="pagination">

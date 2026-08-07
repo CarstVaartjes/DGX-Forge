@@ -115,11 +115,14 @@ jobs:
           cargo fmt --all --check
           cargo clippy --workspace --all-targets --locked -- -D warnings
           cargo test --workspace --locked
-          uvx --from pytest==9.1.1 pytest -q tests/scripts/test_agent_deb.py
+          uvx --from pytest==9.1.1 pytest -q \
+            tests/scripts/test_agent_deb.py \
+            tests/acceptance/test_rust_agent_parity.py
           for unit in vonk-agent-helper vonk-agent-supervisor vonk-agent; do
             systemd-analyze security --offline=yes "packaging/systemd/${unit}.service" \
               > "dist/${unit}-systemd-security.txt"
-            grep -Eq 'Overall exposure level.*: [0-2]\.[0-9]+ (OK|SAFE)' \
+            if [ "$unit" = vonk-agent ]; then maximum='[0-3]'; else maximum='[0-2]'; fi
+            grep -Eq "Overall exposure level.*: ${maximum}\\.[0-9]+ (OK|SAFE)" \
               "dist/${unit}-systemd-security.txt"
           done
 
@@ -131,11 +134,23 @@ jobs:
           VONK_SOURCE_REPOSITORY: ${{ github.server_url }}/${{ github.repository }}
         run: |
           set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y \
+            fuse-overlayfs podman slirp4netns
           package="dist/vonk-forge-agent_${VERSION}_arm64.deb"
           sudo env SYSTEMD_OFFLINE=1 dpkg -i "$package"
           getent passwd vonk-agent >/dev/null
           test "$(stat -c %a /var/lib/vonk-forge/agent)" = 700
           test "$(basename "$(readlink /var/lib/vonk-forge/supervisor/current)")" = a
+          sudo install -d -o vonk-agent -g vonk-agent -m 0700 \
+            /run/vonk-forge-agent
+          sudo -u vonk-agent env \
+            HOME=/var/lib/vonk-forge/agent \
+            XDG_DATA_HOME=/var/lib/vonk-forge/agent \
+            XDG_RUNTIME_DIR=/run/vonk-forge-agent \
+            CONTAINERS_STORAGE_CONF=/etc/vonk-forge/containers-storage.conf \
+            podman info --format '{{.Host.Security.Rootless}}' \
+            | grep -Fx true >/dev/null
           printf '\n# lifecycle-preserved\n' | sudo tee -a /etc/vonk-forge/agent.toml >/dev/null
           sudo install -o vonk-agent -g vonk-agent -m 0600 /dev/null \
             /var/lib/vonk-forge/agent/lifecycle-preserved

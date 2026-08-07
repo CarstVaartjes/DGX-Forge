@@ -124,7 +124,13 @@ fn exec_agent(store: &SlotStore) -> Result<(), String> {
         .env("LANG", "C.UTF-8")
         .env("LC_ALL", "C.UTF-8")
         .env("PATH", "/usr/bin:/bin")
-        .env("HOME", "/var/lib/vonk-forge")
+        .env("HOME", "/var/lib/vonk-forge/agent")
+        .env("XDG_DATA_HOME", "/var/lib/vonk-forge/agent")
+        .env("XDG_RUNTIME_DIR", "/run/vonk-forge-agent")
+        .env(
+            "CONTAINERS_STORAGE_CONF",
+            "/etc/vonk-forge/containers-storage.conf",
+        )
         .env("CREDENTIALS_DIRECTORY", credentials)
         .env("VONK_SUPERVISOR_GENERATION", state.generation.to_string())
         .env("VONK_SUPERVISOR_SLOT", state.active_slot.name())

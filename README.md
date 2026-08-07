@@ -1,18 +1,26 @@
-# DGX-Forge
+# Vonk Forge
+
+Vonk Forge is a local-first control plane for installing and running
+digest-pinned AI recipes across one or more NVIDIA DGX Spark systems. The NAS
+deployment is authoritative for recipes, placement, inventory, and LiteLLM
+routing; each Spark runs a small outbound-only Rust agent. Caddy is the static
+edge proxy. The controller, rather than Caddy or LiteLLM, decides what runs
+where and updates LiteLLM from observed healthy services.
 
 The generic Spark platform design and phased implementation plans live in
 [`docs/superpowers/specs/2026-08-03-scalable-spark-platform-control-plane-design.md`](docs/superpowers/specs/2026-08-03-scalable-spark-platform-control-plane-design.md).
 Each Spark is onboarded independently; the Docker-capable service host runs
 separate Caddy, API/worker, PostgreSQL, LiteLLM, Hermes Agent, Prometheus, and Grafana
 services. Administration is available through both `sparkctl admin` and the
-web UX, with Git-backed fleet, model, and profile definitions.
+web UX. PostgreSQL—not Git—is authoritative for the local recipe/catalog and
+is prefilled with standard entries during installation.
 
 Before a real release, run `scripts/verify-platform-release --candidate X.Y.Z
 --json`. A blocked result is expected until external hardware, recovery, and
 protected-code-host evidence exists. PR-only repository mutation is a one-way
 transition and must not be enabled from simulator evidence.
 
-DGX-Forge is a collection of contracts, controllers, runtime adapters, and
+Vonk Forge is a collection of contracts, controllers, runtime adapters, and
 operational tooling for defining, validating, deploying, and operating
 model-serving profiles across NVIDIA DGX Spark systems. The repository keeps
 cluster admission and model maturity fail-closed: a checked-in definition is
@@ -20,11 +28,12 @@ not treated as production-ready until its evidence gates are accepted.
 
 ## Capabilities
 
-- Validate and reconcile content-addressed cluster profiles from Git.
+- Create recipes locally, import SparkRun recipes with an explicit ignored-field
+  report, and later sync selected entries with the global Vonk Forge catalog.
 - Execute routine lifecycle and probe operations through outbound, fenced,
   mutually authenticated Spark agents; the control worker never SSHes to a
   Spark.
-- Collect durable node, NVIDIA, Docker, thermal, and storage state reported by
+- Collect durable node, NVIDIA, rootless Podman, thermal, and storage state reported by
   authenticated agents.
 - Configure and validate the direct RoCE/NCCL fabric between Spark nodes.
 - Build and operate model-specific runtime adapters, including the checked-in
@@ -40,11 +49,26 @@ not treated as production-ready until its evidence gates are accepted.
 - Python 3.12 or newer
 - [`uv`](https://docs.astral.sh/uv/)
 - SSH access for one-time onboarding and explicit operator recovery only
-- Docker installed and accessible on each DGX Spark host
+- Docker and Compose on the NAS/control host
+- The signed `vonk-forge-agent` apt package on each ARM64 Spark; it installs
+  rootless Podman and does not require Docker-group membership
 
 ## Quick start
 
-Install the locked development environment and run the local test suite:
+Production has two installation surfaces:
+
+- NAS/computer: the immutable Docker Compose control-plane release; see
+  [NAS deployment](deploy/compose/README.md).
+- DGX Spark: one signed apt package; see
+  [Spark agent installation](docs/operations/install-spark-agent.md).
+
+The Python agent under `agent/` is retained only as a migration oracle for one
+release. New nodes must negotiate the Rust protocol. Existing Python nodes are
+visibly migration-required and use the dedicated
+[migration procedure](docs/operations/migrate-python-agent.md).
+
+For repository development, install the locked environment and run the local
+test suite:
 
 ```bash
 uv sync --dev
@@ -119,6 +143,9 @@ reconciled by the repository-less worker.
 ## Documentation
 
 - [Architecture overview](docs/architecture-overview.md)
+- [Interactive architecture overview](docs/vonk-forge-architecture.html)
+- [Spark agent installation](docs/operations/install-spark-agent.md)
+- [Python-to-Rust agent migration](docs/operations/migrate-python-agent.md)
 - [NAS pull-only Compose deployment](deploy/compose/README.md)
 - [Control-plane bootstrap](docs/runbooks/control-plane-bootstrap.md)
 - [`sparkctl` runbook](docs/runbooks/sparkctl.md)

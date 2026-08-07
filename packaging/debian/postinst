@@ -13,10 +13,21 @@ if ! getent passwd vonk-agent >/dev/null; then
         --no-create-home --shell /usr/sbin/nologin vonk-agent
 fi
 
+# Vonk uses Podman's single-UID rootless mode so the service can retain
+# NoNewPrivileges=yes. This package-dedicated account must not acquire mappings
+# that would make Podman invoke the setuid newuidmap/newgidmap helpers.
+if [ -f /etc/subuid ]; then
+    sed -i '/^vonk-agent:/d' /etc/subuid
+fi
+if [ -f /etc/subgid ]; then
+    sed -i '/^vonk-agent:/d' /etc/subgid
+fi
+
 install -d -o root -g root -m 0755 /var/lib/vonk-forge
 install -d -o vonk-agent -g vonk-agent -m 0700 /var/lib/vonk-forge/agent
 install -d -o vonk-agent -g vonk-agent -m 0750 \
     /var/lib/vonk-forge/agent/models \
+    /var/lib/vonk-forge/agent/containers \
     /var/lib/vonk-forge/agent/state \
     /var/lib/vonk-forge/agent/workloads
 install -d -o root -g root -m 0755 /var/lib/vonk-forge/slots

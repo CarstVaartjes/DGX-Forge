@@ -414,9 +414,28 @@ class AgentNode(Base):
             "architecture IS NULL OR architecture IN ('linux-arm64', 'linux-x86_64')",
             name="ck_agent_nodes_architecture",
         ),
+        CheckConstraint(
+            "agent_implementation IN ('pending', 'python', 'rust')",
+            name="ck_agent_nodes_implementation",
+        ),
+        CheckConstraint(
+            "migration_state IN ('required', 'complete')",
+            name="ck_agent_nodes_migration_state",
+        ),
+        CheckConstraint(
+            "(agent_implementation = 'rust' AND migration_state = 'complete') OR "
+            "(agent_implementation IN ('pending', 'python') AND migration_state = 'required')",
+            name="ck_agent_nodes_migration_consistency",
+        ),
     )
     node_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     state: Mapped[str] = mapped_column(String(24), nullable=False)
+    agent_implementation: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="python", server_default="pending"
+    )
+    migration_state: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="required", server_default="required"
+    )
     protocol_version: Mapped[int | None] = mapped_column(Integer)
     architecture: Mapped[str | None] = mapped_column(String(16))
     platform_version: Mapped[str | None] = mapped_column(String(32))
@@ -555,8 +574,17 @@ class AgentIssuedCertificateRevocation(Base):
 
 class AgentEnrollmentGrant(Base):
     __tablename__ = "agent_enrollment_grants"
+    __table_args__ = (
+        CheckConstraint(
+            "purpose IN ('new-node', 'rust-migration')",
+            name="ck_agent_enrollment_grants_purpose",
+        ),
+    )
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     node_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    purpose: Mapped[str] = mapped_column(
+        String(24), nullable=False, default="new-node", server_default="new-node"
+    )
     token_digest: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
     created_by: Mapped[str] = mapped_column(String(200), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
@@ -587,6 +615,7 @@ class AgentEnrollment(Base):
     chain_pem: Mapped[str | None] = mapped_column(Text)
     certificate_serial: Mapped[str | None] = mapped_column(String(128), unique=True)
     certificate_fingerprint: Mapped[str | None] = mapped_column(String(128), unique=True)
+    certificate_generation: Mapped[int | None] = mapped_column(Integer)
     certificate_not_before: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     certificate_not_after: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

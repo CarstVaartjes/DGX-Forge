@@ -4,16 +4,14 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import create_engine, inspect, text
-from sqlalchemy.orm import sessionmaker
-
 from dgx_control.catalog_service import CatalogService, RecipeDraftInput
 from dgx_control.models import Base
 from dgx_control.recipe_deployments import RecipeDeploymentService
+from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.orm import sessionmaker
 
 
 def migration_config(database_url: str) -> Config:
@@ -26,7 +24,7 @@ def migration_config(database_url: str) -> Config:
 
 def test_recipe_deployment_authority_is_linear_head() -> None:
     script = ScriptDirectory.from_config(migration_config("sqlite://"))
-    assert script.get_heads() == ["0017_admission_and_run_state"]
+    assert script.get_heads() == ["0019_rust_agent_migration"]
     assert script.get_revision("0016_recipe_deployment_authority").down_revision == (
         "0015_recipe_catalog"
     )

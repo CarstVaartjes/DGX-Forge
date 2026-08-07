@@ -37,8 +37,22 @@ struct ReadinessDocument {
     pid: u32,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AgentRuntimeIdentity {
+    pub architecture: &'static str,
+    pub platform_version: &'static str,
+    pub build_digest: String,
+    pub active_slot: String,
+    pub agent_sha256: String,
+    pub supervisor_generation: u64,
+    pub supervisor_ready_generation: Option<u64>,
+    pub self_test_passed: bool,
+}
+
 pub struct SupervisorReadiness {
     document: Option<ReadinessDocument>,
+    runtime_identity: Option<AgentRuntimeIdentity>,
     runtime_root: PathBuf,
 }
 
@@ -67,6 +81,7 @@ impl SupervisorReadiness {
         if present == 0 {
             return Ok(Self {
                 document: None,
+                runtime_identity: None,
                 runtime_root: runtime_root.to_path_buf(),
             });
         }
@@ -86,18 +101,37 @@ impl SupervisorReadiness {
             .get("CREDENTIALS_DIRECTORY")
             .ok_or(SupervisorReadinessError::InvalidChallenge)?;
         let challenge = read_challenge(Path::new(credentials))?;
+        let document = ReadinessDocument {
+            schema_version: 1,
+            generation,
+            slot: slot.clone(),
+            artifact_sha256: artifact_sha256.clone(),
+            state_schema,
+            challenge,
+            pid: std::process::id(),
+        };
         Ok(Self {
-            document: Some(ReadinessDocument {
-                schema_version: 1,
-                generation,
-                slot,
-                artifact_sha256,
-                state_schema,
-                challenge,
-                pid: std::process::id(),
+            document: Some(document),
+            runtime_identity: Some(AgentRuntimeIdentity {
+                architecture: if cfg!(target_arch = "aarch64") {
+                    "linux-arm64"
+                } else {
+                    "linux-x86_64"
+                },
+                platform_version: env!("CARGO_PKG_VERSION"),
+                build_digest: format!("sha256:{artifact_sha256}"),
+                active_slot: slot.to_ascii_uppercase(),
+                agent_sha256: artifact_sha256,
+                supervisor_generation: generation,
+                supervisor_ready_generation: Some(generation),
+                self_test_passed: true,
             }),
             runtime_root: runtime_root.to_path_buf(),
         })
+    }
+
+    pub fn runtime_identity(&self) -> Option<&AgentRuntimeIdentity> {
+        self.runtime_identity.as_ref()
     }
 
     pub fn report(&mut self) -> Result<bool, SupervisorReadinessError> {

@@ -17,6 +17,7 @@ from .endpoint_response import EndpointResponse
 from .enrollment_decision_response import EnrollmentDecisionResponse
 from .enrollment_decision_response_state import EnrollmentDecisionResponseState
 from .enrollment_grant_response import EnrollmentGrantResponse
+from .enrollment_grant_response_purpose import EnrollmentGrantResponsePurpose
 from .enrollment_list_response import EnrollmentListResponse
 from .enrollment_summary import EnrollmentSummary
 from .fleet_status_response import FleetStatusResponse
@@ -26,6 +27,10 @@ from .get_platform_update_skew_response_update_skew_api_v1_updates_skew_get impo
 from .get_repository_response_repository_view_api_v1_repository_get import GetRepositoryResponseRepositoryViewApiV1RepositoryGet
 from .grant_request import GrantRequest
 from .http_validation_error import HTTPValidationError
+from .install_node_plan_response import InstallNodePlanResponse
+from .install_plan_response import InstallPlanResponse
+from .install_preview_request import InstallPreviewRequest
+from .install_request import InstallRequest
 from .job_detail_response import JobDetailResponse
 from .job_logs_response import JobLogsResponse
 from .job_operation_progress import JobOperationProgress
@@ -36,8 +41,11 @@ from .job_summary import JobSummary
 from .jobs_response import JobsResponse
 from .list_audit_events_response_audit_view_api_v1_audit_get import ListAuditEventsResponseAuditViewApiV1AuditGet
 from .list_documents_response_document_view_api_v1_documents_get import ListDocumentsResponseDocumentViewApiV1DocumentsGet
+from .migration_grant_request import MigrationGrantRequest
 from .node_status import NodeStatus
 from .node_status_labels import NodeStatusLabels
+from .operation_response import OperationResponse
+from .operation_response_result_type_0 import OperationResponseResultType0
 from .package_candidate_response import PackageCandidateResponse
 from .package_candidate_response_metadata import PackageCandidateResponseMetadata
 from .package_candidates_response import PackageCandidatesResponse
@@ -69,6 +77,8 @@ from .package_rollout_resource_envelope_evidence_item import PackageRolloutResou
 from .package_spark_inventory import PackageSparkInventory
 from .package_spark_resources import PackageSparkResources
 from .package_spark_storage import PackageSparkStorage
+from .placement_request import PlacementRequest
+from .placement_request_role import PlacementRequestRole
 from .plan_endpoint import PlanEndpoint
 from .plan_endpoint_scheme import PlanEndpointScheme
 from .plan_input_digests import PlanInputDigests
@@ -78,6 +88,7 @@ from .plan_placements import PlanPlacements
 from .plan_platform_update_response_update_plan_api_v1_updates_plan_post import PlanPlatformUpdateResponseUpdatePlanApiV1UpdatesPlanPost
 from .plan_prepare_request import PlanPrepareRequest
 from .plan_quota import PlanQuota
+from .plan_reason import PlanReason
 from .plan_release import PlanRelease
 from .plan_release_request import PlanReleaseRequest
 from .plan_releases import PlanReleases
@@ -107,9 +118,14 @@ from .reconciliation_plan_request import ReconciliationPlanRequest
 from .reconciliation_plan_response import ReconciliationPlanResponse
 from .reconciliation_request import ReconciliationRequest
 from .reject_request import RejectRequest
+from .request_key import RequestKey
 from .resolve_import_request import ResolveImportRequest
 from .resolve_import_request_overlays import ResolveImportRequestOverlays
 from .resolve_recipe_request import ResolveRecipeRequest
+from .run_node_plan_response import RunNodePlanResponse
+from .run_plan_response import RunPlanResponse
+from .run_preview_request import RunPreviewRequest
+from .run_request import RunRequest
 from .submit_change_response_submit_change_api_v1_changes_post import SubmitChangeResponseSubmitChangeApiV1ChangesPost
 from .update_apply_request import UpdateApplyRequest
 from .update_approve_resume_request import UpdateApproveResumeRequest
@@ -136,6 +152,7 @@ __all__ = (
     "EnrollmentDecisionResponse",
     "EnrollmentDecisionResponseState",
     "EnrollmentGrantResponse",
+    "EnrollmentGrantResponsePurpose",
     "EnrollmentListResponse",
     "EnrollmentSummary",
     "FleetStatusResponse",
@@ -145,6 +162,10 @@ __all__ = (
     "GetRepositoryResponseRepositoryViewApiV1RepositoryGet",
     "GrantRequest",
     "HTTPValidationError",
+    "InstallNodePlanResponse",
+    "InstallPlanResponse",
+    "InstallPreviewRequest",
+    "InstallRequest",
     "JobDetailResponse",
     "JobLogsResponse",
     "JobOperationProgress",
@@ -155,8 +176,11 @@ __all__ = (
     "JobSummary",
     "ListAuditEventsResponseAuditViewApiV1AuditGet",
     "ListDocumentsResponseDocumentViewApiV1DocumentsGet",
+    "MigrationGrantRequest",
     "NodeStatus",
     "NodeStatusLabels",
+    "OperationResponse",
+    "OperationResponseResultType0",
     "PackageCandidateResponse",
     "PackageCandidateResponseMetadata",
     "PackageCandidatesResponse",
@@ -188,6 +212,8 @@ __all__ = (
     "PackageSparkInventory",
     "PackageSparkResources",
     "PackageSparkStorage",
+    "PlacementRequest",
+    "PlacementRequestRole",
     "PlanEndpoint",
     "PlanEndpointScheme",
     "PlanInputDigests",
@@ -197,6 +223,7 @@ __all__ = (
     "PlanPlatformUpdateResponseUpdatePlanApiV1UpdatesPlanPost",
     "PlanPrepareRequest",
     "PlanQuota",
+    "PlanReason",
     "PlanRelease",
     "PlanReleaseRequest",
     "PlanReleases",
@@ -226,9 +253,14 @@ __all__ = (
     "ReconciliationPlanResponse",
     "ReconciliationRequest",
     "RejectRequest",
+    "RequestKey",
     "ResolveImportRequest",
     "ResolveImportRequestOverlays",
     "ResolveRecipeRequest",
+    "RunNodePlanResponse",
+    "RunPlanResponse",
+    "RunPreviewRequest",
+    "RunRequest",
     "SubmitChangeResponseSubmitChangeApiV1ChangesPost",
     "UpdateApplyRequest",
     "UpdateApproveResumeRequest",

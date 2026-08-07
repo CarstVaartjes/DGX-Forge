@@ -32,7 +32,7 @@ PROBE_RESULT = {
         "nvidia": {"tools": {}},
     },
 }
-PROTOCOL_WHEEL = ROOT / "inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl"
+PROTOCOL_WHEEL = ROOT / "inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
 PROTOCOL_WHEEL_HASH = hashlib.sha256(PROTOCOL_WHEEL.read_bytes()).hexdigest()
 
 
@@ -181,21 +181,21 @@ def test_release_artifacts_install_the_exact_protocol_wheel() -> None:
         if package["name"] == "dgx-agent-protocol"
     ]
 
-    assert '"dgx-agent-protocol==2.0.0"' in control_project
-    assert '"dgx-agent-protocol==2.0.0"' in agent_project
+    assert '"dgx-agent-protocol==2.1.0"' in control_project
+    assert '"dgx-agent-protocol==2.1.0"' in agent_project
     assert protocol_sources == [
-        {"path": "../inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl"},
-        {"path": "../inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl"},
+        {"path": "../inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"},
+        {"path": "../inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"},
     ]
     assert "COPY control/pyproject.toml ./" in dockerfile
     assert "COPY control/src ./src" in dockerfile
-    assert "COPY inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl /wheels/" in dockerfile
-    assert "/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl" in dockerfile
+    assert "COPY inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl /wheels/" in dockerfile
+    assert "/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl" in dockerfile
     dockerignore = set(dockerignore_path.read_text().splitlines())
     assert "*" in dockerignore
     lines = dockerignore_path.read_text().splitlines()
     last_include = max(index for index, line in enumerate(lines) if line.startswith("!"))
-    assert {"!control/src/**", "!control/web/**", "control/.venv", "!inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl"} <= dockerignore
+    assert {"!control/src/**", "!control/web/**", "control/.venv", "!inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"} <= dockerignore
     assert {
         "**/__pycache__/**", "**/*.py[cod]", "**/.env", "**/.env.*", "**/*.pem",
         "**/*.key", "**/*.p12", "**/*.pfx", "**/.pytest_cache/**", "**/.coverage*",
@@ -222,8 +222,8 @@ def test_agent_environment_installs_the_verified_protocol_wheel() -> None:
     agent_lock = tomllib.loads((ROOT / "agent/uv.lock").read_text())
     package = next(package for package in agent_lock["package"] if package["name"] == "dgx-agent-protocol")
 
-    assert direct_url["url"].endswith("/inventory/wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl")
-    assert package["wheels"] == [{"filename": "dgx_agent_protocol-2.0.0-py3-none-any.whl", "hash": f"sha256:{PROTOCOL_WHEEL_HASH}"}]
+    assert direct_url["url"].endswith("/inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl")
+    assert package["wheels"] == [{"filename": "dgx_agent_protocol-2.1.0-py3-none-any.whl", "hash": f"sha256:{PROTOCOL_WHEEL_HASH}"}]
 
 
 def test_root_context_image_installs_the_verified_protocol_wheel() -> None:
@@ -259,8 +259,8 @@ def test_root_context_image_installs_the_verified_protocol_wheel() -> None:
     )
     installed = json.loads(result.stdout)
 
-    assert installed["version"] == "2.0.0"
-    assert installed["direct_url"]["url"] == "file:///wheels/dgx_agent_protocol-2.0.0-py3-none-any.whl"
+    assert installed["version"] == "2.1.0"
+    assert installed["direct_url"]["url"] == "file:///wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
     assert installed["direct_url"]["archive_info"]["hash"] == f"sha256={PROTOCOL_WHEEL_HASH}"
 
 

@@ -3,6 +3,7 @@ use chrono::Utc;
 use serde_json::{Value, json};
 use std::path::Path;
 
+use crate::supervisor_readiness::AgentRuntimeIdentity;
 use crate::{
     client::{AgentHttpClient, ClientError},
     health::{HealthEvidence, wait_ready},
@@ -233,12 +234,16 @@ pub async fn run_once<E: Executor>(
     executor: &E,
     capabilities: &[&str],
     wait_seconds: u64,
+    runtime_identity: Option<&AgentRuntimeIdentity>,
 ) -> Result<(), LoopError> {
     for result in state.pending_results()? {
         client.submit_result(&result).await?;
         state.acknowledge(&result)?;
     }
-    let Some(claim) = client.claim(capabilities, wait_seconds).await? else {
+    let Some(claim) = client
+        .claim(capabilities, wait_seconds, runtime_identity)
+        .await?
+    else {
         return Ok(());
     };
     let result = match state.begin(&claim, Utc::now()) {

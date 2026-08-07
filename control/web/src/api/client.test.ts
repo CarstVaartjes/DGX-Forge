@@ -33,6 +33,7 @@ it("adds the session CSRF token to generated enrollment mutations", async () => 
       expires_at: "2026-08-05T10:15:00Z",
       id: "grant-001",
       node_id: "spk_0123456789abcdef0123456789abcdef",
+      purpose: "new-node",
       token: "g".repeat(48),
     }), {headers: {"Content-Type": "application/json"}, status: 201});
   });
@@ -58,6 +59,7 @@ it.each(["nonce=", "nonce==", "nonce=middle=="]) (
         expires_at: "2026-08-05T10:15:00Z",
         id: "grant-001",
         node_id: "spk_0123456789abcdef0123456789abcdef",
+        purpose: "new-node",
         token: "g".repeat(48),
       }), {headers: {"Content-Type": "application/json"}, status: 201});
     });

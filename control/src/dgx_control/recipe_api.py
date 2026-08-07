@@ -85,6 +85,9 @@ class RunNodePlanResponse(StrictModel):
     active_gpu_reserved_bytes: int
     free_after_bytes: int | None
     memory_floor_bytes: int
+    fabric_address: str | None
+    fabric_bandwidth_mbps: int | None
+    rendezvous_port: int | None
     blockers: list[PlanReason]
     warnings: list[PlanReason]
 

@@ -162,6 +162,8 @@ class DashboardService:
                 "disk_available_bytes": health.get("disk_available_bytes", 0) if isinstance(health, Mapping) else 0,
                 "probe_age_seconds": probe_age,
                 "agent_state": agent_node.state if agent_node is not None else "unregistered",
+                "agent_implementation": None if agent_node is None else agent_node.agent_implementation,
+                "agent_migration_state": None if agent_node is None else agent_node.migration_state,
                 "last_seen_at": None if agent_last_seen_at is None else agent_last_seen_at.isoformat(),
                 "last_seen_age_seconds": None if agent_age is None else max(0.0, agent_age),
                 "agent_last_seen_at": None if agent_last_seen_at is None else agent_last_seen_at.isoformat(),

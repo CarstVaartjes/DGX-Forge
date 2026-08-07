@@ -14,18 +14,18 @@ const OUTPUT_LIMIT: u64 = 64 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Program {
     Curl,
-    Docker,
     NvidiaSmi,
     Oras,
+    Podman,
 }
 
 impl Program {
     fn path(self) -> &'static str {
         match self {
             Self::Curl => "/usr/bin/curl",
-            Self::Docker => "/usr/bin/docker",
             Self::NvidiaSmi => "/usr/bin/nvidia-smi",
             Self::Oras => "/usr/bin/oras",
+            Self::Podman => "/usr/bin/podman",
         }
     }
 }
@@ -73,6 +73,16 @@ impl ProcessRunner for SystemProcessRunner {
             .stdout(Stdio::from(stdout.try_clone()?))
             .stderr(Stdio::from(stderr.try_clone()?))
             .env_clear()
+            .env("LANG", "C.UTF-8")
+            .env("LC_ALL", "C.UTF-8")
+            .env("PATH", "/usr/bin:/bin")
+            .env("HOME", "/var/lib/vonk-forge/agent")
+            .env("XDG_DATA_HOME", "/var/lib/vonk-forge/agent")
+            .env("XDG_RUNTIME_DIR", "/run/vonk-forge-agent")
+            .env(
+                "CONTAINERS_STORAGE_CONF",
+                "/etc/vonk-forge/containers-storage.conf",
+            )
             .spawn()?;
         let status = match child.wait_timeout(timeout)? {
             Some(status) => status,

@@ -11,6 +11,7 @@ use crate::{
     identity::{IdentityPaths, active_identity_paths},
     inventory::Inventory,
     pair::{IssuedResponse, verify_ca_pin},
+    supervisor_readiness::AgentRuntimeIdentity,
     workloads::WorkloadSpec,
 };
 
@@ -43,10 +44,12 @@ impl ClientError {
 #[derive(Serialize)]
 #[serde(deny_unknown_fields)]
 struct ClaimRequest<'a> {
+    agent_implementation: &'static str,
     capabilities: &'a [&'a str],
     lease_seconds: u64,
     node_id: &'a str,
     protocol_version: u32,
+    runtime_identity: Option<&'a AgentRuntimeIdentity>,
     wait_seconds: u64,
 }
 
@@ -116,15 +119,18 @@ impl AgentHttpClient {
         &self,
         capabilities: &[&str],
         wait_seconds: u64,
+        runtime_identity: Option<&AgentRuntimeIdentity>,
     ) -> Result<Option<AgentClaim>, ClientError> {
         let response = self
             .client
             .post(self.endpoint("/agent/v1/claim")?)
             .json(&ClaimRequest {
+                agent_implementation: "rust",
                 capabilities,
                 lease_seconds: 60,
                 node_id: &self.node_id,
-                protocol_version: 2,
+                protocol_version: 3,
+                runtime_identity,
                 wait_seconds: wait_seconds.min(60),
             })
             .send()

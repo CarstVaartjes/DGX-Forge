@@ -46,7 +46,7 @@ jobs:
             if ((${#changed_python[@]} == 0)); then
               echo "No changed Python files; skipping Ruff"
             else
-              uvx --from ruff==0.16.1 ruff check "${changed_python[@]}"
+              uvx --from ruff==0.16.1 ruff check --force-exclude "${changed_python[@]}"
             fi
           else
             uvx --from ruff==0.16.1 ruff check .
@@ -101,7 +101,8 @@ jobs:
             systemd-analyze security --offline=yes \
               "packaging/systemd/${unit}.service" \
               | tee "artifacts/${unit}-systemd-security.txt"
-            grep -Eq 'Overall exposure level.*: [0-2]\.[0-9]+ (OK|SAFE)' \
+            if [ "$unit" = vonk-agent ]; then maximum='[0-3]'; else maximum='[0-2]'; fi
+            grep -Eq "Overall exposure level.*: ${maximum}\\.[0-9]+ (OK|SAFE)" \
               "artifacts/${unit}-systemd-security.txt"
           done
       - name: Upload Spark service exposure

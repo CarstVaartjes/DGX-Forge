@@ -146,7 +146,7 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
     pub fn verify_image(&self, spec: &WorkloadSpec) -> Result<(), OciError> {
         spec.validate()?;
         let pull = self.runner.run(
-            Program::Docker,
+            Program::Podman,
             &["pull".to_owned(), spec.runtime.image.clone()],
             Duration::from_secs(3600),
         )?;
@@ -154,12 +154,12 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
             return Err(OciError::Runtime);
         }
         let inspect = self.runner.run(
-            Program::Docker,
+            Program::Podman,
             &[
                 "image".to_owned(),
                 "inspect".to_owned(),
                 "--format".to_owned(),
-                "{{.Id}}\\t{{.Os}}\\t{{.Architecture}}\\t{{index .Config.Labels \"ai.vonkforge.runtime-interface\"}}".to_owned(),
+                "{{.Id}}\\t{{.Os}}\\t{{.Architecture}}\\t{{index .Config.Labels \"ai.vonkforge.runtime-interface\"}}\\t{{.Config.User}}".to_owned(),
                 spec.runtime.image.clone(),
             ],
             Duration::from_secs(30),
@@ -170,10 +170,17 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
         );
         let fields = std::str::from_utf8(&inspect.stdout)
             .ok()
-            .map(str::trim)
+            .map(|value| value.trim_end_matches(['\r', '\n']))
             .map(|value| value.split('\t').collect::<Vec<_>>())
             .unwrap_or_default();
-        if !inspect.success || fields.as_slice() != [expected.as_str(), "linux", "arm64", "v1"] {
+        let root_user = fields
+            .get(4)
+            .is_some_and(|value| matches!(*value, "" | "0" | "root" | "0:0" | "root:root"));
+        if !inspect.success
+            || fields.get(..4) != Some(&[expected.as_str(), "linux", "arm64", "v1"])
+            || fields.len() != 5
+            || !root_user
+        {
             return Err(OciError::ImageDigest);
         }
         Ok(())
@@ -202,7 +209,7 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
             "--cap-drop=ALL".to_owned(),
             "--security-opt=no-new-privileges".to_owned(),
             "--network".to_owned(),
-            "bridge".to_owned(),
+            "slirp4netns:allow_host_loopback=false".to_owned(),
             "--pids-limit".to_owned(),
             "4096".to_owned(),
             "--memory".to_owned(),
@@ -243,7 +250,9 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
             }
         }
         if !spec.security.devices.is_empty() {
-            arguments.extend(["--gpus".to_owned(), "all".to_owned()]);
+            for device in &spec.security.devices {
+                arguments.extend(["--device".to_owned(), device.clone()]);
+            }
         }
         for mount in &spec.security.mounts {
             let source = if mount.source == "model" {
@@ -291,7 +300,7 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
         let arguments = self.start_arguments(spec, installation_id, run_id, placement)?;
         let output = self
             .runner
-            .run(Program::Docker, &arguments, Duration::from_secs(300))?;
+            .run(Program::Podman, &arguments, Duration::from_secs(300))?;
         let identifier = std::str::from_utf8(&output.stdout)
             .ok()
             .map(str::trim)
@@ -308,7 +317,7 @@ impl<R: ProcessRunner> OciRuntime<'_, R> {
     pub fn stop(&self, run_id: &str) -> Result<(), OciError> {
         managed_path(self.data_root, "runs", run_id)?;
         let output = self.runner.run(
-            Program::Docker,
+            Program::Podman,
             &[
                 "stop".to_owned(),
                 "--time".to_owned(),

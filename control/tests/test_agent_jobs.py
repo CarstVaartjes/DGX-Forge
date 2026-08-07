@@ -13,6 +13,8 @@ from dgx_agent_protocol import canonical_message
 from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
 from dgx_control.models import (
     AgentCertificate,
+    AgentEnrollment,
+    AgentEnrollmentGrant,
     AgentNode,
     AgentOperation,
     AgentOperationAttempt,
@@ -266,6 +268,171 @@ def test_agent_can_claim_only_its_node_operation(service) -> None:
     assert claim is not None
     assert claim.operation_id == operation.id
     assert claim.node_id == NODE_A
+
+
+def test_rust_node_cannot_be_assigned_an_unadvertised_operation(service) -> None:
+    jobs, sessions, clock = service
+    job = parent(sessions, clock)
+    with sessions.begin() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        node.agent_implementation = "rust"
+        node.migration_state = "complete"
+        node.capabilities = ["recipe.install"]
+
+    with pytest.raises(ValueError, match="does not advertise"):
+        jobs.enqueue(job.id, NODE_A, "node.probe", COMMIT, {})
+
+    stored = jobs.enqueue(
+        job.id,
+        NODE_A,
+        "recipe.install",
+        COMMIT,
+        {"schema_version": 1, "recipe": {}},
+    )
+    assert stored.kind == "recipe.install"
+
+
+def test_new_enrollment_requires_rust_and_cannot_downgrade_after_migration(service) -> None:
+    jobs, sessions, _clock = service
+    with sessions.begin() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        node.agent_implementation = "pending"
+        node.migration_state = "required"
+
+    with pytest.raises(ValueError, match="requires the Rust agent"):
+        jobs.claim(
+            NODE_A,
+            "serial-a",
+            30,
+            protocol_version=2,
+            capabilities=["recipe.install"],
+            agent_implementation="python",
+        )
+
+    assert jobs.claim(
+        NODE_A,
+        "serial-a",
+        30,
+        protocol_version=3,
+        capabilities=["agent.runtime.rust.v1", "recipe.install"],
+        agent_implementation="rust",
+    ) is None
+    with sessions() as session:
+        node = session.get(AgentNode, NODE_A)
+        assert node is not None
+        assert node.agent_implementation == "rust"
+        assert node.migration_state == "complete"
+
+    with pytest.raises(ValueError, match="cannot downgrade"):
+        jobs.claim(
+            NODE_A,
+            "serial-a",
+            30,
+            protocol_version=2,
+            capabilities=["recipe.install"],
+            agent_implementation="python",
+        )
+
+
+def test_python_cutover_requires_migration_certificate_and_retires_old_identity(
+    service,
+) -> None:
+    jobs, sessions, clock = service
+    rust_serial = "serial-rust"
+
+    with pytest.raises(ValueError, match="dedicated migration certificate"):
+        jobs.claim(
+            NODE_A,
+            "serial-a",
+            30,
+            protocol_version=3,
+            capabilities=["agent.runtime.rust.v1", "recipe.install"],
+            agent_implementation="rust",
+        )
+
+    grant_id = str(uuid.uuid4())
+    with sessions.begin() as session:
+        session.add(
+            AgentEnrollmentGrant(
+                id=grant_id,
+                node_id=NODE_A,
+                purpose="rust-migration",
+                token_digest="d" * 64,
+                created_by="admin",
+                created_at=clock.now,
+                expires_at=clock.now + timedelta(minutes=10),
+                consumed_at=clock.now,
+            )
+        )
+        session.add(
+            AgentCertificate(
+                serial=rust_serial,
+                node_id=NODE_A,
+                not_before=clock.now - timedelta(seconds=1),
+                not_after=clock.now + timedelta(hours=1),
+                fingerprint="fingerprint-rust",
+                generation=2,
+            )
+        )
+        session.add(
+            AgentEnrollment(
+                id=str(uuid.uuid4()),
+                grant_id=grant_id,
+                node_id=NODE_A,
+                state="approved",
+                csr_pem="csr",
+                csr_public_key_pem="public",
+                csr_public_key_fingerprint="e" * 64,
+                host_key_fingerprint="host",
+                hardware_fingerprint="hardware",
+                agent_digest="f" * 64,
+                boot_id="boot",
+                created_at=clock.now,
+                decision_actor="admin",
+                decided_at=clock.now,
+                certificate_pem="certificate",
+                chain_pem="chain",
+                certificate_serial=rust_serial,
+                certificate_fingerprint="fingerprint-rust",
+                certificate_generation=2,
+                certificate_not_before=clock.now - timedelta(seconds=1),
+                certificate_not_after=clock.now + timedelta(hours=1),
+            )
+        )
+
+    assert (
+        jobs.claim(
+            NODE_A,
+            rust_serial,
+            30,
+            protocol_version=3,
+            capabilities=["agent.runtime.rust.v1", "recipe.install"],
+            agent_implementation="rust",
+        )
+        is None
+    )
+    with sessions() as session:
+        node = session.get(AgentNode, NODE_A)
+        old = session.get(AgentCertificate, "serial-a")
+        new = session.get(AgentCertificate, rust_serial)
+        assert node is not None and node.agent_implementation == "rust"
+        assert node.migration_state == "complete"
+        assert old is not None and old.state == "revoked"
+        assert old.revoked_at is not None
+        assert old.revoked_at.replace(tzinfo=UTC) == clock.now
+        assert new is not None and new.state == "active" and new.revoked_at is None
+
+    with pytest.raises(ValueError, match="cannot downgrade"):
+        jobs.claim(
+            NODE_A,
+            rust_serial,
+            30,
+            protocol_version=2,
+            capabilities=["recipe.install"],
+            agent_implementation="python",
+        )
 
 
 def test_package_operation_requires_protocol_v2_and_its_exact_capability(

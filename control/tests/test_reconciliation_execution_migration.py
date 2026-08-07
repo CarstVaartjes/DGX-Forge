@@ -359,10 +359,10 @@ def test_latest_migration_is_the_sole_linear_head() -> None:
     scripts = ScriptDirectory.from_config(config)
     heads = scripts.get_heads()
 
-    assert heads == ["0017_admission_and_run_state"]
+    assert heads == ["0019_rust_agent_migration"]
     revision = ScriptDirectory.from_config(config).get_revision(heads[0])
     assert revision is not None
-    assert revision.down_revision == "0016_recipe_deployment_authority"
+    assert revision.down_revision == "0018_agent_inventory_runtime"
     assert [item.revision for item in reversed(tuple(scripts.walk_revisions()))] == [
         "0001_operational_state",
         "0002_agent_operations",
@@ -381,6 +381,8 @@ def test_latest_migration_is_the_sole_linear_head() -> None:
             "0015_recipe_catalog",
             "0016_recipe_deployment_authority",
             "0017_admission_and_run_state",
+            "0018_agent_inventory_runtime",
+            "0019_rust_agent_migration",
         ]
 
 
@@ -498,10 +500,10 @@ def test_postgresql_0008_0009_preservation_cycle(
 def test_postgresql_presence_reuses_an_existing_node_lock(
     postgres_database: str,
 ) -> None:
-    # AgentNode's runtime identity columns are introduced after the original
+    # AgentNode gains runtime and migration columns after the original
     # execution migration; use the current schema while exercising the
     # presence lock semantics.
-    command.upgrade(_config(postgres_database), "0011_update_rollouts")
+    command.upgrade(_config(postgres_database), "head")
     engine = create_engine(
         postgres_database,
         connect_args={"options": "-c lock_timeout=1000ms"},
