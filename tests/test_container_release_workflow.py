@@ -157,6 +157,19 @@ def test_platform_manifest_binds_actual_build_outputs_and_attestations() -> None
     assert "scripts/build-host-updater-artifact" in build
 
 
+def test_host_updater_uses_the_wheels_built_from_distribution_metadata() -> None:
+    build = workflow_step("publish-images", "Build canonical platform release")
+
+    assert (
+        "--control-wheel "
+        "release-output/wheels/dgx_control-0.1.0-py3-none-any.whl"
+    ) in build
+    assert (
+        "--platform-wheel "
+        "release-output/wheels/vonk_cluster_profiles-0.1.0-py3-none-any.whl"
+    ) in build
+
+
 def test_release_attaches_exact_platform_publication_evidence() -> None:
     manifest = job("release-manifest")
     assert "Download platform publication evidence" in manifest

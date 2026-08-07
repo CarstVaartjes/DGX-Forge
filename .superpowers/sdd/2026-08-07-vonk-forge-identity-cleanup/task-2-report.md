@@ -69,6 +69,50 @@ matches are concentrated in documentation, Compose/deployment contracts,
 native and installer surfaces, transport/runtime identifiers, release
 metadata, and historical task records assigned to later plan tasks.
 
+## Round-1 release-blocker follow-up (2026-08-07)
+
+Status: COMPLETE
+
+### Finding and fix
+
+- The package namespace migration changed distribution-derived wheel names,
+  but the host-updater builder, its fixture, and the release workflow still
+  requested the obsolete import-package-style names
+  `vonk_control-0.1.0-py3-none-any.whl` and
+  `cluster_profiles-0.1.0-py3-none-any.whl`.
+- Fresh Hatch builds establish the authoritative contract:
+  `dgx-control` produces `dgx_control-0.1.0-py3-none-any.whl`, and
+  `vonk-cluster-profiles` produces
+  `vonk_cluster_profiles-0.1.0-py3-none-any.whl`.
+- Updated `.github/workflows/ci.yml` and
+  `scripts/build-host-updater-artifact` to consume and allow exactly those
+  two wheel filenames; updated focused builder and workflow-contract tests.
+
+### Verification
+
+```text
+$ uv run --isolated --frozen pytest -q \
+    tests/scripts/test_build_host_updater_artifact.py \
+    tests/test_container_release_workflow.py
+22 passed
+
+$ uv build --offline --wheel --project . --out-dir <temporary-wheels>
+Successfully built vonk_cluster_profiles-0.1.0-py3-none-any.whl
+
+$ uv build --offline --wheel --project control --out-dir <temporary-wheels>
+Successfully built dgx_control-0.1.0-py3-none-any.whl
+
+$ uv run --isolated --frozen scripts/build-host-updater-artifact ...
+exit 0; archive contains dgx_control, vonk_cluster_profiles, and
+vonk_agent_protocol wheels with matching host-updater manifest entries
+```
+
+### Deferred
+
+No Task 5 supply-chain SBOM or manifest was regenerated in this focused
+follow-up; that generated-material update remains deferred to its designated
+task.
+
 ## Broad-suite diagnostic
 
 The brief's literal `uv run pytest tests -q` could not spawn `pytest` because
