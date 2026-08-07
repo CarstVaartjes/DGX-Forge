@@ -86,24 +86,32 @@ jobs:
         run: >-
           uv run --project control --frozen pytest -q
           control/tests/test_host_helper_authority.py
-      - name: Record privileged helper exposure
+      - name: Verify Python supervisor migration fixtures
+        run: >-
+          uv run --project agent --frozen pytest -q
+          agent/tests/test_slot_artifact.py
+          agent/tests/test_supervisor.py
+          -k 'rust_slot_manifest or rust_supervisor'
+      - name: Record Spark service exposure
         shell: bash
         run: |
           set -euo pipefail
           install -d -m 0755 artifacts
-          systemd-analyze security --offline=yes \
-            packaging/systemd/vonk-agent-helper.service \
-            | tee artifacts/vonk-agent-helper-systemd-security.txt
-          grep -Eq 'Overall exposure level.*: [0-2]\.[0-9]+ (OK|SAFE)' \
-            artifacts/vonk-agent-helper-systemd-security.txt
-      - name: Upload privileged helper exposure
+          for unit in vonk-agent-helper vonk-agent-supervisor vonk-agent; do
+            systemd-analyze security --offline=yes \
+              "packaging/systemd/${unit}.service" \
+              | tee "artifacts/${unit}-systemd-security.txt"
+            grep -Eq 'Overall exposure level.*: [0-2]\.[0-9]+ (OK|SAFE)' \
+              "artifacts/${unit}-systemd-security.txt"
+          done
+      - name: Upload Spark service exposure
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: vonk-agent-helper-systemd-security-${{ github.run_id }}
+          name: vonk-agent-systemd-security-${{ github.run_id }}
           if-no-files-found: error
           retention-days: 30
-          path: artifacts/vonk-agent-helper-systemd-security.txt
+          path: artifacts/vonk-*-systemd-security.txt
 
   generated-clients:
     name: Generated control clients

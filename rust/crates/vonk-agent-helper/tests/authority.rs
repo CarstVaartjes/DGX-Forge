@@ -299,13 +299,22 @@ fn artifacts_are_verified_before_slot_or_package_mutation() {
     executor
         .execute(&HostOperation::ActivateAgentSlot {
             slot: AgentSlot::A,
-            artifact_sha256: digest,
+            artifact_sha256: digest.clone(),
             artifact_signature: hex::encode(signature.as_ref()),
         })
         .unwrap();
     assert_eq!(
-        fs::read_link(&roots.active_slot).unwrap(),
-        PathBuf::from("slots/a")
+        runner.calls.lock().unwrap()[0],
+        (
+            PathBuf::from("/usr/lib/vonk-forge/vonk-agent-supervisor"),
+            vec![
+                "activate".to_owned(),
+                "--slot".to_owned(),
+                "a".to_owned(),
+                "--sha256".to_owned(),
+                digest,
+            ],
+        )
     );
 
     let bad_package = "e".repeat(64);
@@ -322,7 +331,7 @@ fn artifacts_are_verified_before_slot_or_package_mutation() {
             })
             .is_err()
     );
-    assert!(runner.calls.lock().unwrap().is_empty());
+    assert_eq!(runner.calls.lock().unwrap().len(), 1);
 }
 
 #[test]

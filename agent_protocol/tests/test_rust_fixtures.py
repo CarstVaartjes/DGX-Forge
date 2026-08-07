@@ -24,6 +24,7 @@ def test_language_neutral_fixtures_are_canonical_and_manifest_bound() -> None:
         "host-helper-grant.json",
         "operation-poll.json",
         "operation-result.json",
+        "slot-manifest.json",
         "workload-package.json",
     }
     for name, expected_digest in manifest.items():

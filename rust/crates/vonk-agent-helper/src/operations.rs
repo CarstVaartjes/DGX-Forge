@@ -1,9 +1,8 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::Read;
-use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread;
 use std::time::Duration;
 
@@ -18,7 +17,6 @@ use crate::protocol::{AgentSlot, HostOperation, ManagedArea, RestartUnit, artifa
 
 const MAX_ARTIFACT_BYTES: u64 = 1024 * 1024 * 1024;
 const MAX_COMMAND_OUTPUT_BYTES: u64 = 4096;
-static ACTIVATION_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Error)]
 pub enum OperationError {
@@ -42,7 +40,6 @@ pub struct ManagedRoots {
     pub workloads: PathBuf,
     pub slots: PathBuf,
     pub incoming: PathBuf,
-    pub active_slot: PathBuf,
 }
 
 impl ManagedRoots {
@@ -54,7 +51,6 @@ impl ManagedRoots {
             workloads: data.join("workloads"),
             slots: data.join("slots"),
             incoming: data.join("incoming"),
-            active_slot: data.join("current"),
         }
     }
 }
@@ -81,6 +77,7 @@ impl CommandRunner for ProcessCommandRunner {
                     | "/usr/bin/dpkg"
                     | "/usr/bin/systemctl"
                     | "/usr/bin/systemd-run"
+                    | "/usr/lib/vonk-forge/vonk-agent-supervisor"
             )
         ) {
             return Err("executable is not compiled into the helper".to_owned());
@@ -176,7 +173,6 @@ impl<R: CommandRunner> OperationExecutor<R> {
                 &roots.workloads,
                 &roots.slots,
                 &roots.incoming,
-                &roots.active_slot,
             ]
             .iter()
             .all(|path| path.starts_with(&roots.data))
@@ -297,22 +293,23 @@ impl<R: CommandRunner> OperationExecutor<R> {
         let artifact = self.roots.slots.join(slot_name).join("vonk-agent");
         self.verify_artifact(&artifact, "agent", digest, detached_signature)?;
 
-        if let Ok(metadata) = fs::symlink_metadata(&self.roots.active_slot)
-            && !metadata.file_type().is_symlink()
-        {
-            return Err(OperationError::UnsafePath);
+        let result = self
+            .runner
+            .run(
+                Path::new("/usr/lib/vonk-forge/vonk-agent-supervisor"),
+                &[
+                    "activate".to_owned(),
+                    "--slot".to_owned(),
+                    slot_name.to_owned(),
+                    "--sha256".to_owned(),
+                    digest.to_owned(),
+                ],
+            )
+            .map_err(|_| OperationError::CommandFailed)?;
+        if !result.success {
+            return Err(OperationError::CommandFailed);
         }
-        let sequence = ACTIVATION_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let temporary = self
-            .roots
-            .data
-            .join(format!(".current-{}-{sequence}", std::process::id()));
-        symlink(format!("slots/{slot_name}"), &temporary)?;
-        if let Err(error) = fs::rename(&temporary, &self.roots.active_slot) {
-            let _ = fs::remove_file(&temporary);
-            return Err(OperationError::Io(error));
-        }
-        sync_directory(&self.roots.data)
+        Ok(())
     }
 
     fn install_package(

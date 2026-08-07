@@ -18,6 +18,7 @@ use vonk_agent::{
     process::SystemProcessRunner,
     rotation::rotate_if_due,
     state::{StateStore, backoff_delay},
+    supervisor_readiness::SupervisorReadiness,
 };
 
 #[derive(Parser)]
@@ -76,6 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn run_agent(config: &AgentConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let mut supervisor_readiness = SupervisorReadiness::from_process_environment()?;
     rotate_if_due(config).await?;
     let mut client = AgentHttpClient::from_config(config)?;
     let mut state = StateStore::open(&config.data_dir.join("state.sqlite"), &config.node_id)?;
@@ -104,6 +106,7 @@ async fn run_agent(config: &AgentConfig) -> Result<(), Box<dyn std::error::Error
             .collect()?;
             match client.report_inventory(&inventory).await {
                 Ok(()) => {
+                    supervisor_readiness.report()?;
                     failures = 0;
                     next_inventory =
                         tokio::time::Instant::now() + std::time::Duration::from_secs(60);

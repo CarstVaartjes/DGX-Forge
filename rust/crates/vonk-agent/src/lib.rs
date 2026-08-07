@@ -11,4 +11,5 @@ pub mod pair;
 pub mod process;
 pub mod rotation;
 pub mod state;
+pub mod supervisor_readiness;
 pub mod workloads;

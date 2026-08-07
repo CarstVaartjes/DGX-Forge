@@ -1,0 +1,57 @@
+[Unit]
+Description=Vonk Forge outbound Spark agent
+Wants=network-online.target
+After=network-online.target vonk-agent-helper.socket
+PartOf=vonk-agent-supervisor.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=vonk-agent
+Group=vonk-agent
+SupplementaryGroups=
+ExecStart=/usr/lib/vonk-forge/vonk-agent-supervisor run-agent
+LoadCredential=activation-challenge:/var/lib/vonk-forge/supervisor/activation-challenge
+Restart=on-failure
+RestartSec=5s
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+UMask=0077
+RuntimeDirectory=vonk-forge-agent
+RuntimeDirectoryMode=0700
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=yes
+PrivateDevices=yes
+DevicePolicy=closed
+DeviceAllow=/dev/nvidiactl rw
+DeviceAllow=/dev/nvidia-uvm rw
+DeviceAllow=/dev/nvidia-uvm-tools rw
+DeviceAllow=/dev/nvidia-modeset rw
+DeviceAllow=/dev/nvidia0 rw
+BindReadOnlyPaths=-/dev/nvidiactl -/dev/nvidia-uvm -/dev/nvidia-uvm-tools -/dev/nvidia-modeset -/dev/nvidia0
+ProtectSystem=strict
+ProtectHome=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+ReadOnlyPaths=/var/lib/vonk-forge/slots /var/lib/vonk-forge/supervisor /etc/vonk-forge /usr/lib/vonk-forge
+ReadWritePaths=/var/lib/vonk-forge/agent /run/vonk-forge-agent
+
+[Install]
+WantedBy=multi-user.target

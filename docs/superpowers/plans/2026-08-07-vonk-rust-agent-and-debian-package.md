@@ -131,12 +131,12 @@
 - Modify: `agent/tests/test_supervisor.py`
 - Modify: `agent/tests/test_slot_artifact.py`
 
-- [ ] Write failing tests for valid activation, corrupt artifact, bad signature, crash loop, readiness timeout, power loss during pointer update, rollback to previous slot, and never rolling back across an incompatible state-schema boundary.
-- [ ] Run `cargo test -p vonk-agent-supervisor rollback`; confirm failure.
-- [ ] Implement signed slot manifests, atomic `current`/`previous` symlink exchange, child-process readiness handshake, bounded restart policy, and automatic rollback with a durable reason record.
-- [ ] Keep the stable supervisor outside replaceable agent slots. Require a separately signed Debian upgrade for supervisor/helper changes.
-- [ ] Port every scenario from the Python supervisor and slot-artifact tests to the shared fixture set, then run Python and Rust suites against it.
-- [ ] Commit: `feat(agent): add Rust A-B supervisor rollback`
+- [x] Write failing tests for valid activation, corrupt artifact, bad signature, crash loop, readiness timeout, power loss during pointer update, rollback to previous slot, and never rolling back across an incompatible state-schema boundary.
+- [x] Run `cargo test -p vonk-agent-supervisor rollback`; confirm failure.
+- [x] Implement signed slot manifests, atomic `current`/`previous` symlink exchange, child-process readiness handshake, bounded restart policy, and automatic rollback with a durable reason record.
+- [x] Keep the stable supervisor outside replaceable agent slots. Require a separately signed Debian upgrade for supervisor/helper changes.
+- [x] Port every scenario from the Python supervisor and slot-artifact tests to the shared fixture set, then run Python and Rust suites against it.
+- [x] Commit: `feat(agent): add Rust A-B supervisor rollback`
 
 ## Task 7: Produce reproducible ARM64 Debian packages and a signed apt repository
 
