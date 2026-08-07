@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from dgx_agent_protocol import canonical_message
-from dgx_control.update_authority import (
+from vonk_agent_protocol import canonical_message
+from vonk_control.update_authority import (
     PublishedTUFReleaseSource,
     UpdateAuthorizationAuthority,
     UpdateAuthorizationError,

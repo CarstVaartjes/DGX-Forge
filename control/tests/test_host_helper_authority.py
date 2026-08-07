@@ -4,12 +4,12 @@ from datetime import UTC, datetime
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from dgx_agent_protocol import (
+from vonk_agent_protocol import (
     HostHelperOperation,
     HostOperationKind,
     host_helper_grant_signing_bytes,
 )
-from dgx_control.host_helper_authority import (
+from vonk_control.host_helper_authority import (
     HostHelperAuthorityError,
     HostHelperGrantIssuer,
 )

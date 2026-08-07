@@ -51,7 +51,7 @@ def _component(document: dict[str, object]) -> tuple[dict[str, object], bytes]:
 
 
 def _release_lock(name: str):
-    from dgx_agent_protocol import PackageReleaseLock
+    from vonk_agent_protocol import PackageReleaseLock
 
     document = _fixture(name)
     component, content = _component(document)
@@ -174,7 +174,7 @@ class _SignedTargetSource:
         self.refreshes += 1
 
     def trusted_target(self, name: str):
-        from dgx_agent.package_trust import TrustedWorkloadTarget
+        from vonk_agent.package_trust import TrustedWorkloadTarget
 
         if not self.online:
             raise RuntimeError("simulated workload network is offline")
@@ -219,7 +219,7 @@ class _DirectProvider:
 
 class _Materializer:
     def materialize(self, lock, objects, staging: Path):
-        from dgx_agent.packages.materialize import MaterializedGeneration
+        from vonk_agent.packages.materialize import MaterializedGeneration
 
         generation = staging / lock.digest
         generation.mkdir(parents=True, exist_ok=True)
@@ -239,7 +239,7 @@ class _Adapter:
         self.events = events
 
     def execute(self, operation, invocation, deadline):
-        from dgx_agent.packages.adapter import AdapterEvidence
+        from vonk_agent.packages.adapter import AdapterEvidence
 
         del deadline
         self.events.append(f"adapter:{operation.value}")
@@ -269,7 +269,7 @@ class _UpdatesForbidden:
 
 
 def _claim(operation, payload: dict[str, object], index: int):
-    from dgx_agent_protocol import AgentClaim, canonical_message
+    from vonk_agent_protocol import AgentClaim, canonical_message
 
     return AgentClaim(
         schema_version=1,
@@ -290,15 +290,15 @@ def test_unknown_family_simulator_delivers_signed_releases_without_agent_update_
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     """Exercise the generic package ABI for a family absent from agent build inputs."""
-    from dgx_agent.operations import OperationContext, OperationRegistry
-    from dgx_agent.package_trust import WorkloadTrust
-    from dgx_agent.packages.adapter import AdapterOperation
-    from dgx_agent.packages.engine import PackageEngine
-    from dgx_agent.packages.state import PackageState
-    from dgx_agent.state import AgentStateStore
-    from dgx_agent_protocol import AgentOperation
-    from dgx_control.package_publication import PackagePublicationService
-    from dgx_control.workload_trust import (
+    from vonk_agent.operations import OperationContext, OperationRegistry
+    from vonk_agent.package_trust import WorkloadTrust
+    from vonk_agent.packages.adapter import AdapterOperation
+    from vonk_agent.packages.engine import PackageEngine
+    from vonk_agent.packages.state import PackageState
+    from vonk_agent.state import AgentStateStore
+    from vonk_agent_protocol import AgentOperation
+    from vonk_control.package_publication import PackagePublicationService
+    from vonk_control.workload_trust import (
         WorkloadOnlineSigners,
         WorkloadTrustDelivery,
         WorkloadTrustError,
@@ -310,7 +310,7 @@ def test_unknown_family_simulator_delivers_signed_releases_without_agent_update_
     from tuf.api.metadata import Metadata
 
     agent_digest_before = hashlib.sha256(
-        (ROOT / "agent/src/dgx_agent/main.py").read_bytes()
+        (ROOT / "agent/src/vonk_agent/main.py").read_bytes()
     ).hexdigest()
     ssh_calls: list[tuple[object, ...]] = []
 
@@ -454,7 +454,7 @@ def test_unknown_family_simulator_delivers_signed_releases_without_agent_update_
 
     active_two = state.active_generation("unknown-after-build")
     assert active_two is not None and active_two.release_digest == release_two.digest
-    from dgx_agent.packages.adapter import AdapterInvocation
+    from vonk_agent.packages.adapter import AdapterInvocation
 
     adapters[-1].execute(
         AdapterOperation.INFER,
@@ -497,7 +497,7 @@ def test_unknown_family_simulator_delivers_signed_releases_without_agent_update_
     assert "adapter:infer" in events
     assert update_guard.calls == []
     assert ssh_calls == []
-    assert hashlib.sha256((ROOT / "agent/src/dgx_agent/main.py").read_bytes()).hexdigest() == agent_digest_before
+    assert hashlib.sha256((ROOT / "agent/src/vonk_agent/main.py").read_bytes()).hexdigest() == agent_digest_before
     assert all(item["actor"] == "nas-admin@example" for item in audit)
     assert all(len(hashlib.sha256(json.dumps(item, sort_keys=True).encode()).hexdigest()) == 64 for item in audit)
 
@@ -509,9 +509,9 @@ def test_installed_agent_wires_the_generic_package_runtime(monkeypatch: pytest.M
     leaving the package engine composition and ``OperationContext`` assembly
     real.
     """
-    from dgx_agent import main
-    from dgx_agent.config import AgentConfig
-    from dgx_agent.main import build_agent
+    from vonk_agent import main
+    from vonk_agent.config import AgentConfig
+    from vonk_agent.main import build_agent
 
     runtime = SimpleNamespace(
         architecture="x86_64",

@@ -7,7 +7,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from dgx_control.api import (
+from vonk_control.api import (
     GenerationProcessIdentity,
     GenerationReadinessError,
     GenerationReadinessService,
@@ -15,9 +15,9 @@ from dgx_control.api import (
     install_selected_generation_readiness,
     production_app,
 )
-from dgx_control.models import Base, ControlProcessHeartbeat
-from dgx_control.settings import StartupMode
-from dgx_control.worker import (
+from vonk_control.models import Base, ControlProcessHeartbeat
+from vonk_control.settings import StartupMode
+from vonk_control.worker import (
     Worker,
     WorkerHeartbeatRecorder,
     WorkerSelectedIdentityVerifier,
@@ -73,7 +73,7 @@ def _projection(kind: str = "candidate", **changes: object) -> dict[str, object]
         value.update(changes)
         return value
 
-    from dgx_control.host_state import HostOperationPlan, SelectionReceipt
+    from vonk_control.host_state import HostOperationPlan, SelectionReceipt
 
     receipt = SelectionReceipt.from_plan(
         HostOperationPlan.from_document(plan_document),
@@ -200,11 +200,11 @@ def test_preselection_app_exposes_only_generation_readiness(tmp_path: Path) -> N
 def test_production_entrypoint_selects_inert_preselection_before_registration(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from dgx_control import api as api_module
-    from dgx_control import jobs as jobs_module
-    from dgx_control import proposals as proposals_module
-    from dgx_control import repository as repository_module
-    from dgx_control import update_admin as update_admin_module
+    from vonk_control import api as api_module
+    from vonk_control import jobs as jobs_module
+    from vonk_control import proposals as proposals_module
+    from vonk_control import repository as repository_module
+    from vonk_control import update_admin as update_admin_module
 
     constructed: list[str] = []
 
@@ -511,7 +511,7 @@ def test_worker_heartbeat_is_persisted_only_after_scheduler_loop_returns(
 def test_directory_projection_source_reopens_exact_file_by_directory_fd(
     tmp_path: Path,
 ) -> None:
-    from dgx_control.api import DirectoryIdentityProjectionSource
+    from vonk_control.api import DirectoryIdentityProjectionSource
 
     root = tmp_path / "identity"
     candidates = root / "candidates"
@@ -537,7 +537,7 @@ def test_directory_projection_source_reopens_exact_file_by_directory_fd(
 def test_generation_readiness_accepts_task3_candidate_projection_contract(
     tmp_path: Path,
 ) -> None:
-    from dgx_control.host_state import HostGenerationStore, HostOperationPlan
+    from vonk_control.host_state import HostGenerationStore, HostOperationPlan
 
     document = _projection()
     document.pop("projection_kind")
@@ -569,8 +569,8 @@ def test_directory_projection_source_rejects_active_receipt_digest_mismatch(
     tmp_path: Path,
     replacement_digest: str,
 ) -> None:
-    from dgx_control.api import DirectoryIdentityProjectionSource
-    from dgx_control.host_state import (
+    from vonk_control.api import DirectoryIdentityProjectionSource
+    from vonk_control.host_state import (
         HostGenerationStore,
         HostOperationPlan,
         SelectionReceipt,

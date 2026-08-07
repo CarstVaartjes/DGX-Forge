@@ -8,7 +8,7 @@ import threading
 import uuid
 
 import pytest
-from dgx_control.workload_signer import (
+from vonk_control.workload_signer import (
     UnixWorkloadSignerClient,
     WorkloadPublicationSignerPolicy,
     WorkloadSignerConnectionHandler,
@@ -17,7 +17,7 @@ from dgx_control.workload_signer import (
     _document,
     _read_message,
 )
-from dgx_control.workload_trust import TrustedWorkloadTarget
+from vonk_control.workload_trust import TrustedWorkloadTarget
 
 LOCK = b'{"family_id":"future-stack","schema_version":1}'
 EVIDENCE = {

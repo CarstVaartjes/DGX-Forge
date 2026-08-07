@@ -7,7 +7,7 @@ does not claim that the installed Spark agent currently has this path.
 
 The remaining production interfaces are:
 
-1. `dgx_agent.main.build_agent()` must construct and attach a generic
+1. `vonk_agent.main.build_agent()` must construct and attach a generic
    `PackageEngine` to `OperationContext.packages`, including durable package
    state, direct component acquisition, materialization, ABI-v1 adapter
    invocation, preflight, cancellation, and progress callbacks.

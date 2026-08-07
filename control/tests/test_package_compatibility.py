@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dgx_control.package_compatibility import CompatibilityEvaluator
+from vonk_control.package_compatibility import CompatibilityEvaluator
 
 LOCK = {
     "digest": "a" * 64,

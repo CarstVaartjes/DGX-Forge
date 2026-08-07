@@ -5,8 +5,8 @@ import json
 from pathlib import Path
 
 import pytest
-from dgx_control.source_bundles import generate_source_bundle
-from dgx_control.source_policy import SourcePolicyError, enforce_build_source_policy
+from vonk_control.source_bundles import generate_source_bundle
+from vonk_control.source_policy import SourcePolicyError, enforce_build_source_policy
 
 
 @pytest.fixture

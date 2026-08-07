@@ -17,7 +17,7 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 
 PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT.parent / "control/src"))
-from dgx_control.update_authority import UpdateAuthorizationAuthority
+from vonk_control.update_authority import UpdateAuthorizationAuthority
 
 SUPERVISOR = PROJECT / "supervisor" / "dgx-agent-supervisor"
 AGENT_UNIT = PROJECT / "systemd" / "dgx-forge-agent.service"

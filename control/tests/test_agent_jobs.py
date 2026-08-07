@@ -9,9 +9,9 @@ from datetime import UTC, datetime, timedelta
 from threading import Event
 
 import pytest
-from dgx_agent_protocol import canonical_message
-from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
-from dgx_control.models import (
+from vonk_agent_protocol import canonical_message
+from vonk_control.agent_jobs import AgentJobService, StaleAgentAttempt
+from vonk_control.models import (
     AgentCertificate,
     AgentEnrollment,
     AgentEnrollmentGrant,

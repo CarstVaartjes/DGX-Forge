@@ -13,13 +13,13 @@ from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-import dgx_agent.client as client_module
+import vonk_agent.client as client_module
 import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
-from dgx_agent.client import (
+from vonk_agent.client import (
     AgentAuthenticationError,
     AgentClient,
     AgentPermanentError,
@@ -32,7 +32,7 @@ from dgx_agent.client import (
     IssuedCredential,
     StaticCredentialProvider,
 )
-from dgx_agent_protocol import (
+from vonk_agent_protocol import (
     AgentClaim,
     AgentDirective,
     AgentOperation,

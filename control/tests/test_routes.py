@@ -4,8 +4,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from dgx_control.presence import ManagementAddressPolicy
-from dgx_control.routes import (
+from vonk_control.presence import ManagementAddressPolicy
+from vonk_control.routes import (
     RouteCandidate,
     RouteEndpoint,
     RouteEndpointPolicy,

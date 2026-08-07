@@ -11,14 +11,14 @@ from pathlib import Path
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from dgx_agent import package_helper_client as helper_client_module
-from dgx_agent.package_helper_client import (
+from vonk_agent import package_helper_client as helper_client_module
+from vonk_agent.package_helper_client import (
     PACKAGE_HELPER_SOCKET,
     PackageHelperAdapterFactory,
     PackageHelperAuthorityVerifier,
     UnixPackageHelperClient,
 )
-from dgx_agent.package_helper_protocol import (
+from vonk_agent.package_helper_protocol import (
     HelperExecutionBody,
     HelperProtocolError,
     HelperRequest,
@@ -26,14 +26,14 @@ from dgx_agent.package_helper_protocol import (
     frame_helper_message,
     receive_helper_message,
 )
-from dgx_agent.packages.adapter import AdapterInvocation, AdapterOperation
-from dgx_agent.packages.backends import (
+from vonk_agent.packages.adapter import AdapterInvocation, AdapterOperation
+from vonk_agent.packages.backends import (
     Backend,
     BackendInvocation,
     NetworkPolicy,
     ResourcePolicy,
 )
-from dgx_agent_protocol.workload_packages import (
+from vonk_agent_protocol.workload_packages import (
     PACKAGE_HELPER_AUTHORITY,
     PackageHelperGrantClaims,
     PackageHelperOperation,

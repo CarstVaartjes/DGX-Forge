@@ -4,17 +4,17 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
-from dgx_agent.package_operations import OperationBinding, PackageDisposition
-from dgx_agent.packages.adapter import AdapterEvidence, AdapterOperation
-from dgx_agent.packages.engine import (
+from vonk_agent.package_operations import OperationBinding, PackageDisposition
+from vonk_agent.packages.adapter import AdapterEvidence, AdapterOperation
+from vonk_agent.packages.engine import (
     PackageCancelled,
     PackageEngine,
     PackageEngineError,
 )
-from dgx_agent.packages.materialize import MaterializedGeneration
-from dgx_agent.packages.state import PackageState
-from dgx_agent.packages.store import StoreObject
-from dgx_agent_protocol import AgentOperation, PackageOperationRequest
+from vonk_agent.packages.materialize import MaterializedGeneration
+from vonk_agent.packages.state import PackageState
+from vonk_agent.packages.store import StoreObject
+from vonk_agent_protocol import AgentOperation, PackageOperationRequest
 
 RELEASE_A = "a" * 64
 RELEASE_B = "b" * 64
@@ -367,7 +367,7 @@ def test_remove_refuses_live_leased_failed_generation_until_lease_expiry(
         generation_id=generation.generation_id,
         expires_at_ns=2_000,
     )
-    monkeypatch.setattr("dgx_agent.packages.engine.time.time_ns", lambda: 1_000)
+    monkeypatch.setattr("vonk_agent.packages.engine.time.time_ns", lambda: 1_000)
     with pytest.raises(PackageEngineError, match="leased"):
         engine.execute(
             _request(AgentOperation.PACKAGE_REMOVE, RELEASE_A), _binding(2), None

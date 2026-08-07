@@ -7,8 +7,8 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from dgx_control.models import AgentNode, Base, NodeMutationLease
-from dgx_control.node_leases import NodeLeaseConflict, NodeLeaseService
+from vonk_control.models import AgentNode, Base, NodeMutationLease
+from vonk_control.node_leases import NodeLeaseConflict, NodeLeaseService
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 

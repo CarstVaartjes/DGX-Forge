@@ -21,7 +21,7 @@ wheels = [
 ]
 
 [[package]]
-name = "dgx-agent-protocol"
+name = "vonk-agent-protocol"
 version = "2.1.0"
 source = { editable = "." }
 dependencies = [

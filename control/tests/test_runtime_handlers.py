@@ -5,8 +5,8 @@ import json
 from functools import partial
 
 import pytest
-from dgx_control.legacy_runtime import LegacyRuntimeHandlers
-from dgx_control.worker import HandlerRequest
+from vonk_control.legacy_runtime import LegacyRuntimeHandlers
+from vonk_control.worker import HandlerRequest
 
 RuntimeHandlers = partial(
     LegacyRuntimeHandlers,
@@ -64,7 +64,7 @@ def test_reconcile_runs_commit_pinned_release_profile_and_route_publication(tmp_
 
     assert calls == [
         (str(tmp_path / "scripts/deploy-runtime-release"), "model-a", "--root", str(tmp_path), "--apply"),
-        (str(tmp_path / "bin/sparkctl"), "switch", "agent", "--json"),
+        (str(tmp_path / "bin/vonkctl"), "switch", "agent", "--json"),
     ]
     assert routes.calls == [
         ("withdraw", ("spk_00000000000000000000000000000001",)),

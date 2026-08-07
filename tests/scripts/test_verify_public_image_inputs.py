@@ -29,7 +29,7 @@ def test_repository_public_image_inputs_are_clean() -> None:
 
 def test_live_token_pattern_is_rejected_without_echoing_value(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
-    source = repository / "control/src/dgx_control"
+    source = repository / "control/src/vonk_control"
     source.mkdir(parents=True)
     value = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
     (source / "leak.py").write_text(f'KEY = "{value}"\n')
@@ -37,13 +37,13 @@ def test_live_token_pattern_is_rejected_without_echoing_value(tmp_path: Path) ->
     result = run(repository)
 
     assert result.returncode == 1
-    assert "control/src/dgx_control/leak.py: github-token" in result.stderr
+    assert "control/src/vonk_control/leak.py: github-token" in result.stderr
     assert value not in result.stderr
 
 
 def test_private_key_header_is_rejected_without_echoing_content(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
-    source = repository / "control/src/dgx_control"
+    source = repository / "control/src/vonk_control"
     source.mkdir(parents=True)
     value = "-----BEGIN OPENSSH PRIVATE KEY-----"
     (source / "leak.py").write_text(f'KEY = "{value}"\n')
@@ -51,7 +51,7 @@ def test_private_key_header_is_rejected_without_echoing_content(tmp_path: Path) 
     result = run(repository)
 
     assert result.returncode == 1
-    assert "control/src/dgx_control/leak.py: private-key" in result.stderr
+    assert "control/src/vonk_control/leak.py: private-key" in result.stderr
     assert value not in result.stderr
 
 
@@ -59,7 +59,7 @@ def test_private_key_header_is_rejected_without_echoing_content(tmp_path: Path) 
     "relative",
     (
         "pyproject.toml",
-        "src/spark_profiles/leak.py",
+        "src/cluster_profiles/leak.py",
         "control/web/vite.config.ts",
     ),
 )
@@ -100,7 +100,7 @@ def test_dockerignored_web_outputs_are_not_scanned(
 
 
 def wheel_path(repository: Path) -> Path:
-    path = repository / "inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
+    path = repository / "inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl"
     path.parent.mkdir(parents=True)
     return path
 
@@ -109,13 +109,13 @@ def test_secret_in_compressed_wheel_member_is_rejected(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     value = "ghp_abcdefghijklmnopqrstuvwxyz0123456789"
     with zipfile.ZipFile(wheel_path(repository), "w", zipfile.ZIP_DEFLATED) as wheel:
-        wheel.writestr("dgx_agent_protocol/leak.py", f'SECRET = "{value}"\n')
+        wheel.writestr("vonk_agent_protocol/leak.py", f'SECRET = "{value}"\n')
 
     result = run(repository)
 
     assert result.returncode == 1
-    assert "inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl!/" in result.stderr
-    assert "dgx_agent_protocol/leak.py: github-token" in result.stderr
+    assert "inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl!/" in result.stderr
+    assert "vonk_agent_protocol/leak.py: github-token" in result.stderr
     assert value not in result.stdout + result.stderr
 
 

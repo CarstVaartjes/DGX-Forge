@@ -7,14 +7,14 @@ from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from dgx_control.models import (
+from vonk_control.models import (
     AgentNode,
     Base,
     Reconciliation,
     RoutePublication,
     RoutePublicationOwner,
 )
-from dgx_control.update_admin import (
+from vonk_control.update_admin import (
     PlatformUpdateAdminService,
     RouteImpact,
     durable_agent_observations,
@@ -22,8 +22,8 @@ from dgx_control.update_admin import (
     selected_platform_target,
     topology_exclusions_from_document,
 )
-from dgx_control.update_grants import AdminActionGrantIssuer
-from dgx_control.updates import (
+from vonk_control.update_grants import AdminActionGrantIssuer
+from vonk_control.updates import (
     AgentObservation,
     DistributedWorkload,
     PlatformAgentArtifact,

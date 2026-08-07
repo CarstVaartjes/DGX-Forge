@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "agent_protocol/src"))
 sys.path.insert(0, str(ROOT / "agent/src"))
 
-_simulator = import_module("dgx_agent.simulator")
+_simulator = import_module("vonk_agent.simulator")
 canonical_report = _simulator.canonical_report
 simulate_agent_lifecycle = _simulator.simulate_agent_lifecycle
 LINUX_AGENT_STATE_RUNTIME = pytest.mark.skipif(

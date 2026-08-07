@@ -8,10 +8,10 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from dgx_control.host_commands import BoundedCommandRunner, CommandPolicy
-from dgx_control.oci_bundle import OciBundleError, OciBundleSource
+from vonk_control.host_commands import BoundedCommandRunner, CommandPolicy
+from vonk_control.oci_bundle import OciBundleError, OciBundleSource
 
-from spark_profiles.platform_release import OciDeploymentBundle
+from cluster_profiles.platform_release import OciDeploymentBundle
 
 MANIFEST_MEDIA_TYPE = "application/vnd.oci.image.manifest.v1+json"
 LAYER_MEDIA_TYPE = "application/vnd.dgx-forge.control-deployment.v1.tar"

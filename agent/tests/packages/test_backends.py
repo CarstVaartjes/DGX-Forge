@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from dgx_agent.packages.backends import (
+from vonk_agent.packages.backends import (
     Backend,
     BackendInvocation,
     BackendValidationError,
@@ -11,7 +11,7 @@ from dgx_agent.packages.backends import (
     NetworkPolicy,
     ResourcePolicy,
 )
-from dgx_agent_protocol import OciBundleMetadata
+from vonk_agent_protocol import OciBundleMetadata
 
 RELEASE = "a" * 64
 OBJECT = "b" * 64

@@ -16,7 +16,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 ROOT = Path(__file__).resolve().parents[2]
 BUILDER = ROOT / "agent/tools/build-slot-artifact"
-PROTOCOL = ROOT / "inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
+PROTOCOL = ROOT / "inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl"
 
 
 def test_rust_slot_manifest_fixture_is_canonical_and_domain_signed() -> None:
@@ -65,8 +65,8 @@ def slot_wheels(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
             check=True,
         )
     return (
-        next(distribution.glob("dgx_agent-*.whl")),
-        next(distribution.glob("spark_profiles-*.whl")),
+        next(distribution.glob("vonk_agent-*.whl")),
+        next(distribution.glob("cluster_profiles-*.whl")),
     )
 
 

@@ -6,14 +6,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from dgx_control.api import create_app
-from dgx_control.audit import MemoryAuditStore
-from dgx_control.auth import Actor, TokenCodec
-from dgx_control.catalog_service import CatalogService
-from dgx_control.global_catalog import GlobalRecipeRevision
-from dgx_control.models import Base
-from dgx_control.recipe_contract import recipe_content_sha256
-from dgx_control.source_bundles import SourceBundleStore, generate_source_bundle
+from vonk_control.api import create_app
+from vonk_control.audit import MemoryAuditStore
+from vonk_control.auth import Actor, TokenCodec
+from vonk_control.catalog_service import CatalogService
+from vonk_control.global_catalog import GlobalRecipeRevision
+from vonk_control.models import Base
+from vonk_control.recipe_contract import recipe_content_sha256
+from vonk_control.source_bundles import SourceBundleStore, generate_source_bundle
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

@@ -28,7 +28,7 @@ repository_src = Path(__file__).resolve().parents[1] / "src"
 if str(repository_src) not in sys.path:
     sys.path.insert(0, str(repository_src))
 
-from spark_profiles.ssh_transport import select_transport_binary
+from cluster_profiles.ssh_transport import select_transport_binary
 
 NCCL_VERSION = "v2.30.7-1"
 NCCL_COMMIT = "73cf112295c33aee2b895f329f592f2a9b4b0f97"

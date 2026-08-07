@@ -4,7 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from dgx_agent_protocol import (
+from vonk_agent_protocol import (
     AgentClaim,
     AgentOperation,
     AgentResult,

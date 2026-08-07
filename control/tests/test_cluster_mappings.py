@@ -4,9 +4,9 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dgx_control.catalog_service import CatalogService, RecipeDraftInput
-from dgx_control.cluster_mappings import ClusterMappingService
-from dgx_control.models import AgentNode, Base, ClusterMapping, ClusterMappingNode
+from vonk_control.catalog_service import CatalogService, RecipeDraftInput
+from vonk_control.cluster_mappings import ClusterMappingService
+from vonk_control.models import AgentNode, Base, ClusterMapping, ClusterMappingNode
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 

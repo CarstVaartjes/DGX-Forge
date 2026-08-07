@@ -10,10 +10,10 @@ from pathlib import Path
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
-from dgx_control import update_grants
-from dgx_control.update_authority import UpdateAuthorizationError
-from dgx_control.update_grants import AdminActionGrantError, AdminActionGrantIssuer
-from dgx_control.update_signer import AdminActionGrantVerifier
+from vonk_control import update_grants
+from vonk_control.update_authority import UpdateAuthorizationError
+from vonk_control.update_grants import AdminActionGrantError, AdminActionGrantIssuer
+from vonk_control.update_signer import AdminActionGrantVerifier
 
 NOW = datetime.fromtimestamp(1_800_000_000, tz=UTC)
 ROLLOUT = "11111111-1111-4111-8111-111111111111"

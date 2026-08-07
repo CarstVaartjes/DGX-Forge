@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from dgx_control.updates import (
+from vonk_control.updates import (
     AgentObservation,
     DistributedWorkload,
     PlatformAgentArtifact,

@@ -4,7 +4,7 @@ import hashlib
 from datetime import UTC, datetime
 
 import pytest
-from dgx_control.package_validation import ValidationController, ValidationError
+from vonk_control.package_validation import ValidationController, ValidationError
 
 
 def _candidate() -> dict[str, object]:

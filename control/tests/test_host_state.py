@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from dgx_control import host_state as host_state_module
-from dgx_control.host_state import (
+from vonk_control import host_state as host_state_module
+from vonk_control.host_state import (
     HostGenerationStore,
     HostOperationLock,
     HostOperationPlan,

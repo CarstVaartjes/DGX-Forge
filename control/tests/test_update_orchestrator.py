@@ -8,10 +8,10 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from dgx_agent_protocol import canonical_message
-from dgx_control import updates
-from dgx_control.agent_jobs import AgentJobService
-from dgx_control.models import (
+from vonk_agent_protocol import canonical_message
+from vonk_control import updates
+from vonk_control.agent_jobs import AgentJobService
+from vonk_control.models import (
     AgentCertificate,
     AgentNode,
     AgentOperation,
@@ -23,10 +23,10 @@ from dgx_control.models import (
     UpdateRollout,
     UpdateRolloutNode,
 )
-from dgx_control.node_leases import NodeLeaseService
-from dgx_control.update_admin import DurableUpdateGrantRefresher, durable_update_status
-from dgx_control.update_grants import AdminActionGrantIssuer
-from dgx_control.update_routes import RouteDrainReceipt
+from vonk_control.node_leases import NodeLeaseService
+from vonk_control.update_admin import DurableUpdateGrantRefresher, durable_update_status
+from vonk_control.update_grants import AdminActionGrantIssuer
+from vonk_control.update_routes import RouteDrainReceipt
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -445,7 +445,7 @@ def _harness(
     tmp_path, node_ids: tuple[str, ...] = (NODE_A, NODE_B)
 ) -> Harness:
     engine = create_engine(f"sqlite:///{tmp_path / 'updates.sqlite'}")
-    from dgx_control.models import Base
+    from vonk_control.models import Base
 
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)

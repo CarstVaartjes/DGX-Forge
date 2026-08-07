@@ -2,7 +2,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from dgx_control.code_host import RepositoryCodeHost
+from vonk_control.code_host import RepositoryCodeHost
 
 
 def git(root: Path, *args: str, input: bytes | None = None) -> str:

@@ -14,7 +14,7 @@ from types import SimpleNamespace
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-from dgx_agent.package_helper import (
+from vonk_agent.package_helper import (
     Ed25519ReceiptVerifier,
     PackageHelper,
     SignedFenceAuthorizer,
@@ -22,7 +22,7 @@ from dgx_agent.package_helper import (
     main,
     serve_connection,
 )
-from dgx_agent.package_helper_protocol import (
+from vonk_agent.package_helper_protocol import (
     HelperProtocolError,
     HelperRequest,
     HelperResponse,
@@ -31,9 +31,9 @@ from dgx_agent.package_helper_protocol import (
     frame_helper_message,
     receive_helper_message,
 )
-from dgx_agent.packages.backends import BackendInvocation
-from dgx_agent.packages.sandbox import SandboxPolicy
-from dgx_agent_protocol.workload_packages import (
+from vonk_agent.packages.backends import BackendInvocation
+from vonk_agent.packages.sandbox import SandboxPolicy
+from vonk_agent_protocol.workload_packages import (
     PACKAGE_HELPER_AUTHORITY,
     PackageHelperGrantClaims,
     PackageHelperOperation,
@@ -648,8 +648,8 @@ def test_python_launcher_uses_signed_generation_interpreter_and_environment(
 
     # The launcher still verifies and applies the dedicated workload identity;
     # this fixture keeps the test runnable under root CI as well.
-    monkeypatch.setattr("dgx_agent.package_helper.os.fchown", lambda *_: None)
-    monkeypatch.setattr("dgx_agent.package_helper.os.fchmod", lambda *_: None)
+    monkeypatch.setattr("vonk_agent.package_helper.os.fchown", lambda *_: None)
+    monkeypatch.setattr("vonk_agent.package_helper.os.fchmod", lambda *_: None)
     runner = Runner()
     launcher = SystemdBackendLauncher(generations, runner=runner)
     result = launcher.launch(
@@ -765,7 +765,7 @@ def test_helper_cli_requires_exact_systemd_socket_activation(monkeypatch) -> Non
 
 
 def test_helper_cli_rejects_same_grant_and_receipt_public_key(monkeypatch) -> None:
-    import dgx_agent.package_helper as helper_module
+    import vonk_agent.package_helper as helper_module
 
     monkeypatch.setenv("LISTEN_PID", str(os.getpid()))
     monkeypatch.setenv("LISTEN_FDS", "1")
@@ -796,7 +796,7 @@ def test_helper_cli_rejects_same_grant_and_receipt_public_key(monkeypatch) -> No
 def test_helper_cli_builds_only_fixed_installed_boundaries_and_fd3(
     monkeypatch,
 ) -> None:
-    import dgx_agent.package_helper as helper_module
+    import vonk_agent.package_helper as helper_module
 
     monkeypatch.setenv("LISTEN_PID", str(os.getpid()))
     monkeypatch.setenv("LISTEN_FDS", "1")

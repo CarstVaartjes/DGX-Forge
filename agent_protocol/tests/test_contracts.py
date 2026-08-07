@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from dgx_agent_protocol import (
+from vonk_agent_protocol import (
     AgentClaim,
     AgentOperation,
     AgentProgress,
@@ -452,10 +452,10 @@ def test_shared_schema_validator_and_parser_reject_oversized_canonical_documents
 @pytest.mark.parametrize("name", ["agent-job.schema.json", "agent-result.schema.json"])
 def test_packaged_schemas_match_repository_bytes(name: str) -> None:
     repository_schema = (
-        Path(__file__).parents[1] / "src" / "dgx_agent_protocol" / "schemas" / name
+        Path(__file__).parents[1] / "src" / "vonk_agent_protocol" / "schemas" / name
     ).read_bytes()
     packaged_schema = (
-        importlib.resources.files("dgx_agent_protocol") / "schemas" / name
+        importlib.resources.files("vonk_agent_protocol") / "schemas" / name
     ).read_bytes()
 
     assert packaged_schema == repository_schema

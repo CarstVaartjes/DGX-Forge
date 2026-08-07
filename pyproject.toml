@@ -3,9 +3,9 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "spark-profiles"
+name = "vonk-cluster-profiles"
 version = "0.1.0"
-description = "Developer-machine contracts for DGX Spark workload profiles"
+description = "Vonk Forge cluster workload-profile contracts"
 requires-python = ">=3.12"
 dependencies = [
   "attrs==26.1.0",
@@ -17,34 +17,37 @@ dependencies = [
 ]
 
 [project.scripts]
-sparkctl = "spark_profiles.cli:main"
+vonkctl = "cluster_profiles.cli:main"
 
 [dependency-groups]
 dev = ["pytest==9.1.1"]
 
+[tool.hatch.build.targets.wheel]
+packages = ["src/cluster_profiles"]
+
 [tool.hatch.build.targets.wheel.force-include]
-"src/spark_profiles/schemas/workload.schema.json" = "spark_profiles/schemas/workload.schema.json"
-"src/spark_profiles/schemas/cluster-profile.schema.json" = "spark_profiles/schemas/cluster-profile.schema.json"
-"src/spark_profiles/schemas/model-definitions.schema.json" = "spark_profiles/schemas/model-definitions.schema.json"
-"src/spark_profiles/schemas/model-definition-evidence.schema.json" = "spark_profiles/schemas/model-definition-evidence.schema.json"
-"src/spark_profiles/schemas/accepted-cluster-profiles.schema.json" = "spark_profiles/schemas/accepted-cluster-profiles.schema.json"
-"src/spark_profiles/schemas/node-health-raw.schema.json" = "spark_profiles/schemas/node-health-raw.schema.json"
-"src/spark_profiles/schemas/node-health.schema.json" = "spark_profiles/schemas/node-health.schema.json"
-"src/spark_profiles/schemas/fleet.schema.json" = "spark_profiles/schemas/fleet.schema.json"
-"src/spark_profiles/schemas/topology.schema.json" = "spark_profiles/schemas/topology.schema.json"
-"src/spark_profiles/schemas/platform-release-evidence.schema.json" = "spark_profiles/schemas/platform-release-evidence.schema.json"
-"src/spark_profiles/schemas/placement-requirements.schema.json" = "spark_profiles/schemas/placement-requirements.schema.json"
-"src/spark_profiles/schemas/cluster-profile-v2.schema.json" = "spark_profiles/schemas/cluster-profile-v2.schema.json"
-"src/spark_profiles/schemas/workload-v2.schema.json" = "spark_profiles/schemas/workload-v2.schema.json"
-"src/spark_profiles/schemas/platform-update-manifest.schema.json" = "spark_profiles/schemas/platform-update-manifest.schema.json"
-"src/spark_profiles/schemas/control-deployment-bundle.schema.json" = "spark_profiles/schemas/control-deployment-bundle.schema.json"
-"src/spark_profiles/schemas/package-family.schema.json" = "spark_profiles/schemas/package-family.schema.json"
-"src/spark_profiles/schemas/workload-deployment.schema.json" = "spark_profiles/schemas/workload-deployment.schema.json"
+"src/cluster_profiles/schemas/workload.schema.json" = "cluster_profiles/schemas/workload.schema.json"
+"src/cluster_profiles/schemas/cluster-profile.schema.json" = "cluster_profiles/schemas/cluster-profile.schema.json"
+"src/cluster_profiles/schemas/model-definitions.schema.json" = "cluster_profiles/schemas/model-definitions.schema.json"
+"src/cluster_profiles/schemas/model-definition-evidence.schema.json" = "cluster_profiles/schemas/model-definition-evidence.schema.json"
+"src/cluster_profiles/schemas/accepted-cluster-profiles.schema.json" = "cluster_profiles/schemas/accepted-cluster-profiles.schema.json"
+"src/cluster_profiles/schemas/node-health-raw.schema.json" = "cluster_profiles/schemas/node-health-raw.schema.json"
+"src/cluster_profiles/schemas/node-health.schema.json" = "cluster_profiles/schemas/node-health.schema.json"
+"src/cluster_profiles/schemas/fleet.schema.json" = "cluster_profiles/schemas/fleet.schema.json"
+"src/cluster_profiles/schemas/topology.schema.json" = "cluster_profiles/schemas/topology.schema.json"
+"src/cluster_profiles/schemas/platform-release-evidence.schema.json" = "cluster_profiles/schemas/platform-release-evidence.schema.json"
+"src/cluster_profiles/schemas/placement-requirements.schema.json" = "cluster_profiles/schemas/placement-requirements.schema.json"
+"src/cluster_profiles/schemas/cluster-profile-v2.schema.json" = "cluster_profiles/schemas/cluster-profile-v2.schema.json"
+"src/cluster_profiles/schemas/workload-v2.schema.json" = "cluster_profiles/schemas/workload-v2.schema.json"
+"src/cluster_profiles/schemas/platform-update-manifest.schema.json" = "cluster_profiles/schemas/platform-update-manifest.schema.json"
+"src/cluster_profiles/schemas/control-deployment-bundle.schema.json" = "cluster_profiles/schemas/control-deployment-bundle.schema.json"
+"src/cluster_profiles/schemas/package-family.schema.json" = "cluster_profiles/schemas/package-family.schema.json"
+"src/cluster_profiles/schemas/workload-deployment.schema.json" = "cluster_profiles/schemas/workload-deployment.schema.json"
 
 [tool.ruff]
 required-version = "==0.16.1"
 target-version = "py312"
-extend-exclude = ["src/spark_profiles/generated_control"]
+extend-exclude = ["src/cluster_profiles/generated_control"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src", "."]

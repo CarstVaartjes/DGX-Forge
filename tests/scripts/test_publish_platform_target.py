@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from spark_profiles.deployment_bundle import build_deployment_bundle
+from cluster_profiles.deployment_bundle import build_deployment_bundle
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/publish-platform-target"

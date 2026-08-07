@@ -8,16 +8,16 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from dgx_agent_protocol import canonical_message
-from dgx_control.litellm import LiteLlmDeployment
-from dgx_control.models import (
+from vonk_agent_protocol import canonical_message
+from vonk_control.litellm import LiteLlmDeployment
+from vonk_control.models import (
     Base,
     Reconciliation,
     RoutePublication,
     RoutePublicationOwner,
 )
-from dgx_control.presence import ManagementAddressPolicy
-from dgx_control.route_runtime import (
+from vonk_control.presence import ManagementAddressPolicy
+from vonk_control.route_runtime import (
     AcceptedEndpointEvidence,
     ActivationMarker,
     AtomicRouteBundlePublisher,
@@ -26,7 +26,7 @@ from dgx_control.route_runtime import (
     RouteRuntimeError,
     endpoint_evidence_digest,
 )
-from dgx_control.update_routes import (
+from vonk_control.update_routes import (
     ProductionUpdateRouteBoundary,
     RouteDrainReceipt,
     RouteRenewalResult,

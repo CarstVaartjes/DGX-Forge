@@ -11,13 +11,13 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from dgx_agent.packages.materialize import (
+from vonk_agent.packages.materialize import (
     MaterializationCancelled,
     MaterializationError,
     MaterializedGeneration,
     Materializer,
 )
-from dgx_agent_protocol.workload_packages import (
+from vonk_agent_protocol.workload_packages import (
     ComponentDescriptor,
     OciBundleMetadata,
     PackageReleaseLock,

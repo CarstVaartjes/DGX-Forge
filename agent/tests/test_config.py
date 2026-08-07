@@ -6,7 +6,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from dgx_agent.config import (
+from vonk_agent.config import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_STATE_ROOT,
     AgentConfig,
@@ -406,7 +406,7 @@ def test_configuration_rejects_a_credential_swapped_to_symlink_during_open(
             certificate.symlink_to(replacement)
         return real_open(path, flags, *args, **kwargs)
 
-    monkeypatch.setattr("dgx_agent.config.os.open", swapping_open)
+    monkeypatch.setattr("vonk_agent.config.os.open", swapping_open)
     with pytest.raises(AgentConfigError):
         AgentConfig.load(_write_config(tmp_path, document))
 
@@ -414,7 +414,7 @@ def test_configuration_rejects_a_credential_swapped_to_symlink_during_open(
 def test_project_imports_normally_outside_the_repository(tmp_path: Path) -> None:
     project = Path(__file__).parents[1]
     result = subprocess.run(
-        ["uv", "run", "--project", str(project), "python", "-c", "import dgx_agent"],
+        ["uv", "run", "--project", str(project), "python", "-c", "import vonk_agent"],
         cwd=tmp_path,
         capture_output=True,
         text=True,

@@ -5,10 +5,10 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from dgx_agent_protocol import AgentResult
-from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
-from dgx_control.jobs import JobService
-from dgx_control.models import (
+from vonk_agent_protocol import AgentResult
+from vonk_control.agent_jobs import AgentJobService, StaleAgentAttempt
+from vonk_control.jobs import JobService
+from vonk_control.models import (
     AgentCertificate,
     AgentNode,
     AgentOperation,

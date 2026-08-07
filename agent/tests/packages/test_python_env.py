@@ -11,15 +11,15 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from dgx_agent.package_operations import OperationBinding
-from dgx_agent.packages.python_env import (
+from vonk_agent.package_operations import OperationBinding
+from vonk_agent.packages.python_env import (
     PythonEnvironmentBuilder,
     PythonEnvironmentCancelled,
     PythonEnvironmentError,
     PythonEnvironmentSpec,
     PythonRuntimeIdentity,
 )
-from dgx_agent.packages.store import ComponentDescriptor, ContentStore
+from vonk_agent.packages.store import ComponentDescriptor, ContentStore
 
 
 @dataclass(frozen=True)
@@ -306,7 +306,7 @@ def test_runtime_identity_is_validated_and_immutable() -> None:
 
 
 def test_runtime_identity_is_exported_from_package_namespace() -> None:
-    from dgx_agent.packages import PythonRuntimeIdentity as ExportedIdentity
+    from vonk_agent.packages import PythonRuntimeIdentity as ExportedIdentity
 
     assert ExportedIdentity is PythonRuntimeIdentity
 
@@ -315,7 +315,7 @@ def test_wheel_expanded_size_is_checked_before_member_read(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from dgx_agent.packages import python_env
+    from vonk_agent.packages import python_env
 
     wheel_bytes = _wheel()
     wheel = zipfile.ZipFile(io.BytesIO(wheel_bytes))

@@ -13,9 +13,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from dgx_agent import state as state_module
-from dgx_agent.state import AgentStateConflict, AgentStateError, AgentStateStore
-from dgx_agent_protocol import (
+from vonk_agent import state as state_module
+from vonk_agent.state import AgentStateConflict, AgentStateError, AgentStateStore
+from vonk_agent_protocol import (
     AgentClaim,
     AgentOperation,
     AgentProgress,
@@ -470,7 +470,7 @@ def test_fresh_root_initialization_is_race_free_across_processes(tmp_path: Path)
 from concurrent.futures import ProcessPoolExecutor
 import os
 from pathlib import Path
-from dgx_agent.state import AgentStateStore
+from vonk_agent.state import AgentStateStore
 
 def initialize(_):
     AgentStateStore(Path(os.environ['AGENT_STATE_TEST_ROOT']))
@@ -657,7 +657,7 @@ def test_backward_clock_never_commits_corrupt_timestamps(tmp_path: Path, monkeyp
     store.begin(claim())
     if method == "acknowledge":
         store.finish(result())
-    monkeypatch.setattr("dgx_agent.state._now", lambda: "2020-01-01T00:00:00+00:00")
+    monkeypatch.setattr("vonk_agent.state._now", lambda: "2020-01-01T00:00:00+00:00")
     if method == "heartbeat":
         store.heartbeat(progress())
     elif method == "finish":
@@ -693,7 +693,7 @@ def test_sqlite_open_is_anchored_against_path_substitution(tmp_path: Path, monke
             root.mkdir(mode=0o700)
         return real_connect(database, *args, **kwargs)
 
-    monkeypatch.setattr("dgx_agent.state.sqlite3.connect", swapping_connect)
+    monkeypatch.setattr("vonk_agent.state.sqlite3.connect", swapping_connect)
     assert store.recover_active().claim == claim()
 
 

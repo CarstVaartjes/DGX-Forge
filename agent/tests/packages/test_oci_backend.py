@@ -5,21 +5,21 @@ import json
 from pathlib import Path
 
 import pytest
-from dgx_agent.package_helper_protocol import HelperExecutionBody, HelperRequest
-from dgx_agent.packages.backends import (
+from vonk_agent.package_helper_protocol import HelperExecutionBody, HelperRequest
+from vonk_agent.packages.backends import (
     Backend,
     BackendInvocation,
     NetworkPolicy,
     ResourcePolicy,
 )
-from dgx_agent.packages.oci_backend import (
+from vonk_agent.packages.oci_backend import (
     OciBackendError,
     OciBackendLauncher,
     OciRuntimeCapability,
 )
-from dgx_agent.packages.sandbox import SandboxPolicy
-from dgx_agent_protocol import OciBundleMetadata
-from dgx_agent_protocol.workload_packages import (
+from vonk_agent.packages.sandbox import SandboxPolicy
+from vonk_agent_protocol import OciBundleMetadata
+from vonk_agent_protocol.workload_packages import (
     PACKAGE_HELPER_AUTHORITY,
     PackageHelperGrantClaims,
     PackageHelperOperation,
@@ -108,7 +108,7 @@ def test_runtime_capability_rejects_non_fixed_executable(tmp_path: Path) -> None
 def test_oci_launcher_requires_signed_metadata_and_fixed_runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     if __import__("os").geteuid() != 0:
         pytest.skip("runtime capability ownership check requires root")
-    import dgx_agent.packages.oci_backend as module
+    import vonk_agent.packages.oci_backend as module
 
     runtime = tmp_path / "runc"
     runtime.write_bytes(b"runc-test")

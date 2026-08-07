@@ -8,9 +8,9 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import uvicorn
-from dgx_control.api import AdminServices, create_app
-from dgx_control.audit import MemoryAuditStore
-from dgx_control.auth import Actor, TokenCodec
+from vonk_control.api import AdminServices, create_app
+from vonk_control.audit import MemoryAuditStore
+from vonk_control.auth import Actor, TokenCodec
 
 COMMIT = "a" * 40
 PLAN_DIGEST = "d" * 64

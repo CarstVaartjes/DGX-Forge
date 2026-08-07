@@ -5,10 +5,10 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from dgx_agent_protocol import canonical_message
-from dgx_control.auth import TokenCodec
-from dgx_control.jobs import JobService, StaleAttempt
-from dgx_control.models import Base
+from vonk_agent_protocol import canonical_message
+from vonk_control.auth import TokenCodec
+from vonk_control.jobs import JobService, StaleAttempt
+from vonk_control.models import Base
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 

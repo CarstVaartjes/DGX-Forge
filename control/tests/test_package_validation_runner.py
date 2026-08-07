@@ -4,9 +4,9 @@ import hashlib
 from datetime import UTC, datetime
 
 import pytest
-from dgx_agent_protocol import AgentOperation, canonical_message
-from dgx_control.db import build_engine, session_factory
-from dgx_control.models import (
+from vonk_agent_protocol import AgentOperation, canonical_message
+from vonk_control.db import build_engine, session_factory
+from vonk_control.models import (
     AgentCertificate,
     AgentNode,
     AgentOperationAttempt,
@@ -14,10 +14,10 @@ from dgx_control.models import (
     Job,
     PackageValidationRun,
 )
-from dgx_control.models import (
+from vonk_control.models import (
     AgentOperation as StoredAgentOperation,
 )
-from dgx_control.package_validation_runner import PackageValidationRunner
+from vonk_control.package_validation_runner import PackageValidationRunner
 
 
 def _request() -> dict[str, object]:

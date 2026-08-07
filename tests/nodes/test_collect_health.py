@@ -10,7 +10,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 COLLECTOR = ROOT / "nodes" / "bin" / "collect-health"
 SCHEMA_PATH = ROOT / "schemas" / "node-health-raw.schema.json"
-PACKAGED_SCHEMA_PATH = ROOT / "src" / "spark_profiles" / "schemas" / "node-health-raw.schema.json"
+PACKAGED_SCHEMA_PATH = ROOT / "src" / "cluster_profiles" / "schemas" / "node-health-raw.schema.json"
 FIXTURES = ROOT / "tests" / "fixtures" / "node-health"
 FUNCTION_ARGS = (
     "--interface",

@@ -7,14 +7,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from dgx_control.catalog_service import (
+from vonk_control.catalog_service import (
     CatalogConflict,
     CatalogService,
     CatalogValidationError,
     RecipeDraftInput,
 )
-from dgx_control.models import Base, RecipeSourceBundle
-from dgx_control.source_bundles import SourceBundleStore, generate_source_bundle
+from vonk_control.models import Base, RecipeSourceBundle
+from vonk_control.source_bundles import SourceBundleStore, generate_source_bundle
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 

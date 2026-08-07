@@ -3,9 +3,9 @@ from __future__ import annotations
 import hashlib
 
 import pytest
-from dgx_agent.packages.providers import ComponentDescriptor as AgentComponent
-from dgx_agent.workload_runtime import ProtocolAcquisition, protocol_component
-from dgx_agent_protocol import AgentProtocolError
+from vonk_agent.packages.providers import ComponentDescriptor as AgentComponent
+from vonk_agent.workload_runtime import ProtocolAcquisition, protocol_component
+from vonk_agent_protocol import AgentProtocolError
 
 
 def _component(source: dict[str, object]) -> dict[str, object]:
@@ -25,7 +25,7 @@ def _component(source: dict[str, object]) -> dict[str, object]:
 
 
 def test_protocol_component_conversion_preserves_digest_and_source_binding() -> None:
-    from dgx_agent_protocol.workload_packages import ComponentDescriptor
+    from vonk_agent_protocol.workload_packages import ComponentDescriptor
 
     protocol = ComponentDescriptor.parse(
         _component(
@@ -45,7 +45,7 @@ def test_protocol_component_conversion_preserves_digest_and_source_binding() -> 
 
 
 def test_protocol_component_rejects_platform_mismatch() -> None:
-    from dgx_agent_protocol.workload_packages import ComponentDescriptor
+    from vonk_agent_protocol.workload_packages import ComponentDescriptor
 
     protocol = ComponentDescriptor.parse(
         _component(
@@ -61,7 +61,7 @@ def test_protocol_component_rejects_platform_mismatch() -> None:
 
 
 def test_protocol_acquisition_converts_wire_descriptor_before_fetch() -> None:
-    from dgx_agent_protocol.workload_packages import ComponentDescriptor
+    from vonk_agent_protocol.workload_packages import ComponentDescriptor
 
     protocol = ComponentDescriptor.parse(
         _component(

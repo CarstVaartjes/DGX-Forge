@@ -3,9 +3,9 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from dgx_control.auth import AgentIdentity, AgentSource
-from dgx_control.models import AgentCertificate, AgentNode, AgentPresence, Base
-from dgx_control.presence import (
+from vonk_control.auth import AgentIdentity, AgentSource
+from vonk_control.models import AgentCertificate, AgentNode, AgentPresence, Base
+from vonk_control.presence import (
     AgentPresenceService,
     ManagementAddressObservation,
     ManagementAddressPolicy,

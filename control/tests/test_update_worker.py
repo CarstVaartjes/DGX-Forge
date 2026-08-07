@@ -5,9 +5,9 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
-from dgx_control.models import AgentNode, Base, UpdateRollout, UpdateRolloutNode
-from dgx_control.update_routes import RouteRenewalResult, UpdateRouteError
-from dgx_control.update_worker import UpdateRolloutWorker
+from vonk_control.models import AgentNode, Base, UpdateRollout, UpdateRolloutNode
+from vonk_control.update_routes import RouteRenewalResult, UpdateRouteError
+from vonk_control.update_worker import UpdateRolloutWorker
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 

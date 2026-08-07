@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
-from dgx_control.topology import Placement, TopologyError, validate_topology
+from vonk_control.topology import Placement, TopologyError, validate_topology
 
 
 def multinode():

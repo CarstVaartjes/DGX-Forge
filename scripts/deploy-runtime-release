@@ -20,9 +20,9 @@ repository_src = Path(__file__).resolve().parents[1] / "src"
 if str(repository_src) not in sys.path:
     sys.path.insert(0, str(repository_src))
 
-from spark_profiles.ssh_transport import select_transport
-from spark_profiles.fleet import NodeId
-from spark_profiles.fleet.loaders import FleetLoadError, load_fleet
+from cluster_profiles.ssh_transport import select_transport
+from cluster_profiles.fleet import NodeId
+from cluster_profiles.fleet.loaders import FleetLoadError, load_fleet
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _SAFE_NAME = re.compile(r"^[A-Za-z0-9._/-]+$")

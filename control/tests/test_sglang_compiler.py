@@ -1,8 +1,8 @@
 import pytest
-from dgx_control.import_report import ImportReportBuilder
-from dgx_control.runtime_compilers.common import RuntimeCompileError
-from dgx_control.runtime_compilers.sglang import compile_sglang
-from dgx_control.sparkrun_source import parse_sparkrun_yaml
+from vonk_control.import_report import ImportReportBuilder
+from vonk_control.runtime_compilers.common import RuntimeCompileError
+from vonk_control.runtime_compilers.sglang import compile_sglang
+from vonk_control.sparkrun_source import parse_sparkrun_yaml
 
 
 def source(command: str):

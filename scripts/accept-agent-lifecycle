@@ -32,7 +32,7 @@ if os.environ.get("DGX_AGENT_SIMULATOR_LOCKED_ENV") != "1":
 
 sys.path.insert(0, str(ROOT / "agent/src"))
 
-from dgx_agent.simulator import (
+from vonk_agent.simulator import (
     acceptance_argument_parser,
     canonical_report,
     simulate_agent_lifecycle,

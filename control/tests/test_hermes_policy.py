@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from dgx_control.hermes_policy import HermesAgentPolicy, HermesPolicyError
+from vonk_control.hermes_policy import HermesAgentPolicy, HermesPolicyError
 
 DUAL = "deepseek-agent-dual"
 SINGLE = "deepseek-agent-single"

@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 import pytest
-from dgx_control.runtime_init import RuntimeSecretError, install_admin_grant_key
+from vonk_control.runtime_init import RuntimeSecretError, install_admin_grant_key
 
 
 def test_admin_grant_key_is_copied_to_a_private_api_runtime_file(

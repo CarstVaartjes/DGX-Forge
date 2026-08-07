@@ -9,9 +9,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from dgx_agent_protocol import canonical_message
-from dgx_control.presence import ManagementAddressPolicy
-from dgx_control.route_runtime import (
+from vonk_agent_protocol import canonical_message
+from vonk_control.presence import ManagementAddressPolicy
+from vonk_control.route_runtime import (
     AcceptedEndpointEvidence,
     AtomicRouteBundlePublisher,
     FileSupervisorAcknowledger,
@@ -376,7 +376,7 @@ def test_validation_or_activation_failure_retains_previous_exact_marker(
             raise OSError("crash before activation")
         original_replace(source, target)
 
-    monkeypatch.setattr("dgx_control.route_runtime.os.replace", fail_marker)
+    monkeypatch.setattr("vonk_control.route_runtime.os.replace", fail_marker)
     with pytest.raises(RouteRuntimeError, match="activation"):
         publisher.publish(replacement)
     assert active.read_bytes() == previous_bytes
@@ -582,8 +582,8 @@ def test_update_boundary_publication_compare_and_swap_is_atomic_and_idempotent(
 def test_commit_pinned_hermes_policy_selects_only_accepted_published_routes(
     tmp_path: Path,
 ) -> None:
-    hermes_routes = importlib.import_module("dgx_control.hermes_routes")
-    route_runtime = importlib.import_module("dgx_control.route_runtime")
+    hermes_routes = importlib.import_module("vonk_control.hermes_routes")
+    route_runtime = importlib.import_module("vonk_control.route_runtime")
     files = {
         "config/hermes-agent-policy.toml": (
             b"schema_version = 1\n"
@@ -627,7 +627,7 @@ def test_commit_pinned_hermes_policy_selects_only_accepted_published_routes(
 def test_atomic_bundle_includes_commit_pinned_hermes_group_or_fails_closed(
     tmp_path: Path,
 ) -> None:
-    hermes_routes = importlib.import_module("dgx_control.hermes_routes")
+    hermes_routes = importlib.import_module("vonk_control.hermes_routes")
     report = {
         "definitions": [{"id": "model", "maturity": "accepted"}],
     }

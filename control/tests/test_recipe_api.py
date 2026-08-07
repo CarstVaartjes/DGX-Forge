@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from dgx_control.api import create_app
-from dgx_control.audit import MemoryAuditStore
-from dgx_control.auth import Actor, TokenCodec
-from dgx_control.cluster_mappings import ClusterMappingPlacement, ClusterMappingPlan
-from dgx_control.install_admission import InstallNodePlan, InstallPlan
-from dgx_control.recipe_builds import RecipeBuildPlan
-from dgx_control.recipe_operations import RecipeOperationView
-from dgx_control.run_admission import RunNodePlan, RunPlan
-from dgx_control.source_policy import SourcePolicyReport
+from vonk_control.api import create_app
+from vonk_control.audit import MemoryAuditStore
+from vonk_control.auth import Actor, TokenCodec
+from vonk_control.cluster_mappings import ClusterMappingPlacement, ClusterMappingPlan
+from vonk_control.install_admission import InstallNodePlan, InstallPlan
+from vonk_control.recipe_builds import RecipeBuildPlan
+from vonk_control.recipe_operations import RecipeOperationView
+from vonk_control.run_admission import RunNodePlan, RunPlan
+from vonk_control.source_policy import SourcePolicyReport
 from fastapi.testclient import TestClient
 
 NODE = "spk_" + "1" * 32

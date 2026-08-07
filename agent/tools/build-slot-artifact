@@ -24,7 +24,7 @@ MAX_WHEEL = 256 * 1024 * 1024
 MAX_ARTIFACT = 256 * 1024 * 1024
 MAX_BUILD_ATTEMPTS = 3
 PYINSTALLER = "6.15.0"
-LOCK_SHA256 = "cef0b7ed0da7b4accba2503eeaa3fb8b2929e81791d0451975637201157363fe"
+LOCK_SHA256 = "94b9316e43129d775dee36c424c7e01bc0c29e4be6af02fba2d7f734732769ca"
 PACKAGING_DISTRIBUTIONS = {
     "altgraph": "0.17.5",
     "attrs": "26.1.0",
@@ -44,15 +44,15 @@ PACKAGING_DISTRIBUTIONS = {
     "rpds-py": "2026.6.3",
     "securesystemslib": "1.4.0",
     "setuptools": "83.0.0",
-    "spark-profiles": "0.1.0",
+    "vonk-cluster-profiles": "0.1.0",
     "tuf": "7.0.0",
     "typing-extensions": "4.16.0",
     "urllib3": "2.7.0",
 }
 INPUT_DISTRIBUTIONS = {
-    "agent wheel": ("dgx-agent", "0.1.0"),
-    "protocol wheel": ("dgx-agent-protocol", "2.1.0"),
-    "platform wheel": ("spark-profiles", "0.1.0"),
+    "agent wheel": ("vonk-forge-agent", "0.1.0"),
+    "protocol wheel": ("vonk-agent-protocol", "2.1.0"),
+    "platform wheel": ("vonk-cluster-profiles", "0.1.0"),
 }
 
 
@@ -168,9 +168,9 @@ def _validate_wheel(raw: bytes, label: str) -> None:
         raise BuildError(f"{label} distribution identity is not reviewed")
     if label == "platform wheel":
         required = {
-            "spark_profiles/platform_release.py",
-            "spark_profiles/update_trust.py",
-            "spark_profiles/schemas/platform-update-manifest.schema.json",
+            "cluster_profiles/platform_release.py",
+            "cluster_profiles/update_trust.py",
+            "cluster_profiles/schemas/platform-update-manifest.schema.json",
         }
         if not required.issubset(names):
             raise BuildError("platform wheel release closure is incomplete")
@@ -407,45 +407,45 @@ def build(
             "--paths",
             str(platform_source),
             "--hidden-import",
-            "dgx_agent.package_helper",
+            "vonk_agent.package_helper",
             "--hidden-import",
-            "dgx_agent.package_helper_protocol",
+            "vonk_agent.package_helper_protocol",
             "--hidden-import",
-            "dgx_agent.client",
+            "vonk_agent.client",
             "--hidden-import",
-            "dgx_agent.config",
+            "vonk_agent.config",
             "--hidden-import",
-            "dgx_agent.deadlines",
+            "vonk_agent.deadlines",
             "--hidden-import",
-            "dgx_agent.main",
+            "vonk_agent.main",
             "--hidden-import",
-            "dgx_agent.nvidia_tools",
+            "vonk_agent.nvidia_tools",
             "--hidden-import",
-            "dgx_agent.oci",
+            "vonk_agent.oci",
             "--hidden-import",
-            "dgx_agent.operations",
+            "vonk_agent.operations",
             "--hidden-import",
-            "dgx_agent.probe",
+            "vonk_agent.probe",
             "--hidden-import",
-            "dgx_agent.readiness",
+            "vonk_agent.readiness",
             "--hidden-import",
-            "dgx_agent.releases",
+            "vonk_agent.releases",
             "--hidden-import",
-            "dgx_agent.runtime_policy",
+            "vonk_agent.runtime_policy",
             "--hidden-import",
-            "dgx_agent.state",
+            "vonk_agent.state",
             "--hidden-import",
-            "dgx_agent.update_trust",
+            "vonk_agent.update_trust",
             "--hidden-import",
-            "dgx_agent.workloads",
+            "vonk_agent.workloads",
             "--hidden-import",
-            "spark_profiles.platform_release",
+            "cluster_profiles.platform_release",
             "--hidden-import",
-            "spark_profiles.update_trust",
+            "cluster_profiles.update_trust",
             "--add-data",
             (
-                f"{platform_source / 'spark_profiles/schemas/platform-update-manifest.schema.json'}"
-                ":spark_profiles/schemas"
+                f"{platform_source / 'cluster_profiles/schemas/platform-update-manifest.schema.json'}"
+                ":cluster_profiles/schemas"
             ),
             str(entry),
         ]

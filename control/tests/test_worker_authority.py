@@ -7,17 +7,17 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from dgx_agent_protocol import canonical_message
-from dgx_control.litellm import LiteLlmDeployment
-from dgx_control.presence import ManagementAddressPolicy
-from dgx_control.route_runtime import (
+from vonk_agent_protocol import canonical_message
+from vonk_control.litellm import LiteLlmDeployment
+from vonk_control.presence import ManagementAddressPolicy
+from vonk_control.route_runtime import (
     AcceptedEndpointEvidence,
     AtomicRouteBundlePublisher,
     PublishedRoute,
     RouteBundleRequest,
     endpoint_evidence_digest,
 )
-from dgx_control.worker_authority import (
+from vonk_control.worker_authority import (
     HttpWorkerAuthority,
     RepositoryAuthorityService,
     WorkerAuthorityError,
@@ -756,7 +756,7 @@ def test_worker_rejects_tampered_stale_redirected_or_oversized_authority(
 def test_worker_http_client_disables_environment_proxies() -> None:
     source = (
         Path(__file__).resolve().parents[1]
-        / "src/dgx_control/worker_authority.py"
+        / "src/vonk_control/worker_authority.py"
     ).read_text()
 
     assert "ProxyHandler({})" in source

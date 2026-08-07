@@ -9,7 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from dgx_control.host_commands import (
+from vonk_control.host_commands import (
     ArtifactPolicy,
     BoundedCommandRunner,
     CommandPolicy,

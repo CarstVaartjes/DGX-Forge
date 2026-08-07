@@ -1,5 +1,5 @@
 from alembic import context
-from dgx_control.models import Base
+from vonk_control.models import Base
 from sqlalchemy import engine_from_config, pool
 
 config = context.config

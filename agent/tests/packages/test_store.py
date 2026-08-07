@@ -7,19 +7,19 @@ import threading
 from pathlib import Path
 
 import pytest
-from dgx_agent.packages.fetch import AcquisitionEngine
-from dgx_agent.packages.providers import (
+from vonk_agent.packages.fetch import AcquisitionEngine
+from vonk_agent.packages.providers import (
     ComponentDescriptor as FetchComponentDescriptor,
 )
-from dgx_agent.packages.providers import (
+from vonk_agent.packages.providers import (
     FetchResponse,
     NetworkHop,
     ProviderRegistry,
     SourceLocation,
     Validators,
 )
-from dgx_agent.packages.state import OperationBinding, PackageStateConflict
-from dgx_agent.packages.store import (
+from vonk_agent.packages.state import OperationBinding, PackageStateConflict
+from vonk_agent.packages.store import (
     ComponentDescriptor,
     ContentStore,
     PackageCapacityError,

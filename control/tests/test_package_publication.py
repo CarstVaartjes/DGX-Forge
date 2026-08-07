@@ -5,7 +5,7 @@ import json
 from datetime import UTC, datetime
 
 import pytest
-from dgx_control.package_publication import (
+from vonk_control.package_publication import (
     PackagePublicationService,
     PublicationError,
 )

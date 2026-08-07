@@ -13,12 +13,12 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from dgx_agent_protocol import AgentResult, canonical_message
-from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
-from dgx_control.agent_reconciliation import AgentReconciliationService
-from dgx_control.auth import AgentIdentity, AgentSource
-from dgx_control.enrollment import EnrollmentService
-from dgx_control.models import (
+from vonk_agent_protocol import AgentResult, canonical_message
+from vonk_control.agent_jobs import AgentJobService, StaleAgentAttempt
+from vonk_control.agent_reconciliation import AgentReconciliationService
+from vonk_control.auth import AgentIdentity, AgentSource
+from vonk_control.enrollment import EnrollmentService
+from vonk_control.models import (
     AgentCertificate,
     AgentNode,
     AgentOperation,
@@ -33,10 +33,10 @@ from dgx_control.models import (
     RoutePublication,
     RoutePublicationOwner,
 )
-from dgx_control.node_leases import NodeLeaseConflict, NodeLeaseService
-from dgx_control.pki import CertificateAuthority, IssuedCertificate
-from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
-from dgx_control.route_runtime import AtomicRouteBundlePublisher
+from vonk_control.node_leases import NodeLeaseConflict, NodeLeaseService
+from vonk_control.pki import CertificateAuthority, IssuedCertificate
+from vonk_control.presence import AgentPresenceService, ManagementAddressPolicy
+from vonk_control.route_runtime import AtomicRouteBundlePublisher
 from sqlalchemy import create_engine, event, func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import SQLAlchemyError

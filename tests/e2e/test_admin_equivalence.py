@@ -141,12 +141,12 @@ def _fleet() -> dict[str, object]:
 
 
 def _live_check(token_directory: Path) -> dict[str, object]:
-    from dgx_control.api import AdminServices, create_app
-    from dgx_control.audit import MemoryAuditStore
-    from dgx_control.auth import Actor, TokenCodec
+    from vonk_control.api import AdminServices, create_app
+    from vonk_control.audit import MemoryAuditStore
+    from vonk_control.auth import Actor, TokenCodec
     from fastapi.testclient import TestClient
 
-    from spark_profiles.control_client import ControlClient
+    from cluster_profiles.control_client import ControlClient
 
     codec = TokenCodec(b"k" * 32)
     token = codec.issue(Actor("operator", "operator"), ttl_seconds=100, now=0)

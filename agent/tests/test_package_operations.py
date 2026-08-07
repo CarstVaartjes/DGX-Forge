@@ -5,15 +5,15 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from dgx_agent.operations import (
+from vonk_agent.operations import (
     InspectionDisposition,
     OperationContext,
     OperationRegistry,
     UnsupportedOperation,
 )
-from dgx_agent.package_operations import PackageDisposition, PackageInspection
-from dgx_agent.state import AgentStateStore
-from dgx_agent_protocol import (
+from vonk_agent.package_operations import PackageDisposition, PackageInspection
+from vonk_agent.state import AgentStateStore
+from vonk_agent_protocol import (
     AgentClaim,
     AgentDirective,
     AgentOperation,

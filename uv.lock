@@ -457,7 +457,7 @@ wheels = [
 ]
 
 [[package]]
-name = "spark-profiles"
+name = "vonk-cluster-profiles"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

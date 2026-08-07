@@ -21,22 +21,22 @@ def _copy(tmp_path: Path) -> Path:
         "schemas/control-deployment-bundle.schema.json",
         "schemas/platform-update-manifest.schema.json",
         "schemas/workload-artifact-build.schema.json",
-        "src/spark_profiles/deployment_bundle.py",
-        "src/spark_profiles/platform_authority_client.py",
-        "src/spark_profiles/platform_publication.py",
-        "src/spark_profiles/platform_release.py",
-        "src/spark_profiles/schemas/control-deployment-bundle.schema.json",
-        "src/spark_profiles/schemas/platform-update-manifest.schema.json",
+        "src/cluster_profiles/deployment_bundle.py",
+        "src/cluster_profiles/platform_authority_client.py",
+        "src/cluster_profiles/platform_publication.py",
+        "src/cluster_profiles/platform_release.py",
+        "src/cluster_profiles/schemas/control-deployment-bundle.schema.json",
+        "src/cluster_profiles/schemas/platform-update-manifest.schema.json",
         "agent/pyproject.toml", "agent/uv.lock", "agent_protocol/pyproject.toml",
         ".dockerignore", "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
         "bin/dgx-control-offline",
-        "control/src/dgx_control/offline.py",
-        "control/src/dgx_control/generation_launch.py",
-        "control/src/dgx_control/host_backup.py",
-        "control/src/dgx_control/host_commands.py",
-        "control/src/dgx_control/host_state.py",
-        "control/src/dgx_control/oci_bundle.py",
-        "control/src/dgx_control/upgrade.py",
+        "control/src/vonk_control/offline.py",
+        "control/src/vonk_control/generation_launch.py",
+        "control/src/vonk_control/host_backup.py",
+        "control/src/vonk_control/host_commands.py",
+        "control/src/vonk_control/host_state.py",
+        "control/src/vonk_control/oci_bundle.py",
+        "control/src/vonk_control/upgrade.py",
         "control/web/package-lock.json", "control/Dockerfile",
         "deploy/compose/compose.yaml", "deploy/compose/images.lock.json",
         "deploy/compose/Caddyfile", "deploy/compose/caddy/entrypoint.sh",
@@ -76,7 +76,7 @@ def _copy(tmp_path: Path) -> Path:
         "scripts/verify-public-image-inputs",
         "scripts/verify-supply-chain",
         "scripts/workload-artifact-metadata",
-        "src/spark_profiles/update_trust.py",
+        "src/cluster_profiles/update_trust.py",
     ):
         destination = target / path
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -99,7 +99,7 @@ def _rewrite_installed_protocol_wheel(
 ) -> None:
     """Mutate the wheel argument in the pip step, independent of other inputs."""
 
-    wheel = "/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
+    wheel = "/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl"
     lines = dockerfile.read_text().splitlines(keepends=True)
     candidates = [
         index
@@ -194,7 +194,7 @@ def test_supply_chain_manifest_binds_installed_host_updater_sources(
     tmp_path: Path,
 ) -> None:
     repository = _copy(tmp_path)
-    updater = repository / "control/src/dgx_control/offline.py"
+    updater = repository / "control/src/vonk_control/offline.py"
     updater.write_bytes(updater.read_bytes() + b"\n# drift\n")
 
     result = subprocess.run(
@@ -211,9 +211,9 @@ def test_supply_chain_manifest_binds_installed_host_updater_sources(
 @pytest.mark.parametrize(
     "path",
     (
-        "src/spark_profiles/platform_release.py",
+        "src/cluster_profiles/platform_release.py",
         "schemas/platform-update-manifest.schema.json",
-        "src/spark_profiles/schemas/platform-update-manifest.schema.json",
+        "src/cluster_profiles/schemas/platform-update-manifest.schema.json",
     ),
 )
 def test_supply_chain_manifest_binds_platform_parser_and_both_schemas(
@@ -234,7 +234,7 @@ def test_supply_chain_manifest_binds_platform_parser_and_both_schemas(
     assert "manifest" in " ".join(json.loads(result.stdout)["errors"]).lower()
 
 
-def test_verifier_does_not_require_spark_profiles_to_be_installed(
+def test_verifier_does_not_require_cluster_profiles_to_be_installed(
     tmp_path: Path,
 ) -> None:
     repository = _copy(tmp_path)
@@ -252,7 +252,7 @@ def test_verifier_does_not_require_spark_profiles_to_be_installed(
 def test_supply_chain_manifest_binds_the_canonical_deployment_bundle(
     tmp_path: Path,
 ) -> None:
-    from spark_profiles.deployment_bundle import build_deployment_bundle
+    from cluster_profiles.deployment_bundle import build_deployment_bundle
 
     repository = _copy(tmp_path)
     manifest = json.loads(
@@ -411,7 +411,7 @@ def test_verifier_rejects_stale_sbom_after_lock_change(tmp_path: Path) -> None:
 
 def test_verifier_rejects_protocol_wheel_or_lock_drift(tmp_path: Path) -> None:
     repository = _copy(tmp_path)
-    source = repository / "agent_protocol/src/dgx_agent_protocol/contracts.py"
+    source = repository / "agent_protocol/src/vonk_agent_protocol/contracts.py"
     source.write_text(source.read_text() + "\n# package drift\n")
 
     result = subprocess.run([SCRIPT, "--root", repository], capture_output=True, text=True, check=False)
@@ -422,7 +422,7 @@ def test_verifier_rejects_protocol_wheel_or_lock_drift(tmp_path: Path) -> None:
 
 def test_verifier_rejects_a_missing_protocol_wheel_artifact(tmp_path: Path) -> None:
     repository = _copy(tmp_path)
-    wheel = repository / "inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
+    wheel = repository / "inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl"
     assert wheel.is_file()
     wheel.unlink()
 
@@ -434,7 +434,7 @@ def test_verifier_rejects_a_missing_protocol_wheel_artifact(tmp_path: Path) -> N
 
 def test_verifier_rejects_a_byte_different_protocol_wheel_with_the_same_name_and_version(tmp_path: Path) -> None:
     repository = _copy(tmp_path)
-    wheel = repository / "inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
+    wheel = repository / "inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl"
     wheel.write_bytes(wheel.read_bytes() + b"different bytes")
 
     result = subprocess.run([SCRIPT, "--root", repository], capture_output=True, text=True, check=False)
@@ -445,13 +445,13 @@ def test_verifier_rejects_a_byte_different_protocol_wheel_with_the_same_name_and
 
 def test_protocol_spdx_records_the_verified_wheel_checksum(tmp_path: Path) -> None:
     repository = _copy(tmp_path)
-    wheel = repository / "inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
+    wheel = repository / "inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl"
     document = json.loads((repository / "inventory/sbom/agent-protocol.spdx.json").read_text())
-    protocol = next(package for package in document["packages"] if package["name"] == "dgx-agent-protocol")
+    protocol = next(package for package in document["packages"] if package["name"] == "vonk-agent-protocol")
 
     checksum = hashlib.sha256(wheel.read_bytes()).hexdigest()
     assert protocol["checksums"] == [{"algorithm": "SHA256", "checksumValue": checksum}]
-    wheel_file = next(file for file in document["files"] if file["fileName"] == "inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl")
+    wheel_file = next(file for file in document["files"] if file["fileName"] == "inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl")
     assert wheel_file["checksums"] == [{"algorithm": "SHA256", "checksumValue": checksum}]
     assert {
         "spdxElementId": protocol["SPDXID"],
@@ -474,7 +474,7 @@ def test_verifier_rejects_a_root_dockerignore_change(tmp_path: Path) -> None:
 def test_verifier_rejects_a_protocol_lock_hash_that_does_not_match_the_wheel(tmp_path: Path) -> None:
     repository = _copy(tmp_path)
     lock = repository / "agent/uv.lock"
-    wheel = repository / "inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
+    wheel = repository / "inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl"
     wheel_hash = hashlib.sha256(wheel.read_bytes()).hexdigest()
     lock.write_text(lock.read_text().replace(wheel_hash, "0" * 64))
 
@@ -517,10 +517,10 @@ def test_verifier_rejects_a_protocol_wheel_mentioned_only_after_a_shell_operator
 ) -> None:
     repository = _copy(tmp_path)
     dockerfile = repository / "control/Dockerfile"
-    wheel = "/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
+    wheel = "/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl"
     _rewrite_installed_protocol_wheel(
         dockerfile,
-        f"/spark-profiles . {operator} test -f {wheel} #",
+        f"/vonk-cluster-profiles . {operator} test -f {wheel} #",
     )
 
     result = subprocess.run([SCRIPT, "--root", repository, "--generate"], capture_output=True, text=True, check=False)

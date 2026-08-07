@@ -15,21 +15,21 @@ import pytest
 from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from dgx_agent_protocol import canonical_message
-from dgx_control.agent_api import (
+from vonk_agent_protocol import canonical_message
+from vonk_control.agent_api import (
     AgentApiServices,
     EnrollmentRateLimiter,
     _bounded_enrollment_body,
     _read_chunks,
     _sealed_snapshot,
 )
-from dgx_control.agent_jobs import AgentJobService
-from dgx_control.api import create_app
-from dgx_control.audit import MemoryAuditStore
-from dgx_control.auth import Actor, TokenCodec
-from dgx_control.enrollment import EnrollmentDenied, EnrollmentService
-from dgx_control.metrics import MetricsRegistry, OperationalMetricsCollector
-from dgx_control.models import (
+from vonk_control.agent_jobs import AgentJobService
+from vonk_control.api import create_app
+from vonk_control.audit import MemoryAuditStore
+from vonk_control.auth import Actor, TokenCodec
+from vonk_control.enrollment import EnrollmentDenied, EnrollmentService
+from vonk_control.metrics import MetricsRegistry, OperationalMetricsCollector
+from vonk_control.models import (
     AgentCertificate,
     AgentCertificateRotation,
     AgentEnrollment,
@@ -50,10 +50,10 @@ from dgx_control.models import (
     RecipeInstallation,
     RecipeSourceBundle,
 )
-from dgx_control.pki import CertificateAuthority, IssuedCertificate
-from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
-from dgx_control.recipe_contract import recipe_content_sha256
-from dgx_control.source_bundles import SourceBundleStore, generate_source_bundle
+from vonk_control.pki import CertificateAuthority, IssuedCertificate
+from vonk_control.presence import AgentPresenceService, ManagementAddressPolicy
+from vonk_control.recipe_contract import recipe_content_sha256
+from vonk_control.source_bundles import SourceBundleStore, generate_source_bundle
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
@@ -2488,7 +2488,7 @@ def test_platform_tuf_target_rejects_file_changed_while_reading(
             target.write_bytes(b"replaced")
         return result
 
-    monkeypatch.setattr("dgx_control.agent_api.os.read", changing_read)
+    monkeypatch.setattr("vonk_control.agent_api.os.read", changing_read)
 
     response = client.get(
         f"/agent/v1/tuf/targets/{target_name}",
@@ -2556,7 +2556,7 @@ def test_snapshot_allocation_failure_closes_source_descriptor(
     source.write_bytes(b"original")
     descriptor = os.open(source, os.O_RDONLY)
     monkeypatch.setattr(
-        "dgx_control.agent_api.tempfile.TemporaryFile",
+        "vonk_control.agent_api.tempfile.TemporaryFile",
         lambda **_kwargs: (_ for _ in ()).throw(OSError("full")),
     )
     with pytest.raises(OSError, match="full"):

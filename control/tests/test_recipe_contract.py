@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
-from dgx_control.recipe_contract import (
+from vonk_control.recipe_contract import (
     RecipeContractError,
     canonical_recipe,
     deployment_profile,

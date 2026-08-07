@@ -4,7 +4,7 @@ import io
 import json
 
 import pytest
-from dgx_control.worker_authority import (
+from vonk_control.worker_authority import (
     HttpWorkerAuthority,
     WorkerAuthorityError,
     install_worker_authority_routes,

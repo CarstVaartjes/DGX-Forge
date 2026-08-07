@@ -4,7 +4,7 @@ from dataclasses import replace
 
 import pytest
 
-from dgx_agent.packages.providers import (
+from vonk_agent.packages.providers import (
     Credential,
     CredentialError,
     FetchResponse,

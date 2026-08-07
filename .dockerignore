@@ -2,8 +2,8 @@
 !pyproject.toml
 !src/
 src/*
-!src/spark_profiles/
-!src/spark_profiles/**
+!src/cluster_profiles/
+!src/cluster_profiles/**
 !control/
 !control/Dockerfile
 !control/pyproject.toml
@@ -18,7 +18,7 @@ control/web/test-results
 control/web/playwright-report
 !inventory/
 !inventory/wheels/
-!inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl
+!inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl
 **/__pycache__/**
 **/*.py[cod]
 **/.env

@@ -19,39 +19,39 @@ if os.environ.get("DGX_LIFECYCLE_LOCKED_ENV") != "1":
     raise SystemExit(subprocess.run(["uv", "run", "--project", str(ROOT / "control"), "--with", "jsonschema==4.26.0", "python", __file__, *sys.argv[1:]], env=environment, check=False).returncode)
 sys.path[:0] = [str(ROOT / "src"), str(ROOT / "control/src")]
 
-from dgx_control.agent_jobs import AgentJobService
-from dgx_control.agent_reconciliation import AgentReconciliationService
-from dgx_control.auth import AgentIdentity, AgentSource
-from dgx_control.dashboard import DashboardService
-from dgx_control.desired_state import (
+from vonk_control.agent_jobs import AgentJobService
+from vonk_control.agent_reconciliation import AgentReconciliationService
+from vonk_control.auth import AgentIdentity, AgentSource
+from vonk_control.dashboard import DashboardService
+from vonk_control.desired_state import (
     DesiredStateObservation,
     DesiredStateResolver,
     durable_desired_state_observations,
 )
-from dgx_control.git_policy import Eligibility
-from dgx_control.jobs import JobService
-from dgx_control.models import AgentCertificate, AgentNode, Base
-from dgx_control.operation_api import fleet_response
-from dgx_control.orchestration import ReconciliationOrchestrator
-from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
-from dgx_control.reconcile import Reconciler
-from dgx_control.repository import RepositoryService
-from dgx_control.route_runtime import (
+from vonk_control.git_policy import Eligibility
+from vonk_control.jobs import JobService
+from vonk_control.models import AgentCertificate, AgentNode, Base
+from vonk_control.operation_api import fleet_response
+from vonk_control.orchestration import ReconciliationOrchestrator
+from vonk_control.presence import AgentPresenceService, ManagementAddressPolicy
+from vonk_control.reconcile import Reconciler
+from vonk_control.repository import RepositoryService
+from vonk_control.route_runtime import (
     AtomicRouteBundlePublisher,
     FileSupervisorAcknowledger,
 )
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from spark_profiles.fleet import ManagementEndpoint, NodeId
-from spark_profiles.fleet.install_contracts import InstallationRequest
-from spark_profiles.install.orchestrator import (
+from cluster_profiles.fleet import ManagementEndpoint, NodeId
+from cluster_profiles.fleet.install_contracts import InstallationRequest
+from cluster_profiles.install.orchestrator import (
     FileEvidenceStore,
     NodeInstaller,
     StepResult,
 )
-from spark_profiles.install.proposal import build_node_proposal
-from spark_profiles.install.store import InstallStore
+from cluster_profiles.install.proposal import build_node_proposal
+from cluster_profiles.install.store import InstallStore
 
 STEPS = ("identity", "pre-inventory", "public-key", "ssh-hardening", "node-policy", "post-inventory", "acceptance")
 
@@ -133,7 +133,7 @@ def _drive_reconciliation(
             claimed += 1
             continue
         with sessions() as session:
-            from dgx_control.models import Reconciliation
+            from vonk_control.models import Reconciliation
 
             reconciliation = session.get(Reconciliation, reconciliation_id)
             if (
@@ -465,7 +465,7 @@ def run(host: str, display_name: str) -> dict[str, object]:
         claimed += 1
         if os.environ.get("DGX_DEBUG_LIFECYCLE"):
             with sessions() as debug_session:
-                from dgx_control.models import AgentOperation, Job, Reconciliation
+                from vonk_control.models import AgentOperation, Job, Reconciliation
                 print("DEBUG jobs", [(j.id, j.reconciliation_id, j.state, j.kind) for j in debug_session.query(Job).all()], file=sys.stderr)
                 print("DEBUG recs", [(r.id, r.current_phase, r.completion_generation) for r in debug_session.query(Reconciliation).all()], file=sys.stderr)
                 print("DEBUG ops", [(o.id, o.parent_job_id, o.kind, o.state) for o in debug_session.query(AgentOperation).all()], file=sys.stderr)

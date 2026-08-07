@@ -1,7 +1,7 @@
 import logging
 from pathlib import Path
 
-from dgx_control.logging import JobLogStore, log_event, redact_text
+from vonk_control.logging import JobLogStore, log_event, redact_text
 
 
 def test_structured_logger_redacts_secrets(caplog) -> None:

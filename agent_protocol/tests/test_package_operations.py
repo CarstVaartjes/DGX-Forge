@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 import hashlib
 
 import pytest
-from dgx_agent_protocol import (
+from vonk_agent_protocol import (
     AgentDirective,
     AgentOperation,
     AgentProtocolError,

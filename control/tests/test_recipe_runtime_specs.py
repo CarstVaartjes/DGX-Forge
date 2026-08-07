@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from dgx_control.recipe_runtime_specs import compile_runtime_spec
+from vonk_control.recipe_runtime_specs import compile_runtime_spec
 
 
 def test_runtime_spec_binds_built_image_role_and_mapping_parameters() -> None:

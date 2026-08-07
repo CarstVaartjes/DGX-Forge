@@ -16,14 +16,14 @@ import os
 import subprocess
 from pathlib import Path
 
-from dgx_control.api import create_app
-from dgx_control.audit import MemoryAuditStore
-from dgx_control.auth import TokenCodec
-from dgx_control.operation_api import admin_openapi_schema
+from vonk_control.api import create_app
+from vonk_control.audit import MemoryAuditStore
+from vonk_control.auth import TokenCodec
+from vonk_control.operation_api import admin_openapi_schema
 
 ROOT = Path(__file__).resolve().parents[1]
 OPENAPI = ROOT / "control/openapi.json"
-PYTHON_OUTPUT = ROOT / "src/spark_profiles/generated_control"
+PYTHON_OUTPUT = ROOT / "src/cluster_profiles/generated_control"
 TYPESCRIPT_OUTPUT = ROOT / "control/web/src/api/generated.d.ts"
 
 

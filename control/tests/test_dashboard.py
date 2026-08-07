@@ -2,8 +2,8 @@ import json
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from dgx_control.dashboard import DashboardService
-from dgx_control.models import AgentNode, Base, Observation
+from vonk_control.dashboard import DashboardService
+from vonk_control.models import AgentNode, Base, Observation
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 

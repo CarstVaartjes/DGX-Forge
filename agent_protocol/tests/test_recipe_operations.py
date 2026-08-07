@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from dgx_agent_protocol import (
+from vonk_agent_protocol import (
     AgentOperation,
     AgentProtocolError,
     RecipeOperationRequest,

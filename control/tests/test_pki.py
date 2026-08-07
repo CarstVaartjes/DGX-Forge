@@ -9,14 +9,14 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
 from cryptography.x509.oid import ExtendedKeyUsageOID, ExtensionOID, NameOID
-from dgx_control.auth import (
+from vonk_control.auth import (
     TrustedProxyAgentIdentityMiddleware,
     agent_identity_from_scope,
 )
 
 # This import is deliberately first: the initial TDD run must prove the provider
 # does not exist yet, rather than fail because its new dependency is unavailable.
-from dgx_control.pki import (
+from vonk_control.pki import (
     BuiltinCertificateAuthority,
     CertificateAuthority,
 )

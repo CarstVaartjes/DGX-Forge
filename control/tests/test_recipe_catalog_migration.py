@@ -5,7 +5,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from dgx_control.models import Base, LocalRecipe, LocalRecipeRevision
+from vonk_control.models import Base, LocalRecipe, LocalRecipeRevision
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session

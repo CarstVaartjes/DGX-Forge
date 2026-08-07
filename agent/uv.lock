@@ -187,53 +187,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dgx-agent"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "cryptography" },
-    { name = "dgx-agent-protocol" },
-    { name = "securesystemslib", extra = ["crypto"] },
-    { name = "spark-profiles" },
-    { name = "tuf" },
-]
-
-[package.dev-dependencies]
-dev = [
-    { name = "pyinstaller" },
-    { name = "pytest" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "cryptography", specifier = "==50.0.0" },
-    { name = "dgx-agent-protocol", path = "../inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl" },
-    { name = "securesystemslib", extras = ["crypto"], specifier = "==1.4.0" },
-    { name = "spark-profiles", directory = "../" },
-    { name = "tuf", specifier = "==7.0.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "pyinstaller", specifier = "==6.15.0" },
-    { name = "pytest", specifier = "==8.4.2" },
-]
-
-[[package]]
-name = "dgx-agent-protocol"
-version = "2.1.0"
-source = { path = "../inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl" }
-dependencies = [
-    { name = "jsonschema" },
-]
-wheels = [
-    { filename = "dgx_agent_protocol-2.1.0-py3-none-any.whl", hash = "sha256:7fcd36e5d6ce327d34ed29e7aeb2a389ce7ad780f84418d5e748d5566c1fbd06" },
-]
-
-[package.metadata]
-requires-dist = [{ name = "jsonschema", specifier = "==4.25.1" }]
-
-[[package]]
 name = "h11"
 version = "0.16.0"
 source = { registry = "https://pypi.org/simple" }
@@ -592,32 +545,6 @@ wheels = [
 ]
 
 [[package]]
-name = "spark-profiles"
-version = "0.1.0"
-source = { directory = "../" }
-dependencies = [
-    { name = "attrs" },
-    { name = "httpx" },
-    { name = "jsonschema" },
-    { name = "python-dateutil" },
-    { name = "securesystemslib", extra = ["crypto"] },
-    { name = "tuf" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "attrs", specifier = "==26.1.0" },
-    { name = "httpx", specifier = "==0.28.1" },
-    { name = "jsonschema", specifier = ">=4.23" },
-    { name = "python-dateutil", specifier = "==2.9.0.post0" },
-    { name = "securesystemslib", extras = ["crypto"], specifier = "==1.4.0" },
-    { name = "tuf", specifier = "==7.0.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [{ name = "pytest", specifier = "==9.1.1" }]
-
-[[package]]
 name = "tuf"
 version = "7.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -646,4 +573,77 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/53/0c/06f8b233b8fd13b9e5ee11424ef85419ba0d8ba0b3138bf360be2ff56953/urllib3-2.7.0.tar.gz", hash = "sha256:231e0ec3b63ceb14667c67be60f2f2c40a518cb38b03af60abc813da26505f4c", size = 433602, upload-time = "2026-05-07T16:13:18.596Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/3e/5db95bcf282c52709639744ca2a8b149baccf648e39c8cc87553df9eae0c/urllib3-2.7.0-py3-none-any.whl", hash = "sha256:9fb4c81ebbb1ce9531cce37674bbc6f1360472bc18ca9a553ede278ef7276897", size = 131087, upload-time = "2026-05-07T16:13:17.151Z" },
+]
+
+[[package]]
+name = "vonk-agent-protocol"
+version = "2.1.0"
+source = { path = "../inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl" }
+dependencies = [
+    { name = "jsonschema" },
+]
+wheels = [
+    { filename = "vonk_agent_protocol-2.1.0-py3-none-any.whl", hash = "sha256:1438fab0105485422e6e66d8d03d3452d2fcf7803d1fcc8a5693761dcd9cbd7a" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "jsonschema", specifier = "==4.25.1" }]
+
+[[package]]
+name = "vonk-cluster-profiles"
+version = "0.1.0"
+source = { directory = "../" }
+dependencies = [
+    { name = "attrs" },
+    { name = "httpx" },
+    { name = "jsonschema" },
+    { name = "python-dateutil" },
+    { name = "securesystemslib", extra = ["crypto"] },
+    { name = "tuf" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "attrs", specifier = "==26.1.0" },
+    { name = "httpx", specifier = "==0.28.1" },
+    { name = "jsonschema", specifier = ">=4.23" },
+    { name = "python-dateutil", specifier = "==2.9.0.post0" },
+    { name = "securesystemslib", extras = ["crypto"], specifier = "==1.4.0" },
+    { name = "tuf", specifier = "==7.0.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [{ name = "pytest", specifier = "==9.1.1" }]
+
+[[package]]
+name = "vonk-forge-agent"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "cryptography" },
+    { name = "securesystemslib", extra = ["crypto"] },
+    { name = "tuf" },
+    { name = "vonk-agent-protocol" },
+    { name = "vonk-cluster-profiles" },
+]
+
+[package.dev-dependencies]
+dev = [
+    { name = "pyinstaller" },
+    { name = "pytest" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cryptography", specifier = "==50.0.0" },
+    { name = "securesystemslib", extras = ["crypto"], specifier = "==1.4.0" },
+    { name = "tuf", specifier = "==7.0.0" },
+    { name = "vonk-agent-protocol", path = "../inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl" },
+    { name = "vonk-cluster-profiles", directory = "../" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "pyinstaller", specifier = "==6.15.0" },
+    { name = "pytest", specifier = "==8.4.2" },
 ]

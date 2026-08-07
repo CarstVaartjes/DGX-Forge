@@ -5,14 +5,14 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dgx_control.api import create_app
-from dgx_control.audit import MemoryAuditStore
-from dgx_control.auth import Actor, TokenCodec
-from dgx_control.model_resolution import ModelFile, SnapshotEnvelope
-from dgx_control.models import Base, LocalRecipe, RecipeImport
-from dgx_control.registry_resolution import ManifestEnvelope
-from dgx_control.source_bundles import SourceBundleStore
-from dgx_control.sparkrun_workflow import SparkRunWorkflow
+from vonk_control.api import create_app
+from vonk_control.audit import MemoryAuditStore
+from vonk_control.auth import Actor, TokenCodec
+from vonk_control.model_resolution import ModelFile, SnapshotEnvelope
+from vonk_control.models import Base, LocalRecipe, RecipeImport
+from vonk_control.registry_resolution import ManifestEnvelope
+from vonk_control.source_bundles import SourceBundleStore
+from vonk_control.sparkrun_workflow import SparkRunWorkflow
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker

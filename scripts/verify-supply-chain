@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 IMAGE = re.compile(r"^[^\s@]+(?::[^\s@]+)?@sha256:[0-9a-f]{64}$")
-PROTOCOL_WHEEL = "inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
+PROTOCOL_WHEEL = "inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl"
 UV_LOCK_PACKAGE = re.compile(r"(?m)^\[\[package\]\]\n")
 UV_LOCK_SCALAR = re.compile(r'(?m)^(name|version) = "([^"\\\r\n]+)"$')
 
@@ -32,16 +32,16 @@ def digest(content: bytes) -> str:
 
 
 def control_deployment_bundle(root: Path) -> bytes:
-    path = root / "src/spark_profiles/deployment_bundle.py"
+    path = root / "src/cluster_profiles/deployment_bundle.py"
     spec = importlib.util.spec_from_file_location(
-        "spark_profiles.deployment_bundle",
+        "cluster_profiles.deployment_bundle",
         path,
     )
     if spec is None or spec.loader is None:
         raise ValueError("deployment bundle module cannot be loaded")
-    package = types.ModuleType("spark_profiles")
-    package.__path__ = [str(root / "src/spark_profiles")]
-    platform_release = types.ModuleType("spark_profiles.platform_release")
+    package = types.ModuleType("cluster_profiles")
+    package.__path__ = [str(root / "src/cluster_profiles")]
+    platform_release = types.ModuleType("cluster_profiles.platform_release")
 
     @dataclass(frozen=True)
     class OciDeploymentBundle:
@@ -58,13 +58,13 @@ def control_deployment_bundle(root: Path) -> bytes:
     previous = {
         name: sys.modules.get(name)
         for name in (
-            "spark_profiles",
-            "spark_profiles.platform_release",
+            "cluster_profiles",
+            "cluster_profiles.platform_release",
             spec.name,
         )
     }
-    sys.modules["spark_profiles"] = package
-    sys.modules["spark_profiles.platform_release"] = platform_release
+    sys.modules["cluster_profiles"] = package
+    sys.modules["cluster_profiles.platform_release"] = platform_release
     sys.modules[spec.name] = module
     try:
         spec.loader.exec_module(module)
@@ -130,9 +130,9 @@ def workload_package_inputs(root: Path) -> tuple[str, ...]:
 
     paths: list[str] = []
     roots = (
-        root / "agent/src/dgx_agent/packages",
-        root / "control/src/dgx_control",
-        root / "src/spark_profiles/workload_packages",
+        root / "agent/src/vonk_agent/packages",
+        root / "control/src/vonk_control",
+        root / "src/cluster_profiles/workload_packages",
     )
     for directory in roots:
         if not directory.is_dir():
@@ -143,17 +143,17 @@ def workload_package_inputs(root: Path) -> tuple[str, ...]:
             for path in sorted(directory.glob("*.py")):
                 paths.append(path.relative_to(root).as_posix())
     for relative in (
-        "agent/src/dgx_agent/workload_runtime.py",
-        "agent/src/dgx_agent/package_operations.py",
-        "agent/src/dgx_agent/package_trust.py",
-        "agent/src/dgx_agent/package_helper.py",
-        "agent/src/dgx_agent/package_helper_protocol.py",
-        "agent/src/dgx_agent/package_helper_client.py",
+        "agent/src/vonk_agent/workload_runtime.py",
+        "agent/src/vonk_agent/package_operations.py",
+        "agent/src/vonk_agent/package_trust.py",
+        "agent/src/vonk_agent/package_helper.py",
+        "agent/src/vonk_agent/package_helper_protocol.py",
+        "agent/src/vonk_agent/package_helper_client.py",
     ):
         path = root / relative
         if path.is_file():
             paths.append(relative)
-    protocol = root / "agent_protocol/src/dgx_agent_protocol/workload_packages.py"
+    protocol = root / "agent_protocol/src/vonk_agent_protocol/workload_packages.py"
     if protocol.is_file():
         paths.append(protocol.relative_to(root).as_posix())
     for acceptance in (
@@ -167,7 +167,7 @@ def workload_package_inputs(root: Path) -> tuple[str, ...]:
 
 def protocol_wheel(root: Path) -> bytes:
     """Build the release wheel in a temporary directory and return its bytes."""
-    with tempfile.TemporaryDirectory(prefix="dgx-agent-protocol-") as directory:
+    with tempfile.TemporaryDirectory(prefix="vonk-agent-protocol-") as directory:
         output = Path(directory)
         subprocess.run(
             [
@@ -178,7 +178,7 @@ def protocol_wheel(root: Path) -> bytes:
             capture_output=True,
             text=True,
         )
-        wheels = sorted(output.glob("dgx_agent_protocol-*.whl"))
+        wheels = sorted(output.glob("vonk_agent_protocol-*.whl"))
         if len(wheels) != 1:
             raise ValueError("protocol build did not produce exactly one wheel")
         return wheels[0].read_bytes()
@@ -187,11 +187,11 @@ def protocol_wheel(root: Path) -> bytes:
 def protocol_version(lock: bytes) -> str:
     packages = [
         package for package in uv_lock_packages(lock)
-        if package["name"] == "dgx-agent-protocol"
+        if package["name"] == "vonk-agent-protocol"
     ]
     expected_source = (
         'source = { path = "../inventory/wheels/'
-        'dgx_agent_protocol-2.1.0-py3-none-any.whl" }'
+        'vonk_agent_protocol-2.1.0-py3-none-any.whl" }'
     )
     if len(packages) != 1 or expected_source not in packages[0]["record"].splitlines():
         raise ValueError("control and agent must resolve the verified protocol wheel")
@@ -201,7 +201,7 @@ def protocol_version(lock: bytes) -> str:
 def protocol_wheel_hash(lock: bytes) -> str:
     packages = [
         package for package in uv_lock_packages(lock)
-        if package["name"] == "dgx-agent-protocol"
+        if package["name"] == "vonk-agent-protocol"
     ]
     if len(packages) != 1:
         raise ValueError("protocol lock must contain the verified wheel")
@@ -239,7 +239,7 @@ def spdx(
             "licenseDeclared": "NOASSERTION",
             "supplier": "NOASSERTION",
         }
-        if package_name == "dgx-agent-protocol" and protocol_wheel_sha256 is not None:
+        if package_name == "vonk-agent-protocol" and protocol_wheel_sha256 is not None:
             package["checksums"] = [{"algorithm": "SHA256", "checksumValue": protocol_wheel_sha256}]
         described.append(package)
         relationships.append({"spdxElementId": "SPDXRef-DOCUMENT", "relationshipType": "DESCRIBES", "relatedSpdxElement": spdx_id})
@@ -265,7 +265,7 @@ def spdx(
         }]
         protocol_id = next(
             package["SPDXID"] for package in described
-            if package["name"] == "dgx-agent-protocol"
+            if package["name"] == "vonk-agent-protocol"
         )
         relationships.append({
             "spdxElementId": protocol_id,
@@ -304,22 +304,22 @@ def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
         "schemas/control-deployment-bundle.schema.json",
         "schemas/platform-update-manifest.schema.json",
         "schemas/workload-artifact-build.schema.json",
-        "src/spark_profiles/deployment_bundle.py",
-        "src/spark_profiles/platform_authority_client.py",
-        "src/spark_profiles/platform_publication.py",
-        "src/spark_profiles/platform_release.py",
-        "src/spark_profiles/schemas/control-deployment-bundle.schema.json",
-        "src/spark_profiles/schemas/platform-update-manifest.schema.json",
+        "src/cluster_profiles/deployment_bundle.py",
+        "src/cluster_profiles/platform_authority_client.py",
+        "src/cluster_profiles/platform_publication.py",
+        "src/cluster_profiles/platform_release.py",
+        "src/cluster_profiles/schemas/control-deployment-bundle.schema.json",
+        "src/cluster_profiles/schemas/platform-update-manifest.schema.json",
         "agent/pyproject.toml", "agent/uv.lock", "agent_protocol/pyproject.toml",
         "agent_protocol/uv.lock", "control/pyproject.toml", "control/uv.lock",
         "bin/dgx-control-offline",
-        "control/src/dgx_control/offline.py",
-        "control/src/dgx_control/generation_launch.py",
-        "control/src/dgx_control/host_backup.py",
-        "control/src/dgx_control/host_commands.py",
-        "control/src/dgx_control/host_state.py",
-        "control/src/dgx_control/oci_bundle.py",
-        "control/src/dgx_control/upgrade.py",
+        "control/src/vonk_control/offline.py",
+        "control/src/vonk_control/generation_launch.py",
+        "control/src/vonk_control/host_backup.py",
+        "control/src/vonk_control/host_commands.py",
+        "control/src/vonk_control/host_state.py",
+        "control/src/vonk_control/oci_bundle.py",
+        "control/src/vonk_control/upgrade.py",
         ".dockerignore", "control/web/package-lock.json", "control/Dockerfile",
         "deploy/compose/compose.yaml", "deploy/compose/images.lock.json",
         "deploy/compose/Caddyfile", "deploy/compose/caddy/entrypoint.sh",
@@ -359,7 +359,7 @@ def expected(root: Path) -> tuple[dict[str, bytes], bytes, dict[str, object]]:
         "scripts/verify-public-image-inputs",
         "scripts/verify-supply-chain",
         "scripts/workload-artifact-metadata",
-        "src/spark_profiles/update_trust.py",
+        "src/cluster_profiles/update_trust.py",
     )
     input_paths += workload_package_inputs(root)
     deployment_bundle = control_deployment_bundle(root)

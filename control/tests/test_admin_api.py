@@ -1,12 +1,12 @@
 import base64
 
 import pytest
-from dgx_control.api import AdminServices, SpaFiles, create_app
-from dgx_control.audit import MemoryAuditStore
-from dgx_control.auth import Actor, TokenCodec
-from dgx_control.proposals import ProposalPreview
-from dgx_control.reconcile import IneligibleCommit
-from dgx_control.repository import RepositoryPolicyError
+from vonk_control.api import AdminServices, SpaFiles, create_app
+from vonk_control.audit import MemoryAuditStore
+from vonk_control.auth import Actor, TokenCodec
+from vonk_control.proposals import ProposalPreview
+from vonk_control.reconcile import IneligibleCommit
+from vonk_control.repository import RepositoryPolicyError
 from fastapi.testclient import TestClient
 
 

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from dgx_control.repository import RepositoryPolicyError, RepositoryService
+from vonk_control.repository import RepositoryPolicyError, RepositoryService
 
 
 def test_repository_root_and_object_store_must_not_be_symlinks(tmp_path: Path) -> None:

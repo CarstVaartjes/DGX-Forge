@@ -5,7 +5,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
-from dgx_control.models import (
+from vonk_control.models import (
     AgentNode,
     AgentOperation,
     Base,
@@ -13,7 +13,7 @@ from dgx_control.models import (
     PackageRollout,
     PackageRolloutNode,
 )
-from dgx_control.package_rollout_worker import PackageRolloutWorker
+from vonk_control.package_rollout_worker import PackageRolloutWorker
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 

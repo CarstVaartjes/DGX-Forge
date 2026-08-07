@@ -12,15 +12,15 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from dgx_agent_protocol import canonical_message
-from dgx_control.agent_jobs import AgentJobService
-from dgx_control.desired_state import (
+from vonk_agent_protocol import canonical_message
+from vonk_control.agent_jobs import AgentJobService
+from vonk_control.desired_state import (
     CurrentWorkloadState,
     DesiredStateObservation,
     DesiredStateResolver,
     durable_desired_state_observations,
 )
-from dgx_control.models import (
+from vonk_control.models import (
     AgentNode,
     AgentOperation,
     AgentOperationAttempt,
@@ -29,9 +29,9 @@ from dgx_control.models import (
     Observation,
     Reconciliation,
 )
-from dgx_control.presence import ManagementAddressPolicy
-from dgx_control.repository import RepositoryService
-from dgx_control.route_runtime import (
+from vonk_control.presence import ManagementAddressPolicy
+from vonk_control.repository import RepositoryService
+from vonk_control.route_runtime import (
     AcceptedEndpointEvidence,
     AtomicRouteBundlePublisher,
     RouteBundleRequest,
@@ -501,8 +501,8 @@ def test_every_emitted_payload_is_accepted_by_the_exact_agent_parser(
     agent_source = Path(__file__).parents[2] / "agent" / "src"
     sys.path.insert(0, str(agent_source))
     try:
-        from dgx_agent.releases import ReleaseRequest
-        from dgx_agent.workloads import WorkloadAction, WorkloadRequest
+        from vonk_agent.releases import ReleaseRequest
+        from vonk_agent.workloads import WorkloadAction, WorkloadRequest
 
         for node in plan.operation_graph.nodes:
             payload = plan.operation_payloads[node.operation_id]
@@ -529,11 +529,11 @@ def test_generated_workload_graph_executes_through_production_agent_boundaries(
     agent_source = Path(__file__).parents[2] / "agent" / "src"
     sys.path.insert(0, str(agent_source))
     try:
-        from dgx_agent.operations import OperationContext, OperationRegistry
-        from dgx_agent.releases import ReleaseDescriptor
-        from dgx_agent.state import AgentStateStore
-        from dgx_agent.workloads import CompiledAdapterPolicy, WorkloadOperations
-        from dgx_agent_protocol import AgentClaim, AgentOperation
+        from vonk_agent.operations import OperationContext, OperationRegistry
+        from vonk_agent.releases import ReleaseDescriptor
+        from vonk_agent.state import AgentStateStore
+        from vonk_agent.workloads import CompiledAdapterPolicy, WorkloadOperations
+        from vonk_agent_protocol import AgentClaim, AgentOperation
 
         release_digest = "a" * 64
         release_root = tmp_path / "releases" / release_digest

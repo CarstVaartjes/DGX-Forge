@@ -8,8 +8,8 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from dgx_agent import nvidia_tools
-from dgx_agent.nvidia_tools import (
+from vonk_agent import nvidia_tools
+from vonk_agent.nvidia_tools import (
     NVIDIA_TOOL_NAMES,
     REVIEWED_BUNDLE_SHA256,
     REVIEWED_BUNDLE_VERSION,
@@ -21,7 +21,7 @@ from dgx_agent.nvidia_tools import (
     open_verified_executable,
     verify_reviewed_support_files,
 )
-from dgx_agent_protocol import canonical_message
+from vonk_agent_protocol import canonical_message
 
 TOOL_CONTRACT = {
     "device_identity": ("bin/device_identity.py", "1.1.0"),

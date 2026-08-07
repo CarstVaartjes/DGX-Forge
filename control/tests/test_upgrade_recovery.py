@@ -4,8 +4,8 @@ import os
 from pathlib import Path
 
 import pytest
-from dgx_control.host_state import HostOperationPlan, PhaseJournal
-from dgx_control.upgrade import (
+from vonk_control.host_state import HostOperationPlan, PhaseJournal
+from vonk_control.upgrade import (
     PhaseDispatcher,
     PhaseObservation,
     PhaseStep,

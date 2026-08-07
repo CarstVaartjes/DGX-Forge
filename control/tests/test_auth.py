@@ -1,5 +1,5 @@
 import pytest
-from dgx_control.auth import Actor, AuthError, TokenCodec
+from vonk_control.auth import Actor, AuthError, TokenCodec
 
 
 def test_signed_token_round_trip_and_tamper_rejection() -> None:

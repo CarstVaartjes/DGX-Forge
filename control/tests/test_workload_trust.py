@@ -8,8 +8,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from dgx_agent_protocol import PackageReleaseLock
-from dgx_control.workload_trust import (
+from vonk_agent_protocol import PackageReleaseLock
+from vonk_control.workload_trust import (
     WorkloadOnlineSigners,
     WorkloadTrustDelivery,
     WorkloadTrustError,

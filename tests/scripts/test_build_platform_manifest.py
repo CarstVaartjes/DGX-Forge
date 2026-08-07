@@ -4,7 +4,7 @@ import json
 import subprocess
 from pathlib import Path
 
-from spark_profiles.platform_release import PlatformRelease
+from cluster_profiles.platform_release import PlatformRelease
 from tests.scripts.test_publish_platform_target import _bundle_descriptor, _release
 
 ROOT = Path(__file__).resolve().parents[2]

@@ -3,8 +3,8 @@ from __future__ import annotations
 import json
 
 import pytest
-from dgx_control.package_discovery import DiscoveryError
-from dgx_control.package_providers import (
+from vonk_control.package_discovery import DiscoveryError
+from vonk_control.package_providers import (
     BoundedMetadataClient,
     GitReleaseProvider,
     HuggingFaceProvider,
@@ -14,7 +14,7 @@ from dgx_control.package_providers import (
     SignedHTTPIndexProvider,
 )
 
-from spark_profiles.workload_packages import PackageFamily
+from cluster_profiles.workload_packages import PackageFamily
 
 
 def _family(provider: str, locator: str) -> PackageFamily:

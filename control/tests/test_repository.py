@@ -3,7 +3,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from dgx_control.repository import RepositoryPolicyError, RepositoryService
+from vonk_control.repository import RepositoryPolicyError, RepositoryService
 
 
 def _git(root: Path, *args: str) -> str:

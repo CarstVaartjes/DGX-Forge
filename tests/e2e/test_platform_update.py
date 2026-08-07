@@ -180,7 +180,7 @@ def test_acceptance_exercises_the_staged_update_contract_without_ssh() -> None:
         "UpdatePlanner",
         "VersionSkewAnalyzer",
         "control API update route contract with simulated service",
-        "sparkctl update command contract with simulated client",
+        "vonkctl update command contract with simulated client",
     ]
     assert report["scenarios"] == {
         "agent_ab_rollback": "passed",

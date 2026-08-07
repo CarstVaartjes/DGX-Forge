@@ -14,7 +14,7 @@ repository_src = Path(__file__).resolve().parents[1] / "src"
 if str(repository_src) not in sys.path:
     sys.path.insert(0, str(repository_src))
 
-from spark_profiles.platform_authority_client import (
+from cluster_profiles.platform_authority_client import (
     AuthorityError,
     DelegatedPlatformAuthority,
     github_actions_oidc_token,

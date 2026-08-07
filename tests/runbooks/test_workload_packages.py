@@ -22,8 +22,8 @@ def test_workload_runbook_covers_generic_lifecycle_and_recovery_boundaries() -> 
         "repair",
         "Garbage collection",
         "Credentials, licenses",
-        "sparkctl admin packages",
-        "sparkctl admin deployments",
+        "vonkctl admin packages",
+        "vonkctl admin deployments",
         "outbound mTLS",
         "SSH is permitted only",
         "simulated",
@@ -36,7 +36,7 @@ def test_workload_runbook_covers_generic_lifecycle_and_recovery_boundaries() -> 
 def test_top_level_docs_link_the_two_admin_surfaces_and_workload_runbook() -> None:
     readme = (ROOT / "README.md").read_text()
     assert "docs/runbooks/workload-packages.md" in readme
-    assert "sparkctl admin" in readme
+    assert "vonkctl admin" in readme
     assert "web UX" in readme
     platform = (ROOT / "docs/runbooks/platform-update.md").read_text()
     assert "NAS-to-Spark platform skew" in platform

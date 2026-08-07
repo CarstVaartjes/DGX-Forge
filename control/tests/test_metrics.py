@@ -1,9 +1,9 @@
 import pytest
-from dgx_control import api as control_api
-from dgx_control.api import create_app
-from dgx_control.audit import MemoryAuditStore
-from dgx_control.auth import TokenCodec
-from dgx_control.metrics import MetricsRegistry
+from vonk_control import api as control_api
+from vonk_control.api import create_app
+from vonk_control.audit import MemoryAuditStore
+from vonk_control.auth import TokenCodec
+from vonk_control.metrics import MetricsRegistry
 from fastapi.testclient import TestClient
 
 

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from dgx_control.sparkrun_source import SparkRunParseError, parse_sparkrun_yaml
+from vonk_control.sparkrun_source import SparkRunParseError, parse_sparkrun_yaml
 
 FIXTURES = Path(__file__).parent / "fixtures/sparkrun"
 

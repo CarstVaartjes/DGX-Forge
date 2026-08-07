@@ -1,5 +1,5 @@
 import pytest
-from dgx_control.import_report import (
+from vonk_control.import_report import (
     ImportDisposition,
     ImportReportBuilder,
     ImportReportError,

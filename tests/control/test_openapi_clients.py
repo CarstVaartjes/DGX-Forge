@@ -10,7 +10,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 GENERATOR = ROOT / "scripts/generate-control-clients"
 OPENAPI = ROOT / "control/openapi.json"
-PYTHON_CLIENT = ROOT / "src/spark_profiles/generated_control"
+PYTHON_CLIENT = ROOT / "src/cluster_profiles/generated_control"
 TYPESCRIPT_CLIENT = ROOT / "control/web/src/api/generated.d.ts"
 
 
@@ -204,7 +204,7 @@ def test_generated_python_models_compile() -> None:
             "python",
             "-c",
             (
-                "from pathlib import Path; root=Path('src/spark_profiles/generated_control'); "
+                "from pathlib import Path; root=Path('src/cluster_profiles/generated_control'); "
                 "[(compile(path.read_text(), str(path), 'exec')) for path in root.rglob('*.py')]"
             ),
         ],
@@ -226,7 +226,7 @@ def test_generated_python_client_imports_in_the_root_locked_environment() -> Non
             "--frozen",
             "python",
             "-c",
-            "from spark_profiles.generated_control.client import AuthenticatedClient",
+            "from cluster_profiles.generated_control.client import AuthenticatedClient",
         ],
         cwd=ROOT,
         env={**os.environ, "PYTHONDONTWRITEBYTECODE": "1"},
@@ -240,8 +240,8 @@ def test_generated_python_client_imports_in_the_root_locked_environment() -> Non
 def test_generated_python_client_parses_documented_operation_errors() -> None:
     import httpx
 
-    from spark_profiles.generated_control.client import Client
-    from spark_profiles.generated_control.models.bounded_error_response import (
+    from cluster_profiles.generated_control.client import Client
+    from cluster_profiles.generated_control.models.bounded_error_response import (
         BoundedErrorResponse,
     )
 
@@ -256,7 +256,7 @@ def test_generated_python_client_parses_documented_operation_errors() -> None:
     }
     for module_name, status_codes in expected.items():
         module = importlib.import_module(
-            "spark_profiles.generated_control.api.default." + module_name
+            "cluster_profiles.generated_control.api.default." + module_name
         )
         for status_code in status_codes:
             parsed = module._parse_response(
@@ -273,9 +273,9 @@ def test_generated_python_client_parses_documented_operation_errors() -> None:
 def test_generated_python_list_jobs_preserves_cursor_and_typed_rejection() -> None:
     import httpx
 
-    from spark_profiles.generated_control.api.default import list_jobs
-    from spark_profiles.generated_control.client import Client
-    from spark_profiles.generated_control.models.bounded_error_response import (
+    from cluster_profiles.generated_control.api.default import list_jobs
+    from cluster_profiles.generated_control.client import Client
+    from cluster_profiles.generated_control.models.bounded_error_response import (
         BoundedErrorResponse,
     )
 

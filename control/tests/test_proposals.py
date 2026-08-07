@@ -3,8 +3,8 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from dgx_control.proposals import DocumentChange, ProposalService, StaleBaseCommit
-from dgx_control.repository import RepositoryService
+from vonk_control.proposals import DocumentChange, ProposalService, StaleBaseCommit
+from vonk_control.repository import RepositoryService
 
 
 def _git(root: Path, *args: str) -> str:

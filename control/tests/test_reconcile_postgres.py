@@ -9,15 +9,15 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 
 import pytest
-from dgx_agent_protocol import canonical_message
-from dgx_control.git_policy import Eligibility
-from dgx_control.models import Base, Reconciliation
-from dgx_control.orchestration import (
+from vonk_agent_protocol import canonical_message
+from vonk_control.git_policy import Eligibility
+from vonk_control.models import Base, Reconciliation
+from vonk_control.orchestration import (
     OperationGraph,
     OperationNode,
     ReconciliationOrchestrator,
 )
-from dgx_control.reconcile import Reconciler, resolved_reconciliation_plan
+from vonk_control.reconcile import Reconciler, resolved_reconciliation_plan
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError

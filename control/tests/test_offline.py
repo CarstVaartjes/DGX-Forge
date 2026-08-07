@@ -3,8 +3,8 @@ import os
 from pathlib import Path
 
 import pytest
-from dgx_control import offline
-from dgx_control.offline import (
+from vonk_control import offline
+from vonk_control.offline import (
     OfflineConflict,
     OfflineLock,
     OnlineLock,

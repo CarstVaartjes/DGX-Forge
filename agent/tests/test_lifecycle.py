@@ -15,24 +15,24 @@ from cryptography import x509
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
-from dgx_agent.client import AgentTransportError, CredentialStore, IssuedCredential
-from dgx_agent.config import AgentConfig
-from dgx_agent.deadlines import MonotonicDeadline
-from dgx_agent.main import (
+from vonk_agent.client import AgentTransportError, CredentialStore, IssuedCredential
+from vonk_agent.config import AgentConfig
+from vonk_agent.deadlines import MonotonicDeadline
+from vonk_agent.main import (
     Agent,
     ensure_initial_enrollment,
     remove_consumed_enrollment_token,
 )
-from dgx_agent.operations import OperationContext, OperationRegistry
-from dgx_agent.probe import ProbeDeadlineExceeded
-from dgx_agent.readiness import ReadinessError, ReadinessReporter
-from dgx_agent.releases import (
+from vonk_agent.operations import OperationContext, OperationRegistry
+from vonk_agent.probe import ProbeDeadlineExceeded
+from vonk_agent.readiness import ReadinessError, ReadinessReporter
+from vonk_agent.releases import (
     ReleaseDisposition,
     ReleaseEvidence,
     ReleaseInspection,
 )
-from dgx_agent.state import AgentStateStore
-from dgx_agent_protocol import (
+from vonk_agent.state import AgentStateStore
+from vonk_agent_protocol import (
     AgentClaim,
     AgentDirective,
     AgentOperation,
@@ -999,7 +999,7 @@ def test_initial_enrollment_reuses_csr_keeps_token_until_durable_pickup(
         token,
     )
     store = CredentialStore(state_root, ca_path, missing_certificate, missing_key)
-    from dgx_agent.client import EnrollmentPending
+    from vonk_agent.client import EnrollmentPending
 
     pending_control = EnrollmentControl(
         EnrollmentPending(

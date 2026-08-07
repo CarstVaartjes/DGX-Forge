@@ -1,8 +1,8 @@
 from datetime import UTC, datetime
 
-from dgx_control.dashboard import DashboardService
-from dgx_control.metrics import MetricsRegistry, OperationalMetricsCollector
-from dgx_control.models import (
+from vonk_control.dashboard import DashboardService
+from vonk_control.metrics import MetricsRegistry, OperationalMetricsCollector
+from vonk_control.models import (
     AgentNode,
     Base,
     PackageCandidate,

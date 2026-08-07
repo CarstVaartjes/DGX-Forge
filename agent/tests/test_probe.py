@@ -12,11 +12,11 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import dgx_agent.probe as probe_module
+import vonk_agent.probe as probe_module
 import pytest
-from dgx_agent import nvidia_tools
-from dgx_agent.deadlines import MonotonicDeadline
-from dgx_agent.nvidia_tools import (
+from vonk_agent import nvidia_tools
+from vonk_agent.deadlines import MonotonicDeadline
+from vonk_agent.nvidia_tools import (
     NVIDIA_TOOL_NAMES,
     REVIEWED_BUNDLE_SHA256,
     REVIEWED_BUNDLE_VERSION,
@@ -25,7 +25,7 @@ from dgx_agent.nvidia_tools import (
     open_verified_executable,
     open_verified_support_archive,
 )
-from dgx_agent.probe import (
+from vonk_agent.probe import (
     AGGREGATE_OUTPUT_LIMIT_BYTES,
     FIXED_PROCESS_ENVIRONMENT,
     TOTAL_PROBE_SECONDS,
@@ -38,7 +38,7 @@ from dgx_agent.probe import (
     ProcessOutcome,
     ProcessRequest,
 )
-from dgx_agent_protocol import canonical_message
+from vonk_agent_protocol import canonical_message
 
 TOOL_CONTRACT = {
     "device_identity": ("bin/device_identity.py", "1.1.0"),

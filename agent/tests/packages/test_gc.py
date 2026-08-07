@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
-from dgx_agent.package_operations import OperationBinding
-from dgx_agent.packages.gc import GarbageCollectionInterrupted, PackageGarbageCollector
-from dgx_agent.packages.state import PackageState
-from dgx_agent.packages.store import StoreObject
+from vonk_agent.package_operations import OperationBinding
+from vonk_agent.packages.gc import GarbageCollectionInterrupted, PackageGarbageCollector
+from vonk_agent.packages.state import PackageState
+from vonk_agent.packages.store import StoreObject
 
 
 def _binding(index: int = 1) -> OperationBinding:

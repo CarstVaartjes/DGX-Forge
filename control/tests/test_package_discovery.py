@@ -4,7 +4,7 @@ import hashlib
 from dataclasses import dataclass
 
 import pytest
-from dgx_control.package_discovery import (
+from vonk_control.package_discovery import (
     CandidateService,
     DiscoveryCandidate,
     DiscoveryError,
@@ -12,7 +12,7 @@ from dgx_control.package_discovery import (
     InMemoryCandidateStore,
 )
 
-from spark_profiles.workload_packages import PackageFamily
+from cluster_profiles.workload_packages import PackageFamily
 
 
 def _family(provider: str = "signed-http-index") -> PackageFamily:

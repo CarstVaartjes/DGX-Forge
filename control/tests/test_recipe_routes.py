@@ -5,8 +5,8 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from dgx_control.litellm import LiteLlmPolicyError, LiteLlmPublisher
-from dgx_control.models import (
+from vonk_control.litellm import LiteLlmPolicyError, LiteLlmPublisher
+from vonk_control.models import (
     AgentNode,
     Base,
     ClusterMapping,
@@ -19,14 +19,14 @@ from dgx_control.models import (
     RecipeRun,
     RunNode,
 )
-from dgx_control.presence import ManagementAddressPolicy
-from dgx_control.recipe_operation_worker import RecipeOperationWorker
-from dgx_control.recipe_routes import (
+from vonk_control.presence import ManagementAddressPolicy
+from vonk_control.recipe_operation_worker import RecipeOperationWorker
+from vonk_control.recipe_routes import (
     AtomicRecipeRoutePublisher,
     RecipeRouteError,
     RecipeRouteService,
 )
-from dgx_control.route_runtime import AtomicRouteBundlePublisher
+from vonk_control.route_runtime import AtomicRouteBundlePublisher
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 

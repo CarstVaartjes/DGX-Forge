@@ -2,11 +2,11 @@ import hashlib
 import json
 from pathlib import Path
 
-from dgx_control.import_resolution import resolve_import
-from dgx_control.model_resolution import ModelFile, SnapshotEnvelope
-from dgx_control.registry_resolution import ManifestEnvelope
-from dgx_control.sparkrun_importer import import_sparkrun
-from dgx_control.sparkrun_source import parse_sparkrun_yaml
+from vonk_control.import_resolution import resolve_import
+from vonk_control.model_resolution import ModelFile, SnapshotEnvelope
+from vonk_control.registry_resolution import ManifestEnvelope
+from vonk_control.sparkrun_importer import import_sparkrun
+from vonk_control.sparkrun_source import parse_sparkrun_yaml
 
 
 class Registry:

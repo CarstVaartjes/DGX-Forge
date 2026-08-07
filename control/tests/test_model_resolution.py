@@ -1,5 +1,5 @@
 import pytest
-from dgx_control.model_resolution import (
+from vonk_control.model_resolution import (
     ModelFile,
     ModelResolutionError,
     SnapshotEnvelope,

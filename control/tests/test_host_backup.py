@@ -9,23 +9,23 @@ from dataclasses import asdict
 from pathlib import Path
 
 import pytest
-from dgx_control import host_backup as host_backup_module
-from dgx_control import offline
-from dgx_control.host_backup import (
+from vonk_control import host_backup as host_backup_module
+from vonk_control import offline
+from vonk_control.host_backup import (
     BackupError,
     BackupReceipt,
     BackupSource,
     HostBackupBoundary,
     RestoreReceipt,
 )
-from dgx_control.host_commands import (
+from vonk_control.host_commands import (
     ArtifactPolicy,
     ArtifactReceipt,
     CommandPolicy,
     CommandResult,
     HostCommandError,
 )
-from dgx_control.host_state import SelectedGeneration
+from vonk_control.host_state import SelectedGeneration
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64

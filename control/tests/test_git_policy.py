@@ -1,14 +1,14 @@
 from pathlib import Path
 
 import pytest
-from dgx_control.code_host import InMemoryCodeHost
-from dgx_control.git_policy import (
+from vonk_control.code_host import InMemoryCodeHost
+from vonk_control.git_policy import (
     GitPolicy,
     IrreversiblePolicyError,
     PolicyStore,
     ReleaseGateError,
 )
-from dgx_control.proposals import ProposalPreview
+from vonk_control.proposals import ProposalPreview
 
 
 def _preview(digest: str = "a" * 64) -> ProposalPreview:

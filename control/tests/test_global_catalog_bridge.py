@@ -7,21 +7,21 @@ from pathlib import Path
 
 import httpx
 import pytest
-from dgx_control.catalog_service import CatalogService
-from dgx_control.global_catalog import (
+from vonk_control.catalog_service import CatalogService
+from vonk_control.global_catalog import (
     GlobalCatalogClient,
     GlobalCatalogError,
     GlobalRecipeRevision,
 )
-from dgx_control.models import (
+from vonk_control.models import (
     Base,
     LocalRecipe,
     LocalRecipeRevision,
     RecipeGlobalLink,
     RecipeTestReport,
 )
-from dgx_control.recipe_contract import recipe_content_sha256
-from dgx_control.source_bundles import generate_source_bundle
+from vonk_control.recipe_contract import recipe_content_sha256
+from vonk_control.source_bundles import generate_source_bundle
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 

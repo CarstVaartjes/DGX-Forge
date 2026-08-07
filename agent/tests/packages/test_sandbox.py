@@ -3,8 +3,8 @@ from __future__ import annotations
 import os
 
 import pytest
-from dgx_agent.packages.backends import BackendInvocation
-from dgx_agent.packages.sandbox import SandboxError, SandboxPolicy
+from vonk_agent.packages.backends import BackendInvocation
+from vonk_agent.packages.sandbox import SandboxError, SandboxPolicy
 
 from .test_backends import invocation_document
 

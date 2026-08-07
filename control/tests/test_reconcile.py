@@ -3,15 +3,15 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import pytest
-from dgx_agent_protocol import canonical_message
-from dgx_control.git_policy import Eligibility
-from dgx_control.models import Base, Reconciliation
-from dgx_control.orchestration import (
+from vonk_agent_protocol import canonical_message
+from vonk_control.git_policy import Eligibility
+from vonk_control.models import Base, Reconciliation
+from vonk_control.orchestration import (
     OperationGraph,
     OperationNode,
     ReconciliationOrchestrator,
 )
-from dgx_control.reconcile import (
+from vonk_control.reconcile import (
     CompatibilityDefinitions,
     IneligibleCommit,
     Reconciler,
@@ -325,7 +325,7 @@ def test_evidence_change_at_enqueue_barrier_cannot_create_job(tmp_path) -> None:
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
     clock = lambda: datetime(2026, 8, 5, tzinfo=UTC)
-    from dgx_control.jobs import JobService
+    from vonk_control.jobs import JobService
 
     jobs = JobService(sessions, clock=clock)
     reconciler = Reconciler(
@@ -349,7 +349,7 @@ def test_evidence_change_at_enqueue_barrier_cannot_create_job(tmp_path) -> None:
             current_fleet_evidence=lambda: next(checks),
         )
 
-    from dgx_control.models import Job
+    from vonk_control.models import Job
 
     with sessions() as session:
         assert session.scalar(select(Job)) is None

@@ -7,11 +7,11 @@ import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-import dgx_agent.workloads as workloads_module
+import vonk_agent.workloads as workloads_module
 import pytest
-from dgx_agent.deadlines import MonotonicDeadline
-from dgx_agent.releases import ReleaseDescriptor
-from dgx_agent.workloads import (
+from vonk_agent.deadlines import MonotonicDeadline
+from vonk_agent.releases import ReleaseDescriptor
+from vonk_agent.workloads import (
     CompiledAdapterPolicy,
     WorkloadAction,
     WorkloadDisposition,

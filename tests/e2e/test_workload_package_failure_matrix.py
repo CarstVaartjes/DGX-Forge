@@ -19,17 +19,17 @@ ROOT = Path(__file__).resolve().parents[2]
 for source_root in (ROOT / "agent/src", ROOT / "agent_protocol/src", ROOT / "control/src"):
     sys.path.insert(0, str(source_root))
 
-from dgx_agent.packages.failures import (
+from vonk_agent.packages.failures import (
     PackageFailureDisposition,
     PackageFailureReason,
     failure,
 )
-from dgx_agent.packages.gc import (
+from vonk_agent.packages.gc import (
     GarbageCollectionInterrupted,
     PackageGarbageCollector,
 )
-from dgx_agent.packages.state import OperationBinding, PackageState
-from dgx_agent.packages.store import ContentStore, StoreObject
+from vonk_agent.packages.state import OperationBinding, PackageState
+from vonk_agent.packages.store import ContentStore, StoreObject
 
 NODE = "spk_0123456789abcdef0123456789abcdef"
 FENCE = "30000000-0000-4000-8000-000000000001"

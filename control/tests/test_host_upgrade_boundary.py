@@ -8,21 +8,21 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from dgx_control.host_backup import BackupError
-from dgx_control.host_commands import CommandResult
-from dgx_control.host_state import (
+from vonk_control.host_backup import BackupError
+from vonk_control.host_commands import CommandResult
+from vonk_control.host_state import (
     GenerationReceipt,
     HostStateConflict,
     SelectedGeneration,
 )
-from dgx_control.offline import HostUpgradeBoundary
-from dgx_control.upgrade import (
+from vonk_control.offline import HostUpgradeBoundary
+from vonk_control.upgrade import (
     ControlGenerationPlan,
     ProbeDisposition,
     UpgradePhase,
 )
 
-from spark_profiles.platform_release import OciDeploymentBundle
+from cluster_profiles.platform_release import OciDeploymentBundle
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64

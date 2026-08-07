@@ -18,7 +18,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "agent/src"))
 sys.path.insert(0, str(ROOT / "agent_protocol/src"))
-from dgx_agent.packages.failures import (
+from vonk_agent.packages.failures import (
     PackageFailureDisposition,
     PackageFailureReason,
     failure,

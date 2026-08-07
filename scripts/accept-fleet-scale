@@ -17,7 +17,7 @@ if os.environ.get("DGX_ACCEPTANCE_LOCKED_ENV") != "1":
     environment["DGX_ACCEPTANCE_LOCKED_ENV"] = "1"
     raise SystemExit(subprocess.run(["uv", "run", "--project", str(ROOT / "control"), "python", __file__, *sys.argv[1:]], env=environment, check=False).returncode)
 sys.path.insert(0, str(ROOT / "control/src"))
-from dgx_control.acceptance import simulate  # noqa: E402
+from vonk_control.acceptance import simulate  # noqa: E402
 
 COUNTS = (1, 2, 16, 64)
 FAULTS = ("postgres", "worker", "caddy", "litellm", "git", "ssh", "host")

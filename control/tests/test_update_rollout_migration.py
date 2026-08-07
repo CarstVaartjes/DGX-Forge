@@ -186,7 +186,7 @@ def test_update_rollout_migration_is_reversible_and_complete(tmp_path: Path) -> 
 
 
 def test_models_persist_pinned_rollout_and_node_evidence(tmp_path: Path) -> None:
-    from dgx_control.models import (
+    from vonk_control.models import (
         AgentNode,
         UpdateRollout,
         UpdateRolloutNode,

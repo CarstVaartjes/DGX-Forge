@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from dgx_control.generation_launch import (
+from vonk_control.generation_launch import (
     GenerationLaunchError,
     GenerationReleaseIdentity,
     SelectionRuntime,

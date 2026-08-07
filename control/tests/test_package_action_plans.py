@@ -4,9 +4,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from dgx_control.agent_jobs import AgentJobService
-from dgx_control.db import build_engine, session_factory
-from dgx_control.models import (
+from vonk_control.agent_jobs import AgentJobService
+from vonk_control.db import build_engine, session_factory
+from vonk_control.models import (
     AgentNode,
     Base,
     Observation,
@@ -16,9 +16,9 @@ from dgx_control.models import (
     PackageResolution,
     PackageValidationRun,
 )
-from dgx_control.models import AgentOperation as StoredAgentOperation
-from dgx_control.package_services import ProductionPackageProjectionService
-from dgx_control.repository import RepositoryService
+from vonk_control.models import AgentOperation as StoredAgentOperation
+from vonk_control.package_services import ProductionPackageProjectionService
+from vonk_control.repository import RepositoryService
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 

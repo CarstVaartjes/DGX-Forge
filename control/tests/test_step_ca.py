@@ -18,14 +18,14 @@ from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec, ed25519
 from cryptography.x509.oid import ExtendedKeyUsageOID, ExtensionOID, NameOID
-from dgx_control.agent_api import AgentApiServices
-from dgx_control.api import build_agent_services
-from dgx_control.models import Base
-from dgx_control.presence import AgentPresenceService
+from vonk_control.agent_api import AgentApiServices
+from vonk_control.api import build_agent_services
+from vonk_control.models import Base
+from vonk_control.presence import AgentPresenceService
 
 # Keep this import first so the TDD RED proves the provider is absent before
 # any new runtime dependency is imported.
-from dgx_control.step_ca import (
+from vonk_control.step_ca import (
     StepCAError,
     StepCertificateAuthority,
     _validate_crl_freshness,
@@ -411,7 +411,7 @@ def test_production_agent_service_builder_selects_step_ca_and_checks_reachabilit
         def check_health(self) -> None:
             calls.append("health")
 
-    monkeypatch.setattr("dgx_control.step_ca.StepCertificateAuthority", FakeStepAuthority)
+    monkeypatch.setattr("vonk_control.step_ca.StepCertificateAuthority", FakeStepAuthority)
     engine = create_engine(f"sqlite:///{tmp_path / 'runtime.sqlite'}")
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
@@ -444,7 +444,7 @@ def test_production_agent_service_builder_fails_closed_on_unreachable_or_mixed_p
         def check_health(self) -> None:
             raise StepCAError("step-ca request failed")
 
-    monkeypatch.setattr("dgx_control.step_ca.StepCertificateAuthority", Unreachable)
+    monkeypatch.setattr("vonk_control.step_ca.StepCertificateAuthority", Unreachable)
     settings = SimpleNamespace(
         agent_runtime="enabled", agent_ca_provider="step-ca",
         agent_intermediate_certificate_path=tmp_path / "intermediate.pem",

@@ -1,4 +1,4 @@
-from dgx_control.code_host import InMemoryCodeHost
+from vonk_control.code_host import InMemoryCodeHost
 
 
 def test_code_host_rejects_force_update_and_duplicate_branch_content() -> None:

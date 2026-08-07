@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 import pytest
-from dgx_control.artifact_sizes import ArtifactSizeError, DeclaredArtifactSizeResolver
+from vonk_control.artifact_sizes import ArtifactSizeError, DeclaredArtifactSizeResolver
 
 
 def recipe():

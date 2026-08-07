@@ -3,7 +3,7 @@ from __future__ import annotations
 import subprocess
 
 import pytest
-from dgx_control.git_content import read_commit_file
+from vonk_control.git_content import read_commit_file
 
 
 def _git(repository, *arguments):

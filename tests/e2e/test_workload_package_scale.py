@@ -14,11 +14,11 @@ ROOT = Path(__file__).resolve().parents[2]
 for source_root in (ROOT / "agent/src", ROOT / "agent_protocol/src", ROOT / "control/src"):
     sys.path.insert(0, str(source_root))
 
-from dgx_agent.packages.fetch import (
+from vonk_agent.packages.fetch import (
     AcquisitionCancelled,
     AcquisitionEngine,
 )
-from dgx_agent.packages.providers import (
+from vonk_agent.packages.providers import (
     ComponentDescriptor,
     FetchResponse,
     NetworkHop,
@@ -26,8 +26,8 @@ from dgx_agent.packages.providers import (
     SourceLocation,
     Validators,
 )
-from dgx_agent.packages.state import OperationBinding
-from dgx_agent.packages.store import ContentStore
+from vonk_agent.packages.state import OperationBinding
+from vonk_agent.packages.store import ContentStore
 
 CONTENT = b"generic-workload-component-for-fleet-scale"
 DIGEST = hashlib.sha256(CONTENT).hexdigest()

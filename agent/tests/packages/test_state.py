@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 
 import pytest
-from dgx_agent.packages.state import (
+from vonk_agent.packages.state import (
     OperationBinding,
     PackageState,
     PackageStateConflict,

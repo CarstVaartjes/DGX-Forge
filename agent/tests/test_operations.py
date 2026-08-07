@@ -6,27 +6,27 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from dgx_agent.deadlines import MonotonicDeadline
-from dgx_agent.operations import (
+from vonk_agent.deadlines import MonotonicDeadline
+from vonk_agent.operations import (
     InspectionDisposition,
     OperationContext,
     OperationRegistry,
     UnsupportedOperation,
 )
-from dgx_agent.releases import (
+from vonk_agent.releases import (
     ReleaseDisposition,
     ReleaseEvidence,
     ReleaseInspection,
 )
-from dgx_agent.state import AgentStateConflict, AgentStateStore
-from dgx_agent.update import AgentUpdateError
-from dgx_agent.workloads import (
+from vonk_agent.state import AgentStateConflict, AgentStateStore
+from vonk_agent.update import AgentUpdateError
+from vonk_agent.workloads import (
     WorkloadAction,
     WorkloadDisposition,
     WorkloadEvidence,
     WorkloadInspection,
 )
-from dgx_agent_protocol import (
+from vonk_agent_protocol import (
     AgentClaim,
     AgentOperation,
     AgentProtocolError,

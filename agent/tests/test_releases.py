@@ -18,15 +18,15 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
 
-import dgx_agent.oci as oci_module
-import dgx_agent.releases as release_module
+import vonk_agent.oci as oci_module
+import vonk_agent.releases as release_module
 import pytest
-from dgx_agent import nvidia_tools, update_trust
-from dgx_agent.client import CredentialSnapshot
-from dgx_agent.deadlines import DeadlineBindingError, MonotonicDeadline
-from dgx_agent.oci import OCIError, ORASClient, ORASPolicy
-from dgx_agent.probe import ProcessOutcome
-from dgx_agent.releases import (
+from vonk_agent import nvidia_tools, update_trust
+from vonk_agent.client import CredentialSnapshot
+from vonk_agent.deadlines import DeadlineBindingError, MonotonicDeadline
+from vonk_agent.oci import OCIError, ORASClient, ORASPolicy
+from vonk_agent.probe import ProcessOutcome
+from vonk_agent.releases import (
     ReleaseDescriptor,
     ReleaseDisposition,
     ReleaseEvidence,
@@ -38,7 +38,7 @@ from dgx_agent.releases import (
     verify_installed_release,
     verify_release_tree,
 )
-from dgx_agent.update_trust import BoundedHTTPSFetcher, TUFReleaseTrust, TUFTrustError
+from vonk_agent.update_trust import BoundedHTTPSFetcher, TUFReleaseTrust, TUFTrustError
 from securesystemslib.signer import CryptoSigner
 from tuf.api.exceptions import DownloadError, DownloadHTTPError
 from tuf.api.metadata import (
@@ -721,7 +721,7 @@ def test_tuf_deadline_interrupts_signed_metadata_before_persistence(
     writes: list[str] = []
     original_update = TrustedMetadataSet.update_timestamp
     original_persist = update_trust.Updater._persist_file
-    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("vonk_agent.deadlines.time.monotonic", lambda: clock[0])
 
     def expire_inside_verification(self, data):
         writes.clear()
@@ -759,7 +759,7 @@ def test_tuf_deadline_interrupts_constructor_after_root_verification_before_pers
     clock = [0.0]
     persisted: list[int] = []
     original_init = TrustedMetadataSet.__init__
-    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("vonk_agent.deadlines.time.monotonic", lambda: clock[0])
 
     def verify_root_then_expire(self, *args, **kwargs):
         original_init(self, *args, **kwargs)
@@ -795,7 +795,7 @@ def test_tuf_deadline_interrupts_target_hash_before_destination_copy(
     destination_opens: list[str] = []
     original_verify = TargetFile.verify_length_and_hashes
     original_open = builtins.open
-    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("vonk_agent.deadlines.time.monotonic", lambda: clock[0])
 
     def expire_inside_hash(self, fileobj):
         clock[0] = 11.0
@@ -835,7 +835,7 @@ def test_tuf_deadline_stops_between_local_parse_phases(
     original_parse = ReleaseDescriptor.parse
     original_unique = update_trust._unique_object
     original_memfd = update_trust.os.memfd_create
-    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("vonk_agent.deadlines.time.monotonic", lambda: clock[0])
 
     def parse_then_expire(document):
         nonlocal descriptor_parses
@@ -886,7 +886,7 @@ def test_tuf_deadline_after_target_memfd_creation_starts_no_download(
     downloads = 0
     original_memfd = update_trust.os.memfd_create
     original_download = update_trust.Updater.download_target
-    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("vonk_agent.deadlines.time.monotonic", lambda: clock[0])
 
     def create_then_expire(name, flags):
         descriptor = original_memfd(name, flags)
@@ -973,7 +973,7 @@ def test_tuf_marker_replace_is_parent_fsynced_before_elapsed_is_reported(
     root.mkdir(mode=0o700)
     marker = root / ".bootstrap-established"
     clock = [0.0]
-    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("vonk_agent.deadlines.time.monotonic", lambda: clock[0])
     original_replace = update_trust.os.replace
     original_fsync = update_trust.os.fsync
     parent_identity = (root.stat().st_dev, root.stat().st_ino)
@@ -1851,7 +1851,7 @@ def test_release_rename_is_parent_fsynced_before_elapsed_is_reported(
     original_fsync = release_module.os.fsync
     clock = [0.0]
     parent_synced = False
-    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("vonk_agent.deadlines.time.monotonic", lambda: clock[0])
 
     def rename_then_expire(*args):
         original_rename(*args)
@@ -1962,7 +1962,7 @@ def test_expired_staging_setup_defers_cleanup_and_next_attempt_reaps(
     clock = [0.0]
     armed = [True]
     mutations: list[str] = []
-    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("vonk_agent.deadlines.time.monotonic", lambda: clock[0])
     original_mkdir = release_module.os.mkdir
     original_chmod = release_module.os.chmod
     original_fchmod = release_module.os.fchmod
@@ -2098,7 +2098,7 @@ def test_staging_ownership_transaction_stops_after_one_crossing_syscall(
     original_rename_noreplace = release_module._rename_noreplace
     original_stat = release_module.os.stat
     original_fchmod = release_module.os.fchmod
-    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("vonk_agent.deadlines.time.monotonic", lambda: clock[0])
 
     def record(event: str) -> None:
         events.append(event)
@@ -2243,7 +2243,7 @@ def test_expired_member_verification_never_recursively_cleans_staging(
     clock = [0.0]
     armed = [True]
     mutations: list[str] = []
-    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("vonk_agent.deadlines.time.monotonic", lambda: clock[0])
     original_read = release_module.os.read
     original_unlink = release_module.os.unlink
     original_rmdir = release_module.os.rmdir
@@ -2312,7 +2312,7 @@ def test_deferred_reaper_preserves_foreign_inode_substituted_at_owned_name(
     clock = [0.0]
     armed = [True]
     original_fchmod = release_module.os.fchmod
-    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("vonk_agent.deadlines.time.monotonic", lambda: clock[0])
 
     def expire_after_identity(fd, mode):
         result = original_fchmod(fd, mode)
@@ -2368,7 +2368,7 @@ def test_fresh_inspection_reaps_authenticated_partial_staging_for_retry(
     staging = tmp_path / "staging"
     clock = [0.0]
     original_fchmod = release_module.os.fchmod
-    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("vonk_agent.deadlines.time.monotonic", lambda: clock[0])
 
     def expire_after_identity(fd, mode):
         result = original_fchmod(fd, mode)
@@ -2791,7 +2791,7 @@ def test_install_setup_failure_without_identity_is_typed_and_restart_safe(
     clock = [0.0]
     original_open = release_module.os.open
     original_stat = release_module.os.stat
-    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("vonk_agent.deadlines.time.monotonic", lambda: clock[0])
 
     def fail_staging_open(path, flags, *args, **kwargs):
         if (
@@ -2958,7 +2958,7 @@ def test_reservation_recovery_scan_obeys_claim_deadline_before_transport(
     scans = [0]
     continued_after_expiry = [False]
     original_read_records = release_module._read_recovery_records_fd
-    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("vonk_agent.deadlines.time.monotonic", lambda: clock[0])
 
     def expire_during_reservation(parent_fd, check, **kwargs):
         scans[0] += 1
@@ -3703,7 +3703,7 @@ def test_staging_token_deadline_crossing_releases_reservation_for_retry(
             clock[0] = 11.0
         return token
 
-    monkeypatch.setattr("dgx_agent.deadlines.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("vonk_agent.deadlines.time.monotonic", lambda: clock[0])
     monkeypatch.setattr(release_module.secrets, "token_hex", expire_once)
     installer = ReleaseInstaller(
         Trust(), Transport(), tmp_path / "releases", tmp_path / "staging"
@@ -4357,9 +4357,9 @@ def test_monotonic_deadline_cannot_be_extended_by_backward_wall_clock(
         def now(cls, tz=None):
             return datetime(2000, 1, 1, tzinfo=UTC)
 
-    monkeypatch.setattr("dgx_agent.deadlines.datetime", BackwardClock)
+    monkeypatch.setattr("vonk_agent.deadlines.datetime", BackwardClock)
     monkeypatch.setattr(
-        "dgx_agent.deadlines.time.monotonic",
+        "vonk_agent.deadlines.time.monotonic",
         lambda: fixed.absolute_monotonic + 0.001,
     )
     with pytest.raises(DeadlineBindingError):

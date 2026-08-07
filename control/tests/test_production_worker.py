@@ -3,16 +3,16 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from dgx_control.jobs import JobService
-from dgx_control.models import Base
-from dgx_control.package_rollout_worker import PackageRolloutWorker
-from dgx_control.package_validation_runner import PackageValidationRunner
-from dgx_control.presence import ManagementAddressPolicy
-from dgx_control.route_runtime import AtomicRouteBundlePublisher
-from dgx_control.settings import Settings, SettingsError, WorkerSettings
-from dgx_control.update_routes import ProductionUpdateRouteBoundary
-from dgx_control.update_worker import UpdateRolloutWorker
-from dgx_control.worker import Worker, assemble_production_worker
+from vonk_control.jobs import JobService
+from vonk_control.models import Base
+from vonk_control.package_rollout_worker import PackageRolloutWorker
+from vonk_control.package_validation_runner import PackageValidationRunner
+from vonk_control.presence import ManagementAddressPolicy
+from vonk_control.route_runtime import AtomicRouteBundlePublisher
+from vonk_control.settings import Settings, SettingsError, WorkerSettings
+from vonk_control.update_routes import ProductionUpdateRouteBoundary
+from vonk_control.update_worker import UpdateRolloutWorker
+from vonk_control.worker import Worker, assemble_production_worker
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 

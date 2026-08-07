@@ -14,10 +14,10 @@ from types import SimpleNamespace
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from dgx_control.host_state import HostOperationPlan, SelectionReceipt
-from dgx_control.settings import SettingsError, SignerSettings
-from dgx_control.update_authority import UpdateAuthorizationError
-from dgx_control.update_signer import (
+from vonk_control.host_state import HostOperationPlan, SelectionReceipt
+from vonk_control.settings import SettingsError, SignerSettings
+from vonk_control.update_authority import UpdateAuthorizationError
+from vonk_control.update_signer import (
     MAX_SIGNER_MESSAGE_BYTES,
     AdminActionGrantVerifier,
     RootUpdateSignerPolicy,
@@ -27,9 +27,9 @@ from dgx_control.update_signer import (
     UnixUpdateSignerClient,
     UpdateSignerConnectionHandler,
 )
-from dgx_control.upgrade import ActiveControlRelease, UpgradeConflict
+from vonk_control.upgrade import ActiveControlRelease, UpgradeConflict
 
-from spark_profiles.platform_release import PlatformRelease
+from cluster_profiles.platform_release import PlatformRelease
 
 
 def _canonical(value: object) -> bytes:

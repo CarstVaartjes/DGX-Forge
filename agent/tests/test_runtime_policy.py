@@ -9,18 +9,18 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from dgx_agent.config import AgentConfig
-from dgx_agent.main import build_agent
-from dgx_agent.releases import ReleaseInstaller
-from dgx_agent.runtime_policy import RuntimePolicy, RuntimePolicyError
-from dgx_agent.update import (
+from vonk_agent.config import AgentConfig
+from vonk_agent.main import build_agent
+from vonk_agent.releases import ReleaseInstaller
+from vonk_agent.runtime_policy import RuntimePolicy, RuntimePolicyError
+from vonk_agent.update import (
     AgentUpdater,
     LocalSupervisor,
     ORASAgentTransport,
     PlatformAgentTrust,
     PlatformTUFRouteFetcher,
 )
-from dgx_agent.workloads import WorkloadOperations
+from vonk_agent.workloads import WorkloadOperations
 
 
 def _canonical(value: object) -> bytes:
@@ -246,9 +246,9 @@ def test_build_agent_constructs_all_closed_handlers_with_one_credential_store(
     )
     sentinel_nvidia = object()
     monkeypatch.setattr(
-        "dgx_agent.main.InstalledPolicy.load", lambda _: sentinel_nvidia
+        "vonk_agent.main.InstalledPolicy.load", lambda _: sentinel_nvidia
     )
-    monkeypatch.setattr("dgx_agent.main.RuntimePolicy.load", lambda _: runtime)
+    monkeypatch.setattr("vonk_agent.main.RuntimePolicy.load", lambda _: runtime)
     monkeypatch.setenv("DGX_AGENT_PLATFORM_VERSION", "1.0.0")
     monkeypatch.setenv("DGX_AGENT_BUILD_DIGEST", "sha256:" + "b" * 64)
     monkeypatch.setenv("DGX_AGENT_SUPERVISOR_SLOT", "A")

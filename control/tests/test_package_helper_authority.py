@@ -6,14 +6,14 @@ import pytest
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from dgx_agent_protocol import canonical_message
-from dgx_agent_protocol.workload_packages import (
+from vonk_agent_protocol import canonical_message
+from vonk_agent_protocol.workload_packages import (
     PACKAGE_HELPER_AUTHORITY,
     PackageHelperOperation,
     package_helper_grant_signing_bytes,
     package_object_receipt_signing_bytes,
 )
-from dgx_control.package_helper_authority import (
+from vonk_control.package_helper_authority import (
     PackageHelperAuthorityError,
     PackageHelperGrantIssuer,
     PackageObjectReceiptIssuer,

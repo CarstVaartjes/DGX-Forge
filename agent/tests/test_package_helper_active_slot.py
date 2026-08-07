@@ -4,9 +4,9 @@ import json
 from pathlib import Path
 
 import pytest
-from dgx_agent.package_helper import ActiveSlotVerifier, PackageHelper
-from dgx_agent.package_helper_protocol import HelperProtocolError
-from dgx_agent.packages.sandbox import SandboxPolicy
+from vonk_agent.package_helper import ActiveSlotVerifier, PackageHelper
+from vonk_agent.package_helper_protocol import HelperProtocolError
+from vonk_agent.packages.sandbox import SandboxPolicy
 
 DIGEST_A = "a" * 64
 DIGEST_B = "b" * 64

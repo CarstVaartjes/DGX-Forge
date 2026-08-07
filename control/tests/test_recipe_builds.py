@@ -6,9 +6,9 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dgx_control.catalog_service import CatalogService, RecipeDraftInput
-from dgx_control.inventory_repository import InventoryRepository, InventorySnapshotInput
-from dgx_control.models import (
+from vonk_control.catalog_service import CatalogService, RecipeDraftInput
+from vonk_control.inventory_repository import InventoryRepository, InventorySnapshotInput
+from vonk_control.models import (
     AgentNode,
     AgentOperation,
     Base,
@@ -19,9 +19,9 @@ from dgx_control.models import (
     RecipeSourceBundle,
     ResourceReservation,
 )
-from dgx_control.recipe_builds import RecipeBuildService
-from dgx_control.recipe_operations import RecipeOperationService
-from dgx_control.source_bundles import SourceBundleStore, generate_source_bundle
+from vonk_control.recipe_builds import RecipeBuildService
+from vonk_control.recipe_operations import RecipeOperationService
+from vonk_control.source_bundles import SourceBundleStore, generate_source_bundle
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 

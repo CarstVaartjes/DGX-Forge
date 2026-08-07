@@ -5,7 +5,7 @@ from dataclasses import replace
 
 import pytest
 
-from dgx_agent.packages.fetch import (
+from vonk_agent.packages.fetch import (
     AcquisitionCancelled,
     AcquisitionEngine,
     AcquisitionError,
@@ -13,7 +13,7 @@ from dgx_agent.packages.fetch import (
     Reservation,
     StoreObject,
 )
-from dgx_agent.packages.providers import (
+from vonk_agent.packages.providers import (
     ComponentDescriptor,
     FetchResponse,
     NetworkHop,

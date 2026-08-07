@@ -7,8 +7,8 @@ from importlib.resources import files
 from types import MappingProxyType
 
 import pytest
-from dgx_agent_protocol import AgentProtocolError
-from dgx_agent_protocol.workload_packages import (
+from vonk_agent_protocol import AgentProtocolError
+from vonk_agent_protocol.workload_packages import (
     ComponentDescriptor,
     PackageReleaseGraph,
     PackageReleaseLock,
@@ -449,7 +449,7 @@ def test_graph_rejects_more_than_256_aggregate_components() -> None:
 
 def test_schema_is_packaged_and_validates_synthetic_lock() -> None:
     schema = json.loads(
-        files("dgx_agent_protocol.schemas")
+        files("vonk_agent_protocol.schemas")
         .joinpath("workload-release-lock.schema.json")
         .read_text()
     )

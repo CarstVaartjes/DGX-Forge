@@ -4,8 +4,8 @@ import hashlib
 from types import SimpleNamespace
 
 import pytest
-from dgx_agent import main
-from dgx_agent_protocol import (
+from vonk_agent import main
+from vonk_agent_protocol import (
     AgentOperation,
     PackageOperationRequest,
     canonical_message,

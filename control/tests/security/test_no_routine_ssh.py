@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[3]
-PACKAGE = ROOT / "control/src/dgx_control"
+PACKAGE = ROOT / "control/src/vonk_control"
 
 
 def _imports(path: Path) -> set[str]:
@@ -28,8 +28,8 @@ def test_production_api_and_worker_do_not_import_direct_runtime_or_subprocess() 
         imports = _imports(path)
         source = path.read_text()
         assert "subprocess" not in imports
-        assert "dgx_control.runtime" not in imports
-        assert "dgx_control.legacy_runtime" not in imports
+        assert "vonk_control.runtime" not in imports
+        assert "vonk_control.legacy_runtime" not in imports
         assert "RuntimeHandlers" not in source
         assert "LegacyRuntimeHandlers" not in source
 
@@ -54,10 +54,10 @@ def test_production_api_and_worker_do_not_import_direct_runtime_or_subprocess() 
     ):
         assert dynamic_escape not in worker
     for forbidden in (
-        "dgx_control.git_policy",
-        "dgx_control.code_host",
-        "dgx_control.repository",
-        "dgx_control.hermes_routes",
+        "vonk_control.git_policy",
+        "vonk_control.code_host",
+        "vonk_control.repository",
+        "vonk_control.hermes_routes",
         "RepositoryService",
         "GitPolicy",
     ):
@@ -153,9 +153,9 @@ def test_built_worker_image_contains_no_direct_transport_executable() -> None:
             "-eu",
             "-c",
             (
-                "for executable in ssh scp git sparkctl; do "
+                "for executable in ssh scp git vonkctl; do "
                 "! command -v \"$executable\"; done; "
-                "test ! -e /repository; test ! -e /spark-profiles; "
+                "test ! -e /repository; test ! -e /vonk-cluster-profiles; "
                 "test ! -e /scripts"
             ),
         ],

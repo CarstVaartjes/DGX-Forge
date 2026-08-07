@@ -19,13 +19,13 @@ from alembic.migration import MigrationContext
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ed25519
-from dgx_control.enrollment import (
+from vonk_control.enrollment import (
     EnrollmentDenied,
     EnrollmentService,
     RenewalInProgress,
     RenewalIssuanceUncertain,
 )
-from dgx_control.models import (
+from vonk_control.models import (
     AgentCertificate,
     AgentCertificateRotation,
     AgentEnrollment,
@@ -34,7 +34,7 @@ from dgx_control.models import (
     AgentNode,
     Base,
 )
-from dgx_control.pki import CertificateAuthority, IssuedCertificate
+from vonk_control.pki import CertificateAuthority, IssuedCertificate
 from sqlalchemy import create_engine, delete, event, func, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import DBAPIError, IntegrityError, SQLAlchemyError

@@ -1,7 +1,7 @@
 from pathlib import Path
 
 import pytest
-from dgx_control.settings import (
+from vonk_control.settings import (
     GenerationStartupSettings,
     Settings,
     SettingsError,

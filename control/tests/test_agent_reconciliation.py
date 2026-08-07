@@ -7,17 +7,17 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from dgx_agent_protocol import AgentResult, canonical_message
-from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
-from dgx_control.agent_reconciliation import (
+from vonk_agent_protocol import AgentResult, canonical_message
+from vonk_control.agent_jobs import AgentJobService, StaleAgentAttempt
+from vonk_control.agent_reconciliation import (
     AgentReconciliationService,
     accepted_result_digests,
     bind_reconciliation_result_consumer,
     compensation_order,
     ready_operation_ids,
 )
-from dgx_control.auth import AgentIdentity, AgentSource
-from dgx_control.models import (
+from vonk_control.auth import AgentIdentity, AgentSource
+from vonk_control.models import (
     AgentCertificate,
     AgentNode,
     AgentOperation,
@@ -32,10 +32,10 @@ from dgx_control.models import (
     RoutePublication,
     RoutePublicationOwner,
 )
-from dgx_control.node_leases import NodeLeaseService
-from dgx_control.orchestration import OperationNode
-from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
-from dgx_control.route_runtime import ActivationMarker
+from vonk_control.node_leases import NodeLeaseService
+from vonk_control.orchestration import OperationNode
+from vonk_control.presence import AgentPresenceService, ManagementAddressPolicy
+from vonk_control.route_runtime import ActivationMarker
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 

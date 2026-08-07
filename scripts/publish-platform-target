@@ -23,11 +23,11 @@ repository_src = Path(__file__).resolve().parents[1] / "src"
 if str(repository_src) not in sys.path:
     sys.path.insert(0, str(repository_src))
 
-from spark_profiles.deployment_bundle import (
+from cluster_profiles.deployment_bundle import (
     DeploymentBundleError,
     verify_deployment_bundle,
 )
-from spark_profiles.platform_release import (
+from cluster_profiles.platform_release import (
     OciDeploymentBundle,
     PlatformRelease,
     PlatformReleaseError,

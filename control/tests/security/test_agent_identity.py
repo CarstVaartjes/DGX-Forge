@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 
 import pytest
-from dgx_control.auth import (
+from vonk_control.auth import (
     AgentIdentity,
     AgentSource,
     AuthError,

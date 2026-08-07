@@ -4,7 +4,7 @@ import io
 import tarfile
 
 import pytest
-from dgx_control.source_bundles import (
+from vonk_control.source_bundles import (
     BundleLimits,
     SourceBundleError,
     SourceBundleStore,

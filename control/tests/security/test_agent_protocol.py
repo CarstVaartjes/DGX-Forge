@@ -10,9 +10,9 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from dgx_agent_protocol import AgentOperation, AgentProtocolError
-from dgx_control.agent_jobs import AgentJobService, StaleAgentAttempt
-from dgx_control.models import AgentCertificate, AgentNode, Base, Job
+from vonk_agent_protocol import AgentOperation, AgentProtocolError
+from vonk_control.agent_jobs import AgentJobService, StaleAgentAttempt
+from vonk_control.models import AgentCertificate, AgentNode, Base, Job
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
@@ -32,7 +32,7 @@ PROBE_RESULT = {
         "nvidia": {"tools": {}},
     },
 }
-PROTOCOL_WHEEL = ROOT / "inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
+PROTOCOL_WHEEL = ROOT / "inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl"
 PROTOCOL_WHEEL_HASH = hashlib.sha256(PROTOCOL_WHEEL.read_bytes()).hexdigest()
 
 
@@ -178,24 +178,24 @@ def test_release_artifacts_install_the_exact_protocol_wheel() -> None:
         package["source"]
         for lock in (agent_lock, control_lock)
         for package in lock["package"]
-        if package["name"] == "dgx-agent-protocol"
+        if package["name"] == "vonk-agent-protocol"
     ]
 
-    assert '"dgx-agent-protocol==2.1.0"' in control_project
-    assert '"dgx-agent-protocol==2.1.0"' in agent_project
+    assert '"vonk-agent-protocol==2.1.0"' in control_project
+    assert '"vonk-agent-protocol==2.1.0"' in agent_project
     assert protocol_sources == [
-        {"path": "../inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"},
-        {"path": "../inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"},
+        {"path": "../inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl"},
+        {"path": "../inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl"},
     ]
     assert "COPY control/pyproject.toml ./" in dockerfile
     assert "COPY control/src ./src" in dockerfile
-    assert "COPY inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl /wheels/" in dockerfile
-    assert "/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl" in dockerfile
+    assert "COPY inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl /wheels/" in dockerfile
+    assert "/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl" in dockerfile
     dockerignore = set(dockerignore_path.read_text().splitlines())
     assert "*" in dockerignore
     lines = dockerignore_path.read_text().splitlines()
     last_include = max(index for index, line in enumerate(lines) if line.startswith("!"))
-    assert {"!control/src/**", "!control/web/**", "control/.venv", "!inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"} <= dockerignore
+    assert {"!control/src/**", "!control/web/**", "control/.venv", "!inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl"} <= dockerignore
     assert {
         "**/__pycache__/**", "**/*.py[cod]", "**/.env", "**/.env.*", "**/*.pem",
         "**/*.key", "**/*.p12", "**/*.pfx", "**/.pytest_cache/**", "**/.coverage*",
@@ -211,7 +211,7 @@ def test_agent_environment_installs_the_verified_protocol_wheel() -> None:
     result = subprocess.run(
         [
             "uv", "run", "--project", "agent", "python", "-c",
-            "import importlib.metadata, json; d = importlib.metadata.distribution('dgx-agent-protocol'); print((d._path / 'direct_url.json').read_text())",
+            "import importlib.metadata, json; d = importlib.metadata.distribution('vonk-agent-protocol'); print((d._path / 'direct_url.json').read_text())",
         ],
         cwd=ROOT,
         check=True,
@@ -220,10 +220,10 @@ def test_agent_environment_installs_the_verified_protocol_wheel() -> None:
     )
     direct_url = json.loads(result.stdout)
     agent_lock = tomllib.loads((ROOT / "agent/uv.lock").read_text())
-    package = next(package for package in agent_lock["package"] if package["name"] == "dgx-agent-protocol")
+    package = next(package for package in agent_lock["package"] if package["name"] == "vonk-agent-protocol")
 
-    assert direct_url["url"].endswith("/inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl")
-    assert package["wheels"] == [{"filename": "dgx_agent_protocol-2.1.0-py3-none-any.whl", "hash": f"sha256:{PROTOCOL_WHEEL_HASH}"}]
+    assert direct_url["url"].endswith("/inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl")
+    assert package["wheels"] == [{"filename": "vonk_agent_protocol-2.1.0-py3-none-any.whl", "hash": f"sha256:{PROTOCOL_WHEEL_HASH}"}]
 
 
 def test_root_context_image_installs_the_verified_protocol_wheel() -> None:
@@ -251,7 +251,7 @@ def test_root_context_image_installs_the_verified_protocol_wheel() -> None:
     result = subprocess.run(
         [
             "docker", "run", "--rm", "--entrypoint", "python", image, "-c",
-            "import importlib.metadata, json; d = importlib.metadata.distribution('dgx-agent-protocol'); print(json.dumps({'version': d.version, 'direct_url': json.loads((d._path / 'direct_url.json').read_text())}))",
+            "import importlib.metadata, json; d = importlib.metadata.distribution('vonk-agent-protocol'); print(json.dumps({'version': d.version, 'direct_url': json.loads((d._path / 'direct_url.json').read_text())}))",
         ],
         check=True,
         capture_output=True,
@@ -260,7 +260,7 @@ def test_root_context_image_installs_the_verified_protocol_wheel() -> None:
     installed = json.loads(result.stdout)
 
     assert installed["version"] == "2.1.0"
-    assert installed["direct_url"]["url"] == "file:///wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl"
+    assert installed["direct_url"]["url"] == "file:///wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl"
     assert installed["direct_url"]["archive_info"]["hash"] == f"sha256={PROTOCOL_WHEEL_HASH}"
 
 

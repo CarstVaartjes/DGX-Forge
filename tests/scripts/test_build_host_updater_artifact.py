@@ -13,9 +13,9 @@ SCRIPT = ROOT / "scripts/build-host-updater-artifact"
 
 def test_builder_packages_exact_wheel_closure_deterministically(tmp_path: Path) -> None:
     wheels = {
-        "control": tmp_path / "dgx_control-0.1.0-py3-none-any.whl",
-        "platform": tmp_path / "spark_profiles-0.1.0-py3-none-any.whl",
-        "protocol": tmp_path / "dgx_agent_protocol-2.1.0-py3-none-any.whl",
+        "control": tmp_path / "vonk_control-0.1.0-py3-none-any.whl",
+        "platform": tmp_path / "cluster_profiles-0.1.0-py3-none-any.whl",
+        "protocol": tmp_path / "vonk_agent_protocol-2.1.0-py3-none-any.whl",
     }
     for name, path in wheels.items():
         path.write_bytes(f"{name}-wheel".encode())
@@ -60,4 +60,4 @@ def test_builder_packages_exact_wheel_closure_deterministically(tmp_path: Path) 
 def test_control_wheel_declares_installed_offline_entry_point() -> None:
     text = (ROOT / "control/pyproject.toml").read_text()
     assert '[project.scripts]' in text
-    assert 'dgx-control-offline = "dgx_control.offline:main"' in text
+    assert 'dgx-control-offline = "vonk_control.offline:main"' in text

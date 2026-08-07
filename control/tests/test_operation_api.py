@@ -8,11 +8,11 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
-from dgx_control import operation_api
-from dgx_control.api import AdminServices, create_app
-from dgx_control.audit import MemoryAuditStore
-from dgx_control.auth import Actor, TokenCodec
-from dgx_control.models import (
+from vonk_control import operation_api
+from vonk_control.api import AdminServices, create_app
+from vonk_control.audit import MemoryAuditStore
+from vonk_control.auth import Actor, TokenCodec
+from vonk_control.models import (
     AgentCertificate,
     AgentNode,
     AgentOperation,
@@ -23,7 +23,7 @@ from dgx_control.models import (
     RoutePublication,
     RoutePublicationOwner,
 )
-from dgx_control.operation_api import JobProgress, OperationApiServices, OperationPage
+from vonk_control.operation_api import JobProgress, OperationApiServices, OperationPage
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker

@@ -6,17 +6,17 @@ import os
 from pathlib import Path
 
 import pytest
-from dgx_control import offline
-from dgx_control import upgrade as upgrade_module
-from dgx_control.host_commands import CommandResult, HostCommandError
-from dgx_control.host_state import (
+from vonk_control import offline
+from vonk_control import upgrade as upgrade_module
+from vonk_control.host_commands import CommandResult, HostCommandError
+from vonk_control.host_state import (
     GenerationReceipt,
     HostGenerationStore,
     HostOperationLock,
     HostStateConflict,
     SelectionReceipt,
 )
-from dgx_control.upgrade import (
+from vonk_control.upgrade import (
     ActiveControlReleaseLoader,
     AmbiguousMigrationError,
     ControlGenerationPlan,
@@ -31,7 +31,7 @@ from dgx_control.upgrade import (
     UpgradeRecoveryRequired,
 )
 
-from spark_profiles.platform_release import PlatformRelease
+from cluster_profiles.platform_release import PlatformRelease
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64

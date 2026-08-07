@@ -132,7 +132,7 @@ jobs:
       - name: Verify generated OpenAPI and clients
         run: uv run --project control --frozen --with-editable . pytest tests/control/test_openapi_clients.py -v
       - name: Reject generated drift
-        run: git diff --exit-code -- control/openapi.json src/spark_profiles/generated_control control/web/src/api/generated.d.ts
+        run: git diff --exit-code -- control/openapi.json src/cluster_profiles/generated_control control/web/src/api/generated.d.ts
 
   test:
     name: PR contract smoke
@@ -463,9 +463,9 @@ jobs:
           uv build --offline --wheel --project . --out-dir release-output/wheels
           uv build --offline --wheel --project control --out-dir release-output/wheels
           uv run --frozen scripts/build-host-updater-artifact \
-            --control-wheel release-output/wheels/dgx_control-0.1.0-py3-none-any.whl \
-            --platform-wheel release-output/wheels/spark_profiles-0.1.0-py3-none-any.whl \
-            --protocol-wheel inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl \
+            --control-wheel release-output/wheels/vonk_control-0.1.0-py3-none-any.whl \
+            --platform-wheel release-output/wheels/cluster_profiles-0.1.0-py3-none-any.whl \
+            --protocol-wheel inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl \
             --output release-output/dgx-forge-host-updater.tar
           sha256sum release-output/dgx-forge-host-updater.tar \
             > release-output/dgx-forge-host-updater.tar.sha256

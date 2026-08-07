@@ -4,13 +4,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from dgx_control.litellm import (
+from vonk_control.litellm import (
     LiteLlmDeployment,
     LiteLlmPolicy,
     LiteLlmPolicyError,
     LiteLlmPublisher,
 )
-from dgx_control.routes import RouteState
+from vonk_control.routes import RouteState
 
 
 def _snapshot():

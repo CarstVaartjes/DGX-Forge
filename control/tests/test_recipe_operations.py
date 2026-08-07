@@ -13,13 +13,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
-from dgx_agent_protocol import canonical_message
-from dgx_control.artifact_sizes import ArtifactSize, StaticArtifactSizeResolver
-from dgx_control.catalog_service import CatalogService, RecipeDraftInput
-from dgx_control.cluster_mappings import ClusterMappingService
-from dgx_control.install_admission import InstallAdmissionService
-from dgx_control.inventory_repository import InventoryRepository, InventorySnapshotInput
-from dgx_control.models import (
+from vonk_agent_protocol import canonical_message
+from vonk_control.artifact_sizes import ArtifactSize, StaticArtifactSizeResolver
+from vonk_control.catalog_service import CatalogService, RecipeDraftInput
+from vonk_control.cluster_mappings import ClusterMappingService
+from vonk_control.install_admission import InstallAdmissionService
+from vonk_control.inventory_repository import InventoryRepository, InventorySnapshotInput
+from vonk_control.models import (
     AgentCertificate,
     AgentNode,
     AgentOperation,
@@ -33,11 +33,11 @@ from dgx_control.models import (
     RecipeRun,
     ResourceReservation,
 )
-from dgx_control.recipe_operations import (
+from vonk_control.recipe_operations import (
     RecipeOperationConflict,
     RecipeOperationService,
 )
-from dgx_control.run_admission import RunAdmissionService
+from vonk_control.run_admission import RunAdmissionService
 from sqlalchemy import create_engine, select
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import sessionmaker

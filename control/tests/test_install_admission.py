@@ -2,12 +2,12 @@ import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from dgx_control.artifact_sizes import ArtifactSize, StaticArtifactSizeResolver
-from dgx_control.catalog_service import CatalogService, RecipeDraftInput
-from dgx_control.cluster_mappings import ClusterMappingService
-from dgx_control.install_admission import InstallAdmissionService
-from dgx_control.inventory_repository import InventoryRepository, InventorySnapshotInput
-from dgx_control.models import (
+from vonk_control.artifact_sizes import ArtifactSize, StaticArtifactSizeResolver
+from vonk_control.catalog_service import CatalogService, RecipeDraftInput
+from vonk_control.cluster_mappings import ClusterMappingService
+from vonk_control.install_admission import InstallAdmissionService
+from vonk_control.inventory_repository import InventoryRepository, InventorySnapshotInput
+from vonk_control.models import (
     AgentNode,
     Base,
     NodeArtifact,

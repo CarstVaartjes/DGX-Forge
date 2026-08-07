@@ -3,10 +3,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from pathlib import Path
 
-from dgx_control.db import build_engine, session_factory
-from dgx_control.models import AgentOperation, Base, Job, PackageValidationRun
-from dgx_control.package_services import ProductionPackageProjectionService
-from dgx_control.repository import RepositoryService
+from vonk_control.db import build_engine, session_factory
+from vonk_control.models import AgentOperation, Base, Job, PackageValidationRun
+from vonk_control.package_services import ProductionPackageProjectionService
+from vonk_control.repository import RepositoryService
 
 
 def test_production_package_projection_reads_git_authority_and_sql_state(tmp_path) -> None:

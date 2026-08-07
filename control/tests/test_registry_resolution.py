@@ -2,7 +2,7 @@ import hashlib
 import json
 
 import pytest
-from dgx_control.registry_resolution import (
+from vonk_control.registry_resolution import (
     ManifestEnvelope,
     RegistryResolutionError,
     resolve_public_image,

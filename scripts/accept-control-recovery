@@ -16,7 +16,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "control/src"))
 
-from dgx_control.offline import create_backup, extract_backup, inspect_backup  # noqa: E402
+from vonk_control.offline import create_backup, extract_backup, inspect_backup  # noqa: E402
 
 
 def canonical(value: object) -> bytes:

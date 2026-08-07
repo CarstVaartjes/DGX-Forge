@@ -7,17 +7,17 @@ from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 import pytest
-from dgx_agent_protocol import AgentOperation, PackageReleaseLock
-from dgx_control.agent_jobs import AgentJobService
-from dgx_control.models import (
+from vonk_agent_protocol import AgentOperation, PackageReleaseLock
+from vonk_control.agent_jobs import AgentJobService
+from vonk_control.models import (
     AgentNode,
     Base,
     PackageRolloutNode,
 )
-from dgx_control.models import (
+from vonk_control.models import (
     AgentOperation as StoredAgentOperation,
 )
-from dgx_control.package_rollouts import (
+from vonk_control.package_rollouts import (
     PackageDesiredStateResolver,
     PackageRolloutError,
     PackageRolloutOrchestrator,
@@ -26,7 +26,7 @@ from dgx_control.package_rollouts import (
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from spark_profiles.workload_packages import WorkloadDeployment
+from cluster_profiles.workload_packages import WorkloadDeployment
 
 COMMIT = "a" * 40
 NODE = "spk_" + "1" * 32

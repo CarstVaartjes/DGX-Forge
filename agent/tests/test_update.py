@@ -11,8 +11,8 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
-from dgx_agent.deadlines import MonotonicDeadline
-from dgx_agent.update import (
+from vonk_agent.deadlines import MonotonicDeadline
+from vonk_agent.update import (
     ActivationAuthorization,
     AgentArtifact,
     AgentReleaseIdentity,

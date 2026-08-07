@@ -3,15 +3,15 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from dgx_agent_protocol import AgentProtocolError
-from dgx_agent_protocol.host_helper import (
+from vonk_agent_protocol import AgentProtocolError
+from vonk_agent_protocol.host_helper import (
     HOST_HELPER_GRANT_DOMAIN,
     HostHelperGrantClaims,
     HostHelperOperation,
     HostOperationKind,
     host_helper_grant_signing_bytes,
 )
-from dgx_agent_protocol.workload_packages import (
+from vonk_agent_protocol.workload_packages import (
     PackageHelperGrantClaims,
     PackageHelperOperation,
     PackageHelperSignature,

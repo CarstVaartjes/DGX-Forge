@@ -1,9 +1,9 @@
 from datetime import UTC, datetime
 
 import pytest
-from dgx_control.jobs import JobService
-from dgx_control.models import Base
-from dgx_control.worker import HandlerRequest, Worker
+from vonk_control.jobs import JobService
+from vonk_control.models import Base
+from vonk_control.worker import HandlerRequest, Worker
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 

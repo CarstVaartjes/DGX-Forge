@@ -1,9 +1,9 @@
 from pathlib import Path
 
-from dgx_control.import_report import ImportDisposition
-from dgx_control.recipe_contract import validate_recipe
-from dgx_control.sparkrun_importer import import_sparkrun
-from dgx_control.sparkrun_source import parse_sparkrun_yaml
+from vonk_control.import_report import ImportDisposition
+from vonk_control.recipe_contract import validate_recipe
+from vonk_control.sparkrun_importer import import_sparkrun
+from vonk_control.sparkrun_source import parse_sparkrun_yaml
 
 FIXTURES = Path(__file__).parent / "fixtures/sparkrun"
 

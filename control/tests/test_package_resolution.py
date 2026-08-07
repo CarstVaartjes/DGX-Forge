@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import hashlib
 
-from dgx_agent_protocol import PackageReleaseLock
-from dgx_control.package_discovery import DiscoveryCandidate, InMemoryCandidateStore
-from dgx_control.package_resolution import PackageResolver
+from vonk_agent_protocol import PackageReleaseLock
+from vonk_control.package_discovery import DiscoveryCandidate, InMemoryCandidateStore
+from vonk_control.package_resolution import PackageResolver
 
-from spark_profiles.workload_packages import PackageFamily
+from cluster_profiles.workload_packages import PackageFamily
 
 
 def _family(*, with_dependency: bool = False) -> PackageFamily:

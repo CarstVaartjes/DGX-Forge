@@ -11,9 +11,9 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from dgx_control.auth import AgentIdentity, AgentSource
-from dgx_control.models import AgentCertificate, AgentNode
-from dgx_control.presence import AgentPresenceService, ManagementAddressPolicy
+from vonk_control.auth import AgentIdentity, AgentSource
+from vonk_control.models import AgentCertificate, AgentNode
+from vonk_control.presence import AgentPresenceService, ManagementAddressPolicy
 from sqlalchemy import JSON, bindparam, create_engine, inspect, select, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -388,7 +388,7 @@ def test_latest_migration_is_the_sole_linear_head() -> None:
 
 
 def test_execution_models_expose_durable_links_and_bounded_fields() -> None:
-    from dgx_control import models
+    from vonk_control import models
 
     assert hasattr(models, "ReconciliationOperation")
     assert hasattr(models, "ReconciliationCancellation")

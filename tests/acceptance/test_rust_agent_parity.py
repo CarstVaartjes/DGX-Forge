@@ -69,7 +69,7 @@ def test_production_rust_capabilities_are_exact_and_legacy_python_is_not_package
 
     package_builder = _source("scripts/build-agent-deb")
     assert 'BINARIES = ("vonk-agent", "vonk-agent-helper", "vonk-agent-supervisor")' in package_builder
-    assert "dgx_agent" not in package_builder
+    assert "vonk_agent" not in package_builder
 
 
 def test_release_workflow_runs_every_cutover_owner_before_publication() -> None:

@@ -1,6 +1,6 @@
-from dgx_control.api import create_app
-from dgx_control.audit import MemoryAuditStore
-from dgx_control.auth import MUTATION_ROLES, TokenCodec
+from vonk_control.api import create_app
+from vonk_control.audit import MemoryAuditStore
+from vonk_control.auth import MUTATION_ROLES, TokenCodec
 
 
 def test_every_mutating_route_has_explicit_role() -> None:

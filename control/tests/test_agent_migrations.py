@@ -52,7 +52,7 @@ def test_agent_migration_is_reversible(tmp_path: Path) -> None:
 
 
 def test_current_model_metadata_matches_head_schema(tmp_path: Path) -> None:
-    from dgx_control.models import Base
+    from vonk_control.models import Base
 
     database = f"sqlite:///{tmp_path / 'control.sqlite'}"
     upgrade_to("head", database)
@@ -93,7 +93,7 @@ def test_agent_runtime_identity_migration_is_reversible(tmp_path: Path) -> None:
 
 
 def test_agent_models_capture_fenced_operation_state() -> None:
-    from dgx_control.models import (
+    from vonk_control.models import (
         AgentCertificate,
         AgentNode,
         AgentOperation,
@@ -146,7 +146,7 @@ def test_enrollment_migration_is_reversible_and_preserves_model_parity(tmp_path:
     assert tables(database) == before
 
     upgrade_to("head", database)
-    from dgx_control.models import Base
+    from vonk_control.models import Base
 
     engine = create_engine(database)
     with engine.connect() as connection:
@@ -228,7 +228,7 @@ def test_certificate_rotation_migration_backfills_active_generation_and_is_rever
         )).scalar_one_or_none() is None
 
     upgrade_to("head", database)
-    from dgx_control.models import Base
+    from vonk_control.models import Base
 
     with engine.connect() as connection:
         assert compare_metadata(MigrationContext.configure(connection), Base.metadata) == []

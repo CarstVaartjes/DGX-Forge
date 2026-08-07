@@ -10,14 +10,14 @@ RUN npm run build
 
 FROM ${PYTHON_IMAGE} AS build
 WORKDIR /build
-COPY pyproject.toml /spark-profiles/
-COPY src/spark_profiles /spark-profiles/src/spark_profiles
+COPY pyproject.toml /vonk-cluster-profiles/
+COPY src/cluster_profiles /vonk-cluster-profiles/src/cluster_profiles
 COPY control/pyproject.toml ./
 COPY control/src ./src
-COPY --from=web /web/dist ./src/dgx_control/web
-COPY inventory/wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl /wheels/
+COPY --from=web /web/dist ./src/vonk_control/web
+COPY inventory/wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl /wheels/
 RUN python -m pip install --no-cache-dir --prefix=/install \
-    /wheels/dgx_agent_protocol-2.1.0-py3-none-any.whl /spark-profiles .
+    /wheels/vonk_agent_protocol-2.1.0-py3-none-any.whl /vonk-cluster-profiles .
 
 FROM ${PYTHON_IMAGE} AS runtime
 RUN groupadd --gid 10001 control && useradd --uid 10001 --gid 10001 --no-create-home control
