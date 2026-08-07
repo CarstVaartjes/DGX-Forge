@@ -37,7 +37,8 @@ def recipe_document() -> dict[str, object]:
 @pytest.fixture
 def api(tmp_path: Path):
     engine = create_engine(
-        f"sqlite:///{tmp_path / 'api.sqlite'}", connect_args={"check_same_thread": False}
+        f"sqlite:///{tmp_path / 'api.sqlite'}",
+        connect_args={"check_same_thread": False},
     )
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
@@ -47,8 +48,12 @@ def api(tmp_path: Path):
     codec = TokenCodec(b"c" * 32)
     audits = MemoryAuditStore()
     app = create_app(
-        jobs=Jobs(), tokens=codec, audits=audits, fleet=lambda: {"nodes": []},
-        now=lambda: 10, catalog=service,
+        jobs=Jobs(),
+        tokens=codec,
+        audits=audits,
+        fleet=lambda: {"nodes": []},
+        now=lambda: 10,
+        catalog=service,
     )
 
     def headers(role: str) -> dict[str, str]:
@@ -66,7 +71,9 @@ def bridge_api(tmp_path: Path, recipe_document):
     )
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
-    service = CatalogService(sessions, clock=lambda: datetime(2026, 8, 7, 12, 0, tzinfo=UTC))
+    service = CatalogService(
+        sessions, clock=lambda: datetime(2026, 8, 7, 12, 0, tzinfo=UTC)
+    )
     digest = recipe_content_sha256(recipe_document)
     remote = GlobalRecipeRevision(
         publisher="vonk",
@@ -87,8 +94,13 @@ def bridge_api(tmp_path: Path, recipe_document):
     codec = TokenCodec(b"b" * 32)
     audits = MemoryAuditStore()
     app = create_app(
-        jobs=Jobs(), tokens=codec, audits=audits, fleet=lambda: {"nodes": []},
-        now=lambda: 10, catalog=service, global_catalog=Global(),
+        jobs=Jobs(),
+        tokens=codec,
+        audits=audits,
+        fleet=lambda: {"nodes": []},
+        now=lambda: 10,
+        catalog=service,
+        global_catalog=Global(),
     )
 
     def headers(role: str) -> dict[str, str]:
@@ -132,6 +144,9 @@ def test_create_list_get_and_resolve_recipe(api, recipe_document) -> None:
 
     assert listed.status_code == detail.status_code == resolved.status_code == 200
     assert listed.json()["recipes"][0]["origin"] == "local"
+    assert listed.json()["recipes"][0]["source_bundle_sha256"] == "a" * 64
+    assert listed.json()["recipes"][0]["profile_node_counts"] == [1]
+    assert "runtime_image" not in listed.json()["recipes"][0]
     assert detail.json()["document"] == recipe_document
     assert resolved.json()["lifecycle"] == "resolved"
     assert len(resolved.json()["content_sha256"]) == 64
@@ -190,11 +205,25 @@ def test_catalog_operation_ids_are_stable(api) -> None:
     paths = client.get("/openapi.json").json()["paths"]
 
     assert paths["/api/v1/catalog/recipes"]["get"]["operationId"] == "listLocalRecipes"
-    assert paths["/api/v1/catalog/recipes"]["post"]["operationId"] == "createLocalRecipe"
-    assert paths["/api/v1/catalog/recipes/{recipe_id}"]["get"]["operationId"] == "getLocalRecipe"
-    assert paths["/api/v1/catalog/recipes/{recipe_id}/draft"]["put"]["operationId"] == "updateLocalRecipeDraft"
-    assert paths["/api/v1/catalog/recipes/{recipe_id}/resolve"]["post"]["operationId"] == "resolveLocalRecipe"
-    assert paths["/api/v1/catalog/recipes/{recipe_id}/fork"]["post"]["operationId"] == "forkLocalRecipe"
+    assert (
+        paths["/api/v1/catalog/recipes"]["post"]["operationId"] == "createLocalRecipe"
+    )
+    assert (
+        paths["/api/v1/catalog/recipes/{recipe_id}"]["get"]["operationId"]
+        == "getLocalRecipe"
+    )
+    assert (
+        paths["/api/v1/catalog/recipes/{recipe_id}/draft"]["put"]["operationId"]
+        == "updateLocalRecipeDraft"
+    )
+    assert (
+        paths["/api/v1/catalog/recipes/{recipe_id}/resolve"]["post"]["operationId"]
+        == "resolveLocalRecipe"
+    )
+    assert (
+        paths["/api/v1/catalog/recipes/{recipe_id}/fork"]["post"]["operationId"]
+        == "forkLocalRecipe"
+    )
 
 
 def test_preview_and_explicit_global_import_are_separate(bridge_api) -> None:
@@ -225,28 +254,39 @@ def test_preview_and_explicit_global_import_are_separate(bridge_api) -> None:
     assert any(event.action == "catalog.global.import" for event in audits.list())
 
 
-def test_publication_report_and_export_are_local_json_only(bridge_api, recipe_document) -> None:
+def test_publication_report_and_export_are_local_json_only(
+    bridge_api, recipe_document
+) -> None:
     client, headers, _audits, _service, _remote = bridge_api
     created = client.post(
         "/api/v1/catalog/recipes",
         headers=headers("administrator"),
-        json={"slug": "local-copy", "document": {
-            **recipe_document,
-            "identity": {"publisher": "local", "slug": "local-copy"},
-        }},
+        json={
+            "slug": "local-copy",
+            "document": {
+                **recipe_document,
+                "identity": {"publisher": "local", "slug": "local-copy"},
+            },
+        },
     ).json()
     resolved = client.post(
         f"/api/v1/catalog/recipes/{created['recipe_id']}/resolve",
         headers=headers("administrator"),
         json={"expected_revision": 1},
     ).json()
-    image = recipe_document["runtime"]["image"]
     report = {
         "schema_version": 1,
         "recipe_sha256": resolved["content_sha256"],
-        "image_digest": "sha256:" + image.rsplit("@sha256:", 1)[1],
+        "source_bundle_sha256": recipe_document["build"]["context"]["sha256"],
+        "build_input_sha256": "b" * 64,
+        "image_digest": "sha256:" + "c" * 64,
+        "deployment_profile": "solo",
         "node_count": 1,
-        "runtime": {"agent_version": "1.0.0", "container_runtime": "podman", "architecture": "linux/arm64"},
+        "runtime": {
+            "agent_version": "1.0.0",
+            "container_runtime": "podman",
+            "architecture": "linux/arm64",
+        },
         "checks": [
             {"name": "container.started", "passed": True},
             {"name": "endpoint.healthy", "passed": True},
@@ -268,6 +308,8 @@ def test_publication_report_and_export_are_local_json_only(bridge_api, recipe_do
         json={"publisher": "ada-lab"},
     )
     assert exported.status_code == 200
-    assert exported.headers["content-disposition"].endswith('filename="ada-lab-local-copy.json"')
+    assert exported.headers["content-disposition"].endswith(
+        'filename="ada-lab-local-copy.json"'
+    )
     assert exported.json()["recipe"]["identity"]["publisher"] == "ada-lab"
     assert set(exported.json()) == {"recipe", "test_report"}

@@ -12,6 +12,8 @@ class ImportReportError(RuntimeError):
 
 class ImportDisposition(str, Enum):
     IMPORTED = "imported"
+    INCORPORATED = "incorporated"
+    RESOLVED = "resolved"
     TRANSFORMED = "transformed"
     RESOLUTION_REQUIRED = "resolution_required"
     OVERLAY_REQUIRED = "overlay_required"
@@ -47,13 +49,24 @@ class ImportReportBuilder:
         blocking: bool,
     ) -> None:
         synthetic = source_path.startswith("/@missing/")
-        if (source_path not in self._source_paths and not synthetic) or source_path in self._items:
-            raise ImportReportError(f"source path was not registered exactly once: {source_path}")
+        if (
+            source_path not in self._source_paths and not synthetic
+        ) or source_path in self._items:
+            raise ImportReportError(
+                f"source path was not registered exactly once: {source_path}"
+            )
         if destination_path is not None:
             if destination_path in self._destinations:
-                raise ImportReportError(f"destination path was written twice: {destination_path}")
+                raise ImportReportError(
+                    f"destination path was written twice: {destination_path}"
+                )
             self._destinations.add(destination_path)
-        if not reason_code or not detail or len(reason_code) > 128 or len(detail) > 1024:
+        if (
+            not reason_code
+            or not detail
+            or len(reason_code) > 128
+            or len(detail) > 1024
+        ):
             raise ImportReportError("report explanation is invalid")
         self._items[source_path] = ImportReportItem(
             source_path, disposition, destination_path, reason_code, detail, blocking

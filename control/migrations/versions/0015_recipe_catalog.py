@@ -117,7 +117,7 @@ def upgrade() -> None:
         sa.Column("detail", sa.Text, nullable=False),
         sa.Column("blocking", sa.Boolean, nullable=False, server_default=sa.false()),
         sa.CheckConstraint(
-            "disposition IN ('imported','transformed','resolution_required',"
+            "disposition IN ('imported','incorporated','resolved','transformed','resolution_required',"
             "'overlay_required','unsupported_blocking','dropped_redundant')",
             name="ck_recipe_import_items_disposition",
         ),

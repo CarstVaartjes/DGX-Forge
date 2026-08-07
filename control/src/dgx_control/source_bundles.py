@@ -6,8 +6,10 @@ import json
 import os
 import tarfile
 import tempfile
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path, PurePosixPath
+from types import MappingProxyType
 from typing import BinaryIO
 
 
@@ -48,6 +50,47 @@ class StoredBundle:
     archive_bytes: int
 
 
+@dataclass(frozen=True, slots=True)
+class GeneratedSourceBundle:
+    files: Mapping[str, bytes]
+    archive: bytes
+    manifest: BundleManifest
+
+    @property
+    def sha256(self) -> str:
+        return self.manifest.sha256
+
+
+def generate_source_bundle(files: Mapping[str, bytes]) -> GeneratedSourceBundle:
+    """Create a deterministic canonical tar from regular source files."""
+
+    if not files:
+        raise SourceBundleError("bundle.empty", "source bundle has no files")
+    stream = io.BytesIO()
+    normalized: dict[str, bytes] = {}
+    with tarfile.open(fileobj=stream, mode="w", format=tarfile.PAX_FORMAT) as bundle:
+        for raw_path in sorted(files, key=lambda value: value.encode("utf-8")):
+            path = _safe_path(raw_path)
+            content = files[raw_path]
+            if not isinstance(content, bytes):
+                raise SourceBundleError(
+                    "bundle.file_invalid", "source bundle file is not binary"
+                )
+            normalized[path] = content
+            member = tarfile.TarInfo(path)
+            member.size = len(content)
+            member.mode = 0o644
+            member.uid = member.gid = 0
+            member.uname = member.gname = ""
+            member.mtime = 0
+            bundle.addfile(member, io.BytesIO(content))
+    archive = stream.getvalue()
+    manifest = inspect_source_bundle(io.BytesIO(archive))
+    return GeneratedSourceBundle(
+        files=MappingProxyType(normalized), archive=archive, manifest=manifest
+    )
+
+
 def inspect_source_bundle(
     payload: BinaryIO, limits: BundleLimits | None = None
 ) -> BundleManifest:
@@ -66,7 +109,9 @@ class SourceBundleStore:
             or expected_sha256.lower() != expected_sha256
             or any(character not in "0123456789abcdef" for character in expected_sha256)
         ):
-            raise SourceBundleError("bundle.digest_invalid", "expected digest is invalid")
+            raise SourceBundleError(
+                "bundle.digest_invalid", "expected digest is invalid"
+            )
         archive = _read_archive(payload, self._limits)
         manifest = _inspect_archive(archive, self._limits)
         if manifest.sha256 != expected_sha256:
@@ -104,6 +149,40 @@ class SourceBundleStore:
                 temporary.unlink()
         return StoredBundle(destination, manifest, len(archive))
 
+    def get(self, sha256: str) -> GeneratedSourceBundle:
+        if len(sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in sha256
+        ):
+            raise SourceBundleError(
+                "bundle.digest_invalid", "source bundle digest is invalid"
+            )
+        path = self._root / sha256[:2] / f"{sha256}.tar"
+        try:
+            archive = path.read_bytes()
+        except OSError as error:
+            raise SourceBundleError(
+                "bundle.not_found", "source bundle is unavailable"
+            ) from error
+        manifest = _inspect_archive(archive, self._limits)
+        if manifest.sha256 != sha256:
+            raise SourceBundleError(
+                "bundle.storage_collision", "stored source bundle is inconsistent"
+            )
+        files: dict[str, bytes] = {}
+        with tarfile.open(fileobj=io.BytesIO(archive), mode="r:*") as bundle:
+            for member in bundle:
+                if not member.isfile():
+                    continue
+                stream = bundle.extractfile(member)
+                if stream is None:
+                    raise SourceBundleError(
+                        "bundle.read_failed", "source bundle file cannot be read"
+                    )
+                files[_safe_path(member.name)] = stream.read(
+                    self._limits.max_file_bytes + 1
+                )
+        return GeneratedSourceBundle(MappingProxyType(files), archive, manifest)
+
 
 def _read_archive(payload: BinaryIO, limits: BundleLimits) -> bytes:
     archive = payload.read(limits.max_archive_bytes + 1)
@@ -112,7 +191,9 @@ def _read_archive(payload: BinaryIO, limits: BundleLimits) -> bytes:
     if not archive:
         raise SourceBundleError("bundle.empty", "source bundle is empty")
     if len(archive) > limits.max_archive_bytes:
-        raise SourceBundleError("bundle.archive_too_large", "source bundle is too large")
+        raise SourceBundleError(
+            "bundle.archive_too_large", "source bundle is too large"
+        )
     return archive
 
 
@@ -121,9 +202,11 @@ def _inspect_archive(archive: bytes, limits: BundleLimits) -> BundleManifest:
     seen: set[str] = set()
     total = 0
     try:
-        bundle = tarfile.open(fileobj=io.BytesIO(archive), mode="r:*")
+        bundle = tarfile.open(fileobj=io.BytesIO(archive), mode="r:*")  # noqa: SIM115
     except (tarfile.TarError, OSError) as error:
-        raise SourceBundleError("bundle.invalid_archive", "source bundle is invalid") from error
+        raise SourceBundleError(
+            "bundle.invalid_archive", "source bundle is invalid"
+        ) from error
     with bundle:
         for member in bundle:
             path = _safe_path(member.name)
@@ -191,12 +274,17 @@ def _inspect_archive(archive: bytes, limits: BundleLimits) -> BundleManifest:
 
 def _safe_path(value: str) -> str:
     if not value or "\x00" in value or value.startswith("/"):
-        raise SourceBundleError("bundle.path_forbidden", "source bundle path is forbidden")
+        raise SourceBundleError(
+            "bundle.path_forbidden", "source bundle path is forbidden"
+        )
     path = PurePosixPath(value)
     if any(part in {"", ".", ".."} for part in path.parts):
-        raise SourceBundleError("bundle.path_forbidden", "source bundle path is forbidden")
+        raise SourceBundleError(
+            "bundle.path_forbidden", "source bundle path is forbidden"
+        )
     normalized = path.as_posix()
     if len(normalized.encode("utf-8")) > 512:
-        raise SourceBundleError("bundle.path_too_long", "source bundle path is too long")
+        raise SourceBundleError(
+            "bundle.path_too_long", "source bundle path is too long"
+        )
     return normalized
-

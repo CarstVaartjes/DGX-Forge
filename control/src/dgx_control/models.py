@@ -1665,7 +1665,7 @@ class RecipeImportItem(Base):
     __tablename__ = "recipe_import_items"
     __table_args__ = (
         CheckConstraint(
-            "disposition IN ('imported','transformed','resolution_required',"
+            "disposition IN ('imported','incorporated','resolved','transformed','resolution_required',"
             "'overlay_required','unsupported_blocking','dropped_redundant')",
             name="ck_recipe_import_items_disposition",
         ),

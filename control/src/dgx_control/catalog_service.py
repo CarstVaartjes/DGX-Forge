@@ -30,6 +30,7 @@ from .models import (
 )
 from .recipe_contract import (
     RecipeContractError,
+    deployment_profile,
     recipe_content_sha256,
     validate_recipe,
 )
@@ -92,14 +93,12 @@ class RecipeSummary:
     lifecycle: str
     content_sha256: str | None
     runtime_family: str
-    runtime_image: str
+    source_bundle_sha256: str
     artifact_count: int
     expected_download_bytes: int
-    installed_bytes_per_node: int
-    resident_memory_bytes_per_node: int
-    activation_memory_bytes_per_node: int
-    min_nodes: int
-    max_nodes: int
+    profile_node_counts: tuple[int, ...]
+    maximum_installed_bytes_per_node: int
+    maximum_runtime_memory_bytes_per_node: int
 
 
 class CatalogService:
@@ -158,10 +157,7 @@ class CatalogService:
                 )
             rows = session.execute(statement.limit(limit + 1)).all()
         page = rows[:limit]
-        summaries = [
-            _summary(recipe, revision)
-            for recipe, revision in page
-        ]
+        summaries = [_summary(recipe, revision) for recipe, revision in page]
         next_cursor = page[-1][0].id if len(rows) > limit else None
         return summaries, next_cursor
 
@@ -173,9 +169,7 @@ class CatalogService:
                 raise KeyError(recipe_id)
             return _view(recipe, revision)
 
-    def create_recipe(
-        self, actor: str, draft: RecipeDraftInput
-    ) -> RecipeRevisionView:
+    def create_recipe(self, actor: str, draft: RecipeDraftInput) -> RecipeRevisionView:
         document = self._validated_document(draft.document, slug=draft.slug)
         if draft.source_kind not in {"local", "sparkrun", "global"}:
             raise CatalogValidationError("catalog.source_kind", "unknown source kind")
@@ -210,7 +204,9 @@ class CatalogService:
                 session.flush()
                 view = _view(recipe, revision)
         except IntegrityError as error:
-            raise CatalogConflict("catalog.slug_exists", "recipe slug already exists") from error
+            raise CatalogConflict(
+                "catalog.slug_exists", "recipe slug already exists"
+            ) from error
         return view
 
     def update_draft(
@@ -225,14 +221,20 @@ class CatalogService:
             clean = self._validated_document(document, slug=recipe.slug)
             latest = self._repository.latest_revision(session, recipe_id)
             if latest is None or latest.revision_number != expected_revision:
-                raise CatalogConflict("catalog.stale_revision", "recipe revision changed")
+                raise CatalogConflict(
+                    "catalog.stale_revision", "recipe revision changed"
+                )
             if latest.lifecycle not in {"draft", "blocked"}:
-                raise CatalogConflict("catalog.resolved", "resolved recipe cannot be edited")
+                raise CatalogConflict(
+                    "catalog.resolved", "resolved recipe cannot be edited"
+                )
             metadata = _mapping(clean["metadata"])
             now = self._clock()
             revision = LocalRecipeRevision(
                 recipe_id=recipe.id,
-                revision_number=self._repository.next_revision_number(session, recipe.id),
+                revision_number=self._repository.next_revision_number(
+                    session, recipe.id
+                ),
                 lifecycle="draft",
                 schema_version=1,
                 document=clean,
@@ -261,16 +263,26 @@ class CatalogService:
                     latest.revision_number - 1,
                 }:
                     return _view(recipe, latest)
-                raise CatalogConflict("catalog.stale_revision", "recipe revision changed")
+                raise CatalogConflict(
+                    "catalog.stale_revision", "recipe revision changed"
+                )
             if latest.revision_number != expected_revision:
-                raise CatalogConflict("catalog.stale_revision", "recipe revision changed")
+                raise CatalogConflict(
+                    "catalog.stale_revision", "recipe revision changed"
+                )
             if recipe.source_kind == "sparkrun":
                 unresolved = session.scalar(
                     select(RecipeImportItem.id)
                     .join(RecipeImport, RecipeImport.id == RecipeImportItem.import_id)
                     .where(
                         RecipeImport.recipe_id == recipe_id,
-                        RecipeImportItem.disposition.in_(("resolution_required", "overlay_required", "unsupported_blocking")),
+                        RecipeImportItem.disposition.in_(
+                            (
+                                "resolution_required",
+                                "overlay_required",
+                                "unsupported_blocking",
+                            )
+                        ),
                     )
                     .limit(1)
                 )
@@ -283,7 +295,9 @@ class CatalogService:
             digest = recipe_content_sha256(clean)
             revision = LocalRecipeRevision(
                 recipe_id=recipe.id,
-                revision_number=self._repository.next_revision_number(session, recipe.id),
+                revision_number=self._repository.next_revision_number(
+                    session, recipe.id
+                ),
                 lifecycle="resolved",
                 schema_version=1,
                 document=clean,
@@ -314,7 +328,9 @@ class CatalogService:
         provenance["source_kind"] = "fork"
         provenance["source_reference"] = f"local:{source_recipe.slug}:{revision_number}"
         attribution = list(provenance.get("attribution", []))
-        identity_digest = source.content_sha256 or recipe_content_sha256(source.document)
+        identity_digest = source.content_sha256 or recipe_content_sha256(
+            source.document
+        )
         attribution.append(f"forked from {source_recipe.slug}@sha256:{identity_digest}")
         provenance["attribution"] = attribution
         return self.create_recipe(
@@ -354,7 +370,8 @@ class CatalogService:
                 )
                 if revision is None:
                     raise CatalogConflict(
-                        "global.history_inconsistent", "local import history is inconsistent"
+                        "global.history_inconsistent",
+                        "local import history is inconsistent",
                     )
                 return _view(recipe, revision)
 
@@ -456,7 +473,8 @@ class CatalogService:
         sensitive = sensitive_document_path(report)
         if sensitive is not None:
             raise CatalogValidationError(
-                "catalog.sensitive_field", f"sensitive field is forbidden at {sensitive}"
+                "catalog.sensitive_field",
+                f"sensitive field is forbidden at {sensitive}",
             )
         clean: dict[str, object] = copy.deepcopy(dict(report))
         errors = sorted(
@@ -471,15 +489,26 @@ class CatalogService:
         with self._sessions.begin() as session:
             recipe = self._require_recipe(session, recipe_id)
             revision = self._repository.latest_revision(session, recipe.id)
-            if revision is None or revision.lifecycle != "resolved" or revision.content_sha256 is None:
+            if (
+                revision is None
+                or revision.lifecycle != "resolved"
+                or revision.content_sha256 is None
+            ):
                 raise CatalogConflict(
-                    "catalog.recipe_unresolved", "resolve the recipe before attaching a test report"
+                    "catalog.recipe_unresolved",
+                    "resolve the recipe before attaching a test report",
                 )
-            runtime = _mapping(revision.document["runtime"])
-            image = str(runtime["image"])
-            image_digest = "sha256:" + image.rsplit("@sha256:", 1)[-1]
-            topology = _mapping(revision.document["topology"])
-            tested = topology.get("tested_node_counts")
+            build = _mapping(revision.document["build"])
+            context = _mapping(build["context"])
+            try:
+                profile = deployment_profile(
+                    revision.document, str(clean["deployment_profile"])
+                )
+            except RecipeContractError as error:
+                raise CatalogValidationError(
+                    "catalog.test_report_profile_mismatch",
+                    "test report deployment profile is not declared by this recipe",
+                ) from error
             by_name = {
                 str(item.get("name")): item.get("passed")
                 for item in clean["checks"]
@@ -490,15 +519,15 @@ class CatalogService:
                     "catalog.test_report_recipe_mismatch",
                     "test report does not match this recipe revision",
                 )
-            if clean.get("image_digest") != image_digest:
+            if clean.get("source_bundle_sha256") != context["sha256"]:
                 raise CatalogValidationError(
-                    "catalog.test_report_image_mismatch",
-                    "test report does not match this runtime image",
+                    "catalog.test_report_source_bundle_mismatch",
+                    "test report does not match this recipe source bundle",
                 )
-            if not isinstance(tested, list) or clean.get("node_count") not in tested:
+            if clean.get("node_count") != profile["node_count"]:
                 raise CatalogValidationError(
-                    "catalog.test_report_topology_mismatch",
-                    "test report node count is not declared as tested",
+                    "catalog.test_report_profile_mismatch",
+                    "test report node count does not match its deployment profile",
                 )
             if any(by_name.get(name) is not True for name in _REQUIRED_TEST_CHECKS):
                 raise CatalogValidationError(
@@ -506,8 +535,12 @@ class CatalogService:
                     "test report must show all required lifecycle and inference checks passed",
                 )
             try:
-                started = datetime.fromisoformat(str(clean["started_at"])).astimezone(UTC)
-                finished = datetime.fromisoformat(str(clean["finished_at"])).astimezone(UTC)
+                started = datetime.fromisoformat(str(clean["started_at"])).astimezone(
+                    UTC
+                )
+                finished = datetime.fromisoformat(str(clean["finished_at"])).astimezone(
+                    UTC
+                )
             except ValueError as error:
                 raise CatalogValidationError(
                     "catalog.test_report_timestamps",
@@ -528,7 +561,11 @@ class CatalogService:
                     "test report timestamps must be ordered, recent, and within 24 hours",
                 )
             encoded = json.dumps(
-                clean, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")
+                clean,
+                ensure_ascii=False,
+                allow_nan=False,
+                sort_keys=True,
+                separators=(",", ":"),
             ).encode()
             digest = hashlib.sha256(encoded).hexdigest()
             existing = session.scalar(
@@ -559,14 +596,21 @@ class CatalogService:
         with self._sessions() as session:
             recipe = self._require_recipe(session, recipe_id)
             revision = self._repository.latest_revision(session, recipe.id)
-            if revision is None or revision.lifecycle != "resolved" or revision.content_sha256 is None:
+            if (
+                revision is None
+                or revision.lifecycle != "resolved"
+                or revision.content_sha256 is None
+            ):
                 raise CatalogConflict(
-                    "catalog.recipe_unresolved", "resolve the recipe before exporting it"
+                    "catalog.recipe_unresolved",
+                    "resolve the recipe before exporting it",
                 )
             evidence = session.scalar(
                 select(RecipeTestReport)
                 .where(RecipeTestReport.recipe_revision_id == revision.id)
-                .order_by(RecipeTestReport.created_at.desc(), RecipeTestReport.id.desc())
+                .order_by(
+                    RecipeTestReport.created_at.desc(), RecipeTestReport.id.desc()
+                )
                 .limit(1)
             )
             if evidence is None:
@@ -598,7 +642,8 @@ class CatalogService:
         sensitive = sensitive_document_path(document)
         if sensitive is not None:
             raise CatalogValidationError(
-                "catalog.sensitive_field", f"sensitive field is forbidden at {sensitive}"
+                "catalog.sensitive_field",
+                f"sensitive field is forbidden at {sensitive}",
             )
         clean: dict[str, object] = copy.deepcopy(dict(document))
         artifacts = clean.get("artifacts")
@@ -609,12 +654,15 @@ class CatalogService:
                 revision = str(artifact.get("revision", "")).lower()
                 if revision in _MUTABLE_REVISIONS or revision.endswith("-latest"):
                     raise CatalogValidationError(
-                        "catalog.mutable_artifact", "artifact revision must be immutable"
+                        "catalog.mutable_artifact",
+                        "artifact revision must be immutable",
                     )
         try:
             validate_recipe(clean)
         except RecipeContractError as error:
-            raise CatalogValidationError(error.code, f"{error.path}: {error.detail}") from error
+            raise CatalogValidationError(
+                error.code, f"{error.path}: {error.detail}"
+            ) from error
         identity = _mapping(clean["identity"])
         if identity.get("slug") != slug:
             raise CatalogValidationError(
@@ -665,11 +713,7 @@ def _view(recipe: LocalRecipe, revision: LocalRecipeRevision) -> RecipeRevisionV
 
 
 def _summary(recipe: LocalRecipe, revision: LocalRecipeRevision) -> RecipeSummary:
-    runtime = _mapping(revision.document["runtime"])
-    resources = _mapping(_mapping(revision.document["resources"])["per_node"])
-    topology = _mapping(revision.document["topology"])
-    artifacts = revision.document["artifacts"]
-    assert isinstance(artifacts, list)
+    metrics = _document_summary(revision.document)
     return RecipeSummary(
         recipe_id=recipe.id,
         slug=recipe.slug,
@@ -678,15 +722,53 @@ def _summary(recipe: LocalRecipe, revision: LocalRecipeRevision) -> RecipeSummar
         revision_number=revision.revision_number,
         lifecycle=revision.lifecycle,
         content_sha256=revision.content_sha256,
-        runtime_family=str(runtime["family"]),
-        runtime_image=str(runtime["image"]),
-        artifact_count=len(artifacts),
-        expected_download_bytes=sum(
-            int(_mapping(artifact)["expected_bytes"]) for artifact in artifacts
-        ),
-        installed_bytes_per_node=int(resources["installed_bytes"]),
-        resident_memory_bytes_per_node=int(resources["resident_memory_bytes"]),
-        activation_memory_bytes_per_node=int(resources["activation_memory_bytes"]),
-        min_nodes=int(topology["min_nodes"]),
-        max_nodes=int(topology["max_nodes"]),
+        **metrics,
     )
+
+
+def _document_summary(document: Mapping[str, object]) -> dict[str, Any]:
+    runtime = _mapping(document["runtime"])
+    build = _mapping(document["build"])
+    context = _mapping(build["context"])
+    artifacts = document["artifacts"]
+    profiles = document["deployment_profiles"]
+    assert isinstance(artifacts, list)
+    assert isinstance(profiles, list)
+    installed: list[int] = []
+    runtime_memory: list[int] = []
+    node_counts: set[int] = set()
+    for profile_value in profiles:
+        profile = _mapping(profile_value)
+        node_counts.add(int(profile["node_count"]))
+        roles = profile["roles"]
+        assert isinstance(roles, list)
+        for role_value in roles:
+            role = _mapping(role_value)
+            resources = _mapping(role["resources"])
+            disk = _mapping(resources["disk"])
+            memory = _mapping(resources["memory"])
+            installed.append(
+                int(disk["image_bytes"])
+                + int(disk["artifact_bytes"])
+                + int(disk["cache_bytes"])
+                + int(disk["rollback_bytes"])
+            )
+            runtime_memory.append(
+                max(
+                    int(memory["startup_peak_bytes"]),
+                    int(memory["steady_state_bytes"])
+                    + int(memory["runtime_growth_bytes"]),
+                )
+                + int(memory["system_reserve_bytes"])
+            )
+    return {
+        "runtime_family": str(runtime["adapter"]),
+        "source_bundle_sha256": str(context["sha256"]),
+        "artifact_count": len(artifacts),
+        "expected_download_bytes": sum(
+            int(_mapping(artifact)["download_bytes"]) for artifact in artifacts
+        ),
+        "profile_node_counts": tuple(sorted(node_counts)),
+        "maximum_installed_bytes_per_node": max(installed),
+        "maximum_runtime_memory_bytes_per_node": max(runtime_memory),
+    }

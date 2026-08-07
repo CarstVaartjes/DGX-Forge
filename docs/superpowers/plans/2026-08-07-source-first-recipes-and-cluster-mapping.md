@@ -162,6 +162,8 @@ Commit: `git commit -m "feat: import SparkRun as source recipes"`.
 ### Task 3: Build once and replace deployments with cluster mappings
 
 **Files:**
+- Create: `control/src/dgx_control/source_policy.py`
+- Create: `control/tests/test_source_policy.py`
 - Create: `control/src/dgx_control/recipe_builds.py`
 - Create: `control/tests/test_recipe_builds.py`
 - Modify: `control/src/dgx_control/models.py`
@@ -184,6 +186,7 @@ Commit: `git commit -m "feat: import SparkRun as source recipes"`.
 - Modify: `control/tests/test_recipe_catalog_migration.py`
 
 **Interfaces:**
+- `inspect_build_source(recipe, bundle) -> SourcePolicyReport`
 - `RecipeBuildService.plan(recipe_revision_id, builder_node_id, now) -> BuildPlan`
 - Agent operations `recipe.build.v1` and `recipe.image.import.v1`
 - `ClusterMappingService.plan(recipe_revision_id: str, profile_name: str, node_ids: tuple[str, ...], parameters: Mapping[str, object], now: datetime) -> ClusterMappingPlan`
@@ -213,7 +216,7 @@ Run: `cargo test -p vonk-agent --test workloads`.
 
 - [ ] **Step 3: Implement durable build planning and typed agent execution**
 
-Require a resolved recipe, verified bundle, compatible fresh builder, and complete build envelope. Reserve temporary capacity. Build through rootless typed Podman/Buildah argv with no shell/socket/host mounts/devices/secrets/privilege, public-only egress, and bounded CPU/memory/disk/process/time/output. Record input and OCI output digests and sizes.
+Require a resolved recipe, verified bundle, compatible fresh builder, complete build envelope, and a passing source-policy report before sending build inputs to a node. Parse the Dockerfile and any Compose files in the canonical bundle; reject unpinned bases, remote `ADD`, root final users, host/privileged networking or namespaces, Docker sockets, host bind mounts, added capabilities, unconfined security profiles, secret/SSH build mounts, and paths outside the context. Reserve temporary capacity. Build through rootless typed Podman/Buildah argv with no shell/socket/host mounts/devices/secrets/privilege, public-only egress, and bounded CPU/memory/disk/process/time/output. Recheck the policy on the agent and record input and OCI output digests and sizes.
 
 - [ ] **Step 4: Distribute one exact OCI layout**
 

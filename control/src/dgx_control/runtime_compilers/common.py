@@ -41,8 +41,10 @@ class RuntimeProjection:
         index = 0
         while index < len(self.arguments):
             flag = self.arguments[index]
-            name = flag.removeprefix("--").replace("-", "_")
-            if index + 1 < len(self.arguments) and not self.arguments[index + 1].startswith("--"):
+            name = flag.removeprefix("--")
+            if index + 1 < len(self.arguments) and not self.arguments[
+                index + 1
+            ].startswith("--"):
                 result.append({"name": name, "value": self.arguments[index + 1]})
                 index += 2
             else:
@@ -53,7 +55,10 @@ class RuntimeProjection:
 
 def tokens(source: SparkRunSource) -> list[str]:
     raw = source.command.raw.replace("\\\n", " ")
-    if any(character in raw for character in (";", "|", "&", ">", "<", "`", "$", "\n", "\r")):
+    if any(
+        character in raw
+        for character in (";", "|", "&", ">", "<", "`", "$", "\n", "\r")
+    ):
         raise RuntimeCompileError("runtime command contains forbidden shell syntax")
     values: dict[str, object] = {"model": source.model, **source.defaults.values}
 
@@ -61,7 +66,11 @@ def tokens(source: SparkRunSource) -> list[str]:
         name = match.group(1)
         if name not in values or isinstance(values[name], (dict, list)):
             raise RuntimeCompileError(f"runtime placeholder is undeclared: {name}")
-        rendered = str(values[name]).lower() if isinstance(values[name], bool) else str(values[name])
+        rendered = (
+            str(values[name]).lower()
+            if isinstance(values[name], bool)
+            else str(values[name])
+        )
         if _SAFE_VALUE.fullmatch(rendered) is None:
             raise RuntimeCompileError(f"runtime placeholder value is unsafe: {name}")
         return rendered
@@ -98,7 +107,9 @@ def options(
             if inline is None:
                 index += 1
                 if index >= len(values) or values[index].startswith("-"):
-                    raise RuntimeCompileError(f"runtime flag requires a value: {raw_flag}")
+                    raise RuntimeCompileError(
+                        f"runtime flag requires a value: {raw_flag}"
+                    )
                 value = values[index]
             else:
                 value = inline
@@ -109,7 +120,9 @@ def options(
                 emitted.extend((spec.canonical, value))
         else:
             if inline is not None:
-                raise RuntimeCompileError(f"runtime presence flag cannot have a value: {raw_flag}")
+                raise RuntimeCompileError(
+                    f"runtime presence flag cannot have a value: {raw_flag}"
+                )
             parsed[spec.canonical] = True
             if spec.emit:
                 emitted.append(spec.canonical)
@@ -121,7 +134,9 @@ def environment(source: SparkRunSource, allowlist: frozenset[str]) -> dict[str, 
     result: dict[str, str] = {}
     for key, value in source.environment.items():
         if key not in allowlist or not isinstance(value, (str, int, bool)):
-            raise RuntimeCompileError(f"runtime environment field is not allowlisted: {key}")
+            raise RuntimeCompileError(
+                f"runtime environment field is not allowlisted: {key}"
+            )
         rendered = str(value).lower() if isinstance(value, bool) else str(value)
         if _SAFE_VALUE.fullmatch(rendered) is None:
             raise RuntimeCompileError(f"runtime environment value is invalid: {key}")
@@ -136,6 +151,7 @@ def integer(minimum: int, maximum: int) -> Callable[[str], bool]:
         except ValueError:
             return False
         return str(parsed) == value and minimum <= parsed <= maximum
+
     return validate
 
 
@@ -146,6 +162,7 @@ def decimal(minimum: float, maximum: float) -> Callable[[str], bool]:
         except ValueError:
             return False
         return isfinite(parsed) and minimum <= parsed <= maximum
+
     return validate
 
 

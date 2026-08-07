@@ -89,6 +89,7 @@ from .repository import RepositoryPolicyError
 from .settings import StartupMode
 from .sparkrun_api import install_sparkrun_routes
 from .sparkrun_workflow import SparkRunWorkflow
+from .source_bundles import SourceBundleStore
 
 _CONTROL_GENERATION = re.compile(
     r"[a-z0-9](?:[a-z0-9._-]{0,126}[a-z0-9])?\Z"
@@ -1964,7 +1965,11 @@ def production_app() -> FastAPI:
         packages=PackageApiServices.from_object(package_services),
         catalog=CatalogService(sessions, clock=clock),
         global_catalog=global_catalog,
-        sparkrun=SparkRunWorkflow(sessions, clock=clock),
+        sparkrun=SparkRunWorkflow(
+            sessions,
+            clock=clock,
+            bundles=SourceBundleStore(settings.state_path / "source-bundles"),
+        ),
         recipe_operations=recipe_operations,
     )
     install_selected_generation_readiness(app, generation_readiness)

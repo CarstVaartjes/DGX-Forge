@@ -64,10 +64,16 @@ def test_stale_draft_update_has_stable_conflict_code(
 
 
 @pytest.mark.parametrize(
-    "sensitive_key", [
-        "authorization", "credential", "password", "secret", "token",
-        "private_key", "certificate",
-    ]
+    "sensitive_key",
+    [
+        "authorization",
+        "credential",
+        "password",
+        "secret",
+        "token",
+        "private_key",
+        "certificate",
+    ],
 )
 def test_sensitive_keys_are_rejected_at_any_depth(
     service: CatalogService,
@@ -125,3 +131,18 @@ def test_short_opaque_artifact_revision_is_not_treated_as_immutable(
         service.create_recipe(
             "admin", RecipeDraftInput(slug="qwen3-vllm", document=recipe_document)
         )
+
+
+def test_summary_uses_source_bundle_and_exact_profile_counts(
+    service: CatalogService, recipe_document: dict[str, object]
+) -> None:
+    service.create_recipe(
+        "admin", RecipeDraftInput(slug="qwen3-vllm", document=recipe_document)
+    )
+
+    summaries, _ = service.list_recipes()
+
+    assert summaries[0].source_bundle_sha256 == "a" * 64
+    assert summaries[0].profile_node_counts == (1,)
+    assert summaries[0].maximum_installed_bytes_per_node == 68_000_000_000
+    assert summaries[0].maximum_runtime_memory_bytes_per_node == 88_000_000_000

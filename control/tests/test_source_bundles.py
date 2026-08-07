@@ -4,14 +4,12 @@ import io
 import tarfile
 
 import pytest
-
 from dgx_control.source_bundles import (
     BundleLimits,
     SourceBundleError,
     SourceBundleStore,
     inspect_source_bundle,
 )
-
 
 LIMITS = BundleLimits(
     max_archive_bytes=16_384,
@@ -65,9 +63,7 @@ def test_bundle_rejects_links_and_expansion_overflow() -> None:
         inspect_source_bundle(io.BytesIO(linked.getvalue()), LIMITS)
 
     with pytest.raises(SourceBundleError) as error:
-        inspect_source_bundle(
-            io.BytesIO(archive([("large", b"x" * 4097)])), LIMITS
-        )
+        inspect_source_bundle(io.BytesIO(archive([("large", b"x" * 4097)])), LIMITS)
     assert error.value.code == "bundle.file_too_large"
 
 
@@ -78,9 +74,12 @@ def test_store_is_content_addressed_and_idempotent(tmp_path) -> None:
 
     first = store.put(manifest.sha256, io.BytesIO(payload))
     second = store.put(manifest.sha256, io.BytesIO(payload))
+    loaded = store.get(manifest.sha256)
 
     assert first == second
     assert first.path.read_bytes() == payload
+    assert loaded.archive == payload
+    assert loaded.files["Dockerfile"] == b"FROM scratch\n"
 
 
 def test_store_rejects_expected_digest_mismatch(tmp_path) -> None:

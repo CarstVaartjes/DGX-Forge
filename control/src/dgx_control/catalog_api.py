@@ -19,6 +19,7 @@ from .catalog_service import (
     RecipeDraftInput,
     RecipeRevisionView,
     RecipeSummary,
+    _document_summary,
 )
 from .global_catalog import GlobalCatalogError, GlobalRecipeRevision
 
@@ -35,8 +36,14 @@ CATALOG_OPERATION_IDS = {
     ("post", "/api/v1/catalog/recipes/{recipe_id}/fork"): "forkLocalRecipe",
     ("post", "/api/v1/catalog/imports/global/preview"): "previewGlobalRecipeImport",
     ("post", "/api/v1/catalog/imports/global"): "importGlobalRecipe",
-    ("put", "/api/v1/catalog/recipes/{recipe_id}/publication-report"): "attachRecipePublicationReport",
-    ("post", "/api/v1/catalog/recipes/{recipe_id}/publication-export"): "exportRecipeForPublication",
+    (
+        "put",
+        "/api/v1/catalog/recipes/{recipe_id}/publication-report",
+    ): "attachRecipePublicationReport",
+    (
+        "post",
+        "/api/v1/catalog/recipes/{recipe_id}/publication-export",
+    ): "exportRecipeForPublication",
 }
 
 
@@ -113,14 +120,12 @@ class RecipeSummaryResponse(StrictModel):
     lifecycle: Literal["draft", "blocked", "resolved", "deprecated"]
     content_sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     runtime_family: str = Field(min_length=1, max_length=64)
-    runtime_image: str = Field(min_length=1, max_length=512)
-    artifact_count: int = Field(ge=1, le=16)
+    source_bundle_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    artifact_count: int = Field(ge=0, le=32)
     expected_download_bytes: int = Field(ge=1)
-    installed_bytes_per_node: int = Field(ge=1)
-    resident_memory_bytes_per_node: int = Field(ge=1)
-    activation_memory_bytes_per_node: int = Field(ge=1)
-    min_nodes: int = Field(ge=1, le=16)
-    max_nodes: int = Field(ge=1, le=16)
+    profile_node_counts: list[int] = Field(min_length=1)
+    maximum_installed_bytes_per_node: int = Field(ge=1)
+    maximum_runtime_memory_bytes_per_node: int = Field(ge=1)
 
 
 class RecipeListResponse(StrictModel):
@@ -159,37 +164,25 @@ def _summary(value: RecipeSummary) -> dict[str, object]:
         "lifecycle": value.lifecycle,
         "content_sha256": value.content_sha256,
         "runtime_family": value.runtime_family,
-        "runtime_image": value.runtime_image,
+        "source_bundle_sha256": value.source_bundle_sha256,
         "artifact_count": value.artifact_count,
         "expected_download_bytes": value.expected_download_bytes,
-        "installed_bytes_per_node": value.installed_bytes_per_node,
-        "resident_memory_bytes_per_node": value.resident_memory_bytes_per_node,
-        "activation_memory_bytes_per_node": value.activation_memory_bytes_per_node,
-        "min_nodes": value.min_nodes,
-        "max_nodes": value.max_nodes,
+        "profile_node_counts": list(value.profile_node_counts),
+        "maximum_installed_bytes_per_node": value.maximum_installed_bytes_per_node,
+        "maximum_runtime_memory_bytes_per_node": value.maximum_runtime_memory_bytes_per_node,
     }
 
 
 def _revision(value: RecipeRevisionView) -> dict[str, object]:
-    document = value.document
-    runtime = document["runtime"]
-    resources = document["resources"]
-    topology = document["topology"]
-    artifacts = document["artifacts"]
-    assert isinstance(runtime, dict) and isinstance(resources, dict)
-    assert isinstance(resources["per_node"], dict) and isinstance(topology, dict)
-    assert isinstance(artifacts, list)
     summary = {
-        "recipe_id": value.recipe_id, "slug": value.slug, "title": value.title,
-        "origin": value.source_kind, "revision_number": value.revision_number,
-        "lifecycle": value.lifecycle, "content_sha256": value.content_sha256,
-        "runtime_family": runtime["family"], "runtime_image": runtime["image"],
-        "artifact_count": len(artifacts),
-        "expected_download_bytes": sum(int(item["expected_bytes"]) for item in artifacts if isinstance(item, dict)),
-        "installed_bytes_per_node": resources["per_node"]["installed_bytes"],
-        "resident_memory_bytes_per_node": resources["per_node"]["resident_memory_bytes"],
-        "activation_memory_bytes_per_node": resources["per_node"]["activation_memory_bytes"],
-        "min_nodes": topology["min_nodes"], "max_nodes": topology["max_nodes"],
+        "recipe_id": value.recipe_id,
+        "slug": value.slug,
+        "title": value.title,
+        "origin": value.source_kind,
+        "revision_number": value.revision_number,
+        "lifecycle": value.lifecycle,
+        "content_sha256": value.content_sha256,
+        **_document_summary(value.document),
     }
     return {
         **summary,
@@ -205,7 +198,9 @@ def _revision(value: RecipeRevisionView) -> dict[str, object]:
 def _bounded(document: Mapping[str, object]) -> None:
     encoded = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
     if len(encoded) > _MAX_DOCUMENT_BYTES:
-        raise CatalogError("catalog.document_too_large", "recipe document exceeds 256 KiB")
+        raise CatalogError(
+            "catalog.document_too_large", "recipe document exceeds 256 KiB"
+        )
 
 
 def install_catalog_routes(
@@ -239,13 +234,19 @@ def install_catalog_routes(
 
     def global_problem(request: Request, error: GlobalCatalogError) -> JSONResponse:
         status_code = (
-            404 if error.code == "global.not_found"
-            else 409 if error.code == "global.revision_changed"
-            else 422 if error.code in {
-                "global.uri_invalid", "global.identity_mismatch",
+            404
+            if error.code == "global.not_found"
+            else 409
+            if error.code == "global.revision_changed"
+            else 422
+            if error.code
+            in {
+                "global.uri_invalid",
+                "global.identity_mismatch",
                 "global.schema_incompatible",
             }
-            else 503 if error.code in {"global.unavailable", "global.url_insecure"}
+            else 503
+            if error.code in {"global.unavailable", "global.url_insecure"}
             else 502
         )
         return JSONResponse(
@@ -289,20 +290,32 @@ def install_catalog_routes(
         limit: int = Query(default=20, ge=1, le=100),
         _actor: Actor = authenticated,
     ):
-        result = read(lambda: catalog().list_recipes(limit=limit, cursor=cursor), request)
+        result = read(
+            lambda: catalog().list_recipes(limit=limit, cursor=cursor), request
+        )
         if isinstance(result, JSONResponse):
             return result
         recipes, next_cursor = result
-        return {"recipes": [_summary(item) for item in recipes], "next_cursor": next_cursor}
+        return {
+            "recipes": [_summary(item) for item in recipes],
+            "next_cursor": next_cursor,
+        }
 
     @app.post(
         "/api/v1/catalog/recipes",
         response_model=RecipeRevisionResponse,
-        responses={401: {"model": CatalogProblem}, 403: {"model": CatalogProblem}, 409: {"model": CatalogProblem}, 422: {"model": CatalogProblem}},
+        responses={
+            401: {"model": CatalogProblem},
+            403: {"model": CatalogProblem},
+            409: {"model": CatalogProblem},
+            422: {"model": CatalogProblem},
+        },
         status_code=status.HTTP_201_CREATED,
         operation_id="createLocalRecipe",
     )
-    def create_recipe(body: CreateRecipeRequest, request: Request, actor: Actor = authenticated):
+    def create_recipe(
+        body: CreateRecipeRequest, request: Request, actor: Actor = authenticated
+    ):
         administrator(actor)
         try:
             _bounded(body.document)
@@ -311,7 +324,15 @@ def install_catalog_routes(
             )
         except CatalogError as error:
             return _problem(request, error)
-        audits.append(AuditRecord(request.state.request_id, actor.subject, "catalog.recipe.create", None, (result.recipe_id,)))
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                actor.subject,
+                "catalog.recipe.create",
+                None,
+                (result.recipe_id,),
+            )
+        )
         return _revision(result)
 
     @app.get(
@@ -320,35 +341,71 @@ def install_catalog_routes(
         responses={401: {"model": CatalogProblem}, 404: {"model": CatalogProblem}},
         operation_id="getLocalRecipe",
     )
-    def get_recipe(request: Request, recipe_id: str = Path(pattern=_UUID), _actor: Actor = authenticated):
+    def get_recipe(
+        request: Request,
+        recipe_id: str = Path(pattern=_UUID),
+        _actor: Actor = authenticated,
+    ):
         result = read(lambda: catalog().get_recipe(recipe_id), request)
         return result if isinstance(result, JSONResponse) else _revision(result)
 
     @app.put(
         "/api/v1/catalog/recipes/{recipe_id}/draft",
         response_model=RecipeRevisionResponse,
-        responses={401: {"model": CatalogProblem}, 403: {"model": CatalogProblem}, 404: {"model": CatalogProblem}, 409: {"model": CatalogProblem}, 422: {"model": CatalogProblem}},
+        responses={
+            401: {"model": CatalogProblem},
+            403: {"model": CatalogProblem},
+            404: {"model": CatalogProblem},
+            409: {"model": CatalogProblem},
+            422: {"model": CatalogProblem},
+        },
         operation_id="updateLocalRecipeDraft",
     )
-    def update_draft(body: UpdateRecipeDraftRequest, request: Request, recipe_id: str = Path(pattern=_UUID), actor: Actor = authenticated):
+    def update_draft(
+        body: UpdateRecipeDraftRequest,
+        request: Request,
+        recipe_id: str = Path(pattern=_UUID),
+        actor: Actor = authenticated,
+    ):
         administrator(actor)
         try:
             _bounded(body.document)
-            result = catalog().update_draft(recipe_id, body.expected_revision, body.document, actor.subject)
+            result = catalog().update_draft(
+                recipe_id, body.expected_revision, body.document, actor.subject
+            )
         except KeyError:
             raise HTTPException(status_code=404, detail="recipe not found") from None
         except CatalogError as error:
             return _problem(request, error)
-        audits.append(AuditRecord(request.state.request_id, actor.subject, "catalog.recipe.update", None, (recipe_id, str(result.revision_number))))
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                actor.subject,
+                "catalog.recipe.update",
+                None,
+                (recipe_id, str(result.revision_number)),
+            )
+        )
         return _revision(result)
 
     @app.post(
         "/api/v1/catalog/recipes/{recipe_id}/resolve",
         response_model=RecipeRevisionResponse,
-        responses={401: {"model": CatalogProblem}, 403: {"model": CatalogProblem}, 404: {"model": CatalogProblem}, 409: {"model": CatalogProblem}, 422: {"model": CatalogProblem}},
+        responses={
+            401: {"model": CatalogProblem},
+            403: {"model": CatalogProblem},
+            404: {"model": CatalogProblem},
+            409: {"model": CatalogProblem},
+            422: {"model": CatalogProblem},
+        },
         operation_id="resolveLocalRecipe",
     )
-    def resolve_recipe(body: ResolveRecipeRequest, request: Request, recipe_id: str = Path(pattern=_UUID), actor: Actor = authenticated):
+    def resolve_recipe(
+        body: ResolveRecipeRequest,
+        request: Request,
+        recipe_id: str = Path(pattern=_UUID),
+        actor: Actor = authenticated,
+    ):
         administrator(actor)
         try:
             result = catalog().resolve(recipe_id, body.expected_revision, actor.subject)
@@ -356,17 +413,36 @@ def install_catalog_routes(
             raise HTTPException(status_code=404, detail="recipe not found") from None
         except CatalogError as error:
             return _problem(request, error)
-        audits.append(AuditRecord(request.state.request_id, actor.subject, "catalog.recipe.resolve", None, (recipe_id, result.content_sha256 or "")))
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                actor.subject,
+                "catalog.recipe.resolve",
+                None,
+                (recipe_id, result.content_sha256 or ""),
+            )
+        )
         return _revision(result)
 
     @app.post(
         "/api/v1/catalog/recipes/{recipe_id}/fork",
         response_model=RecipeRevisionResponse,
-        responses={401: {"model": CatalogProblem}, 403: {"model": CatalogProblem}, 404: {"model": CatalogProblem}, 409: {"model": CatalogProblem}, 422: {"model": CatalogProblem}},
+        responses={
+            401: {"model": CatalogProblem},
+            403: {"model": CatalogProblem},
+            404: {"model": CatalogProblem},
+            409: {"model": CatalogProblem},
+            422: {"model": CatalogProblem},
+        },
         status_code=status.HTTP_201_CREATED,
         operation_id="forkLocalRecipe",
     )
-    def fork_recipe(body: ForkRecipeRequest, request: Request, recipe_id: str = Path(pattern=_UUID), actor: Actor = authenticated):
+    def fork_recipe(
+        body: ForkRecipeRequest,
+        request: Request,
+        recipe_id: str = Path(pattern=_UUID),
+        actor: Actor = authenticated,
+    ):
         administrator(actor)
         try:
             result = catalog().fork(recipe_id, body.revision, body.slug, actor.subject)
@@ -374,7 +450,15 @@ def install_catalog_routes(
             raise HTTPException(status_code=404, detail="recipe not found") from None
         except CatalogError as error:
             return _problem(request, error)
-        audits.append(AuditRecord(request.state.request_id, actor.subject, "catalog.recipe.fork", None, (recipe_id, result.recipe_id)))
+        audits.append(
+            AuditRecord(
+                request.state.request_id,
+                actor.subject,
+                "catalog.recipe.fork",
+                None,
+                (recipe_id, result.recipe_id),
+            )
+        )
         return _revision(result)
 
     @app.post(
@@ -382,7 +466,9 @@ def install_catalog_routes(
         response_model=GlobalRevisionResponse,
         operation_id="previewGlobalRecipeImport",
     )
-    def preview_global_import(body: GlobalImportPreviewRequest, request: Request, actor: Actor = authenticated):
+    def preview_global_import(
+        body: GlobalImportPreviewRequest, request: Request, actor: Actor = authenticated
+    ):
         administrator(actor)
         try:
             return global_revision(remote(body.uri))
@@ -395,7 +481,9 @@ def install_catalog_routes(
         status_code=status.HTTP_201_CREATED,
         operation_id="importGlobalRecipe",
     )
-    def import_global_recipe(body: GlobalImportRequest, request: Request, actor: Actor = authenticated):
+    def import_global_recipe(
+        body: GlobalImportRequest, request: Request, actor: Actor = authenticated
+    ):
         administrator(actor)
         try:
             fetched = remote(body.uri)
