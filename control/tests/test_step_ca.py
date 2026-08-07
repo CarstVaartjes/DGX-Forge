@@ -530,6 +530,12 @@ def test_pinned_step_ca_issues_tracked_leaf_profile_and_serves_fresh_crl(tmp_pat
     private.update({"kid": kid, "alg": "ES256", "use": "sig"})
     public_jwk.write_text(json.dumps(public))
     private_jwk.write_text(json.dumps(private))
+    # Docker bind mounts retain host ownership, unlike the production secret
+    # projection (1000:1000, mode 0400). These contain fixed test-only values;
+    # make them readable by the image's configured `step` user without relying
+    # on the GitHub runner and image having the same numeric UID.
+    intermediate_key.chmod(0o444)
+    intermediate_password.chmod(0o444)
 
     config_path = Path(__file__).resolve().parents[2] / "deploy/compose/step-ca/ca.json"
     config = json.loads(config_path.read_text())
@@ -540,7 +546,7 @@ def test_pinned_step_ca_issues_tracked_leaf_profile_and_serves_fresh_crl(tmp_pat
     database.mkdir(mode=0o777)
     container = f"dgx-step-ca-test-{uuid.uuid4().hex}"
     subprocess.run([
-        "docker", "run", "--rm", "-d", "--name", container, "-p", "127.0.0.1::9000",
+        "docker", "run", "-d", "--name", container, "-p", "127.0.0.1::9000",
         "-v", f"{generated_config}:/home/step/config/ca.json:ro",
         "-v", f"{root}:/run/secrets/root_ca.crt:ro",
         "-v", f"{intermediate}:/run/secrets/intermediate_ca.crt:ro",
@@ -596,7 +602,7 @@ def test_pinned_step_ca_issues_tracked_leaf_profile_and_serves_fresh_crl(tmp_pat
         assert issued.serial in {str(record.serial_number) for record in crl}
     finally:
         subprocess.run(
-            ["docker", "stop", container],
+            ["docker", "rm", "--force", container],
             capture_output=True,
             text=True,
             timeout=30,
