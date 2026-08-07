@@ -104,6 +104,20 @@ registry publication, inference, and Hermes networks separate. Only Caddy
 publishes a host port. LiteLLM alone joins Spark-facing cluster egress; the
 worker and API do not.
 
+## External release and future global services
+
+The local control plane is complete without any hosted global service. This
+repository's GitHub Actions release workflow builds, tests, signs, and publishes
+the ARM64 `vonk-forge-agent` Debian package to the Cloudflare R2 APT repository
+at `packages.vonkforge.ai`; package publication is not a Railway job.
+
+The separate `vonk-forge-web` repository is a future global catalog surface. Its
+frontend is intended for Cloudflare Pages. Only when the global catalog is
+needed should its API, validation worker, and PostgreSQL database be provisioned
+on Railway. That hosted catalog publishes immutable metadata for import; it does
+not run recipe containers or store model weights. Local PostgreSQL remains
+authoritative for installation, placement, admission, and execution.
+
 ## Reconciliation and route publication
 
 For a new repository commit or profile, the control plane follows a durable,

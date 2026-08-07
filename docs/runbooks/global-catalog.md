@@ -4,6 +4,10 @@ Local PostgreSQL remains authoritative. The controller does not depend on
 vonkforge.ai for startup, readiness, installation, running, or an already
 imported recipe.
 
+The global catalog is a future optional service. The initial release runs fully
+on the NAS/Sparks; when enabled later, its frontend belongs on Cloudflare Pages
+and its API/validation worker/PostgreSQL backend may run on Railway.
+
 ## Import an immutable public recipe
 
 1. Copy the `vonk://catalog/PUBLISHER/SLUG@sha256:DIGEST` URI from

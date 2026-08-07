@@ -10,6 +10,14 @@ and runs. Git/TUF remains the authority for platform source and the existing
 workload-release path while the catalog migration is completed; a recipe never
 needs a Git commit or pull request in order to be imported or run.
 
+The initial product has no Railway or global-catalog dependency. This repository
+owns the Spark/NAS runtime and its GitHub Actions agent release: signed ARM64
+`vonk-forge-agent` Debian packages are published to the Cloudflare R2 APT
+repository at `packages.vonkforge.ai`. The separate `vonk-forge-web` repository
+will later publish a global catalog frontend through Cloudflare Pages and may
+add a Railway API/worker/PostgreSQL service; that future service is optional and
+never replaces the local catalog authority.
+
 Before a real release, run `scripts/verify-platform-release --candidate X.Y.Z
 --json`. A blocked result is expected until external hardware, recovery, and
 protected-code-host evidence exists. PR-only repository mutation is a one-way

@@ -17,6 +17,20 @@ LiteLLM publishes only routes acknowledged by the control plane.
   and the existing platform/workload release projection until that projection
   is migrated to catalog revisions.
 
+## Deployment boundary
+
+- The NAS/Docker service host runs the local control API, repository-less worker,
+  PostgreSQL, Caddy, LiteLLM, Hermes, and observability services. Caddy is the
+  local ingress boundary; it is not the global website host.
+- GitHub Actions in this repository builds, tests, signs, and publishes the
+  `vonk-forge-agent` ARM64 Debian package to the public Cloudflare R2 APT
+  repository at `packages.vonkforge.ai`.
+- The initial local product does not require Railway or a global catalog. The
+  future `vonk-forge-web` frontend belongs on Cloudflare Pages; its global
+  API/validation worker/PostgreSQL backend may later run on Railway.
+- Recipe containers and model weights are installed and run on the NAS/Sparks,
+  never on Railway or Cloudflare Pages.
+
 ## Start here
 
 - [Architecture overview](architecture-overview.md)
