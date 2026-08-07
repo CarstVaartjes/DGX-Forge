@@ -1,28 +1,21 @@
-# Vonk Forge
+# vonk-forge
 
-Vonk Forge is a local-first control plane for installing and running
-digest-pinned AI recipes across one or more NVIDIA DGX Spark systems. The NAS
-deployment is authoritative for recipes, placement, inventory, and LiteLLM
-routing; each Spark runs a small outbound-only Rust agent. Caddy is the static
-edge proxy. The controller, rather than Caddy or LiteLLM, decides what runs
-where and updates LiteLLM from observed healthy services.
-
-The generic Spark platform design and phased implementation plans live in
-[`docs/superpowers/specs/2026-08-03-scalable-spark-platform-control-plane-design.md`](docs/superpowers/specs/2026-08-03-scalable-spark-platform-control-plane-design.md).
+`vonk-forge` is a local-first control plane for one or more NVIDIA DGX Sparks.
 Each Spark is onboarded independently; the Docker-capable service host runs
 separate Caddy, API/worker, PostgreSQL, LiteLLM, Hermes Agent, Prometheus, and Grafana
 services. Administration is available through both `sparkctl admin` and the
-web UX. PostgreSQL—not Git—is authoritative for the local recipe/catalog and
-is prefilled with standard entries during installation. Public vonkforge.ai
-recipes are explicitly reviewed and copied into that database; publishing is
-browser-mediated, so the NAS stores no global OAuth token.
+web UX. The target recipe workflow is local-first: PostgreSQL is authoritative
+for recipe families, authored/imported revisions, installations, placements,
+and runs. Git/TUF remains the authority for platform source and the existing
+workload-release path while the catalog migration is completed; a recipe never
+needs a Git commit or pull request in order to be imported or run.
 
 Before a real release, run `scripts/verify-platform-release --candidate X.Y.Z
 --json`. A blocked result is expected until external hardware, recovery, and
 protected-code-host evidence exists. PR-only repository mutation is a one-way
 transition and must not be enabled from simulator evidence.
 
-Vonk Forge is a collection of contracts, controllers, runtime adapters, and
+`vonk-forge` is a collection of contracts, controllers, runtime adapters, and
 operational tooling for defining, validating, deploying, and operating
 model-serving profiles across NVIDIA DGX Spark systems. The repository keeps
 cluster admission and model maturity fail-closed: a checked-in definition is
@@ -30,19 +23,21 @@ not treated as production-ready until its evidence gates are accepted.
 
 ## Capabilities
 
-- Create recipes locally, import SparkRun recipes with an explicit ignored-field
-  report, import immutable vonkforge.ai revisions for offline use, and export
-  tested local recipes as metadata-only browser uploads.
+- Validate and reconcile the existing content-addressed platform and cluster
+  definitions from Git/TUF.
+- Author recipes locally, import SparkRun profiles with a field-by-field report,
+  or download immutable revisions from the optional global catalog. Local
+  PostgreSQL remains usable when the global service or Git remote is unavailable.
 - Execute routine lifecycle and probe operations through outbound, fenced,
   mutually authenticated Spark agents; the control worker never SSHes to a
   Spark.
-- Collect durable node, NVIDIA, rootless Podman, thermal, and storage state reported by
+- Collect durable node, NVIDIA, Docker, thermal, and storage state reported by
   authenticated agents.
 - Configure and validate the direct RoCE/NCCL fabric between Spark nodes.
 - Build and operate model-specific runtime adapters, including the checked-in
   DeepSeek Mia and DS4 definitions.
 - Publish and operate generic, signed workload packages independently from
-  DGX-Forge platform releases; ordinary model/runtime releases do not require
+  `vonk-forge` platform releases; ordinary model/runtime releases do not require
   an agent update.
 - Review and apply NAS-to-Spark platform skew updates through the Admin web UX
   or `sparkctl`, with explicit signed fan-out over the outbound agent channel.
@@ -52,26 +47,11 @@ not treated as production-ready until its evidence gates are accepted.
 - Python 3.12 or newer
 - [`uv`](https://docs.astral.sh/uv/)
 - SSH access for one-time onboarding and explicit operator recovery only
-- Docker and Compose on the NAS/control host
-- The signed `vonk-forge-agent` apt package on each ARM64 Spark; it installs
-  rootless Podman and does not require Docker-group membership
+- Docker installed and accessible on each DGX Spark host
 
 ## Quick start
 
-Production has two installation surfaces:
-
-- NAS/computer: the immutable Docker Compose control-plane release; see
-  [NAS deployment](deploy/compose/README.md).
-- DGX Spark: one signed apt package; see
-  [Spark agent installation](docs/operations/install-spark-agent.md).
-
-The Python agent under `agent/` is retained only as a migration oracle for one
-release. New nodes must negotiate the Rust protocol. Existing Python nodes are
-visibly migration-required and use the dedicated
-[migration procedure](docs/operations/migrate-python-agent.md).
-
-For repository development, install the locked environment and run the local
-test suite:
+Install the locked development environment and run the local test suite:
 
 ```bash
 uv sync --dev
@@ -109,9 +89,9 @@ inspect current node state and preview the exact server reconciliation plan:
 ```bash
 export DGX_CONTROL_URL=https://control.example.invalid
 export DGX_CONTROL_TOKEN_FILE=/run/secrets/dgx-control-token
-uv run --project /path/to/DGX-Forge sparkctl nodes status --json
-uv run --project /path/to/DGX-Forge sparkctl validate PROFILE --json
-uv run --project /path/to/DGX-Forge sparkctl switch PROFILE --json
+uv run --project /path/to/vonk-forge sparkctl nodes status --json
+uv run --project /path/to/vonk-forge sparkctl validate PROFILE --json
+uv run --project /path/to/vonk-forge sparkctl switch PROFILE --json
 ```
 
 `prepare`, `switch`, and `restore-default` are plan-only unless `--apply` is
@@ -141,14 +121,13 @@ reconciled by the repository-less worker.
 - `nodes/` — node bootstrap, health, fabric, and recovery utilities
 - `schemas/` — JSON contracts for profiles, workloads, and health evidence
 - `tests/` — Python and shell test suites
-- `docs/` — architecture notes, design records, plans, and runbooks
+- `docs/` — architecture, security, testing, and operator runbooks
 
 ## Documentation
 
+- [Documentation index](docs/README.md)
 - [Architecture overview](docs/architecture-overview.md)
-- [Interactive architecture overview](docs/vonk-forge-architecture.html)
-- [Spark agent installation](docs/operations/install-spark-agent.md)
-- [Python-to-Rust agent migration](docs/operations/migrate-python-agent.md)
+- [Recipe catalog and SparkRun operations](docs/runbooks/workload-packages.md)
 - [NAS pull-only Compose deployment](deploy/compose/README.md)
 - [Control-plane bootstrap](docs/runbooks/control-plane-bootstrap.md)
 - [`sparkctl` runbook](docs/runbooks/sparkctl.md)
@@ -175,4 +154,4 @@ Docker group is root-equivalent and should be limited to trusted operators.
 
 ## License
 
-DGX-Forge is available under the [MIT License](LICENSE).
+`vonk-forge` is available under the [MIT License](LICENSE).

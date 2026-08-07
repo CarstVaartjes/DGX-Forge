@@ -7,6 +7,13 @@ never executes Compose from the repository checkout: the root-owned host
 updater selects a TUF-authorized platform target, loads the verified OCI deployment bundle,
 and runs only the resulting immutable generation.
 
+The checkout and TUF release described here govern platform services, fleet
+policy, and the compatibility workload-release projection. They are not a
+recipe authoring gate. Local PostgreSQL is authoritative for recipe families,
+authored/imported recipe revisions, SparkRun import reports, installations,
+placements, and runs; those records remain available when Git or the optional
+global catalog is unavailable.
+
 ## Current release state
 
 No images are currently being published. Repository variables
@@ -51,19 +58,20 @@ sudo install -d -m 0700 -o root -g root /srv/dgx-forge/control-host
 sudo install -d -m 0755 -o root -g root /srv/dgx-forge/control-identity
 sudo install -d -m 0700 -o root -g root /srv/dgx-forge/site
 sudo install -d -m 0750 -o "$operator_user" -g "$operator_group" /srv/dgx-forge/admin-repository
-git clone https://github.com/CarstVaartjes/DGX-Forge.git /srv/dgx-forge/admin-repository
+git clone https://github.com/CarstVaartjes/vonk-forge.git /srv/dgx-forge/admin-repository
 sudo install -d -m 0700 /srv/dgx-forge/secrets /srv/dgx-forge/hermes /srv/dgx-forge/step-ca
 ```
 
-Use `/srv/dgx-forge/admin-repository` as the API-managed Git authoring
-repository. The deployment operator owns this checkout so later
-reviewed Git updates work. `id -gn` records the actual primary group; do not
+Use `/srv/dgx-forge/admin-repository` for platform and release-policy source.
+The deployment operator owns this checkout so later reviewed Git updates work.
+`id -gn` records the actual primary group; do not
 assume a same-named group. The updater reads site values from the root-owned
 `/srv/dgx-forge/site` boundary and release assets from verified generations,
 never from this checkout.
 
-`control-api` mounts this checkout read-write as UID `10001:10001` and
-CONTROL_API writes `.git` for signed repository administration. Preserve
+`control-api` mounts this checkout read-write as UID `10001:10001` for the
+platform/release administration path and writes `.git` for signed changes.
+Recipe CRUD and imports use the local catalog database instead. Preserve
 operator administration while granting both the named operator and UID 10001
 recursive read/write/traverse access now and on all future files and
 directories. The access-control masks keep both named-user entries effective:
@@ -156,8 +164,9 @@ Keep the checked-in upstream image pins (`POSTGRES_IMAGE`, `CADDY_IMAGE`,
 
 Set `COMPOSE_PROJECT_NAME`, `REPOSITORY_PATH`, `HERMES_DATA_ROOT`,
 `NAS_LAN_IP`, `DGX_BACKEND_PORT`, `DGX_MANAGEMENT_CIDRS`, and optional
-`DGX_DIRECT_FABRIC_CIDRS`. `REPOSITORY_PATH` is the admin authoring checkout
-mounted into the API as data; it is not the Compose source.
+`DGX_DIRECT_FABRIC_CIDRS`. `REPOSITORY_PATH` is the platform/release checkout
+mounted into the API as data; it is not the Compose source or the recipe
+catalog database.
 `HERMES_DATA_ROOT` contains `data`, `workspaces`, and `cache`.
 The control state volume contains the explicitly separated agent artifact and
 TUF publication roots. Active mTLS-authenticated Sparks can read only bounded,

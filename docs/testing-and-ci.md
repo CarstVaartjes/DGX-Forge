@@ -1,6 +1,6 @@
 # Testing and CI policy
 
-DGX-Forge keeps pull-request CI small and deterministic. GitHub Actions is a
+Vonk Forge keeps pull-request CI small and deterministic. GitHub Actions is a
 merge gate, not the place to run every hardware, browser, Docker, or long-lived
 acceptance test on every change.
 

@@ -1,10 +1,16 @@
 # Model profile switching
 
-`sparkctl` changes the complete desired state of both DGX Sparks by activating
-a named Cluster Profile. It does not start or stop an individual model outside
-an accepted profile. The controller runs on the developer machine; endpoints
-remain loopback-only on the Sparks and are reached through SSH tunnels until
-the separate NAS control plane exists.
+`sparkctl` changes the complete desired state of the DGX Spark cluster by
+activating a named Cluster Profile. It does not start or stop an individual
+model outside an accepted profile. The supported production path is the NAS
+control API and outbound mTLS agents; the developer-machine controller and SSH
+tunnels described by older examples are migration/recovery compatibility only.
+
+Recipe installs and runs are planned from the local PostgreSQL catalog. The
+catalog records the immutable recipe revision, resource envelope, placement,
+and node-level disk/memory checks before any Spark mutation. Existing checked-
+in profiles continue to use the content-addressed admission checks below until
+their equivalent catalog projection is enabled.
 
 ## Safety model
 

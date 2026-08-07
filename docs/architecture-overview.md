@@ -1,6 +1,6 @@
-# DGX-Forge architecture overview
+# Vonk Forge architecture overview
 
-DGX-Forge separates the Docker service host from the Spark compute plane. The
+Vonk Forge separates the Docker service host from the Spark compute plane. The
 service host can be a NAS or any Docker Compose-capable Linux machine. A cluster
 can contain one, two, or more DGX Sparks; no product contract fixes the count or
 uses a Spark hostname or IP address as identity.
@@ -22,7 +22,7 @@ flowchart LR
     subgraph host[Docker-capable service host]
         tailscale[Tailscale gateway]
         caddy[Caddy]
-        api[Control API and Git authority]
+        api[Control API and authority services]
         worker[Repository-less control worker]
         db[(PostgreSQL)]
         litellm[LiteLLM]
@@ -55,11 +55,21 @@ flowchart LR
 
 ## Trust and control flow
 
-Repository content is the desired-state authority. The API owns the repository,
-signed changes, current deployment-branch head, eligibility policy, model/profile
-resolution, and commit-pinned Hermes policy. Accepted plans are canonical and
-persisted in PostgreSQL with their commit, targets, operation graph, payload
-digests, routes, protocol range, and plan digest.
+Vonk Forge has an explicit authority split. PostgreSQL is authoritative for the
+local recipe catalog: package families, authored and imported revisions,
+SparkRun import reports, installations, placements, and runs. A recipe can be
+created, imported, resolved, installed, and run while the operator is offline;
+the optional global catalog is a source of immutable revisions, never a remote
+dependency for local execution. Git/TUF remains authoritative for platform
+source, fleet/topology policy, and the existing workload-release projection
+until that projection is migrated to catalog revisions.
+
+For the current platform path, the API owns the repository, signed changes,
+current deployment-branch head, eligibility policy, model/profile resolution,
+and commit-pinned Hermes policy. Accepted plans are canonical and persisted in
+PostgreSQL with their commit, targets, operation graph, payload digests, routes,
+protocol range, and plan digest. Catalog plans use a recipe revision digest
+instead of treating `base_commit` as authorization.
 
 The worker deliberately has no repository mount, Git key, Git/OpenSSH executable,
 or Spark-facing network. It advances durable reconciliations and publishes
@@ -109,9 +119,9 @@ restart-safe sequence:
 5. Compensate or enter `waiting-for-operator` when mutation outcome is uncertain.
 6. Publish routes only after every required result and endpoint-evidence digest
    is accepted, then require an exact LiteLLM supervisor acknowledgement.
-7. Renew only while Git authority, agent compatibility, certificate state,
-   authenticated presence, and the publication lease remain valid. Otherwise
-   withdraw fail closed.
+7. Renew only while the applicable authority (catalog revision or Git/TUF
+   release), agent compatibility, certificate state, authenticated presence,
+   and publication lease remain valid. Otherwise withdraw fail closed.
 
 Route generations are staged under immutable digest-named directories and become
 active through one atomic marker. LiteLLM mounts the publication volume read-only

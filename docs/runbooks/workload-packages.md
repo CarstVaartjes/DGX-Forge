@@ -1,5 +1,13 @@
 # Workload package operations
 
+This is the compatibility runbook for the current signed workload-package
+release plane. New Vonk recipes are catalog records, not Git files: local
+PostgreSQL owns their revisions, imports, install plans, placements, and runs,
+and the optional public catalog only supplies immutable data to import. Do not
+use this Git/TUF promotion flow as a prerequisite for authoring or running a
+local recipe. A future catalog-backed release projection will preserve the
+same digest, capacity, topology, and evidence checks.
+
 This runbook is the operator contract for model and runtime releases. A
 workload package is a signed, content-addressed description of a complete
 stack: source or OCI inputs, model/checkpoint files, adapters, Python

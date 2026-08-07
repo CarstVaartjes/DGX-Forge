@@ -1,9 +1,13 @@
-# Repository-backed administration
+# Repository-backed platform administration
 
-Git is the only authority for fleet nodes, topology, model repositories,
-profiles, policy, and desired deployment state. PostgreSQL holds operational
-jobs, observations, audit events, and reconciliation results; it must never be
-used to create an alternative desired state.
+This runbook covers the existing Git/TUF-backed platform and workload-release
+path. Git remains authoritative for fleet nodes, topology, platform policy,
+and the release projection described below. PostgreSQL is authoritative for
+local recipe catalog entries, immutable recipe revisions, imports,
+installations, placements, and runs; those records do not require a commit,
+branch, or pull request and remain available when the remote is unreachable.
+Use the catalog/API runbooks for recipe authoring and SparkRun import. Never
+turn a recipe operation into a Git change merely to satisfy this runbook.
 
 ## Inspect and propose
 
@@ -26,8 +30,8 @@ a pull request; it never force-pushes or deploys an unreviewed branch.
 
 ## Reconcile
 
-Only a commit reachable from the protected deployment branch with every exact
-required check in the successful state is eligible. Planning pins that commit,
+Only a platform/release commit reachable from the protected deployment branch
+with every exact required check in the successful state is eligible. Planning pins that commit,
 sorted node targets, placements, routes, immutable releases, and all input
 digests. Execution rechecks eligibility immediately before any node mutation.
 The worker also reconstructs that exact plan from the checked-out

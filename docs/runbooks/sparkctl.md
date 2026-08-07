@@ -13,12 +13,12 @@ export DGX_CONTROL_TOKEN_FILE=/run/secrets/dgx-control-token
 The routine command surface is:
 
 ```bash
-uv run --project /path/to/DGX-Forge sparkctl nodes status --json
-uv run --project /path/to/DGX-Forge sparkctl validate PROFILE --json
-uv run --project /path/to/DGX-Forge sparkctl prepare PROFILE [--apply] [--wait|--no-wait] --json
-uv run --project /path/to/DGX-Forge sparkctl switch PROFILE [--apply] [--wait|--no-wait] --json
-uv run --project /path/to/DGX-Forge sparkctl restore-default [--apply] [--wait|--no-wait] --json
-uv run --project /path/to/DGX-Forge sparkctl endpoint ALIAS --json
+uv run --project /path/to/vonk-forge sparkctl nodes status --json
+uv run --project /path/to/vonk-forge sparkctl validate PROFILE --json
+uv run --project /path/to/vonk-forge sparkctl prepare PROFILE [--apply] [--wait|--no-wait] --json
+uv run --project /path/to/vonk-forge sparkctl switch PROFILE [--apply] [--wait|--no-wait] --json
+uv run --project /path/to/vonk-forge sparkctl restore-default [--apply] [--wait|--no-wait] --json
+uv run --project /path/to/vonk-forge sparkctl endpoint ALIAS --json
 ```
 
 `nodes status` and `endpoint` return their typed server resources. `validate`

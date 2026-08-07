@@ -1,0 +1,34 @@
+# Vonk Forge operator documentation
+
+Vonk Forge runs a Docker-capable control host (normally a NAS) and one or more
+DGX Spark agents. Caddy is the only published ingress; Tailscale is the
+default remote-access boundary; Spark agents make outbound mTLS connections;
+LiteLLM publishes only routes acknowledged by the control plane.
+
+## Authority boundary
+
+- Local PostgreSQL owns recipe families, authored and imported revisions,
+  SparkRun import reports, installations, placements, and runs. It remains
+  usable without the global catalog or a Git remote.
+- The optional global Vonk Forge Web service publishes immutable recipe
+  revisions and metadata. It never stores image layers, model weights, or
+  cluster state.
+- Git/TUF remains the authority for platform source, fleet/topology policy,
+  and the existing platform/workload release projection until that projection
+  is migrated to catalog revisions.
+
+## Start here
+
+- [Architecture overview](architecture-overview.md)
+- [Testing and CI](testing-and-ci.md)
+- [Control-plane bootstrap](runbooks/control-plane-bootstrap.md)
+- [Node onboarding and health](runbooks/node-onboarding.md)
+- [Recipe and workload operations](runbooks/workload-packages.md)
+- [Model switching](runbooks/model-switching.md)
+- [Platform updates](runbooks/platform-update.md)
+- [Security threat model](security/threat-model.md)
+
+Commands in these pages are plan-first by default. They show the exact
+revision, placement, resource checks, and affected nodes before mutation;
+`--apply` is required for a state-changing operation. Secrets and private
+keys never belong in recipes, Git, command arguments, or captured diagnostics.
