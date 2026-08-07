@@ -2071,6 +2071,12 @@ def test_installed_systemd_harness_verifies_units_by_installed_name() -> None:
     assert all(
         unit["exposure"] == "OK" for unit in report["security_units"].values()
     )
+    assert report["package_helper_socket"] == {
+        "directory_mode": "0711",
+        "group": "vonk-agent",
+        "listen_stream": "/run/vonk-forge-package-helper/package-helper.sock",
+        "runtime_owner": "root",
+    }
 
 
 def test_rust_supervisor_is_stable_outside_slots_and_units_keep_agent_unprivileged() -> None:

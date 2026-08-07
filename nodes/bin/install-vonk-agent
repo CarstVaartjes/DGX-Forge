@@ -1668,6 +1668,15 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
             0o700,
             root_owner,
         )
+        # The privileged socket must never live below the unprivileged
+        # agent's RuntimeDirectory. The socket unit recreates this root-owned
+        # parent after boot; provisioning it here establishes the same
+        # boundary before the unit is first enabled.
+        changed |= _ensure_directory(
+            _destination("/run/vonk-forge-package-helper"),
+            0o711,
+            root_owner,
+        )
         auth_path = state_root / "registry-auth.json"
         token_path = state_root / "bootstrap/enrollment-token"
         changed |= _publish_file(auth_path, snapshots["auth"], 0o600, service_owner)

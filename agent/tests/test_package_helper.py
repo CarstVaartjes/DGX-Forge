@@ -891,6 +891,10 @@ def test_package_helper_units_define_one_persistent_bounded_authority() -> None:
 
     assert socket_unit["Socket"]["Accept"] == "no"
     assert socket_unit["Socket"]["SocketMode"] == "0660"
+    assert socket_unit["Socket"]["DirectoryMode"] == "0711"
+    assert socket_unit["Socket"]["ListenStream"] == (
+        "/run/vonk-forge-package-helper/package-helper.sock"
+    )
     assert service_unit["Service"]["Type"] == "simple"
     assert set(service_unit["Unit"]["Requires"].split()) == {
         "vonk-forge-package-helper.socket",
@@ -907,7 +911,11 @@ def test_package_helper_units_define_one_persistent_bounded_authority() -> None:
     assert service_unit["Service"]["NoNewPrivileges"] == "yes"
     assert service_unit["Service"]["PrivateTmp"] == "yes"
     assert agent_unit["Service"]["RuntimeDirectory"] == "vonk-forge-agent"
-    assert "RuntimeDirectory" not in service_unit["Service"]
+    assert service_unit["Service"]["RuntimeDirectory"] == (
+        "vonk-forge-package-helper"
+    )
+    assert service_unit["Service"]["RuntimeDirectoryMode"] == "0711"
+    assert service_unit["Service"]["RuntimeDirectoryPreserve"] == "yes"
     capabilities = set(service_unit["Service"]["CapabilityBoundingSet"].split())
     assert capabilities == {"CAP_CHOWN"}
 

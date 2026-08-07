@@ -127,6 +127,14 @@ def test_builder_produces_reproducible_verified_arm64_deb(tmp_path: Path) -> Non
     assert "DeviceAllow=char-231:* rw" in unit
     assert "BindPaths=-/dev/fuse" in unit
     assert "Delegate=yes" in unit
+    helper_socket = (
+        payload / "lib/systemd/system/vonk-forge-package-helper.socket"
+    ).read_text()
+    assert (
+        "ListenStream=/run/vonk-forge-package-helper/package-helper.sock"
+        in helper_socket.splitlines()
+    )
+    assert "DirectoryMode=0711" in helper_socket.splitlines()
     assert "usermod --add-subuids" not in postinst
     assert "usermod --add-subgids" not in postinst
     assert "sed -i '/^vonk-agent:/d' /etc/subuid" in postinst

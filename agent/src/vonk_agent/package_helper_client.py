@@ -37,7 +37,7 @@ from .packages.adapter import (
     AdapterOperation,
 )
 
-PACKAGE_HELPER_SOCKET = "/run/vonk-forge-agent/package-helper.sock"
+PACKAGE_HELPER_SOCKET = "/run/vonk-forge-package-helper/package-helper.sock"
 PACKAGE_HELPER_GRANT_PUBLIC_KEY = Path("/etc/vonk-forge-agent/package-fence-public.pem")
 PACKAGE_HELPER_RECEIPT_PUBLIC_KEY = Path("/etc/vonk-forge-agent/package-receipt-public.pem")
 _KEY_ID = re.compile(r"[0-9a-f]{64}\Z")

@@ -521,6 +521,8 @@ def test_install_is_idempotent_generic_and_retains_license_provenance(
     assert installed_authority.stat().st_mode & 0o777 == 0o444
     helper_state = host / "var/lib/vonk-forge-package-helper"
     assert helper_state.stat().st_mode & 0o777 == 0o700
+    helper_runtime = host / "run/vonk-forge-package-helper"
+    assert helper_runtime.stat().st_mode & 0o777 == 0o711
     grant = installer_inputs["paths"]["package_grant_public"].read_bytes()
     receipt = installer_inputs["paths"]["package_receipt_public"].read_bytes()
     assert grant != receipt
@@ -543,6 +545,13 @@ def test_install_is_idempotent_generic_and_retains_license_provenance(
             ROOT / "agent/systemd" / unit_name
         ).read_bytes()
         assert installed_unit.stat().st_mode & 0o777 == 0o644
+    installed_socket = (
+        host / "etc/systemd/system/vonk-forge-package-helper.socket"
+    ).read_text()
+    assert (
+        "ListenStream=/run/vonk-forge-package-helper/package-helper.sock"
+        in installed_socket.splitlines()
+    )
 
 
 @LINUX_INSTALLER_RUNTIME

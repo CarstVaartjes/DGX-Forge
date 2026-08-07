@@ -2,11 +2,11 @@
 Description=Vonk Forge package helper socket
 
 [Socket]
-ListenStream=/run/vonk-forge-agent/package-helper.sock
+ListenStream=/run/vonk-forge-package-helper/package-helper.sock
 SocketUser=root
 SocketGroup=vonk-agent
 SocketMode=0660
-DirectoryMode=0710
+DirectoryMode=0711
 RemoveOnStop=yes
 Accept=no
 

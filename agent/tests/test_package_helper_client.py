@@ -13,7 +13,6 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import ed25519
 from vonk_agent import package_helper_client as helper_client_module
 from vonk_agent.package_helper_client import (
-    PACKAGE_HELPER_SOCKET,
     PackageHelperAdapterFactory,
     PackageHelperAuthorityVerifier,
     UnixPackageHelperClient,
@@ -316,7 +315,12 @@ def test_client_uses_fixed_unix_socket_root_peer_and_exact_response_binding(
     finally:
         thread.join(2)
 
-    assert connected == [(PACKAGE_HELPER_SOCKET, pytest.approx(1, abs=0.05))]
+    assert connected == [
+        (
+            "/run/vonk-forge-package-helper/package-helper.sock",
+            pytest.approx(1, abs=0.05),
+        )
+    ]
     assert response == response_for(request)
 
 

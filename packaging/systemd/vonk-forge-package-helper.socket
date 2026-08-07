@@ -2,12 +2,12 @@
 Description=Vonk Forge privileged agent-helper socket
 
 [Socket]
-ListenStream=/run/vonk-forge-agent/package-helper.sock
+ListenStream=/run/vonk-forge-package-helper/package-helper.sock
 FileDescriptorName=helper
 SocketMode=0660
 SocketUser=root
 SocketGroup=vonk-agent
-DirectoryMode=0750
+DirectoryMode=0711
 RemoveOnStop=yes
 Service=vonk-forge-package-helper.service
 
