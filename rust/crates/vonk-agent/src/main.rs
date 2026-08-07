@@ -22,11 +22,7 @@ use vonk_agent::{
 };
 
 #[derive(Parser)]
-#[command(
-    name = "vonk-agent",
-    version,
-    about = "Vonk Forge outbound Spark agent"
-)]
+#[command(name = "vonk-agent", version, about = "Vonk Forge outbound agent")]
 struct Cli {
     #[arg(long, default_value = DEFAULT_CONFIG_PATH)]
     config: PathBuf,

@@ -361,11 +361,11 @@ impl<R: CommandRunner> OperationExecutor<R> {
 
     fn restart_unit(&self, unit: &RestartUnit) -> Result<&'static str, OperationError> {
         let unit = match unit {
-            RestartUnit::Agent => "vonk-agent.service",
-            RestartUnit::Supervisor => "vonk-agent-supervisor.service",
-            RestartUnit::Helper => "vonk-agent-helper.service",
+            RestartUnit::Agent => "vonk-forge-agent.service",
+            RestartUnit::Supervisor => "vonk-forge-agent-supervisor.service",
+            RestartUnit::Helper => "vonk-forge-package-helper.service",
         };
-        if matches!(unit, "vonk-agent-helper.service") {
+        if matches!(unit, "vonk-forge-package-helper.service") {
             let result = self
                 .runner
                 .run(

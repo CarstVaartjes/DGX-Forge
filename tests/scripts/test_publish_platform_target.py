@@ -115,7 +115,7 @@ def _release(bundle: dict[str, object]) -> dict[str, object]:
                 "architecture": "linux-arm64",
                 "artifact": _artifact("supervisor-linux-arm64", SHA_B),
                 "payload": {
-                    "name": "dgx-agent-supervisor",
+                    "name": "vonk-agent-supervisor",
                     "sha256": SHA_C,
                     "size": 8192,
                 },

@@ -1,24 +1,24 @@
 [Unit]
-Description=DGX Forge outbound Spark agent
+Description=Vonk Forge outbound agent
 Wants=network-online.target
 After=network-online.target
-PartOf=dgx-forge-agent-supervisor.service
+PartOf=vonk-forge-agent-supervisor.service
 StartLimitIntervalSec=300
 StartLimitBurst=5
 
 [Service]
 Type=simple
-User=dgx-agent
-Group=dgx-agent
+User=vonk-agent
+Group=vonk-agent
 SupplementaryGroups=
-ExecStart=/usr/libexec/dgx-agent-supervisor run-agent
-LoadCredential=activation-challenge:/run/dgx-forge-agent-supervisor/activation-challenge
+ExecStart=/usr/libexec/vonk-agent-supervisor run-agent
+LoadCredential=activation-challenge:/run/vonk-forge-agent-supervisor/activation-challenge
 Restart=on-failure
 RestartSec=5s
 TimeoutStartSec=30s
 TimeoutStopSec=30s
 UMask=0077
-RuntimeDirectory=dgx-forge-agent
+RuntimeDirectory=vonk-forge-agent
 RuntimeDirectoryMode=0700
 NoNewPrivileges=yes
 CapabilityBoundingSet=
@@ -51,8 +51,8 @@ RestrictNamespaces=yes
 RemoveIPC=yes
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
-ReadOnlyPaths=/opt/dgx-forge /etc/dgx-forge-agent /usr/libexec/dgx-agent-supervisor
-ReadWritePaths=/var/lib/dgx-forge-agent /var/lib/dgx-forge/releases /var/lib/dgx-forge/release-staging /run/dgx-forge-agent
+ReadOnlyPaths=/opt/vonk-forge /etc/vonk-forge-agent /usr/libexec/vonk-agent-supervisor
+ReadWritePaths=/var/lib/vonk-forge-agent /var/lib/vonk-forge/releases /var/lib/vonk-forge/release-staging /run/vonk-forge-agent
 
 [Install]
 WantedBy=multi-user.target

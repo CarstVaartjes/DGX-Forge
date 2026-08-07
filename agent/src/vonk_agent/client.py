@@ -1,4 +1,4 @@
-"""Strict outbound HTTPS transport for the Spark agent protocol."""
+"""Strict outbound HTTPS transport for the Vonk Forge agent protocol."""
 
 from __future__ import annotations
 
@@ -140,7 +140,7 @@ class AgentRuntimeIdentity:
         cls, *, machine: Callable[[], str] = platform.machine
     ) -> AgentRuntimeIdentity:
         try:
-            generation = int(os.environ["DGX_AGENT_SUPERVISOR_GENERATION"])
+            generation = int(os.environ["VONK_AGENT_SUPERVISOR_GENERATION"])
             architecture = {
                 "aarch64": "linux-arm64",
                 "arm64": "linux-arm64",
@@ -149,10 +149,10 @@ class AgentRuntimeIdentity:
             }[machine().lower()]
             return cls(
                 architecture=architecture,
-                platform_version=os.environ["DGX_AGENT_PLATFORM_VERSION"],
-                build_digest=os.environ["DGX_AGENT_BUILD_DIGEST"],
-                active_slot=os.environ["DGX_AGENT_SUPERVISOR_SLOT"],
-                agent_sha256=os.environ["DGX_AGENT_SUPERVISOR_SHA256"],
+                platform_version=os.environ["VONK_AGENT_PLATFORM_VERSION"],
+                build_digest=os.environ["VONK_AGENT_BUILD_DIGEST"],
+                active_slot=os.environ["VONK_AGENT_SUPERVISOR_SLOT"],
+                agent_sha256=os.environ["VONK_AGENT_SUPERVISOR_SHA256"],
                 supervisor_generation=generation,
                 supervisor_ready_generation=generation,
                 self_test_passed=True,
@@ -1209,7 +1209,7 @@ def _snapshot_source(path: Path, *, private: bool) -> int:
         ):
             raise CredentialStoreError("credential source is unsafe")
         snapshot = os.memfd_create(
-            "dgx-agent-credential", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
+            "vonk-agent-credential", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
         )
         remaining = before.st_size
         while remaining:

@@ -1,11 +1,11 @@
 [Unit]
-Description=Apply one verified DGX Forge agent rollback request
+Description=Apply one verified Vonk Forge agent activation request
 After=local-fs.target
 Conflicts=shutdown.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/libexec/dgx-agent-supervisor apply-rollback-request
+ExecStart=/usr/libexec/vonk-agent-supervisor apply-request
 TimeoutStartSec=60s
 TimeoutStopSec=15s
 UMask=0077
@@ -33,5 +33,5 @@ RestrictNamespaces=yes
 RemoveIPC=yes
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX
-ReadOnlyPaths=/opt/dgx-forge/agent-slots /usr/libexec/dgx-agent-supervisor
-ReadWritePaths=/var/lib/dgx-forge-agent-supervisor /run/dgx-forge-agent
+ReadOnlyPaths=/var/lib/vonk-forge-agent/update-staging /etc/vonk-forge-agent/update-authority.json /usr/bin/openssl /usr/libexec/vonk-agent-supervisor
+ReadWritePaths=/opt/vonk-forge/agent-slots /var/lib/vonk-forge-agent-supervisor /run/vonk-forge-agent

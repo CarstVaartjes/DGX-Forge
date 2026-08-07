@@ -121,7 +121,7 @@ class OciRuntimeCapability:
     @classmethod
     def from_file(
         cls,
-        path: Path = Path("/etc/dgx-forge-agent/oci-runtime.sha256"),
+        path: Path = Path("/etc/vonk-forge-agent/oci-runtime.sha256"),
         *,
         allow_unprivileged_test_file: bool = False,
     ) -> OciRuntimeCapability:

@@ -9,7 +9,7 @@ if ! getent group vonk-agent >/dev/null; then
     addgroup --system vonk-agent
 fi
 if ! getent passwd vonk-agent >/dev/null; then
-    adduser --system --ingroup vonk-agent --home /var/lib/vonk-forge/agent \
+    adduser --system --ingroup vonk-agent --home /var/lib/vonk-forge-agent \
         --no-create-home --shell /usr/sbin/nologin vonk-agent
 fi
 
@@ -24,12 +24,12 @@ if [ -f /etc/subgid ]; then
 fi
 
 install -d -o root -g root -m 0755 /var/lib/vonk-forge
-install -d -o vonk-agent -g vonk-agent -m 0700 /var/lib/vonk-forge/agent
+install -d -o vonk-agent -g vonk-agent -m 0700 /var/lib/vonk-forge-agent
 install -d -o vonk-agent -g vonk-agent -m 0750 \
-    /var/lib/vonk-forge/agent/models \
-    /var/lib/vonk-forge/agent/containers \
-    /var/lib/vonk-forge/agent/state \
-    /var/lib/vonk-forge/agent/workloads
+    /var/lib/vonk-forge-agent/models \
+    /var/lib/vonk-forge-agent/containers \
+    /var/lib/vonk-forge-agent/state \
+    /var/lib/vonk-forge-agent/workloads
 install -d -o root -g root -m 0755 /var/lib/vonk-forge/slots
 install -d -o root -g root -m 0700 \
     /var/lib/vonk-forge/helper \
@@ -68,8 +68,8 @@ if [ ! -e "$state" ]; then
     /usr/lib/vonk-forge/vonk-agent-supervisor initialize --slot a
 fi
 
-deb-systemd-helper enable vonk-agent-helper.socket >/dev/null || true
-deb-systemd-helper enable vonk-agent-supervisor.service >/dev/null || true
+deb-systemd-helper enable vonk-forge-package-helper.socket >/dev/null || true
+deb-systemd-helper enable vonk-forge-agent-supervisor.service >/dev/null || true
 if [ -d /run/systemd/system ]; then
     systemctl --system daemon-reload >/dev/null || true
 fi

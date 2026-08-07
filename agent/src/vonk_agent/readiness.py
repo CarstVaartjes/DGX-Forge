@@ -10,11 +10,11 @@ import stat
 from collections.abc import Mapping
 from pathlib import Path
 
-RUNTIME_ROOT = Path("/run/dgx-forge-agent")
+RUNTIME_ROOT = Path("/run/vonk-forge-agent")
 _ENVIRONMENT = {
-    "generation": "DGX_AGENT_SUPERVISOR_GENERATION",
-    "slot": "DGX_AGENT_SUPERVISOR_SLOT",
-    "sha256": "DGX_AGENT_SUPERVISOR_SHA256",
+    "generation": "VONK_AGENT_SUPERVISOR_GENERATION",
+    "slot": "VONK_AGENT_SUPERVISOR_SLOT",
+    "sha256": "VONK_AGENT_SUPERVISOR_SHA256",
 }
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _CHALLENGE_NAME = "activation-challenge"

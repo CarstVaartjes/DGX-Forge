@@ -1,10 +1,10 @@
 [Unit]
-Description=DGX Forge package helper socket
+Description=Vonk Forge package helper socket
 
 [Socket]
-ListenStream=/run/dgx-forge/package-helper.sock
+ListenStream=/run/vonk-forge-agent/package-helper.sock
 SocketUser=root
-SocketGroup=dgx-agent
+SocketGroup=vonk-agent
 SocketMode=0660
 DirectoryMode=0710
 RemoveOnStop=yes

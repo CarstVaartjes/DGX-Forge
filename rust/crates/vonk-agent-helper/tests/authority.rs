@@ -382,7 +382,7 @@ fn package_restart_and_reboot_commands_are_compiled_not_caller_supplied() {
         calls[3],
         (
             PathBuf::from("/usr/bin/systemctl"),
-            vec!["restart".to_owned(), "vonk-agent.service".to_owned()],
+            vec!["restart".to_owned(), "vonk-forge-agent.service".to_owned()],
         )
     );
     assert_eq!(calls[4].0, PathBuf::from("/usr/bin/systemd-run"));

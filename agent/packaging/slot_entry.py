@@ -1,4 +1,4 @@
-"""PyInstaller entry point for the complete DGX Forge agent slot closure."""
+"""PyInstaller entry point for the complete Vonk Forge agent slot closure."""
 
 from __future__ import annotations
 

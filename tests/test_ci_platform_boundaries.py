@@ -169,7 +169,7 @@ def test_dgx_agent_installer_preserves_exact_non_linux_boundaries(
         "sys.platform = 'darwin'; "
         "import pytest; "
         "raise SystemExit(pytest.main(["
-        "'-vv', 'tests/nodes/test_install_dgx_agent.py', "
+        "'-vv', 'tests/nodes/test_install_vonk_agent.py', "
         "'-k', 'not production_root_chowns_only_a_new_service_directory']))"
     )
 

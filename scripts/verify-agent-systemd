@@ -1,5 +1,5 @@
 #!/usr/bin/python3 -I
-"""Verify DGX agent units through a disposable installed filesystem root."""
+"""Verify Vonk agent units through a disposable installed filesystem root."""
 
 from __future__ import annotations
 
@@ -13,14 +13,14 @@ import tempfile
 from pathlib import Path
 
 UNITS = (
-    "dgx-forge-agent.service",
-    "dgx-forge-agent-supervisor.service",
-    "dgx-forge-agent-activation.service",
-    "dgx-forge-agent-activation.path",
-    "dgx-forge-agent-rollback.service",
-    "dgx-forge-agent-rollback.path",
-    "dgx-forge-package-helper.service",
-    "dgx-forge-package-helper.socket",
+    "vonk-forge-agent.service",
+    "vonk-forge-agent-supervisor.service",
+    "vonk-forge-agent-activation.service",
+    "vonk-forge-agent-activation.path",
+    "vonk-forge-agent-rollback.service",
+    "vonk-forge-agent-rollback.path",
+    "vonk-forge-package-helper.service",
+    "vonk-forge-package-helper.socket",
 )
 SECURITY_UNITS = tuple(name for name in UNITS if name.endswith(".service"))
 SUMMARY = re.compile(
@@ -55,8 +55,8 @@ def _install(root: Path, repository: Path) -> None:
     for name in UNITS:
         shutil.copy2(repository / "agent/systemd" / name, unit_root / name)
     shutil.copy2(
-        repository / "agent/supervisor/dgx-agent-supervisor",
-        executable_root / "dgx-agent-supervisor",
+        repository / "agent/supervisor/vonk-agent-supervisor",
+        executable_root / "vonk-agent-supervisor",
     )
 
 
@@ -119,12 +119,12 @@ def _security(root: Path, name: str) -> dict[str, object]:
 
 
 def verify(repository: Path) -> dict[str, object]:
-    with tempfile.TemporaryDirectory(prefix="dgx-agent-systemd-") as temporary:
+    with tempfile.TemporaryDirectory(prefix="vonk-agent-systemd-") as temporary:
         root = Path(temporary)
         _install(root, repository)
         _verify(root)
         units = {name: _security(root, name) for name in SECURITY_UNITS}
-        supervisor = "dgx-forge-agent-supervisor.service"
+        supervisor = "vonk-forge-agent-supervisor.service"
         if any(unit["ambient_capabilities"] for unit in units.values()):
             raise RuntimeError("agent services must not receive ambient capabilities")
         for name, unit in units.items():

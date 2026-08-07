@@ -40,7 +40,7 @@ LiteLLM publishes only routes acknowledged by the control plane.
 - [Node onboarding and health](runbooks/node-onboarding.md)
 - [Recipe and workload operations](runbooks/workload-packages.md)
 - [Global catalog import and publication](runbooks/global-catalog.md)
-- [Spark agent installation](operations/install-spark-agent.md)
+- [Vonk Forge agent installation](operations/install-vonk-agent.md)
 - [Model switching](runbooks/model-switching.md)
 - [Platform updates](runbooks/platform-update.md)
 - [Security threat model](security/threat-model.md)

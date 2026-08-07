@@ -940,10 +940,10 @@ class LocalSupervisor:
         self,
         *,
         state_path: Path = Path(
-            "/var/lib/dgx-forge-agent-supervisor/state.json"
+            "/var/lib/vonk-forge-agent-supervisor/state.json"
         ),
-        runtime_root: Path = Path("/run/dgx-forge-agent"),
-        slot_root: Path = Path("/opt/dgx-forge/agent-slots"),
+        runtime_root: Path = Path("/run/vonk-forge-agent"),
+        slot_root: Path = Path("/opt/vonk-forge/agent-slots"),
     ) -> None:
         self._state_path = Path(state_path)
         self._runtime_root = Path(runtime_root)

@@ -50,8 +50,8 @@ def _write_config(
 
 
 def test_defaults_are_fixed_system_locations() -> None:
-    assert DEFAULT_CONFIG_PATH == Path("/etc/dgx-forge-agent/config.json")
-    assert DEFAULT_STATE_ROOT == Path("/var/lib/dgx-forge-agent")
+    assert DEFAULT_CONFIG_PATH == Path("/etc/vonk-forge-agent/config.json")
+    assert DEFAULT_STATE_ROOT == Path("/var/lib/vonk-forge-agent")
 
 
 def test_valid_configuration_is_immutable_and_typed(tmp_path: Path) -> None:

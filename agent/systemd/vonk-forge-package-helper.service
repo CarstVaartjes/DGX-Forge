@@ -1,15 +1,15 @@
 [Unit]
-Description=DGX Forge root package helper
-Documentation=https://github.com/dgx-forge/dgx-forge
-Requires=dgx-forge-package-helper.socket dgx-forge-agent-supervisor.service
-After=dgx-forge-agent-supervisor.service
-PartOf=dgx-forge-agent.service dgx-forge-agent-supervisor.service
+Description=Vonk Forge root package helper
+Documentation=https://github.com/vonk-forge/vonk-forge
+Requires=vonk-forge-package-helper.socket vonk-forge-agent-supervisor.service
+After=vonk-forge-agent-supervisor.service
+PartOf=vonk-forge-agent.service vonk-forge-agent-supervisor.service
 
 [Service]
 Type=simple
 User=root
 Group=root
-ExecStart=/usr/libexec/dgx-agent-supervisor run-package-helper
+ExecStart=/usr/libexec/vonk-agent-supervisor run-package-helper
 StandardInput=null
 StandardOutput=journal
 StandardError=journal
@@ -39,6 +39,6 @@ CapabilityBoundingSet=CAP_CHOWN
 AmbientCapabilities=
 UMask=0077
 TimeoutStartSec=95s
-RuntimeDirectory=dgx-forge
-StateDirectory=dgx-forge-package-helper
-ReadWritePaths=/var/lib/dgx-forge-package-helper
+RuntimeDirectory=vonk-forge-agent
+StateDirectory=vonk-forge-package-helper
+ReadWritePaths=/var/lib/vonk-forge-package-helper

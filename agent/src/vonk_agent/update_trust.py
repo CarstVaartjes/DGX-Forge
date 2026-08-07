@@ -211,7 +211,7 @@ class BoundedHTTPSFetcher(FetcherInterface):
         response = pool.request(
             "GET",
             url,
-            headers={"User-Agent": "dgx-forge-agent/0.1.0"},
+            headers={"User-Agent": "vonk-forge-agent/0.1.0"},
             redirect=False,
             retries=False,
             preload_content=False,
@@ -352,7 +352,7 @@ class TUFReleaseTrust:
                         snapshot_max_length=1024 * 1024,
                         targets_max_length=2 * 1024 * 1024,
                         prefix_targets_with_hash=False,
-                        app_user_agent="dgx-forge-agent/0.1.0",
+                        app_user_agent="vonk-forge-agent/0.1.0",
                     ),
                     bootstrap=bootstrap,
                 ),

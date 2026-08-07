@@ -1,6 +1,6 @@
 [Unit]
 Description=Vonk Forge narrow privileged agent helper
-Requires=vonk-agent-helper.socket
+Requires=vonk-forge-package-helper.socket
 After=local-fs.target
 
 [Service]
@@ -33,7 +33,7 @@ SystemCallFilter=~@mount @raw-io @obsolete @debug
 RestrictAddressFamilies=AF_UNIX
 CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_FSETID CAP_SETGID CAP_SETUID
 AmbientCapabilities=
-ReadWritePaths=/var/lib/vonk-forge /var/lib/dpkg /var/log /var/cache/apt /var/cache/debconf /etc/vonk-forge /usr/lib/vonk-forge /usr/bin /lib/systemd/system
+ReadWritePaths=/var/lib/vonk-forge /var/lib/dpkg /var/log /var/cache/apt /var/cache/debconf /etc/vonk-forge-agent /usr/lib/vonk-forge /usr/bin /lib/systemd/system
 TimeoutStartSec=30s
 TimeoutStopSec=15s
 KillMode=mixed

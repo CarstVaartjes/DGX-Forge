@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-INSTALLER = ROOT / "nodes/bin/install-dgx-agent"
+INSTALLER = ROOT / "nodes/bin/install-vonk-agent"
 NVIDIA_LOCK = ROOT / "nodes/vendor/nvidia-manageability.lock.json"
 ROOT_PYTHON_IMAGE = (
     "python:3.12-slim-bookworm@sha256:"
@@ -157,7 +157,7 @@ def test_nvidia_lock_binds_exact_archive_license_provenance_and_installed_subset
 def test_installer_exists_as_networkless_node_local_primitive(tmp_path: Path) -> None:
     result = subprocess.run(
         [str(INSTALLER), "--help"],
-        env={**os.environ, "DGX_INSTALL_TEST_ROOT": str(tmp_path / "host")},
+        env={**os.environ, "VONK_INSTALL_TEST_ROOT": str(tmp_path / "host")},
         check=False,
         capture_output=True,
         text=True,
@@ -172,7 +172,7 @@ def test_installer_exists_as_networkless_node_local_primitive(tmp_path: Path) ->
 def test_installer_rejects_noncanonical_node_before_mutation(tmp_path: Path) -> None:
     result = subprocess.run(
         [str(INSTALLER), "--node-id", "spark1"],
-        env={**os.environ, "DGX_INSTALL_TEST_ROOT": str(tmp_path / "host")},
+        env={**os.environ, "VONK_INSTALL_TEST_ROOT": str(tmp_path / "host")},
         check=False,
         capture_output=True,
         text=True,
@@ -227,7 +227,7 @@ def installer_inputs(tmp_path: Path) -> dict[str, object]:
             "rsa:2048",
             "-nodes",
             "-subj",
-            "/CN=DGX Forge fixture CA",
+            "/CN=Vonk Forge fixture CA",
             "-days",
             "1",
             "-keyout",
@@ -295,7 +295,7 @@ def installer_inputs(tmp_path: Path) -> dict[str, object]:
         "poll_max_seconds": 60,
         "poll_min_seconds": 1,
         "registry_origin": "https://registry.example:8443",
-        "repository": "dgx-forge/releases",
+        "repository": "vonk-forge/releases",
         "schema_version": 1,
     }
     site = _write(tmp_path / "site.json", _canonical(site_document), 0o644)
@@ -379,9 +379,9 @@ def installer_inputs(tmp_path: Path) -> dict[str, object]:
     host = tmp_path / "host"
     environment = {
         **os.environ,
-        "DGX_INSTALL_TEST_ROOT": str(host),
-        "DGX_INSTALL_NVIDIA_LOCK_TEST": str(fake_lock),
-        "DGX_INSTALL_LOCK_TEST": str(tmp_path / "install.lock"),
+        "VONK_INSTALL_TEST_ROOT": str(host),
+        "VONK_INSTALL_NVIDIA_LOCK_TEST": str(fake_lock),
+        "VONK_INSTALL_LOCK_TEST": str(tmp_path / "install.lock"),
     }
     arguments = [
         "--node-id",
@@ -474,11 +474,11 @@ def test_install_is_idempotent_generic_and_retains_license_provenance(
     assert json.loads(second.stdout)["status"] == "unchanged"
     host = installer_inputs["host"]
     lock = installer_inputs["lock"]
-    nvidia_root = host / "opt/dgx-forge/third-party/nvidia" / lock["sha256"]
+    nvidia_root = host / "opt/vonk-forge/third-party/nvidia" / lock["sha256"]
     assert (nvidia_root / "LICENSE").read_bytes().startswith(b"fixture:LICENSE")
     source = nvidia_root / "SOURCE.json"
     assert hashlib.sha256(source.read_bytes()).hexdigest() == lock["provenance_sha256"]
-    policy = json.loads((host / "etc/dgx-forge-agent/nvidia-policy.json").read_text())
+    policy = json.loads((host / "etc/vonk-forge-agent/nvidia-policy.json").read_text())
     assert policy["bundle_root"].endswith(lock["sha256"])
     assert {tool["name"] for tool in policy["tools"]} == {
         "device_identity",
@@ -489,16 +489,16 @@ def test_install_is_idempotent_generic_and_retains_license_provenance(
         "spark_diagctl_health",
         "reset_reason_reporter",
     }
-    config = json.loads((host / "etc/dgx-forge-agent/config.json").read_text())
+    config = json.loads((host / "etc/vonk-forge-agent/config.json").read_text())
     assert config["node_id"] == "spk_0123456789abcdef0123456789abcdef"
-    runtime = json.loads((host / "etc/dgx-forge-agent/runtime-policy.json").read_text())
-    assert runtime["release_root"] == str(host / "var/lib/dgx-forge/releases")
-    assert runtime["staging_root"] == str(host / "var/lib/dgx-forge/release-staging")
+    runtime = json.loads((host / "etc/vonk-forge-agent/runtime-policy.json").read_text())
+    assert runtime["release_root"] == str(host / "var/lib/vonk-forge/releases")
+    assert runtime["staging_root"] == str(host / "var/lib/vonk-forge/release-staging")
     assert runtime["tuf"]["bootstrap_root_path"] == str(
-        host / "etc/dgx-forge-agent/tuf-root.json"
+        host / "etc/vonk-forge-agent/tuf-root.json"
     )
     assert runtime["workload_tuf"]["bootstrap_root_path"] == str(
-        host / "etc/dgx-forge-agent/workload-tuf-root.json"
+        host / "etc/vonk-forge-agent/workload-tuf-root.json"
     )
     assert runtime["tuf"]["bootstrap_root_path"] != runtime["workload_tuf"][
         "bootstrap_root_path"
@@ -510,16 +510,16 @@ def test_install_is_idempotent_generic_and_retains_license_provenance(
         "target_root"
     ]
     assert (
-        host / "etc/dgx-forge-agent/workload-tuf-root.json"
+        host / "etc/vonk-forge-agent/workload-tuf-root.json"
     ).read_bytes() == installer_inputs["paths"]["workload_tuf"].read_bytes()
-    assert (host / "var/lib/dgx-forge/releases").stat().st_mode & 0o777 == 0o700
-    assert (host / "var/lib/dgx-forge/release-staging").stat().st_mode & 0o777 == 0o700
-    installed_authority = host / "etc/dgx-forge-agent/update-authority.json"
+    assert (host / "var/lib/vonk-forge/releases").stat().st_mode & 0o777 == 0o700
+    assert (host / "var/lib/vonk-forge/release-staging").stat().st_mode & 0o777 == 0o700
+    installed_authority = host / "etc/vonk-forge-agent/update-authority.json"
     assert installed_authority.read_bytes() == installer_inputs["paths"][
         "update_authority"
     ].read_bytes()
     assert installed_authority.stat().st_mode & 0o777 == 0o444
-    helper_state = host / "var/lib/dgx-forge-package-helper"
+    helper_state = host / "var/lib/vonk-forge-package-helper"
     assert helper_state.stat().st_mode & 0o777 == 0o700
     grant = installer_inputs["paths"]["package_grant_public"].read_bytes()
     receipt = installer_inputs["paths"]["package_receipt_public"].read_bytes()
@@ -529,14 +529,14 @@ def test_install_is_idempotent_generic_and_retains_license_provenance(
         ("package-fence-public.pem", grant),
         ("package-receipt-public.pem", receipt),
     ):
-        installed_key = host / "etc/dgx-forge-agent" / filename
+        installed_key = host / "etc/vonk-forge-agent" / filename
         assert installed_key.read_bytes() == expected
         assert installed_key.stat().st_mode & 0o777 == 0o444
     for unit_name in (
-        "dgx-forge-agent-rollback.service",
-        "dgx-forge-agent-rollback.path",
-        "dgx-forge-package-helper.service",
-        "dgx-forge-package-helper.socket",
+        "vonk-forge-agent-rollback.service",
+        "vonk-forge-agent-rollback.path",
+        "vonk-forge-package-helper.service",
+        "vonk-forge-package-helper.socket",
     ):
         installed_unit = host / "etc/systemd/system" / unit_name
         assert installed_unit.read_bytes() == (
@@ -552,7 +552,7 @@ def test_reinstall_restores_token_without_durable_node_bound_active_identity(
     first = _run_installer(installer_inputs)
     assert first.returncode == 0, first.stderr
     host = installer_inputs["host"]
-    installed_token = host / "var/lib/dgx-forge-agent/bootstrap/enrollment-token"
+    installed_token = host / "var/lib/vonk-forge-agent/bootstrap/enrollment-token"
     installed_token.unlink()
 
     second = _run_installer(installer_inputs)
@@ -571,8 +571,8 @@ def test_reinstall_suppresses_token_only_for_durable_node_bound_active_identity(
     first = _run_installer(installer_inputs)
     assert first.returncode == 0, first.stderr
     host = installer_inputs["host"]
-    installed_token = host / "var/lib/dgx-forge-agent/bootstrap/enrollment-token"
-    credentials = host / "var/lib/dgx-forge-agent/credentials"
+    installed_token = host / "var/lib/vonk-forge-agent/bootstrap/enrollment-token"
+    credentials = host / "var/lib/vonk-forge-agent/credentials"
     generation = credentials / "generation-00000001"
     credentials.mkdir(mode=0o700)
     generation.mkdir(mode=0o700)
@@ -704,17 +704,17 @@ def test_file_publication_resists_parent_and_temporary_inode_substitution(
         environment = dict(installer_inputs["environment"])
         environment.update(
             {
-                "DGX_INSTALL_RACE_TEST": race,
-                "DGX_INSTALL_RACE_TARGET": "registry-auth.json",
+                "VONK_INSTALL_RACE_TEST": race,
+                "VONK_INSTALL_RACE_TARGET": "registry-auth.json",
             }
         )
         raced = _run_installer({**installer_inputs, "environment": environment})
 
         assert raced.returncode != 0
-        attacker = host / "var/lib/.dgx-forge-agent.race-attacker"
+        attacker = host / "var/lib/.vonk-forge-agent.race-attacker"
         if attacker.exists():
             assert not list(attacker.iterdir())
-        installed_auth = host / "var/lib/dgx-forge-agent/registry-auth.json"
+        installed_auth = host / "var/lib/vonk-forge-agent/registry-auth.json"
         assert not installed_auth.exists() or installed_auth.read_bytes() != (
             b"attacker replacement"
         )
@@ -737,7 +737,7 @@ def test_root_publication_rejects_untrusted_existing_parent(
 
     assert rejected.returncode != 0
     assert "destination ancestry" in rejected.stderr
-    assert not (libexec / "dgx-agent-supervisor").exists()
+    assert not (libexec / "vonk-agent-supervisor").exists()
 
 
 def test_production_root_chowns_only_a_new_service_directory() -> None:
@@ -761,7 +761,7 @@ installer = runpy.run_path("/installer")
 ensure_directory = installer["_ensure_directory"]
 InstallError = installer["InstallError"]
 
-created = Path("/var/lib/dgx-forge-agent")
+created = Path("/var/lib/vonk-forge-agent")
 assert ensure_directory(created, 0o700, (998, 998)) is True
 metadata = os.stat(created, follow_symlinks=False)
 assert (metadata.st_uid, metadata.st_gid, stat.S_IMODE(metadata.st_mode)) == (998, 998, 0o700)
@@ -819,7 +819,7 @@ def test_abandoned_publication_crash_boundaries_recover_bounded_exact_staging(
 ) -> None:
     environment = dict(installer_inputs["environment"])
     environment.update(
-        {"DGX_INSTALL_CRASH_AFTER": stage, "DGX_INSTALL_CRASH_TARGET": "A"}
+        {"VONK_INSTALL_CRASH_AFTER": stage, "VONK_INSTALL_CRASH_TARGET": "A"}
     )
 
     crashed = _run_installer({**installer_inputs, "environment": environment})
@@ -838,18 +838,18 @@ def test_missing_rollback_path_fails_before_mutation_and_all_units_are_enabled(
     (source / "agent/supervisor").mkdir(parents=True)
     (source / "agent/systemd").mkdir(parents=True)
     shutil.copy2(
-        ROOT / "agent/supervisor/dgx-agent-supervisor", source / "agent/supervisor"
+        ROOT / "agent/supervisor/vonk-agent-supervisor", source / "agent/supervisor"
     )
     for unit_name in (
-        "dgx-forge-agent.service",
-        "dgx-forge-agent-supervisor.service",
-        "dgx-forge-agent-activation.service",
-        "dgx-forge-agent-activation.path",
-        "dgx-forge-agent-rollback.service",
+        "vonk-forge-agent.service",
+        "vonk-forge-agent-supervisor.service",
+        "vonk-forge-agent-activation.service",
+        "vonk-forge-agent-activation.path",
+        "vonk-forge-agent-rollback.service",
     ):
         shutil.copy2(ROOT / "agent/systemd" / unit_name, source / "agent/systemd")
     incomplete_environment = dict(installer_inputs["environment"])
-    incomplete_environment["DGX_INSTALL_SOURCE_ROOT_TEST"] = str(source)
+    incomplete_environment["VONK_INSTALL_SOURCE_ROOT_TEST"] = str(source)
 
     missing = _run_installer(
         {**installer_inputs, "environment": incomplete_environment}
@@ -861,14 +861,14 @@ def test_missing_rollback_path_fails_before_mutation_and_all_units_are_enabled(
     actions = tmp_path / "systemctl-actions"
     fake_systemctl = tmp_path / "systemctl"
     fake_systemctl.write_text(
-        '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$DGX_TEST_SYSTEMCTL_ACTIONS"\n'
+        '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$VONK_TEST_SYSTEMCTL_ACTIONS"\n'
     )
     fake_systemctl.chmod(0o755)
     complete_environment = dict(installer_inputs["environment"])
     complete_environment.update(
         {
-            "DGX_INSTALL_SYSTEMCTL_TEST": str(fake_systemctl),
-            "DGX_TEST_SYSTEMCTL_ACTIONS": str(actions),
+            "VONK_INSTALL_SYSTEMCTL_TEST": str(fake_systemctl),
+            "VONK_TEST_SYSTEMCTL_ACTIONS": str(actions),
         }
     )
     installed = _run_installer(
@@ -878,8 +878,8 @@ def test_missing_rollback_path_fails_before_mutation_and_all_units_are_enabled(
     assert installed.returncode == 0, installed.stderr
     assert actions.read_text().splitlines() == [
         "daemon-reload",
-        "enable dgx-forge-agent.service dgx-forge-agent-supervisor.service dgx-forge-agent-activation.path dgx-forge-agent-rollback.path dgx-forge-package-helper.socket",
-        "start dgx-forge-agent-supervisor.service dgx-forge-agent-activation.path dgx-forge-agent-rollback.path dgx-forge-package-helper.socket",
+        "enable vonk-forge-agent.service vonk-forge-agent-supervisor.service vonk-forge-agent-activation.path vonk-forge-agent-rollback.path vonk-forge-package-helper.socket",
+        "start vonk-forge-agent-supervisor.service vonk-forge-agent-activation.path vonk-forge-agent-rollback.path vonk-forge-package-helper.socket",
     ]
 
 
@@ -888,30 +888,30 @@ def test_account_contract_rejects_root_wrong_home_group_and_admin_membership() -
     validate = namespace["_validate_service_account"]
     valid = pwd.struct_passwd(
         (
-            "dgx-agent",
+            "vonk-agent",
             "x",
             998,
             998,
             "",
-            "/var/lib/dgx-forge-agent",
+            "/var/lib/vonk-forge-agent",
             "/usr/sbin/nologin",
         )
     )
-    primary = grp.struct_group(("dgx-agent", "x", 998, []))
-    assert validate(valid, primary, {"dgx-agent"}) == (998, 998)
+    primary = grp.struct_group(("vonk-agent", "x", 998, []))
+    assert validate(valid, primary, {"vonk-agent"}) == (998, 998)
 
     invalid = [
-        pwd.struct_passwd(("dgx-agent", "x", 0, 998, "", valid.pw_dir, valid.pw_shell)),
-        pwd.struct_passwd(("dgx-agent", "x", 998, 998, "", "/tmp", valid.pw_shell)),
+        pwd.struct_passwd(("vonk-agent", "x", 0, 998, "", valid.pw_dir, valid.pw_shell)),
+        pwd.struct_passwd(("vonk-agent", "x", 998, 998, "", "/tmp", valid.pw_shell)),
         pwd.struct_passwd(
-            ("dgx-agent", "x", 998, 997, "", valid.pw_dir, valid.pw_shell)
+            ("vonk-agent", "x", 998, 997, "", valid.pw_dir, valid.pw_shell)
         ),
     ]
     for account in invalid:
         with pytest.raises(namespace["InstallError"]):
-            validate(account, primary, {"dgx-agent"})
+            validate(account, primary, {"vonk-agent"})
     with pytest.raises(namespace["InstallError"]):
-        validate(valid, primary, {"dgx-agent", "docker"})
+        validate(valid, primary, {"vonk-agent", "docker"})
 
 
 def test_workload_account_contract_requires_a_separate_unprivileged_identity() -> None:
@@ -919,25 +919,25 @@ def test_workload_account_contract_requires_a_separate_unprivileged_identity() -
     validate = namespace["_validate_workload_account"]
     valid = pwd.struct_passwd(
         (
-            "dgx-workload",
+            "vonk-workload",
             "x",
             997,
             997,
             "",
-            "/var/lib/dgx-forge-workload",
+            "/var/lib/vonk-forge-workload",
             "/usr/sbin/nologin",
         )
     )
-    primary = grp.struct_group(("dgx-workload", "x", 997, []))
+    primary = grp.struct_group(("vonk-workload", "x", 997, []))
 
-    assert validate(valid, primary, {"dgx-workload"}) == (997, 997)
+    assert validate(valid, primary, {"vonk-workload"}) == (997, 997)
     with pytest.raises(namespace["InstallError"]):
-        validate(valid, primary, {"dgx-workload", "docker"})
+        validate(valid, primary, {"vonk-workload", "docker"})
     with pytest.raises(namespace["InstallError"]):
         validate(
             pwd.struct_passwd(
                 (
-                    "dgx-agent",
+                    "vonk-agent",
                     "x",
                     997,
                     997,
@@ -947,7 +947,7 @@ def test_workload_account_contract_requires_a_separate_unprivileged_identity() -
                 )
             ),
             primary,
-            {"dgx-workload"},
+            {"vonk-workload"},
         )
 
 
@@ -1022,7 +1022,7 @@ def test_reinstall_rejects_unexpected_symlink_inside_immutable_tree(
     assert first.returncode == 0, first.stderr
     host = installer_inputs["host"]
     lock = installer_inputs["lock"]
-    nvidia_root = host / "opt/dgx-forge/third-party/nvidia" / lock["sha256"]
+    nvidia_root = host / "opt/vonk-forge/third-party/nvidia" / lock["sha256"]
     (nvidia_root / "unexpected-link").symlink_to("/tmp")
 
     second = _run_installer(installer_inputs)
@@ -1038,7 +1038,7 @@ def test_distinct_explicit_node_ids_generate_distinct_configs(
     assert first.returncode == 0, first.stderr
     second_root = tmp_path / "second-host"
     environment = dict(installer_inputs["environment"])
-    environment["DGX_INSTALL_TEST_ROOT"] = str(second_root)
+    environment["VONK_INSTALL_TEST_ROOT"] = str(second_root)
     second_inputs = {**installer_inputs, "environment": environment}
     arguments = list(installer_inputs["arguments"])
     arguments[1] = "spk_fedcba9876543210fedcba9876543210"
@@ -1047,10 +1047,10 @@ def test_distinct_explicit_node_ids_generate_distinct_configs(
 
     assert second.returncode == 0, second.stderr
     first_config = json.loads(
-        (installer_inputs["host"] / "etc/dgx-forge-agent/config.json").read_text()
+        (installer_inputs["host"] / "etc/vonk-forge-agent/config.json").read_text()
     )
     second_config = json.loads(
-        (second_root / "etc/dgx-forge-agent/config.json").read_text()
+        (second_root / "etc/vonk-forge-agent/config.json").read_text()
     )
     assert first_config["node_id"] != second_config["node_id"]
 
@@ -1118,7 +1118,7 @@ def test_extra_archive_member_fails_closed(
         archive.writestr("extra", b"extra")
     lock = installer_inputs["lock"]
     lock["sha256"] = _sha(bundle)
-    fake_lock = Path(installer_inputs["environment"]["DGX_INSTALL_NVIDIA_LOCK_TEST"])
+    fake_lock = Path(installer_inputs["environment"]["VONK_INSTALL_NVIDIA_LOCK_TEST"])
     fake_lock.write_bytes(_canonical(lock))
     extra = _run_installer(installer_inputs)
     assert extra.returncode != 0

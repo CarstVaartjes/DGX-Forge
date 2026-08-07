@@ -1,20 +1,16 @@
 [Unit]
-Description=DGX Forge stable agent slot supervisor
+Description=Apply one verified Vonk Forge agent rollback request
 After=local-fs.target
-StartLimitIntervalSec=300
-StartLimitBurst=3
+Conflicts=shutdown.target
 
 [Service]
 Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/libexec/dgx-agent-supervisor supervise
-TimeoutStartSec=150s
+ExecStart=/usr/libexec/vonk-agent-supervisor apply-rollback-request
+TimeoutStartSec=60s
 TimeoutStopSec=15s
 UMask=0077
-RuntimeDirectory=dgx-forge-agent-supervisor
-RuntimeDirectoryMode=0700
 NoNewPrivileges=yes
-CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_SYS_PTRACE
+CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE
 AmbientCapabilities=
 PrivateTmp=yes
 PrivateDevices=yes
@@ -37,8 +33,5 @@ RestrictNamespaces=yes
 RemoveIPC=yes
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX
-ReadOnlyPaths=/opt/dgx-forge/agent-slots /usr/libexec/dgx-agent-supervisor
-ReadWritePaths=/var/lib/dgx-forge-agent-supervisor -/run/dgx-forge-agent /run/dgx-forge-agent-supervisor
-
-[Install]
-WantedBy=multi-user.target
+ReadOnlyPaths=/opt/vonk-forge/agent-slots /usr/libexec/vonk-agent-supervisor
+ReadWritePaths=/var/lib/vonk-forge-agent-supervisor /run/vonk-forge-agent

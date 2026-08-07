@@ -23,8 +23,8 @@ def test_agent_release_exercises_offline_debian_lifecycle() -> None:
         "dpkg -i",
         "dpkg --remove vonk-forge-agent",
         "refused downgrade",
-        "/etc/vonk-forge/agent.toml",
-        "/var/lib/vonk-forge/agent",
+        "/etc/vonk-forge-agent/agent.toml",
+        "/var/lib/vonk-forge-agent",
         "SYSTEMD_OFFLINE=1",
     ):
         assert expected in text

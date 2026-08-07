@@ -14,7 +14,7 @@ use vonk_agent_helper::protocol::{
     GrantVerifier, HelperError, PeerIdentity, parse_request, read_frame, write_frame,
 };
 
-const GRANT_KEY: &str = "/etc/vonk-forge/host-helper-authority.pub";
+const GRANT_KEY: &str = "/etc/vonk-forge-agent/host-helper-authority.pub";
 const RELEASE_KEY: &str = "/usr/share/keyrings/vonk-forge-release.pub";
 const NODE_ID_PATH: &str = "/var/lib/vonk-forge/identity/node-id";
 const REQUEST_LEDGER: &str = "/var/lib/vonk-forge/helper/requests";

@@ -65,8 +65,8 @@ def slot_wheels(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, Path]:
             check=True,
         )
     return (
-        next(distribution.glob("vonk_agent-*.whl")),
-        next(distribution.glob("cluster_profiles-*.whl")),
+        next(distribution.glob("vonk_forge_agent-*.whl")),
+        next(distribution.glob("vonk_cluster_profiles-*.whl")),
     )
 
 
@@ -74,7 +74,7 @@ def test_builder_rejects_missing_inputs_cross_architecture_and_output_symlink(
     tmp_path: Path,
 ) -> None:
     missing = tmp_path / "missing.whl"
-    output = tmp_path / "dgx-forge-agent"
+    output = tmp_path / "vonk-forge-agent"
     cross = "aarch64" if _architecture() == "x86_64" else "x86_64"
 
     for argv in (
@@ -128,7 +128,7 @@ def test_builds_one_self_contained_native_elf_with_isolated_module_smoke(
     slot_wheels: tuple[Path, Path],
 ) -> None:
     wheel, platform_wheel = slot_wheels
-    artifact = tmp_path / "outside/dgx-forge-agent"
+    artifact = tmp_path / "outside/vonk-forge-agent"
     artifact.parent.mkdir()
     subprocess.run(
         [
@@ -153,7 +153,7 @@ def test_builds_one_self_contained_native_elf_with_isolated_module_smoke(
         struct.unpack_from("<H", raw, 18)[0]
         == {"x86_64": 62, "aarch64": 183}[_architecture()]
     )
-    assert [item.name for item in artifact.parent.iterdir()] == ["dgx-forge-agent"]
+    assert [item.name for item in artifact.parent.iterdir()] == ["vonk-forge-agent"]
 
     isolated_home = tmp_path / "empty-home"
     isolated_home.mkdir()
@@ -181,7 +181,7 @@ def test_builds_one_self_contained_native_elf_with_isolated_module_smoke(
         assert result.returncode == 0, result.stderr
         if expected is not None:
             assert result.stdout == expected
-    assert shutil.which("dgx-forge-agent", path=str(artifact.parent)) == str(artifact)
+    assert shutil.which("vonk-forge-agent", path=str(artifact.parent)) == str(artifact)
 
 
 def test_builder_retries_transient_packaging_failure_and_smokes_before_publish(
@@ -192,7 +192,7 @@ def test_builder_retries_transient_packaging_failure_and_smokes_before_publish(
     """A transient PyInstaller crash must never publish an unverified slot."""
 
     specification = importlib.util.spec_from_loader(
-        "dgx_slot_builder", SourceFileLoader("dgx_slot_builder", str(BUILDER))
+        "vonk_slot_builder", SourceFileLoader("vonk_slot_builder", str(BUILDER))
     )
     assert specification and specification.loader
     builder = importlib.util.module_from_spec(specification)
@@ -209,14 +209,14 @@ def test_builder_retries_transient_packaging_failure_and_smokes_before_publish(
                 pyinstaller_failures += 1
                 raise subprocess.CalledProcessError(-11, command)
         elif isinstance(command, list) and command and str(command[0]).endswith(
-            "dgx-forge-agent"
+            "vonk-forge-agent"
         ):
             runtime_smokes.append(tuple(str(value) for value in command[1:]))
         return original_run(command, *args, **kwargs)
 
     monkeypatch.setattr(builder.subprocess, "run", run)
     wheel, platform_wheel = slot_wheels
-    artifact = tmp_path / "dgx-forge-agent"
+    artifact = tmp_path / "vonk-forge-agent"
     builder.build(
         wheel,
         PROTOCOL,
@@ -245,14 +245,14 @@ def test_builder_snapshots_wheels_and_ignores_hostile_path_network_and_empty_cac
     fake_uv = hostile / "uv"
     fake_uv.write_text(f"#!/bin/sh\ntouch {invoked}\nexit 91\n")
     fake_uv.chmod(0o755)
-    output = tmp_path / "dgx-forge-agent"
+    output = tmp_path / "vonk-forge-agent"
     environment = {
         **os.environ,
         "PATH": f"{hostile}:/usr/bin:/bin",
         "UV_CACHE_DIR": str(tmp_path / "empty-cache"),
         "HTTPS_PROXY": "http://127.0.0.1:9",
         "HTTP_PROXY": "http://127.0.0.1:9",
-        "DGX_SLOT_SUBSTITUTE_INPUT_TEST": "1",
+        "VONK_SLOT_SUBSTITUTE_INPUT_TEST": "1",
     }
 
     built = subprocess.run(

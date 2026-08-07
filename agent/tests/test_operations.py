@@ -44,7 +44,7 @@ def update_payload() -> dict[str, object]:
         "artifact": {
             "architecture": "linux-arm64",
             "oci_manifest_digest": "sha256:" + "f" * 64,
-            "payload_name": "dgx-agent",
+            "payload_name": "vonk-agent",
             "payload_sha256": "1" * 64,
             "payload_size": 4096,
         },
@@ -58,7 +58,7 @@ def update_payload() -> dict[str, object]:
             "node_id": NODE_ID,
             "oci_manifest_digest": "sha256:" + "f" * 64,
             "operation_id": OPERATION_ID,
-            "payload_name": "dgx-agent",
+            "payload_name": "vonk-agent",
             "platform_target_name": (
                 "platform/releases/1.2.3/" + "3" * 64 + ".json"
             ),

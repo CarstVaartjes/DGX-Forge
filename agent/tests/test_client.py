@@ -447,11 +447,11 @@ def test_claim_advertises_verified_running_release_identity(tmp_path: Path) -> N
 def test_runtime_identity_normalizes_local_machine_architecture(
     monkeypatch, machine: str, expected: str
 ) -> None:
-    monkeypatch.setenv("DGX_AGENT_PLATFORM_VERSION", "1.2.3")
-    monkeypatch.setenv("DGX_AGENT_BUILD_DIGEST", "sha256:" + "b" * 64)
-    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_SLOT", "B")
-    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_SHA256", "c" * 64)
-    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_GENERATION", "7")
+    monkeypatch.setenv("VONK_AGENT_PLATFORM_VERSION", "1.2.3")
+    monkeypatch.setenv("VONK_AGENT_BUILD_DIGEST", "sha256:" + "b" * 64)
+    monkeypatch.setenv("VONK_AGENT_SUPERVISOR_SLOT", "B")
+    monkeypatch.setenv("VONK_AGENT_SUPERVISOR_SHA256", "c" * 64)
+    monkeypatch.setenv("VONK_AGENT_SUPERVISOR_GENERATION", "7")
 
     identity = AgentRuntimeIdentity.from_environment(machine=lambda: machine)
 
@@ -462,11 +462,11 @@ def test_runtime_identity_normalizes_local_machine_architecture(
 
 
 def test_runtime_identity_rejects_unknown_local_machine(monkeypatch) -> None:
-    monkeypatch.setenv("DGX_AGENT_PLATFORM_VERSION", "1.2.3")
-    monkeypatch.setenv("DGX_AGENT_BUILD_DIGEST", "sha256:" + "b" * 64)
-    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_SLOT", "B")
-    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_SHA256", "c" * 64)
-    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_GENERATION", "7")
+    monkeypatch.setenv("VONK_AGENT_PLATFORM_VERSION", "1.2.3")
+    monkeypatch.setenv("VONK_AGENT_BUILD_DIGEST", "sha256:" + "b" * 64)
+    monkeypatch.setenv("VONK_AGENT_SUPERVISOR_SLOT", "B")
+    monkeypatch.setenv("VONK_AGENT_SUPERVISOR_SHA256", "c" * 64)
+    monkeypatch.setenv("VONK_AGENT_SUPERVISOR_GENERATION", "7")
 
     with pytest.raises(ValueError, match="runtime identity is unavailable"):
         AgentRuntimeIdentity.from_environment(machine=lambda: "riscv64")

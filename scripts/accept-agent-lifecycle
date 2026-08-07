@@ -9,9 +9,9 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-if os.environ.get("DGX_AGENT_SIMULATOR_LOCKED_ENV") != "1":
+if os.environ.get("VONK_AGENT_SIMULATOR_LOCKED_ENV") != "1":
     environment = dict(os.environ)
-    environment["DGX_AGENT_SIMULATOR_LOCKED_ENV"] = "1"
+    environment["VONK_AGENT_SIMULATOR_LOCKED_ENV"] = "1"
     environment.pop("VIRTUAL_ENV", None)
     raise SystemExit(
         subprocess.run(

@@ -362,7 +362,7 @@ def simulate_agent_lifecycle(*, nodes: int, seed: int = 20260803) -> dict[str, A
     duplicate_mutations = 0
     cross_node_claims_accepted = 0
 
-    with tempfile.TemporaryDirectory(prefix="dgx-agent-simulator-") as raw_root:
+    with tempfile.TemporaryDirectory(prefix="vonk-agent-simulator-") as raw_root:
         root = Path(raw_root)
         for index, node_id in enumerate(node_ids):
             certificate = transport.certificate(node_id)

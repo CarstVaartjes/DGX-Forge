@@ -1,4 +1,4 @@
-"""Crash-recovering lifecycle for the outbound Spark agent."""
+"""Crash-recovering lifecycle for the outbound Vonk Forge agent."""
 
 from __future__ import annotations
 
@@ -465,7 +465,7 @@ _MAX_HEARTBEAT_INTERVAL_SECONDS = (
     - _HEARTBEAT_SCHEDULING_MARGIN_SECONDS
 )
 _DEFAULT_HEARTBEAT_JOIN_SECONDS = 20.0
-_AGENT_UPDATE_STAGING_ROOT = Path("/var/lib/dgx-forge-agent/update-staging")
+_AGENT_UPDATE_STAGING_ROOT = Path("/var/lib/vonk-forge-agent/update-staging")
 _PROTOCOL_ARCHITECTURE = {
     "aarch64": "linux-arm64",
     "x86_64": "linux-x86_64",
@@ -509,7 +509,7 @@ class _ActiveHeartbeat:
             raise RuntimeError("heartbeat attempt is not durably active")
         self._thread = threading.Thread(
             target=self._run,
-            name=f"dgx-agent-heartbeat-{self._claim.operation_id[:8]}",
+            name=f"vonk-agent-heartbeat-{self._claim.operation_id[:8]}",
             daemon=True,
         )
         self._thread.start()
@@ -1204,7 +1204,7 @@ def _bounded_text(path: Path, fallback: str) -> str:
 
 
 def _enrollment_evidence() -> dict[str, object]:
-    agent_digest = os.environ.get("DGX_AGENT_SUPERVISOR_SHA256", "")
+    agent_digest = os.environ.get("VONK_AGENT_SUPERVISOR_SHA256", "")
     if re.fullmatch(r"[0-9a-f]{64}", agent_digest) is None:
         raise RuntimeError("supervised agent digest is unavailable")
     machine = _bounded_text(Path("/etc/machine-id"), "unavailable")
@@ -1222,7 +1222,7 @@ def _enrollment_evidence() -> dict[str, object]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="DGX Forge outbound Spark agent")
+    parser = argparse.ArgumentParser(description="Vonk Forge outbound agent")
     parser.add_argument(
         "--config",
         type=Path,

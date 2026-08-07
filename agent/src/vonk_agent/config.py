@@ -12,8 +12,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
-DEFAULT_CONFIG_PATH = Path("/etc/dgx-forge-agent/config.json")
-DEFAULT_STATE_ROOT = Path("/var/lib/dgx-forge-agent")
+DEFAULT_CONFIG_PATH = Path("/etc/vonk-forge-agent/config.json")
+DEFAULT_STATE_ROOT = Path("/var/lib/vonk-forge-agent")
 MAX_CONFIG_BYTES = MAX_IDENTITY_BYTES = 64 * 1024
 _NODE_ID = re.compile(r"spk_[0-9a-f]{32}\Z")
 _DNS = re.compile(

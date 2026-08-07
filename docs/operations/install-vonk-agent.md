@@ -1,17 +1,17 @@
-# Install the Vonk Spark agent
+# Install the Vonk Forge agent
 
-Each DGX Spark runs one outbound-only Rust service. The NAS/controller never
-opens SSH for routine work and the Spark exposes no Vonk listener. The agent
+Each GPU node runs one outbound-only Rust service. The NAS/controller never
+opens SSH for routine work and the node exposes no Vonk listener. The agent
 connects to the controller over mTLS, reports capacity and installed/running
 recipes, then claims only operations matching its advertised capabilities.
 
 ## Prerequisites
 
-- Ubuntu 24.04 ARM64 on the DGX Spark.
+- Ubuntu 24.04 ARM64 on the GPU node.
 - NVIDIA driver and NVIDIA Container Toolkit with a working CDI device list:
   `nvidia-ctk cdi list` must include `nvidia.com/gpu=all`.
-- A route from the Spark to the NAS agent endpoint. The NAS may use its
-  Spark-only management-LAN listener; human and inference access remain
+- A route from the node to the NAS agent endpoint. The NAS may use its
+  node-only management-LAN listener; human and inference access remain
   Tailscale-only.
 - The controller CA certificate and its independently verified SHA-256 digest.
 
@@ -45,12 +45,12 @@ Copy the CA and edit the four bootstrap values:
 
 ```bash
 sudo install -o root -g vonk-agent -m 0640 controller-ca.pem \
-  /etc/vonk-forge/controller-ca.pem
-sudoedit /etc/vonk-forge/agent.toml
+  /etc/vonk-forge-agent/controller-ca.pem
+sudoedit /etc/vonk-forge-agent/agent.toml
 ```
 
 Set `controller_url`, `ca_sha256`, and the controller-created `node_id`.
-Keep `data_dir` at `/var/lib/vonk-forge/agent`.
+Keep `data_dir` at `/var/lib/vonk-forge-agent`.
 
 In the admin interface, create a new-node pairing grant for that node. Supply
 the one-use token through standard input so it never appears in shell history:
@@ -70,14 +70,14 @@ exact command once to collect the issued certificate. Delete the token file.
 
 ```bash
 sudo -u vonk-agent env \
-  HOME=/var/lib/vonk-forge/agent \
-  XDG_DATA_HOME=/var/lib/vonk-forge/agent \
+  HOME=/var/lib/vonk-forge-agent \
+  XDG_DATA_HOME=/var/lib/vonk-forge-agent \
   XDG_RUNTIME_DIR=/run/vonk-forge-agent \
-  CONTAINERS_STORAGE_CONF=/etc/vonk-forge/containers-storage.conf \
+  CONTAINERS_STORAGE_CONF=/etc/vonk-forge-agent/containers-storage.conf \
   podman info
-sudo systemctl enable --now vonk-agent-helper.socket
-sudo systemctl enable --now vonk-agent-supervisor.service
-sudo systemctl status vonk-agent.service vonk-agent-supervisor.service
+sudo systemctl enable --now vonk-forge-package-helper.socket
+sudo systemctl enable --now vonk-forge-agent-supervisor.service
+sudo systemctl status vonk-forge-agent.service vonk-forge-agent-supervisor.service
 ```
 
 The controller must show `Rust agent`, migration `complete`, protocol 3, the
@@ -91,7 +91,7 @@ participants/fabric links before a multi-node start.
 ```bash
 sudo -u vonk-agent podman ps
 sudo ss -lntup
-systemd-analyze security vonk-agent.service
+systemd-analyze security vonk-forge-agent.service
 ```
 
 The agent must have no listening TCP socket. `podman ps` must work without a

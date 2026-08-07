@@ -87,7 +87,11 @@ fn run(cli: Cli) -> Result<(), String> {
                 .activate(slot.into(), &sha256, unix_time()?, &NoCrash)
                 .map_err(display)?;
             remove_readiness(&paths)?;
-            systemctl_required(&["--no-block", "restart", "vonk-agent-supervisor.service"])?;
+            systemctl_required(&[
+                "--no-block",
+                "restart",
+                "vonk-forge-agent-supervisor.service",
+            ])?;
         }
         SupervisorCommand::RunAgent => {
             if rustix::process::geteuid().as_raw() != agent_uid {
@@ -118,18 +122,18 @@ fn exec_agent(store: &SlotStore) -> Result<(), String> {
     }
     let error = Command::new(executable)
         .arg("--config")
-        .arg("/etc/vonk-forge/agent.toml")
+        .arg("/etc/vonk-forge-agent/agent.toml")
         .arg("run")
         .env_clear()
         .env("LANG", "C.UTF-8")
         .env("LC_ALL", "C.UTF-8")
         .env("PATH", "/usr/bin:/bin")
-        .env("HOME", "/var/lib/vonk-forge/agent")
-        .env("XDG_DATA_HOME", "/var/lib/vonk-forge/agent")
+        .env("HOME", "/var/lib/vonk-forge-agent")
+        .env("XDG_DATA_HOME", "/var/lib/vonk-forge-agent")
         .env("XDG_RUNTIME_DIR", "/run/vonk-forge-agent")
         .env(
             "CONTAINERS_STORAGE_CONF",
-            "/etc/vonk-forge/containers-storage.conf",
+            "/etc/vonk-forge-agent/containers-storage.conf",
         )
         .env("CREDENTIALS_DIRECTORY", credentials)
         .env("VONK_SUPERVISOR_GENERATION", state.generation.to_string())
@@ -151,11 +155,11 @@ fn supervise(store: &SlotStore, paths: &SlotPaths, agent_uid: u32) -> Result<(),
         return Err("activation challenge does not match durable state".to_owned());
     }
     if recovery == Transition::RecoveryRequired {
-        let _ = systemctl(&["stop", "vonk-agent.service"]);
+        let _ = systemctl(&["stop", "vonk-forge-agent.service"]);
         return Err("supervisor requires explicit recovery".to_owned());
     }
     remove_readiness(paths)?;
-    systemctl_required(&["restart", "vonk-agent.service"])?;
+    systemctl_required(&["restart", "vonk-forge-agent.service"])?;
     if state.status == SupervisorStatus::Stable {
         return Ok(());
     }
@@ -170,19 +174,19 @@ fn supervise(store: &SlotStore, paths: &SlotPaths, agent_uid: u32) -> Result<(),
                 Transition::Stable => return Ok(()),
                 Transition::RollbackStarted => restart_after_transition(paths)?,
                 Transition::RecoveryRequired => {
-                    let _ = systemctl(&["stop", "vonk-agent.service"]);
+                    let _ = systemctl(&["stop", "vonk-forge-agent.service"]);
                     return Err("rollback target did not become ready".to_owned());
                 }
                 Transition::Waiting | Transition::Restart => {}
             }
         }
-        if !systemctl(&["is-active", "--quiet", "vonk-agent.service"])? {
+        if !systemctl(&["is-active", "--quiet", "vonk-forge-agent.service"])? {
             match store.record_agent_failure(unix_time()?).map_err(display)? {
                 Transition::Restart | Transition::RollbackStarted => {
                     restart_after_transition(paths)?
                 }
                 Transition::RecoveryRequired => {
-                    let _ = systemctl(&["stop", "vonk-agent.service"]);
+                    let _ = systemctl(&["stop", "vonk-forge-agent.service"]);
                     return Err("agent crash loop requires explicit recovery".to_owned());
                 }
                 Transition::Stable | Transition::Waiting => {}
@@ -191,7 +195,7 @@ fn supervise(store: &SlotStore, paths: &SlotPaths, agent_uid: u32) -> Result<(),
         match store.check_deadline(unix_time()?).map_err(display)? {
             Transition::RollbackStarted => restart_after_transition(paths)?,
             Transition::RecoveryRequired => {
-                let _ = systemctl(&["stop", "vonk-agent.service"]);
+                let _ = systemctl(&["stop", "vonk-forge-agent.service"]);
                 return Err("activation deadline requires explicit recovery".to_owned());
             }
             Transition::Stable => return Ok(()),
@@ -202,7 +206,7 @@ fn supervise(store: &SlotStore, paths: &SlotPaths, agent_uid: u32) -> Result<(),
 
 fn restart_after_transition(paths: &SlotPaths) -> Result<(), String> {
     remove_readiness(paths)?;
-    systemctl_required(&["restart", "vonk-agent.service"])
+    systemctl_required(&["restart", "vonk-forge-agent.service"])
 }
 
 fn remove_readiness(paths: &SlotPaths) -> Result<(), String> {

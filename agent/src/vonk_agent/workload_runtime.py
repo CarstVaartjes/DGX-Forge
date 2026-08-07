@@ -458,7 +458,7 @@ class WorkloadTUFSource(FetcherInterface):
                         snapshot_max_length=WORKLOAD_METADATA_LIMIT,
                         targets_max_length=WORKLOAD_METADATA_LIMIT,
                         prefix_targets_with_hash=False,
-                        app_user_agent="dgx-forge-agent/0.1.0",
+                        app_user_agent="vonk-forge-agent/0.1.0",
                     ),
                     bootstrap=bootstrap,
                 ),
@@ -494,7 +494,7 @@ class WorkloadTUFSource(FetcherInterface):
             info = _interruptible_tuf_call(fixed, lambda: updater.get_targetinfo(name))
             if info is None or info.length > WORKLOAD_TARGET_LIMIT or set(info.hashes) != {"sha256"} or info.hashes["sha256"] != digest:
                 raise WorkloadTrustError("workload target is not authorized")
-            descriptor = os.memfd_create("dgx-workload-tuf-target", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
+            descriptor = os.memfd_create("vonk-workload-tuf-target", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING)
             _interruptible_tuf_call(fixed, lambda: updater.download_target(info, f"/proc/self/fd/{descriptor}"))
             _seal_target_fd(descriptor, fixed)
             raw = _read_regular_fd(descriptor, WORKLOAD_TARGET_LIMIT, fixed)

@@ -549,7 +549,7 @@ def test_concrete_launcher_uses_sealed_content_and_fixed_systemd_sandbox(
     mount_source = f"/proc/{os.getpid()}/fd/{pass_fds[2]}"
     assert (
         f"--property=BindReadOnlyPaths={mount_source}:"
-        "/run/dgx-forge/generation/models/primary"
+        "/run/vonk-forge-agent/generation/models/primary"
     ) in argv
     assert timeout == 60
     assert runner.cleaned == []
@@ -659,15 +659,15 @@ def test_python_launcher_uses_signed_generation_interpreter_and_environment(
 
     assert result["status"] == "launched"
     argv, pass_fds, _timeout = runner.calls[0]
-    assert "/run/dgx-forge/interpreter" in argv
+    assert "/run/vonk-forge-agent/interpreter" in argv
     assert argv[-4:] == (
-        "/run/dgx-forge/interpreter",
-        "/run/dgx-forge/entrypoint",
+        "/run/vonk-forge-agent/interpreter",
+        "/run/vonk-forge-agent/entrypoint",
         "serve",
         "--port",
         "8080",
     )[-4:]
-    assert "--setenv=PYTHONPATH=/run/dgx-forge/generation/components/python-environment/lib/python/site-packages" in argv
+    assert "--setenv=PYTHONPATH=/run/vonk-forge-agent/generation/components/python-environment/lib/python/site-packages" in argv
     assert len(pass_fds) == 3
 
 
@@ -753,7 +753,7 @@ def test_launcher_cleans_failed_transient_unit(tmp_path: Path) -> None:
             request,
             SandboxPolicy(os.geteuid(), os.getegid(), allowed_devices=("nvidia0",)),
         )
-    assert runner.cleaned == [f"dgx-workload-{REQUEST_ID}.service"]
+    assert runner.cleaned == [f"vonk-workload-{REQUEST_ID}.service"]
 
 
 def test_helper_cli_requires_exact_systemd_socket_activation(monkeypatch) -> None:
@@ -771,8 +771,8 @@ def test_helper_cli_rejects_same_grant_and_receipt_public_key(monkeypatch) -> No
     monkeypatch.setenv("LISTEN_FDS", "1")
     monkeypatch.setattr(helper_module.os, "geteuid", lambda: 0)
     identities = {
-        "dgx-agent": SimpleNamespace(pw_uid=64000, pw_gid=64000),
-        "dgx-workload": SimpleNamespace(pw_uid=64001, pw_gid=64001),
+        "vonk-agent": SimpleNamespace(pw_uid=64000, pw_gid=64000),
+        "vonk-workload": SimpleNamespace(pw_uid=64001, pw_gid=64001),
     }
     monkeypatch.setattr(helper_module.pwd, "getpwnam", identities.__getitem__)
 
@@ -800,11 +800,11 @@ def test_helper_cli_builds_only_fixed_installed_boundaries_and_fd3(
 
     monkeypatch.setenv("LISTEN_PID", str(os.getpid()))
     monkeypatch.setenv("LISTEN_FDS", "1")
-    monkeypatch.setenv("DGX_PACKAGE_HELPER_SLOT_SHA256", "d" * 64)
+    monkeypatch.setenv("VONK_PACKAGE_HELPER_SLOT_SHA256", "d" * 64)
     monkeypatch.setattr(helper_module.os, "geteuid", lambda: 0)
     identities = {
-        "dgx-agent": SimpleNamespace(pw_uid=64000, pw_gid=64000),
-        "dgx-workload": SimpleNamespace(pw_uid=64001, pw_gid=64001),
+        "vonk-agent": SimpleNamespace(pw_uid=64000, pw_gid=64000),
+        "vonk-workload": SimpleNamespace(pw_uid=64001, pw_gid=64001),
     }
     monkeypatch.setattr(helper_module.pwd, "getpwnam", identities.__getitem__)
     seen: dict[str, object] = {}
@@ -860,11 +860,11 @@ def test_helper_cli_builds_only_fixed_installed_boundaries_and_fd3(
 
     assert main(["--listen-fd=3"]) == 0
     assert seen == {
-        "receipt_key": Path("/etc/dgx-forge-agent/package-receipt-public.pem"),
-        "fence_key": Path("/etc/dgx-forge-agent/package-fence-public.pem"),
+        "receipt_key": Path("/etc/vonk-forge-agent/package-receipt-public.pem"),
+        "fence_key": Path("/etc/vonk-forge-agent/package-fence-public.pem"),
         "slot_digest": "d" * 64,
-        "replay": Path("/var/lib/dgx-forge-package-helper/replay.sqlite3"),
-        "generation_root": Path("/var/lib/dgx-forge-agent/packages/generations"),
+        "replay": Path("/var/lib/vonk-forge-package-helper/replay.sqlite3"),
+        "generation_root": Path("/var/lib/vonk-forge-agent/packages/generations"),
         "listen_fd": 3,
         "helper": seen["helper"],
         "listener": seen["listener"],
@@ -876,24 +876,24 @@ def test_package_helper_units_define_one_persistent_bounded_authority() -> None:
     root = Path(__file__).parents[1] / "systemd"
     socket_unit = ConfigParser(interpolation=None, strict=True)
     service_unit = ConfigParser(interpolation=None, strict=True)
-    assert socket_unit.read(root / "dgx-forge-package-helper.socket")
-    assert service_unit.read(root / "dgx-forge-package-helper.service")
+    assert socket_unit.read(root / "vonk-forge-package-helper.socket")
+    assert service_unit.read(root / "vonk-forge-package-helper.service")
 
     assert socket_unit["Socket"]["Accept"] == "no"
     assert socket_unit["Socket"]["SocketMode"] == "0660"
     assert service_unit["Service"]["Type"] == "simple"
     assert set(service_unit["Unit"]["Requires"].split()) == {
-        "dgx-forge-package-helper.socket",
-        "dgx-forge-agent-supervisor.service",
+        "vonk-forge-package-helper.socket",
+        "vonk-forge-agent-supervisor.service",
     }
     assert service_unit["Service"]["ExecStart"] == (
-        "/usr/libexec/dgx-agent-supervisor run-package-helper"
+        "/usr/libexec/vonk-agent-supervisor run-package-helper"
     )
     assert set(service_unit["Unit"]["PartOf"].split()) == {
-        "dgx-forge-agent.service",
-        "dgx-forge-agent-supervisor.service",
+        "vonk-forge-agent.service",
+        "vonk-forge-agent-supervisor.service",
     }
-    assert service_unit["Unit"]["After"] == "dgx-forge-agent-supervisor.service"
+    assert service_unit["Unit"]["After"] == "vonk-forge-agent-supervisor.service"
     assert service_unit["Service"]["NoNewPrivileges"] == "yes"
     assert service_unit["Service"]["PrivateTmp"] == "yes"
     capabilities = set(service_unit["Service"]["CapabilityBoundingSet"].split())

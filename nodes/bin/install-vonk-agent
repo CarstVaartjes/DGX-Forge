@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Install one Spark agent from already-authorized local artifacts only."""
+"""Install one Vonk Forge agent from already-authorized local artifacts only."""
 
 from __future__ import annotations
 
@@ -102,7 +102,7 @@ def _json(raw: bytes, name: str, *, canonical: bool) -> dict[str, Any]:
 
 
 def _test_root() -> Path | None:
-    value = os.environ.get("DGX_INSTALL_TEST_ROOT")
+    value = os.environ.get("VONK_INSTALL_TEST_ROOT")
     if value is None:
         return None
     if os.geteuid() == 0:
@@ -431,7 +431,7 @@ def _ed25519_public_key(raw: bytes, name: str) -> bytes:
 
 
 def _lock_path() -> Path:
-    override = os.environ.get("DGX_INSTALL_NVIDIA_LOCK_TEST")
+    override = os.environ.get("VONK_INSTALL_NVIDIA_LOCK_TEST")
     if override is not None:
         if _test_root() is None:
             raise InstallError("NVIDIA lock override is forbidden")
@@ -680,8 +680,8 @@ def _read_at(directory: int, name: str, maximum: int) -> tuple[bytes, os.stat_re
 
 
 def _crash(stage: str, target: str) -> None:
-    configured = os.environ.get("DGX_INSTALL_CRASH_AFTER")
-    selected = os.environ.get("DGX_INSTALL_CRASH_TARGET")
+    configured = os.environ.get("VONK_INSTALL_CRASH_AFTER")
+    selected = os.environ.get("VONK_INSTALL_CRASH_TARGET")
     if configured is None:
         return
     if _test_root() is None or configured not in {
@@ -698,8 +698,8 @@ def _crash(stage: str, target: str) -> None:
 
 
 def _race(stage: str, path: Path, directory: int, temporary: str) -> None:
-    configured = os.environ.get("DGX_INSTALL_RACE_TEST")
-    selected = os.environ.get("DGX_INSTALL_RACE_TARGET")
+    configured = os.environ.get("VONK_INSTALL_RACE_TEST")
+    selected = os.environ.get("VONK_INSTALL_RACE_TARGET")
     if configured is None:
         return
     if _test_root() is None or configured not in {"replace-parent", "replace-temp"}:
@@ -707,7 +707,7 @@ def _race(stage: str, path: Path, directory: int, temporary: str) -> None:
     if selected is not None and selected != path.name:
         return
     if configured == "replace-temp" and stage == "before-rename":
-        os.environ.pop("DGX_INSTALL_RACE_TEST", None)
+        os.environ.pop("VONK_INSTALL_RACE_TEST", None)
         os.unlink(temporary, dir_fd=directory)
         attacker = os.open(
             temporary,
@@ -718,7 +718,7 @@ def _race(stage: str, path: Path, directory: int, temporary: str) -> None:
         os.write(attacker, b"attacker replacement")
         os.close(attacker)
     elif configured == "replace-parent" and stage == "parent-opened":
-        os.environ.pop("DGX_INSTALL_RACE_TEST", None)
+        os.environ.pop("VONK_INSTALL_RACE_TEST", None)
         moved = path.parent.with_name(f".{path.parent.name}.race-moved")
         attacker = path.parent.with_name(f".{path.parent.name}.race-attacker")
         path.parent.rename(moved)
@@ -1090,16 +1090,16 @@ def _validate_service_account(
     group_names: set[str],
 ) -> Identity:
     if (
-        account.pw_name != "dgx-agent"
+        account.pw_name != "vonk-agent"
         or not 0 < account.pw_uid <= 999
-        or account.pw_dir != "/var/lib/dgx-forge-agent"
+        or account.pw_dir != "/var/lib/vonk-forge-agent"
         or account.pw_shell != "/usr/sbin/nologin"
         or account.pw_gid != primary.gr_gid
-        or primary.gr_name != "dgx-agent"
-        or any(member != "dgx-agent" for member in primary.gr_mem)
-        or group_names != {"dgx-agent"}
+        or primary.gr_name != "vonk-agent"
+        or any(member != "vonk-agent" for member in primary.gr_mem)
+        or group_names != {"vonk-agent"}
     ):
-        raise InstallError("dgx-agent account is not a dedicated system identity")
+        raise InstallError("vonk-agent account is not a dedicated system identity")
     return account.pw_uid, account.pw_gid
 
 
@@ -1109,7 +1109,7 @@ def _service_identity() -> Identity:
     if os.geteuid() != 0:
         raise InstallError("installation requires root")
     try:
-        account = pwd.getpwnam("dgx-agent")
+        account = pwd.getpwnam("vonk-agent")
     except KeyError:
         try:
             subprocess.run(
@@ -1118,19 +1118,19 @@ def _service_identity() -> Identity:
                     "--system",
                     "--user-group",
                     "--home-dir",
-                    "/var/lib/dgx-forge-agent",
+                    "/var/lib/vonk-forge-agent",
                     "--no-create-home",
                     "--shell",
                     "/usr/sbin/nologin",
-                    "dgx-agent",
+                    "vonk-agent",
                 ],
                 check=True,
                 stdin=subprocess.DEVNULL,
                 timeout=15,
             )
         except (OSError, subprocess.SubprocessError) as error:
-            raise InstallError("dgx-agent account could not be created") from error
-        account = pwd.getpwnam("dgx-agent")
+            raise InstallError("vonk-agent account could not be created") from error
+        account = pwd.getpwnam("vonk-agent")
     try:
         primary = grp.getgrgid(account.pw_gid)
         group_names = {
@@ -1138,7 +1138,7 @@ def _service_identity() -> Identity:
             for group_id in os.getgrouplist(account.pw_name, account.pw_gid)
         }
     except KeyError as error:
-        raise InstallError("dgx-agent group identity is unavailable") from error
+        raise InstallError("vonk-agent group identity is unavailable") from error
     return _validate_service_account(account, primary, group_names)
 
 
@@ -1148,16 +1148,16 @@ def _validate_workload_account(
     group_names: set[str],
 ) -> Identity:
     if (
-        account.pw_name != "dgx-workload"
+        account.pw_name != "vonk-workload"
         or not 0 < account.pw_uid <= 999
-        or account.pw_dir != "/var/lib/dgx-forge-workload"
+        or account.pw_dir != "/var/lib/vonk-forge-workload"
         or account.pw_shell != "/usr/sbin/nologin"
         or account.pw_gid != primary.gr_gid
-        or primary.gr_name != "dgx-workload"
-        or any(member != "dgx-workload" for member in primary.gr_mem)
-        or group_names != {"dgx-workload"}
+        or primary.gr_name != "vonk-workload"
+        or any(member != "vonk-workload" for member in primary.gr_mem)
+        or group_names != {"vonk-workload"}
     ):
-        raise InstallError("dgx-workload account is not a dedicated system identity")
+        raise InstallError("vonk-workload account is not a dedicated system identity")
     return account.pw_uid, account.pw_gid
 
 
@@ -1170,7 +1170,7 @@ def _workload_identity() -> Identity:
     if os.geteuid() != 0:
         raise InstallError("installation requires root")
     try:
-        account = pwd.getpwnam("dgx-workload")
+        account = pwd.getpwnam("vonk-workload")
     except KeyError:
         try:
             subprocess.run(
@@ -1179,19 +1179,19 @@ def _workload_identity() -> Identity:
                     "--system",
                     "--user-group",
                     "--home-dir",
-                    "/var/lib/dgx-forge-workload",
+                    "/var/lib/vonk-forge-workload",
                     "--no-create-home",
                     "--shell",
                     "/usr/sbin/nologin",
-                    "dgx-workload",
+                    "vonk-workload",
                 ],
                 check=True,
                 stdin=subprocess.DEVNULL,
                 timeout=15,
             )
         except (OSError, subprocess.SubprocessError) as error:
-            raise InstallError("dgx-workload account could not be created") from error
-        account = pwd.getpwnam("dgx-workload")
+            raise InstallError("vonk-workload account could not be created") from error
+        account = pwd.getpwnam("vonk-workload")
     try:
         primary = grp.getgrgid(account.pw_gid)
         group_names = {
@@ -1199,7 +1199,7 @@ def _workload_identity() -> Identity:
             for group_id in os.getgrouplist(account.pw_name, account.pw_gid)
         }
     except KeyError as error:
-        raise InstallError("dgx-workload group identity is unavailable") from error
+        raise InstallError("vonk-workload group identity is unavailable") from error
     return _validate_workload_account(account, primary, group_names)
 
 
@@ -1288,24 +1288,24 @@ def _runtime_policy(
             "version": "1.3.3",
         },
         "registry_origin": site["registry_origin"],
-        "release_root": str(_destination("/var/lib/dgx-forge/releases")),
+        "release_root": str(_destination("/var/lib/vonk-forge/releases")),
         "repository": site["repository"],
         "schema_version": 1,
-        "staging_root": str(_destination("/var/lib/dgx-forge/release-staging")),
+        "staging_root": str(_destination("/var/lib/vonk-forge/release-staging")),
         "tuf": {
             "bootstrap_root_path": str(tuf_path),
             "bootstrap_root_sha256": tuf_sha,
-            "metadata_root": str(_destination("/var/lib/dgx-forge-agent/tuf/metadata")),
-            "target_root": str(_destination("/var/lib/dgx-forge-agent/tuf/targets")),
+            "metadata_root": str(_destination("/var/lib/vonk-forge-agent/tuf/metadata")),
+            "target_root": str(_destination("/var/lib/vonk-forge-agent/tuf/targets")),
         },
         "workload_tuf": {
             "bootstrap_root_path": str(workload_tuf_path),
             "bootstrap_root_sha256": workload_tuf_sha,
             "metadata_root": str(
-                _destination("/var/lib/dgx-forge-agent/workload-tuf/metadata")
+                _destination("/var/lib/vonk-forge-agent/workload-tuf/metadata")
             ),
             "target_root": str(
-                _destination("/var/lib/dgx-forge-agent/workload-tuf/targets")
+                _destination("/var/lib/vonk-forge-agent/workload-tuf/targets")
             ),
         },
     }
@@ -1313,33 +1313,33 @@ def _runtime_policy(
 
 def _configuration(site: dict[str, Any], node_id: str) -> dict[str, Any]:
     return {
-        "ca_path": str(_destination("/etc/dgx-forge-agent/ca.pem")),
+        "ca_path": str(_destination("/etc/vonk-forge-agent/ca.pem")),
         "certificate_path": str(
-            _destination("/var/lib/dgx-forge-agent/bootstrap/seed-certificate.pem")
+            _destination("/var/lib/vonk-forge-agent/bootstrap/seed-certificate.pem")
         ),
         "control_origin": site["control_origin"],
         "enrollment_origin": site["enrollment_origin"],
         "enrollment_token_path": str(
-            _destination("/var/lib/dgx-forge-agent/bootstrap/enrollment-token")
+            _destination("/var/lib/vonk-forge-agent/bootstrap/enrollment-token")
         ),
         "installed_policy_path": str(
-            _destination("/etc/dgx-forge-agent/nvidia-policy.json")
+            _destination("/etc/vonk-forge-agent/nvidia-policy.json")
         ),
         "node_id": node_id,
         "poll_max_seconds": site["poll_max_seconds"],
         "poll_min_seconds": site["poll_min_seconds"],
         "private_key_path": str(
-            _destination("/var/lib/dgx-forge-agent/bootstrap/seed-private-key.pem")
+            _destination("/var/lib/vonk-forge-agent/bootstrap/seed-private-key.pem")
         ),
         "runtime_policy_path": str(
-            _destination("/etc/dgx-forge-agent/runtime-policy.json")
+            _destination("/etc/vonk-forge-agent/runtime-policy.json")
         ),
-        "state_root": str(_destination("/var/lib/dgx-forge-agent")),
+        "state_root": str(_destination("/var/lib/vonk-forge-agent")),
     }
 
 
 def _repository() -> Path:
-    override = os.environ.get("DGX_INSTALL_SOURCE_ROOT_TEST")
+    override = os.environ.get("VONK_INSTALL_SOURCE_ROOT_TEST")
     if override is None:
         return Path(__file__).resolve().parents[2]
     if _test_root() is None or not Path(override).is_absolute():
@@ -1348,16 +1348,16 @@ def _repository() -> Path:
 
 
 def _installer_lock_path() -> Path:
-    override = os.environ.get("DGX_INSTALL_LOCK_TEST")
+    override = os.environ.get("VONK_INSTALL_LOCK_TEST")
     if override is None:
-        return Path("/run/lock/dgx-forge-agent-install.lock")
+        return Path("/run/lock/vonk-forge-agent-install.lock")
     if _test_root() is None or not Path(override).is_absolute():
         raise InstallError("installer lock override is invalid")
     return Path(override)
 
 
 def _systemctl_path() -> Path | None:
-    override = os.environ.get("DGX_INSTALL_SYSTEMCTL_TEST")
+    override = os.environ.get("VONK_INSTALL_SYSTEMCTL_TEST")
     if override is None:
         return None if _test_root() is not None else Path("/usr/bin/systemctl")
     path = Path(override)
@@ -1541,7 +1541,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
 
     repository = _repository()
     supervisor_raw = _snapshot(
-        repository / "agent/supervisor/dgx-agent-supervisor",
+        repository / "agent/supervisor/vonk-agent-supervisor",
         "stable supervisor",
         maximum=1024 * 1024,
         executable=True,
@@ -1549,14 +1549,14 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
     unit_snapshots = {
         name: _snapshot(repository / "agent/systemd" / name, name, maximum=MAX_JSON)
         for name in (
-            "dgx-forge-agent.service",
-            "dgx-forge-agent-supervisor.service",
-            "dgx-forge-agent-activation.service",
-            "dgx-forge-agent-activation.path",
-            "dgx-forge-agent-rollback.service",
-            "dgx-forge-agent-rollback.path",
-            "dgx-forge-package-helper.service",
-            "dgx-forge-package-helper.socket",
+            "vonk-forge-agent.service",
+            "vonk-forge-agent-supervisor.service",
+            "vonk-forge-agent-activation.service",
+            "vonk-forge-agent-activation.path",
+            "vonk-forge-agent-rollback.service",
+            "vonk-forge-agent-rollback.path",
+            "vonk-forge-package-helper.service",
+            "vonk-forge-package-helper.socket",
         )
     }
     lock_path = _installer_lock_path()
@@ -1598,15 +1598,15 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
         _validate_distinct_service_identities(service_owner, workload_owner)
         changed = False
         root_owner = (0, 0) if _test_root() is None else service_owner
-        agent_path = _destination("/opt/dgx-forge/agent-slots/A/dgx-forge-agent")
+        agent_path = _destination("/opt/vonk-forge/agent-slots/A/vonk-forge-agent")
         oras_path = _destination(
-            f"/opt/dgx-forge/third-party/oras/{arguments.oras_sha256}/oras"
+            f"/opt/vonk-forge/third-party/oras/{arguments.oras_sha256}/oras"
         )
         health_path = _destination(
-            f"/opt/dgx-forge/collectors/{arguments.health_collector_sha256}/collect-health"
+            f"/opt/vonk-forge/collectors/{arguments.health_collector_sha256}/collect-health"
         )
         nvidia_root = _destination(
-            f"/opt/dgx-forge/third-party/nvidia/{lock['sha256']}"
+            f"/opt/vonk-forge/third-party/nvidia/{lock['sha256']}"
         )
         changed |= _publish_tree(
             agent_path.parent,
@@ -1641,7 +1641,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
         tree_files["SOURCE.json"] = (_canonical(lock["provenance"]), 0o444)
         changed |= _publish_tree(nvidia_root, tree_files, root_owner)
 
-        state_root = _destination("/var/lib/dgx-forge-agent")
+        state_root = _destination("/var/lib/vonk-forge-agent")
         changed |= _ensure_directory(state_root, 0o700, service_owner)
         for relative in (
             "bootstrap",
@@ -1653,7 +1653,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
             "workload-tuf/targets",
         ):
             changed |= _ensure_directory(state_root / relative, 0o700, service_owner)
-        release_parent = _destination("/var/lib/dgx-forge")
+        release_parent = _destination("/var/lib/vonk-forge")
         changed |= _ensure_directory(release_parent, 0o755, root_owner)
         changed |= _ensure_directory(release_parent / "releases", 0o700, service_owner)
         changed |= _ensure_directory(
@@ -1664,14 +1664,14 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
         # enabled and keeps a stale/writable replay database from surviving a
         # reinstall unnoticed.
         changed |= _ensure_directory(
-            _destination("/var/lib/dgx-forge-package-helper"),
+            _destination("/var/lib/vonk-forge-package-helper"),
             0o700,
             root_owner,
         )
         auth_path = state_root / "registry-auth.json"
         token_path = state_root / "bootstrap/enrollment-token"
         changed |= _publish_file(auth_path, snapshots["auth"], 0o600, service_owner)
-        config_path = _destination("/etc/dgx-forge-agent/config.json")
+        config_path = _destination("/etc/vonk-forge-agent/config.json")
         token_was_consumed = not os.path.lexists(
             token_path
         ) and _enrollment_identity_is_active(
@@ -1681,7 +1681,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
             changed |= _publish_file(
                 token_path, snapshots["token"], 0o600, service_owner
             )
-        etc = _destination("/etc/dgx-forge-agent")
+        etc = _destination("/etc/vonk-forge-agent")
         changed |= _ensure_directory(etc, 0o755, root_owner)
         ca_path = etc / "ca.pem"
         tuf_path = etc / "tuf-root.json"
@@ -1765,7 +1765,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
             parent_mode=0o755,
         )
 
-        supervisor_path = _destination("/usr/libexec/dgx-agent-supervisor")
+        supervisor_path = _destination("/usr/libexec/vonk-agent-supervisor")
         changed |= _publish_file(
             supervisor_path,
             supervisor_raw,
@@ -1785,8 +1785,8 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
         if _test_root() is not None:
             supervisor_env.update(
                 {
-                    "DGX_SUPERVISOR_TEST_ROOT": str(_test_root()),
-                    "DGX_SUPERVISOR_TEST_UID": str(service_owner[0]),
+                    "VONK_SUPERVISOR_TEST_ROOT": str(_test_root()),
+                    "VONK_SUPERVISOR_TEST_UID": str(service_owner[0]),
                 }
             )
         initialized = subprocess.run(
@@ -1823,11 +1823,11 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
                     [
                         str(systemctl),
                         "enable",
-                        "dgx-forge-agent.service",
-                        "dgx-forge-agent-supervisor.service",
-                        "dgx-forge-agent-activation.path",
-                        "dgx-forge-agent-rollback.path",
-                        "dgx-forge-package-helper.socket",
+                        "vonk-forge-agent.service",
+                        "vonk-forge-agent-supervisor.service",
+                        "vonk-forge-agent-activation.path",
+                        "vonk-forge-agent-rollback.path",
+                        "vonk-forge-package-helper.socket",
                     ],
                     check=True,
                     timeout=30,
@@ -1836,10 +1836,10 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
                     [
                         str(systemctl),
                         "start",
-                        "dgx-forge-agent-supervisor.service",
-                        "dgx-forge-agent-activation.path",
-                        "dgx-forge-agent-rollback.path",
-                        "dgx-forge-package-helper.socket",
+                        "vonk-forge-agent-supervisor.service",
+                        "vonk-forge-agent-activation.path",
+                        "vonk-forge-agent-rollback.path",
+                        "vonk-forge-package-helper.socket",
                     ],
                     check=True,
                     timeout=30,
@@ -1860,7 +1860,7 @@ def install(arguments: argparse.Namespace) -> dict[str, object]:
 
 
 def _parser() -> UsageParser:
-    parser = UsageParser(description="networkless local DGX Forge agent installer")
+    parser = UsageParser(description="networkless local Vonk Forge agent installer")
     parser.add_argument("--node-id", required=True)
     parser.add_argument("--platform-version", required=True)
     parser.add_argument("--build-digest", required=True)

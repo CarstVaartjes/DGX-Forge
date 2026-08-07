@@ -19,13 +19,13 @@ PROJECT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT.parent / "control/src"))
 from vonk_control.update_authority import UpdateAuthorizationAuthority
 
-SUPERVISOR = PROJECT / "supervisor" / "dgx-agent-supervisor"
-AGENT_UNIT = PROJECT / "systemd" / "dgx-forge-agent.service"
-SUPERVISOR_UNIT = PROJECT / "systemd" / "dgx-forge-agent-supervisor.service"
-ACTIVATION_UNIT = PROJECT / "systemd" / "dgx-forge-agent-activation.service"
-ACTIVATION_PATH = PROJECT / "systemd" / "dgx-forge-agent-activation.path"
-ROLLBACK_UNIT = PROJECT / "systemd" / "dgx-forge-agent-rollback.service"
-ROLLBACK_PATH = PROJECT / "systemd" / "dgx-forge-agent-rollback.path"
+SUPERVISOR = PROJECT / "supervisor" / "vonk-agent-supervisor"
+AGENT_UNIT = PROJECT / "systemd" / "vonk-forge-agent.service"
+SUPERVISOR_UNIT = PROJECT / "systemd" / "vonk-forge-agent-supervisor.service"
+ACTIVATION_UNIT = PROJECT / "systemd" / "vonk-forge-agent-activation.service"
+ACTIVATION_PATH = PROJECT / "systemd" / "vonk-forge-agent-activation.path"
+ROLLBACK_UNIT = PROJECT / "systemd" / "vonk-forge-agent-rollback.service"
+ROLLBACK_PATH = PROJECT / "systemd" / "vonk-forge-agent-rollback.path"
 SYSTEMD_VERIFY = PROJECT.parent / "scripts" / "verify-agent-systemd"
 
 
@@ -77,25 +77,25 @@ class SupervisorHost:
         self.systemctl = root / "systemctl"
         self.systemctl.write_text(
             "#!/bin/sh\n"
-            'printf \'%s\\n\' "$*" >> "$DGX_TEST_SYSTEMCTL_ACTIONS"\n'
+            'printf \'%s\\n\' "$*" >> "$VONK_TEST_SYSTEMCTL_ACTIONS"\n'
             'if [ "${1:-}" = is-failed ]; then exit 1; fi\n'
             "exit 0\n"
         )
         self.systemctl.chmod(0o755)
         self.environment = {
             **os.environ,
-            "DGX_SUPERVISOR_TEST_ROOT": str(root / "host"),
-            "DGX_SUPERVISOR_SYSTEMCTL": str(self.systemctl),
-            "DGX_TEST_SYSTEMCTL_ACTIONS": str(self.actions),
-            "DGX_SUPERVISOR_TEST_UID": str(os.geteuid()),
-            "DGX_SUPERVISOR_POLL_SECONDS": "0.01",
+            "VONK_SUPERVISOR_TEST_ROOT": str(root / "host"),
+            "VONK_SUPERVISOR_SYSTEMCTL": str(self.systemctl),
+            "VONK_TEST_SYSTEMCTL_ACTIONS": str(self.actions),
+            "VONK_SUPERVISOR_TEST_UID": str(os.geteuid()),
+            "VONK_SUPERVISOR_POLL_SECONDS": "0.01",
         }
         self.update_signer = ed25519.Ed25519PrivateKey.generate()
         public = self.update_signer.public_key().public_bytes(
             serialization.Encoding.Raw,
             serialization.PublicFormat.Raw,
         )
-        authority = self.host_root / "etc/dgx-forge-agent/update-authority.json"
+        authority = self.host_root / "etc/vonk-forge-agent/update-authority.json"
         authority.parent.mkdir(parents=True)
         authority.write_text(
             json.dumps(
@@ -124,19 +124,19 @@ class SupervisorHost:
 
     @property
     def host_root(self) -> Path:
-        return Path(self.environment["DGX_SUPERVISOR_TEST_ROOT"])
+        return Path(self.environment["VONK_SUPERVISOR_TEST_ROOT"])
 
     @property
     def state_path(self) -> Path:
-        return self.host_root / "var/lib/dgx-forge-agent-supervisor/state.json"
+        return self.host_root / "var/lib/vonk-forge-agent-supervisor/state.json"
 
     @property
     def readiness_path(self) -> Path:
-        return self.host_root / "run/dgx-forge-agent/readiness.json"
+        return self.host_root / "run/vonk-forge-agent/readiness.json"
 
     @property
     def challenge_path(self) -> Path:
-        return self.host_root / "run/dgx-forge-agent-supervisor/activation-challenge"
+        return self.host_root / "run/vonk-forge-agent-supervisor/activation-challenge"
 
     @property
     def service_pid_path(self) -> Path:
@@ -144,11 +144,11 @@ class SupervisorHost:
 
     @property
     def activation_request_path(self) -> Path:
-        return self.host_root / "run/dgx-forge-agent/activation-request.json"
+        return self.host_root / "run/vonk-forge-agent/activation-request.json"
 
     @property
     def rollback_request_path(self) -> Path:
-        return self.host_root / "run/dgx-forge-agent/rollback-request.json"
+        return self.host_root / "run/vonk-forge-agent/rollback-request.json"
 
     def stage_update_request(
         self,
@@ -165,7 +165,7 @@ class SupervisorHost:
         platform_target_name: str | None = None,
     ) -> str:
         digest = _digest(candidate)
-        staging = self.host_root / "var/lib/dgx-forge-agent/update-staging"
+        staging = self.host_root / "var/lib/vonk-forge-agent/update-staging"
         staging.mkdir(parents=True, mode=0o700, exist_ok=True)
         staging.parent.chmod(0o700)
         staging.chmod(0o700)
@@ -180,7 +180,7 @@ class SupervisorHost:
         authorization = {
             "architecture": (
                 "linux-arm64"
-                if self.environment.get("DGX_SUPERVISOR_TEST_ARCH") == "aarch64"
+                if self.environment.get("VONK_SUPERVISOR_TEST_ARCH") == "aarch64"
                 else "linux-x86_64"
             ),
             "attempt": 1,
@@ -191,7 +191,7 @@ class SupervisorHost:
             "node_id": "spk_0123456789abcdef0123456789abcdef",
             "oci_manifest_digest": "sha256:" + "a" * 64,
             "operation_id": operation_id,
-            "payload_name": "dgx-agent",
+            "payload_name": "vonk-agent",
             "platform_target_name": platform_target_name
             or _platform_target(platform_version, platform_target_sha256),
             "platform_version": platform_version,
@@ -199,7 +199,7 @@ class SupervisorHost:
             "previous_slot": previous,
             "previous_sha256": _digest(
                 self.host_root
-                / f"opt/dgx-forge/agent-slots/{previous}/dgx-forge-agent"
+                / f"opt/vonk-forge/agent-slots/{previous}/vonk-forge-agent"
             ),
             "previous_generation": generation,
             "sha256": digest,
@@ -254,7 +254,7 @@ class SupervisorHost:
             "#include <stdio.h>\n"
             'int main(void) { puts("' + message + '"); return 0; }\n'
         )
-        target = self.host_root / "opt/dgx-forge/agent-slots" / slot / "dgx-forge-agent"
+        target = self.host_root / "opt/vonk-forge/agent-slots" / slot / "vonk-forge-agent"
         target.parent.mkdir(parents=True, mode=0o755)
         subprocess.run(
             ["cc", "-O2", "-o", str(target), str(source)],
@@ -292,13 +292,13 @@ class SupervisorHost:
             f'FILE *f=fopen("{self.readiness_path}", "w"); if (!f) return 2;\n'
             'fprintf(f, "{\\"challenge\\":\\"%s\\",\\"generation\\":%s,\\"pid\\":%ld,\\"schema_version\\":2,'
             '\\"sha256\\":\\"%s\\",\\"slot\\":\\"%s\\"}\\n", challenge, '
-            'getenv("DGX_AGENT_SUPERVISOR_GENERATION"), '
+            'getenv("VONK_AGENT_SUPERVISOR_GENERATION"), '
             f"(long)getpid()+{pid_delta}, "
-            'getenv("DGX_AGENT_SUPERVISOR_SHA256"), '
-            'getenv("DGX_AGENT_SUPERVISOR_SLOT"));\n'
+            'getenv("VONK_AGENT_SUPERVISOR_SHA256"), '
+            'getenv("VONK_AGENT_SUPERVISOR_SLOT"));\n'
             f"fflush(f); fsync(fileno(f)); fchmod(fileno(f), 0600); fclose(f); sleep({3 if pid_delta == 0 else 0}); return 0; }}\n"
         )
-        target = self.host_root / "opt/dgx-forge/agent-slots" / slot / "dgx-forge-agent"
+        target = self.host_root / "opt/vonk-forge/agent-slots" / slot / "vonk-forge-agent"
         target.parent.mkdir(parents=True, mode=0o755)
         subprocess.run(
             ["cc", "-O2", "-o", str(target), str(source)],
@@ -312,25 +312,25 @@ class SupervisorHost:
     def spawn_agent_from_systemctl(self) -> None:
         self.systemctl.write_text(
             "#!/bin/sh\n"
-            'printf \'%s\\n\' "$*" >> "$DGX_TEST_SYSTEMCTL_ACTIONS"\n'
+            'printf \'%s\\n\' "$*" >> "$VONK_TEST_SYSTEMCTL_ACTIONS"\n'
             'if [ "${1:-}" = stop ]; then\n'
-            '  if [ -s "$DGX_TEST_SERVICE_PID" ]; then kill "$(cat "$DGX_TEST_SERVICE_PID")" 2>/dev/null || true; fi\n'
-            '  rm -f "$DGX_TEST_SERVICE_PID"\n'
+            '  if [ -s "$VONK_TEST_SERVICE_PID" ]; then kill "$(cat "$VONK_TEST_SERVICE_PID")" 2>/dev/null || true; fi\n'
+            '  rm -f "$VONK_TEST_SERVICE_PID"\n'
             "fi\n"
             'if [ "${1:-}" = restart ] || [ "${1:-}" = start ]; then\n'
-            '  "$DGX_TEST_SUPERVISOR" run-agent &\n'
-            '  printf \'%s\\n\' "$!" > "$DGX_TEST_SERVICE_PID"\n'
+            '  "$VONK_TEST_SUPERVISOR" run-agent &\n'
+            '  printf \'%s\\n\' "$!" > "$VONK_TEST_SERVICE_PID"\n'
             "fi\n"
-            'if [ "${1:-}" = show ]; then cat "$DGX_TEST_SERVICE_PID" 2>/dev/null || printf \'0\\n\'; fi\n'
+            'if [ "${1:-}" = show ]; then cat "$VONK_TEST_SERVICE_PID" 2>/dev/null || printf \'0\\n\'; fi\n'
             'if [ "${1:-}" = is-failed ]; then\n'
-            '  if [ -s "$DGX_TEST_SERVICE_PID" ] && kill -0 "$(cat "$DGX_TEST_SERVICE_PID")" 2>/dev/null; then exit 1; fi\n'
+            '  if [ -s "$VONK_TEST_SERVICE_PID" ] && kill -0 "$(cat "$VONK_TEST_SERVICE_PID")" 2>/dev/null; then exit 1; fi\n'
             '  exit 0\n'
             "fi\n"
             "exit 0\n"
         )
         self.systemctl.chmod(0o755)
-        self.environment["DGX_TEST_SUPERVISOR"] = str(SUPERVISOR)
-        self.environment["DGX_TEST_SERVICE_PID"] = str(self.service_pid_path)
+        self.environment["VONK_TEST_SUPERVISOR"] = str(SUPERVISOR)
+        self.environment["VONK_TEST_SERVICE_PID"] = str(self.service_pid_path)
 
     def run(
         self, *arguments: str, timeout: float = 5
@@ -452,15 +452,15 @@ def test_run_agent_exports_verified_release_identity(
     source.write_text(
         "#include <stdio.h>\n#include <stdlib.h>\n"
         "int main(void){printf(\"%s %s %s %s %s\\n\","
-        "getenv(\"DGX_AGENT_PLATFORM_VERSION\"),"
-        "getenv(\"DGX_AGENT_BUILD_DIGEST\"),"
-        "getenv(\"DGX_AGENT_SUPERVISOR_GENERATION\"),"
-        "getenv(\"DGX_AGENT_SUPERVISOR_SLOT\"),"
-        "getenv(\"DGX_AGENT_SUPERVISOR_SHA256\"));}\n"
+        "getenv(\"VONK_AGENT_PLATFORM_VERSION\"),"
+        "getenv(\"VONK_AGENT_BUILD_DIGEST\"),"
+        "getenv(\"VONK_AGENT_SUPERVISOR_GENERATION\"),"
+        "getenv(\"VONK_AGENT_SUPERVISOR_SLOT\"),"
+        "getenv(\"VONK_AGENT_SUPERVISOR_SHA256\"));}\n"
     )
     target = (
         supervisor_host.host_root
-        / "opt/dgx-forge/agent-slots/A/dgx-forge-agent"
+        / "opt/vonk-forge/agent-slots/A/vonk-forge-agent"
     )
     target.parent.mkdir(parents=True)
     subprocess.run(["cc", "-O2", "-o", target, source], check=True)
@@ -486,11 +486,11 @@ def test_run_package_helper_executes_the_verified_active_slot_with_socket_state(
         "int main(int argc, char **argv){"
         'printf("%d %s %s %s %s %s %s\\n", argc, argv[1], argv[2], '
         'getenv("LISTEN_FDS"), getenv("LISTEN_PID"), getenv("HOME"), '
-        'getenv("DGX_PACKAGE_HELPER_SLOT_SHA256"));}\n'
+        'getenv("VONK_PACKAGE_HELPER_SLOT_SHA256"));}\n'
     )
     target = (
         supervisor_host.host_root
-        / "opt/dgx-forge/agent-slots/A/dgx-forge-agent"
+        / "opt/vonk-forge/agent-slots/A/vonk-forge-agent"
     )
     target.parent.mkdir(parents=True)
     subprocess.run(["cc", "-O2", "-o", target, source], check=True)
@@ -517,7 +517,7 @@ def test_run_package_helper_executes_the_verified_active_slot_with_socket_state(
     fields = launched.stdout.strip().split()
     assert fields[:4] == ["3", "--package-helper", "--listen-fd=3", "1"]
     assert int(fields[4]) > 1
-    assert fields[5] == "/var/lib/dgx-forge-package-helper"
+    assert fields[5] == "/var/lib/vonk-forge-package-helper"
     assert fields[6] == digest
 
 
@@ -539,7 +539,7 @@ def test_apply_request_installs_verified_inactive_slot_and_starts_activation(
     assert applied.returncode == 0, applied.stderr
     installed = (
         supervisor_host.host_root
-        / "opt/dgx-forge/agent-slots/B/dgx-forge-agent"
+        / "opt/vonk-forge/agent-slots/B/vonk-forge-agent"
     )
     assert _digest(installed) == digest
     assert installed.stat().st_mode & 0o777 == 0o555
@@ -555,7 +555,7 @@ def test_apply_request_installs_verified_inactive_slot_and_starts_activation(
     assert state["active_slot"] == "B"
     assert state["previous_slot"] == "A"
     assert state["status"] == "pending"
-    assert "--no-block restart dgx-forge-agent-supervisor.service" in (
+    assert "--no-block restart vonk-forge-agent-supervisor.service" in (
         supervisor_host.actions.read_text()
     )
 
@@ -572,9 +572,9 @@ def test_apply_request_cleans_crash_leftovers_before_slot_publication(
     source.write_text('int main(void){return 0;}\n')
     subprocess.run(["cc", "-O2", "-o", candidate, source], check=True)
     supervisor_host.stage_update_request(candidate)
-    slot = supervisor_host.host_root / "opt/dgx-forge/agent-slots/B"
+    slot = supervisor_host.host_root / "opt/vonk-forge/agent-slots/B"
     slot.mkdir(parents=True, exist_ok=True)
-    executable_partial = slot / (".dgx-forge-agent." + "0" * 24 + ".new")
+    executable_partial = slot / (".vonk-forge-agent." + "0" * 24 + ".new")
     identity_partial = slot / (".identity.json." + "1" * 24 + ".new")
     executable_partial.write_bytes(b"partial")
     executable_partial.chmod(0o500)
@@ -611,7 +611,7 @@ def test_unprivileged_agent_cannot_persist_unsigned_elf(
     assert supervisor_host.state() == before
     assert not (
         supervisor_host.host_root
-        / "opt/dgx-forge/agent-slots/B/dgx-forge-agent"
+        / "opt/vonk-forge/agent-slots/B/vonk-forge-agent"
     ).exists()
 
 
@@ -626,7 +626,7 @@ def test_activation_rejects_mutable_root_authority_material(
     supervisor_host.stage_update_request(candidate)
     authority = (
         supervisor_host.host_root
-        / "etc/dgx-forge-agent/update-authority.json"
+        / "etc/vonk-forge-agent/update-authority.json"
     )
     authority.chmod(0o644)
     before = supervisor_host.state()
@@ -680,7 +680,7 @@ def test_candidate_verification_failure_does_not_consume_activation_receipt(
     digest = supervisor_host.stage_update_request(candidate)
     staged = (
         supervisor_host.host_root
-        / f"var/lib/dgx-forge-agent/update-staging/{digest}.agent"
+        / f"var/lib/vonk-forge-agent/update-staging/{digest}.agent"
     )
     original = staged.read_bytes()
     staged.chmod(0o700)
@@ -864,7 +864,7 @@ def test_control_authority_signature_is_verified_by_root_supervisor(
     authority = UpdateAuthorizationAuthority(
         signer, release_source=UnusedReleaseSource()
     )
-    pinned = supervisor_host.host_root / "etc/dgx-forge-agent/update-authority.json"
+    pinned = supervisor_host.host_root / "etc/vonk-forge-agent/update-authority.json"
     pinned.chmod(0o600)
     pinned.write_bytes(authority.public_authority_bytes())
     pinned.chmod(0o444)
@@ -1100,7 +1100,7 @@ def test_explicit_rollback_automatically_reverts_when_target_is_not_ready(
     supervisor_host.write_rollback_request(_rollback_request(a, b))
     assert supervisor_host.run("apply-rollback-request").returncode == 0
     pending = supervisor_host.state()
-    supervisor_host.environment["DGX_SUPERVISOR_NOW"] = str(
+    supervisor_host.environment["VONK_SUPERVISOR_NOW"] = str(
         float(pending["activation_deadline"]) + 1
     )
 
@@ -1113,7 +1113,7 @@ def test_explicit_rollback_automatically_reverts_when_target_is_not_ready(
     assert stable["expected_sha256"] == _digest(b)
     assert stable["status"] == "stable"
     assert stable["rollback_performed"] is True
-    assert "restart dgx-forge-agent.service" in (
+    assert "restart vonk-forge-agent.service" in (
         supervisor_host.actions.read_text().splitlines()
     )
 
@@ -1147,10 +1147,10 @@ def test_slot_path_rejects_symlink_in_any_ancestor(
 ) -> None:
     agent = supervisor_host.compile_agent("A", "slot-a")
     digest = _digest(agent)
-    dgx_root = supervisor_host.host_root / "opt/dgx-forge"
-    moved = supervisor_host.root / "moved-dgx-forge"
-    dgx_root.rename(moved)
-    dgx_root.symlink_to(moved, target_is_directory=True)
+    vonk_root = supervisor_host.host_root / "opt/vonk-forge"
+    moved = supervisor_host.root / "moved-vonk-forge"
+    vonk_root.rename(moved)
+    vonk_root.symlink_to(moved, target_is_directory=True)
 
     initialized = supervisor_host.run("initialize", "--slot", "A", "--sha256", digest)
 
@@ -1204,10 +1204,10 @@ def test_concurrent_initialization_serializes_and_publication_crashes_recover(
     for stage in ("create", "write", "file-fsync", "rename", "directory-fsync"):
         host = SupervisorHost(tmp_path / stage)
         artifact = host.compile_agent("A", "slot-a")
-        host.environment["DGX_SUPERVISOR_CRASH_AFTER"] = stage
+        host.environment["VONK_SUPERVISOR_CRASH_AFTER"] = stage
         crashed = host.run("initialize", "--slot", "A", "--sha256", _digest(artifact))
         assert crashed.returncode == 99
-        host.environment.pop("DGX_SUPERVISOR_CRASH_AFTER")
+        host.environment.pop("VONK_SUPERVISOR_CRASH_AFTER")
 
         recovered = host.run("initialize", "--slot", "A", "--sha256", _digest(artifact))
 
@@ -1232,14 +1232,14 @@ def test_activation_accepts_only_exact_generation_bound_readiness(
     activated = supervisor_host.run("activate", "--slot", "B", "--sha256", digest_b)
     assert activated.returncode == 0, activated.stderr
     assert (
-        "--no-block restart dgx-forge-agent-supervisor.service"
+        "--no-block restart vonk-forge-agent-supervisor.service"
         in supervisor_host.actions.read_text().splitlines()
     )
     generation = int(supervisor_host.state()["generation"])
     supervisor_host.readiness(generation=generation - 1, slot="B", digest=digest_b)
     supervisor_host.systemctl.write_text(
         "#!/bin/sh\n"
-        'printf \'%s\\n\' "$*" >> "$DGX_TEST_SYSTEMCTL_ACTIONS"\n'
+        'printf \'%s\\n\' "$*" >> "$VONK_TEST_SYSTEMCTL_ACTIONS"\n'
         'if [ "${1:-}" = is-failed ]; then exit 0; fi\n'
         "exit 0\n"
     )
@@ -1277,7 +1277,7 @@ def test_preplanted_correct_looking_readiness_cannot_commit_new_slot(
     )
     supervisor_host.systemctl.write_text(
         "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$DGX_TEST_SYSTEMCTL_ACTIONS\"\n"
+        "printf '%s\\n' \"$*\" >> \"$VONK_TEST_SYSTEMCTL_ACTIONS\"\n"
         "if [ \"${1:-}\" = is-failed ]; then exit 0; fi\n"
         "exit 0\n"
     )
@@ -1294,8 +1294,8 @@ def test_preplanted_correct_looking_readiness_cannot_commit_new_slot(
     assert state["rollback_performed"] is True
     assert not supervisor_host.readiness_path.exists()
     actions = supervisor_host.actions.read_text().splitlines()
-    assert actions.index("stop dgx-forge-agent.service") < actions.index(
-        "restart dgx-forge-agent.service"
+    assert actions.index("stop vonk-forge-agent.service") < actions.index(
+        "restart vonk-forge-agent.service"
     )
 
 
@@ -1316,10 +1316,10 @@ def test_pending_slot_replacement_before_commit_rolls_back(
         ).returncode
         == 0
     )
-    replacement = b.with_name(".dgx-forge-agent.commit-race")
+    replacement = b.with_name(".vonk-forge-agent.commit-race")
     replacement.write_bytes(a.read_bytes())
     replacement.chmod(0o555)
-    supervisor_host.environment["DGX_SUPERVISOR_SWAP_SLOT_BEFORE_COMMIT_TEST"] = "1"
+    supervisor_host.environment["VONK_SUPERVISOR_SWAP_SLOT_BEFORE_COMMIT_TEST"] = "1"
     supervisor_host.spawn_agent_from_systemctl()
 
     supervised = supervisor_host.run("supervise")
@@ -1366,7 +1366,7 @@ def test_readiness_replacement_during_consumption_is_not_unlinked(
         + "\n"
     )
     replacement.chmod(0o600)
-    supervisor_host.environment["DGX_SUPERVISOR_SWAP_READINESS_TEST"] = "1"
+    supervisor_host.environment["VONK_SUPERVISOR_SWAP_READINESS_TEST"] = "1"
     supervisor_host.spawn_agent_from_systemctl()
 
     supervised = supervisor_host.run("supervise")
@@ -1414,7 +1414,7 @@ def test_readiness_replacement_after_identity_check_survives(
     )
     replacement.chmod(0o600)
     supervisor_host.environment[
-        "DGX_SUPERVISOR_SWAP_READINESS_AFTER_STAT_TEST"
+        "VONK_SUPERVISOR_SWAP_READINESS_AFTER_STAT_TEST"
     ] = "1"
     supervisor_host.spawn_agent_from_systemctl()
 
@@ -1492,12 +1492,12 @@ def test_main_pid_change_after_readiness_verification_rolls_back(
     show_count = supervisor_host.root / "show-count"
     supervisor_host.systemctl.write_text(
         "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$DGX_TEST_SYSTEMCTL_ACTIONS\"\n"
-        'if [ "${1:-}" = stop ]; then rm -f "$DGX_TEST_SERVICE_PID"; fi\n'
-        'if [ "${1:-}" = restart ]; then "$DGX_TEST_SUPERVISOR" run-agent & printf \'%s\\n\' "$!" > "$DGX_TEST_SERVICE_PID"; fi\n'
+        "printf '%s\\n' \"$*\" >> \"$VONK_TEST_SYSTEMCTL_ACTIONS\"\n"
+        'if [ "${1:-}" = stop ]; then rm -f "$VONK_TEST_SERVICE_PID"; fi\n'
+        'if [ "${1:-}" = restart ]; then "$VONK_TEST_SUPERVISOR" run-agent & printf \'%s\\n\' "$!" > "$VONK_TEST_SERVICE_PID"; fi\n'
         'if [ "${1:-}" = show ]; then\n'
-        '  count=0; if [ -s "$DGX_TEST_SHOW_COUNT" ]; then count=$(sed -n \'1p\' "$DGX_TEST_SHOW_COUNT"); fi; count=$((count + 1)); printf \'%s\\n\' "$count" > "$DGX_TEST_SHOW_COUNT"\n'
-        '  if [ "$count" -le 2 ]; then cat "$DGX_TEST_SERVICE_PID"; else printf \'0\\n\'; fi\n'
+        '  count=0; if [ -s "$VONK_TEST_SHOW_COUNT" ]; then count=$(sed -n \'1p\' "$VONK_TEST_SHOW_COUNT"); fi; count=$((count + 1)); printf \'%s\\n\' "$count" > "$VONK_TEST_SHOW_COUNT"\n'
+        '  if [ "$count" -le 2 ]; then cat "$VONK_TEST_SERVICE_PID"; else printf \'0\\n\'; fi\n'
         "fi\n"
         'if [ "${1:-}" = is-failed ]; then exit 1; fi\n'
         "exit 0\n"
@@ -1505,9 +1505,9 @@ def test_main_pid_change_after_readiness_verification_rolls_back(
     supervisor_host.systemctl.chmod(0o755)
     supervisor_host.environment.update(
         {
-            "DGX_TEST_SERVICE_PID": str(supervisor_host.service_pid_path),
-            "DGX_TEST_SHOW_COUNT": str(show_count),
-            "DGX_TEST_SUPERVISOR": str(SUPERVISOR),
+            "VONK_TEST_SERVICE_PID": str(supervisor_host.service_pid_path),
+            "VONK_TEST_SHOW_COUNT": str(show_count),
+            "VONK_TEST_SUPERVISOR": str(SUPERVISOR),
         }
     )
 
@@ -1536,15 +1536,15 @@ def test_activation_rejects_matching_digest_from_wrong_executable_inode(
     pending = supervisor_host.state()
     supervisor_host.systemctl.write_text(
         "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$DGX_TEST_SYSTEMCTL_ACTIONS\"\n"
-        'if [ "${1:-}" = stop ]; then rm -f "$DGX_TEST_SERVICE_PID"; fi\n'
+        "printf '%s\\n' \"$*\" >> \"$VONK_TEST_SYSTEMCTL_ACTIONS\"\n"
+        'if [ "${1:-}" = stop ]; then rm -f "$VONK_TEST_SERVICE_PID"; fi\n'
         'if [ "${1:-}" = restart ]; then\n'
-        '  CREDENTIALS_DIRECTORY="$DGX_TEST_CREDENTIALS" DGX_AGENT_SUPERVISOR_GENERATION="$DGX_TEST_GENERATION" DGX_AGENT_SUPERVISOR_SLOT=B DGX_AGENT_SUPERVISOR_SHA256="$DGX_TEST_SHA256" "$DGX_TEST_IMPOSTOR" &\n'
-        '  printf \'%s\\n\' "$!" > "$DGX_TEST_SERVICE_PID"\n'
+        '  CREDENTIALS_DIRECTORY="$VONK_TEST_CREDENTIALS" VONK_AGENT_SUPERVISOR_GENERATION="$VONK_TEST_GENERATION" VONK_AGENT_SUPERVISOR_SLOT=B VONK_AGENT_SUPERVISOR_SHA256="$VONK_TEST_SHA256" "$VONK_TEST_IMPOSTOR" &\n'
+        '  printf \'%s\\n\' "$!" > "$VONK_TEST_SERVICE_PID"\n'
         "fi\n"
-        'if [ "${1:-}" = show ]; then cat "$DGX_TEST_SERVICE_PID" 2>/dev/null || printf \'0\\n\'; fi\n'
+        'if [ "${1:-}" = show ]; then cat "$VONK_TEST_SERVICE_PID" 2>/dev/null || printf \'0\\n\'; fi\n'
         'if [ "${1:-}" = is-failed ]; then\n'
-        '  if [ -s "$DGX_TEST_SERVICE_PID" ] && kill -0 "$(cat "$DGX_TEST_SERVICE_PID")" 2>/dev/null; then exit 1; fi\n'
+        '  if [ -s "$VONK_TEST_SERVICE_PID" ] && kill -0 "$(cat "$VONK_TEST_SERVICE_PID")" 2>/dev/null; then exit 1; fi\n'
         '  exit 0\n'
         "fi\n"
         "exit 0\n"
@@ -1552,11 +1552,11 @@ def test_activation_rejects_matching_digest_from_wrong_executable_inode(
     supervisor_host.systemctl.chmod(0o755)
     supervisor_host.environment.update(
         {
-            "DGX_TEST_CREDENTIALS": str(supervisor_host.challenge_path.parent),
-            "DGX_TEST_GENERATION": str(pending["generation"]),
-            "DGX_TEST_IMPOSTOR": str(impostor),
-            "DGX_TEST_SERVICE_PID": str(supervisor_host.service_pid_path),
-            "DGX_TEST_SHA256": _digest(b),
+            "VONK_TEST_CREDENTIALS": str(supervisor_host.challenge_path.parent),
+            "VONK_TEST_GENERATION": str(pending["generation"]),
+            "VONK_TEST_IMPOSTOR": str(impostor),
+            "VONK_TEST_SERVICE_PID": str(supervisor_host.service_pid_path),
+            "VONK_TEST_SHA256": _digest(b),
         }
     )
 
@@ -1603,14 +1603,14 @@ def test_stale_challenge_reuse_after_readiness_clear_is_rejected(
     captured = supervisor_host.root / "captured-activation-challenge"
     supervisor_host.systemctl.write_text(
         "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$DGX_TEST_SYSTEMCTL_ACTIONS\"\n"
-        'if [ "${1:-}" = restart ] && [ ! -e "$DGX_TEST_CAPTURED_CHALLENGE" ]; then cp "$DGX_TEST_CHALLENGE" "$DGX_TEST_CAPTURED_CHALLENGE"; fi\n'
+        "printf '%s\\n' \"$*\" >> \"$VONK_TEST_SYSTEMCTL_ACTIONS\"\n"
+        'if [ "${1:-}" = restart ] && [ ! -e "$VONK_TEST_CAPTURED_CHALLENGE" ]; then cp "$VONK_TEST_CHALLENGE" "$VONK_TEST_CAPTURED_CHALLENGE"; fi\n'
         'if [ "${1:-}" = is-failed ]; then exit 0; fi\n'
         "exit 0\n"
     )
     supervisor_host.systemctl.chmod(0o755)
-    supervisor_host.environment["DGX_TEST_CAPTURED_CHALLENGE"] = str(captured)
-    supervisor_host.environment["DGX_TEST_CHALLENGE"] = str(
+    supervisor_host.environment["VONK_TEST_CAPTURED_CHALLENGE"] = str(captured)
+    supervisor_host.environment["VONK_TEST_CHALLENGE"] = str(
         supervisor_host.challenge_path
     )
     assert supervisor_host.run("supervise").returncode != 0
@@ -1638,14 +1638,14 @@ def test_stale_challenge_reuse_after_readiness_clear_is_rejected(
     )
     supervisor_host.systemctl.write_text(
         "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$DGX_TEST_SYSTEMCTL_ACTIONS\"\n"
-        'if [ "${1:-}" = restart ]; then cp "$DGX_TEST_STALE_READINESS" "$DGX_TEST_READINESS"; chmod 0600 "$DGX_TEST_READINESS"; fi\n'
+        "printf '%s\\n' \"$*\" >> \"$VONK_TEST_SYSTEMCTL_ACTIONS\"\n"
+        'if [ "${1:-}" = restart ]; then cp "$VONK_TEST_STALE_READINESS" "$VONK_TEST_READINESS"; chmod 0600 "$VONK_TEST_READINESS"; fi\n'
         'if [ "${1:-}" = is-failed ]; then exit 0; fi\n'
         "exit 0\n"
     )
     supervisor_host.systemctl.chmod(0o755)
-    supervisor_host.environment["DGX_TEST_STALE_READINESS"] = str(stale)
-    supervisor_host.environment["DGX_TEST_READINESS"] = str(
+    supervisor_host.environment["VONK_TEST_STALE_READINESS"] = str(stale)
+    supervisor_host.environment["VONK_TEST_READINESS"] = str(
         supervisor_host.readiness_path
     )
 
@@ -1686,14 +1686,14 @@ def test_old_agent_readiness_racing_service_stop_is_cleared(
     )
     supervisor_host.systemctl.write_text(
         "#!/bin/sh\n"
-        "printf '%s\\n' \"$*\" >> \"$DGX_TEST_SYSTEMCTL_ACTIONS\"\n"
-        'if [ "${1:-}" = stop ]; then cp "$DGX_TEST_RACED_READINESS" "$DGX_TEST_READINESS"; chmod 0600 "$DGX_TEST_READINESS"; fi\n'
+        "printf '%s\\n' \"$*\" >> \"$VONK_TEST_SYSTEMCTL_ACTIONS\"\n"
+        'if [ "${1:-}" = stop ]; then cp "$VONK_TEST_RACED_READINESS" "$VONK_TEST_READINESS"; chmod 0600 "$VONK_TEST_READINESS"; fi\n'
         'if [ "${1:-}" = is-failed ]; then exit 0; fi\n'
         "exit 0\n"
     )
     supervisor_host.systemctl.chmod(0o755)
-    supervisor_host.environment["DGX_TEST_RACED_READINESS"] = str(raced)
-    supervisor_host.environment["DGX_TEST_READINESS"] = str(
+    supervisor_host.environment["VONK_TEST_RACED_READINESS"] = str(raced)
+    supervisor_host.environment["VONK_TEST_READINESS"] = str(
         supervisor_host.readiness_path
     )
 
@@ -1815,7 +1815,7 @@ def test_arm64_elf_is_validated_without_execution(
 ) -> None:
     if platform.machine() not in {"x86_64", "AMD64"}:
         pytest.skip("foreign ARM64 validation is exercised from x86_64")
-    target = supervisor_host.host_root / "opt/dgx-forge/agent-slots/A/dgx-forge-agent"
+    target = supervisor_host.host_root / "opt/vonk-forge/agent-slots/A/vonk-forge-agent"
     target.parent.mkdir(parents=True)
     # ELF64 little-endian, ET_EXEC, EM_AARCH64; no executable body is needed.
     target.write_bytes(
@@ -1823,7 +1823,7 @@ def test_arm64_elf_is_validated_without_execution(
     )
     target.chmod(0o555)
     supervisor_host.write_identity(target)
-    supervisor_host.environment["DGX_SUPERVISOR_TEST_ARCH"] = "aarch64"
+    supervisor_host.environment["VONK_SUPERVISOR_TEST_ARCH"] = "aarch64"
 
     initialized = supervisor_host.run(
         "initialize", "--slot", "A", "--sha256", _digest(target)
@@ -1851,7 +1851,7 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
     )
     for source in units:
         shutil.copy2(source, unit_directory / source.name)
-    shutil.copy2("/bin/true", executable_directory / "dgx-agent-supervisor")
+    shutil.copy2("/bin/true", executable_directory / "vonk-agent-supervisor")
     verified = subprocess.run(
         [
             "systemd-analyze",
@@ -1921,12 +1921,12 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
     rollback = ROLLBACK_UNIT.read_text()
     rollback_path = ROLLBACK_PATH.read_text()
     for literal in (
-        "User=dgx-agent",
-        "Group=dgx-agent",
+        "User=vonk-agent",
+        "Group=vonk-agent",
         "SupplementaryGroups=",
-        "PartOf=dgx-forge-agent-supervisor.service",
-        "ExecStart=/usr/libexec/dgx-agent-supervisor run-agent",
-        "LoadCredential=activation-challenge:/run/dgx-forge-agent-supervisor/activation-challenge",
+        "PartOf=vonk-forge-agent-supervisor.service",
+        "ExecStart=/usr/libexec/vonk-agent-supervisor run-agent",
+        "LoadCredential=activation-challenge:/run/vonk-forge-agent-supervisor/activation-challenge",
         "UMask=0077",
         "NoNewPrivileges=yes",
         "CapabilityBoundingSet=",
@@ -1936,12 +1936,12 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
         "ProtectHome=yes",
         "MemoryDenyWriteExecute=yes",
         "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6",
-        "ReadWritePaths=/var/lib/dgx-forge-agent /var/lib/dgx-forge/releases /var/lib/dgx-forge/release-staging /run/dgx-forge-agent",
+        "ReadWritePaths=/var/lib/vonk-forge-agent /var/lib/vonk-forge/releases /var/lib/vonk-forge/release-staging /run/vonk-forge-agent",
     ):
         assert literal in agent
     assert "docker" not in agent.lower()
     for literal in (
-        "ExecStart=/usr/libexec/dgx-agent-supervisor supervise",
+        "ExecStart=/usr/libexec/vonk-agent-supervisor supervise",
         "UMask=0077",
         "NoNewPrivileges=yes",
         "CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_SYS_PTRACE",
@@ -1952,32 +1952,32 @@ def test_systemd_units_verify_and_enforce_split_privilege_hardening(
         assert literal in supervisor
     assert "User=" not in supervisor
     for literal in (
-        "ExecStart=/usr/libexec/dgx-agent-supervisor apply-request",
+        "ExecStart=/usr/libexec/vonk-agent-supervisor apply-request",
         "NoNewPrivileges=yes",
         "PrivateNetwork=yes",
         "ProtectSystem=strict",
-        "ReadOnlyPaths=/var/lib/dgx-forge-agent/update-staging /etc/dgx-forge-agent/update-authority.json /usr/bin/openssl /usr/libexec/dgx-agent-supervisor",
-        "ReadWritePaths=/opt/dgx-forge/agent-slots /var/lib/dgx-forge-agent-supervisor /run/dgx-forge-agent",
+        "ReadOnlyPaths=/var/lib/vonk-forge-agent/update-staging /etc/vonk-forge-agent/update-authority.json /usr/bin/openssl /usr/libexec/vonk-agent-supervisor",
+        "ReadWritePaths=/opt/vonk-forge/agent-slots /var/lib/vonk-forge-agent-supervisor /run/vonk-forge-agent",
     ):
         assert literal in activation
     assert "User=" not in activation
-    assert "PathExists=/run/dgx-forge-agent/activation-request.json" in activation_path
-    assert "Unit=dgx-forge-agent-activation.service" in activation_path
+    assert "PathExists=/run/vonk-forge-agent/activation-request.json" in activation_path
+    assert "Unit=vonk-forge-agent-activation.service" in activation_path
     assert "TriggerLimitIntervalSec=60s" in activation_path
     assert "TriggerLimitBurst=3" in activation_path
     for literal in (
-        "ExecStart=/usr/libexec/dgx-agent-supervisor apply-rollback-request",
+        "ExecStart=/usr/libexec/vonk-agent-supervisor apply-rollback-request",
         "CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE",
         "NoNewPrivileges=yes",
         "PrivateNetwork=yes",
         "ProtectSystem=strict",
-        "ReadOnlyPaths=/opt/dgx-forge/agent-slots /usr/libexec/dgx-agent-supervisor",
-        "ReadWritePaths=/var/lib/dgx-forge-agent-supervisor /run/dgx-forge-agent",
+        "ReadOnlyPaths=/opt/vonk-forge/agent-slots /usr/libexec/vonk-agent-supervisor",
+        "ReadWritePaths=/var/lib/vonk-forge-agent-supervisor /run/vonk-forge-agent",
     ):
         assert literal in rollback
     assert "User=" not in rollback
-    assert "PathExists=/run/dgx-forge-agent/rollback-request.json" in rollback_path
-    assert "Unit=dgx-forge-agent-rollback.service" in rollback_path
+    assert "PathExists=/run/vonk-forge-agent/rollback-request.json" in rollback_path
+    assert "Unit=vonk-forge-agent-rollback.service" in rollback_path
     assert "TriggerLimitIntervalSec=60s" in rollback_path
     assert "TriggerLimitBurst=3" in rollback_path
 
@@ -2042,26 +2042,26 @@ def test_installed_systemd_harness_verifies_units_by_installed_name() -> None:
     report = json.loads(verified.stdout)
     assert report["verify"] == "passed"
     assert set(report["units"]) == {
-        "dgx-forge-agent.service",
-        "dgx-forge-agent-supervisor.service",
-        "dgx-forge-agent-activation.service",
-        "dgx-forge-agent-activation.path",
-        "dgx-forge-agent-rollback.service",
-        "dgx-forge-agent-rollback.path",
-        "dgx-forge-package-helper.service",
-        "dgx-forge-package-helper.socket",
+        "vonk-forge-agent.service",
+        "vonk-forge-agent-supervisor.service",
+        "vonk-forge-agent-activation.service",
+        "vonk-forge-agent-activation.path",
+        "vonk-forge-agent-rollback.service",
+        "vonk-forge-agent-rollback.path",
+        "vonk-forge-package-helper.service",
+        "vonk-forge-package-helper.socket",
     }
     assert set(report["security_units"]) == {
-        "dgx-forge-agent.service",
-        "dgx-forge-agent-supervisor.service",
-        "dgx-forge-agent-activation.service",
-        "dgx-forge-agent-rollback.service",
-        "dgx-forge-package-helper.service",
+        "vonk-forge-agent.service",
+        "vonk-forge-agent-supervisor.service",
+        "vonk-forge-agent-activation.service",
+        "vonk-forge-agent-rollback.service",
+        "vonk-forge-package-helper.service",
     }
-    assert report["security_units"]["dgx-forge-agent-supervisor.service"][
+    assert report["security_units"]["vonk-forge-agent-supervisor.service"][
         "cap_sys_ptrace"
     ] is True
-    assert report["security_units"]["dgx-forge-agent.service"][
+    assert report["security_units"]["vonk-forge-agent.service"][
         "cap_sys_ptrace"
     ] is False
     assert all(
@@ -2075,9 +2075,9 @@ def test_installed_systemd_harness_verifies_units_by_installed_name() -> None:
 
 def test_rust_supervisor_is_stable_outside_slots_and_units_keep_agent_unprivileged() -> None:
     packaging = PROJECT.parent / "packaging/systemd"
-    rust_agent = (packaging / "vonk-agent.service").read_text().splitlines()
+    rust_agent = (packaging / "vonk-forge-agent.service").read_text().splitlines()
     rust_supervisor = (
-        packaging / "vonk-agent-supervisor.service"
+        packaging / "vonk-forge-agent-supervisor.service"
     ).read_text().splitlines()
 
     assert "User=vonk-agent" in rust_agent
@@ -2088,7 +2088,7 @@ def test_rust_supervisor_is_stable_outside_slots_and_units_keep_agent_unprivileg
     )
     assert (
         "LoadCredential=activation-challenge:"
-        "/var/lib/vonk-forge/supervisor/activation-challenge"
+            "/var/lib/vonk-forge/supervisor/activation-challenge"
         in rust_agent
     )
     assert (

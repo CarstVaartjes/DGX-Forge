@@ -1,19 +1,20 @@
 [Unit]
-Description=Vonk Forge stable A/B agent supervisor
-After=local-fs.target vonk-agent-helper.socket
-Wants=vonk-agent-helper.socket
+Description=Vonk Forge stable agent slot supervisor
+After=local-fs.target
 StartLimitIntervalSec=300
 StartLimitBurst=3
 
 [Service]
 Type=oneshot
 RemainAfterExit=yes
-ExecStart=/usr/lib/vonk-forge/vonk-agent-supervisor supervise
-TimeoutStartSec=300s
-TimeoutStopSec=30s
+ExecStart=/usr/libexec/vonk-agent-supervisor supervise
+TimeoutStartSec=150s
+TimeoutStopSec=15s
 UMask=0077
+RuntimeDirectory=vonk-forge-agent-supervisor
+RuntimeDirectoryMode=0700
 NoNewPrivileges=yes
-CapabilityBoundingSet=CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_KILL
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_READ_SEARCH CAP_DAC_OVERRIDE CAP_SYS_PTRACE
 AmbientCapabilities=
 PrivateTmp=yes
 PrivateDevices=yes
@@ -35,11 +36,9 @@ RestrictSUIDSGID=yes
 RestrictNamespaces=yes
 RemoveIPC=yes
 SystemCallArchitectures=native
-SystemCallFilter=@system-service
-SystemCallFilter=~@mount @raw-io @obsolete @debug @reboot
 RestrictAddressFamilies=AF_UNIX
-ReadOnlyPaths=/var/lib/vonk-forge/slots /etc/vonk-forge /usr/lib/vonk-forge /usr/share/keyrings/vonk-forge-release.pub
-ReadWritePaths=/var/lib/vonk-forge/supervisor -/run/vonk-forge-agent
+ReadOnlyPaths=/opt/vonk-forge/agent-slots /usr/libexec/vonk-agent-supervisor
+ReadWritePaths=/var/lib/vonk-forge-agent-supervisor -/run/vonk-forge-agent /run/vonk-forge-agent-supervisor
 
 [Install]
 WantedBy=multi-user.target

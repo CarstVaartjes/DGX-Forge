@@ -224,13 +224,13 @@ def test_readiness_reporter_requires_complete_environment_and_publishes_exact_ma
     assert ReadinessReporter._from_environment_for_test({}, tmp_path).report() is False
     with pytest.raises(ReadinessError):
         ReadinessReporter._from_environment_for_test(
-            {"DGX_AGENT_SUPERVISOR_GENERATION": "2"}, tmp_path
+            {"VONK_AGENT_SUPERVISOR_GENERATION": "2"}, tmp_path
         )
     environment = {
         "CREDENTIALS_DIRECTORY": str(tmp_path),
-        "DGX_AGENT_SUPERVISOR_GENERATION": "2",
-        "DGX_AGENT_SUPERVISOR_SLOT": "B",
-        "DGX_AGENT_SUPERVISOR_SHA256": "a" * 64,
+        "VONK_AGENT_SUPERVISOR_GENERATION": "2",
+        "VONK_AGENT_SUPERVISOR_SLOT": "B",
+        "VONK_AGENT_SUPERVISOR_SHA256": "a" * 64,
     }
     (tmp_path / "activation-challenge").write_text("b" * 64 + "\n")
     reporter = ReadinessReporter._from_environment_for_test(environment, tmp_path)
@@ -364,7 +364,7 @@ def test_active_operation_sends_periodic_heartbeats_without_moving_execution_thr
         thread_id != runner.ident for thread_id in control.heartbeat_thread_ids
     )
     assert not any(
-        thread.name == f"dgx-agent-heartbeat-{active.operation_id[:8]}"
+        thread.name == f"vonk-agent-heartbeat-{active.operation_id[:8]}"
         for thread in threading.enumerate()
     )
     assert control.heartbeat_requests[1].deadline == (
@@ -1132,7 +1132,7 @@ def test_installed_console_entry_point_has_bounded_help_without_loading_credenti
 ) -> None:
     project = Path(__file__).parents[1]
     result = subprocess.run(
-        ["uv", "run", "--project", str(project), "dgx-forge-agent", "--help"],
+        ["uv", "run", "--project", str(project), "vonk-forge-agent", "--help"],
         cwd=tmp_path,
         capture_output=True,
         text=True,
@@ -1141,4 +1141,4 @@ def test_installed_console_entry_point_has_bounded_help_without_loading_credenti
     )
 
     assert result.returncode == 0, result.stderr
-    assert "outbound Spark agent" in result.stdout
+    assert "Vonk Forge outbound agent" in result.stdout

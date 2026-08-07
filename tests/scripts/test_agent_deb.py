@@ -118,9 +118,9 @@ def test_builder_produces_reproducible_verified_arm64_deb(tmp_path: Path) -> Non
     subprocess.run(
         ["/usr/bin/dpkg-deb", "--extract", first_deb, payload], check=True
     )
-    assert (payload / "etc/vonk-forge/containers-storage.conf").is_file()
-    unit = (payload / "lib/systemd/system/vonk-agent.service").read_text()
-    assert "Environment=HOME=/var/lib/vonk-forge/agent" in unit
+    assert (payload / "etc/vonk-forge-agent/containers-storage.conf").is_file()
+    unit = (payload / "lib/systemd/system/vonk-forge-agent.service").read_text()
+    assert "Environment=HOME=/var/lib/vonk-forge-agent" in unit
     assert "Environment=XDG_RUNTIME_DIR=/run/vonk-forge-agent" in unit
     assert "RestrictNamespaces=user mnt pid ipc uts cgroup net" in unit
     assert "DeviceAllow=/dev/fuse rw" in unit
@@ -132,7 +132,7 @@ def test_builder_produces_reproducible_verified_arm64_deb(tmp_path: Path) -> Non
     assert "sed -i '/^vonk-agent:/d' /etc/subuid" in postinst
     assert "sed -i '/^vonk-agent:/d' /etc/subgid" in postinst
     assert 'ignore_chown_errors = "true"' in (
-        payload / "etc/vonk-forge/containers-storage.conf"
+        payload / "etc/vonk-forge-agent/containers-storage.conf"
     ).read_text()
 
 

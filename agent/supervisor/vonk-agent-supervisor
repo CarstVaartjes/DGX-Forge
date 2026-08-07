@@ -104,7 +104,7 @@ MACHINE = {"x86_64": 62, "aarch64": 183}
 ARCHITECTURE = {"x86_64": "linux-x86_64", "aarch64": "linux-arm64"}
 STAGING = re.compile(r"\.state\.[0-9a-f]{24}\.new\Z")
 SLOT_STAGING = re.compile(
-    r"\.(?:dgx-forge-agent|identity\.json)\.[0-9a-f]{24}\.new\Z"
+    r"\.(?:vonk-forge-agent|identity\.json)\.[0-9a-f]{24}\.new\Z"
 )
 UUID = re.compile(
     r"[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\Z"
@@ -125,7 +125,7 @@ class UsageParser(argparse.ArgumentParser):
 
 
 def _test_root() -> Path | None:
-    value = os.environ.get("DGX_SUPERVISOR_TEST_ROOT")
+    value = os.environ.get("VONK_SUPERVISOR_TEST_ROOT")
     if value is None:
         return None
     if os.geteuid() == 0:
@@ -145,14 +145,14 @@ def _owner() -> int:
     root = _test_root()
     if root is None:
         return 0
-    value = os.environ.get("DGX_SUPERVISOR_TEST_UID")
+    value = os.environ.get("VONK_SUPERVISOR_TEST_UID")
     if value is None or not value.isdecimal() or int(value) != os.geteuid():
         raise SupervisorError("test UID is invalid")
     return int(value)
 
 
 def _architecture() -> str:
-    value = os.environ.get("DGX_SUPERVISOR_TEST_ARCH") if _test_root() else None
+    value = os.environ.get("VONK_SUPERVISOR_TEST_ARCH") if _test_root() else None
     machine = value or platform.machine()
     if machine == "AMD64":
         machine = "x86_64"
@@ -164,7 +164,7 @@ def _architecture() -> str:
 
 
 def _now() -> float:
-    value = os.environ.get("DGX_SUPERVISOR_NOW") if _test_root() else None
+    value = os.environ.get("VONK_SUPERVISOR_NOW") if _test_root() else None
     if value is None:
         return time.time()
     try:
@@ -177,7 +177,7 @@ def _now() -> float:
 
 
 def _systemctl() -> str:
-    value = os.environ.get("DGX_SUPERVISOR_SYSTEMCTL") if _test_root() else None
+    value = os.environ.get("VONK_SUPERVISOR_SYSTEMCTL") if _test_root() else None
     if value is None:
         return "/usr/bin/systemctl"
     path = Path(value)
@@ -186,13 +186,13 @@ def _systemctl() -> str:
     return str(path)
 
 
-STATE_ROOT = "/var/lib/dgx-forge-agent-supervisor"
-SLOT_ROOT = "/opt/dgx-forge/agent-slots"
-RUNTIME_ROOT = "/run/dgx-forge-agent"
-READINESS_QUARANTINE_ROOT = "/run/dgx-forge-agent-supervisor"
-UPDATE_STAGING_ROOT = "/var/lib/dgx-forge-agent/update-staging"
-UPDATE_AUTHORITY_PATH = "/etc/dgx-forge-agent/update-authority.json"
-AGENT_CONFIG_PATH = "/etc/dgx-forge-agent/config.json"
+STATE_ROOT = "/var/lib/vonk-forge-agent-supervisor"
+SLOT_ROOT = "/opt/vonk-forge/agent-slots"
+RUNTIME_ROOT = "/run/vonk-forge-agent"
+READINESS_QUARANTINE_ROOT = "/run/vonk-forge-agent-supervisor"
+UPDATE_STAGING_ROOT = "/var/lib/vonk-forge-agent/update-staging"
+UPDATE_AUTHORITY_PATH = "/etc/vonk-forge-agent/update-authority.json"
+AGENT_CONFIG_PATH = "/etc/vonk-forge-agent/config.json"
 OPENSSL_PATH = "/usr/bin/openssl"
 AUTHORIZATION_FLOOR_NAME = "authorization-floor.json"
 ACTIVATION_CHALLENGE_NAME = "activation-challenge"
@@ -421,7 +421,7 @@ def _decode_rollback_request(raw: bytes) -> dict[str, Any]:
 
 
 def _agent_owner() -> int:
-    return _owner() if _test_root() else pwd.getpwnam("dgx-agent").pw_uid
+    return _owner() if _test_root() else pwd.getpwnam("vonk-agent").pw_uid
 
 
 def _trusted(metadata: os.stat_result, mode: int, *, regular: bool) -> None:
@@ -613,7 +613,7 @@ def _publish(directory: int, state: dict[str, Any]) -> None:
 
 
 def _crash(stage: str) -> None:
-    if _test_root() and os.environ.get("DGX_SUPERVISOR_CRASH_AFTER") == stage:
+    if _test_root() and os.environ.get("VONK_SUPERVISOR_CRASH_AFTER") == stage:
         os._exit(99)
 
 
@@ -650,7 +650,7 @@ def _cleanup_staging(directory: int) -> None:
 
 
 def _slot_path(slot: str) -> Path:
-    return _path(f"{SLOT_ROOT}/{slot}/dgx-forge-agent")
+    return _path(f"{SLOT_ROOT}/{slot}/vonk-forge-agent")
 
 
 def _open_directory_ancestry(path: Path, *, final_owner: int | None = None) -> int:
@@ -955,9 +955,9 @@ def _verify_ed25519(public_key: bytes, message: bytes, signature: bytes) -> None
     # shell, environment lookup, network, or persistent verification material.
     subject_public_key_info = bytes.fromhex("302a300506032b6570032100") + public_key
     descriptors = [
-        _memfd("dgx-update-key", subject_public_key_info),
-        _memfd("dgx-update-message", message),
-        _memfd("dgx-update-signature", signature),
+        _memfd("vonk-update-key", subject_public_key_info),
+        _memfd("vonk-update-message", message),
+        _memfd("vonk-update-signature", signature),
     ]
     try:
         try:
@@ -1043,7 +1043,7 @@ def _verify_activation_authorization(
     # maintained TUF client authorizes the named platform target/version.  The
     # receipt carries that TUF evidence and every mutable installation binding.
     # This root process deliberately does not trust the agent's TUF cache: a
-    # fully compromised dgx-agent may write the request and staged ELF, but it
+    # fully compromised vonk-agent may write the request and staged ELF, but it
     # cannot forge, extend, alter, downgrade, or replay the signed receipt.
     authorization = request["authorization"]
     signature = request["signature"]
@@ -1367,7 +1367,7 @@ def _install_candidate(request: dict[str, Any]) -> None:
     target_path = _slot_path(request["target_slot"])
     _mkdirs(target_path.parent, 0o755)
     target = _open_directory_ancestry(target_path.parent)
-    temporary = f".dgx-forge-agent.{secrets.token_hex(12)}.new"
+    temporary = f".vonk-forge-agent.{secrets.token_hex(12)}.new"
     destination = -1
     try:
         _cleanup_slot_staging(target)
@@ -1488,7 +1488,7 @@ def _service_main_pid() -> int:
                 "show",
                 "--property=MainPID",
                 "--value",
-                "dgx-forge-agent.service",
+                "vonk-forge-agent.service",
             ],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
@@ -1613,7 +1613,7 @@ def activate(slot: str, digest: str) -> int:
     finally:
         os.close(lock)
         os.close(descriptor)
-    _service("--no-block", "restart", "dgx-forge-agent-supervisor.service")
+    _service("--no-block", "restart", "vonk-forge-agent-supervisor.service")
     return 0
 
 
@@ -1660,7 +1660,7 @@ def apply_request() -> int:
         os.close(state_directory)
         os.close(request_directory)
     if published:
-        _service("--no-block", "restart", "dgx-forge-agent-supervisor.service")
+        _service("--no-block", "restart", "vonk-forge-agent-supervisor.service")
     if consumption_error is not None:
         raise consumption_error
     return 0
@@ -1717,7 +1717,7 @@ def apply_rollback_request() -> int:
         os.close(state_directory)
         os.close(request_directory)
     if published:
-        _service("--no-block", "restart", "dgx-forge-agent-supervisor.service")
+        _service("--no-block", "restart", "vonk-forge-agent-supervisor.service")
     if consumption_error is not None:
         raise consumption_error
     return 0
@@ -1788,8 +1788,8 @@ def _publish_readiness_replacement_for_test(directory: int) -> None:
     configured = any(
         os.environ.get(name) == "1"
         for name in (
-            "DGX_SUPERVISOR_SWAP_READINESS_TEST",
-            "DGX_SUPERVISOR_SWAP_READINESS_AFTER_STAT_TEST",
+            "VONK_SUPERVISOR_SWAP_READINESS_TEST",
+            "VONK_SUPERVISOR_SWAP_READINESS_AFTER_STAT_TEST",
         )
     )
     if not configured:
@@ -1808,7 +1808,7 @@ def _publish_readiness_replacement_for_test(directory: int) -> None:
 
 def _read_readiness(state: dict[str, Any], challenge: str) -> int | None:
     root = _path(RUNTIME_ROOT)
-    expected_owner = _owner() if _test_root() else pwd.getpwnam("dgx-agent").pw_uid
+    expected_owner = _owner() if _test_root() else pwd.getpwnam("vonk-agent").pw_uid
     try:
         directory = _open_directory_ancestry(root, final_owner=expected_owner)
     except FileNotFoundError:
@@ -1892,7 +1892,7 @@ def _read_readiness(state: dict[str, Any], challenge: str) -> int | None:
 
 def _clear_readiness() -> None:
     root = _path(RUNTIME_ROOT)
-    expected_owner = _owner() if _test_root() else pwd.getpwnam("dgx-agent").pw_uid
+    expected_owner = _owner() if _test_root() else pwd.getpwnam("vonk-agent").pw_uid
     try:
         directory = _open_directory_ancestry(root, final_owner=expected_owner)
     except FileNotFoundError:
@@ -2011,7 +2011,7 @@ def _stable(state: dict[str, Any], *, rollback: bool = False) -> dict[str, Any]:
 
 
 def _swap_pending_slot_before_commit_for_test(state: dict[str, Any]) -> None:
-    configured = os.environ.get("DGX_SUPERVISOR_SWAP_SLOT_BEFORE_COMMIT_TEST")
+    configured = os.environ.get("VONK_SUPERVISOR_SWAP_SLOT_BEFORE_COMMIT_TEST")
     if configured is None:
         return
     if _test_root() is None or configured != "1":
@@ -2020,7 +2020,7 @@ def _swap_pending_slot_before_commit_for_test(state: dict[str, Any]) -> None:
     parent = _open_directory_ancestry(path.parent)
     try:
         os.rename(
-            ".dgx-forge-agent.commit-race",
+            ".vonk-forge-agent.commit-race",
             path.name,
             src_dir_fd=parent,
             dst_dir_fd=parent,
@@ -2074,14 +2074,14 @@ def _ensure_runtime_directory() -> None:
         try:
             if created:
                 if _test_root() is None:
-                    account = pwd.getpwnam("dgx-agent")
+                    account = pwd.getpwnam("vonk-agent")
                     os.fchown(directory, account.pw_uid, account.pw_gid)
                 os.fchmod(directory, 0o700)
                 os.fsync(directory)
                 os.fsync(parent)
             metadata = os.fstat(directory)
             expected_owner = (
-                _owner() if _test_root() else pwd.getpwnam("dgx-agent").pw_uid
+                _owner() if _test_root() else pwd.getpwnam("vonk-agent").pw_uid
             )
             if (
                 metadata.st_uid != expected_owner
@@ -2122,7 +2122,7 @@ def supervise() -> int:
                 os.close(lock)
                 lock = -1
                 _ensure_runtime_directory()
-                _service("start", "dgx-forge-agent.service")
+                _service("start", "vonk-forge-agent.service")
                 return 0
             if (
                 state["boot_attempts"] >= MAX_BOOT_ATTEMPTS
@@ -2137,13 +2137,13 @@ def supervise() -> int:
                 os.close(lock)
                 lock = -1
                 _ensure_runtime_directory()
-                _service("stop", "dgx-forge-agent.service")
+                _service("stop", "vonk-forge-agent.service")
                 _clear_readiness()
                 challenge = _new_activation_challenge()
-                _service("restart", "dgx-forge-agent.service")
+                _service("restart", "vonk-forge-agent.service")
                 poll = 0.25
                 if _test_root():
-                    poll = float(os.environ.get("DGX_SUPERVISOR_POLL_SECONDS", "0.01"))
+                    poll = float(os.environ.get("VONK_SUPERVISOR_POLL_SECONDS", "0.01"))
                 ready_pid: int | None = None
                 while _now() < state["activation_deadline"]:
                     candidate_pid = _read_readiness(state, challenge)
@@ -2153,7 +2153,7 @@ def supervise() -> int:
                     failed = _service(
                         "is-failed",
                         "--quiet",
-                        "dgx-forge-agent.service",
+                        "vonk-forge-agent.service",
                         check=False,
                     )
                     if failed.returncode == 0:
@@ -2201,7 +2201,7 @@ def supervise() -> int:
         os.close(coordination)
         os.close(directory)
     if restart_after_rollback:
-        _service("restart", "dgx-forge-agent.service")
+        _service("restart", "vonk-forge-agent.service")
     return result
 
 
@@ -2219,17 +2219,17 @@ def run_agent() -> int:
         os.close(lock)
         os.close(directory)
     environment = {
-        "HOME": "/var/lib/dgx-forge-agent",
+        "HOME": "/var/lib/vonk-forge-agent",
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "PATH": "/usr/bin",
         "PYTHONNOUSERSITE": "1",
         "PYTHONSAFEPATH": "1",
-        "DGX_AGENT_PLATFORM_VERSION": identity["platform_version"],
-        "DGX_AGENT_BUILD_DIGEST": identity["build_digest"],
-        "DGX_AGENT_SUPERVISOR_GENERATION": str(state["generation"]),
-        "DGX_AGENT_SUPERVISOR_SLOT": state["active_slot"],
-        "DGX_AGENT_SUPERVISOR_SHA256": state["expected_sha256"],
+        "VONK_AGENT_PLATFORM_VERSION": identity["platform_version"],
+        "VONK_AGENT_BUILD_DIGEST": identity["build_digest"],
+        "VONK_AGENT_SUPERVISOR_GENERATION": str(state["generation"]),
+        "VONK_AGENT_SUPERVISOR_SLOT": state["active_slot"],
+        "VONK_AGENT_SUPERVISOR_SHA256": state["expected_sha256"],
     }
     if state["status"] == "pending":
         credentials_directory = os.environ.get("CREDENTIALS_DIRECTORY")
@@ -2244,7 +2244,7 @@ def run_agent() -> int:
             }
         )
     try:
-        os.execve(f"/proc/self/fd/{executable}", ["dgx-forge-agent"], environment)
+        os.execve(f"/proc/self/fd/{executable}", ["vonk-forge-agent"], environment)
     except OSError as error:
         os.close(executable)
         raise SupervisorError("verified slot could not be executed") from error
@@ -2267,8 +2267,8 @@ def run_package_helper() -> int:
         os.close(lock)
         os.close(directory)
     environment = {
-        "DGX_PACKAGE_HELPER_SLOT_SHA256": state["expected_sha256"],
-        "HOME": "/var/lib/dgx-forge-package-helper",
+        "VONK_PACKAGE_HELPER_SLOT_SHA256": state["expected_sha256"],
+        "HOME": "/var/lib/vonk-forge-package-helper",
         "LANG": "C.UTF-8",
         "LC_ALL": "C.UTF-8",
         "LISTEN_FDS": "1",
@@ -2280,7 +2280,7 @@ def run_package_helper() -> int:
     try:
         os.execve(
             f"/proc/self/fd/{executable}",
-            ["dgx-forge-agent", "--package-helper", "--listen-fd=3"],
+            ["vonk-forge-agent", "--package-helper", "--listen-fd=3"],
             environment,
         )
     except OSError as error:
@@ -2290,7 +2290,7 @@ def run_package_helper() -> int:
 
 
 def _parser() -> UsageParser:
-    parser = UsageParser(description="stable DGX Forge agent A/B supervisor")
+    parser = UsageParser(description="stable Vonk Forge agent A/B supervisor")
     subparsers = parser.add_subparsers(dest="command", required=True)
     for command in ("initialize", "activate"):
         child = subparsers.add_parser(command)
@@ -2307,26 +2307,26 @@ def _parser() -> UsageParser:
 def main(argv: list[str] | None = None) -> int:
     arguments = _parser().parse_args(argv)
     try:
-        crash_stage = os.environ.get("DGX_SUPERVISOR_CRASH_AFTER")
+        crash_stage = os.environ.get("VONK_SUPERVISOR_CRASH_AFTER")
         if crash_stage is not None and (
             not _test_root()
             or crash_stage
             not in {"create", "write", "file-fsync", "rename", "directory-fsync"}
         ):
             raise SupervisorError("publication crash hook is invalid")
-        readiness_swap = os.environ.get("DGX_SUPERVISOR_SWAP_READINESS_TEST")
+        readiness_swap = os.environ.get("VONK_SUPERVISOR_SWAP_READINESS_TEST")
         if readiness_swap is not None and (
             not _test_root() or readiness_swap != "1"
         ):
             raise SupervisorError("readiness race hook is invalid")
         readiness_after_stat = os.environ.get(
-            "DGX_SUPERVISOR_SWAP_READINESS_AFTER_STAT_TEST"
+            "VONK_SUPERVISOR_SWAP_READINESS_AFTER_STAT_TEST"
         )
         if readiness_after_stat is not None and (
             not _test_root() or readiness_after_stat != "1"
         ):
             raise SupervisorError("readiness race hook is invalid")
-        slot_swap = os.environ.get("DGX_SUPERVISOR_SWAP_SLOT_BEFORE_COMMIT_TEST")
+        slot_swap = os.environ.get("VONK_SUPERVISOR_SWAP_SLOT_BEFORE_COMMIT_TEST")
         if slot_swap is not None and (not _test_root() or slot_swap != "1"):
             raise SupervisorError("pending slot race hook is invalid")
         if arguments.command in {"initialize", "activate"} and not DIGEST.fullmatch(arguments.sha256):

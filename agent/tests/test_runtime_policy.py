@@ -47,22 +47,22 @@ def policy_fixture(tmp_path: Path) -> tuple[Path, dict[str, object]]:
     architecture = "aarch64" if platform.machine() in {"aarch64", "arm64"} else "x86_64"
     unhashed_executable = _elf(tmp_path)
     executable_digest = hashlib.sha256(unhashed_executable.read_bytes()).hexdigest()
-    executable = tmp_path / f"opt/dgx-forge/third-party/oras/{executable_digest}/oras"
+    executable = tmp_path / f"opt/vonk-forge/third-party/oras/{executable_digest}/oras"
     executable.parent.mkdir(parents=True)
     unhashed_executable.rename(executable)
     auth = _write(
-        tmp_path / "var/lib/dgx-forge-agent/registry-auth.json", b"{}\n", 0o600
+        tmp_path / "var/lib/vonk-forge-agent/registry-auth.json", b"{}\n", 0o600
     )
-    bootstrap = _write(tmp_path / "etc/dgx-forge-agent/tuf-root.json", b"{}\n", 0o644)
+    bootstrap = _write(tmp_path / "etc/vonk-forge-agent/tuf-root.json", b"{}\n", 0o644)
     workload_bootstrap = _write(
-        tmp_path / "etc/dgx-forge-agent/workload-tuf-root.json", b"{}\n", 0o644
+        tmp_path / "etc/vonk-forge-agent/workload-tuf-root.json", b"{}\n", 0o644
     )
-    metadata = tmp_path / "var/lib/dgx-forge-agent/tuf/metadata"
-    targets = tmp_path / "var/lib/dgx-forge-agent/tuf/targets"
-    workload_metadata = tmp_path / "var/lib/dgx-forge-agent/workload-tuf/metadata"
-    workload_targets = tmp_path / "var/lib/dgx-forge-agent/workload-tuf/targets"
-    releases = tmp_path / "var/lib/dgx-forge/releases"
-    staging = tmp_path / "var/lib/dgx-forge/release-staging"
+    metadata = tmp_path / "var/lib/vonk-forge-agent/tuf/metadata"
+    targets = tmp_path / "var/lib/vonk-forge-agent/tuf/targets"
+    workload_metadata = tmp_path / "var/lib/vonk-forge-agent/workload-tuf/metadata"
+    workload_targets = tmp_path / "var/lib/vonk-forge-agent/workload-tuf/targets"
+    releases = tmp_path / "var/lib/vonk-forge/releases"
+    staging = tmp_path / "var/lib/vonk-forge/release-staging"
     for directory in (
         metadata,
         targets,
@@ -108,7 +108,7 @@ def policy_fixture(tmp_path: Path) -> tuple[Path, dict[str, object]]:
         },
     }
     policy = _write(
-        tmp_path / "etc/dgx-forge-agent/runtime-policy.json",
+        tmp_path / "etc/vonk-forge-agent/runtime-policy.json",
         _canonical(document),
         0o644,
     )
@@ -249,11 +249,11 @@ def test_build_agent_constructs_all_closed_handlers_with_one_credential_store(
         "vonk_agent.main.InstalledPolicy.load", lambda _: sentinel_nvidia
     )
     monkeypatch.setattr("vonk_agent.main.RuntimePolicy.load", lambda _: runtime)
-    monkeypatch.setenv("DGX_AGENT_PLATFORM_VERSION", "1.0.0")
-    monkeypatch.setenv("DGX_AGENT_BUILD_DIGEST", "sha256:" + "b" * 64)
-    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_SLOT", "A")
-    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_SHA256", "a" * 64)
-    monkeypatch.setenv("DGX_AGENT_SUPERVISOR_GENERATION", "1")
+    monkeypatch.setenv("VONK_AGENT_PLATFORM_VERSION", "1.0.0")
+    monkeypatch.setenv("VONK_AGENT_BUILD_DIGEST", "sha256:" + "b" * 64)
+    monkeypatch.setenv("VONK_AGENT_SUPERVISOR_SLOT", "A")
+    monkeypatch.setenv("VONK_AGENT_SUPERVISOR_SHA256", "a" * 64)
+    monkeypatch.setenv("VONK_AGENT_SUPERVISOR_GENERATION", "1")
 
     agent = build_agent(config, readiness=SimpleNamespace(report=lambda: None))
 

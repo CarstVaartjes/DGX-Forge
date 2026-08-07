@@ -25,12 +25,12 @@ REQUIRED_ELF = {
 }
 REQUIRED_PAYLOAD = {
     *REQUIRED_ELF,
-    "etc/vonk-forge/agent.toml",
-    "etc/vonk-forge/containers-storage.conf",
-    "lib/systemd/system/vonk-agent.service",
-    "lib/systemd/system/vonk-agent-supervisor.service",
-    "lib/systemd/system/vonk-agent-helper.service",
-    "lib/systemd/system/vonk-agent-helper.socket",
+    "etc/vonk-forge-agent/agent.toml",
+    "etc/vonk-forge-agent/containers-storage.conf",
+    "lib/systemd/system/vonk-forge-agent.service",
+    "lib/systemd/system/vonk-forge-agent-supervisor.service",
+    "lib/systemd/system/vonk-forge-package-helper.service",
+    "lib/systemd/system/vonk-forge-package-helper.socket",
     "usr/lib/vonk-forge/release/manifest-a.json",
     "usr/lib/vonk-forge/release/manifest-b.json",
     "usr/lib/vonk-forge/release/artifact.sig",
@@ -190,8 +190,8 @@ def _verify_control(control: Path) -> None:
         raise VerificationError("Debian control archive is incomplete")
     conffiles = (control / "conffiles").read_text(encoding="utf-8").splitlines()
     if conffiles != [
-        "/etc/vonk-forge/agent.toml",
-        "/etc/vonk-forge/containers-storage.conf",
+        "/etc/vonk-forge-agent/agent.toml",
+        "/etc/vonk-forge-agent/containers-storage.conf",
     ]:
         raise VerificationError("agent configuration is not preserved as a conffile")
     for name in ("postinst", "preinst", "prerm"):
@@ -231,30 +231,30 @@ def _verify_payload(payload: Path, control: Path) -> None:
     units = {
         name: (payload / f"lib/systemd/system/{name}").read_text(encoding="utf-8")
         for name in (
-            "vonk-agent.service",
-            "vonk-agent-supervisor.service",
-            "vonk-agent-helper.service",
-            "vonk-agent-helper.socket",
+            "vonk-forge-agent.service",
+            "vonk-forge-agent-supervisor.service",
+            "vonk-forge-package-helper.service",
+            "vonk-forge-package-helper.socket",
         )
     }
-    if "User=vonk-agent" not in units["vonk-agent.service"]:
+    if "User=vonk-agent" not in units["vonk-forge-agent.service"]:
         raise VerificationError("agent unit is not unprivileged")
     if (
-        "SupplementaryGroups=" not in units["vonk-agent.service"]
-        or "NoNewPrivileges=yes" not in units["vonk-agent.service"]
-        or "CapabilityBoundingSet=" not in units["vonk-agent.service"]
-        or "CONTAINERS_STORAGE_CONF=/etc/vonk-forge/containers-storage.conf"
-        not in units["vonk-agent.service"]
+        "SupplementaryGroups=" not in units["vonk-forge-agent.service"]
+        or "NoNewPrivileges=yes" not in units["vonk-forge-agent.service"]
+        or "CapabilityBoundingSet=" not in units["vonk-forge-agent.service"]
+        or "CONTAINERS_STORAGE_CONF=/etc/vonk-forge-agent/containers-storage.conf"
+        not in units["vonk-forge-agent.service"]
         or "RestrictNamespaces=user mnt pid ipc uts cgroup net"
-        not in units["vonk-agent.service"]
-        or "DeviceAllow=/dev/fuse rw" not in units["vonk-agent.service"]
-        or "DeviceAllow=char-231:* rw" not in units["vonk-agent.service"]
-        or "BindPaths=-/dev/fuse" not in units["vonk-agent.service"]
-        or "Delegate=yes" not in units["vonk-agent.service"]
+        not in units["vonk-forge-agent.service"]
+        or "DeviceAllow=/dev/fuse rw" not in units["vonk-forge-agent.service"]
+        or "DeviceAllow=char-231:* rw" not in units["vonk-forge-agent.service"]
+        or "BindPaths=-/dev/fuse" not in units["vonk-forge-agent.service"]
+        or "Delegate=yes" not in units["vonk-forge-agent.service"]
     ):
         raise VerificationError("agent rootless container boundary is invalid")
     storage = (
-        payload / "etc/vonk-forge/containers-storage.conf"
+        payload / "etc/vonk-forge-agent/containers-storage.conf"
     ).read_text(encoding="utf-8")
     if (
         'driver = "overlay"' not in storage
@@ -262,9 +262,9 @@ def _verify_payload(payload: Path, control: Path) -> None:
         or 'ignore_chown_errors = "true"' not in storage
     ):
         raise VerificationError("single-UID rootless storage is invalid")
-    if "SocketGroup=vonk-agent" not in units["vonk-agent-helper.socket"]:
+    if "SocketGroup=vonk-agent" not in units["vonk-forge-package-helper.socket"]:
         raise VerificationError("helper socket group is invalid")
-    if "PrivateNetwork=yes" not in units["vonk-agent-helper.service"]:
+    if "PrivateNetwork=yes" not in units["vonk-forge-package-helper.service"]:
         raise VerificationError("helper unit is not network isolated")
     expected_md5: dict[str, str] = {}
     for line in (control / "md5sums").read_text(encoding="ascii").splitlines():

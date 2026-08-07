@@ -1,4 +1,4 @@
-name: Rust Spark agent release
+name: Rust Vonk Forge agent release
 
 on:
   push:
@@ -140,20 +140,20 @@ jobs:
           package="dist/vonk-forge-agent_${VERSION}_arm64.deb"
           sudo env SYSTEMD_OFFLINE=1 dpkg -i "$package"
           getent passwd vonk-agent >/dev/null
-          test "$(stat -c %a /var/lib/vonk-forge/agent)" = 700
+          test "$(stat -c %a /var/lib/vonk-forge-agent)" = 700
           test "$(basename "$(readlink /var/lib/vonk-forge/supervisor/current)")" = a
           sudo install -d -o vonk-agent -g vonk-agent -m 0700 \
             /run/vonk-forge-agent
           sudo -u vonk-agent env \
-            HOME=/var/lib/vonk-forge/agent \
-            XDG_DATA_HOME=/var/lib/vonk-forge/agent \
+            HOME=/var/lib/vonk-forge-agent \
+            XDG_DATA_HOME=/var/lib/vonk-forge-agent \
             XDG_RUNTIME_DIR=/run/vonk-forge-agent \
-            CONTAINERS_STORAGE_CONF=/etc/vonk-forge/containers-storage.conf \
+            CONTAINERS_STORAGE_CONF=/etc/vonk-forge-agent/containers-storage.conf \
             podman info --format '{{.Host.Security.Rootless}}' \
             | grep -Fx true >/dev/null
-          printf '\n# lifecycle-preserved\n' | sudo tee -a /etc/vonk-forge/agent.toml >/dev/null
+          printf '\n# lifecycle-preserved\n' | sudo tee -a /etc/vonk-forge-agent/agent.toml >/dev/null
           sudo install -o vonk-agent -g vonk-agent -m 0600 /dev/null \
-            /var/lib/vonk-forge/agent/lifecycle-preserved
+            /var/lib/vonk-forge-agent/lifecycle-preserved
 
           IFS=. read -r major minor patch <<< "$VERSION"
           next_version="${major}.${minor}.$((patch + 1))"
@@ -166,7 +166,7 @@ jobs:
             --output-dir lifecycle
           sudo env SYSTEMD_OFFLINE=1 dpkg -i \
             "lifecycle/vonk-forge-agent_${next_version}_arm64.deb"
-          grep -Fx '# lifecycle-preserved' /etc/vonk-forge/agent.toml >/dev/null
+          grep -Fx '# lifecycle-preserved' /etc/vonk-forge-agent/agent.toml >/dev/null
           test -x /var/lib/vonk-forge/slots/b/vonk-agent
           test "$(basename "$(readlink /var/lib/vonk-forge/supervisor/current)")" = a
 
@@ -179,11 +179,11 @@ jobs:
           echo "refused downgrade"
 
           sudo env SYSTEMD_OFFLINE=1 dpkg --remove vonk-forge-agent
-          test -f /etc/vonk-forge/agent.toml
-          test -f /var/lib/vonk-forge/agent/lifecycle-preserved
+          test -f /etc/vonk-forge-agent/agent.toml
+          test -f /var/lib/vonk-forge-agent/lifecycle-preserved
           sudo env SYSTEMD_OFFLINE=1 dpkg -i \
             "lifecycle/vonk-forge-agent_${next_version}_arm64.deb"
-          grep -Fx '# lifecycle-preserved' /etc/vonk-forge/agent.toml >/dev/null
+          grep -Fx '# lifecycle-preserved' /etc/vonk-forge-agent/agent.toml >/dev/null
           sudo env SYSTEMD_OFFLINE=1 dpkg --remove vonk-forge-agent
 
       - name: Install Cosign
@@ -238,7 +238,7 @@ jobs:
           gh release create "v$VERSION" dist/* \
             --verify-tag \
             --title "Vonk Forge agent v$VERSION" \
-            --notes "Signed ARM64 Spark agent package. Verify before installation; see docs/operations/agent-package-release.md."
+            --notes "Signed ARM64 Vonk Forge agent package. Verify before installation; see docs/operations/agent-package-release.md."
 
   publish-apt:
     name: Publish signed packages.vonkforge.ai apt repository

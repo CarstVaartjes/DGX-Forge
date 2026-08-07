@@ -130,7 +130,7 @@ def _platform_manifest(payload_sha256: str, payload_size: int) -> bytes:
                 "architecture": "linux-arm64",
                 "artifact": artifact("agent-linux-arm64", "a" * 64),
                 "payload": {
-                    "name": "dgx-agent",
+                    "name": "vonk-agent",
                     "sha256": payload_sha256,
                     "size": payload_size,
                 },
@@ -200,7 +200,7 @@ def test_agent_update_command_binds_only_digest_addressed_signed_payload() -> No
         "artifact": {
             "architecture": "linux-arm64",
             "oci_manifest_digest": "sha256:" + "a" * 64,
-            "payload_name": "dgx-agent",
+            "payload_name": "vonk-agent",
             "payload_sha256": "b" * 64,
             "payload_size": 4096,
         },
@@ -220,7 +220,7 @@ def test_agent_update_command_binds_only_digest_addressed_signed_payload() -> No
             "node_id": "spk_0123456789abcdef0123456789abcdef",
             "oci_manifest_digest": "sha256:" + "a" * 64,
             "operation_id": OPERATION_ID,
-            "payload_name": "dgx-agent",
+            "payload_name": "vonk-agent",
             "platform_target_name": _platform_target("1.2.3", "d" * 64),
             "platform_target_sha256": "d" * 64,
             "platform_version": "1.2.3",
@@ -242,13 +242,13 @@ def test_agent_update_command_binds_only_digest_addressed_signed_payload() -> No
 
     command = AgentUpdateCommand.parse(payload)
 
-    assert command.artifact.payload_name == "dgx-agent"
+    assert command.artifact.payload_name == "vonk-agent"
     assert command.artifact.payload_sha256 == "b" * 64
     assert command.artifact.payload_size == 4096
     assert command.authorization.operation_id == OPERATION_ID
     assert "reference" not in json.dumps(payload)
     assert "/" not in command.artifact.payload_name
-    for invalid_name in ("bin/dgx-agent", "../dgx-agent", "/tmp/dgx-agent"):
+    for invalid_name in ("bin/vonk-agent", "../vonk-agent", "/tmp/vonk-agent"):
         invalid = json.loads(json.dumps(payload))
         invalid["artifact"]["payload_name"] = invalid_name
         with pytest.raises(AgentUpdateError, match="payload"):
@@ -259,7 +259,7 @@ def test_agent_payload_limit_matches_stable_supervisor() -> None:
     common = {
         "architecture": "linux-arm64",
         "oci_manifest_digest": "sha256:" + "a" * 64,
-        "payload_name": "dgx-agent",
+        "payload_name": "vonk-agent",
         "payload_sha256": "b" * 64,
     }
 
@@ -303,7 +303,7 @@ def test_platform_tuf_authorizes_exact_manifest_and_installed_payload() -> None:
     artifact = AgentArtifact(
         architecture="linux-arm64",
         oci_manifest_digest="sha256:" + "a" * 64,
-        payload_name="dgx-agent",
+        payload_name="vonk-agent",
         payload_sha256="b" * 64,
         payload_size=4096,
     )
@@ -385,7 +385,7 @@ def test_oras_pull_uses_exact_digest_and_selects_only_signed_payload(
     artifact = AgentArtifact(
         architecture="linux-arm64",
         oci_manifest_digest="sha256:" + "a" * 64,
-        payload_name="dgx-agent",
+        payload_name="vonk-agent",
         payload_sha256=hashlib.sha256(content).hexdigest(),
         payload_size=len(content),
     )
@@ -396,7 +396,7 @@ def test_oras_pull_uses_exact_digest_and_selects_only_signed_payload(
 
         def pull(self, descriptor, destination, deadline) -> None:
             self.calls.append((descriptor, destination, deadline))
-            (destination / "dgx-agent").write_bytes(content)
+            (destination / "vonk-agent").write_bytes(content)
 
     client = Client()
     deadline = MonotonicDeadline.bind(datetime.now(UTC) + timedelta(seconds=30))
@@ -411,7 +411,7 @@ def test_oras_pull_uses_exact_digest_and_selects_only_signed_payload(
 
     descriptor, _root, passed_deadline = client.calls[0]
     assert destination.read_bytes() == content
-    assert descriptor.target_name == "dgx-agent"
+    assert descriptor.target_name == "vonk-agent"
     assert descriptor.target_digest == artifact.payload_sha256
     assert descriptor.target_length == artifact.payload_size
     assert descriptor.oci_manifest_digest == artifact.oci_manifest_digest
@@ -491,7 +491,7 @@ def _inputs(content: bytes) -> tuple[AgentArtifact, AgentReleaseIdentity]:
         AgentArtifact(
             architecture="linux-arm64",
             oci_manifest_digest="sha256:" + "f" * 64,
-            payload_name="dgx-agent",
+            payload_name="vonk-agent",
             payload_sha256=digest,
             payload_size=len(content),
         ),
@@ -689,7 +689,7 @@ def test_local_supervisor_writes_only_typed_activation_request(tmp_path: Path) -
     artifact = AgentArtifact(
         architecture="linux-arm64",
         oci_manifest_digest="sha256:" + "3" * 64,
-        payload_name="dgx-agent",
+        payload_name="vonk-agent",
         payload_sha256="1" * 64,
         payload_size=4096,
     )
@@ -718,7 +718,7 @@ def test_local_supervisor_writes_only_typed_activation_request(tmp_path: Path) -
                 "node_id": "spk_0123456789abcdef0123456789abcdef",
             "oci_manifest_digest": "sha256:" + "3" * 64,
             "operation_id": OPERATION_ID,
-            "payload_name": "dgx-agent",
+            "payload_name": "vonk-agent",
             "platform_target_name": _platform_target("1.2.3", "9" * 64),
             "platform_target_sha256": "9" * 64,
             "platform_version": "1.2.3",

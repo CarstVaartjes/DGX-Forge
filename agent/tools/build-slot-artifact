@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Build one native self-contained DGX Forge agent slot ELF."""
+"""Build one native self-contained Vonk Forge agent slot ELF."""
 
 from __future__ import annotations
 
@@ -356,13 +356,13 @@ def build(
     _validate_wheel(platform_snapshot, "platform wheel")
     entry = Path(__file__).resolve().parents[1] / "packaging/slot_entry.py"
     entry_snapshot = _input(entry, "packaging entry")
-    substitute = os.environ.get("DGX_SLOT_SUBSTITUTE_INPUT_TEST")
+    substitute = os.environ.get("VONK_SLOT_SUBSTITUTE_INPUT_TEST")
     if substitute is not None:
         if substitute != "1" or "PYTEST_CURRENT_TEST" not in os.environ:
             raise BuildError("wheel substitution hook is invalid")
         agent_wheel.write_bytes(b"substituted after descriptor snapshot")
     python = _packaging_python()
-    with tempfile.TemporaryDirectory(prefix="dgx-slot-build-") as raw:
+    with tempfile.TemporaryDirectory(prefix="vonk-slot-build-") as raw:
         root = Path(raw)
         agent_source = root / "agent-wheel"
         protocol_source = root / "protocol-wheel"
@@ -393,7 +393,7 @@ def build(
             "--noupx",
             "--onefile",
             "--name",
-            "dgx-forge-agent",
+            "vonk-forge-agent",
             "--distpath",
             str(root / "dist"),
             "--workpath",
@@ -460,7 +460,7 @@ def build(
                     shutil.rmtree(partial, ignore_errors=True)
             try:
                 subprocess.run(command, check=True, cwd=root, env=environment)
-                built = root / "dist/dgx-forge-agent"
+                built = root / "dist/vonk-forge-agent"
                 _verify_elf(built, architecture)
                 _verify_packaged_runtime(built, Path(environment["HOME"]))
             except (BuildError, OSError, subprocess.CalledProcessError) as error:

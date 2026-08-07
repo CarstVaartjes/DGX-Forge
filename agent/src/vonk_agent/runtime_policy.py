@@ -144,7 +144,7 @@ class RuntimePolicy:
         oras = InstalledORASPolicy(
             _installed_path(
                 oras_raw["executable"],
-                f"/opt/dgx-forge/third-party/oras/{oras_digest}/oras",
+                f"/opt/vonk-forge/third-party/oras/{oras_digest}/oras",
                 "ORAS executable",
                 installation_prefix,
             ),
@@ -152,7 +152,7 @@ class RuntimePolicy:
             "1.3.3",
             _installed_path(
                 oras_raw["auth_path"],
-                "/var/lib/dgx-forge-agent/registry-auth.json",
+                "/var/lib/vonk-forge-agent/registry-auth.json",
                 "ORAS auth",
                 installation_prefix,
             ),
@@ -170,20 +170,20 @@ class RuntimePolicy:
         tuf = InstalledTUFPolicy(
             _installed_path(
                 tuf_raw["bootstrap_root_path"],
-                "/etc/dgx-forge-agent/tuf-root.json",
+                "/etc/vonk-forge-agent/tuf-root.json",
                 "TUF bootstrap root",
                 installation_prefix,
             ),
             _digest(tuf_raw["bootstrap_root_sha256"], "TUF bootstrap root"),
             _installed_path(
                 tuf_raw["metadata_root"],
-                "/var/lib/dgx-forge-agent/tuf/metadata",
+                "/var/lib/vonk-forge-agent/tuf/metadata",
                 "TUF metadata root",
                 installation_prefix,
             ),
             _installed_path(
                 tuf_raw["target_root"],
-                "/var/lib/dgx-forge-agent/tuf/targets",
+                "/var/lib/vonk-forge-agent/tuf/targets",
                 "TUF target root",
                 installation_prefix,
             ),
@@ -201,7 +201,7 @@ class RuntimePolicy:
         workload_tuf = InstalledWorkloadTUFPolicy(
             _installed_path(
                 workload_tuf_raw["bootstrap_root_path"],
-                "/etc/dgx-forge-agent/workload-tuf-root.json",
+                "/etc/vonk-forge-agent/workload-tuf-root.json",
                 "workload TUF bootstrap root",
                 installation_prefix,
             ),
@@ -211,13 +211,13 @@ class RuntimePolicy:
             ),
             _installed_path(
                 workload_tuf_raw["metadata_root"],
-                "/var/lib/dgx-forge-agent/workload-tuf/metadata",
+                "/var/lib/vonk-forge-agent/workload-tuf/metadata",
                 "workload TUF metadata root",
                 installation_prefix,
             ),
             _installed_path(
                 workload_tuf_raw["target_root"],
-                "/var/lib/dgx-forge-agent/workload-tuf/targets",
+                "/var/lib/vonk-forge-agent/workload-tuf/targets",
                 "workload TUF target root",
                 installation_prefix,
             ),
@@ -254,13 +254,13 @@ class RuntimePolicy:
             raise RuntimePolicyError("compiled adapter policy is not reviewed")
         release_root = _installed_path(
             root["release_root"],
-            "/var/lib/dgx-forge/releases",
+            "/var/lib/vonk-forge/releases",
             "release root",
             installation_prefix,
         )
         staging_root = _installed_path(
             root["staging_root"],
-            "/var/lib/dgx-forge/release-staging",
+            "/var/lib/vonk-forge/release-staging",
             "staging root",
             installation_prefix,
         )

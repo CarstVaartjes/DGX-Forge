@@ -94,7 +94,7 @@ def _manifest() -> dict[str, object]:
             {
                 "architecture": "linux-arm64",
                 "artifact": _artifact("supervisor-linux-arm64", SHA_B),
-                "payload": _payload("dgx-agent-supervisor", SHA_C, 8192),
+                "payload": _payload("vonk-agent-supervisor", SHA_C, 8192),
             }
         ],
         "tooling": [

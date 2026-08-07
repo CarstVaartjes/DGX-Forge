@@ -8,7 +8,7 @@ use serde::Deserialize;
 use thiserror::Error;
 use url::Url;
 
-pub const DEFAULT_CONFIG_PATH: &str = "/etc/vonk-forge/agent.toml";
+pub const DEFAULT_CONFIG_PATH: &str = "/etc/vonk-forge-agent/agent.toml";
 
 #[derive(Debug, Error)]
 pub enum ConfigError {

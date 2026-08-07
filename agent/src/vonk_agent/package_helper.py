@@ -45,7 +45,7 @@ from .packages.sandbox import SandboxPolicy
 
 MAX_REPLAY_ENTRIES = 65_536
 MAX_SUPERVISOR_STATE_BYTES = 64 * 1024
-OCI_RUNTIME_DIGEST_PATH = Path("/etc/dgx-forge-agent/oci-runtime.sha256")
+OCI_RUNTIME_DIGEST_PATH = Path("/etc/vonk-forge-agent/oci-runtime.sha256")
 
 
 class ReceiptVerifier(Protocol):
@@ -73,7 +73,7 @@ class ActiveSlotVerifier:
         self,
         expected_sha256: str,
         state_path: Path = Path(
-            "/var/lib/dgx-forge-agent-supervisor/state.json"
+            "/var/lib/vonk-forge-agent-supervisor/state.json"
         ),
         *,
         allow_unprivileged_test_file: bool = False,
@@ -220,7 +220,7 @@ class SystemdCommandRunner:
         return completed.returncode
 
     def cleanup(self, unit_name: str) -> None:
-        if not unit_name.startswith("dgx-workload-") or not unit_name.endswith(
+        if not unit_name.startswith("vonk-workload-") or not unit_name.endswith(
             ".service"
         ):
             raise HelperProtocolError("package backend unit name is invalid")
@@ -366,7 +366,7 @@ class SystemdBackendLauncher:
                 else None
             )
             resources = request.invocation.resources
-            unit_name = f"dgx-workload-{request.request_id}.service"
+            unit_name = f"vonk-workload-{request.request_id}.service"
             argv = [
                 "/usr/bin/systemd-run",
                 "--quiet",
@@ -390,22 +390,22 @@ class SystemdBackendLauncher:
                 f"--property=CPUQuota={resources.cpu_millis / 10:.1f}%",
                 f"--property=RuntimeMaxSec={resources.timeout_seconds}",
                 "--property=TimeoutStopSec=10",
-                f"--property=BindReadOnlyPaths={source_executable}:/run/dgx-forge/entrypoint",
-                f"--property=BindReadOnlyPaths={source_generation}:/run/dgx-forge/generation",
-                "--working-directory=/run/dgx-forge/generation",
+                f"--property=BindReadOnlyPaths={source_executable}:/run/vonk-forge-agent/entrypoint",
+                f"--property=BindReadOnlyPaths={source_generation}:/run/vonk-forge-agent/generation",
+                "--working-directory=/run/vonk-forge-agent/generation",
             ]
             argv.append("--property=PrivateNetwork=yes")
             if interpreter_fd >= 0:
                 runtime = request.invocation.python_runtime
                 assert runtime is not None
                 environment_root = (
-                    f"/run/dgx-forge/generation/components/"
+                    f"/run/vonk-forge-agent/generation/components/"
                     f"{runtime.environment_component}"
                 )
                 assert source_interpreter is not None
                 argv.extend(
                     (
-                        f"--property=BindReadOnlyPaths={source_interpreter}:/run/dgx-forge/interpreter",
+                        f"--property=BindReadOnlyPaths={source_interpreter}:/run/vonk-forge-agent/interpreter",
                         f"--property=WorkingDirectory={environment_root}",
                         "--setenv=PYTHONNOUSERSITE=1",
                         f"--setenv=VIRTUAL_ENV={environment_root}",
@@ -423,16 +423,16 @@ class SystemdBackendLauncher:
                 )
                 mount_fds.append(mount_fd)
                 source = f"/proc/{helper_pid}/fd/{mount_fd}"
-                target = f"/run/dgx-forge/generation/{mount.target}"
+                target = f"/run/vonk-forge-agent/generation/{mount.target}"
                 argv.append(f"--property=BindReadOnlyPaths={source}:{target}")
             argv.extend(
                 f"--property=DeviceAllow=/dev/{device} rw"
                 for device in request.invocation.devices
             )
             command = (
-                ("/run/dgx-forge/interpreter", "/run/dgx-forge/entrypoint")
+                ("/run/vonk-forge-agent/interpreter", "/run/vonk-forge-agent/entrypoint")
                 if interpreter_fd >= 0
-                else ("/run/dgx-forge/entrypoint",)
+                else ("/run/vonk-forge-agent/entrypoint",)
             )
             argv.extend(("--", *command, *request.invocation.arguments))
             fixed_argv = tuple(argv)
@@ -1486,8 +1486,8 @@ def main(argv: list[str] | None = None) -> int:
     if os.geteuid() != 0:
         raise HelperProtocolError("package helper must run as root")
     try:
-        agent_uid = pwd.getpwnam("dgx-agent").pw_uid
-        workload = pwd.getpwnam("dgx-workload")
+        agent_uid = pwd.getpwnam("vonk-agent").pw_uid
+        workload = pwd.getpwnam("vonk-workload")
     except KeyError as error:
         raise HelperProtocolError(
             "package helper identities are not installed"
@@ -1504,11 +1504,11 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     receipt_verifier = Ed25519ReceiptVerifier.from_file(
-        Path("/etc/dgx-forge-agent/package-receipt-public.pem")
+        Path("/etc/vonk-forge-agent/package-receipt-public.pem")
     )
     fence_authorizer = SignedFenceAuthorizer.from_file(
-        Path("/etc/dgx-forge-agent/package-fence-public.pem"),
-        Path("/var/lib/dgx-forge-package-helper/replay.sqlite3"),
+        Path("/etc/vonk-forge-agent/package-fence-public.pem"),
+        Path("/var/lib/vonk-forge-package-helper/replay.sqlite3"),
     )
     receipt_key = getattr(receipt_verifier, "public_key_bytes", None)
     fence_key = getattr(fence_authorizer, "public_key_bytes", None)
@@ -1522,12 +1522,12 @@ def main(argv: list[str] | None = None) -> int:
         agent_uid=agent_uid,
         sandbox=sandbox,
         active_slot_verifier=ActiveSlotVerifier(
-            os.environ.get("DGX_PACKAGE_HELPER_SLOT_SHA256", "")
+            os.environ.get("VONK_PACKAGE_HELPER_SLOT_SHA256", "")
         ),
         receipt_verifier=receipt_verifier,
         fence_authorizer=fence_authorizer,
         launcher=SystemdBackendLauncher(
-            Path("/var/lib/dgx-forge-agent/packages/generations")
+            Path("/var/lib/vonk-forge-agent/packages/generations")
         ),
     )
     listener = socket.socket(fileno=args.listen_fd)

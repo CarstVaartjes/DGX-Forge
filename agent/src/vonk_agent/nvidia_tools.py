@@ -708,7 +708,7 @@ def open_verified_support_archive(
             archive.writestr(info, support_bytes[name])
             _check(_check_deadline)
     return _sealed_memfd(
-        "dgx-agent-reviewed-support",
+        "vonk-agent-reviewed-support",
         rendered.getvalue(),
         check_deadline=_check_deadline,
     )
@@ -769,7 +769,7 @@ def _open_verified_file(
         total = 0
         _check(check_deadline)
         snapshot = os.memfd_create(
-            "dgx-agent-verified-artifact", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
+            "vonk-agent-verified-artifact", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
         )
         _check(check_deadline)
         while True:

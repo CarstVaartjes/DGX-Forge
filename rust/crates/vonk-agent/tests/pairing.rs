@@ -26,7 +26,7 @@ const NODE_ID: &str = "spk_0123456789abcdef0123456789abcdef";
 fn config_is_strict_and_rejects_secret_fields() {
     let document = r#"
 controller_url = "https://controller.vonkforge.test"
-ca_path = "/etc/vonk-forge/controller-ca.pem"
+ca_path = "/etc/vonk-forge-agent/controller-ca.pem"
 ca_sha256 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 data_dir = "/var/lib/vonk-forge"
 node_id = "spk_0123456789abcdef0123456789abcdef"

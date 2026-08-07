@@ -562,7 +562,7 @@ def _snapshot_release_member(
             raise WorkloadValidationError("workload adapter metadata is invalid")
         _workload_deadline(deadline)
         snapshot_fd = os.memfd_create(
-            "dgx-workload-adapter", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
+            "vonk-workload-adapter", os.MFD_CLOEXEC | os.MFD_ALLOW_SEALING
         )
         _workload_deadline(deadline)
         digest = hashlib.sha256()
