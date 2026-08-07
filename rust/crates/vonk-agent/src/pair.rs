@@ -6,6 +6,7 @@ use std::{
 };
 
 use reqwest::{Certificate, Client, StatusCode};
+use rcgen::PublicKeyData;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -302,7 +303,7 @@ pub fn validate_issued(
     let fingerprint = hex::encode(Sha256::digest(&pem.contents));
     if !common_name_matches
         || !san_matches
-        || certificate.public_key().raw != key.public_key_der()
+        || certificate.public_key().raw != key.subject_public_key_info()
         || fingerprint != issued.fingerprint
     {
         return Err(PairingError::Certificate);
