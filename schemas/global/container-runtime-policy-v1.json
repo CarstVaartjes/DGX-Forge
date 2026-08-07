@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "runtime_interface": "vonk.runtime.v1",
+  "architecture": "linux/arm64",
+  "required_image_label": {
+    "name": "ai.vonkforge.runtime-interface",
+    "value": "v1"
+  },
+  "accepted_config_users": ["", "0", "root", "0:0", "root:root"],
+  "host_isolation": "rootless-podman-single-uid"
+}

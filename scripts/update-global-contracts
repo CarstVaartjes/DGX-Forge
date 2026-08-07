@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 SCHEMAS = {
+    "schemas/container-runtime-policy/v1.json": "schemas/global/container-runtime-policy-v1.json",
     "schemas/recipe/v1.schema.json": "schemas/global/recipe-v1.schema.json",
     "schemas/problem/v1.schema.json": "schemas/global/problem-v1.schema.json",
     "schemas/test-report/v1.schema.json": "schemas/global/test-report-v1.schema.json",

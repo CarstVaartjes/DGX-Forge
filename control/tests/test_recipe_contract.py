@@ -61,7 +61,26 @@ def test_recipe_validation_rejects_unsafe_values(path, value, message) -> None:
 
 def test_global_contract_lock_matches_vendored_bytes() -> None:
     lock = contract_lock()
-    assert lock["source_commit"] == "b046dc33e428868dec635ec63616a568b225561c"
+    assert lock["source_commit"] == "64a17a462be046a44ae5945b7b794c0220044640"
     for relative_path, metadata in lock["files"].items():
         payload = (ROOT / relative_path).read_bytes()
         assert __import__("hashlib").sha256(payload).hexdigest() == metadata["sha256"]
+
+
+def test_vendored_runtime_policy_matches_agent_rootless_contract() -> None:
+    policy = json.loads(
+        (ROOT / "schemas/global/container-runtime-policy-v1.json").read_text()
+    )
+
+    assert policy["required_image_label"] == {
+        "name": "ai.vonkforge.runtime-interface",
+        "value": "v1",
+    }
+    assert policy["accepted_config_users"] == [
+        "",
+        "0",
+        "root",
+        "0:0",
+        "root:root",
+    ]
+    assert policy["host_isolation"] == "rootless-podman-single-uid"
