@@ -6,10 +6,10 @@ use std::{
 };
 
 use chrono::{DateTime, TimeZone, Utc};
+use rcgen::string::Ia5String;
 use rcgen::{
     CertificateParams, DistinguishedName, DnType, KeyPair, PKCS_ED25519, PublicKeyData, SanType,
 };
-use rcgen::string::Ia5String;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;

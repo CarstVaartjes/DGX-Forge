@@ -3,8 +3,8 @@
 use std::{fs, os::unix::fs::PermissionsExt};
 
 use chrono::{TimeZone, Utc};
-use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 use rcgen::string::Ia5String;
+use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, SanType};
 use sha2::{Digest, Sha256};
 use tempfile::tempdir;
 use url::Url;
