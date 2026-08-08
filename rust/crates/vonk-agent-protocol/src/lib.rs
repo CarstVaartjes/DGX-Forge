@@ -342,6 +342,8 @@ fn validate_build(value: &RecipeBuildRequest) -> bool {
             .iter()
             .all(|argument| valid_name(&argument.name) && valid_scalar(&argument.value))
         && matches!(value.network.mode.as_str(), "none" | "public")
+        && ((value.network.mode == "none" && value.network.hosts.is_empty())
+            || (value.network.mode == "public" && !value.network.hosts.is_empty()))
         && value.network.hosts.len() <= 64
         && value
             .network
@@ -359,7 +361,7 @@ fn validate_build(value: &RecipeBuildRequest) -> bool {
         && value.limits.timeout_seconds >= 1
         && value.limits.timeout_seconds <= 86_400
         && value.limits.output_bytes >= 1
-        && value.limits.output_bytes <= 64 * 1024 * 1024
+        && value.limits.output_bytes <= 16 * 1024_u64.pow(4)
         && value.limits.gpu == 0
         && !value.limits.privileged
         && !value.limits.host_mounts
@@ -475,13 +477,48 @@ fn valid_bundle_path(value: &str) -> bool {
 }
 
 fn valid_public_host(value: &str) -> bool {
+    let lowered = value.to_ascii_lowercase();
+    let reserved = matches!(
+        lowered.as_str(),
+        "localhost"
+            | "localhost.localdomain"
+            | "metadata"
+            | "metadata.google.internal"
+            | "instance-data.ec2.internal"
+    ) || lowered.ends_with(".localhost")
+        || lowered.ends_with(".localdomain")
+        || lowered.ends_with(".internal");
+    let numeric = value
+        .bytes()
+        .all(|byte| byte.is_ascii_digit() || byte == b'.');
+    let numeric_public = if numeric {
+        value.parse::<std::net::Ipv4Addr>().is_ok_and(public_ipv4)
+    } else {
+        true
+    };
     !value.is_empty()
         && value.len() <= 253
         && !value.starts_with('.')
         && !value.ends_with('.')
+        && !reserved
+        && numeric_public
         && value
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+}
+
+fn public_ipv4(address: std::net::Ipv4Addr) -> bool {
+    let octets = address.octets();
+    let [first, second, ..] = octets;
+    first != 0
+        && first != 10
+        && first != 127
+        && !(first == 100 && (64..=127).contains(&second))
+        && !(first == 169 && second == 254)
+        && !(first == 172 && (16..=31).contains(&second))
+        && !(first == 192 && second == 168)
+        && !(first == 198 && (18..=19).contains(&second))
+        && first < 224
 }
 
 fn link_local(value: std::net::IpAddr) -> bool {

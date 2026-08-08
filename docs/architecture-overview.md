@@ -112,7 +112,16 @@ bounded build context; the controller validates the Dockerfile and any Compose
 policy, checks fresh builder disk and memory capacity, and queues a typed
 `recipe.build.v1` operation. One compatible GPU-node agent performs the
 rootless Podman build without a Docker socket, host mounts, devices, secrets, or
-privilege, then records the exact OCI image digest and layout digest.
+privilege, then records the exact OCI image digest and layout digest. The
+declared OCI output bound follows the recipe's temporary build envelope, so
+large CUDA-based images are not constrained by a small log-size constant;
+diagnostic stdout/stderr remains independently capped.
+
+Public build networking is fail-closed until a hostname-aware egress
+proxy/firewall is installed. `slirp4netns` is not an allowlist, so the agent
+rejects `network.mode: public` rather than allowing a Dockerfile to reach
+private or metadata endpoints. Networkless recipes and cached pinned bases are
+the supported initial build path.
 
 Installation maps a resolved recipe profile to exact node identities and ranks.
 The controller transfers that one verified OCI layout over the authenticated

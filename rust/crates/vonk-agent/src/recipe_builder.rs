@@ -25,6 +25,12 @@ pub enum RecipeBuildError {
     Process(#[from] ProcessError),
     #[error("build evidence is invalid")]
     Evidence,
+    #[error("build output exceeded its declared limit")]
+    OutputLimit,
+    #[error(
+        "source build network policy is unsupported: public host allowlists require an installed egress boundary"
+    )]
+    NetworkPolicy,
     #[error("build storage is unavailable")]
     Io(#[from] std::io::Error),
 }
@@ -57,6 +63,11 @@ impl<R: ProcessRunner> RecipeBuilder<'_, R> {
         operation_id: Uuid,
         archive: &[u8],
     ) -> Result<RecipeBuildEvidence, RecipeBuildError> {
+        // `slirp4netns` only isolates the host network namespace; it does not
+        // enforce a destination allowlist.  Never silently widen a declared
+        // host policy into unrestricted egress.  Until the dedicated egress
+        // boundary is installed, only explicitly networkless builds run.
+        let network = build_network(&request.network)?;
         let staging_root = self.data_root.join("build-staging");
         fs::create_dir_all(&staging_root)?;
         let staging = Builder::new().prefix("source-").tempdir_in(&staging_root)?;
@@ -89,7 +100,7 @@ impl<R: ProcessRunner> RecipeBuilder<'_, R> {
             format!("--cpus={}", request.limits.cpu_cores),
             format!("--memory={}", request.limits.memory_bytes),
             format!("--pids-limit={}", request.limits.processes),
-            format!("--network={}", build_network(&request.network.mode)),
+            format!("--network={network}"),
         ];
         for argument in &request.arguments {
             arguments.push("--build-arg".to_owned());
@@ -97,12 +108,13 @@ impl<R: ProcessRunner> RecipeBuilder<'_, R> {
         }
         arguments.push(context.display().to_string());
         let timeout = Duration::from_secs(request.limits.timeout_seconds.into());
-        let output = self.runner.run_bounded_directory(
+        let output = self.runner.run_bounded_directory_with_output_limit(
             Program::Podman,
             &arguments,
             timeout,
             staging.path(),
             request.limits.temporary_bytes,
+            request.limits.output_bytes,
         )?;
         if !output.success {
             return Err(RecipeBuildError::Evidence);
@@ -129,7 +141,7 @@ impl<R: ProcessRunner> RecipeBuilder<'_, R> {
         fs::create_dir(&operation_root)?;
         let layout = self.layout_path(operation_id);
         let digest_file = staging.path().join("image.digest");
-        let saved = self.runner.run_bounded_directory(
+        let saved = self.runner.run_bounded_directory_with_output_limit(
             Program::Podman,
             &[
                 "--root".to_owned(),
@@ -145,6 +157,7 @@ impl<R: ProcessRunner> RecipeBuilder<'_, R> {
             Duration::from_secs(600),
             &operation_root,
             request.limits.temporary_bytes,
+            request.limits.output_bytes,
         )?;
         if !saved.success {
             return Err(RecipeBuildError::Evidence);
@@ -159,8 +172,14 @@ impl<R: ProcessRunner> RecipeBuilder<'_, R> {
             return Err(RecipeBuildError::Evidence);
         }
         let image_bytes = fs::metadata(&layout)?.len();
-        if image_bytes == 0 || image_bytes > request.limits.temporary_bytes {
+        if image_bytes == 0 {
             return Err(RecipeBuildError::Evidence);
+        }
+        if image_bytes > request.limits.output_bytes {
+            return Err(RecipeBuildError::OutputLimit);
+        }
+        if image_bytes > request.limits.temporary_bytes {
+            return Err(RecipeBuildError::Process(ProcessError::StorageLimit));
         }
         let oci_layout_sha256 = sha256_file(&layout)?;
         let _ = self.runner.run(
@@ -186,11 +205,13 @@ impl<R: ProcessRunner> RecipeBuilder<'_, R> {
     }
 }
 
-fn build_network(mode: &str) -> &'static str {
-    if mode == "none" {
-        "none"
+fn build_network(
+    network: &vonk_agent_protocol::RecipeBuildNetwork,
+) -> Result<&'static str, RecipeBuildError> {
+    if network.mode == "none" && network.hosts.is_empty() {
+        Ok("none")
     } else {
-        "slirp4netns:allow_host_loopback=false"
+        Err(RecipeBuildError::NetworkPolicy)
     }
 }
 

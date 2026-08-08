@@ -34,7 +34,6 @@ from .source_policy import (
 
 _OCI_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
-_BUILD_OUTPUT_BYTES = 64 * 1024 * 1024
 
 
 class RecipeBuildError(ValueError):
@@ -97,6 +96,7 @@ class RecipeBuildService:
             build = document.get("build")
             context = build.get("context") if isinstance(build, dict) else None
             source_sha256 = context.get("sha256") if isinstance(context, dict) else None
+            _ensure_supported_build_network(build)
             if (
                 not isinstance(source_sha256, str)
                 or session.get(RecipeSourceBundle, source_sha256) is None
@@ -129,6 +129,7 @@ class RecipeBuildService:
             build = document.get("build")
             context = build.get("context") if isinstance(build, dict) else None
             source_sha256 = context.get("sha256") if isinstance(context, dict) else None
+            _ensure_supported_build_network(build)
             if not isinstance(source_sha256, str):
                 raise RecipeBuildError(
                     "build.source_invalid", "recipe source bundle identity is invalid"
@@ -176,7 +177,10 @@ class RecipeBuildService:
             memory_reserved = _reserved(session, builder_node_id, "host-memory")
         # The rootless builder retains its source/staging data while exporting
         # the OCI layout.  Reserve the concurrent peak, not just the inputs.
-        output_bytes = _BUILD_OUTPUT_BYTES
+        # The OCI export is the build output. Bind it to the largest declared
+        # per-node image envelope across the selected recipe's profiles;
+        # CUDA/vLLM images routinely exceed 64 MiB.
+        output_bytes = _declared_image_bytes(document)
         required_disk = temporary_bytes + len(bundle.archive) + output_bytes
         if snapshot.disk_free_bytes - disk_reserved < required_disk:
             raise RecipeBuildError(
@@ -512,6 +516,43 @@ def _validate_builder(node: AgentNode) -> None:
         raise RecipeBuildError(
             "build.node_incompatible", "builder GPU node is inactive or incompatible"
         )
+
+
+def _ensure_supported_build_network(build: object) -> None:
+    if not isinstance(build, dict):
+        return
+    network = build.get("network")
+    if isinstance(network, dict) and network.get("mode") == "public":
+        raise RecipeBuildError(
+            "build.network_unsupported",
+            "public build networking is unavailable until a hostname-aware egress boundary is installed",
+        )
+
+
+def _declared_image_bytes(document: dict[str, object]) -> int:
+    profiles = document.get("deployment_profiles")
+    values: list[int] = []
+    if isinstance(profiles, list):
+        for profile in profiles:
+            if not isinstance(profile, dict):
+                continue
+            roles = profile.get("roles")
+            if not isinstance(roles, list):
+                continue
+            for role in roles:
+                if not isinstance(role, dict):
+                    continue
+                resources = role.get("resources")
+                disk = resources.get("disk") if isinstance(resources, dict) else None
+                image_bytes = disk.get("image_bytes") if isinstance(disk, dict) else None
+                if isinstance(image_bytes, int) and not isinstance(image_bytes, bool):
+                    values.append(image_bytes)
+    if not values or min(values) < 1 or max(values) > 16 * 1024**4:
+        raise RecipeBuildError(
+            "build.image_size_invalid",
+            "recipe profiles must declare a positive per-node image size",
+        )
+    return max(values)
 
 
 def _reserved(session: Session, node_id: str, kind: str) -> int:

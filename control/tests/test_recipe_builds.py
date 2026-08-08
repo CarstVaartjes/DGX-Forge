@@ -59,7 +59,7 @@ class RecordingQueue:
         pass
 
 
-def setup(tmp_path: Path):
+def setup(tmp_path: Path, *, network: dict[str, object] | None = None):
     engine = create_engine(f"sqlite:///{tmp_path / 'build.sqlite'}")
     Base.metadata.create_all(engine)
     sessions = sessionmaker(engine, expire_on_commit=False)
@@ -77,6 +77,7 @@ def setup(tmp_path: Path):
     document = json.loads(
         (Path(__file__).parent / "fixtures/global/recipe-v1-minimal.json").read_text()
     )
+    document["build"]["network"] = network or {"mode": "none", "hosts": []}
     document["build"]["context"]["sha256"] = bundle.sha256
     document["build"]["context"]["expected_bytes"] = len(bundle.archive)
     document["build"]["resources"] = {
@@ -113,8 +114,8 @@ def setup(tmp_path: Path):
         InventorySnapshotInput(
             node_id,
             now,
-            256 * 1024 * 1024,
-            128 * 1024 * 1024,
+            8 * 1024 * 1024 * 1024,
+            7 * 1024 * 1024 * 1024,
             100_000,
             80_000,
             100_000,
@@ -222,7 +223,11 @@ def test_build_plan_rejects_disk_below_concurrent_oci_export_peak(
         bundles.get(revision.document["build"]["context"]["sha256"]).archive
     )
     temporary_bytes = revision.document["build"]["resources"]["temporary_bytes"]
-    output_bytes = 64 * 1024 * 1024
+    output_bytes = max(
+        role["resources"]["disk"]["image_bytes"]
+        for profile in revision.document["deployment_profiles"]
+        for role in profile["roles"]
+    )
     peak_bytes = temporary_bytes + source_bytes + output_bytes
     # This inventory has enough capacity for staging + source, but not for the
     # simultaneous OCI export that the builder retains before promotion.
@@ -246,6 +251,19 @@ def test_build_plan_rejects_disk_below_concurrent_oci_export_peak(
     with pytest.raises(RecipeBuildError, match="temporary disk capacity"):
         RecipeBuildService(sessions, bundles=bundles).plan(
             revision.id, node_id, now=newer
+        )
+
+
+def test_build_plan_rejects_public_network_until_egress_boundary_exists(
+    tmp_path: Path,
+) -> None:
+    sessions, bundles, now, node_id, revision = setup(
+        tmp_path, network={"mode": "public", "hosts": ["pypi.org"]}
+    )
+
+    with pytest.raises(RecipeBuildError, match="public build networking"):
+        RecipeBuildService(sessions, bundles=bundles).plan(
+            revision.id, node_id, now=now
         )
 
 

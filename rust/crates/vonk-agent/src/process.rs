@@ -72,6 +72,29 @@ pub trait ProcessRunner {
         }
         Ok(output)
     }
+
+    /// Run a subprocess while enforcing both its bounded working directory and
+    /// declared output limits. Existing runners can keep implementing
+    /// `run_bounded_directory`; the default implementation applies the output
+    /// check after that call, while the system runner enforces it while the
+    /// process is still running.
+    fn run_bounded_directory_with_output_limit(
+        &self,
+        program: Program,
+        arguments: &[String],
+        timeout: Duration,
+        directory: &Path,
+        maximum_bytes: u64,
+        maximum_output_bytes: u64,
+    ) -> Result<ProcessOutput, ProcessError> {
+        let diagnostic_limit = maximum_output_bytes.min(OUTPUT_LIMIT);
+        let output =
+            self.run_bounded_directory(program, arguments, timeout, directory, maximum_bytes)?;
+        if output_bytes(&output) > diagnostic_limit {
+            return Err(ProcessError::OutputLimit);
+        }
+        Ok(output)
+    }
 }
 
 pub struct SystemProcessRunner;
@@ -83,7 +106,7 @@ impl ProcessRunner for SystemProcessRunner {
         arguments: &[String],
         timeout: Duration,
     ) -> Result<ProcessOutput, ProcessError> {
-        run_process(program, arguments, timeout, None)
+        run_process(program, arguments, timeout, None, OUTPUT_LIMIT)
     }
 
     fn run_bounded_directory(
@@ -99,6 +122,25 @@ impl ProcessRunner for SystemProcessRunner {
             arguments,
             timeout,
             Some((directory, maximum_bytes)),
+            OUTPUT_LIMIT,
+        )
+    }
+
+    fn run_bounded_directory_with_output_limit(
+        &self,
+        program: Program,
+        arguments: &[String],
+        timeout: Duration,
+        directory: &Path,
+        maximum_bytes: u64,
+        maximum_output_bytes: u64,
+    ) -> Result<ProcessOutput, ProcessError> {
+        run_process(
+            program,
+            arguments,
+            timeout,
+            Some((directory, maximum_bytes)),
+            maximum_output_bytes.min(OUTPUT_LIMIT),
         )
     }
 }
@@ -108,6 +150,7 @@ fn run_process(
     arguments: &[String],
     timeout: Duration,
     storage_limit: Option<(&Path, u64)>,
+    output_limit: u64,
 ) -> Result<ProcessOutput, ProcessError> {
     let mut stdout = tempfile()?;
     let mut stderr = tempfile()?;
@@ -138,7 +181,12 @@ fn run_process(
             child.wait()?;
             return Err(ProcessError::Timeout);
         }
-        if stdout.metadata()?.len() > OUTPUT_LIMIT || stderr.metadata()?.len() > OUTPUT_LIMIT {
+        let stdout_bytes = stdout.metadata()?.len();
+        let stderr_bytes = stderr.metadata()?.len();
+        if stdout_bytes > output_limit
+            || stderr_bytes > output_limit
+            || stdout_bytes.saturating_add(stderr_bytes) > output_limit
+        {
             child.kill()?;
             child.wait()?;
             return Err(ProcessError::OutputLimit);
@@ -162,8 +210,8 @@ fn run_process(
     };
     Ok(ProcessOutput {
         success: status.success(),
-        stdout: bounded_read(&mut stdout)?,
-        stderr: bounded_read(&mut stderr)?,
+        stdout: bounded_read(&mut stdout, output_limit)?,
+        stderr: bounded_read(&mut stderr, output_limit)?,
     })
 }
 
@@ -195,17 +243,22 @@ fn directory_bytes(path: &Path) -> Result<u64, std::io::Error> {
     Ok(total)
 }
 
-fn bounded_read(file: &mut File) -> Result<Vec<u8>, ProcessError> {
-    if file.metadata()?.len() > OUTPUT_LIMIT {
+fn bounded_read(file: &mut File, output_limit: u64) -> Result<Vec<u8>, ProcessError> {
+    if file.metadata()?.len() > output_limit {
         return Err(ProcessError::OutputLimit);
     }
     file.seek(SeekFrom::Start(0))?;
     let mut value = Vec::new();
-    file.take(OUTPUT_LIMIT + 1).read_to_end(&mut value)?;
-    if value.len() as u64 > OUTPUT_LIMIT {
+    file.take(output_limit.saturating_add(1))
+        .read_to_end(&mut value)?;
+    if value.len() as u64 > output_limit {
         return Err(ProcessError::OutputLimit);
     }
     Ok(value)
+}
+
+fn output_bytes(output: &ProcessOutput) -> u64 {
+    (output.stdout.len() as u64).saturating_add(output.stderr.len() as u64)
 }
 
 #[cfg(test)]
@@ -234,6 +287,35 @@ mod tests {
             Program::Curl,
             &["--silent".to_owned(), format!("http://{address}")],
             Duration::from_secs(5),
+        );
+        assert!(matches!(result, Err(ProcessError::OutputLimit)));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn system_runner_applies_a_declared_output_limit_without_weakening_storage_limit() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 1048576\r\n\r\n")
+                .unwrap();
+            for _ in 0..1024 {
+                if stream.write_all(&[b'x'; 1024]).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(1));
+            }
+        });
+        let directory = tempdir().unwrap();
+        let result = SystemProcessRunner.run_bounded_directory_with_output_limit(
+            Program::Curl,
+            &["--silent".to_owned(), format!("http://{address}")],
+            Duration::from_secs(5),
+            directory.path(),
+            1024 * 1024,
+            16,
         );
         assert!(matches!(result, Err(ProcessError::OutputLimit)));
         server.join().unwrap();

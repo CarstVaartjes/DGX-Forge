@@ -6,7 +6,7 @@ use tempfile::tempdir;
 use uuid::Uuid;
 use vonk_agent::{
     process::{ProcessError, ProcessOutput, ProcessRunner, Program},
-    recipe_builder::RecipeBuilder,
+    recipe_builder::{RecipeBuildError, RecipeBuilder},
 };
 use vonk_agent_protocol::{
     RecipeBuildArgument, RecipeBuildLimits, RecipeBuildNetwork, RecipeBuildRequest, canonical_json,
@@ -186,4 +186,50 @@ fn build_uses_only_typed_rootless_podman_arguments_and_records_exact_layout() {
         )
         .ends_with("00000000-0000-4000-8000-000000000002/image.oci.tar")
     );
+}
+
+#[test]
+fn build_rejects_declared_public_hosts_before_running_podman() {
+    let (archive, digest) = bundle();
+    let runner = Runner {
+        calls: RefCell::new(Vec::new()),
+    };
+    let root = tempdir().unwrap();
+    let operation = Uuid::parse_str("00000000-0000-4000-8000-000000000002").unwrap();
+    let mut build_request = request(archive.len(), digest);
+    build_request.network = RecipeBuildNetwork {
+        mode: "public".to_owned(),
+        hosts: vec!["pypi.org".to_owned()],
+    };
+
+    let error = RecipeBuilder {
+        runner: &runner,
+        data_root: root.path(),
+    }
+    .build(&build_request, operation, &archive)
+    .unwrap_err();
+
+    assert!(matches!(error, RecipeBuildError::NetworkPolicy));
+    assert!(runner.calls.borrow().is_empty());
+}
+
+#[test]
+fn build_rejects_an_oci_layout_larger_than_declared_output_limit() {
+    let (archive, digest) = bundle();
+    let runner = Runner {
+        calls: RefCell::new(Vec::new()),
+    };
+    let root = tempdir().unwrap();
+    let operation = Uuid::parse_str("00000000-0000-4000-8000-000000000003").unwrap();
+    let mut build_request = request(archive.len(), digest);
+    build_request.limits.output_bytes = 8;
+
+    let error = RecipeBuilder {
+        runner: &runner,
+        data_root: root.path(),
+    }
+    .build(&build_request, operation, &archive)
+    .unwrap_err();
+
+    assert!(matches!(error, RecipeBuildError::OutputLimit));
 }

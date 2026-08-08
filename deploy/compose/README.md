@@ -31,6 +31,13 @@ each node. A community container registry is therefore not required. The
 global catalog, when enabled, stores recipe metadata and source bundles, not
 workload image layers or registry credentials.
 
+Builds declaring `network.mode: public` are currently rejected at the agent
+boundary until a dedicated egress proxy/firewall is deployed; `slirp4netns`
+alone cannot enforce a hostname allowlist. Networkless recipes (or recipes
+whose pinned base is already available in the node's local cache) can build now.
+The rejection is deliberate and visible in the build admission result; it never
+silently widens a recipe allowlist to unrestricted network access.
+
 This source-first path applies to recipe workloads only. The API, worker, and
 optional Hermes images used by this Compose project remain platform release
 artifacts and are selected from the signed, digest-pinned platform target

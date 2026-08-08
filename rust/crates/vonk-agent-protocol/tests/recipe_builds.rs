@@ -65,6 +65,35 @@ fn build_payload_is_closed_and_declarative() {
 }
 
 #[test]
+fn build_network_requires_a_consistent_mode_and_host_declaration() {
+    let mut payload = build_payload();
+    payload["network"] = json!({"mode": "none", "hosts": ["pypi.org"]});
+    assert!(RecipeOperationRequest::parse(&claim("recipe.build.v1", payload)).is_err());
+
+    let mut payload = build_payload();
+    payload["network"] = json!({"mode": "public", "hosts": []});
+    assert!(RecipeOperationRequest::parse(&claim("recipe.build.v1", payload)).is_err());
+}
+
+#[test]
+fn build_network_rejects_private_and_metadata_destinations() {
+    for host in [
+        "127.0.0.1",
+        "10.0.0.1",
+        "169.254.169.254",
+        "localhost",
+        "metadata.google.internal",
+    ] {
+        let mut payload = build_payload();
+        payload["network"] = json!({"mode": "public", "hosts": [host]});
+        assert!(
+            RecipeOperationRequest::parse(&claim("recipe.build.v1", payload)).is_err(),
+            "private or metadata host was accepted: {host}"
+        );
+    }
+}
+
+#[test]
 fn image_import_binds_one_exact_build_and_layout() {
     let payload = json!({
         "schema_version": 1,
