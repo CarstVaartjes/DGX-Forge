@@ -137,7 +137,9 @@ jobs:
           sudo env SYSTEMD_OFFLINE=1 dpkg -i "$package"
           getent passwd vonk-agent >/dev/null
           test "$(stat -c %a /var/lib/vonk-forge-agent)" = 700
-          test "$(basename "$(readlink /var/lib/vonk-forge/supervisor/current)")" = a
+          current_target=$(readlink /var/lib/vonk-forge/supervisor/current)
+          printf 'initial supervisor current: %s\n' "$current_target"
+          test "$(basename "$current_target")" = a
           sudo install -d -o vonk-agent -g vonk-agent -m 0700 \
             /run/vonk-forge-agent
           sudo -u vonk-agent env \
