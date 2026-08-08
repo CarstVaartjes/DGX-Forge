@@ -14,6 +14,28 @@ authored/imported recipe revisions, WorkloadRun import reports, installations,
 placements, and runs; those records remain available when Git or the optional
 global catalog is unavailable.
 
+## Recipe containers are source-first
+
+The Compose deployment and recipe workloads are separate layers. Compose starts
+the Vonk Forge control services on the NAS; it does not build or publish a
+community workload image. A recipe carries a digest-bound source bundle with
+its Dockerfile and build context. The controller validates that bundle, checks
+the builder's temporary disk and memory, and asks one compatible GPU-node agent
+to perform a rootless Podman/Buildah build with the recipe's declared policy.
+
+The resulting OCI layout is retained in the local artifact store and is
+identified by its immutable image digest. For a multi-node mapping, Vonk
+transfers that exact OCI layout through the authenticated agent channel and
+verifies the digest on every target node; it never rebuilds independently on
+each node. A community container registry is therefore not required. The
+global catalog, when enabled, stores recipe metadata and source bundles, not
+workload image layers or registry credentials.
+
+This source-first path applies to recipe workloads only. The API, worker, and
+optional Hermes images used by this Compose project remain platform release
+artifacts and are selected from the signed, digest-pinned platform target
+described below.
+
 ## Current release state
 
 No images are currently being published. Repository variables
