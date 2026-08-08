@@ -29,6 +29,7 @@ test("uploads source first and authors a source-first typed recipe", async () =>
   await user.clear(screen.getByLabelText("Artifact bytes"));
   await user.type(screen.getByLabelText("Artifact bytes"), "1000000");
   await user.click(screen.getByRole("button", {name: "Verify source & save draft"}));
+  expect(await screen.findByRole("status")).toHaveTextContent("Source verified and draft saved as revision 1");
 
   expect(uploaded).toHaveLength(1);
   expect(created).toHaveLength(1);
@@ -41,7 +42,6 @@ test("uploads source first and authors a source-first typed recipe", async () =>
   expect(input.document.runtime).not.toHaveProperty("image");
   expect(input.document.build.context.sha256).toBe(uploaded[0]);
   expect(input.document.deployment_profiles[0].node_count).toBe(1);
-  expect(await screen.findByRole("status")).toHaveTextContent("Source verified and draft saved as revision 1");
 });
 
 test("attaches local test evidence and exports for an exact publisher namespace", async () => {
