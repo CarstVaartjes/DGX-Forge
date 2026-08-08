@@ -3,9 +3,10 @@ from __future__ import annotations
 import io
 import json
 from dataclasses import asdict
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import pytest
 from vonk_control.catalog_service import CatalogService, RecipeDraftInput
 from vonk_control.inventory_repository import InventoryRepository, InventorySnapshotInput
 from vonk_control.models import (
@@ -19,7 +20,7 @@ from vonk_control.models import (
     RecipeSourceBundle,
     ResourceReservation,
 )
-from vonk_control.recipe_builds import RecipeBuildService
+from vonk_control.recipe_builds import RecipeBuildError, RecipeBuildService
 from vonk_control.recipe_operations import RecipeOperationService
 from vonk_control.source_bundles import SourceBundleStore, generate_source_bundle
 from sqlalchemy import create_engine, select
@@ -112,8 +113,8 @@ def setup(tmp_path: Path):
         InventorySnapshotInput(
             node_id,
             now,
-            100_000,
-            90_000,
+            256 * 1024 * 1024,
+            128 * 1024 * 1024,
             100_000,
             80_000,
             100_000,
@@ -188,7 +189,8 @@ def test_starting_build_atomically_reserves_temporary_disk_and_memory(
         (
             "disk",
             plan.agent_payload["limits"]["temporary_bytes"]
-            + plan.agent_payload["source_bundle_bytes"],
+            + plan.agent_payload["source_bundle_bytes"]
+            + plan.agent_payload["limits"]["output_bytes"],
         ),
         ("host-memory", plan.agent_payload["limits"]["memory_bytes"]),
     ]
@@ -209,6 +211,41 @@ def test_starting_build_atomically_reserves_temporary_disk_and_memory(
                 )
             )
             is None
+        )
+
+
+def test_build_plan_rejects_disk_below_concurrent_oci_export_peak(
+    tmp_path: Path,
+) -> None:
+    sessions, bundles, now, node_id, revision = setup(tmp_path)
+    source_bytes = len(
+        bundles.get(revision.document["build"]["context"]["sha256"]).archive
+    )
+    temporary_bytes = revision.document["build"]["resources"]["temporary_bytes"]
+    output_bytes = 64 * 1024 * 1024
+    peak_bytes = temporary_bytes + source_bytes + output_bytes
+    # This inventory has enough capacity for staging + source, but not for the
+    # simultaneous OCI export that the builder retains before promotion.
+    newer = now + timedelta(seconds=1)
+    InventoryRepository(sessions, clock=lambda: newer).record(
+        InventorySnapshotInput(
+            node_id,
+            newer,
+            peak_bytes,
+            peak_bytes - 1,
+            100_000,
+            80_000,
+            100_000,
+            80_000,
+            1,
+            False,
+            ("recipe.build.v1",),
+        )
+    )
+
+    with pytest.raises(RecipeBuildError, match="temporary disk capacity"):
+        RecipeBuildService(sessions, bundles=bundles).plan(
+            revision.id, node_id, now=newer
         )
 
 

@@ -34,6 +34,7 @@ from .source_policy import (
 
 _OCI_DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
+_BUILD_OUTPUT_BYTES = 64 * 1024 * 1024
 
 
 class RecipeBuildError(ValueError):
@@ -173,7 +174,10 @@ class RecipeBuildService:
         with self._sessions() as session:
             disk_reserved = _reserved(session, builder_node_id, "disk")
             memory_reserved = _reserved(session, builder_node_id, "host-memory")
-        required_disk = temporary_bytes + len(bundle.archive)
+        # The rootless builder retains its source/staging data while exporting
+        # the OCI layout.  Reserve the concurrent peak, not just the inputs.
+        output_bytes = _BUILD_OUTPUT_BYTES
+        required_disk = temporary_bytes + len(bundle.archive) + output_bytes
         if snapshot.disk_free_bytes - disk_reserved < required_disk:
             raise RecipeBuildError(
                 "build.insufficient_disk", "builder lacks temporary disk capacity"
@@ -197,7 +201,7 @@ class RecipeBuildService:
             "temporary_bytes": temporary_bytes,
             "processes": 4096,
             "timeout_seconds": int(resources["timeout_seconds"]),
-            "output_bytes": 64 * 1024 * 1024,
+            "output_bytes": output_bytes,
             "gpu": 0,
             "privileged": False,
             "host_mounts": False,
@@ -359,9 +363,15 @@ class RecipeBuildService:
             raise RecipeBuildError("build.plan_invalid", "build plan is invalid")
         temporary_bytes = limits.get("temporary_bytes")
         memory_bytes = limits.get("memory_bytes")
-        if not isinstance(temporary_bytes, int) or not isinstance(memory_bytes, int):
+        output_bytes = limits.get("output_bytes")
+        if (
+            not isinstance(temporary_bytes, int)
+            or not isinstance(memory_bytes, int)
+            or not isinstance(output_bytes, int)
+        ):
             raise RecipeBuildError("build.plan_invalid", "build plan is invalid")
-        disk_bytes = temporary_bytes + source_bytes
+        # Staging and the OCI export coexist until the build is committed.
+        disk_bytes = temporary_bytes + source_bytes + output_bytes
         if (
             snapshot.disk_free_bytes - _reserved(session, plan.builder_node_id, "disk")
             < disk_bytes
