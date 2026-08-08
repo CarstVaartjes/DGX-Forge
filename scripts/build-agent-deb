@@ -66,24 +66,40 @@ def run(
 
 
 def read_aarch64(path: Path) -> bytes:
-    metadata = path.lstat()
-    if (
-        not stat.S_ISREG(metadata.st_mode)
-        or metadata.st_nlink != 1
-        or not 64 <= metadata.st_size <= MAX_BINARY_BYTES
-        or metadata.st_mode & 0o022
-    ):
-        raise BuildError(f"unsafe release binary: {path}")
-    before = (metadata.st_dev, metadata.st_ino, metadata.st_size, metadata.st_mtime_ns)
-    raw = path.read_bytes()
-    after_metadata = path.stat()
-    after = (
-        after_metadata.st_dev,
-        after_metadata.st_ino,
-        after_metadata.st_size,
-        after_metadata.st_mtime_ns,
-    )
-    if before != after:
+    try:
+        descriptor = os.open(
+            path,
+            os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+        )
+    except OSError as error:
+        raise BuildError(f"unsafe release binary: {path}") from error
+    with os.fdopen(descriptor, "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or not 64 <= metadata.st_size <= MAX_BINARY_BYTES
+            or metadata.st_mode & 0o022
+        ):
+            raise BuildError(f"unsafe release binary: {path}")
+        before = (
+            metadata.st_dev,
+            metadata.st_ino,
+            metadata.st_nlink,
+            metadata.st_size,
+            metadata.st_mtime_ns,
+            metadata.st_ctime_ns,
+        )
+        raw = stream.read(MAX_BINARY_BYTES + 1)
+        after_metadata = os.fstat(stream.fileno())
+        after = (
+            after_metadata.st_dev,
+            after_metadata.st_ino,
+            after_metadata.st_nlink,
+            after_metadata.st_size,
+            after_metadata.st_mtime_ns,
+            after_metadata.st_ctime_ns,
+        )
+    if before != after or len(raw) != metadata.st_size:
         raise BuildError(f"release binary changed while read: {path}")
     if raw[:7] != b"\x7fELF\x02\x01\x01" or struct.unpack_from("<H", raw, 18)[0] != 183:
         raise BuildError(f"release binary is not AArch64 ELF: {path.name}")

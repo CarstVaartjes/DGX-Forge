@@ -169,6 +169,24 @@ def test_verifier_rejects_tampered_release_sidecar(tmp_path: Path) -> None:
     assert "sidecar is invalid" in verified.stdout
 
 
+def test_builder_accepts_cargo_hardlinked_release_binary(tmp_path: Path) -> None:
+    binaries = tmp_path / "binaries"
+    binaries.mkdir()
+    for name in ("vonk-agent", "vonk-agent-helper", "vonk-agent-supervisor"):
+        _aarch64_fixture(binaries / name, name.encode())
+    # Cargo can materialize release outputs as hardlinks on the runner's
+    # filesystem. The builder must bind and verify the inode, not reject a
+    # valid native build because its link count is greater than one.
+    alias = tmp_path / "cargo-artifact-cache.bin"
+    os.link(binaries / "vonk-agent", alias)
+    key = tmp_path / "release.pem"
+    _release_key(key)
+
+    result = _build(tmp_path / "dist", binaries, key)
+
+    assert result.returncode == 0, result.stderr
+
+
 def test_builder_rejects_symlinked_release_key(tmp_path: Path) -> None:
     binaries = tmp_path / "binaries"
     binaries.mkdir()
