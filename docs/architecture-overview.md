@@ -104,6 +104,27 @@ registry publication, inference, and Hermes networks separate. Only Caddy
 publishes a host port. LiteLLM alone joins GPU node-facing cluster egress; the
 worker and API do not.
 
+## Source-first recipe lifecycle
+
+Recipe workloads are built from their own immutable source bundles, not from a
+community image registry. A recipe bundle contains one Dockerfile and its
+bounded build context; the controller validates the Dockerfile and any Compose
+policy, checks fresh builder disk and memory capacity, and queues a typed
+`recipe.build.v1` operation. One compatible GPU-node agent performs the
+rootless Podman build without a Docker socket, host mounts, devices, secrets, or
+privilege, then records the exact OCI image digest and layout digest.
+
+Installation maps a resolved recipe profile to exact node identities and ranks.
+The controller transfers that one verified OCI layout over the authenticated
+agent channel and each target re-verifies it before import, so a three-node
+profile never rebuilds independently on the other two nodes. Model weights and
+other declared artifacts are installed separately, with disk checks before
+installation and memory/VRAM, active-workload, and direct-fabric checks before
+start. The resulting workload route is published to LiteLLM only after every
+mapped node has acknowledged the same build and run evidence. The global
+catalog, when enabled, stores recipe metadata and source bundles; it does not
+store image layers or registry credentials.
+
 ## External release and future global services
 
 The local control plane is complete without any hosted global service. This

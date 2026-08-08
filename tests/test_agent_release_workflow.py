@@ -12,7 +12,7 @@ def test_agent_release_is_native_arm64_reproducible_and_attested() -> None:
     assert text.count("scripts/build-agent-deb") >= 3
     assert "cmp --silent" in text
     assert "scripts/verify-agent-deb" in text
-    assert "actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26" in text
+        assert "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6" in text
     assert "sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6" in text
     assert "cosign sign-blob --yes --bundle" in text
 
@@ -58,7 +58,7 @@ def test_release_actions_are_commit_pinned_and_secrets_are_environment_scoped() 
         "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a" in text
     )
     assert (
-        "uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3"
+            "uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c"
         in text
     )
     for line in text.splitlines():

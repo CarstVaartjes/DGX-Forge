@@ -43,6 +43,9 @@ not treated as production-ready until its evidence gates are accepted.
 - Collect durable node, NVIDIA, Docker, thermal, and storage state reported by
   authenticated agents.
 - Configure and validate the direct RoCE/NCCL fabric between GPU nodes.
+- Build recipe workload containers from digest-bound Dockerfiles on a compatible
+  GPU node, transfer the exact OCI result to mapped nodes, and run them without
+  requiring a community container registry.
 - Build and operate model-specific runtime adapters, including the checked-in
   DeepSeek Mia and DS4 definitions.
 - Publish and operate generic, signed workload packages independently from
@@ -56,7 +59,9 @@ not treated as production-ready until its evidence gates are accepted.
 - Python 3.12 or newer
 - [`uv`](https://docs.astral.sh/uv/)
 - SSH access for one-time onboarding and explicit operator recovery only
-- Docker installed and accessible on each Vonk Forge GPU node host
+- Rootless Podman, `fuse-overlayfs`, and `slirp4netns` on each Vonk Forge GPU
+  node host (installed by `vonk-forge-agent`); Docker is only required on the
+  NAS/service host for the control-plane Compose deployment
 
 ## Quick start
 
@@ -138,6 +143,8 @@ reconciled by the repository-less worker.
 - [Architecture overview](docs/architecture-overview.md)
 - [Recipe catalog and WorkloadRun operations](docs/runbooks/workload-packages.md)
 - [NAS pull-only Compose deployment](deploy/compose/README.md)
+- [Source-first recipe containers and local builds](deploy/compose/README.md#recipe-containers-are-source-first)
+- [Agent package release and APT installation](docs/operations/agent-package-release.md)
 - [Control-plane bootstrap](docs/runbooks/control-plane-bootstrap.md)
 - [`vonkctl` runbook](docs/runbooks/vonkctl.md)
 - [Inventory runbook](docs/runbooks/inventory.md)
