@@ -150,7 +150,7 @@ jobs:
             XDG_CONFIG_HOME=/var/lib/vonk-forge-agent/.config \
             XDG_RUNTIME_DIR=/run/vonk-forge-agent \
             CONTAINERS_STORAGE_CONF=/etc/vonk-forge-agent/containers-storage.conf \
-            podman info --format '{{.Host.Security.Rootless}}' \
+            sh -c 'cd / && exec podman info --format "{{.Host.Security.Rootless}}"' \
             | grep -Fx true >/dev/null
           printf '\n# lifecycle-preserved\n' | sudo tee -a /etc/vonk-forge-agent/agent.toml >/dev/null
           sudo install -o vonk-agent -g vonk-agent -m 0600 /dev/null \
